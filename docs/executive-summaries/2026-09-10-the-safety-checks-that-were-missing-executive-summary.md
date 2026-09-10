@@ -1,20 +1,24 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
 # The safety checks that were missing
 
-**Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
-guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
-merge audio guard), #3188 (duplicate rows in one batch), #3189 and #3190 (two more
-series-delete guards), #3191 (series-dedup undo record and scan check), #3192 (the
-deleted "fix library states" job), #3193 (author-merge preview error state), #3194 (iTunes
-cleanup apply path retired), #3196 (iTunes write-back shutdown and single writer), #3197
-(database upgrade bookkeeping), #3198 (preview for the operation-history delete). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
-will be updated with merge commits as they land. Merged: #3184 (ISBN sweep outage
-reporting, `2ed12521b`), #3186 (scan reports a failed AI phase, `03286fa87`). Planning
-package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
+**Pull requests:** merged by the owner on 2026-09-10: #3180 (organize check, `a5be1c9a4`),
+#3181 (merge lock, `8d63cee95`), #3182 (author delete guard, `7196a2365`), #3183 (backup
+verification, `a05bbe20f`), #3184 (ISBN sweep outage reporting, `2ed12521b`), #3185
+(orphan-file cleanup guard, `640343ee3`), #3186 (scan reports a failed AI phase,
+`03286fa87`), #3187 (duplicate merge audio guard, `550762858`), #3188 (duplicate rows in
+one batch, `3e2167421`), #3189 (`69a95a065`) and #3190 (`316ddd73a`) (two more
+series-delete guards), #3191 (series-dedup undo record and scan check, `43ed26986`),
+#3192 (the deleted "fix library states" job, `c02e38a39`), #3193 (author-merge preview
+error state, `472af5c55`), #3194 (iTunes cleanup apply path retired, `44e254ccb`), #3195
+(SSE CORS wildcard removed, `ed958d4a1`), #3196 (iTunes write-back shutdown and single
+writer, `2ef5f01c5`). Still open and **held for the owner's review**: #3197 (database
+upgrade bookkeeping), #3198 (preview for the operation-history delete), #3199 (six more
+config secrets masked). Planning package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`);
+`TODO.md` check-off: #3200.
 
 ## Executive Summary
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.23.0 -->
+<!-- version: 1.24.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -16,31 +16,31 @@ security) are HELD OPEN for the owner — never admin-merged.
 
 | Wave | Brief | Risk | Effort | Worker | Status |
 |---|---|---|---|---|---|
-| 1 | TASK-300 MergeSplitBookCluster RMW lock | data-loss critical | S | go-specialist/sonnet | PR #3181 HELD (14:42) |
-| 1 | TASK-302 purge-empty-authors guard byte range | data-loss high | S | go-specialist/sonnet | PR #3182 HELD (14:49) |
-| 1 | TASK-303 organize no-op stat (`:141-142` only) | data-loss high | S | go-specialist/sonnet | PR #3180 HELD (14:41) |
-| 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 HELD (14:55) |
-| 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 HELD (15:24) |
+| 1 | TASK-300 MergeSplitBookCluster RMW lock | data-loss critical | S | go-specialist/sonnet | PR #3181 MERGED by owner 16:3x (`8d63cee95`; held 14:42) |
+| 1 | TASK-302 purge-empty-authors guard byte range | data-loss high | S | go-specialist/sonnet | PR #3182 MERGED by owner 16:3x (`7196a2365`; held 14:49) |
+| 1 | TASK-303 organize no-op stat (`:141-142` only) | data-loss high | S | go-specialist/sonnet | PR #3180 MERGED by owner 16:3x (`a5be1c9a4`; held 14:41) |
+| 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 MERGED by owner 16:3x (`a05bbe20f`; held 14:55) |
+| 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 MERGED by owner 16:3x (`640343ee3`; held 15:24) |
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 MERGED 15:41 (rebase, 26/26 green) |
 | 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 MERGED 15:36 (rebase, 26/26 green) |
-| 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | PR #3188 HELD (15:40); L4244 decision surfaced to owner |
+| 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | PR #3188 MERGED by owner 16:3x (`3e2167421`; held 15:40); L4244 decision surfaced to owner |
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued — memdb_reads.go; wait for #3185 (and #3182 same guard family) |
-| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
-| 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 HELD (15:44) |
-| 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3190 HELD (15:48) |
-| 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | PR #3191 HELD (15:57) |
+| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 MERGED by owner 16:3x (`550762858`; held 15:35) |
+| 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 MERGED by owner 16:3x (`69a95a065`; held 15:44) |
+| 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3190 MERGED by owner 16:3x (`316ddd73a`; held 15:48) |
+| 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | PR #3191 MERGED by owner 16:3x (`43ed26986`; held 15:57) |
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued — pebble_store.go; wait for #3182/#3185 |
-| 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | PR #3192 HELD (16:00); job never run |
+| 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | PR #3192 MERGED by owner 16:3x (`c02e38a39`; held 16:00); job never run |
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
-| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 HELD (16:00) |
-| later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | PR #3194 HELD (16:06) |
+| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 MERGED by owner 16:3x (`472af5c55`; held 16:00) |
+| later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | PR #3194 MERGED by owner 16:3x (`44e254ccb`; held 16:06) |
 | later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | PR #3198 HELD (16:23); delete-by-id half NOT built (recommendation in PR) |
-| later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | PR #3196 HELD (16:14) |
-| security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
+| later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | PR #3196 MERGED by owner 16:3x (`2ef5f01c5`; held 16:14) |
+| security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 MERGED by owner 16:3x (`ed958d4a1`; held 16:06) |
 | later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | PR #3197 HELD (16:21) |
 | security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | PR #3199 HELD (16:29); owner note: nested download-client secrets clear via config file only |
 | security | TASK-080 SSRF on cover fetch (fix #645, assess #662) | security | M | go-specialist/opus | dispatched 16:16 (covers.go + cover.go shared hardened client; no dismissals) |
@@ -48,6 +48,8 @@ security) are HELD OPEN for the owner — never admin-merged.
 | later | TASK-072 operator-confirmed author merge op | data-loss | M | go-specialist/opus | dispatched 16:24 (new op; dry-run default, ref-count guard, ledger) |
 | security | TASK-160 OpenAI key validation server-side (SEC-9) | security | M | general-purpose/opus | dispatched 16:30 (new setup endpoint + WelcomeWizard.tsx) |
 | later | TASK-220, 352(prod run), 373, 342, 345, 114, 096; security 335(reshaped), 365(needs owner policy: opt-in vs local-only), 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
+
+**16:35 owner merged 15 held PRs** (#3180–#3196 except #3179; #3197/#3198/#3199 still open). Coordinator: 15 worktrees removed + pruned; `TODO.md` check-off PR #3200 (11 lines; L4244 stays open); unblocked queue now dispatchable in order 359 → 363 → 301 → 362 → 361 → 345 as slots free (cap 4).
 
 ## Per-task record
 
