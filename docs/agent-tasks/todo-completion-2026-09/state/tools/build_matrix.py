@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: docs/agent-tasks/todo-completion-2026-09/state/tools/build_matrix.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 5d1f8b2c-3e7a-4a95-b6c0-7f2e9d4a1c83
 # last-edited: 2026-09-10
 """Build PRIORITY-MATRIX.md (risk-ordered + effort-ordered) from merged.json.
@@ -29,6 +29,11 @@ BRIEFS = json.load(open(_idx_path, encoding="utf-8")) if os.path.exists(_idx_pat
 BRIEF_BY_ID = {b["id"]: b for b in BRIEFS}
 BRIEF_BY_SOURCE = {b["source_key"]: b for b in BRIEFS if b.get("source_key")}
 BRIEF_BY_TODO_LINE = {ln: b for b in BRIEFS for ln in (b.get("todo_lines") or [])}
+DESIGN = {}  # design-fit verdicts keyed by matrix id (sibling-package briefs are not in brief_index)
+for _n in ("design_fit_rows_1_29.json", "design_fit_rows_31_64.json"):
+    _p = os.path.join(STATE, "final", _n)
+    if os.path.exists(_p):
+        DESIGN.update({r["brief"]: r for r in json.load(open(_p, encoding="utf-8"))})
 
 
 def real_heading(line):
@@ -72,7 +77,8 @@ for b in d["briefs"]:
         "effort": b.get("effort") or "M",
         "count": 1,
         "anchor": carried["path"] if carried else b["path"],  # carried briefs live in the 2026-09 package now
-        "gate": gate or (f"{carried['dispatch']} — {carried['dispatch_why'][:120]}" if carried and carried["dispatch"] != "DISPATCH" else None),
+        "gate": gate or (f"{carried['dispatch']} — {carried['dispatch_why'][:120]}" if carried and carried["dispatch"] != "DISPATCH" else None)
+                or (lambda dfit: f"{dfit['verdict']} — {dfit['why'][:120]}" if dfit and dfit["verdict"] in ("DEFER", "SUPERSEDED") else None)(DESIGN.get(f"{b['initiative']}/{b['task_id']}")),
         "brief": carried["id"] if carried else "",
     })
 
@@ -144,7 +150,7 @@ by_risk = collections.Counter(r["risk"] for r in rows)
 by_effort = collections.Counter(r["effort"] for r in rows)
 
 md = f"""<!-- file: docs/agent-tasks/todo-completion-2026-09/PRIORITY-MATRIX.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 8e2c4f7a-1d5b-4b39-9a6e-3c8f0d2b7e41 -->
 <!-- last-edited: 2026-09-10 -->
 

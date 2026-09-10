@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/PRIORITY-MATRIX.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 8e2c4f7a-1d5b-4b39-9a6e-3c8f0d2b7e41 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -44,7 +44,7 @@ risk then severity. `GATED` rows are REAL but need an owner decision before disp
 | 12 | todo-section | `TODO.md:4241` | `TASK-354` | data-loss | — | S | 3 | 🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration › Fix | `lines 4241,4242,4244` |
 | 13 | todo-section | `TODO.md:5139` | `TASK-360` | data-loss | — | S | 1 | ORPHAN-FILES-HARD-DELETE-FAIL-OPEN — `internal/plugins/maintenance/orphan_book_files.go` classifies  | `lines 5139` |
 | 14 | todo-section | `TODO.md:5246` | `TASK-362` | data-loss | — | S | 1 | MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it | `lines 5246` |
-| 15 | brief | `dedup-pipeline-hardening/TASK-06` | — | data-loss | — | S | 1 | Prod drain of ~387k exact-candidate backlog via dedup.drain-stale (dry-run -> AskUserQuestion -> apply -> veri | `docs/agent-tasks/dedup-pipeline-hardening/TASK-06-prod-drain-run.md` |
+| 15 | brief | `dedup-pipeline-hardening/TASK-06` | — | data-loss | — | S | 1 | Prod drain of ~387k exact-candidate backlog via dedup.drain-stale (dry-run -> AskUserQuestion -> apply -> veri | `docs/agent-tasks/dedup-pipeline-hardening/TASK-06-prod-drain-run.md` · **GATED: DEFER — drainStaleDoneFlag present (drain_stale.go:47) so the prerequisite (TASK-03) is merged and the mechanism matches design;** |
 | 16 | brief | `TASK-072` | `TASK-072` | data-loss | — | M | 1 | New maintenance op: merge an operator-confirmed list of duplicate real-author rows | `docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md` |
 | 17 | brief | `TASK-220` | `TASK-220` | data-loss | — | M | 1 | Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active | `docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md` |
 | 18 | todo-section | `TODO.md:1192` | `TASK-337` | data-loss | — | M | 1 | Add a dry-run / count mode to `DELETE /operations/history` | `lines 1192` |
@@ -350,7 +350,7 @@ risk then severity. `GATED` rows are REAL but need an owner decision before disp
 | 10 | todo-section | `TODO.md:4241` | `TASK-354` | data-loss | — | S | 3 | 🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration › Fix | `lines 4241,4242,4244` |
 | 11 | todo-section | `TODO.md:5139` | `TASK-360` | data-loss | — | S | 1 | ORPHAN-FILES-HARD-DELETE-FAIL-OPEN — `internal/plugins/maintenance/orphan_book_files.go` classifies  | `lines 5139` |
 | 12 | todo-section | `TODO.md:5246` | `TASK-362` | data-loss | — | S | 1 | MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it | `lines 5246` |
-| 13 | brief | `dedup-pipeline-hardening/TASK-06` | — | data-loss | — | S | 1 | Prod drain of ~387k exact-candidate backlog via dedup.drain-stale (dry-run -> AskUserQuestion -> apply -> veri | `docs/agent-tasks/dedup-pipeline-hardening/TASK-06-prod-drain-run.md` |
+| 13 | brief | `dedup-pipeline-hardening/TASK-06` | — | data-loss | — | S | 1 | Prod drain of ~387k exact-candidate backlog via dedup.drain-stale (dry-run -> AskUserQuestion -> apply -> veri | `docs/agent-tasks/dedup-pipeline-hardening/TASK-06-prod-drain-run.md` · **GATED: DEFER — drainStaleDoneFlag present (drain_stale.go:47) so the prerequisite (TASK-03) is merged and the mechanism matches design;** |
 | 14 | finding | `CI-02` | `TASK-307` | security | high | S | 1 | frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow | `.github/workflows/frontend-ci.yml:20` |
 | 15 | finding | `SV-03` | `TASK-308` | security | low | S | 1 | SSE handler unconditionally overrides the app's restrictive CORS policy with Access-Control-Allow-Origin: * | `internal/realtime/events.go:221` |
 | 16 | todo-section | `TODO.md:16960` | `TASK-371` | security | — | S | 1 | TODO-SEC-JWT — Rotate `ABS_JWT_SECRET` | `lines 16960` · **GATED: HOLD-FOR-OWNER — Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.** |
