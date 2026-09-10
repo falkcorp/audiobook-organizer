@@ -1,12 +1,13 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-07-16
+// last-edited: 2026-09-10
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -42,6 +43,13 @@ func (s *Server) wireSystemRoutes(
 	}
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
+	// Setup-wizard OpenAI key check (SEC-9). Registered next to /config because
+	// that is the sibling endpoint the same wizard step already calls to SAVE
+	// the key -- so the wizard is necessarily past auth by the time it can reach
+	// this, and PermSettingsManage cannot break the flow. There is no
+	// per-endpoint rate limiter on the siblings; the whole /api/v1 group runs
+	// behind the IP rate limiter wired in server_lifecycle.go.
+	protected.POST("/setup/validate-openai-key", s.perm(auth.PermSettingsManage), handlers.ValidateOpenAIKey)
 	protected.GET("/dashboard", s.perm(auth.PermLibraryView), systemH.GetDashboard)
 	protected.POST("/backup/create", s.perm(auth.PermSettingsManage), systemH.CreateBackup)
 	protected.GET("/backup/list", s.perm(auth.PermSettingsManage), systemH.ListBackups)

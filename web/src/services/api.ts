@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.84.0
+// version: 2.85.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-10
 
@@ -2433,6 +2433,34 @@ export async function updateConfig(updates: Partial<Config>): Promise<Config> {
   }
   const data = await response.json();
   return data.data?.config ?? data.config;
+}
+
+/** Result of the setup wizard's server-side OpenAI key check. */
+export interface ValidateOpenAIKeyResponse {
+  valid: boolean;
+  error?: string;
+}
+
+/**
+ * Ask the backend to verify an OpenAI API key.
+ *
+ * SEC-9: the setup wizard used to call api.openai.com directly from the
+ * browser, which put the raw key in the network log. The key now goes to our
+ * own origin and the outbound call happens server-side. A rejected key comes
+ * back as 200 + `valid:false`; a key we could not check (OpenAI unreachable or
+ * erroring) comes back as a thrown error, so the two stay distinguishable.
+ */
+export async function validateOpenAIKey(apiKey: string): Promise<ValidateOpenAIKeyResponse> {
+  const response = await apiFetch(`${API_BASE}/setup/validate-openai-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to validate OpenAI API key');
+  }
+  const data = await response.json();
+  return data.data ?? data;
 }
 
 // Auth
