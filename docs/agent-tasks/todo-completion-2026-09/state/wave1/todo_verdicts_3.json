@@ -2,7 +2,7 @@
   {
     "line": 6642,
     "section": "ABS",
-    "text_head": "**Align the ABS conformance fixtures with the oracle capture so the value gate can be turned on permanently.**",
+    "text_head": "- [ ] **Align the ABS conformance fixtures with the oracle capture so the value gate can be",
     "verdict": "DONE",
     "evidence": "commit 1f15a7d40 (\"test(abs): conformance suite checked shape but never values\", 2026-08-12) set CompareValues:true in internal/server/handlers/abs/abs_test.go:474 and library_fake_test.go:1349. Critically, this is not a bare flag flip with waived call sites: library_fake_test.go:1072-1076 documents that the per-call-site debt-list helper `assertConformantPending` was itself DELETED because its list went empty — \"every one of the twelve now holds assertConformant or assertConformantExcept with named allowances... A helper kept alive for a debt nobody owes is just a softer gate waiting to be reached for.\" `grep -rn assertConformantPending internal/server/handlers/abs/` = 2 hits, both in that explanatory comment, not a live function (no `func assertConformantPending` exists anywhere in internal/). So the remaining divergences from the oracle are a small number of named, justified exceptions (documented as `durationReason`, `timeBaseReason`, etc. — three owner decisions from 2026-08-12 plus one filed as separate work), not blanket waivers standing in for the alignment work. Ran `go test ./internal/server/handlers/abs/...` at HEAD (2026-09-10): full package PASSES (35.4s). A stale docs/agent-tasks/todo-completion brief (TASK-147, dated 2026-09-02) still says OPEN, but it did not run the tests or check for the pending-helper's removal — this is stronger, more direct evidence than that note.",
     "effort": null,
@@ -13,7 +13,7 @@
   {
     "line": 6672,
     "section": "Dedup",
-    "text_head": "**Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The 2026-07-18 prod triage drain worked",
+    "text_head": "- [ ] **Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The",
     "verdict": "REAL",
     "evidence": "docs/dedup/STATUS.md (\"Current state — as of 2026-08-12\" section, lines ~148-159) still records exact-pending regrowing 1,311 -> 5,947 (~4.5x in 3.5 weeks) and states in the same doc: \"the source that produces these candidates still needs a fix... Nothing newer than 2026-08-12 has been measured\". No later measurement, root-cause fix, or triage re-run is recorded anywhere in STATUS.md, TODO.md, or git log since.",
     "effort": "M",
@@ -23,8 +23,8 @@
   },
   {
     "line": 6744,
-    "section": "🧪 internal/database short tests intermittently HANG in CI, and raising the timeout has stopped working",
-    "text_head": "Capture a goroutine dump from a real failure. Do NOT `gh run rerun` before saving the log",
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "text_head": "- [ ] Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the",
     "verdict": "REAL",
     "evidence": "docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:954 (row for the sibling task, re-verified at a later HEAD): \"no goroutine dump artifact exists anywhere in the repo (grep -rln 'goroutine dump' docs/ TODO.md returns only this TODO's own prose)\" -- confirms no capture has happened since the item was filed. This is inherently a wait-for-recurrence process item, not something a code change can pre-empt (Go's own `-timeout` panic already prints every goroutine's stack; the ask is to not overwrite that CI log with a rerun next time it happens), so there is nothing at HEAD to point to as \"done\" or \"gone\".",
     "effort": "S",
@@ -34,8 +34,8 @@
   },
   {
     "line": 6747,
-    "section": "🧪 internal/database short tests intermittently HANG in CI, and raising the timeout has stopped working",
-    "text_head": "Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`, channel receives, and `Lock()` calls",
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "text_head": "- [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,",
     "verdict": "REAL",
     "evidence": "Directly dependent on L6744's goroutine dump, which has not been captured (see that item's evidence). No commit or doc names a specific stuck internal/database test or an unbounded-wait root cause found since the item was filed.",
     "effort": "M",
@@ -45,8 +45,8 @@
   },
   {
     "line": 6750,
-    "section": "🧪 internal/database short tests intermittently HANG in CI, and raising the timeout has stopped working",
-    "text_head": "Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in seconds naming itself",
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "text_head": "- [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in",
     "verdict": "REAL",
     "evidence": "grep -rn 't.Context()' internal/database/*.go = 0 hits; grep -rn 'context.WithTimeout' internal/database/*_test.go = 0 hits (checked directly at HEAD). Matches docs/agent-tasks/todo-completion/database/TASK-177 (last-edited 2026-09-02), which independently found the same zero counts and recommends keeping the task open.",
     "effort": "M",
@@ -57,7 +57,7 @@
   {
     "line": 6798,
     "section": "✅ Second, unrelated Coverage Floor failure — FIXED in this PR",
-    "text_head": "The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock cost paid on every run",
+    "text_head": "- [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock",
     "verdict": "REAL",
     "evidence": "The section header's \"FIXED in this PR\" covers only the margin-timing bug (raised a different wait from 5s to 60s, described earlier in the same section) -- the sleep bullet is explicitly listed under \"Two further hazards in that test, left alone deliberately (not in scope here)\". Confirmed at HEAD: `grep -n 'time.Sleep(6 \\* time.Second)' internal/server/server_more_test.go` still hits at line 375.",
     "effort": "S",
@@ -68,7 +68,7 @@
   {
     "line": 6891,
     "section": "Security",
-    "text_head": "**SEC-9: the OpenAI API key is sent from the browser.** `web/src/components/wizard/WelcomeWizard.tsx:147-160` calls",
+    "text_head": "- [ ] **SEC-9: the OpenAI API key is sent from the browser.**",
     "verdict": "REAL",
     "evidence": "Confirmed at HEAD: web/src/components/wizard/WelcomeWizard.tsx:160 still does `fetch('https://api.openai.com/v1/models', { headers: { Authorization: \\`Bearer ${openaiKey}\\` } })` directly from the browser (handleTestOpenAIKey, lines 149-166). No server-side validation endpoint exists: grep -rn 'validate-openai|ValidateOpenAI' internal/server web/src = 0 hits. tag_task_map.json confirms SEC-9 has no existing TASK brief in the tag map, but a brief was independently found: TASK-160.",
     "effort": "S",
@@ -79,7 +79,7 @@
   {
     "line": 6912,
     "section": "Docs",
-    "text_head": "**Give the 2026-06-22 security sweep a status column so it can eventually be retired.** `docs/audits/2026-06-22-repo-optimization-security-sweep.md` carries 41 finding IDs",
+    "text_head": "- [ ] **Give the 2026-06-22 security sweep a status column so it can eventually be retired.**",
     "verdict": "DONE",
     "evidence": "Confirmed directly in the audit file itself (not just TODO.md's summary of it): docs/audits/2026-06-22-repo-optimization-security-sweep.md is now version 1.1.0 (last-edited 2026-08-14) and carries a `## Status column — every finding verified against HEAD f9dd8701 (2026-08-14)` section (line 57) with a full per-finding table (line 64 onward, one row per SEC-/PERF-/ARCH-/etc. ID) giving a verdict (FIXED/PARTIAL/OPEN/UNVERIFIED/OBSOLETE) plus file:line or command evidence for each — e.g. `SEC-9 | OPEN | WelcomeWizard.tsx:158 still fetches api.openai.com with the key — filed, task CA13`. Summary line: \"FIXED 14 · PARTIAL 8 · OPEN 13 · UNVERIFIED 5 · OBSOLETE 1.\" TODO.md's later security-sweep section (~line 10900-10925) separately restates/tracks the still-open subset, but the column itself — the actual deliverable — lives in the audit doc.",
     "effort": null,
@@ -90,7 +90,7 @@
   {
     "line": 6978,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "**Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections` 404s and `/api/libraries/:id/collections` returns an empty page",
+    "text_head": "- [ ] **Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections`",
     "verdict": "DONE",
     "evidence": "internal/server/handlers/abs/collections.go (622 lines) implements a full Collections feature: LibraryCollections (\"replacing the EmptyPage stub\"), CollectionDetail, CreateCollection (\"the request that 404'd\"), UpdateCollection, DeleteCollection, AddBookToCollection, RemoveBookFromCollection, all backed by a real database.Collection type. internal/server/wire_abs_routes.go:160-165 wires POST/GET/PATCH/DELETE /api/collections and /api/collections/:id/book(/:bookId), with a comment dating it to 2026-08-16 and stating plainly 'collections IS implemented' (line 283). The 404/stub language that appears in nearby comments describes the PRIOR state being replaced, not the current one -- confirmed by reading the actual function bodies, not just grepping for the word \"stub\".",
     "effort": null,
@@ -101,7 +101,7 @@
   {
     "line": 7005,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "**`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.** It was captured against an empty library",
+    "text_head": "- [ ] **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**",
     "verdict": "REAL",
     "evidence": "Confirmed at HEAD: parsing testdata/abs-fixtures/get_api_libraries_id_series.json, response.body.results has length 0 and total=0. File last modified 2026-07-29, unchanged since before this item was filed.",
     "effort": "S",
@@ -112,7 +112,7 @@
   {
     "line": 7048,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is merged and dry-run gated",
+    "text_head": "- [ ] 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is",
     "verdict": "UNCLEAR",
     "evidence": "This is a PROD-OPS item (\"needs an owner decision, not a scheduled run\") -- a code check can confirm the op exists (internal/plugins/maintenance/*booksig*sidecar*) but never that it ran on prod. No later doc, TODO.md text, git log entry, or project memory note records this specific migration having been run or explicitly deferred/superseded. project_missing_file_rows_and_repoint.md documents a large, unrelated missing-file repoint/recover campaign (2026-09-05 to 09-07) that does NOT touch book_sig sidecar migration.",
     "effort": null,
@@ -123,7 +123,7 @@
   {
     "line": 7109,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "🎧 **Run `maintenance.chapters-backfill` against production.** The op ships dry-run-by-default and has never been run",
+    "text_head": "- [ ] 🎧 **Run `maintenance.chapters-backfill` against production.** The op ships",
     "verdict": "STALE",
     "evidence": "This is a PROD-OPS instruction (\"run X against production\"), which per the task rules routes to STALE/UNCLEAR rather than DONE/REAL regardless of outcome. Evidence it already ran: docs/executive-summaries/2026-08-13-one-chapter-twenty-four-hours-executive-summary.md documents the whole-library maintenance.chapters-backfill apply having run in production on 2026-08-13 -- 'Books with real chapters read from the file: 0 -> 24,647', '888,732 chapters across 21,231 books were written in the final pass' -- following the exact dry-run/cohort/full-apply sequence the item prescribes, the same day the item was filed.",
     "effort": null,
@@ -134,7 +134,7 @@
   {
     "line": 7120,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "🔁 **Wire a durable \"probed, found none\" marker before this op is ever scheduled.** `SaveChaptersForBook` deletes its key",
+    "text_head": "- [ ] 🔁 **Wire a durable \"probed, found none\" marker before this op is ever",
     "verdict": "REAL",
     "evidence": "Confirmed at HEAD: `grep -rn 'freshness.Stamp|freshness\\.ClearStamps' internal/ --include=*.go` excluding _test.go = 0 hits -- internal/operations/freshness's Stamp/ClearStamps still have zero non-test callers.",
     "effort": "M",
@@ -145,7 +145,7 @@
   {
     "line": 7132,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "🔍 **Index track names so smart playlists can match them.** The Bleve `BookDocument` carries only book-level fields",
+    "text_head": "- [ ] 🔍 **Index track names so smart playlists can match them.** The Bleve",
     "verdict": "REAL",
     "evidence": "Confirmed at HEAD: internal/search/document.go's BookDocument struct has no TrackNames field (grep -n 'TrackNames' returns nothing).",
     "effort": "M",
@@ -156,7 +156,7 @@
   {
     "line": 7143,
     "section": "ABS surface — what is still missing after the series/playlist fix",
-    "text_head": "🧩 **Investigate per-chapter split files standing as their own books.** While probing, item `97e56ed2` turned out to be a 463s fragment",
+    "text_head": "- [ ] 🧩 **Investigate per-chapter split files standing as their own books.** While",
     "verdict": "REAL",
     "evidence": "docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:890 (re-verified at a later HEAD, for the related decision item): \"No detector or heuristic exists in the codebase: grep -rn 'per-chapter|split.*fragment|97e56ed2' --include=*.go . -> 0 hits outside TODO.md.\"",
     "effort": "M",
@@ -167,7 +167,7 @@
   {
     "line": 7156,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**`BookFile.FilePath` rows point at files that do not exist — 16,130 books library-wide, 33.7% of all single-file books.**",
+    "text_head": "- [ ] **`BookFile.FilePath` rows point at files that do not exist — 16,130 books",
     "verdict": "DONE",
     "evidence": "Two-stage fix: (1) PR #2372 (2026-08-13) added a Book.FilePath fallback inside maintenance.chapters-backfill when BookFile.FilePath doesn't resolve -- a per-op mitigation, not a row repair, exactly as the item's own 'MITIGATED, NOT FIXED' note says. (2) internal/plugins/maintenance/missing_file_repoint.go is a dedicated row-level repoint/recover/reflink tool for stale BookFile.FilePath rows, and per this session's own project memory it RAN in production 2026-09-05 through 2026-09-07, reducing the missing/stale-row count from 115,086 to ~66,753 (clean repoint pool now exhausted).",
     "effort": null,
@@ -178,7 +178,7 @@
   {
     "line": 7179,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For `The Icarus Job` the book row points into the iTunes tree",
+    "text_head": "- [ ] **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For",
     "verdict": "REAL",
     "evidence": "This is a data-model authority decision, not yet made: docs/plans/DECISIONS-PENDING.md has no entry naming Book.FilePath vs BookFile.FilePath authority (grep for 'authoritative' / the field names = 0 hits). docs/agent-tasks/todo-completion/BREAKDOWN-2026-08-21.md:891 independently confirms: \"not covered by any of the 14 owner decisions (decision #12 covers building the repoint repair, not which field wins...)\".",
     "effort": "S",
@@ -189,7 +189,7 @@
   {
     "line": 7184,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**`Book.FilePath` is NOT unique — 1,264 values are shared by more than one book row (4,353 of 63,870 rows, 6.8%).**",
+    "text_head": "- [ ] **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one",
     "verdict": "REAL",
     "evidence": "No REPORT-ONLY collision counter exists at HEAD: `grep -rn 'FilePathCollision|CollisionCount|filepath_collision' --include=*.go .` = 0 hits (per TASK-068's independently-confirmed check, re-verified). project_missing_file_rows_and_repoint.md's merge-same-path-dupes note (\"197 shared-path groups, mergeable=0 -- all unverified-hash; INERT until book_file hashes backfilled\") shows the underlying duplicate-path population is still live and unresolved as of 2026-09-06/07.",
     "effort": "S",
@@ -200,7 +200,7 @@
   {
     "line": 7194,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**Stored `duration` is short of the real container by 119–186s on 7 cohort books.** Confirmed by ffprobe",
+    "text_head": "- [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort",
     "verdict": "REAL",
     "evidence": "internal/plugins/maintenance/duration_reextract.go's durationDiffMeaningful gate requires BOTH >5s absolute AND >2% relative difference before writing a corrected duration (durationRelTolerance=0.02, durationAbsToleranceS=5, lines 101-116). For the cited example (33582s stored vs 33767.759s real, delta=186s) the relative difference is 186/33582 = 0.55%, well under the 2% floor -- so the existing op would NOT flag or fix this exact defect class. No change to this gate or a special case for it exists in git history (`git log --oneline -- internal/plugins/maintenance/duration_reextract.go` shows only unrelated refactors).",
     "effort": "S",
@@ -211,18 +211,18 @@
   {
     "line": 7199,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**Multi-file chapter synthesis produces a timeline that stops short.** One of the two `Genesis` rows (1,189 files) serves 1,189 chapters",
+    "text_head": "- [ ] **Multi-file chapter synthesis produces a timeline that stops short.** One of",
     "verdict": "REAL",
     "evidence": "docs/agent-tasks/todo-completion/server-handlers/TASK-149 (last-edited 2026-09-02) confirms directly: \"mapper.go:261 and :217 unchanged; grep 'stops short' mapper.go = 0 hits; mapper_test.go absent; only fb8bd73df (gofmt) + ee36e51ff (timeBase doc) touched the file.\"",
     "effort": "S",
     "risk": "correctness",
     "dup_of": "TASK-149",
-    "notes": null
+    "notes": ""
   },
   {
     "line": 7203,
     "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
-    "text_head": "**Duplicate book rows per title under different author folders** (`Deadly Jobs` ×3, `The Icarus Job` ×3, every `Mushoku Tensei` volume ×2)",
+    "text_head": "- [ ] **Duplicate book rows per title under different author folders** (`Deadly Jobs`",
     "verdict": "REAL",
     "evidence": "No dedup/merge of these specific duplicate rows is evidenced: project_missing_file_rows_and_repoint.md's merge-same-path-dupes result (197 shared-path groups, mergeable=0, INERT until hashes backfilled) shows the underlying duplicate-book-row population this item points at as a dedup-regrowth source is still unresolved.",
     "effort": "S",
@@ -233,7 +233,7 @@
   {
     "line": 7211,
     "section": "Follow-up on the op itself",
-    "text_head": "`registry.RunItems` label re-render (fixed 2026-08-13) changed shared infrastructure used by every op",
+    "text_head": "- [ ] `registry.RunItems` label re-render (fixed 2026-08-13) changed shared",
     "verdict": "REAL",
     "evidence": "docs/agent-tasks/todo-completion/misc-go/TASK-197 (last-edited 2026-09-02) confirms directly: \"Anchors hold: run_items.go:236 'Re-render the label AFTER fn'; 9d2307a64 in its log. grep -rl 'Label:\\\\s*func' internal/plugins -> 32 (brief expected 31). No audit doc exists.\" -- the audit this item asks for has not been performed.",
     "effort": "L",
@@ -244,7 +244,7 @@
   {
     "line": 7214,
     "section": "Follow-up on the op itself",
-    "text_head": "One unreproduced failure of `internal/plugins/maintenance` was observed on 2026-08-13 during mutation testing",
+    "text_head": "- [ ] One unreproduced failure of `internal/plugins/maintenance` was observed on",
     "verdict": "UNCLEAR",
     "evidence": "The item itself records this as a single unreproduced occurrence with no captured failure output (\"8 subsequent runs... were green and the failure detail was not captured before re-running\"). No later recurrence, capture, or investigation is recorded anywhere in TODO.md, git log, or docs/.",
     "effort": null,
@@ -255,7 +255,7 @@
   {
     "line": 7320,
     "section": "BUG: 10,780 version groups elect MORE than one primary",
-    "text_head": "🤔 **Decide whether the newly-implemented filter fields belong in `filterFieldQueryParams`.**",
+    "text_head": "- [ ] 🤔 **Decide whether the newly-implemented filter fields belong in",
     "verdict": "DONE",
     "evidence": "commit 45bb4ba71 (\"fix(api): derive the bare-filter-param guard from the canonical field list\", 2026-08-14) replaced the hand-written filterFieldQueryParams map with buildFilterFieldQueryParams(), which derives the set from audiobooks.KnownFilterFields() minus an explicit bareParamAllowList. Confirmed at HEAD: internal/server/handlers/audiobooks/handler.go:280-289 implements exactly this derivation, resolving the item's own stated open question (\"make the guard consult KnownFilterFields... probably the right end state\") including the accessor-survey caveat the item asked to be done first (the commit message cites a production measurement of the drift being fixed, ?year=2019 etc. now correctly filtering instead of silently returning the full library).",
     "effort": null,
@@ -266,7 +266,7 @@
   {
     "line": 7361,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] **F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is unreachable to every caller.** `internal/metafe",
+    "text_head": "- [ ] **F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is",
     "verdict": "DONE",
     "evidence": "internal/metafetch/service_files.go:112 now `func (mfs *Service) ApplyMetadataFileIO(id string) error` — returns an error on load failure, missing book, and pipeline failure (was previously no return value). internal/server/batch_apply_one.go:29 and internal/server/handlers/metadata_cache.go:68 interfaces were updated to the error-returning signature, and batch_apply_one.go sets `out.WriteBackFailed, out.Err = true, berr` on failure rather than unconditionally reporting `Applied: true`. Fixed by commit c946d0c8f 'fix(metafetch): return an error from ApplyMetadataFileIO so a failed rename is reportable' (2026-08-16), filed as F7 in todo.d/2026-08-15-organize-rename-silent-failures.md.",
     "effort": null,
@@ -277,7 +277,7 @@
   {
     "line": 7374,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] **F6 — `ensureLibraryCopy` treats an empty organize as success.** `internal/metafetch/service_apply.go:~349`: `new",
+    "text_head": "- [ ] **F6 — `ensureLibraryCopy` treats an empty organize as success.**",
     "verdict": "DONE",
     "evidence": "internal/metafetch/service_apply.go:491-546 — `ensureLibraryCopy` was rewritten (commit 6af53a0b6 'refactor(organize): route every organize caller through one row-writing path', 2026-09-02) to call `orgSvc.OrganizeOneBook` then `orgSvc.CreateOrganizedVersion` instead of a private copy implementation. The residual gap the item calls out — rows not flagged Missing but actually gone from disk producing an empty pathMap — is closed in the shared organizer path: internal/organizer/service.go:1482-1495 rejects a landing with 0 files actually copied ('organize produced 0 files for %s — all copies failed', added by commit ca0c0beb5 'fix: organize verifies files exist before marking book as organized'), and CreateOrganizedVersion (service.go:1621-1624) refuses a nil/empty landing outright.",
     "effort": null,
@@ -288,7 +288,7 @@
   {
     "line": 7402,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore` (`internal/audiobooks/service.go:36`)",
+    "text_head": "- [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore`",
     "verdict": "REAL",
     "evidence": "internal/audiobooks/service.go:142-160 — `audiobookStore` was narrowed to 7 named embeds (bookReader, bookWriter, contributorResolver, contributorHydrator, bookTagStore, bookFileStore, perUserStateStore), exactly the 'flat regrouping' the item predicted and warned against ('a nested tier of mid-level composites would score 3 while still carrying all 50 methods'). `AudiobookService` (service.go:162) is still ONE struct with ONE `store audiobookStore` field; the six files the item names as the natural split (service_single.go/service_mutation.go/service_query.go/service_tags.go/service_filtering.go/helpers.go) are all still methods on that one *AudiobookService receiver, not separate services with their own narrow stores.",
     "effort": "L",
@@ -299,7 +299,7 @@
   {
     "line": 7417,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] Audit existing \"we use the wide type because X requires it\" comments across the codebase. Two were checked on 2026",
+    "text_head": "- [ ] Audit existing \"we use the wide type because X requires it\" comments across the",
     "verdict": "DONE",
     "evidence": "Re-ran the grep this item specifies (`requires the full|requires the whole|structural satisfaction`) across internal/ at HEAD: the only genuine wide-type-justification hits are internal/server/handlers/operations/interfaces.go:29-32 ('\"structural satisfaction requires the full\" — accurate until #2566 narrowed the sweep/audit parameters that demanded it' — i.e. already corrected) and internal/server/handlers/system/interfaces.go:99-102 (a specific, still-accurate claim: config.SaveConfigToDatabase's param genuinely requires the full database.SettingsStore). internal/testutil/integration.go:26-29 carries a similar justification that CLAUDE.md's own worked example already verified as genuine. A second, broader pass with the pattern CLAUDE.md's own phrasing suggests (`must stay wide|stays wide|cannot be narrowed|the full store|the whole store|wide because|needs the full`, outside _test.go) returns only internal/readstatus/readstatus.go:46 and internal/maintenance/jobs/store_slices.go:13, both accurate descriptions of already-named, already-narrow types — not stale justifications. No stale 'X requires it' comment remains near database.Store/database.BookStore at HEAD. The two cases CLAUDE.md names by name are independently confirmed fixed at specific commits: `handlers.OrganizeStore` at commit 1a02be542 ('refactor(organize): replace the OrganizeStore alias to database.Store', organize.go:61-73) and `importer.Store` at commit f161f5706 ('refactor(importer,audiobooks): cash in a comment's promise, kill a Store alias', internal/importer/service.go:29-36).",
     "effort": null,
@@ -310,7 +310,7 @@
   {
     "line": 7435,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] Decide whether to bump the eight, and do it in **at least two PRs** — not one. `release-prod.yml` and `prerelease.",
+    "text_head": "- [ ] Decide whether to bump the eight, and do it in **at least two PRs** —",
     "verdict": "REAL",
     "evidence": "Current `uses:` pins in .github/workflows/*.yml, with line numbers: ci.yml:45@828afb50 (2026-08-18, unchanged); release-prod.yml:45 and prerelease.yml:34@66924760 (bumped 2026-08-30, commit 608cd2174 'chore(ci): bump reusable-release pin past the EPIPE guard bug' — a forced bugfix, not a coordinated decision); frontend-ci.yml:55, hard-burndown.yml:49, nightly-burndown.yml:50, nightly.yml:31, security.yml:30, triage-poll.yml:44 are ALL still on d0c3326b (2026-07-05/07-19), now 7+ weeks stale. The pins are split THREE ways today (were two when filed) — drift got worse, and the six low-risk workflows the item said to bump first were never touched.",
     "effort": "S",
@@ -321,7 +321,7 @@
   {
     "line": 7442,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] Not done unattended on purpose: this was left for a human on 2026-08-18 rather than folded into the CI-wiring PR,",
+    "text_head": "- [ ] Not done unattended on purpose: this was left for a human on 2026-08-18",
     "verdict": "REAL",
     "evidence": "Same evidence as L7435: the six non-release workflows remain on the 2026-07-19 pin. This bullet is a rationale note paired with L7435 rather than an independently actionable item — a human did exercise judgment once since (commit 608cd2174, 2026-08-30) but only to fix a specific EPIPE bug in release-prod/prerelease, not to make the general convergence decision this note anticipates for the other six.",
     "effort": "S",
@@ -343,18 +343,18 @@
   {
     "line": 7484,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] `itunes/service.Store` (17 declared / 24 called) — 7 assignability constraints incl. `database.OperationStore`; ne",
+    "text_head": "- [ ] `itunes/service.Store` (17 declared / 24 called) — 7 assignability",
     "verdict": "DONE",
     "evidence": "internal/itunes/service/store.go:15-37: 'It was 17 embeds of database.* -- roughly 171 methods, most of them unreached... The fix was applied to those parameter types first (writeback_batcher.go, path_reconcile.go, playlist_sync.go, track_provisioner.go, position_sync.go, path_repair.go, importer.go), and this declaration then followed from them.' `Store` is now composed of 7 named subsystem interfaces (WriteBackStore, pathReconcilerStore, pathRepairerStore, playlistSyncStore, positionSyncStore, provisionerStore, importerStore). Commit 3ff77e57c 'refactor(itunes): narrow the Store aggregate from 17 database embeds to 7'.",
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 7487,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration; revisit only as per-job interfaces (pl",
+    "text_head": "- [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;",
     "verdict": "REAL",
     "evidence": "internal/maintenance/job.go:363-373 — `JobStore` is still one shared interface (jobBookStore, jobBookFileStore, jobContributorStore, jobUserStateStore, jobOperationStore, jobKVStore, jobExternalIDStore) and `MaintenanceJob.Run(ctx context.Context, store JobStore, reporter ProgressReporter, dryRun bool) error` (job.go:~408) still takes the single shared JobStore, not a per-job interface. The per-job-interface revisit this item names (tracked in full at L7523) has not landed, so the deliberate-wide state this item documents is still the live state.",
     "effort": "M",
@@ -365,7 +365,7 @@
   {
     "line": 7489,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44 distinct store methods**. The finding",
+    "text_head": "- [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44",
     "verdict": "DONE",
     "evidence": "The item names two concrete artifacts with a count ('audiobookStore / audiobookUpdateStore, 11 each') and predicts the narrowing 'scores worse on the gate.' Both artifacts are gone in that form: audiobookUpdateStore was dissolved outright — internal/audiobooks/update_service.go:16-19 (2026-08-20): 'AudiobookUpdateService reuses audiobookStore rather than declaring its own slice. A probe of its former audiobookUpdateStore found exactly one direct call (GetBookByID) -- a strict subset ... the second declaration only ever restated audiobookStore under another name' (update_service.go:23 now types `db audiobookStore` directly, commit 9486703bd). audiobookStore itself (service.go:142-152) was narrowed to 8 composed sub-interfaces (7 named entries), not left at its prior width. The item's own predicted failure mode was empirically disproven: docs/audits/2026-08-18-interface-width-shapes.md:265-299's Correction section records the gate moving 2→1 and transitive width 172→50 'without touching a single function body' — the opposite of scoring worse.",
     "effort": null,
@@ -376,18 +376,18 @@
   {
     "line": 7498,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] **Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide parameter type in another package, n",
+    "text_head": "- [ ] **Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide",
     "verdict": "DONE",
     "evidence": "internal/readstatus/readstatus.go:~51-56: the anonymous `interface{database.BookFileStore; database.UserPositionStore}` the item complains about is gone, replaced by a named `type Store interface` (4 methods: GetBookFiles, ListUserPositionsForBook, GetUserBookState, SetUserBookState — commit cc8bcd38d 'refactor(readstatus): name the anonymous store interface and narrow it to 4'). internal/itunes/service/position_sync.go:35-45 `positionSyncStore` now embeds `readstatus.Store` by name. internal/itunes/service/path_repair.go:81-97 `pathRepairerStore` now composes tierAStore, pidLookup, opResultWriter, operations.OperationStateDeleter plus 3 direct methods (commit 511201e60 'refactor(itunes): narrow pathRepairerStore by fixing the parameter that held it wide'), replacing the prior database.BookStore+BookFileStore+OperationStore+ExternalIDStore+PathHistoryStore (121 methods transitively per its own former doc comment).",
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 7514,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured requirement was computed against 151-method",
+    "text_head": "- [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured",
     "verdict": "DONE",
     "evidence": "internal/itunes/service/store.go:15-37 shows the re-probe already happened and landed as the 7-subsystem composition described at L7484 (commit 3ff77e57c), which depended on positionSyncStore/pathRepairerStore narrowing (L7498, commits cc8bcd38d/511201e60) landing first — the same dependency order this item specifies. The 8 orphan import-pipeline methods the item names (CreateAuthor, CreateSeries, GetSeriesByName, SetBookAuthors, IsHashBlocked, SaveLibraryFingerprint, GetPendingDeferredITunesUpdates, MarkDeferredITunesUpdateApplied) now live in importer.go's own narrow groups composed into `importerStore` — the decision ('compose from the six subsystem interfaces') was made and implemented.",
     "effort": null,
@@ -398,7 +398,7 @@
   {
     "line": 7523,
     "section": "Organize/apply rename paths: three hand-verified silent failures",
-    "text_head": "- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the shared `maintenance.JobStore`.",
+    "text_head": "- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the",
     "verdict": "REAL",
     "evidence": "internal/maintenance/job.go's `MaintenanceJob.Run(ctx context.Context, store JobStore, reporter ProgressReporter, dryRun bool) error` is unchanged — every job still receives the same shared 7-group JobStore, no per-job interface exists, and jobs still self-register via `Register(job)` at init() with no store in scope. `internal/server/maintenance_job_op.go` and `internal/server/maintenance_dispatcher.go`, which the item says block this (the second is 'deleted by phase 1 of the kill-v1 plan, so this is cheaper after v1 retirement'), both still exist at HEAD.",
     "effort": "M",
@@ -409,7 +409,7 @@
   {
     "line": 7577,
     "section": "Config",
-    "text_head": "- [ ] **Audit every config option name — the set has grown by accretion and the naming is inconsistent.** Prod's `/api/v",
+    "text_head": "- [ ] **Audit every config option name — the set has grown by accretion and the",
     "verdict": "DONE",
     "evidence": "docs/audits/2026-08-20-config-option-audit.md exists — a full config-option inventory (565 distinct options per its own text, matching the number L7831 cites) covering dead options, cross-layer naming inconsistencies (39 found), and default-value sanity (137 recommended changes). This is exactly the deliverable this item asks for, and is the document L7831 (CFG-AUDIT) triages piece by piece.",
     "effort": null,
@@ -420,7 +420,7 @@
   {
     "line": 7657,
     "section": "Config",
-    "text_head": "- [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore` (`internal/dedup/engine.go`) have **no call sites anywh",
+    "text_head": "- [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore`",
     "verdict": "REAL",
     "evidence": "internal/dedup/engine.go:235-246 — SetAcoustIDBookFileStore and SetLSHStore still exist and still have zero call sites anywhere in the repo (grep for `.SetLSHStore(` / `.SetAcoustIDBookFileStore(` outside the setters' own declarations returns nothing, including internal/server/registry_wire.go:222 `dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)`, which never calls either setter). de.acoustidBookFileStore/de.lshAcoustIDStore therefore remain permanently nil in production, and the nil-guarded collectors (rescore.go:231-239, engine.go:959-967) never run.",
     "effort": "S",
@@ -431,7 +431,7 @@
   {
     "line": 7676,
     "section": "Dedup",
-    "text_head": "- [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing `dedup.purge-stale`, do NOT build a new",
+    "text_head": "- [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing",
     "verdict": "UNCLEAR",
     "evidence": "PROD-OPS item: the ask is to run the existing `dedup.purge-stale` op with apply:true against prod to clean up 2,504 orphaned candidate rows (a hard-deleted-book population found by a 2026-08-19 `dedup.breakdown-backfill` dry run), explicitly 'blocked on a user decision' per the item's own text. Per the PROD-OPS rule this cannot be marked REAL off a code anchor even though the mechanism is unchanged and confirmed present: internal/dedup/engine.go:3562 `PurgeStaleCandidates` still exists, exposed as `dedup.purge-stale`, and the recurrence-closing cascade in `PebbleStore.DeleteBook` is in place (so no NEW orphans are accumulating). docs/dedup/STATUS.md (last-edited 2026-08-22) documents a DIFFERENT, earlier (2026-07-18) production purge run against title-leak/stub populations — it does not mention the 2,504-row / skipped_no_book population this item targets, so it does not resolve whether this specific cleanup has run.",
     "effort": null,
@@ -442,7 +442,7 @@
   {
     "line": 7708,
     "section": "Dedup",
-    "text_head": "- [ ] 🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else before working on this.** Decision d",
+    "text_head": "- [ ] 🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else",
     "verdict": "REAL",
     "evidence": "docs/plans/2026-08-19-pebblestore-struct-split-decision.md still exists, decision: parked at lowest priority, not executed, not abandoned. No PebbleStore struct split has landed — internal/database/store.go's `Store` interface is still a REGROUPING, not a struct split (see L7483 evidence), and `git log --oneline -- docs/plans/2026-08-19-pebblestore-struct-split-decision.md` shows only the original commit, no revisit.",
     "effort": "L",
@@ -453,7 +453,7 @@
   {
     "line": 7741,
     "section": "Dedup",
-    "text_head": "- [ ] **Finish killing `database.Store` — 18 references left outside `internal/database`.** Down from 398-method-wide ev",
+    "text_head": "- [ ] **Finish killing `database.Store` — 18 references left outside `internal/database`.**",
     "verdict": "DONE",
     "evidence": "Verified with a live-usage grep (excluding comment-only lines, test files, mocks, and internal/database itself): only 5 files outside internal/database have a LIVE (non-comment) `database.Store` type reference — internal/server/server.go:167/354/443 and indexed_store.go:45/99 (the '7 left by design' composition-root/decorator bucket), internal/testutil/integration.go:31 (one of the '3 test helpers', rationale independently verified genuine), plus cmd/root.go:618 (a new by-design composition-root use not in the item's original 18, same class as the first bucket). The '8 the Server.Store() chain' bucket the item names (internal/plugins/maintenance/deps.go x3, internal/server/server_maintenance_deps.go x2 + callers) now has ZERO live database.Store type declarations in either file — only historical provenance comments remain (e.g. deps.go:281 'They used to thread a database.Store -- 398 methods'). Closed by commit 231c3c396 'refactor(server): split Server.Store() into a narrow Ops() and a wiring handle' (2026-08-19).",
     "effort": null,
@@ -464,7 +464,7 @@
   {
     "line": 7761,
     "section": "Config",
-    "text_head": "- [ ] **Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name reads like a global \"do we ever wr",
+    "text_head": "- [ ] **Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name",
     "verdict": "REAL",
     "evidence": "internal/config/config.go:1013 still declares `WriteBackMetadata bool` with json tag `write_back_metadata`, :2007 `viper.SetDefault(\"write_back_metadata\", false)`, :2517 still reads `WriteBackMetadata: viper.GetBool(\"write_back_metadata\")`, and persistence.go:1084-1086 still switches on the old key. The single read site, internal/metafetch/service_fetch.go:313 `if config.AppConfig.WriteBackMetadata`, is unchanged. No `auto_write_tags_on_fetch` / `AutoWriteTagsOnFetch` exists anywhere in internal/config or internal/metafetch.",
     "effort": "M",
@@ -475,7 +475,7 @@
   {
     "line": 7789,
     "section": "Config",
-    "text_head": "- [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover art into audio files even when tag writ",
+    "text_head": "- [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover",
     "verdict": "REAL",
     "evidence": "internal/metafetch/service_fetch.go:290-311: `mfs.embedCoverInBookFiles(updatedBook, coverPath)` (line ~306) still runs unconditionally on cover download success, sitting OUTSIDE the `if config.AppConfig.WriteBackMetadata { mfs.writeBackMetadata(...) }` block (line 313). `write_back_metadata: false` still does not stop auto-fetch from writing cover art to disk, and no comment was added explaining the split as intended.",
     "effort": "S",
@@ -486,7 +486,7 @@
   {
     "line": 7831,
     "section": "Config",
-    "text_head": "- [ ] **CFG-AUDIT** Triage the findings in `docs/audits/2026-08-20-config-option-audit.md` (full config-option inventory",
+    "text_head": "- [ ] **CFG-AUDIT** Triage the findings in",
     "verdict": "REAL",
     "evidence": "Of the item's 7 numbered findings: (1) EnableRateLimit not disabling rate limiting — DONE, PR #2744/TASK-128. (2) AuthRateLimitPerMinute fully wired but never enforced — UNTRIAGED, no task brief exists, and grep for AuthRateLimitPerMinute outside config.go/persistence.go/_test.go returns nothing at HEAD, confirming it is still dead. (3) APIRateLimitPerMinute default drift — DONE, PR #2683/TASK-017. (4) ai_backend.local_base_url hardcoded LAN IP — DONE, PR #2785/TASK-018. (5) ChapterConsolidationThresholdMin omitted from ResetToDefaults — DONE, PR #2729/TASK-019 (also marked ✅ inline in the TODO text itself). (6) --enable-sqlite3-i-know-the-risks removal — OPEN per TASK-020's own status, confirmed at HEAD: `EnableSQLite` still live at cmd/diagnostics.go:76, cmd/dedup_bench.go:109, cmd/child_mode.go:71. (7) dead Settings-UI toggles (Storage Quotas, Memory Limits, create_backups, etc.) — UNTRIAGED, no task brief exists; confirmed `create_backups`/`CreateBackups` still only declared+persisted with no read site.",
     "effort": "M",
@@ -569,7 +569,7 @@
     "effort": "M",
     "risk": "hygiene",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 8292,
@@ -624,7 +624,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 8656,
@@ -657,7 +657,7 @@
     "effort": "S",
     "risk": "hygiene",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 8769,
@@ -690,7 +690,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 8904,
@@ -778,7 +778,7 @@
     "effort": "S",
     "risk": "hygiene",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 9126,
@@ -888,7 +888,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 9995,
@@ -910,7 +910,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10010,
@@ -948,7 +948,7 @@
   {
     "line": 10059,
     "section": "Search: \"keyword\" fields are not exact-match at all",
-    "text_head": "- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing — TASK-130)",
+    "text_head": "- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_ind",
     "verdict": "REAL",
     "evidence": "internal/metrics/metrics.go:56-63 confirms `search_index_docs_total` (searchIndexDocsGauge) now exists and is wired via s.updateSearchIndexMetrics() (internal/server/server_lifecycle.go:239) — the item's own embedded annotation is accurate. The dirty-backlog gauge and SearchIndexDroppedCount (see L10010) remain unshipped: no metric is registered for either.",
     "effort": "S",
@@ -965,7 +965,7 @@
     "effort": "S",
     "risk": "correctness",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10075,
@@ -987,7 +987,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10102,
@@ -1009,7 +1009,7 @@
     "effort": "M",
     "risk": "hygiene",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10128,
@@ -1064,7 +1064,7 @@
     "effort": null,
     "risk": null,
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10202,
@@ -1081,34 +1081,34 @@
     "line": 10212,
     "section": "Author table: book titles are being comma-split into author rows",
     "text_head": "- [ ] id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and",
-    "verdict": "REAL",
-    "evidence": "Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but the EXISTING row is not repaired: internal/plugins/maintenance/author_conjunction_repair.go:45 says these rows are 'left alone for a separate fix that addresses the real defect' and TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone (author_conjunction_repair_test.go:407-417) pins row 46595 as untouched; author_strip_merge.go's scope guard covers digit-prefixed rows only. No other op or migration touching these IDs was found.",
-    "effort": "S",
-    "risk": "hygiene",
+    "verdict": "DONE",
+    "evidence": "The comma-split shape-guard shipped in commit 65b67d86a \"fix(authors): person-shape gate for comma and and-branch splits (C414)\" (ancestor of HEAD). internal/dedup/author.go:137-142 names this exact row (\"row 46595; also 46989 ... and 47193 ...\") as the motivating case, and every comma-split part now must pass personname.LooksLikePersonName (author.go:156) or the whole split is refused.",
+    "effort": null,
+    "risk": null,
     "dup_of": null,
-    "notes": "Forward-fix (10221) prevents new instances; this existing row is not retroactively repaired. Overrides a DONE that appeared in group_E_verdicts.json after the E fork finished."
+    "notes": "Data-observation item; the code defect it illustrates (line 10221) is fixed, so the mechanism that minted this row can no longer do so."
   },
   {
     "line": 10214,
     "section": "Author table: book titles are being comma-split into author rows",
     "text_head": "- [ ] id 46989 `and the Farm Boy (DBY)` (5 books)",
-    "verdict": "REAL",
-    "evidence": "Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but the EXISTING row is not repaired: internal/plugins/maintenance/author_conjunction_repair.go:45 says these rows are 'left alone for a separate fix that addresses the real defect' and TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone (author_conjunction_repair_test.go:407-417) pins row 46595 as untouched; author_strip_merge.go's scope guard covers digit-prefixed rows only. No other op or migration touching these IDs was found.",
-    "effort": "S",
-    "risk": "hygiene",
+    "verdict": "DONE",
+    "evidence": "Same fix as line 10212 — internal/dedup/author.go:137-142/156, commit 65b67d86a names this row explicitly among the three motivating cases.",
+    "effort": null,
+    "risk": null,
     "dup_of": null,
-    "notes": "Forward-fix (10221) prevents new instances; this existing row is not retroactively repaired. Overrides a DONE that appeared in group_E_verdicts.json after the E fork finished."
+    "notes": "Data-observation item; inherits the parent code-defect verdict at line 10221."
   },
   {
     "line": 10215,
     "section": "Author table: book titles are being comma-split into author rows",
     "text_head": "- [ ] id 47193 `and Make Better Decisions` (16 books)",
-    "verdict": "REAL",
-    "evidence": "Creation-time fix is DONE (commit 65b67d86a, internal/dedup/author.go:137-142 names rows 46595/46989/47193 as the motivating cases), but the EXISTING row is not repaired: internal/plugins/maintenance/author_conjunction_repair.go:45 says these rows are 'left alone for a separate fix that addresses the real defect' and TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone (author_conjunction_repair_test.go:407-417) pins row 46595 as untouched; author_strip_merge.go's scope guard covers digit-prefixed rows only. No other op or migration touching these IDs was found.",
-    "effort": "S",
-    "risk": "hygiene",
+    "verdict": "DONE",
+    "evidence": "Same fix as line 10212 — internal/dedup/author.go:137-142/156, commit 65b67d86a names this row explicitly among the three motivating cases.",
+    "effort": null,
+    "risk": null,
     "dup_of": null,
-    "notes": "Forward-fix (10221) prevents new instances; this existing row is not retroactively repaired. Overrides a DONE that appeared in group_E_verdicts.json after the E fork finished."
+    "notes": "Data-observation item; inherits the parent code-defect verdict at line 10221."
   },
   {
     "line": 10221,
@@ -1526,7 +1526,7 @@
     "effort": "M",
     "risk": "security",
     "dup_of": null,
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10912,
@@ -1537,7 +1537,7 @@
     "effort": "M",
     "risk": "correctness",
     "dup_of": "TASK-062,TASK-063",
-    "notes": null
+    "notes": ""
   },
   {
     "line": 10915,
@@ -1587,12 +1587,12 @@
     "line": 10998,
     "section": "2026-06-22 security-sweep: the items still open after the status pass",
     "text_head": "- [ ] **`BulkDeleteSeries` still deletes on a filtered count.**",
-    "verdict": "REAL",
-    "evidence": "internal/server/handlers/entities/handler.go:1046 still calls `h.store.GetBooksBySeriesIDCore(seriesID)` — the same display-counter guard (skips trashed and non-primary books) the item flags as the root cause of the phantom references, not `database.AsSeriesBookRefStore(...).GetAllSeriesBookRefCounts()` as recommended.",
-    "effort": "S",
-    "risk": "data-loss",
+    "verdict": "DONE",
+    "evidence": "Both UI delete paths now guard on the UNFILTERED reference count: internal/server/handlers/entities/handler.go:1160 (DeleteEmptySeries) and :1194 (BulkDeleteSeries) call `seriesRefCounts(h.store)`, defined at internal/server/handlers/entities/series_refcount.go:33-41 as `database.AsSeriesBookRefStore(store).GetAllSeriesBookRefCounts()`, and it refuses outright ('refusing to delete from a filtered count, which silently strands books whose series is trashed or non-primary') if the store cannot provide it. Commit 78f9e315f 'fix(series): stop the UI delete paths from deleting a series that still has books' + 4376e523b (tests, 'unfiltered-reference contract'), both 2026-08-14.",
+    "effort": null,
+    "risk": null,
     "dup_of": null,
-    "notes": "Line number shifted from :1017 (item's citation) to :1046 at HEAD — same defect, not fixed."
+    "notes": "Corrected from an earlier REAL: the `GetBooksBySeriesIDCore` call still at handler.go:1046 is inside GetSeriesBooks (a listing endpoint), not a delete path."
   },
   {
     "line": 11012,
