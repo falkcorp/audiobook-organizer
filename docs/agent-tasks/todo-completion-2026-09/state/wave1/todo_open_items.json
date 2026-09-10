@@ -1,0 +1,3518 @@
+[
+  {
+    "line": 45,
+    "section": "📥 Inbox",
+    "subsection": "Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget",
+    "text": "- [ ] Add an `embedding.request_timeout_seconds` config key, resolve it the way"
+  },
+  {
+    "line": 49,
+    "section": "📥 Inbox",
+    "subsection": "Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget",
+    "text": "- [ ] While there: `OLLAMA_KEEP_ALIVE=30m` on the Mac was set with"
+  },
+  {
+    "line": 57,
+    "section": "📥 Inbox",
+    "subsection": "Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget",
+    "text": "- [ ] **8 ops declare `ResumeRestart` but never checkpoint — they silently"
+  },
+  {
+    "line": 110,
+    "section": "📥 Inbox",
+    "subsection": "Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget",
+    "text": "- [ ] **`ai parse summary` reports a fully-green line for a batch where nothing"
+  },
+  {
+    "line": 180,
+    "section": "📥 Inbox",
+    "subsection": "Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget",
+    "text": "- [ ] **`ParsedMetadata.Confidence` is asked for, paid for, and never read —"
+  },
+  {
+    "line": 247,
+    "section": "📥 Inbox",
+    "subsection": "Activity compaction — three follow-ups found while fixing the double-count",
+    "text": "- [ ] **`RepairActivityIndexes` is time-unbounded and runs nightly inside the job"
+  },
+  {
+    "line": 253,
+    "section": "📥 Inbox",
+    "subsection": "Activity compaction — three follow-ups found while fixing the double-count",
+    "text": "- [ ] **`maintenance.window` has no per-task panic isolation.** A nil-deref panic"
+  },
+  {
+    "line": 258,
+    "section": "📥 Inbox",
+    "subsection": "Activity compaction — three follow-ups found while fixing the double-count",
+    "text": "- [ ] **Re-derive the \"scheduled ops that never fire\" list before acting on it.**"
+  },
+  {
+    "line": 290,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": null,
+    "text": "- [ ] Grep every read of `AppConfig.DatabasePath` and `filepath.Dir(...DatabasePath)`"
+  },
+  {
+    "line": 292,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": null,
+    "text": "- [ ] Decide which of them SHOULD follow a relocation and which should be"
+  },
+  {
+    "line": 295,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": null,
+    "text": "- [ ] Check whether a stale `/var/lib/audiobook-organizer/library.bleve` is left"
+  },
+  {
+    "line": 371,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+    "text": "- [ ] **Deploy #3171** (`make deploy-debug` from the PRIMARY checkout, only at"
+  },
+  {
+    "line": 376,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+    "text": "- [ ] **Then** `sudo python3 scripts/finish_credential_migration.py --apply` on the"
+  },
+  {
+    "line": 381,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+    "text": "- [ ] **Later, after the next restart for any other reason:**"
+  },
+  {
+    "line": 470,
+    "section": "Operation parent/child lineage is never populated by the BACKEND",
+    "subsection": null,
+    "text": "- [ ] Decide whether SERVER-SIDE op lineage should be wired up. Several ops obviously"
+  },
+  {
+    "line": 515,
+    "section": "Two db-optimize ops exist; only one reports progress",
+    "subsection": null,
+    "text": "- [ ] **Consolidate the space-reclaim maintenance ops into one job.**"
+  },
+  {
+    "line": 708,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "subsection": null,
+    "text": "- [ ] Decide whether to pass `option.WithMaxRetries(0)` and let `DoWithRetry`"
+  },
+  {
+    "line": 713,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "subsection": null,
+    "text": "- [ ] If the answer is \"only for local backends\", scope it to"
+  },
+  {
+    "line": 717,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "subsection": null,
+    "text": "- [ ] Whichever way it goes, `DoWithRetry`'s doc comment names the current"
+  },
+  {
+    "line": 724,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "subsection": null,
+    "text": "- [ ] **Find out why scanning the `metadata_cache:` prefix takes ~28s.**"
+  },
+  {
+    "line": 770,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "subsection": null,
+    "text": "- [ ] **`TestProp_ChromemMatchesSqlite` has a reproducible counterexample — chromem returns an EMPTY set where sqlite returns a match.** Found 2026-09-09 by a routine full-package `go test ./internal/server/ -count=1` on an unrelated branch; `rapid` hit it on a random seed after 0 shrink steps. Failure: `sqlite→chromem overlap too low: 0 of 1 matched (chromem set=0)` at `internal/server/dedup_engine_prop_test.go:387`."
+  },
+  {
+    "line": 823,
+    "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+    "subsection": null,
+    "text": "- [ ] **`POST /ai/test-connection` tests OpenAI unconditionally — it can never"
+  },
+  {
+    "line": 900,
+    "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+    "subsection": null,
+    "text": "- [ ] **Run one embedding through the APP to close out the local-embedding"
+  },
+  {
+    "line": 917,
+    "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+    "subsection": null,
+    "text": "- [ ] **The AI parser CHAIN is unexercised on this deployment.** Prod is"
+  },
+  {
+    "line": 924,
+    "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+    "subsection": null,
+    "text": "- [ ] **Four `library.ai-parse` failure rows on prod dated 2026-09-09 are probe"
+  },
+  {
+    "line": 972,
+    "section": "ABS layer hides every `imported` book — author pages undercount (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Decide the intended semantics and make the filter match them.** Should the"
+  },
+  {
+    "line": 992,
+    "section": "ABS layer hides every `imported` book — author pages undercount (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Add a test that a non-`organized` book is reachable wherever it is"
+  },
+  {
+    "line": 1015,
+    "section": "Why the books are `imported` is NOT yet established",
+    "subsection": null,
+    "text": "- [ ] **Determine what `library_state` actually means and why these 6 are"
+  },
+  {
+    "line": 1021,
+    "section": "Why the books are `imported` is NOT yet established",
+    "subsection": null,
+    "text": "- [ ] **Re-measure after the collision resolver lands** before changing the ABS"
+  },
+  {
+    "line": 1035,
+    "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Reset Activity Log — admin feature (PR in progress).** Let a user reset"
+  },
+  {
+    "line": 1045,
+    "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Reauth / passkey reverify gate (future).** Require a step-up reauth"
+  },
+  {
+    "line": 1049,
+    "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Full-application-database reset (future, GATED).** A \"reset everything\""
+  },
+  {
+    "line": 1061,
+    "section": "Re-enable SQLite activity backend after details compression (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Re-run the migration with compression in place and confirm the size is"
+  },
+  {
+    "line": 1069,
+    "section": "Re-enable SQLite activity backend after details compression (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Only then** consider retiring the Pebble activity path and reclaiming the"
+  },
+  {
+    "line": 1084,
+    "section": "Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Fix the 18 confirmed functions.** Each was verified against its actual Go"
+  },
+  {
+    "line": 1087,
+    "section": "Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Verify the 11 bare-return candidates**: `patchAudiobookRating`,"
+  },
+  {
+    "line": 1092,
+    "section": "Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Triage the ~30 second-shape candidates.** `searchBooks` (~`api.ts:1113`)"
+  },
+  {
+    "line": 1111,
+    "section": "Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **`metadata.batch-apply-cached` still has no resume — and a bare"
+  },
+  {
+    "line": 1192,
+    "section": "`GET /operations/timeline` silently ignores its query filters (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider"
+  },
+  {
+    "line": 1270,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Work",
+    "text": "- [ ] **Stop the clobber.** Guard `LibraryState` in `applyScannerFields`"
+  },
+  {
+    "line": 1274,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Work",
+    "text": "- [ ] **Close the re-stamp gate** at `server.go:1230` / `service.go:1268` so the"
+  },
+  {
+    "line": 1276,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Work",
+    "text": "- [ ] **Backfill** the reverted rows, keyed on `library_state='imported' AND"
+  },
+  {
+    "line": 1278,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Work",
+    "text": "- [ ] **Pin it with a test.** `internal/scanner/rescan_preserve_test.go` and"
+  },
+  {
+    "line": 1294,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "🔴 DO NOT RUN `fix-library-states`",
+    "text": "- [ ] **Fix or unregister `fix-library-states`** before someone clicks it."
+  },
+  {
+    "line": 1311,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Two incidental defects found en route",
+    "text": "- [ ] **Broken undo record.** `internal/organizer/rename.go:230` assigns"
+  },
+  {
+    "line": 1317,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "subsection": "Two incidental defects found en route",
+    "text": "- [ ] **A false agreement claim.** `internal/server/handlers/abs/browse.go:176-178`"
+  },
+  {
+    "line": 1344,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Set `completed_at` when an op reaches a terminal status.** `canceled` is"
+  },
+  {
+    "line": 1350,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Age out / visually distinguish terminal ops in the timeline** so a"
+  },
+  {
+    "line": 1366,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **There is no delete-one-op endpoint.** `DELETE /operations/history` deletes"
+  },
+  {
+    "line": 1373,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Concurrency audit 2026-09-07: unjoined goroutines + serial whole-library loops.**"
+  },
+  {
+    "line": 1461,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] `internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a"
+  },
+  {
+    "line": 1472,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] `internal/scanner/scanner.go:1398-1406` — bare `recover()` whose comment"
+  },
+  {
+    "line": 1477,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] `internal/plugins/maintenance/extract_wav_clips.go:127` — 8-slot ffmpeg pool"
+  },
+  {
+    "line": 1483,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] Remaining unjoined-goroutine sites: `metafetch/service.go:746`,"
+  },
+  {
+    "line": 1495,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] Serial whole-library loops needing a worker pool (several need a"
+  },
+  {
+    "line": 1505,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] `maintenance/merge_same_path_dupes.go:366-372` — safe today only because"
+  },
+  {
+    "line": 1535,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": null,
+    "text": "- [ ] **Upgrade the reflink predicate from the size+re-stat proxy to real DVA"
+  },
+  {
+    "line": 1701,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "Finish the v1 resume teardown: the `opstate:params` side table and `GetInterruptedOperations`",
+    "text": "- [ ] **`GET /system/logs` returns nothing and has for a long time — point it at the activity store.**"
+  },
+  {
+    "line": 1735,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **abs mapper: batch the per-book file fetch** — `mapper.go:163`"
+  },
+  {
+    "line": 1746,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **`ListCachedCandidates`: use `GetBooksByIDs`** — `metadata_cache.go:129`."
+  },
+  {
+    "line": 1750,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **Fix `mapper.go:82-84`, which claims the relation lookups are batched.**"
+  },
+  {
+    "line": 1755,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **Add memdb-backed author/series/narrator batch getters.**"
+  },
+  {
+    "line": 1760,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **`OptimizeDatabase`: batch the per-author read** —"
+  },
+  {
+    "line": 1764,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **dedup handlers: batch the point-gets** — `dedup/handler.go:769,894,626,674,281`,"
+  },
+  {
+    "line": 1767,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **`/api/me`: hoist `GetBookFilesForIDsCore` above the errgroup** —"
+  },
+  {
+    "line": 1769,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **Add a batch chapter getter.** `GetChaptersForBook`"
+  },
+  {
+    "line": 1773,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **`GetSyncFileIDsForBook` prefix scan** (follow-up to #3128) — the"
+  },
+  {
+    "line": 1778,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **Background loops with an existing batch fix** — `relink_unlinked.go:119/126`,"
+  },
+  {
+    "line": 1783,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+    "text": "- [ ] **Group-by-BookID, not a batch swap** — `fix_book_file_paths.go:56`,"
+  },
+  {
+    "line": 1826,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+    "text": "- [ ] **`searchSeriesHits` — 29.26 s cum (6.69 %), now larger than the entire"
+  },
+  {
+    "line": 1883,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+    "text": "- [ ] **`minifiedItem` — 23.17 s (5.30 %).**"
+  },
+  {
+    "line": 1884,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+    "text": "- [ ] `loadItemViews` / `loadOneItemView` — 17.80 s (4.07 %); `GetBookFiles`"
+  },
+  {
+    "line": 1896,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+    "text": "- [ ] **`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan"
+  },
+  {
+    "line": 1901,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+    "text": "- [ ] **Investigate the 47 % GC directly.** A 3 MB response per search is a large"
+  },
+  {
+    "line": 1935,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+    "text": "- [ ] **🔴 The barrier still does not fire, and deleting the invalid file did not fix it.**"
+  },
+  {
+    "line": 1952,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+    "text": "- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.**"
+  },
+  {
+    "line": 1966,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+    "text": "- [ ] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a"
+  },
+  {
+    "line": 1999,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+    "text": "- [ ] **Defense-in-depth: the abandonment path never closes `parked`.** Independent"
+  },
+  {
+    "line": 2022,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /"
+  },
+  {
+    "line": 2025,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Scheduled auto-compaction toggle.** A `ScheduledTaskConfig` (like"
+  },
+  {
+    "line": 2030,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Make the \"Compact after N days\" button async.** The handler"
+  },
+  {
+    "line": 2035,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod."
+  },
+  {
+    "line": 2044,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Stop dual-writing.** `MigratingActivityStore.Record` fans out to BOTH"
+  },
+  {
+    "line": 2053,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a"
+  },
+  {
+    "line": 2056,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **A canceled operation can linger forever in the Active-Operations timeline"
+  },
+  {
+    "line": 2073,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **After the download-fix set (#3075/#3076/#3077) is deployed, run the two repair ops** to clean up books already broken by the stale `book_file` pointer. Order and both report-only first:"
+  },
+  {
+    "line": 2078,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Provider quota + \"last resort\" tier refactor (big — scan change + provider-model change).** Google Books enforces a hard **1,000 requests/day** quota per API key (project 157967346493) and is unforgiving about it — once exhausted, every lookup 429s for the rest of the day and the scan/backfill silently stalls on that provider. The 2026-09-05 throttle (#3066) only *slows* a provider after it reports a limit; it does not budget a finite daily quota or let us prefer cheaper providers first. We need a real provider-economics model:"
+  },
+  {
+    "line": 2084,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Series identity fragmented by (name, author-combo) instead of name — PRIORITY 1 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`docs/audits/` / scratchpad `library-health-audit-2026-09-05.md`) found **8,530 distinct series names with >1 series ID and 15,448 redundant series rows** — the largest raw-count data-quality problem in the library. Series appear to be keyed on the (name, author/narrator combination) rather than the name alone, so any installment credited to a different co-author/narrator combination mints a brand-new series entity for what a human calls one series. Worst cases: \"Doctor Who\" ~90 series IDs, \"Night of the Hunter\" 118 IDs (nearly all `book_count:2` — one row minted per book pair), \"KGUniverse\" ~70 IDs, \"Doctor Who BF Monthly Range\" ~50. Clean spot-check cases: \"Discworld\" 4 IDs (1 real @128 books + 3 near-empty), \"The Dresden Files\" 2 IDs (107 vs 2), \"Eldest\" 2 IDs (349 vs 0). Also: 51.8% of series have `book_count:0` and 35.3% have exactly 1 book → 87% of series entities hold 0 or 1 books; 91% of primary books belong to *some* series (suspiciously high, consistent with auto-create-per-book). Work: (1) find the series-create/resolve path and change the identity key from (name,author-combo) to a normalized name (with a deliberate co-author/narrator disambiguation rule only where genuinely distinct); (2) a plan-first, dry-run-first merge op to collapse the redundant rows and re-point book→series FKs; (3) prune the 0-book series. Note the `series[].book_count` field drifts low vs a direct census tally (cached counter) — measure from the book census, not the field. Plan-first + dry-run before any prod write; NEVER during a scan."
+  },
+  {
+    "line": 2086,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Author table is ~half junk — PRIORITY 2 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`) over all 17,498 author rows: (1) **7,890 (45.1%) have `book_count == 0`** — dead weight; (2) **1,204 (6.9%) are book/chapter titles mis-filed as author names** (e.g. `\"[PZG] Arifureta, Vol. 01 (Audiobook) [JNC Audio]\"`, heuristic: len>45 + digit/`:`/`-`); (3) **221 are narrator credits mis-filed as authors** (`read by|narrated by|narrator`, e.g. `\"- Bag of Bones (read by Stephen King)\"`); (4) **\"Unknown Author\" is ≥12 distinct rows** (`\"- Unknown Author\"`, `\"Unknown Author\"`, `\"Author Unknown Note 01\"`, plus `\"Unknown Title\"`/`\"Unknown Album\"`/`\"Unknown Artist\"` used as the same dumping ground), ~260+ book rows attributed; (5) **24 author-name clusters (180 rows) match the known `CreateAuthor` check-then-create race** — \"Mythos\" 41 IDs (40 empty), two `jennsen, gs_…` clusters 9 & 12 IDs, \"cthulhu armageddon (unabridged)\" 25 IDs; (6) **6 clean two-way splits need a HUMAN merge decision** (both sides have real books): \"Terry Pratchett\" 375 vs 1, \"Tamora Pierce\" 63 vs 7, \"Ian Irvine\" 7 vs 5, \"James A. Hunter\" 18 vs 14, \"Gardner Dozois\" 4 vs 2, \"Daniel José Older\" 1 vs 1. Related memory: [[project_createauthor_check_then_create_race]], [[project_author_dangling_authorid_leak]] (dangling AuthorID improved to 140/33-primary from ~212). Work: canonicalize the CreateAuthor race (upsert-by-normalized-name, not check-then-create) so it stops minting; a plan-first dry-run merge/prune op for empty dupes and race clusters; a classifier + repair for title-as-author and narrator-as-author rows (re-parse from path/folder or move narrator→narrator field). The `authors[].book_count` field drifts low — count from the book census. Plan-first + dry-run; NEVER during a scan."
+  },
+  {
+    "line": 2088,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Duplicate & placeholder book records — PRIORITY 3 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`). (1) **8,235 redundant primary book rows are true content/metadata duplicates** (same normalized title+author, placeholders excluded; 5,671 distinct clean (title,author) pairs with >1 primary) — top clusters: \"PZG\" bundle 57 copies, Jim Butcher \"Skin Game\" **51 rows split per-chapter as separate books** (`Skin Game - 1`, `Skin Game - 11`, …), \"For We Are Many\" (Bobiverse 2) 39, \"Prince of Fools\" 31. (2) **839 distinct `file_path`s are shared by >1 primary book** (1,334 redundant rows) — strongest duplicate signal; includes front-matter minted as its own book: `.../Unknown Author/Introduction` (37 book IDs), `/Prologue` (35), `/About the Author` (20), `/Audible Opening Message` (19). (3) **Front-matter tracks stored as their own books** (37 \"Introduction\", 35 \"Prologue\", 20 \"About the Author\", 19 \"Audible Opening Message\" under Unknown Author) — these should be chapters/tracks of their parent book, not standalone records. (4) **5,421 primary books (12.5%) carry placeholder title/author** (`\"read by narrator\"` ×1,182+520, `\"unknown title\"`/`\"unknown author\"` ×153) — folder-parser fallback strings persisted as real metadata; re-parse or re-fetch. (5) 414 book rows (333 primary) have an empty `title` even though most have a usable `transcribed_title` fallback. Related: [[project_repoint_collision_bucket_is_duplicate_books]] (repoint collisions ARE duplicate books — dedup is upstream), the dedup sandbox work. Do AFTER the missing-file recovery and series/author cleanup, because merging duplicate books changes which rows the missing-file repointer must consider. Work: a plan-first dry-run merge op keyed on `file_path` collision first (exact, safe), then normalized title+author with hash confirmation; fold per-chapter split books back into one book with track/chapter files; a placeholder-title re-parse/re-fetch pass. Plan-first + dry-run; NEVER during a scan (a scan re-mints duplicates)."
+  },
+  {
+    "line": 2090,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "subsection": null,
+    "text": "- [ ] **Evaluate store-level optimistic concurrency (compare-and-swap) for DB writes — a general \"recheck before write\" guard.** Raised by the user 2026-09-05 while building the missing-file recovery ops: \"can we guard at [the central write] level making everything idempotent.\" Findings from that session: (1) **Filesystem writes are already centrally guarded** — `internal/fileops` refuses clobber (`ReflinkOrCopy` → `TestReflinkOrCopyRefusesExistingDestination`, `reflink_test.go:51`; plus `CopyFileExclusive` O_EXCL and `CopyFileAtomic` write-temp-then-rename). New file-moving ops should ROUTE through fileops and inherit that idempotency rather than reimplement it. (2) **DB writes have NO concurrency guard** — `PebbleStore.UpdateBookFile(id, *BookFile)` (`pebble_store_bookfiles.go:519`) is an unconditional full-record replace; `BookFile` carries no CAS revision. A per-op stat-recheck (as added to mark-missing/recover) CANNOT be centralized into the write function, because it rechecks a **disk fact** the store can't see — the store writes rows, not files. The centralizable mechanism is different: **optimistic concurrency** — add a monotonic `rev` to `BookFile`, have `UpdateBookFile` take the expected rev and reject the write if the row changed since it was read (compare-and-swap). That makes every DB write *conflict-detecting* for all ops at once. Scope/cost: a rev field on the model + threading expected-rev through the write surface (`UpdateBookFile`, `BatchCreateBookFiles`, `UpdateBookFileHashes`, and the memdb sync path) + deciding fail-closed (reject) vs fail-open (retry-read-merge) per caller. Wide but bounded; its own PR with its own plan. Related: the per-op stat-interlock in `mark_missing_files.go` / the recover op is the disk↔row coherence tool and stays; this todo is the row↔row (concurrent-writer) tool. Consider whether the CoW `book_ver:` history already gives a natural rev to CAS on. Plan-first; no behavior change until reviewed."
+  },
+  {
+    "line": 2187,
+    "section": "Provider throttling — follow-ups",
+    "subsection": null,
+    "text": "- [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns"
+  },
+  {
+    "line": 2192,
+    "section": "Provider throttling — follow-ups",
+    "subsection": null,
+    "text": "- [ ] **Unify the two metadata source-chain builders.** `metafetch.buildSourceChainFromConfig`"
+  },
+  {
+    "line": 2198,
+    "section": "Provider throttling — follow-ups",
+    "subsection": null,
+    "text": "- [ ] **`internal/metadata/wikipedia.go` drops three non-200s on the floor** (lines ~173,"
+  },
+  {
+    "line": 2202,
+    "section": "Provider throttling — follow-ups",
+    "subsection": null,
+    "text": "- [ ] **`internal/metadata/cover.go` still returns a bare status error.** Cover downloads"
+  },
+  {
+    "line": 2206,
+    "section": "Provider throttling — follow-ups",
+    "subsection": null,
+    "text": "- [ ] **Chase the Google Books quota itself.** Re-tested from prod past the Pacific"
+  },
+  {
+    "line": 2213,
+    "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+    "subsection": null,
+    "text": "- [ ] `PebbleStore.DeleteAuthor` → `sweepAuthorFromBookAuthors` scans the whole"
+  },
+  {
+    "line": 2218,
+    "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+    "subsection": null,
+    "text": "- [ ] 3,372 books were left with no author row (`books-left-authorless` 896 + 2,476)."
+  },
+  {
+    "line": 2221,
+    "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+    "subsection": null,
+    "text": "- [ ] 662 `out-of-scope` rows (publisher/copyright/translator shrapnel that fails"
+  },
+  {
+    "line": 2260,
+    "section": "Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] Prod has 43,592 `series` rows for 83,229 books. \"The Primal Hunter\" exists 8"
+  },
+  {
+    "line": 2267,
+    "section": "Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] `GET /api/v1/series?search=…` (also `q=`, `name=`) ignores its filter and returns"
+  },
+  {
+    "line": 2272,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] The weekly `library.scan` (`01M1M51FCKD1KA4XQ9AQ63XZWD`) organized a book at 02:31"
+  },
+  {
+    "line": 2288,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **CFG-VALIDATE-AFTER-PERSIST** `PUT /api/v1/config` still calls"
+  },
+  {
+    "line": 2304,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **`dedup.MergeBooks` hard-delete path has no audio-route guard** — surfaced by the"
+  },
+  {
+    "line": 2319,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **`extractSeriesName` truncates an album on the first `,`, `-` or `:`.**"
+  },
+  {
+    "line": 2333,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **~17 maintenance/regroup ops write `Book` columns without consulting a field"
+  },
+  {
+    "line": 2380,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these"
+  },
+  {
+    "line": 2406,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "subsection": null,
+    "text": "- [ ] **Organize landing follow-ups accepted as non-blocking in the #3051 review** —"
+  },
+  {
+    "line": 2488,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "subsection": null,
+    "text": "- [ ] Replace the literal with an ffprobe-derived expected sum; confirm which ffprobe CI installs"
+  },
+  {
+    "line": 2490,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "subsection": null,
+    "text": "- [ ] **Unify `folder_parser.looksLikeAuthorSegment` with `personname.LooksLikePersonName`**"
+  },
+  {
+    "line": 2506,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "subsection": null,
+    "text": "- [ ] **Release builds take Go from `go.mod`, not the 1.27.1 pin** — `release-prod.yml` and"
+  },
+  {
+    "line": 2515,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "subsection": null,
+    "text": "- [ ] **Add an op that reports undecodable review-hold payloads.** `ListReviewItems`'"
+  },
+  {
+    "line": 2525,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "subsection": null,
+    "text": "- [ ] **Consolidate the four `IsPlaceholder(StripEditionSuffix(...))` call sites**"
+  },
+  {
+    "line": 2551,
+    "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+    "subsection": null,
+    "text": "- [ ] Decide: populate `author_name` server-side, or drop it from the TS interface"
+  },
+  {
+    "line": 2552,
+    "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+    "subsection": null,
+    "text": "- [ ] Grep for other readers of `book.author_name` that are silently getting `undefined`"
+  },
+  {
+    "line": 2553,
+    "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+    "subsection": null,
+    "text": "- [ ] Prefer whichever option makes the absence a compile error rather than an empty string"
+  },
+  {
+    "line": 2569,
+    "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+    "subsection": null,
+    "text": "- [ ] Measure the real cost of a dedup search against the production library first"
+  },
+  {
+    "line": 2570,
+    "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+    "subsection": null,
+    "text": "- [ ] If it warrants the change: add the projection to `BookBulkReader`, implement on"
+  },
+  {
+    "line": 2572,
+    "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+    "subsection": null,
+    "text": "- [ ] Keep the author-name join — the projection has to see author names, not just books"
+  },
+  {
+    "line": 2615,
+    "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+    "subsection": null,
+    "text": "- [ ] Decide the exception mechanism, then fix `LooksLikePersonName` and add"
+  },
+  {
+    "line": 2618,
+    "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+    "subsection": null,
+    "text": "- [ ] Until then, record Georgian and lowercase-Armenian in the package doc's"
+  },
+  {
+    "line": 2661,
+    "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+    "subsection": "\"Last, First\" is not used as a discriminator when choosing the author side",
+    "text": "- [ ] **`internal/metadata` and `internal/scanner` filename parsing still disagrees on 1,110 of 40,261 real library paths.**"
+  },
+  {
+    "line": 2734,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] Measure how many authors normalize to something other than their lower-cased name"
+  },
+  {
+    "line": 2735,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] Decide whether the query should be normalized, or the stored side lower-cased only"
+  },
+  {
+    "line": 2736,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] Check the other `SearchBooks` callers before changing the predicate"
+  },
+  {
+    "line": 2741,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] **On the `\"_\"` filename path, a refusal from `ChooseAuthorSide` produces a worse answer than a guess, and the directory fallback can mint a genre folder as an author.**"
+  },
+  {
+    "line": 2789,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] **TODO-REVIEW-PUSHDOWN** Push the metadata review lane's filters down to"
+  },
+  {
+    "line": 2811,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "subsection": null,
+    "text": "- [ ] **TODO-ORIGHASH-SPLIT** `book_files.original_file_hash` has the same"
+  },
+  {
+    "line": 2857,
+    "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+    "subsection": null,
+    "text": "- [ ] **TODO-FILEHASH-REPAIR** Repair `book_files.file_hash` rows written by the three"
+  },
+  {
+    "line": 2872,
+    "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+    "subsection": null,
+    "text": "- [ ] **SERIES-PHANTOM-REPAIR** Repair the series IDs that are ALREADY phantom."
+  },
+  {
+    "line": 2887,
+    "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+    "subsection": null,
+    "text": "- [ ] **SERIES-NORMALIZE-TRASHED-GAP** `mergeSeriesGroupHelper`"
+  },
+  {
+    "line": 2901,
+    "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+    "subsection": null,
+    "text": "- [ ] **SERIES-DENUMBER-TRASHED-GAP** `internal/plugins/maintenance/series_denumber_op.go`"
+  },
+  {
+    "line": 2933,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 1 — highest value, do next",
+    "text": "- [ ] **`internal/operations/registry` (24 test files, ~80 waits, ~5.7s of"
+  },
+  {
+    "line": 2948,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 1 — highest value, do next",
+    "text": "- [ ] **`internal/realtime/events_test.go` — the remaining 25 waits.** The 26s"
+  },
+  {
+    "line": 2960,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 1 — highest value, do next",
+    "text": "- [ ] **`internal/activity/batcher_test.go` (4 waits, 2.2s package).** Flush-timer"
+  },
+  {
+    "line": 2966,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 2 — worth doing, needs a per-test read",
+    "text": "- [ ] `internal/metadata/circuitbreaker_test.go` — open/half-open/closed state"
+  },
+  {
+    "line": 2968,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 2 — worth doing, needs a per-test read",
+    "text": "- [ ] `internal/scheduler/periodic_library_scan_test.go`, `full_sweep_test.go` —"
+  },
+  {
+    "line": 2970,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 2 — worth doing, needs a per-test read",
+    "text": "- [ ] `internal/metrics/metrics_test.go`, `internal/plugin/events_test.go`,"
+  },
+  {
+    "line": 2973,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tier 2 — worth doing, needs a per-test read",
+    "text": "- [ ] `internal/scanner/process_file_timeout_test.go` — timeout logic; confirm it"
+  },
+  {
+    "line": 2985,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Do NOT convert — with the reason",
+    "text": "- [ ] `internal/server/server_more_test.go` :: `TestServerStartGracefulShutdown`."
+  },
+  {
+    "line": 2996,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Do NOT convert — with the reason",
+    "text": "- [ ] `internal/watcher/*`, `internal/itunes/library_watcher_test.go` — fsnotify"
+  },
+  {
+    "line": 2998,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Do NOT convert — with the reason",
+    "text": "- [ ] `internal/plugins/webhook`, `internal/mtls`, `internal/metadata/audnexus_test.go`"
+  },
+  {
+    "line": 3000,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Do NOT convert — with the reason",
+    "text": "- [ ] `internal/transcode/transcode_coverage_test.go` — spawns ffmpeg/ffprobe."
+  },
+  {
+    "line": 3001,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Do NOT convert — with the reason",
+    "text": "- [ ] Everything using a real Pebble/NutsDB store in the wait window"
+  },
+  {
+    "line": 3020,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Docs",
+    "text": "- [ ] **Decide the fate of `docs/CODING_STANDARDS.md` — it is an unreferenced stale"
+  },
+  {
+    "line": 3063,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Concurrency",
+    "text": "- [ ] **`internal/scanner/scanner.go` spawns one goroutine per directory and per"
+  },
+  {
+    "line": 3114,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tooling / CI",
+    "text": "- [ ] **~44 repos still pin `.standards` at a stale commit; none of them is at"
+  },
+  {
+    "line": 3136,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tooling / CI",
+    "text": "- [ ] **Decide the sweep's real scope before running it — it is not free after"
+  },
+  {
+    "line": 3151,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Tooling / CI",
+    "text": "- [ ] **`falkcorp/magnet-handler` `main` has a `toolchain` directive below its"
+  },
+  {
+    "line": 3172,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Testing",
+    "text": "- [ ] **Five goroutine bodies converted to `wg.Go` in #2992 have ZERO test"
+  },
+  {
+    "line": 3196,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Testing",
+    "text": "- [ ] **The `wg.Go` parameter-capture sites rest on review, not on tests.**"
+  },
+  {
+    "line": 3218,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Testing",
+    "text": "- [ ] **DEDUP-ORPHAN-BOOK-EMB** Act on `HydrateChromem`'s new `books_orphaned`"
+  },
+  {
+    "line": 3260,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Investigate kektordb as a vector-store option",
+    "text": "- [ ] Investigate app-dir guard tests failing only under heavy cross-package test load"
+  },
+  {
+    "line": 3288,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Investigate kektordb as a vector-store option",
+    "text": "- [ ] **Activity `Summarize` writes a summary row with an `OperationID` but no `act:op:` index entry.**"
+  },
+  {
+    "line": 3297,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "subsection": "Investigate kektordb as a vector-store option",
+    "text": "- [ ] **Verify against production whether `act:digest:` and `act:debug:` keys actually exist.**"
+  },
+  {
+    "line": 3326,
+    "section": "Applied books stay in the list in BulkMetadataSearchDialog",
+    "subsection": null,
+    "text": "- [ ] Make the filter session-aware (also exclude `bookStatuses.get(id) === 'applied'`)."
+  },
+  {
+    "line": 3327,
+    "section": "Applied books stay in the list in BulkMetadataSearchDialog",
+    "subsection": null,
+    "text": "- [ ] Decide whether `skipApplied` should default to `true`."
+  },
+  {
+    "line": 3344,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": null,
+    "text": "- [ ] `OAuthGithubClientSecret` and `OAuthGoogleClientSecret` (`internal/config/config.go:895-898`)"
+  },
+  {
+    "line": 3345,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": null,
+    "text": "- [ ] `DelugeWebPassword` (`internal/config/config.go:991`)"
+  },
+  {
+    "line": 3346,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": null,
+    "text": "- [ ] `DownloadClient.Torrent.Deluge.Password` (`config.go:172`)"
+  },
+  {
+    "line": 3347,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": null,
+    "text": "- [ ] `DownloadClient.Torrent.QBittorrent.Password` (`config.go:180`)"
+  },
+  {
+    "line": 3348,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": null,
+    "text": "- [ ] `DownloadClient.Usenet.Sabnzbd.APIKey` (`config.go:188`)"
+  },
+  {
+    "line": 3380,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": "Metadata review: a book can be dispatched to apply twice",
+    "text": "- [ ] Confirm server-side idempotency for a repeated apply of the same book"
+  },
+  {
+    "line": 3381,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "subsection": "Metadata review: a book can be dispatched to apply twice",
+    "text": "- [ ] If not idempotent, have `applyMany` drain `applyQueueRef` (and cancel the"
+  },
+  {
+    "line": 3392,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": null,
+    "text": "- [ ] Make `BackupConfig.BackupDir` configurable to an absolute path on another"
+  },
+  {
+    "line": 3395,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": null,
+    "text": "- [ ] Decide whether a backup that lands on the same filesystem should warn at"
+  },
+  {
+    "line": 3397,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": null,
+    "text": "- [ ] Revisit `defaultMaxTotalBytes` (currently 40 GiB) once the destination is"
+  },
+  {
+    "line": 3423,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "A running scan does not say which kind of scan it is",
+    "text": "- [ ] Give the running operation a display name that names the mode"
+  },
+  {
+    "line": 3425,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "A running scan does not say which kind of scan it is",
+    "text": "- [ ] Check the progress/log lines too — \"Reading tags: N files\" never says"
+  },
+  {
+    "line": 3428,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "A running scan does not say which kind of scan it is",
+    "text": "- [ ] **Audible metadata upgrade job** — add a dry-run-first maintenance"
+  },
+  {
+    "line": 3436,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "A running scan does not say which kind of scan it is",
+    "text": "- [ ] **Operation bell: name metadata subjects** — render a single-book cached"
+  },
+  {
+    "line": 3445,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "Metal Whisper worker follow-up",
+    "text": "- [ ] Validate the Mac MLX/Metal Whisper worker locally, then benchmark and add"
+  },
+  {
+    "line": 3449,
+    "section": "Move database backups off the database's own filesystem",
+    "subsection": "Metal Whisper worker follow-up",
+    "text": "- [ ] **Metadata Review: hide runtime mismatches** — add a filter that excludes"
+  },
+  {
+    "line": 3475,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] Have the organize path record the old->new relationship when it creates the second"
+  },
+  {
+    "line": 3478,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] Decide whether reflink/hardlink cases should be version-linked at all — they share"
+  },
+  {
+    "line": 3480,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] Confirm on prod whether original import locations remain in the scan paths. If they"
+  },
+  {
+    "line": 3482,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] Re-check the single-member version group finding with `RootDir` SET. It was measured"
+  },
+  {
+    "line": 3489,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] **Check whether `/filterdata`'s SERIES list has the same zero-book"
+  },
+  {
+    "line": 3502,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] **Make `/filterdata` stop walking the whole book keyspace twice to read"
+  },
+  {
+    "line": 3514,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "subsection": null,
+    "text": "- [ ] **Decide what to do about the 6 ABS client sorts this server has no field"
+  },
+  {
+    "line": 3587,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "subsection": null,
+    "text": "- [ ] Set the production value back to 10. **Fixes future scans only.** Production"
+  },
+  {
+    "line": 3589,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "subsection": null,
+    "text": "- [ ] Repair the 12,525 existing books with no `book_file` rows, and the ~1,710"
+  },
+  {
+    "line": 3592,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "subsection": null,
+    "text": "- [ ] Fix the silent-disable defect: `ChapterConsolidationThresholdMin` has no"
+  },
+  {
+    "line": 3604,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "subsection": null,
+    "text": "- [ ] **CI never fetches Git LFS, so every audio-fixture test runs against a"
+  },
+  {
+    "line": 3720,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "subsection": null,
+    "text": "- [ ] **Make the `has_file_errors` fast path honor the rest of the query, or"
+  },
+  {
+    "line": 3812,
+    "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+    "subsection": null,
+    "text": "- [ ] Decide which contract `/reconcile/latest-scan` should honour"
+  },
+  {
+    "line": 3813,
+    "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+    "subsection": null,
+    "text": "- [ ] If falling through: name the source op in the response so a stale preview is identifiable"
+  },
+  {
+    "line": 3814,
+    "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+    "subsection": null,
+    "text": "- [ ] Either way, stop discarding the `json.Unmarshal` error without a log line"
+  },
+  {
+    "line": 3836,
+    "section": "Finish the LLM fallback chain — stages 2 through 4",
+    "subsection": null,
+    "text": "- [ ] **Stage 2 — make the local rung start a backend.** Today the local rung's"
+  },
+  {
+    "line": 3842,
+    "section": "Finish the LLM fallback chain — stages 2 through 4",
+    "subsection": null,
+    "text": "- [ ] **Stage 3 — durable deferral.** When no rung answers, the candidates are"
+  },
+  {
+    "line": 3855,
+    "section": "Finish the LLM fallback chain — stages 2 through 4",
+    "subsection": null,
+    "text": "- [ ] **Stage 4 — poll for the remote and drain what is owed.**"
+  },
+  {
+    "line": 3901,
+    "section": "The path→author parser exists twice, the copies have diverged, and only one of them runs",
+    "subsection": null,
+    "text": "- [ ] Collapse the two into one parser (its own package, as"
+  },
+  {
+    "line": 3904,
+    "section": "The path→author parser exists twice, the copies have diverged, and only one of them runs",
+    "subsection": null,
+    "text": "- [ ] Reconcile the divergent directory validation deliberately rather than"
+  },
+  {
+    "line": 3906,
+    "section": "The path→author parser exists twice, the copies have diverged, and only one of them runs",
+    "subsection": null,
+    "text": "- [ ] Add a conformance test over a shared corpus, in the shape of"
+  },
+  {
+    "line": 3965,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Dry-run the 1,291 reconciliation and report per-bucket counts"
+  },
+  {
+    "line": 3966,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Apply it, REPOINTING rather than deleting"
+  },
+  {
+    "line": 3967,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Decide the route for the 2,307"
+  },
+  {
+    "line": 3968,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Re-census afterwards to confirm the cohort actually shrank"
+  },
+  {
+    "line": 3970,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] **The quarantine \"safety net\" in `buildAudiobookListResponse` is justified"
+  },
+  {
+    "line": 4005,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Apply `ExcludeQuarantined` in the service post-filter and add it to"
+  },
+  {
+    "line": 4010,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "subsection": "Task 2 — decide the route for the 2,307 (needs a decision, not code yet)",
+    "text": "- [ ] Then delete the safety net in `audiobooks_helpers.go`, or rewrite its"
+  },
+  {
+    "line": 4019,
+    "section": "Data repair",
+    "subsection": null,
+    "text": "- [ ] **Decide how to repair the duplicate author rows that already exist.** The"
+  },
+  {
+    "line": 4058,
+    "section": "`ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement",
+    "subsection": null,
+    "text": "- [ ] Size the backlog: how many books have zero `book_file` rows and a"
+  },
+  {
+    "line": 4061,
+    "section": "`ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement",
+    "subsection": null,
+    "text": "- [ ] Repair the backlog once, from the scan's writer rather than the thin one,"
+  },
+  {
+    "line": 4063,
+    "section": "`ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement",
+    "subsection": null,
+    "text": "- [ ] Then delete `ensureSingleFileBookFile` and its call, rather than leaving a"
+  },
+  {
+    "line": 4065,
+    "section": "`ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement",
+    "subsection": null,
+    "text": "- [ ] Until then, do not \"simplify\" the two into one by keeping the thin version"
+  },
+  {
+    "line": 4106,
+    "section": "staticcheck gates nothing on a PR — decide whether it should",
+    "subsection": null,
+    "text": "- [ ] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck"
+  },
+  {
+    "line": 4107,
+    "section": "staticcheck gates nothing on a PR — decide whether it should",
+    "subsection": null,
+    "text": "- [ ] Decide: add to PR CI, or document it as local/nightly-only"
+  },
+  {
+    "line": 4108,
+    "section": "staticcheck gates nothing on a PR — decide whether it should",
+    "subsection": null,
+    "text": "- [ ] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape"
+  },
+  {
+    "line": 4112,
+    "section": "Scanner / scan cache",
+    "subsection": null,
+    "text": "- [ ] **Wire `BackfillBookFileScanCache` so it can actually be invoked before the"
+  },
+  {
+    "line": 4137,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "subsection": null,
+    "text": "- [ ] **Confirm a real scan actually queues.** After deploying, run a scan and"
+  },
+  {
+    "line": 4145,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "subsection": null,
+    "text": "- [ ] **Confirm queued results land on the version-group PRIMARY.** This is the"
+  },
+  {
+    "line": 4156,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "subsection": null,
+    "text": "- [ ] **Decide what to do about organize running before the parse.** Named as a"
+  },
+  {
+    "line": 4168,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "subsection": null,
+    "text": "- [ ] **Two books from one version group in one batch can lose a field.** The"
+  },
+  {
+    "line": 4175,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "subsection": null,
+    "text": "- [ ] **Watch the params row size once.** A batch carries only the seven fields"
+  },
+  {
+    "line": 4190,
+    "section": "Update Deluge when the organizer moves a book's files",
+    "subsection": null,
+    "text": "- [ ] Decide the mechanism: Deluge `move_storage` per torrent vs. re-announce, and what"
+  },
+  {
+    "line": 4192,
+    "section": "Update Deluge when the organizer moves a book's files",
+    "subsection": null,
+    "text": "- [ ] Decide failure policy: does a Deluge update failure roll the move back, or is the"
+  },
+  {
+    "line": 4195,
+    "section": "Update Deluge when the organizer moves a book's files",
+    "subsection": null,
+    "text": "- [ ] Wire it into the organize path, not just the manual move endpoint"
+  },
+  {
+    "line": 4196,
+    "section": "Update Deluge when the organizer moves a book's files",
+    "subsection": null,
+    "text": "- [ ] Only then schedule option B"
+  },
+  {
+    "line": 4241,
+    "section": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+    "subsection": "Fix",
+    "text": "- [ ] Dedup by FilePath within a single batch, before staging"
+  },
+  {
+    "line": 4242,
+    "section": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+    "subsection": "Fix",
+    "text": "- [ ] Same for iTunes PID — `enforceBookFilePIDUniqueness` has the identical read-committed gap"
+  },
+  {
+    "line": 4243,
+    "section": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+    "subsection": "Fix",
+    "text": "- [ ] Regression test: batch two rows with one path, assert 1 stored row and the un-doubled total"
+  },
+  {
+    "line": 4244,
+    "section": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+    "subsection": "Fix",
+    "text": "- [ ] Decide whether existing duplicate rows need a repair pass, and measure how many exist"
+  },
+  {
+    "line": 4267,
+    "section": "Scan cache is keyed per-book but the skip decision is per-file",
+    "subsection": null,
+    "text": "- [ ] Decide per-file scan-cache keying and write it up before coding"
+  },
+  {
+    "line": 4268,
+    "section": "Scan cache is keyed per-book but the skip decision is per-file",
+    "subsection": null,
+    "text": "- [ ] Confirm whether the directory-rooted book branch (`scanner.go:1229`, never calls"
+  },
+  {
+    "line": 4270,
+    "section": "Scan cache is keyed per-book but the skip decision is per-file",
+    "subsection": null,
+    "text": "- [ ] Open question, not yet measured: does the real `saveBookToDatabase` create a"
+  },
+  {
+    "line": 4274,
+    "section": "Scan cache is keyed per-book but the skip decision is per-file",
+    "subsection": null,
+    "text": "- [ ] **Fix the RC-ordinal guard's 200-release truncation window.**"
+  },
+  {
+    "line": 4357,
+    "section": "🟡 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it",
+    "subsection": "Fix",
+    "text": "- [ ] Check prod: is `system:backfill:book_aggregates_v1_done` currently set? — still"
+  },
+  {
+    "line": 4365,
+    "section": "🟡 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it",
+    "subsection": "Fix",
+    "text": "- [ ] The web UI's Run button (`api.runMaintenanceJob`) sends `{dry_run}` only, so `force`"
+  },
+  {
+    "line": 4383,
+    "section": "Repair the book rows that were written one-per-track",
+    "subsection": null,
+    "text": "- [ ] **Measure the real size of the affected population first.** One folder is"
+  },
+  {
+    "line": 4388,
+    "section": "Repair the book rows that were written one-per-track",
+    "subsection": null,
+    "text": "- [ ] **Decide the repair shape with the user before writing it.** Collapsing a"
+  },
+  {
+    "line": 4393,
+    "section": "Repair the book rows that were written one-per-track",
+    "subsection": null,
+    "text": "- [ ] **Check whether the author is correct once grouping works.** The folder-name"
+  },
+  {
+    "line": 4447,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "subsection": "Tasks",
+    "text": "- [ ] Read `scanCacheNoRowCount` off a completed production scan summary to size"
+  },
+  {
+    "line": 4471,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "subsection": "Tasks",
+    "text": "- [ ] Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the"
+  },
+  {
+    "line": 4474,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "subsection": "Tasks",
+    "text": "- [ ] Note when sizing: version-linking is *a* cause of a row-less path, not"
+  },
+  {
+    "line": 4484,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "subsection": "Tasks",
+    "text": "- [ ] **Decide how a forced per-book rescan gets picked up immediately.**"
+  },
+  {
+    "line": 4529,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "subsection": "Tasks",
+    "text": "- [ ] **Watch `too-fresh` in the scan summary on the first real run after deploy.**"
+  },
+  {
+    "line": 4544,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "Blocked on a deploy, not on code",
+    "text": "- [ ] **Deploy `main` and trigger the first `library_scan_full` sweep via \"Run now\".**"
+  },
+  {
+    "line": 4560,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "Blocked on a deploy, not on code",
+    "text": "- [ ] **The prod `library.scan` canceled at 8,367/40,108 stays canceled.**"
+  },
+  {
+    "line": 4567,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "The real fix, and the home for the path-keyed cache",
+    "text": "- [ ] **Implement the staged library scan pipeline.** Spec is on main at"
+  },
+  {
+    "line": 4582,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "Measurement that needs a real run",
+    "text": "- [ ] **Read `scanCacheNoRowCount`, `scanCacheStatErrCount` and"
+  },
+  {
+    "line": 4589,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "Measurement that needs a real run",
+    "text": "- [ ] **Read `too-fresh` off the same summary.** New in the age-gate PR, and"
+  },
+  {
+    "line": 4596,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "resume-sweep — never started, needs the user's go-ahead",
+    "text": "- [ ] **resume-sweep PR1: `userCanceled` marker on `runHandle` + correct shutdown"
+  },
+  {
+    "line": 4601,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "subsection": "resume-sweep — never started, needs the user's go-ahead",
+    "text": "- [ ] **resume-sweep PR2 — do NOT ship without the user's explicit say-so.**"
+  },
+  {
+    "line": 4628,
+    "section": "`CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows",
+    "subsection": null,
+    "text": "- [ ] Make the lookup and insert atomic (single Pebble batch with a conditional"
+  },
+  {
+    "line": 4630,
+    "section": "`CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows",
+    "subsection": null,
+    "text": "- [ ] Decide how to merge the duplicate author rows already present, and whether"
+  },
+  {
+    "line": 4633,
+    "section": "`CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows",
+    "subsection": null,
+    "text": "- [ ] Add a concurrency test asserting N concurrent `CreateAuthor` calls with one"
+  },
+  {
+    "line": 4667,
+    "section": "The directory author fallback reads the TITLE as the author on organized books",
+    "subsection": null,
+    "text": "- [ ] Decide the correct rule. The author is the **grandparent** under the"
+  },
+  {
+    "line": 4671,
+    "section": "The directory author fallback reads the TITLE as the author on organized books",
+    "subsection": null,
+    "text": "- [ ] Apply it in both copies, or collapse the two parsers into one — they are"
+  },
+  {
+    "line": 4673,
+    "section": "The directory author fallback reads the TITLE as the author on organized books",
+    "subsection": null,
+    "text": "- [ ] Quantify how many of the 4,643 junk author rows came from this specific"
+  },
+  {
+    "line": 4714,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] Widen the sentinel check to cover the WAL-write error as well as"
+  },
+  {
+    "line": 4718,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] Better: make the registry's `dbReporter` stop its flush loop before the"
+  },
+  {
+    "line": 4726,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SEC-BACKUP-ABSPATH** Decide whether the backup restore path should"
+  },
+  {
+    "line": 4740,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **PEBBLE-KEY-BOUND-CENSUS** Two related gaps surfaced while fixing"
+  },
+  {
+    "line": 4861,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **The dedup UI's \"Merge All\" button now previews instead of merging.**"
+  },
+  {
+    "line": 4875,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **`/api/v1/audiobooks` reports the PRIMARY count as `count` whenever no"
+  },
+  {
+    "line": 4932,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **DATABASE-RUNMIGRATIONS-TEST-COST** `internal/database`'s"
+  },
+  {
+    "line": 4967,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **`dedup.series-dedup`'s apply path writes no undo-ledger rows and does"
+  },
+  {
+    "line": 5007,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] (4) **NEW, found reviewing the above:** both `duplicates_helpers.go`"
+  },
+  {
+    "line": 5018,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed"
+  },
+  {
+    "line": 5119,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns"
+  },
+  {
+    "line": 5131,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-MERGE-PRIMITIVE-UNGUARDED** `MergeSeries` — the store-level"
+  },
+  {
+    "line": 5139,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] 🔴 **ORPHAN-FILES-HARD-DELETE-FAIL-OPEN** `internal/plugins/maintenance/orphan_book_files.go`"
+  },
+  {
+    "line": 5163,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] 🔴🔥 **AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24"
+  },
+  {
+    "line": 5246,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it.**"
+  },
+  {
+    "line": 5264,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-MERGE-PERSERIES-SCAN-COST** Four callers of"
+  },
+  {
+    "line": 5282,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **AUTHOR-FILE-SAFETY: `purge-empty-authors`' \"safety that matters\" is itself a"
+  },
+  {
+    "line": 5300,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **BOOKDETAIL-PROTO-READ: three membership checks in `web/src/pages/BookDetail.tsx` read"
+  },
+  {
+    "line": 5313,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **`DeleteAuthor` scans the whole `book_authors:` keyspace once per author deleted.**"
+  },
+  {
+    "line": 5338,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **DEMO-RECORDING-BROKEN: `scripts/record_demo.js` fails at Phase 2 on `main` — the"
+  },
+  {
+    "line": 5357,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **OPS-V2-DISPATCH-RACE — `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.**"
+  },
+  {
+    "line": 5379,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SCAN-STALL-ITEM** Find what wedges `library.scan` at ~14912 — and fix the"
+  },
+  {
+    "line": 5477,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **BOOK-ID-RANGE: measure whether any `book:` key has a non-digit first byte, then"
+  },
+  {
+    "line": 5492,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **MEMDB-LOSSY-READERS** The known-incomplete guard added in #2794 covers"
+  },
+  {
+    "line": 5532,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **MEMDB-SYNC-DROPPED-ERRORS: seven delete helpers in `memdb_sync.go` treat a"
+  },
+  {
+    "line": 5547,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **METADATA-GUARD-ASYMMETRY** Decide whether"
+  },
+  {
+    "line": 5587,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **JSONV2-OMITEMPTY** `omitempty` means something different in"
+  },
+  {
+    "line": 5640,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **RECORD-DEMO-TEMPDIR-LEAK: `scripts/record_demo.js` never removes the temp directory"
+  },
+  {
+    "line": 5647,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **`regroup_apply.go` skips nil members when demoting, so it can still leave a"
+  },
+  {
+    "line": 5728,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-DELETE-UNGUARDED** Two series-delete paths consult **no"
+  },
+  {
+    "line": 5979,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SERIES-NORMALIZE-PREVIEW-SWALLOWS-ERROR** `buildSeriesNormalizePreview`"
+  },
+  {
+    "line": 5987,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two"
+  },
+  {
+    "line": 6000,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own \"File the bug\" step"
+  },
+  {
+    "line": 6011,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **TODO-051-UNDOC** `docs/api/openapi.json` is missing correctly-prefixed"
+  },
+  {
+    "line": 6022,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **SCAN-PHASE** Restructure the library scan into discrete, resumable phases —"
+  },
+  {
+    "line": 6101,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **TODO-MOCKORDER** Decide whether to add a permanent guard against shadowed"
+  },
+  {
+    "line": 6117,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **TODO-MOCKWORKS** `web/tests/e2e/utils/test-helpers.ts` ~L1750:"
+  },
+  {
+    "line": 6126,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": null,
+    "text": "- [ ] **COLLECTION-NAME-CONFLICT-SENTINEL** `PebbleStore.UpdateCollection`'s"
+  },
+  {
+    "line": 6149,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧹 DEAD-1 residue — `linkAsVersion` is dead production code",
+    "text": "- [ ] **Remove `Importer.linkAsVersion`** (`internal/itunes/service/importer.go:1780`) and the"
+  },
+  {
+    "line": 6192,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "📋 `DECISIONS-PENDING.md` contradicts itself — settled decisions still listed as open",
+    "text": "- [ ] **Reconcile `docs/plans/DECISIONS-PENDING.md`'s open table with its own recorded-decisions"
+  },
+  {
+    "line": 6229,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "Bulk book-merge shows \"Merged all\" even when individual merges failed",
+    "text": "- [ ] Track per-group outcomes in the loop and report \"Merged N of M\" (naming the"
+  },
+  {
+    "line": 6242,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧹 DEP-1e — drop the deprecated `Book.ITunesPath` field",
+    "text": "- [ ] **Remove `ITunesPath *string` from `database.Book`** and the `BookCore` round-trip that"
+  },
+  {
+    "line": 6365,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] **B (do first):** give each maintenance def a per-job `ConcurrencyKey` so a job can never run"
+  },
+  {
+    "line": 6373,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] **Then: the consolidator.** Once ~3–4 ops for the same def are QUEUED, open one new op whose"
+  },
+  {
+    "line": 6450,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] **Decide the fate of `api.startBulkMetadataFetch`, now caller-less.** Deleting"
+  },
+  {
+    "line": 6479,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] Add a Settings panel for `path_aliases` (root / Windows prefix / UNC /"
+  },
+  {
+    "line": 6482,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] Make `PathAliases` the single source for the Windows prefix and have"
+  },
+  {
+    "line": 6490,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] Decide how `path_aliases` re-derives after a normalization change."
+  },
+  {
+    "line": 6498,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] Replace the fixed `resume_policy` enum with a **condition-based** resume"
+  },
+  {
+    "line": 6523,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "subsection": "🧩 Queued-op consolidator — collapse N queued runs of one def into a single merged op",
+    "text": "- [ ] **MERGE-UNDO** Make a review-initiated merge reversible. The machinery is"
+  },
+  {
+    "line": 6548,
+    "section": "CI / automation",
+    "subsection": null,
+    "text": "- [ ] Decide whether the 22 `gha-*` repos (plus `magnet-handler`) should keep their"
+  },
+  {
+    "line": 6560,
+    "section": "CI / automation",
+    "subsection": null,
+    "text": "- [ ] 🔌 **ABS coverage gaps N-1 … N-10** (audit:"
+  },
+  {
+    "line": 6598,
+    "section": "CI / automation",
+    "subsection": null,
+    "text": "- [ ] ⚙️ **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`"
+  },
+  {
+    "line": 6604,
+    "section": "CI / automation",
+    "subsection": null,
+    "text": "- [ ] 🌐 **Per-stream `language` is always `nil` (N-12).** `mapper.go:676` returns nil"
+  },
+  {
+    "line": 6609,
+    "section": "CI / automation",
+    "subsection": null,
+    "text": "- [ ] 📚 **Docs consolidation follow-ups (from the 2026-08-11 inventory).** Full evidence in"
+  },
+  {
+    "line": 6642,
+    "section": "ABS",
+    "subsection": null,
+    "text": "- [ ] **Align the ABS conformance fixtures with the oracle capture so the value gate can be"
+  },
+  {
+    "line": 6672,
+    "section": "Dedup",
+    "subsection": null,
+    "text": "- [ ] **Exact-candidate backlog is re-accumulating — fix the source, not the symptom.** The"
+  },
+  {
+    "line": 6744,
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "subsection": "Tasks",
+    "text": "- [ ] Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the"
+  },
+  {
+    "line": 6747,
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "subsection": "Tasks",
+    "text": "- [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,"
+  },
+  {
+    "line": 6750,
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "subsection": "Tasks",
+    "text": "- [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in"
+  },
+  {
+    "line": 6798,
+    "section": "✅ Second, unrelated Coverage Floor failure — FIXED in this PR",
+    "subsection": null,
+    "text": "- [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock"
+  },
+  {
+    "line": 6891,
+    "section": "Security",
+    "subsection": null,
+    "text": "- [ ] **SEC-9: the OpenAI API key is sent from the browser.**"
+  },
+  {
+    "line": 6912,
+    "section": "Docs",
+    "subsection": null,
+    "text": "- [ ] **Give the 2026-06-22 security sweep a status column so it can eventually be retired.**"
+  },
+  {
+    "line": 6978,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": null,
+    "text": "- [ ] **Collections do not exist — this is a FEATURE, not a wiring fix.** `/api/collections`"
+  },
+  {
+    "line": 7005,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": null,
+    "text": "- [ ] **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**"
+  },
+  {
+    "line": 7048,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": "ABS API — sweep every endpoint for accepted-but-ignored query parameters",
+    "text": "- [ ] 💾 **Run `maintenance.booksig-sidecar-migrate` on production** — the op is"
+  },
+  {
+    "line": 7109,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": "ABS API — sweep every endpoint for accepted-but-ignored query parameters",
+    "text": "- [ ] 🎧 **Run `maintenance.chapters-backfill` against production.** The op ships"
+  },
+  {
+    "line": 7120,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": "ABS API — sweep every endpoint for accepted-but-ignored query parameters",
+    "text": "- [ ] 🔁 **Wire a durable \"probed, found none\" marker before this op is ever"
+  },
+  {
+    "line": 7132,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": "ABS API — sweep every endpoint for accepted-but-ignored query parameters",
+    "text": "- [ ] 🔍 **Index track names so smart playlists can match them.** The Bleve"
+  },
+  {
+    "line": 7143,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "subsection": "ABS API — sweep every endpoint for accepted-but-ignored query parameters",
+    "text": "- [ ] 🧩 **Investigate per-chapter split files standing as their own books.** While"
+  },
+  {
+    "line": 7156,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **`BookFile.FilePath` rows point at files that do not exist — 16,130 books"
+  },
+  {
+    "line": 7179,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For"
+  },
+  {
+    "line": 7184,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **`Book.FilePath` is NOT unique — 1,264 values are shared by more than one"
+  },
+  {
+    "line": 7194,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort"
+  },
+  {
+    "line": 7199,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **Multi-file chapter synthesis produces a timeline that stops short.** One of"
+  },
+  {
+    "line": 7203,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "subsection": null,
+    "text": "- [ ] **Duplicate book rows per title under different author folders** (`Deadly Jobs`"
+  },
+  {
+    "line": 7211,
+    "section": "Follow-up on the op itself",
+    "subsection": null,
+    "text": "- [ ] `registry.RunItems` label re-render (fixed 2026-08-13) changed shared"
+  },
+  {
+    "line": 7214,
+    "section": "Follow-up on the op itself",
+    "subsection": null,
+    "text": "- [ ] One unreproduced failure of `internal/plugins/maintenance` was observed on"
+  },
+  {
+    "line": 7320,
+    "section": "BUG: 10,780 version groups elect MORE than one primary",
+    "subsection": "6,157 books are invisible in the web UI — `vg-` singleton groups elect no primary",
+    "text": "- [ ] 🤔 **Decide whether the newly-implemented filter fields belong in"
+  },
+  {
+    "line": 7361,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": null,
+    "text": "- [ ] **F7 — `ApplyMetadataFileIO` returns nothing, so rename failure is"
+  },
+  {
+    "line": 7374,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": null,
+    "text": "- [ ] **F6 — `ensureLibraryCopy` treats an empty organize as success.**"
+  },
+  {
+    "line": 7402,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": null,
+    "text": "- [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore`"
+  },
+  {
+    "line": 7417,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": null,
+    "text": "- [ ] Audit existing \"we use the wide type because X requires it\" comments across the"
+  },
+  {
+    "line": 7435,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "ghcommon reusable-workflow pins are a month apart — decide, don't drift",
+    "text": "- [ ] Decide whether to bump the eight, and do it in **at least two PRs** —"
+  },
+  {
+    "line": 7442,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "ghcommon reusable-workflow pins are a month apart — decide, don't drift",
+    "text": "- [ ] Not done unattended on purpose: this was left for a human on 2026-08-18"
+  },
+  {
+    "line": 7483,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] `database.Store` (40) — make unreachable rather than smaller (plan phase 2)."
+  },
+  {
+    "line": 7484,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] `itunes/service.Store` (17 declared / 24 called) — 7 assignability"
+  },
+  {
+    "line": 7487,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] `maintenance.JobStore` (12) — deliberate choice from the #2534 arbitration;"
+  },
+  {
+    "line": 7489,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) — the service calls **44"
+  },
+  {
+    "line": 7498,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] **Narrow `positionSyncStore` and `pathRepairerStore` — both blocked on a wide"
+  },
+  {
+    "line": 7514,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured"
+  },
+  {
+    "line": 7523,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "subsection": "Interface width: the five the sweep did not reach",
+    "text": "- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the"
+  },
+  {
+    "line": 7577,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **Audit every config option name — the set has grown by accretion and the"
+  },
+  {
+    "line": 7657,
+    "section": "Config",
+    "subsection": "Dedup",
+    "text": "- [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore`"
+  },
+  {
+    "line": 7676,
+    "section": "Dedup",
+    "subsection": null,
+    "text": "- [ ] **Clean up the 2,504 already-orphaned dedup candidates — use the existing"
+  },
+  {
+    "line": 7708,
+    "section": "Dedup",
+    "subsection": null,
+    "text": "- [ ] 🧊 **`*PebbleStore` struct split — LOWEST PRIORITY. Literally do anything else"
+  },
+  {
+    "line": 7741,
+    "section": "Dedup",
+    "subsection": null,
+    "text": "- [ ] **Finish killing `database.Store` — 18 references left outside `internal/database`.**"
+  },
+  {
+    "line": 7761,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **Rename `write_back_metadata` → `auto_write_tags_on_fetch`.** The current name"
+  },
+  {
+    "line": 7789,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover"
+  },
+  {
+    "line": 7831,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **CFG-AUDIT** Triage the findings in"
+  },
+  {
+    "line": 7875,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🏷️ **\"Browse by Tag\" surfaces internal bookkeeping tags and formats them"
+  },
+  {
+    "line": 7928,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its"
+  },
+  {
+    "line": 7987,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🔴 **The binary ITL parser extracts ZERO smart playlists from real iTunes"
+  },
+  {
+    "line": 8042,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **ITUNES-SMARTCRIT-PARSE** `ParseSmartCriteria` does not understand the"
+  },
+  {
+    "line": 8152,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **MERGE-CACHE-EVICT** A merge must evict (or dirty-flag) every merged-away"
+  },
+  {
+    "line": 8252,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🟡 **Why does React silently drop a `setState` issued from a `setTimeout`"
+  },
+  {
+    "line": 8269,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🟡 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake —"
+  },
+  {
+    "line": 8292,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🎧 **iTunes dynamic-playlist import and playlist push-back are fully"
+  },
+  {
+    "line": 8488,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in"
+  },
+  {
+    "line": 8511,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **SEARCH-CACHE** Search results are not cached anywhere on the server."
+  },
+  {
+    "line": 8556,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **REVIEW-COMBINE-FIRST** Let the owner combine two books into one, or"
+  },
+  {
+    "line": 8608,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🚨 **E2E runs in one worktree can silently be served by a DIFFERENT"
+  },
+  {
+    "line": 8656,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **ORGANIZE-4TH-COPY** `internal/server/handlers/filesystem.go:286` is a"
+  },
+  {
+    "line": 8712,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **PLAYBACK-IMPORT** Listened / in-progress status is not coming across from"
+  },
+  {
+    "line": 8750,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false"
+  },
+  {
+    "line": 8769,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **REVIEW-PREVIEW** Play the first ~2 minutes of audio directly from the"
+  },
+  {
+    "line": 8798,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **ROWCOUNT-REVERIFY** Re-measure every production table row count once the"
+  },
+  {
+    "line": 8860,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] 🐛 **`GET /audiobooks/soft-deleted` computes its `total` by fetching up to"
+  },
+  {
+    "line": 8904,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **VG-DOUBLE-PRIMARY** A version group can end up with **two** members both"
+  },
+  {
+    "line": 8962,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **UI-LOCKUP-2** The web interface still locks up despite the virtualization"
+  },
+  {
+    "line": 8998,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **Repair books applied from the Metadata Review screen before the tag-write fix.**"
+  },
+  {
+    "line": 9012,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **Consider the same file-I/O audit for the remaining apply-shaped"
+  },
+  {
+    "line": 9017,
+    "section": "Config",
+    "subsection": null,
+    "text": "- [ ] **17 API calls will now surface an expired session that previously"
+  },
+  {
+    "line": 9068,
+    "section": "⚠️ The activity channel overflows during organize and DROPS records",
+    "subsection": null,
+    "text": "- [ ] **`BookFile.Duration` is `int` seconds, so every per-track duration is truncated and"
+  },
+  {
+    "line": 9099,
+    "section": "⚠️ The activity channel overflows during organize and DROPS records",
+    "subsection": null,
+    "text": "- [ ] **`deviceInfo.deviceType` is always `\"unknown\"`, and the capture cannot tell us what"
+  },
+  {
+    "line": 9114,
+    "section": "⚠️ The activity channel overflows during organize and DROPS records",
+    "subsection": null,
+    "text": "- [ ] **`publishedYear` loses the era: `Book.PrintYear` is an `int`, so the oracle's"
+  },
+  {
+    "line": 9126,
+    "section": "⚠️ The activity channel overflows during organize and DROPS records",
+    "subsection": null,
+    "text": "- [ ] **SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2"
+  },
+  {
+    "line": 9749,
+    "section": "🔴 Stored ZERO values shadow every `scheduled.*` default — nothing has been scanning",
+    "subsection": "Make metadata fields on the book page clickable (future improvement)",
+    "text": "- [ ] **Author name → library filtered by that author.** The most-wanted one. The API"
+  },
+  {
+    "line": 9754,
+    "section": "🔴 Stored ZERO values shadow every `scheduled.*` default — nothing has been scanning",
+    "subsection": "Make metadata fields on the book page clickable (future improvement)",
+    "text": "- [ ] **Series name → library filtered by that series.** `series_id` is on the payload"
+  },
+  {
+    "line": 9757,
+    "section": "🔴 Stored ZERO values shadow every `scheduled.*` default — nothing has been scanning",
+    "subsection": "Make metadata fields on the book page clickable (future improvement)",
+    "text": "- [ ] **Narrator, publisher, genre, and release year.** Same idea, but check each has a"
+  },
+  {
+    "line": 9761,
+    "section": "🔴 Stored ZERO values shadow every `scheduled.*` default — nothing has been scanning",
+    "subsection": "Make metadata fields on the book page clickable (future improvement)",
+    "text": "- [ ] **⚠️ Do not link `version_group_id` to a filtered view until the filter works.**"
+  },
+  {
+    "line": 9933,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%,"
+  },
+  {
+    "line": 9937,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **Find the writer that creates a `vg-` group without electing a primary.** The lead"
+  },
+  {
+    "line": 9970,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **116 ungrouped books are hidden anyway** and do not fit the rule above."
+  },
+  {
+    "line": 9982,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **`version_group_id` is silently ignored as a filter** on `/api/v1/audiobooks` —"
+  },
+  {
+    "line": 9988,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **Decide whether to force a search-index rebuild on prod.** The boot-time"
+  },
+  {
+    "line": 9995,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **`all` and `and` are stopwords and are silently dropped from queries.**"
+  },
+  {
+    "line": 10003,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **Quoted phrases do not produce a `MatchPhraseQuery`.** The server-side"
+  },
+  {
+    "line": 10010,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The"
+  },
+  {
+    "line": 10017,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search / version-group census corrections (2026-08-13)",
+    "text": "- [ ] **A one-book version group can have no primary member.**"
+  },
+  {
+    "line": 10049,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search-index coverage repair — production findings (2026-08-13)",
+    "text": "- [ ] **The coverage gate compares two slightly different populations.**"
+  },
+  {
+    "line": 10059,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search-index coverage repair — production findings (2026-08-13)",
+    "text": "- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing — TASK-130)"
+  },
+  {
+    "line": 10069,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search-index coverage repair — production findings (2026-08-13)",
+    "text": "- [ ] **`audiobook_organizer_books_total` reports the PRIMARY count, not the total.**"
+  },
+  {
+    "line": 10075,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search-index coverage repair — production findings (2026-08-13)",
+    "text": "- [ ] **Re-measure the per-cohort coverage now that a true figure exists.** The"
+  },
+  {
+    "line": 10095,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+    "text": "- [ ] **Fuzzy queries (`~`) have the same case-sensitivity defect the wildcard fix just"
+  },
+  {
+    "line": 10102,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+    "text": "- [ ] **A04's designated probe cannot verify the op-ID audit trail.**"
+  },
+  {
+    "line": 10114,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+    "text": "- [ ] **Activity log: auto-compact after 7 days, user-configurable.** Owner"
+  },
+  {
+    "line": 10128,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+    "text": "- [ ] **Activity-log summaries drop their data — \"cover art saved to\" (to"
+  },
+  {
+    "line": 10187,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "subsection": null,
+    "text": "- [ ] Author id 46583 is named `&#169` — an HTML entity for `©` with its"
+  },
+  {
+    "line": 10189,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "subsection": null,
+    "text": "- [ ] Author id 51870 is named `&#169;2013 by HarperCollinsPublishers` — a whole"
+  },
+  {
+    "line": 10192,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "subsection": null,
+    "text": "- [ ] Find where the entity loses its `;`. `SplitCompositeAuthorName`'s semicolon"
+  },
+  {
+    "line": 10197,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "subsection": null,
+    "text": "- [ ] Decide whether author-name ingest should HTML-unescape at all. If it should,"
+  },
+  {
+    "line": 10202,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "subsection": null,
+    "text": "- [ ] Consider a `isDirtyAuthorName` rule for names starting with `©`/`&#`/a"
+  },
+  {
+    "line": 10212,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] id 46595 `and Thanks for All the Fish` (2 books) — from *So Long, and"
+  },
+  {
+    "line": 10214,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] id 46989 `and the Farm Boy (DBY)` (5 books)"
+  },
+  {
+    "line": 10215,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] id 47193 `and Make Better Decisions` (16 books)"
+  },
+  {
+    "line": 10221,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] The real defect is that `SplitCompositeAuthorName`'s comma branch has no"
+  },
+  {
+    "line": 10224,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] Consider requiring a part to look like a personal name (2-4 words, no"
+  },
+  {
+    "line": 10228,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "subsection": null,
+    "text": "- [ ] Check how many other author rows are title fragments without the `and`"
+  },
+  {
+    "line": 10233,
+    "section": "Author table: misspelling shared by both rows of a duplicate pair",
+    "subsection": null,
+    "text": "- [ ] `Sylverster McCoy` (2 books) and `& Sylverster McCoy` (1 book) are *both*"
+  },
+  {
+    "line": 10261,
+    "section": "B06 chapters end-to-end: VERIFIED on prod — E02 backfill only needs the residue",
+    "subsection": null,
+    "text": "- [ ] **`bulk-write-back` cannot do the approved E08 library-wide run as-is.**"
+  },
+  {
+    "line": 10306,
+    "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) — \"22,552 nils\" was a misread",
+    "subsection": null,
+    "text": "- [ ] Make every raw `*bool` post-filter treat nil as true (matching"
+  },
+  {
+    "line": 10308,
+    "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) — \"22,552 nils\" was a misread",
+    "subsection": null,
+    "text": "- [ ] better: backfill explicit `true` onto the 5,702 nil rows (dry-run"
+  },
+  {
+    "line": 10311,
+    "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) — \"22,552 nils\" was a misread",
+    "subsection": null,
+    "text": "- [ ] Fix the 41 ungrouped-false rows to true in the same op (C314)."
+  },
+  {
+    "line": 10312,
+    "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) — \"22,552 nils\" was a misread",
+    "subsection": null,
+    "text": "- [ ] Re-run this census as the post-fix verification: expected end state is"
+  },
+  {
+    "line": 10344,
+    "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained",
+    "subsection": null,
+    "text": "- [ ] **`show_quarantined=true` under-reports `count`.** The flag makes the"
+  },
+  {
+    "line": 10432,
+    "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained",
+    "subsection": null,
+    "text": "- [ ] **CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`"
+  },
+  {
+    "line": 10488,
+    "section": "56 duplicate-name author groups, and most of them are not authors",
+    "subsection": "3. Real authors, genuinely duplicated",
+    "text": "- [ ] Normalize whitespace (and probably case) in author lookup/creation, so a"
+  },
+  {
+    "line": 10493,
+    "section": "56 duplicate-name author groups, and most of them are not authors",
+    "subsection": "3. Real authors, genuinely duplicated",
+    "text": "- [ ] Merge the type-3 real-author duplicates. The existing"
+  },
+  {
+    "line": 10497,
+    "section": "56 duplicate-name author groups, and most of them are not authors",
+    "subsection": "3. Real authors, genuinely duplicated",
+    "text": "- [ ] Decide what to DO with types 1 and 2 rather than merging them. Merging 25"
+  },
+  {
+    "line": 10501,
+    "section": "56 duplicate-name author groups, and most of them are not authors",
+    "subsection": "3. Real authors, genuinely duplicated",
+    "text": "- [ ] 🚨 Do NOT write a single op that treats all three kinds the same. Type 3"
+  },
+  {
+    "line": 10587,
+    "section": "`is_primary_version` means different things on the library path and the author path",
+    "subsection": "Likely cause",
+    "text": "- [ ] Add a conformance test in the shape used by #2406/#2410/#2411: one"
+  },
+  {
+    "line": 10591,
+    "section": "`is_primary_version` means different things on the library path and the author path",
+    "subsection": "Likely cause",
+    "text": "- [ ] Decide whether the author listing SHOULD expose non-primary books at all."
+  },
+  {
+    "line": 10619,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Legacy operation rows never leave \"pending\" — the ops UI shows"
+  },
+  {
+    "line": 10637,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Check GitHub CI on the merge commit.** Merged on an explicit instruction"
+  },
+  {
+    "line": 10658,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Verify the dry-run default on prod after deploy.** `GET"
+  },
+  {
+    "line": 10680,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Consider making the resume path's fallback observable.** When no saved"
+  },
+  {
+    "line": 10686,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Metadata matcher: shift-click range selection.** Owner request"
+  },
+  {
+    "line": 10692,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Metadata matcher: \"skip all\" / hide-multiples control.** Owner request"
+  },
+  {
+    "line": 10699,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Metadata matcher: apply falsely reports \"signed out — no changes were"
+  },
+  {
+    "line": 10711,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "subsection": null,
+    "text": "- [ ] **Metadata matcher: multi-file write-to-files must dispatch as a"
+  },
+  {
+    "line": 10768,
+    "section": "memdb and Pebble disagree about author→book links — ROOT-CAUSED, one step left",
+    "subsection": "✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)",
+    "text": "- [ ] **After this deploys**, drop `skip_author_ids: [46627]` from the repair"
+  },
+  {
+    "line": 10785,
+    "section": "memdb and Pebble disagree about author→book links — ROOT-CAUSED, one step left",
+    "subsection": "✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)",
+    "text": "- [ ] **CORRECTION to `20260814-matcher-writeback-background-job.md`: the"
+  },
+  {
+    "line": 10811,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **5 more walkers share the exposure** (whole-library offset loops over"
+  },
+  {
+    "line": 10821,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **The original CI flake (run 30702594886, 39/40 books) CANNOT be the"
+  },
+  {
+    "line": 10830,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **Verify op-ID audit trail on prod after deploying the run-context fix.** Trigger"
+  },
+  {
+    "line": 10836,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **Historical gap is permanent — do not chase it.** Every maintenance op run before"
+  },
+  {
+    "line": 10841,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **Audit the eight `ctxOpID` consumers now that the ID actually arrives.** Their"
+  },
+  {
+    "line": 10848,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **Organize renames with placeholder metadata — \"Unknown Author\" gets"
+  },
+  {
+    "line": 10870,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "subsection": null,
+    "text": "- [ ] **E07 residue: 2 ambiguous duplicate-PID groups need a human pick.**"
+  },
+  {
+    "line": 10890,
+    "section": "Bleve index holds ~3,953 docs for soft-deleted books",
+    "subsection": null,
+    "text": "- [ ] Add/verify a reconcile pass that REMOVES index docs whose book is"
+  },
+  {
+    "line": 10896,
+    "section": "Bleve index holds ~3,953 docs for soft-deleted books",
+    "subsection": null,
+    "text": "- [ ] Verify with a bogus-value control: search for a known trashed title"
+  },
+  {
+    "line": 10906,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] **SEC-2** — bootstrap still writes plaintext credential files"
+  },
+  {
+    "line": 10908,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] **SEC-4 residue** — no CSP header yet (middleware comment defers until a"
+  },
+  {
+    "line": 10912,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over"
+  },
+  {
+    "line": 10915,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] **TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split."
+  },
+  {
+    "line": 10916,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] **FE-2/FE-3/FE-4** — the three stale-deps findings' line anchors have"
+  },
+  {
+    "line": 10918,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": null,
+    "text": "- [ ] ARCH-3/4/5/7/8 remain structural programs. **ARCH-8 is DONE"
+  },
+  {
+    "line": 10939,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": "Series table integrity — follow-ups from the 2026-08-14 prune repair",
+    "text": "- [ ] **Identify what produced the 2026-08-11 burst of phantom series references.**"
+  },
+  {
+    "line": 10998,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": "Series table integrity — follow-ups from the 2026-08-14 prune repair",
+    "text": "- [ ] **`BulkDeleteSeries` still deletes on a filtered count.**"
+  },
+  {
+    "line": 11012,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": "Series table integrity — follow-ups from the 2026-08-14 prune repair",
+    "text": "- [ ] **`WithOpID` is never called in production code**, so `ctxOpID(ctx)` returns \"\""
+  },
+  {
+    "line": 11021,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "subsection": "Series table integrity — follow-ups from the 2026-08-14 prune repair",
+    "text": "- [ ] **~2,270 series look like they were created from a book title rather than a real"
+  },
+  {
+    "line": 11073,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": null,
+    "text": "- [ ] Decide whether the list should filter on `version_group_id` at all. There"
+  },
+  {
+    "line": 11077,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": null,
+    "text": "- [ ] If yes: add a `case \"version_group_id\"` to `bookFieldValue` and the name"
+  },
+  {
+    "line": 11082,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": null,
+    "text": "- [ ] If no: it still must not answer with the whole library. Extend the guard"
+  },
+  {
+    "line": 11092,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": null,
+    "text": "- [ ] **124 files remain 0600 after the fix-file-modes repair (1,547 repaired),"
+  },
+  {
+    "line": 11134,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **ABS series list emits a non-ABS `books[]` shape, and no series render in ABS clients.**"
+  },
+  {
+    "line": 11166,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **The AI-scan cancel wiring is unverified, and it fails silently.**"
+  },
+  {
+    "line": 11195,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md`"
+  },
+  {
+    "line": 11230,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **\"Dynamic\" collections are currently *manually* refreshed.** A query-backed"
+  },
+  {
+    "line": 11246,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **`POST /api/session/local-all` 404s.** Observed from the app alongside the"
+  },
+  {
+    "line": 11252,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **Finish (or delete) the iTunes plugin op migration.** `internal/plugins/itunes/`"
+  },
+  {
+    "line": 11260,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go`"
+  },
+  {
+    "line": 11287,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **`ClearStaleOperations` is still wired, deliberately.** `POST"
+  },
+  {
+    "line": 11332,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **`library.import`, `library.organize` and `library.transcode` still carry the"
+  },
+  {
+    "line": 11338,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **Convert the remaining long-running `ResumeDrop` ops to real resume.** The"
+  },
+  {
+    "line": 11349,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **Forward `IsCanceled()` through `reporterLogger` and exercise the four guards it wakes up.**"
+  },
+  {
+    "line": 11368,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+    "text": "- [ ] **Audit the other two silently-stubbed `StandardLogger` methods.**"
+  },
+  {
+    "line": 11423,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Import-path scan no longer surfaces per-file scan errors",
+    "text": "- [ ] **3 scheduled tasks are ENABLED but can never run.** Startup logs"
+  },
+  {
+    "line": 11448,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/server/wire_abs_routes.go:494` — bare `s.Store().(*database.PebbleStore)`"
+  },
+  {
+    "line": 11461,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/merge/service.go:34-42` — `AsExternalIDReassigner` uses a bare"
+  },
+  {
+    "line": 11466,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/operations/registry/register.go:40-42` — `prodSchedulerStore` embeds"
+  },
+  {
+    "line": 11477,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/importer/service.go:27-31` — `type Store = database.Store` justified by"
+  },
+  {
+    "line": 11479,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/server/handlers/organize.go:57-62` — `type OrganizeStore = database.Store`"
+  },
+  {
+    "line": 11510,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Store-interface audit — defects found incidentally (each independent of the refactor)",
+    "text": "- [ ] `internal/operations/mocks` — 206 generated lines, effectively unreferenced."
+  },
+  {
+    "line": 11599,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Stranded `.tmp-rename` recovery — bisect complete, recovery outstanding",
+    "text": "- [ ] Recovery tool. Dry-run by default, full report before anything moves."
+  },
+  {
+    "line": 11607,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Stranded `.tmp-rename` recovery — bisect complete, recovery outstanding",
+    "text": "- [ ] Compare with per-file SHA-256; where hashes differ because of embedded"
+  },
+  {
+    "line": 11611,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Stranded `.tmp-rename` recovery — bisect complete, recovery outstanding",
+    "text": "- [ ] Investigate book rows affected as a side effect. `scrubVar`'s own comment"
+  },
+  {
+    "line": 11615,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Stranded `.tmp-rename` recovery — bisect complete, recovery outstanding",
+    "text": "- [ ] Confirm no new bogus directories appear now that both the pattern and the"
+  },
+  {
+    "line": 11628,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "Stranded `.tmp-rename` recovery — bisect complete, recovery outstanding",
+    "text": "- [ ] **Maintenance window: watchdog cancels it, then the plugin reports success.** Prod"
+  },
+  {
+    "line": 11661,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **Classify the 71,954 missing `book_file` rows by shape before any"
+  },
+  {
+    "line": 11668,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **Decide the 16,265 books with no surviving file** (was believed to be 5,"
+  },
+  {
+    "line": 11670,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true"
+  },
+  {
+    "line": 11672,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **1,006 missing rows are under the iTunes tree**, contradicting the"
+  },
+  {
+    "line": 11675,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **61 rows carry a mangled `/X:/books/itunes/Audiobooks` Windows path.**"
+  },
+  {
+    "line": 11677,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **Decide what to do with the books whose EVERY `book_file` row is dead.** The"
+  },
+  {
+    "line": 11686,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **Answer why the organizer recorded destination rows it never populated.**"
+  },
+  {
+    "line": 11691,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them",
+    "text": "- [ ] **Register `HEAD` for the audio/file routes.** The server registers no `HEAD` handler"
+  },
+  {
+    "line": 11727,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "subsection": "🔴 `dedup.llm-review` holds a library write with no `ConcurrencyKey` — it can run concurrently with itself",
+    "text": "- [ ] **Six E2E mocks point at operation URLs that no longer exist, and two"
+  },
+  {
+    "line": 11788,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": null,
+    "text": "- [ ] **Add an `{edition_suffix}` folder-pattern token.** Two editions of the same"
+  },
+  {
+    "line": 11804,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": null,
+    "text": "- [ ] **Investigate the LLM host's GPU cooling before running another full `library.scan`.**"
+  },
+  {
+    "line": 11821,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": null,
+    "text": "- [ ] **`make ci` cannot pass on `main` — staticcheck has 10 findings and aborts the target**"
+  },
+  {
+    "line": 11964,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Compound narrator names are not split into individual narrators",
+    "text": "- [ ] **`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* doing the enforcing**"
+  },
+  {
+    "line": 12038,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`",
+    "text": "- [ ] **Narrator equivalent of the empty-author purge.** There is no"
+  },
+  {
+    "line": 12042,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`",
+    "text": "- [ ] **Decide what the 822 zero-book-but-has-files authors actually are.** Measured"
+  },
+  {
+    "line": 12048,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`",
+    "text": "- [ ] **Author↔narrator swap repair.** Measured lower bound: 1,052 names appear in"
+  },
+  {
+    "line": 12226,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "`ResumeRequeue` has two live implementations that disagree about params",
+    "text": "- [ ] **Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST."
+  },
+  {
+    "line": 12251,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Run the classify pass in prod** and record the numbers."
+  },
+  {
+    "line": 12256,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Build the re-point repair.** It must UPDATE `file_path` to the flat name the"
+  },
+  {
+    "line": 12260,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Decide what happens to the 16,265 fully-broken books** (every file entry dead)."
+  },
+  {
+    "line": 12263,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Missing-file audit Phase 1a still has no PR and is not mutation-tested.**"
+  },
+  {
+    "line": 12268,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **`database.Store` is grouped, not yet unreachable.** `.interface-width-baseline`"
+  },
+  {
+    "line": 12296,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **AudiobookShelf-compatible API: series are broken, and collections/playlists are"
+  },
+  {
+    "line": 12456,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **`book-detail.spec.ts` \"soft delete, restore, and purge flow\" fails only in the full"
+  },
+  {
+    "line": 12732,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **You cannot sort the library from the UI.** The \"Sort by\" and \"Order\""
+  },
+  {
+    "line": 12800,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Per-field \"Use File\" / \"Use Fetched\" one-click apply is gone from Book Detail"
+  },
+  {
+    "line": 12815,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Visual-regression goldens exist only for darwin.**"
+  },
+  {
+    "line": 12915,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:"
+  },
+  {
+    "line": 12961,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The checked-in `.api-token` no longer authenticates, and it blocked a real"
+  },
+  {
+    "line": 13069,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **You can no longer navigate between versions of a book.** Book Detail used to"
+  },
+  {
+    "line": 13086,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The library card's overflow menu button has no accessible name.**"
+  },
+  {
+    "line": 13222,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **`scan-import-organize.spec.ts` (7 failures) — Settings tab deep-link"
+  },
+  {
+    "line": 13253,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **E2E repair progress — measured 2026-08-09. Supersedes the stale"
+  },
+  {
+    "line": 13312,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **`version-management.spec.ts` (6 failures) — version management MOVED off"
+  },
+  {
+    "line": 13529,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **⚖️ DECIDE which sort indexes to enable — the design-doc cost estimate was ~10×"
+  },
+  {
+    "line": 13816,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Audit every e2e mock handler against whether its app-side reader"
+  },
+  {
+    "line": 14037,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The library \"Sort by\" control no longer exists — 4 e2e tests target a"
+  },
+  {
+    "line": 14082,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The unified Dedup view has no e2e coverage at all.** Found 2026-08-09"
+  },
+  {
+    "line": 14232,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Stop Deluge writing in-progress downloads directly into the new-books"
+  },
+  {
+    "line": 14263,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Require every operation to support `dry_run`, and enforce it at the"
+  },
+  {
+    "line": 14377,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **TODO-MUI-1** MUI upgrade Step 1 — `@mui/*` 5.14 → 6.x (brief:"
+  },
+  {
+    "line": 14401,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **TODO-MUI-2** MUI upgrade Step 2 — `@mui/*` 6.x → 7.x including the"
+  },
+  {
+    "line": 14462,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **TODO-MUI-4** MUI upgrade Step 4 — `@mui/*` 7.x → 9.x (final hop; there"
+  },
+  {
+    "line": 14572,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Move library filtering/search into the Go server as a real, declared"
+  },
+  {
+    "line": 14655,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Fix the Library \"In Progress\" nav item — the selection highlight never"
+  },
+  {
+    "line": 14773,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The Library must never show an empty \"no items\" state unless the"
+  },
+  {
+    "line": 14880,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Never accumulate more than 10 RCs on a version — cut the stable release"
+  },
+  {
+    "line": 14947,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **~180 \"bracketed series\" are actually one shattered book each** — found by"
+  },
+  {
+    "line": 14978,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Give the 466 low-confidence series positions somewhere to go** — deferred"
+  },
+  {
+    "line": 15004,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not"
+  },
+  {
+    "line": 15092,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **`DeleteBookFilesForBook` leaves stale memdb rows behind.** It never calls"
+  },
+  {
+    "line": 15101,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **The 3 dangerous multidisc holds are DUPLICATES, not series — feed them to"
+  },
+  {
+    "line": 15129,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Frontend framework versions — how far behind we actually are, and the"
+  },
+  {
+    "line": 15172,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Per-file intro transcription as the primary book-identity signal** — owner"
+  },
+  {
+    "line": 15220,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Tiered backfill.** Naive \"every file\" is ~284,000 files ≈ 12–14 days of"
+  },
+  {
+    "line": 15227,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Wire into the regroup classifier**, outranking runtime where both exist."
+  },
+  {
+    "line": 15230,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Wire into First Aid** as a tier-2 signal beside the duration probe, and"
+  },
+  {
+    "line": 15255,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request"
+  },
+  {
+    "line": 15289,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Investigate: 79% of books with a stored transcript are marked"
+  },
+  {
+    "line": 15407,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Version-group acoustic audit op** — verify that books marked as VERSIONS"
+  },
+  {
+    "line": 15439,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Verify the server actually returns chapters to clients** — confirm the"
+  },
+  {
+    "line": 15467,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Backfill chapters into files that lack them, using a duplicate as the"
+  },
+  {
+    "line": 15502,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Playlists — implement the whole surface** — owner request 2026-08-05:"
+  },
+  {
+    "line": 15531,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Reading status and review/rating must sync from the app back to the"
+  },
+  {
+    "line": 15563,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Use Deluge as a metadata and identity source** — owner idea 2026-08-05:"
+  },
+  {
+    "line": 15594,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** — owner"
+  },
+  {
+    "line": 15693,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Canary the multidisc applies behind a before/after snapshot** — owner"
+  },
+  {
+    "line": 15746,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **\"First Aid\" — one sequenced library validate + repair system** — owner"
+  },
+  {
+    "line": 15766,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] Tier-2 duration probe for the **1,019** directory-shaped books that went"
+  },
+  {
+    "line": 15769,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] Duplicate detection + **combine-by-template** + version-group (the"
+  },
+  {
+    "line": 15771,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] Orchestrator + frontend button, dry-run by default, no schedule."
+  },
+  {
+    "line": 15772,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Missing-input triggering:** when a check's input is absent, ENQUEUE the"
+  },
+  {
+    "line": 15799,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Never delete — re-associate (duplicate resolution)**. Deleting a"
+  },
+  {
+    "line": 15856,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for"
+  },
+  {
+    "line": 15876,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Re-run `regroup-shattered-ai` after relink and re-measure the queue.**"
+  },
+  {
+    "line": 16115,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "subsection": "Missing-file lane — follow-ups after the report-only change (#2614)",
+    "text": "- [ ] **Corrected book aggregates are invisible until memdb refreshes.**"
+  },
+  {
+    "line": 16515,
+    "section": "DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds",
+    "subsection": "Status 2026-08-04",
+    "text": "- [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**"
+  },
+  {
+    "line": 16522,
+    "section": "DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds",
+    "subsection": "Status 2026-08-04",
+    "text": "- [ ] **5 books are multi-copy, not row-duplicated** — distinct paths for the same"
+  },
+  {
+    "line": 16525,
+    "section": "DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds",
+    "subsection": "Status 2026-08-04",
+    "text": "- [ ] **`Call to Arms` (9,957h)** — 96 *distinct* files, unchanged by the dedupe run."
+  },
+  {
+    "line": 16527,
+    "section": "DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds",
+    "subsection": "Status 2026-08-04",
+    "text": "- [ ] **Corrected aggregates are invisible until memdb refreshes** — see the"
+  },
+  {
+    "line": 16927,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "subsection": "Decision needed",
+    "text": "- [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at"
+  },
+  {
+    "line": 16949,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "subsection": "Decision needed",
+    "text": "- [ ] **TODO-SEC-BIND** The service binds every interface"
+  },
+  {
+    "line": 16960,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "subsection": "Decision needed",
+    "text": "- [ ] **TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` — it was pasted in plaintext into"
+  },
+  {
+    "line": 16966,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "subsection": "Decision needed",
+    "text": "- [ ] **TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,"
+  },
+  {
+    "line": 16976,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "subsection": "Decision needed",
+    "text": "- [ ] **TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package —"
+  },
+  {
+    "line": 17162,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`"
+  },
+  {
+    "line": 17175,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: consolidate the two DRM detection paths, and wire one into the"
+  },
+  {
+    "line": 17185,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's"
+  },
+  {
+    "line": 17201,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: wave 2 — scanner + merge wiring.** Briefs in"
+  },
+  {
+    "line": 17205,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: wave 3 — backfill + survival proof.** TASK-04 (idempotent sync-ID"
+  },
+  {
+    "line": 17209,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: TASK-11 — auth core, both credential modes.** Brief not yet written."
+  },
+  {
+    "line": 17216,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: Phase 3 — DTO mapping + library browse.** Depends on waves 1–2 and"
+  },
+  {
+    "line": 17222,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: Phase 5b — playback routes.** `POST /api/items/:id/play`,"
+  },
+  {
+    "line": 17226,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: Phase 7 — socket.io (Absorb only).** AudioBooth needs no websocket at"
+  },
+  {
+    "line": 17230,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **ABS-SYNC: Phase 8 — topology, runbook, migration guide.** Cloudflare Access"
+  },
+  {
+    "line": 17238,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **REGROUP-PARTCHAPTER-PARSER** The Mistborn-style \"Ambiguous folder\" case"
+  },
+  {
+    "line": 17244,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**"
+  },
+  {
+    "line": 17255,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes 2-way-sync — remaining P0 measurements.** (a) Cross-type PID collisions"
+  },
+  {
+    "line": 17262,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes 2-way-sync P2 — relocate-only sync cycle (MVP end).** All prerequisites are"
+  },
+  {
+    "line": 17278,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**"
+  },
+  {
+    "line": 17290,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **🚧 P2 BLOCKER — location-form guard rejects the entire live AO library (F7).** The"
+  },
+  {
+    "line": 17307,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).**"
+  },
+  {
+    "line": 17319,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes book_file PID uniqueness — apply the backfill repair (gated).** Forward"
+  },
+  {
+    "line": 17329,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "subsection": null,
+    "text": "- [ ] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed"
+  },
+  {
+    "line": 17771,
+    "section": "2026-07-17 review findings — remaining (post-fix-wave)",
+    "subsection": "Remaining — execution state (briefs)",
+    "text": "- [ ] **T03** — **sandbox** purge wave: `maintenance.dedup-exact-triage {\"apply\":true}` (dismiss"
+  },
+  {
+    "line": 17789,
+    "section": "2026-07-17 review findings — remaining (post-fix-wave)",
+    "subsection": "Remaining — execution state (briefs)",
+    "text": "- [ ] **T13** — docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) — in progress"
+  }
+]

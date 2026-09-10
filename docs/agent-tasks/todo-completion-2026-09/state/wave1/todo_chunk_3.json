@@ -1,0 +1,884 @@
+[
+ {
+  "line": 6642,
+  "section": "ABS",
+  "subsection": null,
+  "text": "- [ ] **Align the ABS conformance fixtures with the oracle capture so the value gate can be"
+ },
+ {
+  "line": 6672,
+  "section": "Dedup",
+  "subsection": null,
+  "text": "- [ ] **Exact-candidate backlog is re-accumulating \u2014 fix the source, not the symptom.** The"
+ },
+ {
+  "line": 6744,
+  "section": "\ud83e\uddea `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+  "subsection": "Tasks",
+  "text": "- [ ] Capture a goroutine dump from a real failure. **Do NOT `gh run rerun` before saving the"
+ },
+ {
+  "line": 6747,
+  "section": "\ud83e\uddea `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+  "subsection": "Tasks",
+  "text": "- [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,"
+ },
+ {
+  "line": 6750,
+  "section": "\ud83e\uddea `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+  "subsection": "Tasks",
+  "text": "- [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in"
+ },
+ {
+  "line": 6798,
+  "section": "\u2705 Second, unrelated Coverage Floor failure \u2014 FIXED in this PR",
+  "subsection": null,
+  "text": "- [ ] The unconditional `time.Sleep(6 * time.Second)` before the signal is pure wall-clock"
+ },
+ {
+  "line": 6891,
+  "section": "Security",
+  "subsection": null,
+  "text": "- [ ] **SEC-9: the OpenAI API key is sent from the browser.**"
+ },
+ {
+  "line": 6912,
+  "section": "Docs",
+  "subsection": null,
+  "text": "- [ ] **Give the 2026-06-22 security sweep a status column so it can eventually be retired.**"
+ },
+ {
+  "line": 6978,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": null,
+  "text": "- [ ] **Collections do not exist \u2014 this is a FEATURE, not a wiring fix.** `/api/collections`"
+ },
+ {
+  "line": 7005,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": null,
+  "text": "- [ ] **`testdata/abs-fixtures/get_api_libraries_id_series.json` contains ZERO series.**"
+ },
+ {
+  "line": 7048,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": "ABS API \u2014 sweep every endpoint for accepted-but-ignored query parameters",
+  "text": "- [ ] \ud83d\udcbe **Run `maintenance.booksig-sidecar-migrate` on production** \u2014 the op is"
+ },
+ {
+  "line": 7109,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": "ABS API \u2014 sweep every endpoint for accepted-but-ignored query parameters",
+  "text": "- [ ] \ud83c\udfa7 **Run `maintenance.chapters-backfill` against production.** The op ships"
+ },
+ {
+  "line": 7120,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": "ABS API \u2014 sweep every endpoint for accepted-but-ignored query parameters",
+  "text": "- [ ] \ud83d\udd01 **Wire a durable \"probed, found none\" marker before this op is ever"
+ },
+ {
+  "line": 7132,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": "ABS API \u2014 sweep every endpoint for accepted-but-ignored query parameters",
+  "text": "- [ ] \ud83d\udd0d **Index track names so smart playlists can match them.** The Bleve"
+ },
+ {
+  "line": 7143,
+  "section": "ABS surface \u2014 what is still missing after the series/playlist fix",
+  "subsection": "ABS API \u2014 sweep every endpoint for accepted-but-ignored query parameters",
+  "text": "- [ ] \ud83e\udde9 **Investigate per-chapter split files standing as their own books.** While"
+ },
+ {
+  "line": 7156,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **`BookFile.FilePath` rows point at files that do not exist \u2014 16,130 books"
+ },
+ {
+  "line": 7179,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **`Book.FilePath` and `BookFile.FilePath` disagree for the same book.** For"
+ },
+ {
+  "line": 7184,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **`Book.FilePath` is NOT unique \u2014 1,264 values are shared by more than one"
+ },
+ {
+  "line": 7194,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **Stored `duration` is short of the real container by 119\u2013186s on 7 cohort"
+ },
+ {
+  "line": 7199,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **Multi-file chapter synthesis produces a timeline that stops short.** One of"
+ },
+ {
+  "line": 7203,
+  "section": "Library data integrity \u2014 surfaced by the chapters-backfill cohort run",
+  "subsection": null,
+  "text": "- [ ] **Duplicate book rows per title under different author folders** (`Deadly Jobs`"
+ },
+ {
+  "line": 7211,
+  "section": "Follow-up on the op itself",
+  "subsection": null,
+  "text": "- [ ] `registry.RunItems` label re-render (fixed 2026-08-13) changed shared"
+ },
+ {
+  "line": 7214,
+  "section": "Follow-up on the op itself",
+  "subsection": null,
+  "text": "- [ ] One unreproduced failure of `internal/plugins/maintenance` was observed on"
+ },
+ {
+  "line": 7320,
+  "section": "BUG: 10,780 version groups elect MORE than one primary",
+  "subsection": "6,157 books are invisible in the web UI \u2014 `vg-` singleton groups elect no primary",
+  "text": "- [ ] \ud83e\udd14 **Decide whether the newly-implemented filter fields belong in"
+ },
+ {
+  "line": 7361,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": null,
+  "text": "- [ ] **F7 \u2014 `ApplyMetadataFileIO` returns nothing, so rename failure is"
+ },
+ {
+  "line": 7374,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": null,
+  "text": "- [ ] **F6 \u2014 `ensureLibraryCopy` treats an empty organize as success.**"
+ },
+ {
+  "line": 7402,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": null,
+  "text": "- [ ] **Split `AudiobookService`, not just its store interface.** `audiobookStore`"
+ },
+ {
+  "line": 7417,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": null,
+  "text": "- [ ] Audit existing \"we use the wide type because X requires it\" comments across the"
+ },
+ {
+  "line": 7435,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "ghcommon reusable-workflow pins are a month apart \u2014 decide, don't drift",
+  "text": "- [ ] Decide whether to bump the eight, and do it in **at least two PRs** \u2014"
+ },
+ {
+  "line": 7442,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "ghcommon reusable-workflow pins are a month apart \u2014 decide, don't drift",
+  "text": "- [ ] Not done unattended on purpose: this was left for a human on 2026-08-18"
+ },
+ {
+  "line": 7483,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] `database.Store` (40) \u2014 make unreachable rather than smaller (plan phase 2)."
+ },
+ {
+  "line": 7484,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] `itunes/service.Store` (17 declared / 24 called) \u2014 7 assignability"
+ },
+ {
+  "line": 7487,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] `maintenance.JobStore` (12) \u2014 deliberate choice from the #2534 arbitration;"
+ },
+ {
+  "line": 7489,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] `audiobookStore` / `audiobookUpdateStore` (11 each) \u2014 the service calls **44"
+ },
+ {
+  "line": 7498,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] **Narrow `positionSyncStore` and `pathRepairerStore` \u2014 both blocked on a wide"
+ },
+ {
+  "line": 7514,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] **Re-probe `itunesservice.Store` after those two land.** Its measured"
+ },
+ {
+  "line": 7523,
+  "section": "Organize/apply rename paths: three hand-verified silent failures",
+  "subsection": "Interface width: the five the sweep did not reach",
+  "text": "- [ ] Decide whether maintenance jobs should take per-job store interfaces instead of the"
+ },
+ {
+  "line": 7577,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **Audit every config option name \u2014 the set has grown by accretion and the"
+ },
+ {
+  "line": 7657,
+  "section": "Config",
+  "subsection": "Dedup",
+  "text": "- [ ] `Engine.SetLSHStore` and `Engine.SetAcoustIDBookFileStore`"
+ },
+ {
+  "line": 7676,
+  "section": "Dedup",
+  "subsection": null,
+  "text": "- [ ] **Clean up the 2,504 already-orphaned dedup candidates \u2014 use the existing"
+ },
+ {
+  "line": 7708,
+  "section": "Dedup",
+  "subsection": null,
+  "text": "- [ ] \ud83e\uddca **`*PebbleStore` struct split \u2014 LOWEST PRIORITY. Literally do anything else"
+ },
+ {
+  "line": 7741,
+  "section": "Dedup",
+  "subsection": null,
+  "text": "- [ ] **Finish killing `database.Store` \u2014 18 references left outside `internal/database`.**"
+ },
+ {
+  "line": 7761,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **Rename `write_back_metadata` \u2192 `auto_write_tags_on_fetch`.** The current name"
+ },
+ {
+  "line": 7789,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **Related asymmetry found while tracing the above: auto-fetch embeds cover"
+ },
+ {
+  "line": 7831,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **CFG-AUDIT** Triage the findings in"
+ },
+ {
+  "line": 7875,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83c\udff7\ufe0f **\"Browse by Tag\" surfaces internal bookkeeping tags and formats them"
+ },
+ {
+  "line": 7928,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **E2EGATE-NOTREQUIRED** The E2E suite runs on every qualifying PR and its"
+ },
+ {
+  "line": 7987,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udd34 **The binary ITL parser extracts ZERO smart playlists from real iTunes"
+ },
+ {
+  "line": 8042,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **ITUNES-SMARTCRIT-PARSE** `ParseSmartCriteria` does not understand the"
+ },
+ {
+  "line": 8152,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **MERGE-CACHE-EVICT** A merge must evict (or dirty-flag) every merged-away"
+ },
+ {
+  "line": 8252,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udfe1 **Why does React silently drop a `setState` issued from a `setTimeout`"
+ },
+ {
+  "line": 8269,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udfe1 **`batch-operations.spec.ts:100` [webkit] is an intermittent flake \u2014"
+ },
+ {
+  "line": 8292,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83c\udfa7 **iTunes dynamic-playlist import and playlist push-back are fully"
+ },
+ {
+  "line": 8488,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in"
+ },
+ {
+  "line": 8511,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **SEARCH-CACHE** Search results are not cached anywhere on the server."
+ },
+ {
+  "line": 8556,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **REVIEW-COMBINE-FIRST** Let the owner combine two books into one, or"
+ },
+ {
+  "line": 8608,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udea8 **E2E runs in one worktree can silently be served by a DIFFERENT"
+ },
+ {
+  "line": 8656,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **ORGANIZE-4TH-COPY** `internal/server/handlers/filesystem.go:286` is a"
+ },
+ {
+  "line": 8712,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **PLAYBACK-IMPORT** Listened / in-progress status is not coming across from"
+ },
+ {
+  "line": 8750,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false"
+ },
+ {
+  "line": 8769,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **REVIEW-PREVIEW** Play the first ~2 minutes of audio directly from the"
+ },
+ {
+  "line": 8798,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **ROWCOUNT-REVERIFY** Re-measure every production table row count once the"
+ },
+ {
+  "line": 8860,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udc1b **`GET /audiobooks/soft-deleted` computes its `total` by fetching up to"
+ },
+ {
+  "line": 8904,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **VG-DOUBLE-PRIMARY** A version group can end up with **two** members both"
+ },
+ {
+  "line": 8962,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **UI-LOCKUP-2** The web interface still locks up despite the virtualization"
+ },
+ {
+  "line": 8998,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **Repair books applied from the Metadata Review screen before the tag-write fix.**"
+ },
+ {
+  "line": 9012,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **Consider the same file-I/O audit for the remaining apply-shaped"
+ },
+ {
+  "line": 9017,
+  "section": "Config",
+  "subsection": null,
+  "text": "- [ ] **17 API calls will now surface an expired session that previously"
+ },
+ {
+  "line": 9068,
+  "section": "\u26a0\ufe0f The activity channel overflows during organize and DROPS records",
+  "subsection": null,
+  "text": "- [ ] **`BookFile.Duration` is `int` seconds, so every per-track duration is truncated and"
+ },
+ {
+  "line": 9099,
+  "section": "\u26a0\ufe0f The activity channel overflows during organize and DROPS records",
+  "subsection": null,
+  "text": "- [ ] **`deviceInfo.deviceType` is always `\"unknown\"`, and the capture cannot tell us what"
+ },
+ {
+  "line": 9114,
+  "section": "\u26a0\ufe0f The activity channel overflows during organize and DROPS records",
+  "subsection": null,
+  "text": "- [ ] **`publishedYear` loses the era: `Book.PrintYear` is an `int`, so the oracle's"
+ },
+ {
+  "line": 9126,
+  "section": "\u26a0\ufe0f The activity channel overflows during organize and DROPS records",
+  "subsection": null,
+  "text": "- [ ] **SEC-CODEQL-BACKLOG** 326 open CodeQL alerts on `main`, including **2"
+ },
+ {
+  "line": 9749,
+  "section": "\ud83d\udd34 Stored ZERO values shadow every `scheduled.*` default \u2014 nothing has been scanning",
+  "subsection": "Make metadata fields on the book page clickable (future improvement)",
+  "text": "- [ ] **Author name \u2192 library filtered by that author.** The most-wanted one. The API"
+ },
+ {
+  "line": 9754,
+  "section": "\ud83d\udd34 Stored ZERO values shadow every `scheduled.*` default \u2014 nothing has been scanning",
+  "subsection": "Make metadata fields on the book page clickable (future improvement)",
+  "text": "- [ ] **Series name \u2192 library filtered by that series.** `series_id` is on the payload"
+ },
+ {
+  "line": 9757,
+  "section": "\ud83d\udd34 Stored ZERO values shadow every `scheduled.*` default \u2014 nothing has been scanning",
+  "subsection": "Make metadata fields on the book page clickable (future improvement)",
+  "text": "- [ ] **Narrator, publisher, genre, and release year.** Same idea, but check each has a"
+ },
+ {
+  "line": 9761,
+  "section": "\ud83d\udd34 Stored ZERO values shadow every `scheduled.*` default \u2014 nothing has been scanning",
+  "subsection": "Make metadata fields on the book page clickable (future improvement)",
+  "text": "- [ ] **\u26a0\ufe0f Do not link `version_group_id` to a filtered view until the filter works.**"
+ },
+ {
+  "line": 9933,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **765 books, not 6,157, are wrongly hidden by the primary-version filter** (1.20%,"
+ },
+ {
+  "line": 9937,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **Find the writer that creates a `vg-` group without electing a primary.** The lead"
+ },
+ {
+  "line": 9970,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **116 ungrouped books are hidden anyway** and do not fit the rule above."
+ },
+ {
+  "line": 9982,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **`version_group_id` is silently ignored as a filter** on `/api/v1/audiobooks` \u2014"
+ },
+ {
+  "line": 9988,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **Decide whether to force a search-index rebuild on prod.** The boot-time"
+ },
+ {
+  "line": 9995,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **`all` and `and` are stopwords and are silently dropped from queries.**"
+ },
+ {
+  "line": 10003,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **Quoted phrases do not produce a `MatchPhraseQuery`.** The server-side"
+ },
+ {
+  "line": 10010,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The"
+ },
+ {
+  "line": 10017,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search / version-group census corrections (2026-08-13)",
+  "text": "- [ ] **A one-book version group can have no primary member.**"
+ },
+ {
+  "line": 10049,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search-index coverage repair \u2014 production findings (2026-08-13)",
+  "text": "- [ ] **The coverage gate compares two slightly different populations.**"
+ },
+ {
+  "line": 10059,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search-index coverage repair \u2014 production findings (2026-08-13)",
+  "text": "- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing \u2014 TASK-130)"
+ },
+ {
+  "line": 10069,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search-index coverage repair \u2014 production findings (2026-08-13)",
+  "text": "- [ ] **`audiobook_organizer_books_total` reports the PRIMARY count, not the total.**"
+ },
+ {
+  "line": 10075,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search-index coverage repair \u2014 production findings (2026-08-13)",
+  "text": "- [ ] **Re-measure the per-cohort coverage now that a true figure exists.** The"
+ },
+ {
+  "line": 10095,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+  "text": "- [ ] **Fuzzy queries (`~`) have the same case-sensitivity defect the wildcard fix just"
+ },
+ {
+  "line": 10102,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+  "text": "- [ ] **A04's designated probe cannot verify the op-ID audit trail.**"
+ },
+ {
+  "line": 10114,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+  "text": "- [ ] **Activity log: auto-compact after 7 days, user-configurable.** Owner"
+ },
+ {
+  "line": 10128,
+  "section": "Search: \"keyword\" fields are not exact-match at all",
+  "subsection": "Search follow-ups from the wildcard/phrase fix (2026-08-13)",
+  "text": "- [ ] **Activity-log summaries drop their data \u2014 \"cover art saved to\" (to"
+ },
+ {
+  "line": 10187,
+  "section": "Author table: copyright text and HTML entities leaked into artist tags",
+  "subsection": null,
+  "text": "- [ ] Author id 46583 is named `&#169` \u2014 an HTML entity for `\u00a9` with its"
+ },
+ {
+  "line": 10189,
+  "section": "Author table: copyright text and HTML entities leaked into artist tags",
+  "subsection": null,
+  "text": "- [ ] Author id 51870 is named `&#169;2013 by HarperCollinsPublishers` \u2014 a whole"
+ },
+ {
+  "line": 10192,
+  "section": "Author table: copyright text and HTML entities leaked into artist tags",
+  "subsection": null,
+  "text": "- [ ] Find where the entity loses its `;`. `SplitCompositeAuthorName`'s semicolon"
+ },
+ {
+  "line": 10197,
+  "section": "Author table: copyright text and HTML entities leaked into artist tags",
+  "subsection": null,
+  "text": "- [ ] Decide whether author-name ingest should HTML-unescape at all. If it should,"
+ },
+ {
+  "line": 10202,
+  "section": "Author table: copyright text and HTML entities leaked into artist tags",
+  "subsection": null,
+  "text": "- [ ] Consider a `isDirtyAuthorName` rule for names starting with `\u00a9`/`&#`/a"
+ },
+ {
+  "line": 10212,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] id 46595 `and Thanks for All the Fish` (2 books) \u2014 from *So Long, and"
+ },
+ {
+  "line": 10214,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] id 46989 `and the Farm Boy (DBY)` (5 books)"
+ },
+ {
+  "line": 10215,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] id 47193 `and Make Better Decisions` (16 books)"
+ },
+ {
+  "line": 10221,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] The real defect is that `SplitCompositeAuthorName`'s comma branch has no"
+ },
+ {
+  "line": 10224,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] Consider requiring a part to look like a personal name (2-4 words, no"
+ },
+ {
+  "line": 10228,
+  "section": "Author table: book titles are being comma-split into author rows",
+  "subsection": null,
+  "text": "- [ ] Check how many other author rows are title fragments without the `and`"
+ },
+ {
+  "line": 10233,
+  "section": "Author table: misspelling shared by both rows of a duplicate pair",
+  "subsection": null,
+  "text": "- [ ] `Sylverster McCoy` (2 books) and `& Sylverster McCoy` (1 book) are *both*"
+ },
+ {
+  "line": 10261,
+  "section": "B06 chapters end-to-end: VERIFIED on prod \u2014 E02 backfill only needs the residue",
+  "subsection": null,
+  "text": "- [ ] **`bulk-write-back` cannot do the approved E08 library-wide run as-is.**"
+ },
+ {
+  "line": 10306,
+  "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) \u2014 \"22,552 nils\" was a misread",
+  "subsection": null,
+  "text": "- [ ] Make every raw `*bool` post-filter treat nil as true (matching"
+ },
+ {
+  "line": 10308,
+  "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) \u2014 \"22,552 nils\" was a misread",
+  "subsection": null,
+  "text": "- [ ] better: backfill explicit `true` onto the 5,702 nil rows (dry-run"
+ },
+ {
+  "line": 10311,
+  "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) \u2014 \"22,552 nils\" was a misread",
+  "subsection": null,
+  "text": "- [ ] Fix the 41 ungrouped-false rows to true in the same op (C314)."
+ },
+ {
+  "line": 10312,
+  "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) \u2014 \"22,552 nils\" was a misread",
+  "subsection": null,
+  "text": "- [ ] Re-run this census as the post-fix verification: expected end state is"
+ },
+ {
+  "line": 10344,
+  "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained",
+  "subsection": null,
+  "text": "- [ ] **`show_quarantined=true` under-reports `count`.** The flag makes the"
+ },
+ {
+  "line": 10432,
+  "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained",
+  "subsection": null,
+  "text": "- [ ] **CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine`"
+ },
+ {
+  "line": 10488,
+  "section": "56 duplicate-name author groups, and most of them are not authors",
+  "subsection": "3. Real authors, genuinely duplicated",
+  "text": "- [ ] Normalize whitespace (and probably case) in author lookup/creation, so a"
+ },
+ {
+  "line": 10493,
+  "section": "56 duplicate-name author groups, and most of them are not authors",
+  "subsection": "3. Real authors, genuinely duplicated",
+  "text": "- [ ] Merge the type-3 real-author duplicates. The existing"
+ },
+ {
+  "line": 10497,
+  "section": "56 duplicate-name author groups, and most of them are not authors",
+  "subsection": "3. Real authors, genuinely duplicated",
+  "text": "- [ ] Decide what to DO with types 1 and 2 rather than merging them. Merging 25"
+ },
+ {
+  "line": 10501,
+  "section": "56 duplicate-name author groups, and most of them are not authors",
+  "subsection": "3. Real authors, genuinely duplicated",
+  "text": "- [ ] \ud83d\udea8 Do NOT write a single op that treats all three kinds the same. Type 3"
+ },
+ {
+  "line": 10587,
+  "section": "`is_primary_version` means different things on the library path and the author path",
+  "subsection": "Likely cause",
+  "text": "- [ ] Add a conformance test in the shape used by #2406/#2410/#2411: one"
+ },
+ {
+  "line": 10591,
+  "section": "`is_primary_version` means different things on the library path and the author path",
+  "subsection": "Likely cause",
+  "text": "- [ ] Decide whether the author listing SHOULD expose non-primary books at all."
+ },
+ {
+  "line": 10619,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Legacy operation rows never leave \"pending\" \u2014 the ops UI shows"
+ },
+ {
+  "line": 10637,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Check GitHub CI on the merge commit.** Merged on an explicit instruction"
+ },
+ {
+  "line": 10658,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Verify the dry-run default on prod after deploy.** `GET"
+ },
+ {
+  "line": 10680,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Consider making the resume path's fallback observable.** When no saved"
+ },
+ {
+  "line": 10686,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Metadata matcher: shift-click range selection.** Owner request"
+ },
+ {
+  "line": 10692,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Metadata matcher: \"skip all\" / hide-multiples control.** Owner request"
+ },
+ {
+  "line": 10699,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Metadata matcher: apply falsely reports \"signed out \u2014 no changes were"
+ },
+ {
+  "line": 10711,
+  "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+  "subsection": null,
+  "text": "- [ ] **Metadata matcher: multi-file write-to-files must dispatch as a"
+ },
+ {
+  "line": 10768,
+  "section": "memdb and Pebble disagree about author\u2192book links \u2014 ROOT-CAUSED, one step left",
+  "subsection": "\u2705 Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)",
+  "text": "- [ ] **After this deploys**, drop `skip_author_ids: [46627]` from the repair"
+ },
+ {
+  "line": 10785,
+  "section": "memdb and Pebble disagree about author\u2192book links \u2014 ROOT-CAUSED, one step left",
+  "subsection": "\u2705 Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)",
+  "text": "- [ ] **CORRECTION to `20260814-matcher-writeback-background-job.md`: the"
+ },
+ {
+  "line": 10811,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **5 more walkers share the exposure** (whole-library offset loops over"
+ },
+ {
+  "line": 10821,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **The original CI flake (run 30702594886, 39/40 books) CANNOT be the"
+ },
+ {
+  "line": 10830,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **Verify op-ID audit trail on prod after deploying the run-context fix.** Trigger"
+ },
+ {
+  "line": 10836,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **Historical gap is permanent \u2014 do not chase it.** Every maintenance op run before"
+ },
+ {
+  "line": 10841,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **Audit the eight `ctxOpID` consumers now that the ID actually arrives.** Their"
+ },
+ {
+  "line": 10848,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **Organize renames with placeholder metadata \u2014 \"Unknown Author\" gets"
+ },
+ {
+  "line": 10870,
+  "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+  "subsection": null,
+  "text": "- [ ] **E07 residue: 2 ambiguous duplicate-PID groups need a human pick.**"
+ },
+ {
+  "line": 10890,
+  "section": "Bleve index holds ~3,953 docs for soft-deleted books",
+  "subsection": null,
+  "text": "- [ ] Add/verify a reconcile pass that REMOVES index docs whose book is"
+ },
+ {
+  "line": 10896,
+  "section": "Bleve index holds ~3,953 docs for soft-deleted books",
+  "subsection": null,
+  "text": "- [ ] Verify with a bogus-value control: search for a known trashed title"
+ },
+ {
+  "line": 10906,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] **SEC-2** \u2014 bootstrap still writes plaintext credential files"
+ },
+ {
+  "line": 10908,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] **SEC-4 residue** \u2014 no CSP header yet (middleware comment defers until a"
+ },
+ {
+  "line": 10912,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] **PERF-5** \u2014 `internal/itunes/backfill.go:60-68` offset pagination over"
+ },
+ {
+  "line": 10915,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] **TOOL-1** \u2014 `testdata` is 2.2G tracked; decide fetched-dataset split."
+ },
+ {
+  "line": 10916,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] **FE-2/FE-3/FE-4** \u2014 the three stale-deps findings' line anchors have"
+ },
+ {
+  "line": 10918,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": null,
+  "text": "- [ ] ARCH-3/4/5/7/8 remain structural programs. **ARCH-8 is DONE"
+ },
+ {
+  "line": 10939,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": "Series table integrity \u2014 follow-ups from the 2026-08-14 prune repair",
+  "text": "- [ ] **Identify what produced the 2026-08-11 burst of phantom series references.**"
+ },
+ {
+  "line": 10998,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": "Series table integrity \u2014 follow-ups from the 2026-08-14 prune repair",
+  "text": "- [ ] **`BulkDeleteSeries` still deletes on a filtered count.**"
+ },
+ {
+  "line": 11012,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": "Series table integrity \u2014 follow-ups from the 2026-08-14 prune repair",
+  "text": "- [ ] **`WithOpID` is never called in production code**, so `ctxOpID(ctx)` returns \"\""
+ },
+ {
+  "line": 11021,
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "subsection": "Series table integrity \u2014 follow-ups from the 2026-08-14 prune repair",
+  "text": "- [ ] **~2,270 series look like they were created from a book title rather than a real"
+ }
+]

@@ -1,0 +1,136 @@
+{
+  "audit": "silent-failure sweep: metafetch/metadata, scanner, organizer pipelines",
+  "repo": "/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-burndown-2026-09",
+  "head": "42d187168",
+  "date": "2026-09-10",
+  "findings": [
+    {
+      "id": "SF-01",
+      "area": "internal/organizer",
+      "title": "Single-file organize no-op paths report success without ever stat-verifying the file, unlike the directory path's explicit post-copy check",
+      "severity": "high",
+      "risk": "data-loss",
+      "file": "internal/organizer/organizer.go",
+      "line": 141,
+      "evidence": "OrganizeBook at organizer.go:141-143 returns `(targetPath, \"\", nil)` the instant `book.FilePath == targetPath`, with no os.Stat/os.Lstat on either path — it assumes a match means the file is really there. The sibling case at organizer.go:184-190 (owner lookup says the target already belongs to this book.ID) returns the same success shape, also with no stat. OrganizeSingleFile (organizer.go:794-804) wraps this 1:1 into a Landing with Created==nil whenever mode==\"\". The caller, Service.OrganizeOneBook (internal/organizer/service.go:1424), returns that Landing straight to its own caller with zero post-check. Contrast with the directory path: organizeDirectoryBookRows (service.go:1477-1498) explicitly os.Stat()s every landing.Files entry after organizeBookDirectory returns and fails the book if copiedCount==0, with a comment (service.go:1488-1489) explaining exactly why that check exists (\"pathMap records what organize believed it wrote, and this verifies the files are still there\") — a check the single-file path never received.",
+      "why_it_matters": "A book row whose FilePath already equals the computed target (e.g. after a prior successful organize, or a stale/edited DB row) is reported organized successfully even if the file was deleted, corrupted, or moved out from under the row between the last scan and this organize call. The itunes importer (internal/itunes/service/importer.go:1736-1741) calls the exact same OrganizeSingleFile and also does no stat before treating it as done. The user sees \"organized\" for a book whose file may not exist, and nothing before the next full rescan will catch it.",
+      "suggested_fix": "Add the same os.Stat verification the directory path already has to OrganizeBook's two no-op branches (organizer.go:141-143, 184-190), or push a single shared \"verify landing.Path exists\" check into OrganizeSingleFile so every caller gets it for free.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SF-02",
+      "area": "internal/scanner",
+      "title": "Inline AI-parse phase result is discarded by the scan, so a fully-aborted LLM phase (revoked key, quota exhausted, 3+ batch failures) still lets library.scan report success",
+      "severity": "critical",
+      "risk": "correctness",
+      "file": "internal/scanner/scanner.go",
+      "line": 1705,
+      "evidence": "runAIBatchPhase returns an AIPhaseSummary whose own doc comment (internal/scanner/ai_batch_phase.go:61-66) says \"Every failure in this phase is a log.Warn and a `return nil` ... The queued library.ai-parse operation reports this summary into its own operation record so a run that did nothing cannot show up green.\" scanner.go:1705 and scanner.go:1714 call `runAIBatchPhase(...)` as a bare statement — the returned AIPhaseSummary is never assigned to a variable, so `.Failed()`, `.String()`, and `.FailureDetails()` (which the queued path at internal/server/library_ai_parse_op.go:143-167 uses to turn a failed phase into `reporter.Log(WARN, ...)` plus `return fmt.Errorf(...)`) are never consulted here. ProcessBooksParallel (scanner.go:1106) always falls through to `return nil` at line 1728 regardless of what the AI phase did. ProcessBooksParallel's own callers (internal/scanner/service.go:455, the library.scan chunk loop, and internal/server/folder_autoscan_op.go:90) treat that nil as the definitive chunk/op success signal.",
+      "why_it_matters": "This is exactly the pattern CLAUDE.md/the mission calls out: \"Ops that report completed when a phase returned an error.\" Whenever the AI parse queue is unavailable (ErrAIParseEnqueueUnavailable) or partially rejects candidates, the AI batch phase runs inline inside the scan. If the LLM backend is fully down (revoked API key, exhausted quota — the exact 2026-08-16 incident ai_failure.go documents) the phase aborts every remaining batch, but library.scan and folder-autoscan still finish reporting COMPLETED with a full progress bar, identical to a run that AI-parsed everything. The only surviving evidence is the internal log.Warn lines inside runAIBatchPhase itself — nothing reaches the operation record, unlike the queued path which was specifically built to fix this exact blind spot for itself.",
+      "suggested_fix": "Capture the AIPhaseSummary from both call sites (scanner.go:1705, 1714), and when `.Failed()` is true, surface it into the scan's own reporter/log (and consider folding it into ProcessBooksParallel's returned error or a non-fatal warning surfaced to the operation record), matching what library_ai_parse_op.go already does for the queued path.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SF-03",
+      "area": "internal/metafetch",
+      "title": "ISBN/ASIN enrichment sweep discards every provider search error, making a circuit-breaker-open or throttled provider indistinguishable from a legitimate zero-result search",
+      "severity": "critical",
+      "risk": "correctness",
+      "file": "internal/metafetch/isbn.go",
+      "line": 399,
+      "evidence": "searchSourceForISBN (isbn.go:394-414) and searchSourceForASIN (isbn.go:418-435) call `results, _ = src.SearchByTitleAndAuthor(ctx, title, author)` (lines 399, 423) and `results, _ = src.SearchByTitle(ctx, title)` (lines 402, 426), discarding the error return entirely. The metadata.MetadataSource these run against is typically internal/metadata.ProtectedSource (circuitbreaker.go:220-234, :236-250), whose SearchByTitle/SearchByTitleAndAuthor return a real error whenever `ps.allowThrottle(ctx)` rejects the call (rate limit) or `ps.breaker.AllowRequest()` rejects it (circuit open after repeated failures) — i.e. exactly the conditions this package's own sibling code (isbn.go's cousin, service_apply.go, the throttle registry) treats as first-class, loggable events elsewhere. Here the error is thrown away before the caller (EnrichBookISBN, isbn.go:87-114 and :117-134) ever sees it, so a provider outage renders as `isbn == \"\"` / `asin == \"\"`, the same value a genuine \"no such book\" search produces.",
+      "why_it_matters": "The nightly EnrichMissingISBNs sweep (isbn.go:174-281) walks the whole library and reports `checked N, updated M` with no way to tell \"M books genuinely have no ISBN/ASIN anywhere\" from \"every provider call this run was throttled or circuit-broken and we never actually searched.\" This is the same failure shape as the 2026-09-08 empty-refetch incident this package's cache.go was specifically hardened against (an empty/failed response getting treated as an authoritative negative) — except unlike cache.go, isbn.go has no SourceHash/preserve-on-empty defense at all, and unlike the AI batch phase (ai_batch_phase.go), there is no failure counter, no abort threshold, and no per-book \"why\" recorded. A book can sit unenriched indefinitely while every log line says the sweep is healthy.",
+      "suggested_fix": "Stop discarding the error: log it (at minimum a sampled warning naming the source and error), and consider not counting a book as \"checked\" (or track it separately) when every source call errored rather than returned zero results, so a provider outage is visible in EnrichMissingISBNs' own summary line.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "SF-04",
+      "area": "internal/metafetch",
+      "title": "Auto-merge primary-selection (MATCH-4) silently scores a book as having zero files when GetBookFiles errors, which can pick the wrong book as merge primary",
+      "severity": "medium",
+      "risk": "correctness",
+      "file": "internal/metafetch/service_apply.go",
+      "line": 933,
+      "evidence": "checkMetadataSourceHashDuplicates (service_apply.go:908-961) picks which of several same-metadata-hash books becomes the merge `primaryID` by comparing `len(files)` per candidate: `files, err := mfs.db.GetBookFiles(id); n := 0; if err == nil { n = len(files) }` (lines 934-938). On a GetBookFiles error the candidate is scored as having 0 files — the same score a book that legitimately has zero files gets — and the error is not logged at all (no slog.Warn anywhere in this loop, unlike the rest of the function which logs both the outer query failure at line 911 and every FlagMetadataHashDuplicate failure at line 956).",
+      "why_it_matters": "This function automatically demotes every non-primary book to merged_into_book_id, which is a real, user-visible library mutation (the loser's rows stop being independently visible). A transient DB read error on the book that actually has the most files silently makes it lose the primary election to a book with fewer or no real files, and there is no log trail explaining why — an operator investigating a bad auto-merge has nothing to go on.",
+      "suggested_fix": "Log the GetBookFiles error per candidate (mirroring the existing slog.Warn calls elsewhere in this function), and treat an error as \"skip this candidate for primary selection this run\" rather than silently equating it with zero files, or make the merge decision retry rather than default to zero.",
+      "effort": "S",
+      "confidence": "medium",
+      "already_tracked_hint": null
+    }
+  ],
+  "verified_correct_paths": [
+    {
+      "file": "internal/organizer/move.go",
+      "lines": "32-98",
+      "note": "MoveBookFile: stats source, checks destination collision, MkdirAll, os.Rename, then DB update with explicit rollback (renames file back) on DB-write failure; every branch is slog.Error/Warn logged and returns a wrapped error. Fail-closed, no silent path."
+    },
+    {
+      "file": "internal/organizer/organizer.go",
+      "lines": "649-668, 675-721",
+      "note": "copyFile uses exclusive temp-file creation + finalizeExclusive with nonce collision detection; errors are wrapped and temp files cleaned up on every failure branch. No silent success."
+    },
+    {
+      "file": "internal/organizer/service.go",
+      "lines": "1482-1501",
+      "note": "organizeDirectoryBookRows explicitly os.Stat()s every landed file after organizeBookDirectory returns and fails the book (`organize produced 0 files`) if nothing actually landed on disk — the check SF-01 shows is missing from the single-file sibling."
+    },
+    {
+      "file": "internal/organizer/apply_failure.go",
+      "lines": "1-193",
+      "note": "Durable per-book rename-failure records: fail-safe on encode/decode/store errors (logged, treated as 'no record' rather than blocking forever), explicit self-heal conditions (occupant gone, occupant changed, target no longer planned) all logged via slog.Info before clearing."
+    },
+    {
+      "file": "internal/metafetch/field_locks.go",
+      "lines": "122-173",
+      "note": "loadFieldLocks / guardedApply fail CLOSED on a lock-read error (refuses to apply metadata rather than writing over a lock it couldn't verify); StripLockedFields panics (test-pinned) on an unhandled lock key rather than silently letting a new lockable field bypass the guard."
+    },
+    {
+      "file": "internal/metafetch/cache.go",
+      "lines": "160-211",
+      "note": "cacheSearchResponse's preserve-on-empty logic (post-2026-09-08 fix) keeps the previous candidates and FetchedAt when a search legitimately returns zero results with a matching SourceHash, rather than wiping cached candidates — the exact prior incident the mission calls out has been fixed here at HEAD."
+    },
+    {
+      "file": "internal/scanner/process_file.go",
+      "lines": "82-133, 216-317",
+      "note": "ProcessFileWithTimeout bounds an uncancellable tag-read/hash chain with a 120s timeout (documented against a real 3-day prod hang) via a buffered channel that lets the leaked goroutine exit later; PersistChaptersForBook's every edge case (no store, wrong store type, book not found, ffprobe failure) is enumerated in the doc comment and each is either sampled-logged (wiring mismatches) or per-call logged (data-path failures), never silent."
+    },
+    {
+      "file": "internal/scanner/ai_batch_phase.go",
+      "lines": "1-492",
+      "note": "runAIBatchPhase itself is a model implementation: bounded total-failure threshold (maxTotalFailures=3), permanent-vs-transient classification, capped-but-counted failure detail (BatchFailures/SaveFailures with '...and N more' when truncated), and an AIPhaseSummary.Failed() that a zero-change healthy run does not trip but a failed-batch run does. The defect (SF-02) is entirely in a caller that discards this well-built summary, not in this file."
+    },
+    {
+      "file": "internal/scanner/ai_parse_async.go",
+      "lines": "291-424",
+      "note": "saveAIFieldsToPrimary only ever fills empty/blank fields, honors field locks fail-closed (locksOK==false blocks every lockable field), logs every resolution-failure branch distinctly (row vanished, primary-version resolution failed, lock read failed) rather than silently writing to a possibly-wrong row."
+    },
+    {
+      "file": "internal/scanner/scanner.go",
+      "lines": "3334-3379",
+      "note": "applyScannerFields' LibraryState guard (post 2026-09-07 fix, matches project memory) explicitly prevents a bare rescan default of 'imported' from overwriting an already-organized row's state, with a comment documenting the exact prod incident it fixes. Confirmed present and correct at HEAD."
+    },
+    {
+      "file": "internal/fileops/write_tags_safe.go",
+      "lines": "63-189",
+      "note": "WriteTagsSafe: copy-to-temp, write-on-copy, atomic rename; leaves the original untouched on any failure and cleans up the temp file; a post-write hash-column update failure is deliberately non-fatal (bytes are already safely on disk) but is always logged, replacing a prior silent `_ =` that let hash columns drift from the files unnoticed."
+    },
+    {
+      "file": "internal/ai/retry.go",
+      "lines": "40-247",
+      "note": "DoWithRetry is bounded (maxAttempts, not unbounded), and isPermanentAIError/isPermanentQuota429 carefully distinguish quota-exhaustion (permanent, stop immediately) from ordinary rate-limiting (transient, backoff and retry) — with the 2026-08-16 incident that motivated the distinction documented inline."
+    }
+  ],
+  "summary_counts": {
+    "critical": 2,
+    "high": 1,
+    "medium": 1,
+    "low": 0
+  }
+}

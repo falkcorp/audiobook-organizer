@@ -1,0 +1,2010 @@
+[
+  {
+    "path": "abs-sync/TASK-01-syncitem-keyspace.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — `sync_item` keyspace: durable 36-char UUID identity for `libraryItemId` (ABS-SYNC-ID-1)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-02-syncfile-keyspace.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — `sync_file` keyspace: durable per-file IDs for ABS's `ino` (ABS-SYNC-ID-2)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-03-merge-follow-hook.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Merge-follow hook: sync identity + progress survive a dedup merge (ABS-SYNC-ID-3)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-04-syncid-backfill.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Idempotent sync-ID backfill over the existing library (ABS-SYNC-ID-4)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-05-id-survival-tests.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — ID-survival acceptance suite: rename / move / retag / merge / replace (ABS-SYNC-ID-5)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-06-chapter-persistence.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-06",
+    "title": "TASK-06 — Persisted `Chapter` type + Pebble keyspace + store methods (abs-sync Phase 4)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-07-scanner-chapter-hook.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-07",
+    "title": "TASK-07 — Extract + persist chapters at scan time (abs-sync Phase 4)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-08-progress-merge-policy.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-08",
+    "title": "TASK-08 — Pure progress-merge policy package (ABS-SYNC, Phase 6 foundation)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-09-bookmarks.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-09",
+    "title": "TASK-09 — Bookmarks CRUD, server-persisted (ABS-SYNC, Phase 6 foundation)",
+    "status_0902": null
+  },
+  {
+    "path": "abs-sync/TASK-10-drm-detection.md",
+    "initiative": "abs-sync",
+    "workstream": null,
+    "task_id": "TASK-10",
+    "title": "TASK-10 — DRM detection (Audible AAX/AAXC) → unplayable-with-reason (abs-sync Phase 4)",
+    "status_0902": null
+  },
+  {
+    "path": "ai-responses-migration/TASK-01-metadata-llm-review.md",
+    "initiative": "ai-responses-migration",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — Migrate metadata_llm_review.go single call to /v1/responses (AI-RESP-A)",
+    "status_0902": null
+  },
+  {
+    "path": "ai-responses-migration/TASK-02-openai-parser.md",
+    "initiative": "ai-responses-migration",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — Migrate openai_parser.go single-shot calls (6 sites) (AI-RESP-B)",
+    "status_0902": null
+  },
+  {
+    "path": "ai-responses-migration/TASK-03-batches-api.md",
+    "initiative": "ai-responses-migration",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Migrate Batches API (openai_batch.go) — verify allowlist first (AI-RESP-D)",
+    "status_0902": null
+  },
+  {
+    "path": "ai-responses-migration/TASK-04-aijobs-multiturn.md",
+    "initiative": "ai-responses-migration",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Migrate aijobs.go multi-turn flows (add last_response_id) (AI-RESP-E)",
+    "status_0902": null
+  },
+  {
+    "path": "ai-responses-migration/TASK-05-cleanup-chatcompletions.md",
+    "initiative": "ai-responses-migration",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — Delete remaining Chat Completions call sites in internal/ai/ (AI-RESP-F)",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-01-cfg2-retire-flat-remap.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — Retire the CFG-2 flat-key compat shim (CFG-2 Phase D, #1536/CONS-13)",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-02-staticcheck-burndown.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — Drain the staticcheck backlog to green (STATICCHECK-BURNDOWN, #1796)",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-03-sdkguard-break-deps.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Break the two sdkguard dependency violations (SDKGUARD-VIOLATION, #1795) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-04-mock-freshness-glob.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Fix the Mock-Freshness CI glob to cover nested mocks dirs (MOCK-FRESHNESS-GLOB-GAP, #1797)",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-05-warmers-bgwg.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — Enroll the four fire-and-forget cache warmers in bgWG (WARMERS-NOT-IN-BGWG, #1794)",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-06-repo-size-rewrite-plan.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-06",
+    "title": "TASK-06 — REPO-SIZE-1: produce the history-rewrite migration plan, then STOP (REPO-SIZE-1, #1650) [⛔ STOP-FOR-HUMAN]",
+    "status_0902": null
+  },
+  {
+    "path": "bug-techdebt/TASK-07-w5d1-verify-writeback.md",
+    "initiative": "bug-techdebt",
+    "workstream": null,
+    "task_id": "TASK-07",
+    "title": "TASK-07 — Verify Author/Series survive the CreateOrganizedVersion original-book write-back (STOREFID W5d-1, TODO.md:62)",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-01-folder-duplicates-getter.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — Implement GetFolderDuplicatesCore on both backends; revive dedup tier 2 (INIT-2 T1)",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-02-metadata-fuzzy-getter.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — Implement GetDuplicateBooksByMetadataCore on both backends; revive dedup tier 3 (INIT-2 T2) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-03-exact-explosion-gates-drain-parity.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Exact-layer explosion #1512: verify/close emission gates, drain-gate parity, drain flag v2 (INIT-2 T3) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-04-candidate-status-index.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Status secondary index over dedup candidates; de-magic the both_unmatched limit (INIT-2 T4)",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-05-emit-mutex-sharding.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — CONC-3: shard the full-scan emit() off its single global mutex; -race proof (INIT-2 T5) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "dedup-pipeline-hardening/TASK-06-prod-drain-run.md",
+    "initiative": "dedup-pipeline-hardening",
+    "workstream": null,
+    "task_id": "TASK-06",
+    "title": "TASK-06 — Prod drain of the ~387k exact-candidate backlog: dry-run → AskUserQuestion → apply → verify (INIT-2 T6) [NOT AGENT WORK — human + coordinator]",
+    "status_0902": null
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-001",
+    "title": "TASK-001 — Add a short-TTL cache to the search branch of GetAudiobooksWithTotal (explicit first-cut, defer full dirty-set wiring) (SEARCH-CACHE)",
+    "status_0902": "🟡 OPEN — still worth doing — service_query.go: searchWithBleve L166 has no cache read/write; listCache hits only L231/264, inside the non-search pushdown branch; no 'search:' key. Recommendation: keep - depends on the same invalidation gap as TASK-023 (MERGE-CACHE-EVICT), which the brief itself flags."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-002-fix-the-3-way-disagreement-in-how-a-nil-isprimar.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-002",
+    "title": "TASK-002 — Fix the 3-way disagreement in how a nil IsPrimaryVersion is treated (matcher vs. pushdown vs. serialized field) (TODO.md L3348)",
+    "status_0902": "✅ DONE — PR #2805 merged 2026-08-23 (0e97c8398)."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-003-fix-the-author-path-post-filter-to-treat-nil-isp.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-003",
+    "title": "TASK-003 — Fix the author-path post-filter to treat nil IsPrimaryVersion as primary, matching storage's default (TODO.md L3884)",
+    "status_0902": "✅ DONE — PR #2786 merged 2026-08-23 (5f7404066)."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-004",
+    "title": "TASK-004 — Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically (TODO.md L3889)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/audiobooks/service_query_isprimary_conformance_test.go absent; 0 commits to it; no IsPrimaryVersion case in the 3 existing conformance test files. Recommendation: keep - cheap regression net over the nil-primary fixes that did land (8486c93f8, fc93d1b88)."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-005",
+    "title": "TASK-005 — Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint (TODO.md L10728)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn OnlyParsedTranscription --include='*.go': hits only in database/, plugins/maintenance/ and a pushdown test; 0 in service_types.go ListFilters and 0 in handler.go. Recommendation: keep - the filter exists for bulk ops only; the interactive endpoint still cannot express it."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-176-build-a-read-only-census-tool-for-the-41-ungroup.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-176",
+    "title": "TASK-176 — Build a read-only census tool for the 41 ungrouped-but-explicitly-non-primary books (TODO.md L3354)",
+    "status_0902": "✅ DONE — PR #2809 merged 2026-08-23 (144d81f39)."
+  },
+  {
+    "path": "todo-completion/audiobooks/TASK-190-root-cause-and-fix-show-quarantined-true-silentl.md",
+    "initiative": "todo-completion",
+    "workstream": "audiobooks",
+    "task_id": "TASK-190",
+    "title": "TASK-190 — Root-cause and fix: show_quarantined=true silently narrows the audiobook list to is_primary_version=true (TODO.md L3718)",
+    "status_0902": "⏩ SUPERSEDED — PR #2814 / 9d818d822 (2026-08-23) 're-diagnose show_quarantined as a count bug, not a list bug'; TODO L7554: 'previously filed as SHRINKS the list... That is wrong'. Recommendation: drop because the brief's premise (a list/scan-path bug) was overturned 2 days after it was written; re-brief the surviving count bug (audiobooks_helpers.go:113-127 overwrites matchTotal)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-006-add-a-scheduled-detect-only-backstop-workflow-fo.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-006",
+    "title": "TASK-006 — Add a scheduled detect-only backstop workflow for auto-revert.yml (TODO.md L46)",
+    "status_0902": "✅ DONE — PR #2748 merged 2026-08-23 (bc24f8b84)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-007-wire-scripts-test-check-memory-leaks-py-into-a-c.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-007",
+    "title": "TASK-007 — Wire scripts/test_check_memory_leaks.py into a CI job (repo-guards) (TODO.md L50)",
+    "status_0902": "✅ DONE — PR #2700 merged 2026-08-22 (a19851ebd)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-009",
+    "title": "TASK-009 — Teach the ABS fixture-capture harness to record request headers (TODO.md L2568)",
+    "status_0902": "🟡 OPEN — still worth doing — grep 'request_headers\\|RequestHeaders\\|req_headers' scripts/abs_capture_fixtures.py = 0 hits; the 2 ABS-oracle commits (ccdb23792, 828cb69ba) add no header capture. Recommendation: keep - TODO says 0 of 28 fixtures record headers, so it unblocks an evidence-blocked lane."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-010-add-top-level-permissions-blocks-to-the-3-workfl.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-010",
+    "title": "TASK-010 — Add top-level `permissions:` blocks to the 3 workflows flagged by actions/missing-workflow-permissions (SEC-CODEQL-BACKLOG)",
+    "status_0902": "✅ DONE — PR #2766 merged 2026-08-23 (fddc740d7)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-011-pin-sha256-checksums-for-dockerfile-fetched-utfc.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-011",
+    "title": "TASK-011 — Pin SHA256 checksums for Dockerfile-fetched utfcpp/taglib tarballs (SEC-8)",
+    "status_0902": "✅ DONE — PR #2692 merged 2026-08-22 (4b5f6af22)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-012-scripts-setup-prometheus-auth-py-does-not-share-.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-012",
+    "title": "TASK-012 — scripts/setup-prometheus-auth.py does NOT share the server-side shell script's dead-indentation bug (TODO.md L4312)",
+    "status_0902": "✅ DONE — PR #2694 merged 2026-08-22 (1ca4ad775)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-013-build-a-report-only-scan-for-book-rows-that-may-.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-013",
+    "title": "TASK-013 — Build a report-only scan for book rows that may have been spuriously created by the .tmp-rename bug (TODO.md L4844)",
+    "status_0902": "✅ DONE — PR #2797 shipped the report-only scan script. The TODO item (L8819, \"investigate book rows\") stays open until the script has been run against prod and the result recorded. Recommendation: close the brief; TODO item is an owner prod action."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-014",
+    "title": "TASK-014 — Remove committed mtls-bridge build artifact and gitignore it (REPO-SIZE-1)",
+    "status_0902": "🟡 OPEN — still worth doing — git ls-files -s mtls-bridge -> '100755 05891c026... 0 mtls-bridge' (still tracked); grep mtls-bridge .gitignore = 0 hits. Recommendation: keep - trivial, and independent of the STOP-FOR-HUMAN history-rewrite decision it sits under."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-015-stop-committing-series-dedup-py-s-generated-dump.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-015",
+    "title": "TASK-015 — Stop committing series_dedup.py's generated dump/fix cache files (REPO-SIZE-1)",
+    "status_0902": "✅ DONE — PR #2726 merged 2026-08-22 (7ac49d895)."
+  },
+  {
+    "path": "todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md",
+    "initiative": "todo-completion",
+    "workstream": "ci-tooling",
+    "task_id": "TASK-191",
+    "title": "TASK-191 — Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first (TODO.md L921)",
+    "status_0902": "🟡 OPEN — still worth doing — Partly landed, in reverse order: PRs #2875/#2889/#2988 bumped prerelease.yml + release-prod.yml to 66924760. 6 workflows still pin d0c3326b; acceptance needs 0. Recommendation: keep but rewrite - the risky release pair the brief wanted done LAST already shipped, so what remains is the low-consequence six (frontend-ci, nightly, nightly-burndown, hard-burndown, security, triage-poll) in one PR."
+  },
+  {
+    "path": "todo-completion/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md",
+    "initiative": "todo-completion",
+    "workstream": "config",
+    "task_id": "TASK-016",
+    "title": "TASK-016 — Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration (TODO.md L1247)",
+    "status_0902": "🟡 OPEN — still worth doing — grep 'auto_write_tags_on_fetch\\|AutoWriteTagsOnFetch' internal/config/ internal/metafetch/ = 0 hits; grep -c write_back_metadata internal/config/config.go = 3. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/config/TASK-017-fix-apiratelimitperminute-default-drift-between-.md",
+    "initiative": "todo-completion",
+    "workstream": "config",
+    "task_id": "TASK-017",
+    "title": "TASK-017 — Fix APIRateLimitPerMinute default drift between fresh-install (0) and ResetToDefaults/.env.example (100) (CFG-AUDIT)",
+    "status_0902": "✅ DONE — PR #2683 merged 2026-08-22 (03e5d8707)."
+  },
+  {
+    "path": "todo-completion/config/TASK-018-fix-ai-backend-local-base-url-hardcoded-develope.md",
+    "initiative": "todo-completion",
+    "workstream": "config",
+    "task_id": "TASK-018",
+    "title": "TASK-018 — Fix ai_backend.local_base_url hardcoded developer LAN IP default (CFG-AUDIT)",
+    "status_0902": "✅ DONE — PR #2785 merged 2026-08-23 (f4c3f26dd)."
+  },
+  {
+    "path": "todo-completion/config/TASK-019-fix-chapterconsolidationthresholdmin-omitted-fro.md",
+    "initiative": "todo-completion",
+    "workstream": "config",
+    "task_id": "TASK-019",
+    "title": "TASK-019 — Fix ChapterConsolidationThresholdMin omitted from ResetToDefaults (factory reset silently disables consolidation) (CFG-AUDIT)",
+    "status_0902": "✅ DONE — PR #2729 merged 2026-08-22 (213d0b6c9)."
+  },
+  {
+    "path": "todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md",
+    "initiative": "todo-completion",
+    "workstream": "config",
+    "task_id": "TASK-020",
+    "title": "TASK-020 — Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option (CFG-AUDIT)",
+    "status_0902": "🟡 OPEN — still worth doing — EnableSQLite still live at cmd/diagnostics.go:76, cmd/dedup_bench.go:109, cmd/child_mode.go:71 and cmd/commands_test.go x7. Recommendation: keep - pure dead-code removal; the flag has been inert since SQLite3 support was removed."
+  },
+  {
+    "path": "todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-023",
+    "title": "TASK-023 — Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge (MERGE-CACHE-EVICT)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn 'IndexBook\\|bleve\\|Invalidate\\|listCache' internal/merge internal/dedup --include='*.go' = 0 hits; the 4 commits to these files are version-group semantics only. Recommendation: keep - highest leverage of the cache lane; it is the prerequisite TASK-001 defers around, and the 'I merged these and still see two copies' symptom."
+  },
+  {
+    "path": "todo-completion/database/TASK-024-replace-fragile-0x30-0x3a-only-book-0-book-bound.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-024",
+    "title": "TASK-024 — Replace fragile [0x30-0x3A]-only book:0..book:; bounds in the version-group backfill with a real prefix scan (VGBACKFILL-BOUNDS-FRAGILE)",
+    "status_0902": "✅ DONE — PR #2801 merged 2026-08-23 (aa80d6fea)."
+  },
+  {
+    "path": "todo-completion/database/TASK-025-make-wipeallactivity-cancellable-currently-an-un.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-025",
+    "title": "TASK-025 — Make WipeAllActivity cancellable (currently an uncancellable full scan reachable from a request path) (TODO.md L1970)",
+    "status_0902": "✅ DONE — PR #2769 merged 2026-08-23 (51259deb0)."
+  },
+  {
+    "path": "todo-completion/database/TASK-026-triage-the-remaining-misc-codeql-alerts-js-findi.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-026",
+    "title": "TASK-026 — Triage the remaining misc CodeQL alerts: JS findings, uncontrolled-allocation-size FP, and the drifted clear-text-logging FP (SEC-CODEQL-BACKLOG)",
+    "status_0902": "✅ DONE — PR #2798 merged 2026-08-23 (ef7c32d54)."
+  },
+  {
+    "path": "todo-completion/database/TASK-027-build-a-diagnostic-reconciling-the-3-954-book-ga.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-027",
+    "title": "TASK-027 — Build a diagnostic reconciling the 3,954-book gap between the store's live-book count and the API list endpoint's total (TODO.md L3414)",
+    "status_0902": "✅ DONE — PR #2752 read-only diagnostic; cause already recorded in the C716 section (Bleve DocCount polluted by stale soft-deleted docs). TODO L7248 checked off."
+  },
+  {
+    "path": "todo-completion/database/TASK-028-guard-author-delete-paths-with-an-unfiltered-aut.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-028",
+    "title": "TASK-028 — Guard author delete paths with an unfiltered author-reference counter (twin of the series-delete fix) (TODO.md L3526)",
+    "status_0902": "✅ DONE — PR #2787 merged 2026-08-23 (2a789cb31)."
+  },
+  {
+    "path": "todo-completion/database/TASK-029-add-getbooksbyseriesidallversions-and-switch-ded.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-029",
+    "title": "TASK-029 — Add GetBooksBySeriesIDAllVersions and switch DedupSeries's merge loop to it before DeleteSeries (TODO.md L3966)",
+    "status_0902": "✅ DONE — PR #2821 (41641f952) — owner-reserved PR, merged."
+  },
+  {
+    "path": "todo-completion/database/TASK-030-add-a-compare-and-swap-on-collection-version-to-.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-030",
+    "title": "TASK-030 — Add a compare-and-swap on Collection.Version to PebbleStore.UpdateCollection (TODO.md L4501)",
+    "status_0902": "✅ DONE — PR #2760 merged 2026-08-23 (102f2e6a0)."
+  },
+  {
+    "path": "todo-completion/database/TASK-031-lock-the-three-bare-globalstore-accesses-in-init.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-031",
+    "title": "TASK-031 — Lock the three bare globalStore accesses in InitializeStore/CloseStore (TODO.md L4678)",
+    "status_0902": "✅ DONE — PR #2693 merged 2026-08-22 (d6cba017b)."
+  },
+  {
+    "path": "todo-completion/database/TASK-032-add-the-4-missing-compile-time-assertions-to-ifa.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-032",
+    "title": "TASK-032 — Add the 4 missing compile-time assertions to iface_assert.go (TODO.md L4694)",
+    "status_0902": "✅ DONE — PR #2685 merged 2026-08-22 (b44c76cdd)."
+  },
+  {
+    "path": "todo-completion/database/TASK-033-repoint-store-go-17-s-broken-doc-reference-to-th.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-033",
+    "title": "TASK-033 — Repoint store.go:17's broken doc reference to the archived design spec (TODO.md L4721)",
+    "status_0902": "✅ DONE — PR #2732 merged 2026-08-22 (fd666bff3)."
+  },
+  {
+    "path": "todo-completion/database/TASK-034-add-func-override-fields-to-mockstore-s-86-hardw.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-034",
+    "title": "TASK-034 — Add Func override fields to MockStore's ~86 hardwired-zero-return methods (TODO.md L4728)",
+    "status_0902": "✅ DONE — PR #2704 merged 2026-08-22 (54839dc47)."
+  },
+  {
+    "path": "todo-completion/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-035",
+    "title": "TASK-035 — Add DeleteNarrator to the store (CRUD building block only) (TODO.md L5271)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn DeleteNarrator internal/database/ = 0 hits at HEAD. Author-side deletes landed (7b4a45f39, 23fa23694); nothing narrator-side. Recommendation: keep - small CRUD building block, and the author-side pattern to mirror now exists."
+  },
+  {
+    "path": "todo-completion/database/TASK-036-fix-deleteauthor-s-junction-cleanup-it-scans-the.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-036",
+    "title": "TASK-036 — Fix DeleteAuthor's junction cleanup: it scans the dead book_author: keyspace instead of book_authors: (TODO.md L5290)",
+    "status_0902": "✅ DONE — PR #2775 merged 2026-08-23 (777dc7e64)."
+  },
+  {
+    "path": "todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-037",
+    "title": "TASK-037 — Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec (TODO.md L10523)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn 'BookType\\|book_type' internal/database/ = 0 hits at HEAD; no migration added. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-038",
+    "title": "TASK-038 — Filter system-sourced tags out of the Browse-by-Tag cloud (TODO.md L10526)",
+    "status_0902": "🟡 OPEN — still worth doing — service_tags.go:16-21 ListAllUserTags is still 'return svc.store.ListAllTags()' with no Source filter, though pebble_store_tags.go:44 persists Source. Recommendation: keep, lowest priority of this set - TODO itself classes it 'UX preference, not a bug'."
+  },
+  {
+    "path": "todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-039",
+    "title": "TASK-039 — Add transcribe_status to the book-summary list projection and a frontend quality filter control (TODO.md L10728)",
+    "status_0902": "🟡 OPEN — still worth doing — store.go: TranscribeStatus at L350/L974 (full Book only); BookSummary (L377+) carries TranscribedTitle but no TranscribeStatus. Library.test.tsx absent. Recommendation: keep - pairs with TASK-005 (same TODO source line, same filter surface); consider shipping them together."
+  },
+  {
+    "path": "todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-177",
+    "title": "TASK-177 — Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers (TODO.md L235)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn 't.Context()' internal/database/*.go = 0; context.WithTimeout in internal/database/*_test.go = 0. 31e6feddf closed the sibling wall-clock bullet, not this one. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/database/TASK-178-reduce-internal-database-s-short-test-run-wall-c.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-178",
+    "title": "TASK-178 — Reduce internal/database's -short test-run wall-clock cost (currently 200-280s, most of the coverage gate's budget) (TODO.md L238)",
+    "status_0902": "✅ DONE — PR #2810 merged 2026-08-23 (31e6feddf)."
+  },
+  {
+    "path": "todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md",
+    "initiative": "todo-completion",
+    "workstream": "database",
+    "task_id": "TASK-179",
+    "title": "TASK-179 — database.Store (40) -- build the AST/go-types CI gate that makes it unreachable in new files (Phase 2 item 2 of the kill-v1-and-narrow plan) (TODO.md L969)",
+    "status_0902": "🟡 OPEN — still worth doing — tools/cmd/storewidthgate/ absent (tools/cmd has 8 other cmds); .store-width-gate-baseline absent; no store-width job in ci.yml or Makefile. Recommendation: keep - without the gate the 91 database.Store references keep growing; the interface-width job is the pattern to mirror."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-040",
+    "title": "TASK-040 — Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record (MERGE-UNDO)",
+    "status_0902": "🟡 OPEN — still worth doing — AutoMergeJournalEntry (dedup_automerge_journal.go:36-60) still has only Key/CandidateID/Winner/Loser/PreMergeTS/Tag/MergedAt - no ext-id or PID field. Recommendation: keep - highest-value item in this set: an unmerge that leaves ext-ids reassigned is silent, unrecoverable data loss."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-041-audit-remaining-we-use-the-wide-type-because-x-r.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-041",
+    "title": "TASK-041 — Audit remaining 'we use the wide type because X requires it' justification comments -- one genuinely stale instance found (TODO.md L903)",
+    "status_0902": "✅ DONE — Duplicate of TASK-047: skeleton goal is the same CollectDuration narrowing, shipped in PR #2728 (987aaa454). The brief TITLE (\"audit wide-type justification comments\", TODO L4625) is NOT covered by any brief and that TODO item stays open. Recommendation: close as duplicate of TASK-047."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-042-forward-fix-demote-pre-existing-version-group-me.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-042",
+    "title": "TASK-042 — Forward fix: demote pre-existing version-group members when a merge reuses their group ID (VG-DOUBLE-PRIMARY)",
+    "status_0902": "✅ DONE — PR #2777 merged 2026-08-23 (34ed3e24c)."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-043-add-a-dry-run-parameter-to-dedup-series-dedup.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-043",
+    "title": "TASK-043 — Add a dry-run parameter to dedup.series-dedup (TODO.md L3966)",
+    "status_0902": "✅ DONE — PR #2773 merged 2026-08-23 (5ffefdd85)."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-044-apply-the-unfiltered-ref-count-guard-to-the-two-.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-044",
+    "title": "TASK-044 — Apply the unfiltered ref-count guard to the two remaining series deleters (internal/dedup/series_dedup.go, internal/maintenance/jobs/cleanup_series.go) (TODO.md L4288)",
+    "status_0902": "✅ DONE — PR #2782 merged 2026-08-23 (b3bf412f6)."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-045",
+    "title": "TASK-045 — Build a dry-run report-only classifier for series that look like they were minted from a book title (TODO.md L4304)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/plugins/maintenance/series_title_leak_audit.go and _test.go both absent; 0 commits to the paths. Recommendation: keep - report-only and cheap; run it as one measurement wave with TASK-180."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-046",
+    "title": "TASK-046 — Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion (TODO.md L4698)",
+    "status_0902": "🟡 OPEN — still worth doing — Held 2026-08-23 and has NOT landed: merge/service.go:34 is still a bare assertion, called at L372/L513; no AsCapability in the file. Precedent: PR #2696. Recommendation: keep - still held for owner review, not dropped; either unblock it or close it explicitly rather than leaving it queued."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-047-narrow-collectduration-s-tagstore-param-from-ded.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-047",
+    "title": "TASK-047 — Narrow CollectDuration's tagStore param from dedup.Store to database.BookTagSingletonStore (TODO.md L4719)",
+    "status_0902": "✅ DONE — PR #2728 merged 2026-08-22 (987aaa454)."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-048",
+    "title": "TASK-048 — Physically co-locate a Combine survivor's files under RootDir after CombineBooks (AP-1b)",
+    "status_0902": "🟡 OPEN — still worth doing — merge/service.go:467 still reads 'DB-only: files stay where they are on disk'; no OrganizeBook/ensureUnderRoot call in the file. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-049",
+    "title": "TASK-049 — Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity (TODO.md L10750)",
+    "status_0902": "🟡 OPEN — still worth doing — grep WholeFileSimilarity internal/dedup/auto_resolve.go = 0 hits; only commit since 2026-08-21 is 9b698345e (merge journaling). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-050",
+    "title": "TASK-050 — Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment (TODO.md L10750)",
+    "status_0902": "🟡 OPEN — still worth doing — grep 'AcoustID\\|Fingerprint\\|fpidx' internal/dedup/split_book_detector.go = 0 hits. PRs #2946/#2947 shipped batched split-book merges, not containment matching. Recommendation: keep - but note #2946's apply path landed first, so the FingerprintConfirmed gate the brief requires is now a retrofit, not a greenfield addition."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-180",
+    "title": "TASK-180 — Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display (TODO.md L1350)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/plugins/maintenance/dedup_abridged_measure.go absent; collectors_metadata.go:259-263 still applies the tag on the pct>=0.10 rule. Recommendation: keep - it is the measurement gate the TODO demands before any display change; bundle with TASK-045."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-192",
+    "title": "TASK-192 — Clamp ComposeScore against per-kind confidence bounds; route calibrate-composite Round 2 through a new apply_confidence param (INIT-1 T05)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn apply_confidence/ApplyConfidence internal/ = 0 hits; scoreWithClamp exists only in the simulation (calibrate_composite.go:198); 0 commits to any exact_file. Recommendation: keep - the owner already decided FOR it: DECISIONS-PENDING.md L43 row 10 = option (a), 'clamp primary kinds + route Round-2 via a separate apply_confidence param', briefable/Opus-tier."
+  },
+  {
+    "path": "todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md",
+    "initiative": "todo-completion",
+    "workstream": "dedup",
+    "task_id": "TASK-193",
+    "title": "TASK-193 — Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw (DEC-10)",
+    "status_0902": "🟡 OPEN — still worth doing — Same absence as TASK-192 (apply_confidence = 0 hits repo-wide). Both briefs cite DECISIONS-PENDING row 10 and overlap on compose.go / calibrate_composite.go. Recommendation: merge into TASK-192 - same owner decision, same files, near-duplicate scope; TASK-193's wider exact_files list should become TASK-192's."
+  },
+  {
+    "path": "todo-completion/docs/TASK-051-delete-the-34-group-relative-duplicate-paths-fro.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-051",
+    "title": "TASK-051 — Delete the 34 group-relative duplicate paths from docs/api/openapi.json (safe to delete on sight) (TODO.md L296)",
+    "status_0902": "✅ DONE — PR #2745 merged 2026-08-23 (44cb324e0)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-052-triage-the-16-removed-post-maintenance-paths-in-.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-052",
+    "title": "TASK-052 — Triage the 16 removed POST /maintenance/* paths in openapi.json — delete, or document as ops-API equivalents (TODO.md L296)",
+    "status_0902": "✅ DONE — PR #2751 merged 2026-08-23 (76325be70)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-053-delete-the-torrents-group-relative-fragment-from.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-053",
+    "title": "TASK-053 — Delete the /torrents group-relative fragment from openapi.json (TODO.md L296)",
+    "status_0902": "✅ DONE — PR #2686 merged 2026-08-22 (153a88f1c)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-054-re-verify-docs-reference-abs-target-client-contr.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-054",
+    "title": "TASK-054 — Re-verify docs/reference/abs-target-client-contract.md §11's 'safe to stub' list — playlists AND collections are now both falsified (TODO.md L497)",
+    "status_0902": "✅ DONE — PR #2743 merged 2026-08-23 (5185d64a6)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-055-document-the-todo-d-fragment-race-assembled-betw.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-055",
+    "title": "TASK-055 — Document the todo.d fragment race (assembled between filing and finishing) as a process rule, not a mechanical guard (TODO.md L1852)",
+    "status_0902": "✅ DONE — PR #2714 merged 2026-08-22 (d7f665de1)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-056-consolidate-the-august-executive-summary-roundup.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-056",
+    "title": "TASK-056 — Consolidate the August executive-summary roundup through 2026-08-19 (TODO.md L4463)",
+    "status_0902": "✅ DONE — PR #2749 merged 2026-08-23 (9a6fa06cf)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-057",
+    "title": "TASK-057 — Phase 8 — write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix) (ABS-SYNC-Phase8)",
+    "status_0902": "🟡 OPEN — still worth doing — docs/reference/abs-sync-topology-runbook.md absent; docs/reference holds only abs-client-network-audit, abs-implementation-status, abs-target-client-contract, abs-upstream-api-reference. Recommendation: keep - flagged 'possibly parked', but the TODO item is unchecked and both prerequisite contract docs exist, so it is writable now, not blocked."
+  },
+  {
+    "path": "todo-completion/docs/TASK-058-update-execution-manifest-doc-to-reflect-the-now.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-058",
+    "title": "TASK-058 — Update execution-manifest doc to reflect the now-settled human gates (TODO.md L10635)",
+    "status_0902": "✅ DONE — PR #2715 merged 2026-08-22 (20c6d2f8b)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-059-close-out-the-2026-05-01-re-audit-block-test-2-d.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-059",
+    "title": "TASK-059 — Close out the 2026-05-01 re-audit block (TEST-2/DEP-1/DEAD-1/CTX-4/LOG-5/R-9/R-10) (TODO.md L10706)",
+    "status_0902": "✅ DONE — PR #2741 merged 2026-08-23 (bf277c1bc)."
+  },
+  {
+    "path": "todo-completion/docs/TASK-060-docs-truth-up-with-measured-sandbox-prod-dedup-n.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-060",
+    "title": "TASK-060 — Docs truth-up with measured sandbox/prod dedup numbers (T13)",
+    "status_0902": "✅ DONE — PR #2712. PARTIAL by design — TODO L14990 stays open until the T03 sandbox run happens. Recommendation: close the brief; the TODO box is an owner prod action."
+  },
+  {
+    "path": "todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-182",
+    "title": "TASK-182 — Record the docs/system vs top-level architecture classification decision in the docs inventory (TODO.md L101)",
+    "status_0902": "🟡 OPEN — still worth doing — docs/audits/2026-08-11-docs-inventory.md:224 still reads 'out of the classification scope... follow-up pass'; 0 commits to the file since 2026-08-21. Recommendation: keep - ~15 minutes of pure bookkeeping, no code risk."
+  },
+  {
+    "path": "todo-completion/docs/TASK-183-write-file-header-for-the-35-current-live-docs-s.md",
+    "initiative": "todo-completion",
+    "workstream": "docs",
+    "task_id": "TASK-183",
+    "title": "TASK-183 — Write file-header for the 35 current live docs still missing one (TODO.md L101)",
+    "status_0902": "✅ DONE — PR #2713 merged 2026-08-22 (8db9e3e60)."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-062",
+    "title": "TASK-062 — internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor (PERF-5)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/itunes/backfill.go:60 still 'offset := 0'; grep GetAllBooksFullFrom backfill.go = 0 hits; 0 commits to the file since 2026-08-21. Recommendation: keep - carry TASK-063 in the same PR."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-063",
+    "title": "TASK-063 — internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO but identical pattern in the same file (PERF-5)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/itunes/backfill.go:178 still 'offset := 0' (2 occurrences total, L60 and L178, exactly as the brief measured). Recommendation: merge into TASK-062 - identical fix, same file, one PR."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-064",
+    "title": "TASK-064 — Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous (REGROUP-PARTCHAPTER-PARSER)",
+    "status_0902": "🟡 OPEN — still worth doing — fs_regroup_shape.go has 14 regexp.MustCompile (disc/chapter-subdir/edition/lead-trail-num/anthology markers) and none matches a Part/Chapter token; 0 commits to the file. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-065",
+    "title": "TASK-065 — P2 relocate-only sync cycle — the composed cycle already exists (RunRelocateSyncCycle); wire it to a caller and add an end-to-end test (TODO.md L10390)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rln RunRelocateSyncCycle internal/ = 1 file, its own definition (still unwired); internal/server/itl_sync_cycle.go and both new test files absent. Recommendation: keep - flagged 'possibly parked', but the composed cycle already exists, so this is a wiring job, not a build."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-184",
+    "title": "TASK-184 — Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import (ITUNES-SMARTCRIT-PARSE)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/itunes/pid_coverage.go and _test.go absent; cmd/pid-census pre-dates the brief; 0 commits to any exact_file since 2026-08-21. Recommendation: keep - it is the measurement gate before promising a Playlist-Items snapshot import."
+  },
+  {
+    "path": "todo-completion/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md",
+    "initiative": "todo-completion",
+    "workstream": "itunes",
+    "task_id": "TASK-185",
+    "title": "TASK-185 — Report the iTunes listened/in-progress status pipeline's actual wiring gap: PositionSync is fully built but its maintenance op is an unimplemented stub (PLAYBACK-IMPORT)",
+    "status_0902": "🟡 OPEN — still worth doing — docs/audits/2026-08-21-itunes-playback-import-wiring.md absent (docs/audits jumps 2026-08-20 -> 2026-08-25); 0 commits to the path. Recommendation: keep - docs-only, cheap, and the four-stage answer is already sourced inside the brief."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-066",
+    "title": "TASK-066 — Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled (TODO.md L606)",
+    "status_0902": "🟡 OPEN — still worth doing — HEAD d2fcef16a: grep 'freshness.Stamp\\|ClearStamps' non-test -> 0 hits. All 5 anchors hit (StoreProvider deps.go:188, PebbleStore.DB() :427). No commits on exact_files since 2026-08-21. Recommendation: keep — prerequisite for scheduling chapters-backfill; unchanged since the brief."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-067-extend-the-repoint-repair-to-recover-bookfile-ro.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-067",
+    "title": "TASK-067 — Extend the REPOINT repair to recover BookFile rows via Book.FilePath (the #2372 fallback shape), not just the padded-filename shape (TODO.md L642)",
+    "status_0902": "🟡 OPEN — still worth doing — repoint file last touched ed0939c37 (2026-08-20, pre-brief); grep 'book.FilePath\\|GetBookByID' in it -> 0 hits; op ID anchor :132; recoveredViaBook 4 hits in chapters_backfill.go. Recommendation: keep — extends REPOINT only, never deletes; consistent with the report-only/#2614 rule."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-068",
+    "title": "TASK-068 — Build a REPORT-ONLY counter for Book.FilePath collisions (rows sharing the same path across different books) (TODO.md L670)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -rn 'FilePathCollision\\|CollisionCount\\|filepath_collision' --include=*.go -> 0 hits; filepath_collision_report.go ABSENT; GetAllBooksCore anchor hits deps.go:39. Recommendation: keep — cheap report-only op, no contradiction with later decisions."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-070",
+    "title": "TASK-070 — Add a user-configurable activity-log retention window (default 7 days, 0=never) (TODO.md L3488)",
+    "status_0902": "🟡 OPEN — still worth doing — grep activity_log_retention_days config.go -> 0; ActivityLogRetentionDays across go/ts -> 0; CompactActivityLog still hardcodes compactionDays<=0 -> 14 (server_maintenance_deps.go:255-257). Op-ID anchor now 2 hits not 3, def moved to cleanup.go:132/ID :135. Recommendation: keep — anchors all still hit."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-071",
+    "title": "TASK-071 — Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-') (TODO.md L3602)",
+    "status_0902": "🟡 OPEN — still worth doing — Goal absent: author_title_fragment_report.go ABSENT, TitleFragmentAuthor -> 0 hits. Brief's step-1 export is already done by #3035: dedup.looksLikePersonName is now personname.LooksLikePersonName (authorname/parse.go:149). Recommendation: keep — goal unbuilt; re-point the brief's anchor at personname.LooksLikePersonName, the export step is no longer needed."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-072",
+    "title": "TASK-072 — New maintenance op: merge an operator-confirmed list of duplicate real-author rows (TODO.md L3795)",
+    "status_0902": "🟡 OPEN — still worth doing — author_duplicate_merge.go ABSENT; 'author-duplicate-merge\\|MergeAuthors\\b' in maintenance -> 0 hits; mergeAuthorInto author_conjunction_repair.go:288; GetAllAuthors pebble_store_authors.go:21. Recommendation: keep — the reusable merge primitive it builds on is intact."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-073",
+    "title": "TASK-073 — Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive (TODO.md L4137)",
+    "status_0902": "🟡 OPEN — still worth doing — All 8 ctxOpID sites present (cleanup:50,122; dedup_ops:124; metadata:121; optimize:54; reconcile:49; series:82; write_back:59). CreateOperationChange still decl-only deps.go:148. No audit doc. Recommendation: keep — read-only audit, no artifact anywhere; low cost."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-074",
+    "title": "TASK-074 — Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata (TODO.md L4144)",
+    "status_0902": "🟡 OPEN — still worth doing — unknown_author_audit.go ABSENT; 'unknown-author-audit\\|UnknownAuthorAudit' -> 0 hits. Anchors hit: placeholderAuthor organizer.go:316, HasResolvedAuthor :343, dedup_triage Apply :294. Recommendation: keep — but note #2888/#2923 changed placeholder handling in the scanner; re-measure before building."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-075",
+    "title": "TASK-075 — Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors (TODO.md L5275)",
+    "status_0902": "🟡 OPEN — still worth doing — author_purge_empty.go has ZeroBooksWithFiles (5) + RequireZeroFiles (3), no HeldBackSample. 3 post-08-21 commits (01c927fc0, 58718e84b, c81512fcd) — none added the sample. Recommendation: keep — the report struct it extends is actively maintained."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-076",
+    "title": "TASK-076 — Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job) (TODO.md L5281)",
+    "status_0902": "🟡 OPEN — still worth doing — author_narrator_swap_review.go ABSENT; 'swap-shaped\\|AuthorNarratorSwapCandidate' -> 0 hits. All 5 anchors hit (fix_author_narrator_swap.go:70,86; iface_review.go:12; regroup_shattered_ai.go:270). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-077",
+    "title": "TASK-077 — Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, migrateOne, ddMergeDuplicateBook) (TODO.md L5424)",
+    "status_0902": "🟡 OPEN — still worth doing — All 3 still take maintenance.JobStore: fix_version_groups.go:277, backfill_itunes_positions.go:274, dedup_books.go:329. The 5 narrowed exemplars all hit. No commits since 2026-08-21. Recommendation: keep — mechanical, and the pattern to copy is intact."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-078-task-04-build-the-idempotent-sync-id-backfill-ov.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-078",
+    "title": "TASK-078 — TASK-04: build the idempotent sync-ID backfill over the existing library (bounded worker pool required) (ABS-SYNC-TASK-04)",
+    "status_0902": "🟡 OPEN — still worth doing — backfill_sync_id.go ABSENT; no maintenance file pairs backfill with SyncID/SyncItem. docs/agent-tasks/abs-sync/TASK-04-syncid-backfill.md exists; RunItems pattern acoustid/backfill.go:125. Recommendation: keep — but it is wave-3 of a multi-task ABS-SYNC lane; sequence after waves 1-2."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-195",
+    "title": "TASK-195 — Add a zero-size bucket to maintenance.missing-file-audit (the delta TASK-074 does not cover) (DEC-13)",
+    "status_0902": "🟡 OPEN — still worth doing — missing_file_audit.go: '.Size()' -> 0 hits; enum still fileUnknown/filePresent/fileMissing/fileUnreadable (:288-291); classification :606; def plugin.go:62. Last commit e26d9cfae 2026-08-19. Recommendation: keep — report-only extension, consistent with the report-only missing-file rule."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-219",
+    "title": "TASK-219 — Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run (DUPROW-2)",
+    "status_0902": "🟡 OPEN — still worth doing — dedupe_book_file_rows.go: no ReportPath/writeDupeRow/tsv hits; runDedupeBookFileRows :157, counters :224. TSV pattern exists metadata_cache_reap.go:223,478 and missing_file_repoint.go:188. Recommendation: keep — pure dry-run observability; pairs naturally with TASK-220."
+  },
+  {
+    "path": "todo-completion/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md",
+    "initiative": "todo-completion",
+    "workstream": "maintenance",
+    "task_id": "TASK-220",
+    "title": "TASK-220 — Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active (DUPROW-3)",
+    "status_0902": "🟡 OPEN — still worth doing — CreateOperationChange still decl-only (deps.go:148, 1 hit in internal/plugins); ListActiveOperationsV2 absent from maintenance/deps.go though it exists iface_ops_v2.go:156; library.scan library_core_ops.go:48. Recommendation: keep — this is the safety gate before any apply=true run in prod; do before TASK-219."
+  },
+  {
+    "path": "todo-completion/metadata/TASK-079-route-scoreoneresultwithbreakdown-s-base-0-path-.md",
+    "initiative": "todo-completion",
+    "workstream": "metadata",
+    "task_id": "TASK-079",
+    "title": "TASK-079 — Route ScoreOneResultWithBreakdown's base==0 path through scoreRecorder instead of a hand-built ScoreStep (SCORE-REC)",
+    "status_0902": "✅ DONE — PR #2806 merged 2026-08-23 (b9ccfc4a8)."
+  },
+  {
+    "path": "todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md",
+    "initiative": "todo-completion",
+    "workstream": "metadata",
+    "task_id": "TASK-080",
+    "title": "TASK-080 — Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths (SEC-CODEQL-BACKLOG)",
+    "status_0902": "🟡 OPEN — still worth doing — code-scanning state=open still lists #662 go/request-forgery metadata/cover.go:137 and #645 covers/covers.go:82. Both nolint sites unchanged. No commits on either file since 2026-08-21. Recommendation: keep — REVIEW-CRITICAL; brief v2.0.0 already corrects the inert lgtm[] premise, so work from the rewritten step 3."
+  },
+  {
+    "path": "todo-completion/metadata/TASK-081-prefix-metadata-apply-activity-summaries-with-th.md",
+    "initiative": "todo-completion",
+    "workstream": "metadata",
+    "task_id": "TASK-081",
+    "title": "TASK-081 — Prefix metadata-apply activity summaries with the book title and render empty old-value as '(none)' (TODO.md L3517)",
+    "status_0902": "✅ DONE — PR #2706 merged 2026-08-22 (f6af07a0b)."
+  },
+  {
+    "path": "todo-completion/metadata/TASK-196-build-an-async-fanned-out-background-operation-f.md",
+    "initiative": "todo-completion",
+    "workstream": "metadata",
+    "task_id": "TASK-196",
+    "title": "TASK-196 — Build an async, fanned-out background operation for metadata matching -- the bulk dialog is a human-driven one-book-at-a-time loop today (TODO.md L4081)",
+    "status_0902": "🟡 OPEN — still worth doing — metadata_ops_bulk_search_test.go ABSENT; BulkMetadataSearchDialog.tsx still per-currentIndex (:122,:160,:174); searchMetadataForBook still synchronous per book (service_search.go:243). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/metadata/TASK-221-metafetch-collapse-duplicate-book-file-rows-by-c.md",
+    "initiative": "todo-completion",
+    "workstream": "metadata",
+    "task_id": "TASK-221",
+    "title": "TASK-221 — metafetch: collapse duplicate book_file rows by cleaned path before write/rename (DUPROW-1)",
+    "status_0902": "✅ DONE — PR #2690 merged 2026-08-22 (03006224e)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-082-fix-the-go-zipslip-finding-on-the-backup-restore.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-082",
+    "title": "TASK-082 — Fix the go/zipslip finding on the backup-restore extraction path (SEC-CODEQL-BACKLOG)",
+    "status_0902": "✅ DONE — PR #2774 merged 2026-08-23 (694162f24)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-083",
+    "title": "TASK-083 — Fix or verify the still-open go/path-injection findings (SEC-CODEQL-BACKLOG)",
+    "status_0902": "✅ DONE — PR #2781 (a76556310). Partial by its own account: 2 alerts dismissed, #1477/#1478 left open as real bugs (handoff/2026-08-23-state.md). Recommendation: close; the two real bugs are tracked in the SEC-CODEQL-BACKLOG item."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-084-add-codeql-specific-lgtm-suppressions-for-the-3-.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-084",
+    "title": "TASK-084 — Dismiss the 3 already-justified go/disabled-certificate-check alerts via the code-scanning API (SEC-CODEQL-BACKLOG)",
+    "status_0902": "✅ DONE — PR #2800 merged 2026-08-23 (d0cc228a2)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-085-add-search-index-metrics-docs-total-dirty-backlo.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-085",
+    "title": "TASK-085 — Add search-index metrics (docs total, dirty backlog) to /metrics — the search index has zero metrics today (TODO.md L3433)",
+    "status_0902": "✅ DONE — PR #2758 merged 2026-08-23 (e4c1d4195)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-086",
+    "title": "TASK-086 — Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly (TODO.md L3790)",
+    "status_0902": "🟡 OPEN — still worth doing — normalize.go:26 NormalizeAuthor still ToLower(TrimSpace) only; CollapseSpaces :36 has no author-path caller; CreateAuthor (pebble_store_authors.go:134) keys on the un-collapsed value. #2920 fixed atomicity only. Recommendation: keep — owner held it 'review_critical' 2026-08-23 and it did NOT land; needs a backfill/merge plan for existing dup rows before the key change."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-087-replace-serviceregistry-get-t-s-panicking-string.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-087",
+    "title": "TASK-087 — Replace serviceregistry.Get[T]'s panicking string-key lookups with typed accessors (ARCH-8)",
+    "status_0902": "✅ DONE — PR #2804 merged 2026-08-23 (d852a7d6f)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-088-route-acoustid-lsh-backfill-s-lshindexchecker-lo.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-088",
+    "title": "TASK-088 — Route acoustid lsh_backfill's lshIndexChecker lookup through database.AsCapability (TODO.md L4698)",
+    "status_0902": "✅ DONE — PR #2696 merged 2026-08-22 (56302e007)."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-186",
+    "title": "TASK-186 — Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries (VG-DOUBLE-PRIMARY)",
+    "status_0902": "🟡 OPEN — still worth doing — 'primaries > 1\\|MultiPrimary\\|DoublePrimary' non-test -> 0 hits; elect_primaries.go only counts gs.primaries>0 (:158). #2777 landed prevention-on-merge; no library-wide measure or demote sweep. Recommendation: keep — prevention shipped in #2777; the measure + demote-existing half did not."
+  },
+  {
+    "path": "todo-completion/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md",
+    "initiative": "todo-completion",
+    "workstream": "misc-go",
+    "task_id": "TASK-197",
+    "title": "TASK-197 — Audit every registry.RunItems caller's custom Label closure for the post-fn re-render timing change (TODO.md L697)",
+    "status_0902": "🟡 OPEN — still worth doing — Anchors hold: run_items.go:236 'Re-render the label AFTER fn'; 9d2307a64 in its log. grep -rl 'Label:\\s*func' internal/plugins -> 32 (brief expected 31). No audit doc exists. Recommendation: keep, but re-scope: exact_files is one file short of the current 32; low value per file, batch it."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-089-log-a-warning-when-getallseriesbookcounts-itself.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-089",
+    "title": "TASK-089 — Log a warning when GetAllSeriesBookCounts() itself errors in LibrarySeries (TODO.md L5494)",
+    "status_0902": "✅ DONE — PR #2699 merged 2026-08-22 (1b5df3041)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-090-give-change-log-row-compare-snapshot-keyboard-a1.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-090",
+    "title": "TASK-090 — Give Change Log row 'Compare snapshot' keyboard/a11y affordance (TODO.md L5722)",
+    "status_0902": "✅ DONE — PR #2807 merged 2026-08-23 (7bac4e6de)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-091-remove-dead-expanded-state-in-tagcomparison.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-091",
+    "title": "TASK-091 — Remove dead expanded state in TagComparison (TODO.md L5736)",
+    "status_0902": "✅ DONE — PR #2691 merged 2026-08-22 (c6848aa6a)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-092-delete-the-unreachable-bulk-fetch-metadata-dialo.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-092",
+    "title": "TASK-092 — Delete the unreachable Bulk Fetch Metadata dialog and its handler (TODO.md L5742)",
+    "status_0902": "✅ DONE — PR #2757 merged 2026-08-23 (f3f2c85db)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-093-audit-remaining-setupmockapi-startswith-catch-al.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-093",
+    "title": "TASK-093 — Audit remaining setupMockApi startsWith() catch-alls for shadowed specific branches (TODO.md L5758)",
+    "status_0902": "✅ DONE — PR #2710 merged 2026-08-22 (d8f15bd0a)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-094-restore-version-group-count-and-current-version-.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-094",
+    "title": "TASK-094 — Restore version-group count and current-version marker on Book Detail (TODO.md L6252)",
+    "status_0902": "✅ DONE — PR #2770 merged 2026-08-23 (a7eeb6b13)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-095",
+    "title": "TASK-095 — Instrument sort_by usage to inform the enabled_sort_indexes decision (TODO.md L6701)",
+    "status_0902": "🟡 OPEN — still worth doing — 'slog.*sort_by\\|sort_by.*slog' internal/ -> 0 hits; no sort_by metric in metrics.go; ParseQueryString(c,\"sort_by\") handler.go:489; CanPushDownSort memdb_sort_indexers.go:336. Recommendation: keep — but #2911/#2912/#2913 reworked sort handling in late Aug; confirm the decision it feeds is still open."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-096",
+    "title": "TASK-096 — Require every mutating operation to declare and enforce dry_run support at the registry (TODO.md L7435)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -c DryRun registry/types.go -> 0; ValidateOpDef exists registry.go:434 (exported by 73e6815ec 2026-08-20), so the hook point is ready; DryRun *bool still per-op (intro_transcribe.go:90). Recommendation: keep — ValidateOpDef being exported makes this smaller than when the brief was written."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-097-remove-the-now-redundant-react-is-override-from-.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-097",
+    "title": "TASK-097 — Remove the now-redundant react-is override from web/package.json (TODO-MUI-3)",
+    "status_0902": "✅ DONE — PR #2703 merged 2026-08-22 (b7965d56c)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-098",
+    "title": "TASK-098 — Echo which filters the server actually applied in the /audiobooks list response (TODO.md L7736)",
+    "status_0902": "🟡 OPEN — still worth doing — grep applied_filters handlers/audiobooks/handler.go -> 0 hits; applied_filters_test.go ABSENT; filters query parse still handler.go:501. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-099-fail-warn-ci-when-the-rc-ordinal-for-a-version-h.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-099",
+    "title": "TASK-099 — Fail/warn CI when the RC ordinal for a version hits 10 (TODO.md L8044)",
+    "status_0902": "✅ DONE — PR #2742 merged 2026-08-23 (d16bddcd7)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-100-validate-the-two-unvalidated-client-side-navigat.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-100",
+    "title": "TASK-100 — Validate the two unvalidated client-side navigation sinks (Login.tsx from-state, BookDetail.tsx library_return_url) the way the Go side already does (TODO.md L8177)",
+    "status_0902": "✅ DONE — PR #2761 merged 2026-08-23 (c00480a91)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-101-pin-a-regression-test-the-regroup-recommender-mu.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-101",
+    "title": "TASK-101 — Pin a regression test: the regroup recommender must not default to duplicate-of on equal-runtime alone, using the 3 real multidisc holds as fixtures (TODO.md L8245)",
+    "status_0902": "🚫 NOT WORTH DOING — Already shipped 93ed49f41 (2026-08-06, pre-brief): fs_regroup_recommend_test.go:251 TestRecommend_Multidisc_MajorityBookLength_Separate_NearMiss asserts ActionSeparate on the Sevenfold Sword equal-runtime two-disc pair. Recommendation: drop — duplicate of the test shipped in 93ed49f41; adding ULID-keyed fixtures re-pins the same assertion."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-102",
+    "title": "TASK-102 — TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the frontend-framework-versions survey) (TODO.md L8273)",
+    "status_0902": "🟡 OPEN — still worth doing — web/package.json:62 still \"typescript\": \"^6.0.3\"; package-lock node_modules/typescript = 6.0.3. All 6 peer anchors (react 19 / MUI 9 / eslint 10 / zustand 5 / vite / jsdom) still hit. Recommendation: keep — last item of the frontend-framework-versions survey; run it alone so a tsc blast radius is attributable."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-103",
+    "title": "TASK-103 — Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% whisper_error-with-transcript sample) (TODO.md L8433)",
+    "status_0902": "🟡 OPEN — still worth doing — transcribe_status_drift_report.go ABSENT; 'transcribe.status.drift\\|TranscribeStatusDrift' -> 0 hits; IntroTranscription anchors still in intro_transcribe.go (:44,:59,:66,:230). Recommendation: keep — but the Whisper worker rework (#2943/#2999/#3000/#3001/#3014) may have changed the error rate; the op is exactly what re-measures it."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-106",
+    "title": "TASK-106 — Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows (TODO.md L8646)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/playlist/import.go ABSENT (pkg has playlist.go/evaluator.go only); '\\.pls\\|\\.xspf' in scanner.go -> 0 hits; parseM3UFile grouping-only :2160. #2767 shipped .m3u EXPORT, not import. Recommendation: keep — export half landed in #2767, import half did not."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-107-export-a-playlist-back-to-m3u.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-107",
+    "title": "TASK-107 — Export a playlist back to .m3u (TODO.md L8646)",
+    "status_0902": "✅ DONE — PR #2767 merged 2026-08-23 (4b84e65af)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-108",
+    "title": "TASK-108 — Add the review/rating half of app-to-server reading-state sync (reading status half already exists) (TODO.md L8675)",
+    "status_0902": "🟡 OPEN — still worth doing — grep -inw 'rating\\|review' handlers/abs/progress.go -> 0 hits; IsFinished pattern to mirror present (7 hits incl :58,:292,:305,:316). No commits on progress.go since 2026-08-21. Recommendation: keep — but the brief's first step (inspect what AudioBooth/Absorb actually send) is a real prerequisite, not optional."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-109",
+    "title": "TASK-109 — Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/deluge/metadata_candidate.go ABSENT; ParseTorrentNameMetadata -> 0 hits; title-only ParseTorrentNameCandidates still discovery.go:334; core.get_torrent_status client.go:200. Recommendation: keep — scored-candidate-only framing is right; do not let it write authoritatively."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-110",
+    "title": "TASK-110 — Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)",
+    "status_0902": "🟡 OPEN — still worth doing — internal/deluge/grouping_audit.go ABSENT; 'audit\\|grouping' in deluge pkgs -> 0 hits. client.go:199 requests only hash/name/save_path/state/progress — no file list yet. Recommendation: keep — audit tier only; note client.go's field list needs extending to get 'files'."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-111",
+    "title": "TASK-111 — Build the pre-apply snapshot tool for the 138 pending multidisc holds (TODO.md L8837)",
+    "status_0902": "🟡 OPEN — still worth doing — multidisc_snapshot.go ABSENT; grep -rln snapshot regroup*.go -> 0 hits; pickPrimary regroup_apply.go:391. #2960 added a snapshot PRUNE job, not this pre-image. Recommendation: keep — cheap pre-image for an apply path that hard-deletes absorbed rows; do before any multidisc apply."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-112",
+    "title": "TASK-112 — Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule) (TODO.md L8890)",
+    "status_0902": "🟡 OPEN — still worth doing — 'FirstAid\\|first-aid\\|first_aid' internal --include=*.go -> 0 hits; orchestrator file ABSENT; all 14 roster ops exist. Design note exists in the clone (untracked, so not visible inside the worktree). Recommendation: keep — largest item in this batch; the 14 tier ops it sequences are all built."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-113",
+    "title": "TASK-113 — Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run (TODO.md L8890)",
+    "status_0902": "🟡 OPEN — still worth doing — 'func.*Enqueue' in deps_scheduler.go -> 0 hits; PromoteToQueued is the only transition (:44,:46,:233,:236); Registry.EnqueueOp registry.go:575 and scheduler already holds reg *Registry (:55). Recommendation: keep — the wiring it needs (reg handle + EnqueueOp) is already in place."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-114",
+    "title": "TASK-114 — Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)",
+    "status_0902": "🟡 OPEN — still worth doing — combine_by_template.go ABSENT; 'Successors\\|combine_by_template\\|CombineByTemplate' internal -> 0 hits; DoNotImport/block_hash anchor hits internal/database. Recommendation: keep — 'never delete, re-associate' is exactly the later decision the lane settled on, so no contradiction."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-198-diagnose-and-fix-scan-import-organize-spec-ts-s-.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-198",
+    "title": "TASK-198 — Diagnose and fix scan-import-organize.spec.ts's 7 stuck-on-'Add Import Path' failures via DOM snapshot (TODO.md L6394)",
+    "status_0902": "🟡 OPEN — still worth doing — web/tests/e2e/scan-import-organize.spec.ts present; 'Add Import Path' PathsSettingsTab.tsx:211; tabFromHash Settings.tsx:102,:168. No commits on those files since 2026-08-21. Recommendation: keep — but record a fresh baseline chromium failure count first; the TODO's '7' is stale by the brief's own instruction."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-199-render-library-sub-nav-items-in-progress-finishe.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-199",
+    "title": "TASK-199 — Render Library sub-nav items (In Progress/Finished) in collapsed-sidebar mode (TODO.md L7819)",
+    "status_0902": "✅ DONE — PR #2768 merged 2026-08-23 (d9b61a45c)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-200",
+    "title": "TASK-200 — Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2/3) (TODO.md L8316)",
+    "status_0902": "🟡 OPEN — still worth doing — intro_tiered_backfill.go ABSENT; 'tiered.*backfill\\|TieredBackfill\\|introTierBackfill' -> 0 hits; ClassifyIntro classify.go:356; RunItems already used intro_transcribe.go:217. Recommendation: keep — but re-cost it against the new Metal/capability-routed Whisper workers (#2943/#2999/#3001)."
+  },
+  {
+    "path": "todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md",
+    "initiative": "todo-completion",
+    "workstream": "missing-file-lane",
+    "task_id": "TASK-201",
+    "title": "TASK-201 — Wire per-file intro classification into the regroup-shattered-books classifier, outranking runtime (TODO.md L8316)",
+    "status_0902": "🟡 OPEN — still worth doing — grep ClassifyIntro regroup_shattered_ai.go -> 0 hits; the runtime proxy it must outrank is still the only signal (durationSec :175, DurationSec :183). Recommendation: keep — depends on TASK-200's per-file store being populated; sequence after it."
+  },
+  {
+    "path": "todo-completion/operations/TASK-115-distinguish-nothing-to-cancel-from-cancelled-in-.md",
+    "initiative": "todo-completion",
+    "workstream": "operations",
+    "task_id": "TASK-115",
+    "title": "TASK-115 — Distinguish 'nothing to cancel' from 'cancelled' in registry.Cancel so unknown-id cancels 404 instead of lying 204 (TODO.md L4477)",
+    "status_0902": "✅ DONE — PR #2802 merged 2026-08-23 (3d902dff4)."
+  },
+  {
+    "path": "todo-completion/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md",
+    "initiative": "todo-completion",
+    "workstream": "operations",
+    "task_id": "TASK-116",
+    "title": "TASK-116 — Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal (TODO.md L4586)",
+    "status_0902": "🟡 OPEN — still worth doing — progress.go has 2 reporterLogger methods (UpdateProgress :83, With :100) and no IsCanceled override — brief said 'expect 3' but named only those 2, so 2 is consistent. Guards live: scanner/service.go:232,245; organizer/service.go:980,982. Recommendation: keep — small change, but the brief is right that each guard's exit path must be read first."
+  },
+  {
+    "path": "todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md",
+    "initiative": "todo-completion",
+    "workstream": "operations",
+    "task_id": "TASK-117",
+    "title": "TASK-117 — Give prodSchedulerStore an Unwrap() so capability lookups can see past it (TODO.md L4703)",
+    "status_0902": "🟡 OPEN — still worth doing — register.go:58 prodSchedulerStore embeds only opRegistryStore, exactly 1 method (BookFiles :64), no Unwrap. StoreUnwrapper store_capability.go:68; construction register.go:91. Recommendation: keep — trivial, but it is speculative (enables a 'future AsCapability lookup'); merge into whichever task first needs it."
+  },
+  {
+    "path": "todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md",
+    "initiative": "todo-completion",
+    "workstream": "operations",
+    "task_id": "TASK-118",
+    "title": "TASK-118 — Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently-broken test code (TODO.md L4743)",
+    "status_0902": "🟡 OPEN — still worth doing — mocks still 206 lines. 2nd referencer handlers/operations/handler_test.go:35 imports handlers/operations/mocks — DIFFERENT path — so sole importer is the //go:build mocks dead test (:6). No -tags mocks in CI. Recommendation: keep — safe deletion, confirmed sole referencer is the dead build-tagged file."
+  },
+  {
+    "path": "todo-completion/operations/TASK-222-enqueueop-dedupe-only-on-byte-equal-params-or-an.md",
+    "initiative": "todo-completion",
+    "workstream": "operations",
+    "task_id": "TASK-222",
+    "title": "TASK-222 — EnqueueOp: dedupe only on byte-equal params (or an explicit opt-in), never silently drop a different request (ENQ-DEDUP-1)",
+    "status_0902": "✅ DONE — PR #2688 merged 2026-08-22 (656c73574)."
+  },
+  {
+    "path": "todo-completion/organize/TASK-119-replace-the-size-equality-heuristic-in-organizeb.md",
+    "initiative": "todo-completion",
+    "workstream": "organize",
+    "task_id": "TASK-119",
+    "title": "TASK-119 — Replace the size-equality heuristic in OrganizeBookDirectory's destination-adoption check with a content hash (F5)",
+    "status_0902": "✅ DONE — PR #2778 merged 2026-08-23 (fceaf51fb)."
+  },
+  {
+    "path": "todo-completion/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md",
+    "initiative": "todo-completion",
+    "workstream": "organize",
+    "task_id": "TASK-121",
+    "title": "TASK-121 — Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write (TODO.md L4919)",
+    "status_0902": "🟡 OPEN — still worth doing — resolveOrganizedFilePath now service.go:1339; warns only on the source-exists branch (:1348) — the third 'plan on faith' branch is still silent, no verify-before-write. Callers :1598/:1600. Recommendation: keep — fix (1) and (2) of the audit doc are still unimplemented; the file shifted ~14 lines."
+  },
+  {
+    "path": "todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
+    "initiative": "todo-completion",
+    "workstream": "organize",
+    "task_id": "TASK-122",
+    "title": "TASK-122 — Add an {edition_suffix} folder-pattern token (TODO.md L5021)",
+    "status_0902": "🟡 OPEN — still worth doing — grep edition_suffix pathbuild.go -> 0 hits; model intact ('{edition}' :279, series_prefix-after-trim comment :298, Edition field :198). No commits on pathbuild.go since 2026-08-21. Recommendation: keep — small and self-contained."
+  },
+  {
+    "path": "todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+    "initiative": "todo-completion",
+    "workstream": "organize",
+    "task_id": "TASK-203",
+    "title": "TASK-203 — Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)",
+    "status_0902": "🟡 OPEN — still worth doing — prometheus.NewCounter internal/organizer -> 0 hits; no run-scoped collision map in organizeBooks (:959). 1fdf37a0e (08-28) added _copyN suffixing + OnCollision (organizer.go:150,184) but counts nothing. Recommendation: keep at lower priority — the overwrite harm is now mitigated by #2944's suffixing; remaining value is measuring degenerate patterns."
+  },
+  {
+    "path": "todo-completion/organize/TASK-223-organizer-collapse-duplicate-paths-in-plantarget.md",
+    "initiative": "todo-completion",
+    "workstream": "organize",
+    "task_id": "TASK-223",
+    "title": "TASK-223 — organizer: collapse duplicate paths in planTargetPaths so totalTracks counts files, not rows (DUPROW-1)",
+    "status_0902": "✅ DONE — PR #2689 merged 2026-08-22 (ba869ab36)."
+  },
+  {
+    "path": "todo-completion/scanner/TASK-123-delete-the-unused-internal-scanner-mocks-generat.md",
+    "initiative": "todo-completion",
+    "workstream": "scanner",
+    "task_id": "TASK-123",
+    "title": "TASK-123 — Delete the unused internal/scanner/mocks generated package (TODO.md L4739)",
+    "status_0902": "✅ DONE — PR #2730 merged 2026-08-22 (4f428d125)."
+  },
+  {
+    "path": "todo-completion/scanner/TASK-124-reuse-internal-ai-s-existing-typed-openai-error-.md",
+    "initiative": "todo-completion",
+    "workstream": "scanner",
+    "task_id": "TASK-124",
+    "title": "TASK-124 — Reuse internal/ai's existing typed OpenAI error classification in scanner.isPermanentAIFailure instead of re-parsing error text (TODO.md L4852)",
+    "status_0902": "✅ DONE — PR #2756 merged 2026-08-23 (1ddaa840d)."
+  },
+  {
+    "path": "todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md",
+    "initiative": "todo-completion",
+    "workstream": "search",
+    "task_id": "TASK-125",
+    "title": "TASK-125 — Index track names on BookDocument so smart playlists can match them (TODO.md L618)",
+    "status_0902": "🟡 OPEN — still worth doing — grep TrackNames document.go -> 0 hits; bookMappingVersion still \"2\" (bleve_index.go:94); AddFieldMappingsAt 25 hits; indexBuilderStore :25; GetBookFiles iface_bookfile.go:20. Recommendation: keep — remember the mapping-version bump forces a full index rebuild; schedule accordingly."
+  },
+  {
+    "path": "todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md",
+    "initiative": "todo-completion",
+    "workstream": "search",
+    "task_id": "TASK-126",
+    "title": "TASK-126 — Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query (TODO.md L3369)",
+    "status_0902": "🟡 OPEN — still worth doing — dropStopwordOnlyConjuncts still bleve_translator.go:166 with no dropped-term return; stopword/ignored/discard across handlers + Library.tsx -> 0 hits. No commits since 2026-08-21. Recommendation: keep — behaviour-preserving UX fix; do not change the dropping itself."
+  },
+  {
+    "path": "todo-completion/server/TASK-127-log-abs-api-enabled-s-actual-boot-time-value-unc.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-127",
+    "title": "TASK-127 — Log ABS_API_ENABLED's actual boot-time value unconditionally (currently silent when disabled) (N-11)",
+    "status_0902": "✅ DONE — PR #2695 logs the value. The TODO item (L3816, DECIDE ABS_API_ENABLED for prod) is an owner decision and stays open. Recommendation: close the brief; decision is Bucket 3."
+  },
+  {
+    "path": "todo-completion/server/TASK-128-fix-enableratelimit-false-not-actually-disabling.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-128",
+    "title": "TASK-128 — Fix EnableRateLimit=false not actually disabling rate limiting (CFG-AUDIT)",
+    "status_0902": "✅ DONE — PR #2744 merged 2026-08-23 (8a4f10c7a)."
+  },
+  {
+    "path": "todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-129",
+    "title": "TASK-129 — Fix wipeActivity dry-run count saturating at 2 (TODO.md L1957)",
+    "status_0902": "🟡 OPEN — still worth doing — maintenance_fixups.go:445 wipeActivity dry-run still returns svc.Query(Limit:1) total; NOTE comment intact; no count path added; no commit touches it since 08-21. Recommendation: keep - unchanged, still actionable."
+  },
+  {
+    "path": "todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-130",
+    "title": "TASK-130 — Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics (TODO.md L3384)",
+    "status_0902": "🟡 OPEN — still worth doing — PR #2758 (e4c1d4195) added ONLY search_index_docs_total (metrics.go:60). grep SearchIndexDropped internal/metrics/*.go = 0 hits; no dirty_backlog gauge (git log -S empty). Recommendation: keep - the #2758 hint is false; neither metric shipped."
+  },
+  {
+    "path": "todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-131",
+    "title": "TASK-131 — Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it) (TODO.md L3443)",
+    "status_0902": "🟡 OPEN — still worth doing — metrics.go:47-48 still books_total / 'Current total number of books in library'; server_lifecycle.go:506 CountPrimaryBooks -> :515 SetBooks; CountAllBooks only at pebble_store.go:3399. Recommendation: keep - neither the rename nor the CountAllBooks switch landed."
+  },
+  {
+    "path": "todo-completion/server/TASK-132-fix-indexedstore-updatebook-to-enqueue-a-bleve-d.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-132",
+    "title": "TASK-132 — Fix indexedStore.UpdateBook to enqueue a Bleve DELETE when the update is a soft-delete transition (TODO.md L4329)",
+    "status_0902": "✅ DONE — Fixed inside TASK-133 PR #2750 (b5ad85ac8); no own branch."
+  },
+  {
+    "path": "todo-completion/server/TASK-133-regression-test-soft-deleting-an-indexed-book-mu.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-133",
+    "title": "TASK-133 — Regression test: soft-deleting an indexed book must be unsearchable without a boot reconcile (TODO.md L4334)",
+    "status_0902": "✅ DONE — PR #2750 merged 2026-08-23 (b5ad85ac8)."
+  },
+  {
+    "path": "todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-134",
+    "title": "TASK-134 — Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached (TODO.md L4449)",
+    "status_0902": "🟡 OPEN — still worth doing — wire_handlers_test.go absent; grep pipelineManager=/aiScanStore= in internal/server/*_test.go = 0 hits; only handler-level fakes at handlers/operations_v2_test.go:409,430 (542a69296, pre-brief). Recommendation: keep - TODO itself says 'Still open, and deliberately'."
+  },
+  {
+    "path": "todo-completion/server/TASK-135-convert-metadata-batch-apply-cached-from-resumed.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-135",
+    "title": "TASK-135 — Convert metadata.batch-apply-cached from ResumeDrop to real checkpoint/resume (TODO.md L4575)",
+    "status_0902": "🟡 OPEN — still worth doing — batch_apply_op.go:97 ResumePolicy: opsregistry.ResumeDrop unchanged; RunItems at :198 has no ResumeFrom/CheckpointEvery; batch_apply_op_test.go absent. Recommendation: keep - memory note confirmed: applies still do not resume at HEAD."
+  },
+  {
+    "path": "todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-136",
+    "title": "TASK-136 — Convert reconcile.apply from ResumeDrop to real checkpoint/resume (TODO.md L4575)",
+    "status_0902": "🟡 OPEN — still worth doing — reconcile_ops.go:96 ResumeDrop for 'reconcile.apply' (and :49 for reconcile.scan); 0 RunItems hits; reconcile_ops_test.go absent. PR #2763 only made it v2-native. Recommendation: keep - same TODO item as TASK-135."
+  },
+  {
+    "path": "todo-completion/server/TASK-137-fix-testorganizeservice-performorganize-nobookst.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-137",
+    "title": "TASK-137 — Fix TestOrganizeService_PerformOrganize_NoBooksToOrganize to mock the method PerformOrganize actually calls (TODO.md L4732)",
+    "status_0902": "✅ DONE — PR #2753 merged 2026-08-23 (904f9a87e)."
+  },
+  {
+    "path": "todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-138",
+    "title": "TASK-138 — Exempt the ABS router group from the global BasicAuth() middleware (ABS-SYNC)",
+    "status_0902": "🟡 OPEN — still worth doing — basicauth.go exempts only health (L28-32) and /assets/+extensions (L34-42); no ABS branch; git log since 08-21 on the file = no commits; server.go:472 still router.Use(BasicAuth()). Recommendation: keep - untouched."
+  },
+  {
+    "path": "todo-completion/server/TASK-139-prune-expired-abs-sess-records-on-the-existing-s.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-139",
+    "title": "TASK-139 — Prune expired abs_sess: records on the existing session-cleanup schedule (ABS-SYNC)",
+    "status_0902": "✅ DONE — PR #2737 merged 2026-08-23 (56d4de4fb)."
+  },
+  {
+    "path": "todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-140",
+    "title": "TASK-140 — Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal) (TODO.md L10372)",
+    "status_0902": "🟡 OPEN — still worth doing — itl_cleanup.go:53 still calls SafeWriteITL(itlPath,*ops) on the apply path; grep 'no-op\\|noop\\|disabled\\|guard' = 0 hits; no commits to the file since 2026-08-21. Recommendation: keep - unguarded apply path still live."
+  },
+  {
+    "path": "todo-completion/server/TASK-141-add-regression-tests-for-the-2-untested-deluge-h.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-141",
+    "title": "TASK-141 — Add regression tests for the 2 untested deluge hydrate sites (TODO.md L10525)",
+    "status_0902": "✅ DONE — PR #2705 merged 2026-08-22 (260c0f4cb)."
+  },
+  {
+    "path": "todo-completion/server/TASK-204-guard-testserverstartgracefulshutdown-s-sigterm-.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-204",
+    "title": "TASK-204 — Guard TestServerStartGracefulShutdown's SIGTERM against future parallelism (TODO.md L280)",
+    "status_0902": "✅ DONE — PR #2698 merged 2026-08-22 (eaa32185b)."
+  },
+  {
+    "path": "todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-205",
+    "title": "TASK-205 — Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll (TODO.md L283)",
+    "status_0902": "🟡 OPEN — still worth doing — server_more_test.go:375 time.Sleep(6*time.Second) + :382 syscall.Kill still present; no shutdownArmed field. PR #2698 fixed the sibling (SIGTERM parallelism guard), not the sleep. Recommendation: keep - the wall-clock cost is still there."
+  },
+  {
+    "path": "todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-206",
+    "title": "TASK-206 — Split or speed up the internal/server test package -- migrate call sites to a lighter newTestServer helper (TODO-SRVTIMEOUT)",
+    "status_0902": "🟡 OPEN — still worth doing — grep 'func newTestServer' internal/server/*.go = 0 hits; the 4 heavy fixtures unchanged (server_test.go:50,57,61,153); package grew 139 -> 164 *_test.go files. Recommendation: keep - no lighter fixture exists; scope grew."
+  },
+  {
+    "path": "todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-208",
+    "title": "TASK-208 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go (DEC-6)",
+    "status_0902": "🟡 OPEN — still worth doing — itunes_error_test.go still 11 NewServer(env.Store) (L34..286) with manual opRegistry Start/Shutdown; version_lifecycle_test.go:37 srv := NewServer(store). Baseline counts unchanged. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-209",
+    "title": "TASK-209 — Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go (DEC-6)",
+    "status_0902": "🟡 OPEN — still worth doing — NewServer( still at itunes_integration_test.go:56,124,172,222,256; indexed_store_test.go now 6 sites (51,99,153,234,297,334); similar_books_test.go:42,136; e2e_workflow_test.go:49. Recommendation: keep - indexed_store grew from 4 to 6 sites."
+  },
+  {
+    "path": "todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-210",
+    "title": "TASK-210 — Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go (DEC-6)",
+    "status_0902": "🟡 OPEN — still worth doing — server_coverage_phase2_test.go still 4 allowOpDefinitionUpserts+NewServer pairs (75/76,133/134,167/168,222/223); deluge 113,161; search_reconciler 46,242; 4 wrapper fixtures still NewServer. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
+    "initiative": "todo-completion",
+    "workstream": "server",
+    "task_id": "TASK-211",
+    "title": "TASK-211 — Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go (DEC-6)",
+    "status_0902": "🟡 OPEN — still worth doing — all 10 files still hold one NewServer(: cover_history:44, server_middleware:38, ai_jobs:40, entity_tag:36, import_collision:38, reading:35, user_handlers, organize_integration:53, op_registration:46. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-142",
+    "title": "TASK-142 — Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke) (MERGE-UNDO)",
+    "status_0902": "🟡 OPEN — still worth doing — grep UnmergeAuto internal/server internal/plugins = comments only (handler.go:1452, handler_test.go:1059); 0 hits for UndoMerge\\|ListMergeJournal. PR #2676 shipped only the journal. Recommendation: keep - journal exists, the endpoints do not."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-143",
+    "title": "TASK-143 — N-3: stop advertising Delete/Update permissions the library surface cannot honor (ABS-N3)",
+    "status_0902": "🟡 OPEN — still worth doing — abs/dto.go:302 Delete: true and :305 Update: true still inside defaultPermissions(); LibraryStore (handler.go:182-189) is still six *Reader interfaces only. Recommendation: keep - cheap honesty fix, untouched."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-144-n-5-search-narrators-must-omit-numbooks-not-emit.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-144",
+    "title": "TASK-144 — N-5: /search narrators must omit numBooks, not emit 0 (ABS-N5)",
+    "status_0902": "✅ DONE — PR #2731, completed by #2738 (narrator id half)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-145-n-6-log-metric-when-listening-stats-read-fails-c.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-145",
+    "title": "TASK-145 — N-6: log + metric when listening-stats read fails (currently silent 0) (ABS-N6)",
+    "status_0902": "✅ DONE — PR #2701 merged 2026-08-22 (0fd2f9d67)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-146-n-10-advertised-login-rate-limit-10-10min-does-n.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-146",
+    "title": "TASK-146 — N-10: advertised login rate limit (10/10min) does not match the real throttle (15/15min) (ABS-N10)",
+    "status_0902": "✅ DONE — PR #2734 + follow-up in #2738/#2739. Fixed 2 of the 3 N-10 mismatches; the throttle-counts-failures-not-requests third is still in the audit doc. Recommendation: close; residual is part of the umbrella ABS N-1..N-10 item."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-147",
+    "title": "TASK-147 — Align ABS conformance fixtures with the oracle so CompareValues stays green permanently (TODO.md L127)",
+    "status_0902": "🟡 OPEN — still worth doing — TODO item still [ ]; CompareValues:true still at abs_test.go:474 and library_fake_test.go:1294; fake grew 767->1356 lines via unrelated ABS fixes (ccdb23792, 09131f17c), not an oracle re-seed. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-148",
+    "title": "TASK-148 — Re-capture the series ABS fixture against a populated library (it currently contains zero series) (TODO.md L491)",
+    "status_0902": "🟡 OPEN — still worth doing — brief's own presence check at HEAD: len(results)==0 in testdata/abs-fixtures/get_api_libraries_id_series.json; no commits to the file since 2026-08-21. Recommendation: keep, but note it needs a populated live library to re-capture - not doable from the repo alone."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-149",
+    "title": "TASK-149 — Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong) (TODO.md L685)",
+    "status_0902": "🟡 OPEN — still worth doing — mapper.go:261 and :217 unchanged; grep 'stops short' mapper.go = 0 hits; mapper_test.go absent; only fb8bd73df (gofmt) + ee36e51ff (timeBase doc) touched the file. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-150",
+    "title": "TASK-150 — Audit apply-shaped endpoints for missing tag/file-I/O writeback (TODO.md L2481)",
+    "status_0902": "🟡 OPEN — still worth doing — docs/audits/2026-08-21-apply-endpoint-fileio-audit.md does not exist at HEAD; all four handler anchors still resolve (organize.go:160, ai.go:592/820, diagnostics.go:443, review/handler.go:137). Recommendation: keep - re-scope: the v2 migration (25227c126, f8c0d43e6, 281955c6f) rewrote several of these handlers since the brief."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-151-document-the-hardcoded-abs-timebase-as-a-permane.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-151",
+    "title": "TASK-151 — Document the hardcoded ABS timeBase as a permanent, owner-approved allowance (TODO.md L2589)",
+    "status_0902": "✅ DONE — PR #2727 merged 2026-08-22 (fb8bd73df)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-152-bound-the-itunes-search-handler-s-unbounded-sear.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-152",
+    "title": "TASK-152 — Bound the iTunes search handler's unbounded SearchBooks(search, 0, 0) call (PERF-4)",
+    "status_0902": "✅ DONE — PR #2755 merged 2026-08-23 (6e9ed9d6d)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-153-implement-post-api-session-local-2xx-stub.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-153",
+    "title": "TASK-153 — Implement POST /api/session/local (2xx stub) (TODO.md L4507)",
+    "status_0902": "✅ DONE — PR #2707 merged 2026-08-22 (747fdfd2a)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-154",
+    "title": "TASK-154 — Implement POST /api/session/local-all (batch local-session sync, accept both body shapes) (TODO.md L4507)",
+    "status_0902": "🟡 OPEN — still worth doing — only r.POST('/api/session/local', h.SessionLocal) at abs/handler.go:585; play.go:364 comment still calls local-all 'the endpoint that actually applies progress'. TASK-153 stub shipped as b52bae9f0. Recommendation: keep - highest-value remaining ABS sync gap."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-155-move-tasks-and-maintenance-window-off-the-legacy.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-155",
+    "title": "TASK-155 — Move /tasks/* and /maintenance-window/* off the legacy v1 operations handler into their own scheduler-config handler (TODO.md L4563)",
+    "status_0902": "✅ DONE — PR #2719 merged 2026-08-22 (09c48386b)."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-156-phase-7-socket-io-for-absorb-deprioritized-by-th.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-156",
+    "title": "TASK-156 — Phase 7 — socket.io for Absorb (deprioritized by the item's own text; still unbuilt) (ABS-SYNC-Phase7)",
+    "status_0902": "🚫 NOT WORTH DOING — 0 socketio hits in abs/*.go; a later decision landed instead: spa_fallback.go:45 'We do not implement socket.io. The honest answer is 404' + :57 nonSPAPrefixes entry. Recommendation: drop/defer - honest-404 degrade-to-polling is shipped and the primary client (AudioBooth) needs no websocket; TODO text self-deprioritizes."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-157",
+    "title": "TASK-157 — Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster (TODO.md L10521)",
+    "status_0902": "🟡 OPEN — still worth doing — DismissDedupCluster at dedup/handler.go:1223 with the sequential 'for _, cand := range candidates' at :1256; grep errgroup = 0 hits; label_capture.go:92 refreshExampleBreakdown still synchronous. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-212-add-get-api-libraries-libraryid-series-seriesid-.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-212",
+    "title": "TASK-212 — Add GET /api/libraries/:libraryId/series/:seriesId to the ABS surface (TODO.md L476)",
+    "status_0902": "⏩ SUPERSEDED — f1072d065 (2026-08-28) served the need via GET /api/series/:id instead - handler.go:534 r.GET('/api/series/:id', auth, h.SeriesDetail), browse.go:824 using GetSeriesByIDs; TODO now [x]. Recommendation: close - the brief's route shape was superseded by the /api/series/:id detail route."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-213-replace-the-single-file-organizebook-call-in-fil.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-213",
+    "title": "TASK-213 — Replace the single-file OrganizeBook call in filesystem.go's auto-organize-after-browse block with OrganizeOneBook + counters (ORGANIZE-4TH-COPY)",
+    "status_0902": "🟡 OPEN — still worth doing — filesystem.go:311 still 'newPath, _, err := org.OrganizeBook(dbBook)' in the auto-organize loop; OrganizeOneBook lives at organizer/service.go:1234 and is not called there; filesystem_test.go absent. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md",
+    "initiative": "todo-completion",
+    "workstream": "server-handlers",
+    "task_id": "TASK-214",
+    "title": "TASK-214 — Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s (REV-EMPTY-2)",
+    "status_0902": "🟡 OPEN — still worth doing — metadata_cache.go:168 limit := ParseQueryInt(c,'limit',0) unchanged; 0 hits for an 'all' query param; useMetadataLane.ts:537 still calls getCachedReviewResults(0, 0); no 5s slow-log. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-158",
+    "title": "TASK-158 — Add a Settings panel section to edit path_aliases (2026-08-20-dual-path-settings-panel.md#1)",
+    "status_0902": "🟡 OPEN — still worth doing — PathAliasesSection.tsx/.test.tsx do not exist; grep -c path_aliases in useSettingsHandlers.ts and PathsSettingsTab.tsx = 0/0; API side present (api.ts:874 PathAlias, :884 path_aliases). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-159-add-and-use-a-test-reset-hook-for-the-module-sco.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-159",
+    "title": "TASK-159 — Add and use a test-reset hook for the module-scope path-alias/path-var promise caches (2026-08-20-dual-path-settings-panel.md#3)",
+    "status_0902": "✅ DONE — PR #2711 merged 2026-08-22 (556048790)."
+  },
+  {
+    "path": "todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-160",
+    "title": "TASK-160 — Move OpenAI API key validation server-side (currently sent from the browser) (SEC-9)",
+    "status_0902": "🟡 OPEN — still worth doing — WelcomeWizard.tsx:160 still fetch('https://api.openai.com/v1/models') from the browser; grep 'validate-openai\\|ValidateOpenAI' internal/server web/src = 0 hits; no commits to either file since 08-21. Recommendation: keep - live SEC-9 finding."
+  },
+  {
+    "path": "todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-161",
+    "title": "TASK-161 — Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget (TODO.md L1350)",
+    "status_0902": "🟡 OPEN — still worth doing — TagCloud.tsx:120 label={`${t.tag} (${t.count})`} with no filter step; grep 'dedup:\\|metadata:source:\\|startsWith' TagCloud.tsx = 0 hits; Library.tsx:2223/2244 still passes availableTags raw. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-162",
+    "title": "TASK-162 — Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing (TODO.md L1350)",
+    "status_0902": "🟡 OPEN — still worth doing — TagCloud.tsx has exactly one label={} at :120 using the raw tag; no formatting helper; no commits to TagCloud.tsx since 2026-08-21. Recommendation: keep - ship together with TASK-161 (same file, same TODO item)."
+  },
+  {
+    "path": "todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-165",
+    "title": "TASK-165 — Review the 17 apiFetch-callers' catch handlers for session-expiry messaging (TODO.md L2486)",
+    "status_0902": "🟡 OPEN — still worth doing — isAuthRedirectError used in one non-test product file (useMetadataLane.ts:40,896) + apiFetch.ts:70; none of the 17 named call sites (BookDetail/Library/FileManager/UserMenu) reference it. Recommendation: keep - audit-shaped; consider splitting per-surface if it stalls again."
+  },
+  {
+    "path": "todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-166",
+    "title": "TASK-166 — Make the book-detail page's Author field(s) link to a library view filtered by that author (TODO.md L3156)",
+    "status_0902": "🟡 OPEN — still worth doing — 0 hits for author_id in useLibraryQuery.ts, Library.tsx, BookDetailInfoTab.tsx; BookDetailInfoTab.tsx:215-217 still joins book.authors[].name with ' & '; backend filter exists (handler.go:379). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-167",
+    "title": "TASK-167 — Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index (TODO.md L3161)",
+    "status_0902": "🟡 OPEN — still worth doing — 0 hits for series_id in useLibraryQuery.ts/Library.tsx/BookDetailInfoTab.tsx; BookDetailInfoTab.tsx:228-231 still a plain template string; backend has handler.go:380 series_id. Recommendation: keep - ship with TASK-166 (same file/hook)."
+  },
+  {
+    "path": "todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-168",
+    "title": "TASK-168 — Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them) (TODO.md L3164)",
+    "status_0902": "🟡 OPEN — still worth doing — grep \"searchParams.get('filters')\" web/src = 0 hits (prerequisite missing); useLibraryFilters.ts:56-60 reads only author/series/genre/language; backend cases intact (service_filtering.go:324,330,334). Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-169",
+    "title": "TASK-169 — Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0) (TODO.md L3168)",
+    "status_0902": "🟡 OPEN — still worth doing — 0 hits for version_group_id in BookDetailVersionGroup.tsx; unblocking filter confirmed at service_filtering.go:412/538 + TestVersionGroupIDFilter_MatchesMembersOnly; b0ebccb0 is an ancestor. Recommendation: keep - depends on TASK-168's ?filters= parsing."
+  },
+  {
+    "path": "todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-170",
+    "title": "TASK-170 — Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2 (TODO.md L4960)",
+    "status_0902": "🟡 OPEN — still worth doing — web/tests/e2e/dedup-operations.spec.ts:118 and dedup.spec.ts:163 both still page.route('**/api/v1/operations/*/status'); 0 hits for operations/v2 in either; no commits since 08-21. Recommendation: keep - the brief also lists non-existent tests/e2e/ paths; only web/tests/e2e/ exists."
+  },
+  {
+    "path": "todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-171",
+    "title": "TASK-171 — Retarget diagnostics.spec.ts AI-submit and export status mocks to v2 (TODO.md L4960)",
+    "status_0902": "🟡 OPEN — still worth doing — half landed: 871f90e71 retargeted op-1 to '**/api/v1/operations/v2/op-1' (spec L183) with the v2 body; op-2 is still '**/api/v1/operations/op-2' at L80 with the v1 progress shape. Recommendation: keep, but re-scope to op-2 only."
+  },
+  {
+    "path": "todo-completion/web/TASK-172-add-a-frontend-test-asserting-the-book-sig-cover.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-172",
+    "title": "TASK-172 — Add a frontend test asserting the book-sig coverage % badge renders (TODO.md L10586)",
+    "status_0902": "✅ DONE — PR #2708. Half 2 only (frontend test); half 1 (14K purge visible in dedup UI) is a live-prod verification. Recommendation: close the brief; remaining half is Bucket 3 (prod verification)."
+  },
+  {
+    "path": "todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-173",
+    "title": "TASK-173 — Add resizable/sortable columns to the acoustic dedup candidates table (TODO.md L10660)",
+    "status_0902": "🟡 OPEN — still worth doing — grep useConfigurableTable DedupAcousticTab.tsx = 0 hits; raw <TableContainer> still at :1136-1307 with candidates.map at :1163; no commits to the file since 2026-08-21. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-174",
+    "title": "TASK-174 — Add resizable/sortable columns to the Activity Log table (TODO.md L10660)",
+    "status_0902": "🟡 OPEN — still worth doing — grep useConfigurableTable ActivityLog.tsx = 0 hits; raw <TableContainer> at :2091 with hardcoded <TableCell>Time at :2095; no commits since 2026-08-21. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-175",
+    "title": "TASK-175 — Add resizable/sortable columns to the split-book dedup candidates table (TODO.md L10660)",
+    "status_0902": "🟡 OPEN — still worth doing — grep useConfigurableTable DedupSplitBookTab.tsx = 0 hits; CandidateRow at :70, TablePagination at :427 unchanged; only 1b616d5c9 (JSON import safety) touched the file. Recommendation: keep - 173/174/175 are one mechanical sweep."
+  },
+  {
+    "path": "todo-completion/web/TASK-188-harden-muimenu-against-the-documented-react-sets.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-188",
+    "title": "TASK-188 — Harden MuiMenu against the documented React setState-drop defect (exit:0 -> exit:false), given the root-cause research is already extensively recorded at HEAD and remains unresolved (TODO.md L1727)",
+    "status_0902": "✅ DONE — PR #2779 applied the MuiMenu exit:false mitigation. The TODO item (L5460, WHY React drops the setState) is a research question and stays open. Recommendation: close the brief."
+  },
+  {
+    "path": "todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-189",
+    "title": "TASK-189 — Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint (REVIEW-PREVIEW)",
+    "status_0902": "🟡 OPEN — still worth doing — audio_sample.go:47 still context.WithTimeout(ctx, 120) (bare-nanoseconds bug) and :42 FilePath: book.FilePath, no GetBookFiles; MetadataPanel.tsx has 0 '/sample' hits; audio_sample_test.go absent. Recommendation: keep - contains a real latent bug (120ns timeout)."
+  },
+  {
+    "path": "todo-completion/web/TASK-215-never-send-batchfetchcandidates-from-the-search-.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-215",
+    "title": "TASK-215 — Never send batchFetchCandidates({}) from the Search providers command (REV-EMPTY-1)",
+    "status_0902": "✅ DONE — PR #2684 merged 2026-08-22 (cd511e17d)."
+  },
+  {
+    "path": "todo-completion/web/TASK-216-show-a-loading-skeleton-not-the-empty-state-whil.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-216",
+    "title": "TASK-216 — Show a loading skeleton, not the empty state, while the metadata review list is still fetching (REV-EMPTY-1)",
+    "status_0902": "✅ DONE — SHA 4a95f3696 added CompareSpine loading prop (:1076,:1089) + data-testid='spine-loading' (:1131) before the empty branch (:1150); pinned by CompareSpine.test.tsx:128, ReviewWorkspace.test.tsx:458. Recommendation: close - shipped as spine-loading in CompareSpine (not metadata-loading in MetadataPanel); behaviour is test-pinned."
+  },
+  {
+    "path": "todo-completion/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-217",
+    "title": "TASK-217 — Evidence panel: explain a missing score derivation in plain language and offer re-search inline (REV-EMPTY-3)",
+    "status_0902": "🟡 OPEN — still worth doing — adapters.ts:119 wording unchanged from the brief's snapshot ('...without a recorded derivation, so its score cannot be explained here'); grep onRefetch CompareSpine.tsx = 0; adapters.test.ts missing. Recommendation: keep."
+  },
+  {
+    "path": "todo-completion/web/TASK-218-operationactivitypanel-stop-re-appending-the-las.md",
+    "initiative": "todo-completion",
+    "workstream": "web",
+    "task_id": "TASK-218",
+    "title": "TASK-218 — OperationActivityPanel: stop re-appending the last SSE log line on every progress tick (REV-EMPTY-4)",
+    "status_0902": "✅ DONE — PR #2687 merged 2026-08-22 (618390ddf)."
+  },
+  {
+    "path": "torrent-relocation/TASK-01-downloadclient-interface.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — Extend download.TorrentClient with UpdateStoragePath + fail-closed stubs (INIT-5 T1)",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-02-deluge-repoint-spike.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — Real-Deluge re-point spike + UpdateStoragePath implementation (INIT-5 T2) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-03-mode-aware-callsites.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Route the MoveStorage call sites through mode-aware relocation (INIT-5 T3) [⚠ review-critical]",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-04-reconcile-reflink-imports.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Reconcile the two import impls: make the plugin reflink real (INIT-5 T4)",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-05-qbit-transmission-adapters.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — qBittorrent re-point + Transmission client in internal/download (INIT-5 T5)",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-06-tristate-relocation-config.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-06",
+    "title": "TASK-06 — Tri-state relocation config + Settings UI + docs (INIT-5 T6)",
+    "status_0902": null
+  },
+  {
+    "path": "torrent-relocation/TASK-07-undo-repoint-closure.md",
+    "initiative": "torrent-relocation",
+    "workstream": null,
+    "task_id": "TASK-07",
+    "title": "TASK-07 — Close the deferred undo re-point item: mode-matrix cells in the EXISTING suites (INIT-5 T7)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-01-ratings-closeout.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-01",
+    "title": "TASK-01 — Verify RATE-5 shipped; fix the stale User Ratings TODO header (RATINGS-CLOSEOUT)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-02-hash-chain-detail-view.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-02",
+    "title": "TASK-02 — Show the file hash chain in the book-file detail view (HASH-CHAIN-2 / #1270)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-03-audible-runtime-closeout.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-03",
+    "title": "TASK-03 — Close out Audible runtime-vs-duration mismatch detection with a fresh read-only prod scan (AUDIBLE-RUNTIME-MISMATCH)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-04-category-ladders-residual.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-04",
+    "title": "TASK-04 — Confirm zero residual work on Audible category ladders (CATEGORY-LADDERS-RESIDUAL)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-05-c8-autofile-notdup-issues.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-05",
+    "title": "TASK-05 — C8: auto-file a GitHub issue per not_dup cluster, dry-run + human-gated (C8 / #1447) ⚠ review-critical",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-06-docs-1-system-docs.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-06",
+    "title": "TASK-06 — DOCS-1: comprehensive system documentation (#1276) — SINGLE-AGENT (strong model)",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-07-slog-w13-sweep.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-07",
+    "title": "TASK-07 — SLOG-W13: wire op-context raw slog calls to logging.* (#1254) — /parallel-sweep",
+    "status_0902": null
+  },
+  {
+    "path": "ux-small-items/TASK-08-slog-prod-verify.md",
+    "initiative": "ux-small-items",
+    "workstream": null,
+    "task_id": "TASK-08",
+    "title": "TASK-08 — SLOG-PROD-VERIFY: smoke-test the op-ID chain on prod, read-only by default (Lane B write path AskUserQuestion-gated) (#1255) — NOT AGENT WORK",
+    "status_0902": null
+  }
+]

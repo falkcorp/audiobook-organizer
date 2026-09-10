@@ -1,0 +1,142 @@
+{
+  "scope": {
+    "repo": "/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-burndown-2026-09",
+    "head": "42d187168",
+    "packages": ["internal/database", "internal/operations", "internal/operations/registry"],
+    "note": "gopls/LSP tool was not available in this session (ToolSearch found no LSP tool); grep/ripgrep and manual read were used instead for symbol lookups and call-site enumeration."
+  },
+  "findings": [
+    {
+      "id": "DB-01",
+      "area": "internal/database (author_bookref.go)",
+      "title": "purge-empty-authors delete-guard book scan uses a narrower byte-range bound than the sibling backfill already fixed for the identical bug",
+      "severity": "high",
+      "risk": "data-loss",
+      "file": "internal/database/author_bookref.go",
+      "line": 325,
+      "evidence": "Pass 2 of CountAuthorReferences (the safety scan that decides whether an author is deletable) opens `snap.NewIter(&pebble.IterOptions{LowerBound: []byte(\"book:0\"), UpperBound: []byte(\"book:;\")})` (lines 324-327), justified by a comment at lines 308-323 admitting: 'a caller-supplied book ID starting outside that range would be invisible to pass 2, losing its LEGACY AuthorID reference... Whether any such row exists on the live library has NOT been measured.' The exact same bound shape (`book:0`..`book:;`) was identified as a real bug and FIXED in the sibling file internal/database/pebble_store_versiongroup_backfill.go (sentinel bumped v2->v3 on 2026-08-23, see lines 36-49 and 112-124 there): 'a letter-leading ID... would have been silently invisible to the v2 scan, with no error surfaced anywhere,' replaced with the true prefix range `book:`..`book;`. author_bookref.go was never updated to match.",
+      "why_it_matters": "CountAuthorReferences backs the delete-author / purge-empty-authors safety guard. If any book row's ID does not start with a Crockford-ULID digit (0-7) or a plain digit (0-9) -- a caller-supplied ID from an importer, migration, or restore path, which the code's own comment says is possible -- pass 2 silently misses that book's legacy AuthorID reference. That undercounts the author's references, and an author who is credited ONLY through that legacy field on that one book becomes wrongly deletable, permanently losing the author record (and any editorial data attached to it) with no error surfaced. This is the exact failure class already proven real enough to force a mandatory one-time re-backfill in the sibling file.",
+      "suggested_fix": "Widen both iterator bounds in author_bookref.go's pass 2 to the true prefix range (`[]byte(\"book:\")`..`prefixUpperBound([]byte(\"book:\"))`, mirroring pebble_store_versiongroup_backfill.go's v3 fix); the existing one-colon structural filter already discriminates primary rows from secondary indexes across the wider range, so no other logic changes. Then run a one-off audit query for any live `book:` key whose first byte after the colon is not `0-9`.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": "Not tracked as an action item anywhere seen -- the residual risk is only documented in a code comment in author_bookref.go itself ('RESIDUAL, recorded rather than guessed'), which does not cross-reference the sibling file's fix."
+    },
+    {
+      "id": "DB-02",
+      "area": "internal/database (migrations.go)",
+      "title": "Migration effect, migration-record write, and schema-version write are three separate, unbatched Pebble writes -- a crash between them replays a non-idempotent migration",
+      "severity": "medium",
+      "risk": "data-loss",
+      "file": "internal/database/migrations.go",
+      "line": 451,
+      "evidence": "RunMigrations (lines 451-469) does, per pending migration: `m.Up(store)` (runs the migration's side effects), then `recordMigration(store, m)` (a separate `store.SetUserPreference` write), then `setVersion(store, m.Version)` (a third separate `SetUserPreference` write). None of the three is wrapped in one atomic batch/transaction.",
+      "why_it_matters": "If the process crashes or is killed between `m.Up(store)` succeeding and `setVersion` succeeding, `getCurrentVersion` on the next boot still reports the pre-migration version, so `RunMigrations` re-runs the SAME migration's `Up` function. Every currently-registered migration happens to be a no-op for PebbleStore ('SQLite-only migration; no-op for PebbleStore', e.g. lines 594-598, 601-605, 608-612), so this is latent today, but the pattern is the general mechanism any future Pebble-side migration will inherit, and nothing in the framework enforces or even flags idempotency on `Up`.",
+      "suggested_fix": "Either (a) require every future Pebble `Up` function to be provably idempotent (document and lint-check it, as pebble_store_versiongroup_backfill.go already models), or (b) fold the migration-record write and the version write into the same batch the migration itself uses, and require `Up` implementations to accept and write into that batch instead of committing independently.",
+      "effort": "M",
+      "confidence": "medium",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "DB-03",
+      "area": "internal/database (migrations.go)",
+      "title": "The real PebbleDB corrupted-organize-path repair (migration014UpPebble) is written but never wired to migration014Up, so it has never run against the production backend",
+      "severity": "medium",
+      "risk": "correctness",
+      "file": "internal/database/migrations.go",
+      "line": 632,
+      "evidence": "migration014Up (lines 628-636) is a hardcoded no-op with the comment 'SQLite-only migration; no-op for PebbleStore.' The actual repair logic lives in migration014UpPebble (lines 638-670), which scans every book with `GetAllBooksCore(0, 0)`, flags any book whose FilePath still contains a literal `{` (an unresolved `{series}`/`{author}` placeholder) by setting `LibraryState = \"needs_review\"`, and is marked `//lint:ignore U1000 kept: real Pebble corrupted-path migration logic not yet dispatched from the migration014Up no-op stub (follow-up wire-up, 2026-07-12)`. grep across internal/database confirms migration014UpPebble is called from nowhere -- it is dead code sitting behind a lint suppression for roughly two months as of this audit (2026-09-10).",
+      "why_it_matters": "Books whose FilePath was written before the leftover-placeholder guard was added to expandPattern (i.e. paths that literally contain `{series}` or `{author}`) are never flagged for review on the production (Pebble) database -- the one-time cleanup this migration exists for silently never executes. Any such rows remain silently corrupted/unresolvable indefinitely.",
+      "suggested_fix": "Either dispatch migration014UpPebble from migration014Up via AsPebbleStore(store) (the same pattern migration007Up already uses at lines 577-581), or -- if the condition is believed to no longer exist in the live library -- run a one-off read-only audit to confirm zero `book:` rows contain `{` in FilePath, then delete the dead function and its lint suppression.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": "The code comment itself flags it as a pending 'follow-up wire-up' from 2026-07-12, but nothing in TODO.md was checked for a matching entry by this audit -- worth reconciling rather than re-filing if one already exists."
+    },
+    {
+      "id": "OPS-01",
+      "area": "internal/operations/registry (resume.go)",
+      "title": "resumeRestart proceeds to announce an op as \"queued\" (publishOpCreated + pingDispatch) even when ResetOperationV2ForResume fails to persist that status, producing a ghost op the dispatcher will never pick up",
+      "severity": "medium",
+      "risk": "correctness",
+      "file": "internal/operations/registry/resume.go",
+      "line": 265,
+      "evidence": "In resumeRestart (lines 219-299): if `r.store.ResetOperationV2ForResume(row.ID)` fails, the code only logs a warning (lines 265-268) and falls through. It then unconditionally sets `row.Status = \"queued\"` on the in-memory struct (line 295) and calls `r.publishOpCreated(row, true)` (line 296) and `r.pingDispatch()` (line 298). The dispatcher (dispatcher.go:40, `dispatchCycle`) only ever dispatches ops returned by `r.store.ListQueuedOperationsV2()` -- a fresh DB read -- so if the DB row's status was never actually flipped to \"queued\" (the write failed), the op is invisible to the dispatcher forever, while every connected client was just told (via the published op.created event) that it is queued.",
+      "why_it_matters": "On a PebbleDB write failure during boot-time resume (disk pressure, compaction stall, etc.), this produces a phantom operation: visible in the UI as queued/about to run, but structurally unable to ever dispatch, with no further error surfaced anywhere. A user has no way to notice other than the op never starting.",
+      "suggested_fix": "On ResetOperationV2ForResume failure, either retry with backoff, or skip publishOpCreated/pingDispatch for that row and instead route it through the same resumeDrop/resumeAsk path used for other failure modes, so the UI and dispatcher state stay consistent with the store.",
+      "effort": "S",
+      "confidence": "medium",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "OPS-02",
+      "area": "internal/database (sql_activity_migrating_store.go)",
+      "title": "Dual-write activity migration: the secondary (SQLite) backend receives every write immediately but Prune/Summarize/CompactByDay run only against the ACTIVE backend until the read flip, so the secondary accumulates unbounded rows for the entire migration window",
+      "severity": "medium",
+      "risk": "perf",
+      "file": "internal/database/sql_activity_migrating_store.go",
+      "line": 161,
+      "evidence": "Record (lines 114-131) writes to BOTH `m.primary` and `m.secondary` unconditionally on every call. But Summarize (161-163), Prune (165-167), CompactByDay (169-171), RecompactDigests (173-175) and RepairActivityIndexes (177-179) are all routed through `m.active()` only (line 95-100: active() returns primary until `readSecondary` flips true). The package doc (lines 16-28) states this is deliberate ('after the flip... never Pebble's unbounded, timeout-prone path'), but the mirror direction is unguarded: before the flip, the secondary is a write-only sink with zero maintenance run against it.",
+      "why_it_matters": "Every activity event the running server records lands in the secondary (SQLite) store from the moment dual-write starts, but nothing prunes, compacts, or digests it until the backfill completes and SetReadSecondary(true) is called (internal/activity/sql_migration.go:125). If the backfill/parity-verification phase runs for an extended period (it is explicitly a live, no-downtime, potentially multi-day cutover per the package doc), the secondary's live-traffic table grows without bound for that whole window with no compaction, which can turn the eventual flip into a bigger-than-necessary table and a slower first CompactByDay/RepairActivityIndexes pass.",
+      "suggested_fix": "Either also run Prune/CompactByDay against the secondary during the dual-write window (bounded, so it cannot race the backfill's own reads), or add an explicit alarm/metric on secondary row count vs. wall-clock time in dual-write mode so an abnormally long migration window is visible before it becomes a storage problem.",
+      "effort": "S",
+      "confidence": "medium",
+      "already_tracked_hint": "Project memory notes 'Activity SQLite is ON... Dual-write (read_secondary=false)' as the state at least as of the most recent note in scope, which is consistent with this window being live in prod right now, but no task was found addressing secondary-side growth specifically."
+    },
+    {
+      "id": "DB-04",
+      "area": "internal/database (nuts_activity_store.go)",
+      "title": "Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact)",
+      "severity": "low",
+      "risk": "hygiene",
+      "file": "internal/database/nuts_activity_store.go",
+      "line": 614,
+      "evidence": "In the daily-digest compaction transaction (lines 608-630): `if existingKey != nil { _ = tx.Delete(actBucket(\"digest\"), existingKey) }` discards the error entirely (not even filtering `IsKeyNotFound` the way the originals-delete loop three lines later does at line 623). If the delete fails for a real I/O reason, the code still proceeds to `tx.Put` the new digest at a freshly-minted ULID key (line 617), leaving the old digest row behind alongside the new one for the same day.",
+      "why_it_matters": "Two digest rows for the same date would double-count that day's digest in any UI/summary that sums per-day digests. In practice this is low-impact: grep confirms `NewNutsActivityStore` has zero production call sites in this tree (only referenced in comments and `dual_write_activity_store.go`, which is itself marked 'UNUSED as of 2026-07-03 (TASK-22)... will be deleted... once the soak period has passed'), so this code path is dormant pending removal.",
+      "suggested_fix": "If NutsActivityStore is being kept as a rollback reference until removal, fix the swallowed error for correctness parity with the pattern used three lines below (check and propagate, or explicitly note why it's safe to ignore). If removal is imminent, this is moot and can be left for the removal PR.",
+      "effort": "S",
+      "confidence": "low",
+      "already_tracked_hint": "dual_write_activity_store.go's own header already tracks NutsActivityStore for deletion 'in the follow-up NutsDB-removal PR once the soak period has passed and an owner has greenlit removal' -- this finding is only relevant if that removal is delayed further."
+    }
+  ],
+  "checked_and_correct": [
+    {
+      "area": "internal/operations/registry/run_items.go",
+      "note": "RunItems generic worker-pool helper: sequential vs. concurrent paths, watermark-based checkpointing (handles out-of-order concurrent completion correctly, documented rationale for why a raw completion count is unsafe), ResumeFrom/ProgressOffset math, and ErrModeFail cancellation propagation were all read in full and are correct and well-reasoned. Do not re-audit."
+    },
+    {
+      "area": "internal/database/memdb_sync.go",
+      "note": "UpsertBookToMemDB / memSync / applyMemSync: write-through from Pebble to the in-memory index correctly snapshots the caller's struct before enqueueing (avoids the documented 2026-08-07 caller-pointer race), buffers writes during warmup instead of dropping them, and on a reload failure (book_authors/book_narrators/book_files) explicitly flags the table via recordLostRows rather than silently committing an empty set. This is the 'ensureLibraryCopy must be followed by syncMetadataToLibraryCopy'-style hazard done correctly with an explicit fallback-to-Pebble-authoritative design."
+    },
+    {
+      "area": "internal/database/pebble_store.go UpdateBook",
+      "note": "Full-column-replacement contract is honored; old-book preserve-on-nil guards (Description, BookSig*, Author, Series) are present and documented (STOR-1/STOREFID W5d-1); all secondary indexes (path, hash x3, version-group, work, ISBN/ASIN, metadata-cache invalidation) are written in ONE pebble.Batch committed with pebble.Sync before the memdb write-through fires. This is the correct pattern; UpdateBook itself is not a finding."
+    },
+    {
+      "area": "internal/database/embedding_store.go DeleteCandidate / deleteCandidateKeys / deleteDedupCandidatesForBook",
+      "note": "The documented 'four candidate key families must be deleted together' invariant is enforced via a single shared deleteCandidateKeys helper used by every delete path, closing the class of index-drift bug the docs warn about."
+    },
+    {
+      "area": "internal/operations/registry/dispatcher.go",
+      "note": "Claim/gate logic (Gate 0 in-memory re-dispatch guard, TOCTOU re-check under write lock, write-set conflict gate, MergeQueuedParams re-read-after-claim race) is carefully reasoned with inline incident history (dedup.book-merge double-run, 2026-08-07 acoustid.backfill x maintenance.repair-transcribe-status write collision) and the fixes read as correct."
+    },
+    {
+      "area": "internal/operations/registry/worker.go",
+      "note": "Goroutine abandonment/grace-period handling, shutdown-safe handle release ordering, subprocess vs in-process terminal-status paths, and finalStatusForCanceledRun's precedence ordering (deadline > user-cancel > quiescing > shutdown) were read in full; the logic is internally consistent and each branch is justified by a cited past incident (C-1 through C-5, R-1 through R-3)."
+    },
+    {
+      "area": "internal/operations/registry/watchdog.go",
+      "note": "stuck vs never_reported strike differentiation, in-memory atomic lastProgressAt preferred over the DB row (compaction-stall false-positive avoidance), and the uncheckpointed-strike declaration-vs-ResumePolicy gate are all correct and match their doc comments."
+    },
+    {
+      "area": "internal/operations/registry/batch.go",
+      "note": "Debounce generation-counter (stale-fire self-abort), batchMu/fireWG shutdown-safety sequencing, and journal-based crash recovery (unready subjects re-bucketed, ready-but-undispatched subjects retried on next Start()) are correct as written."
+    },
+    {
+      "area": "internal/database/pebble_store_versiongroup_backfill.go",
+      "note": "Model implementation for a whole-library one-time repair: sentinel gated, chunked+durable commits (bounds memory, survives interruption), and the v2->v3 sentinel bump specifically fixed the same book:0..book:; byte-range bug flagged in DB-01 above. Use this file as the reference fix when addressing DB-01."
+    },
+    {
+      "area": "internal/operations/registry/run_items.go callers",
+      "note": "Enumerated every registry.RunItems call site in the repo (~50+) via grep; none of the callers within the audited scope (internal/database, internal/operations/registry itself) omit Concurrency on a whole-library loop -- all such call sites live in internal/plugins/*, internal/dedup, internal/itunes/service, internal/metadata and internal/server, which are outside this audit's scope and were not evaluated for the omits-Concurrency hazard CLAUDE.md warns about."
+    }
+  ]
+}

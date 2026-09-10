@@ -1,0 +1,399 @@
+42d187168 fix(metafetch): sweep the whole library for ISBN/ASIN enrichment
+27c53ed30 feat(metadata): persist provider fields previously decoded and dropped
+ef9681ef2 fix(metafetch): enrich ASIN for books that already have an ISBN
+08ec6c882 perf(maintenance): parallelize backfill-file-hashes with resume-safe chunks
+3a4ddbd7e docs(todo): collect fragments into TODO.md [skip ci]
+0ee35ebcb docs(todo): record scan per-book denominator climbs on many-folder scans
+6c4305816 fix(scanner): correct scan-progress denominators, drop counts-up total
+98f15ac94 fix(scripts): Path.exists() does not fail the same way on every Python
+3976b459e chore(scripts): add a gated finisher for the credential relocation
+e7c40b9bd docs(bootstrap): the credential directory is fixed, and stale tokens still answer
+49439b6d4 test(state-dir): sandbox the credential directory and pin the fallback
+61564272a fix(config): stop the credentials following the database around
+344d71724 fix(appdirs): keep the empty-AppDirs negative controls armed
+83db6adb4 fix(pathutil): exclude the database directory from library walks by rule
+e6e696d6a feat(settings): make the main database location a settable option
+1803f3c4d fix(config): honour --db and DATABASE_PATH over the persisted config blob
+24cbf7831 docs(exec-summary): link the compaction summary to PR #3167
+e6a0acf8b fix(activity): make compaction chunk-atomic so interrupts cannot double-count
+22996df58 docs(todo): record that the discard warning is itself dropped from activity
+7d8205767 docs(todo): file the ai-parse summary line that hides discarded saves
+582b06940 docs(todo): file the 8 ops that declare ResumeRestart without a checkpoint
+49abc6602 docs(ai): correct the batch comments for the GPU backend prod now uses
+bc51e511f docs(ai): settle 7B vs 3B with a real sample, measure where 30s actually breaks [skip changelog]
+174c11c1e docs(todo): collect fragments into TODO.md [skip ci]
+82304bb39 docs(ai): record the measured local embedding budget, correct the parse follow-ups [skip changelog]
+9921c7613 fix(ai): make in-flight parse batches configurable, not a hardcoded 4
+25f3b269c fix(ai): make the parse batch size and per-batch timeout configurable
+944cdaf21 docs(todo): file that /ai/test-connection only ever tests OpenAI
+92387343d docs(todo): close the timeline status-filter entries with evidence
+c5cc757f2 test(operations): make the statuses_present noise guard able to fail
+16c9f043a fix(operations): honor the status filter on the timeline endpoint
+49dad4328 docs(handlers): correct stale caller claims about the cached listing's limit
+bb7c9705f test(organizer): the pinned-nonce race test rejected a safe interleaving
+b355ad99e perf(web): Resume Review asks for a count, not the whole backlog
+a9a9ead5d docs(todo): cross-reference the existing rapid-failfile section, don't restate it
+b14dc506a fix(quarantine): stop swallowing the count error and correct a false comment
+0adfb5ebf docs(todo): the series list already paginates — close the stale entry
+9ef923ba7 fix(metadata): the cached listing honours limit and offset
+d854c3908 docs(summaries): the AI filename parser could not reach its backend
+9dd714fd4 fix(web): the notification bell calls an operation by its real name
+57ab94321 fix(ai): an unreachable backend no longer eats the fallback chain's budget
+a9f367c8b fix(ops): summarize the two queued-row creation paths that were missed
+b9dc0eb2e feat(ops): a queued operation reports how many books it is holding
+4fa123bc9 docs(todo): file the bell's ignored displayName, found while grouping
+1ae5c2f64 fix(web): count operations, not rows, in section headings
+ecb74be64 fix(web): let real op lineage outrank inferred grouping
+2e6a93fa7 docs: changelog, todo and executive summary for the AI-parse reporting fixes
+a304f071c fix(web): group consecutive operation rows, and stop full-barring a 0% row
+9afd6d152 fix(ops): report a failed AI-parse batch as a failed operation, with the cause
+f1da7dbe5 feat(web): paginate each operations section on the Activity page
+f4de12645 docs(todo): close the reading-guide sweep — it found the correction itself
+45d737b96 docs(activity): stop diagnosing the backfill from scanned vs copied
+1cbe78dfb test(e2e): assert the operation NAME, not the raw def id
+ba0948244 fix(web): one operation display name for the bell and the Activity page
+e62e30412 fix(web): group finished operations by outcome; stop counting them as active
+1923a0a47 docs(todo): record the fail-closed terminal status and the publish gate
+3279b827f fix(activity): fail closed on the migration's terminal status; don't announce a row that failed to insert
+f0902d00e fix(activity): publish migration status to the SSE hub so it actually updates
+b3b3a2216 feat(activity): show the Pebble→SQLite migration as a visible operation
+d22762f35 fix(activity): keep an inherited parity failure across a forced full re-scan
+8e3db01e7 fix(activity): never resume the migration's digest tier — a backdated row could be skipped and still verify
+089d8410f fix(activity): checkpoint the Pebble→SQLite migration, and make its parity verdict durable
+171fe25ac fix(operations): show 24h of completed operations, and match finished ops on when they completed
+36435bb3f deps(deps): Bump golang in the dependencies group
+d8909c566 docs(todo): fold the reclaim into the existing "retire the Pebble activity path" entry
+26f8a6f76 fix(maintenance): name the store on refusal, report census progress, mark the remainder approximate
+596b4b06f feat(maintenance): add activity-reclaim op to free the migrated Pebble copy
+50e8e82df fix(database): give MockStore.CompactionStats an override guard
+d4afe83e6 fix(maintenance): make db-optimize report real progress and honour cancellation
+49b7a2ca5 fix(metadata): stop empty refetches destroying candidates; fix review chips
+2de382b01 fix(web): make the sidebar scrollable and Expand/Collapse All functional
+9773ac8b0 fix(activity): honor an explicit vacuum request when nothing needed clamping
+06a1b51ec fix(activity): truncate the WAL after VACUUM so space is actually reclaimed
+dd933f20c docs(todo): collect fragments into TODO.md [skip ci]
+397a68905 docs(todo): correct the CodeQL sanitizer entry and record the control result
+46d97a0cd fix(codeql): drop a model file declaring a predicate the Go pack lacks
+b1d526a79 feat(activity): retroactively clamp oversized activity summaries
+118e7fe01 docs(todo): correct the cover-404 entry's stale glob description
+8c34a0427 docs(todo): record that CodeQL analyzes every language twice per run
+f7d9d9d99 test(metadata): pin that os.DirFS stats without opening
+fc3620f60 docs(todo): file the CodeQL path-sanitizer model defect found via #3130
+a9a1b87e2 fix(metadata): confine the cover lookup with io/fs instead of a path join
+6fed618b7 fix(metadata): reject cover IDs containing a separator instead of truncating
+814ec43a4 docs(todo): check off the coverPath hotspot; record what the fix surfaced
+65317bb8b fix(metadata): confine cover paths to the covers directory with SecureJoin
+3b49d842f perf(metadata): resolve covers by stat probe instead of globbing 9,288 files
+b8fe49faa docs(todo): resolve the coverPath hotspot to filepath.Glob reading 9,288 entries
+39f4bb085 docs(todo): post-mint-lock CPU profile of ABS search on prod
+11c045920 docs(audits): fix blockquote swallowing the finding-1 body
+87286a73d docs(audits): flag that the abs file-batch swap is not a clean drop-in
+5fb614d84 docs(audits): N+1 / batch-endpoint sweep across the Go backend
+4d7b9d9e4 perf(abs): take the sync-identity mint lock only to mint, and batch it per book
+f570a2d5e test(scan): register library.scan's dedupe opt-in with its reason
+80051ae88 fix(scan): stop a duplicate library scan queueing behind a running one
+dd80af53e fix(search): size the result slice from a constant, not from `limit`
+27d415e70 fix(search): do not trust `limit` for the result slice's capacity
+4ea62baf7 perf(search): match in memdb instead of scanning the library from disk
+b61056a2b fix(abs): honour the search limit and rank hits before truncating them
+ea7f62abc fix(activity): bound the summary column; the 5.3 GB was never the details blobs
+b7747f8f7 test(server): assert dashboard stats CONVERGE rather than recompute synchronously
+3e59ab732 fix(database): make dashboard stats actually stale-while-revalidate
+ba9b4a452 fix(server): close the FileIOPool submit/Stop window and join overflow goroutines
+42f4b1139 fix(acoustid): run the nightly fingerprint backfill on a worker pool
+b34bb97ee docs(claude): stop naming a sequential loop as the parallel exemplar
+0fc11a9ab fix(test): drop hand-rolled regex escaping flagged by CodeQL
+e9c669b02 fix(config-api): keep large integers exact when grafting the env-lock annotation
+9e53a7764 docs: executive summary for the shutdown-race family, and file the audit backlog
+34a647658 feat(settings): add the activity-database location control, and mark env-pinned settings read-only
+a803b1995 docs(changelog): activity DB in the library folder, with relocation
+70f893b3c feat(activity): default the activity database into the library folder and relocate on change
+660ae0bce feat(activity): add a verified relocation for the SQLite activity database
+254f69a14 fix(activity): make the SQLite backfill cancellable and joinable at shutdown
+ab266748d fix(auth): stop losing API-key usage increments to a read-modify-write race
+5a32b1d4d fix(operations): join the op-reporter flush loop before the store can close
+6e3f3ef05 feat(activity): make the Pebble→SQLite backfill legible while it runs
+61523744c fix(config): stop wiping the activity DB path setting on every boot
+b81c6b50d perf(activity): stop decoding 9.6 MB detail blobs to read one string
+ae0520464 style(server): gofmt the import block left by the deleted resume test
+ce18292af refactor(server): drop schedulerExtraOpParams, orphaned by the resume sweep deletion
+c5f84f8d8 refactor(server): delete the superseded v1 startup resume sweep
+d22e86498 docs(todo): the opstate params side table has zero matched writer/reader pairs
+c0492886b docs(todo): the v1 startup resume sweep is a superseded duplicate
+c505b2c32 test(server): move the handler unit tests off the deleted v1 arms
+2a4d6d4eb refactor(operations): drop the v1 keyspace reads from the operations handlers
+bcd5df26b fix(maintenance): revert-metadata-fetch resolves operations in both keyspaces
+c344068e0 docs(todo): the v1 stale-operation reaper is inert on both ends
+eab24ce1b docs(todo): no retention sweep exists for v2 operations
+48a90f045 fix(maintenance): retention opstate sweep reads both operation keyspaces
+2f9afad44 fix(dashboard): unfreeze Recent Operations; stop reading the retired v1 keyspace
+e1b1be2ef test(server): invert the reconcile v1-resolution test instead of leaving it green
+9905b4623 refactor(operations): stop reading the v1 keyspace from the op indexes
+347eefb98 fix(diagnostics): read operations from the v2 keyspace, not retired v1
+d844f20c0 fix(operations): persist op results on the v2 row, not a v1 row that never exists
+7be432016 refactor(database): split OpV2LifecycleStore so the new method fits the width cap
+3dbf5dd03 fix(operations): make Clear Stale repair v2 rows stuck reading as in-flight
+d487c2098 fix(operations): stamp completed_at when a queued op is canceled
+601d67192 test(metadata): assert the out-of-order gap by completion order, not by a checkpoint
+801a1a485 fix(metadata): retry gate-deferred books instead of dropping them
+33ab91236 fix(operations): stop the resume from being undone by a stale checkpoint, a queued sibling, or one gate timeout
+5df6b70cb feat(metadata): resume an interrupted batch apply instead of abandoning it
+df888eef9 fix(organizer): name the collision quarantine dir from the stored row, not the request
+f24454251 fix(organizer): clear the log- and path-injection alerts this PR introduced
+75069af64 fix(organizer): never repoint a row at a path another book_file already holds
+3686b3596 test(organizer): pin the library-boundary error contract and document the branch
+b3b441bfd fix(metafetch): resolve occupied apply targets instead of failing forever
+1a67a7371 fix(organize): restamp already-correct books when no operation started the run
+962eaa46e fix(scanner): stop a rescan reverting library_state and hiding organized books
+ca144f83d chore(todo): every rescan reverts library_state, emptying ABS [skip changelog]
+b2b12fd5e chore(todo): retract the collisions-cause-imported claim, evidence contradicts it
+50fba62c6 chore(todo): tie the series symptom to the same library_state filter
+29b705f8a chore(todo): retract the libraryItems claim, it is correct ABS behaviour
+034777286 chore(todo): record ABS hiding imported books, confirmed on prod [skip changelog]
+6d835c312 chore(todo): file real zdb-based reflink detection as a follow-up [skip changelog]
+f95a9a09b chore(todo): file the operations timeline ignoring its query filters [skip changelog]
+88bd954b0 chore(todo): file the api.ts envelope-unwrap sweep and terminal-op zombie bugs [skip changelog]
+1155f9c54 fix(web): unwrap the data envelope in batchFetchCandidates
+9b9e7d73f feat(activity): zstd-compress the SQLite details column (pure-Go)
+eda5a541b fix(activity): stream the Pebble→SQLite backfill in bounded batches
+1a7f65d67 docs(todo): collect fragments into TODO.md [skip ci]
+edf265220 docs(activity): record the 2026-09-07 SQLite-backfill OOM incident
+192decd12 fix(config): wire ACTIVITY_BACKEND env so the Pebble rollback lever works
+15489db40 docs(activity): correct the sqlActInsertIgnore comment's idempotency claim
+905cc68bf fix(activity): content-key idempotency for the Pebble→SQLite cutover
+f16e32b1f feat(activity): backend-agnostic SQL activity store + Pebble→SQLite cutover
+33597e8f6 fix(transcribe): skip durably-failed books, self-heal when their source returns
+0016c7558 fix(scanner): observe ctx cancellation in the discovery/scan phase so scans quiesce
+a867f9ba0 fix(maintenance): reflink-only recover runs skip the scan stand-down
+bce09dd63 chore(todo): file operation-log download corruption (delivery path, not handler)
+b76439f1c feat(maintenance): reflink outside sources back into the tree (recover-missing-files reflinkOutside)
+2fca5851f docs(todo): check off the stand-down retrofit; record Branch B block-cloning probe
+ffd98e33c fix(maintenance): write the per-row report before aborting on a lapsed stand-down lease
+6e0e7f939 feat(maintenance): retrofit file-repointing applies onto the scan stand-down
+6e22a8025 docs(todo): collect fragments into TODO.md [skip ci]
+ea3c469dd feat(registry): scan stand-down control so an op can quiesce the scanner
+7e09e558b fix(maintenance): make recover-missing-files fail hard on an unreadable RootDir
+e010f0e96 feat(maintenance): add recover-missing-files op (size-matched in-tree repoint + census)
+feb180c57 style(maintenance): gofmt mark_missing_files_test.go comment alignment
+5105a815b docs(todo): file separable follow-ups from the health audit + quota work
+e7b9cb041 feat(maintenance): honest Broken Files counter + mark-missing-files op
+8d0b93b93 test(organizer): stub GetBookAuthors in #3075's ReOrganizeInPlace mock tests
+a8a4236b2 test(audiobooks): seed a two-row join so the ID-edit sync test pins replace-semantics
+3c8d24972 docs(executive-summaries): plain-language summary of the download-fix set + repair runbook
+32c19054d fix(organizer): address author-from-join review — log swallowed join errors, sync join on ID edit
+bbe750b42 test(handlers): organizeStoreFake implements GetBookAuthors
+6508b00c9 fix(organizer): resolve author from the join table before the scalar
+3b6c9110e fix(maintenance): address merge-same-path review — honest counts, durable audit
+b63ac0779 style(maintenance): gofmt-align merge-same-path files
+e0a0373ec feat(maintenance): merge-same-path-dupes op to collapse one-file duplicate books
+ae364cb43 style(maintenance): gofmt-align repoint test struct comment
+4ed8f109f fix(maintenance): harden the book-path fallback and stale-row rescan (review)
+b9540e98c test(organizer): pin the directory prefix separator against sibling rewrites
+2d1db2222 fix(organizer): repoint single-file book_file rows on move; repair via missing-file-repoint
+821f0fa74 docs(todo): collect fragments into TODO.md [skip ci]
+434885279 fix(metafetch): a one-word variant hit needs a person to vouch, series words stay in the anchor
+39978d0da docs(metafetch): changelog and executive summary describe the anchored rules
+7dcd4f660 test(metafetch): a book name made only of kind-of-book words anchors nothing
+12234c664 fix(metafetch): anchor every variant on both paths, derive the book name positionally, and write the ledger row as JSON
+d38808d49 docs(executive-summaries): titles the catalogs could not find — the folder-name query, Google's real allowance, and the empty middle of the chain
+a0a39364a fix(metafetch): anchor bulk variants on the book's own name and close a ladder on a provider sentinel
+f52ac743e docs(changelog): metadata search retries a series-decorated title without its decoration
+c836b189c test(metafetch): give the interactive variant tests an author so the miss guard and the break are observable
+497dad5d9 fix(metafetch): retry a series-decorated title without its decoration before calling it not found
+a4b1f16f9 docs(todo): file the scan-vs-auto-backup watchdog kill and the copyfile race-test flake
+3baf104d6 docs(todo): file the orphan duplicate series rows and the inert series search filter
+24279fb3a test(abs): say what the listing-failure search test can and cannot observe
+cff6ade79 test(abs): pin that a groupings failure is served unfiltered and never cached
+28cd48de2 fix(abs): judge an empty series by the tile's own grouping, not the store count
+10c7709ab test(abs): add the database import the new search tests were missing
+ccbbe30d8 fix(abs): search drops series with no books and ranks the populated exact match first
+b9c169191 fix(maintenance): a total store failure is a run error; deferred and unreadable reach the aggregate
+27a8da919 fix(maintenance): transcribe progress denominator counts books needing work, not the library
+f1badb119 docs(executive-summaries): the numbered-author cleanup, its numbers and its follow-ups
+4aa010b56 fix(abs): never cache a degraded search document; author hydration failure is a 500
+c2daecbca fix(abs): series search hits carry their books; author detail honours include; search cached 2 min
+69eddfe09 test(maintenance): observe partial books-touched on an erroring strip-merge row
+b9c15e4b7 fix(maintenance): make the strip-merge dry run agree with the apply, and never delete past a failed rewrite
+c8f9be9e0 feat(maintenance): opt-in delete_unmatched for author-strip-merge's no-target rows
+1d55c74ac test(metafetch): cover the mid-run all-throttled flag directly
+e7d34dd71 fix(metadata): close the gaps three reviews found in the provider throttle
+0443d1ce2 docs(executive-summaries): link the provider-throttle summary to PR #3066
+b8756ca31 test(metadata): pin the cancellation guard with the error shape it actually sees
+305ba250c docs(metadata): changelog, executive summary and follow-ups for provider throttling
+bb33b357a feat(metadata): global, persisted, reason-aware provider throttling
+d69939e47 refactor(personname): move the author-name predicates to a leaf, and gate Combine
+722e8ae4e docs(todo): collect fragments into TODO.md [skip ci]
+92854d05f fix(authors): gate the book-edit author path, and pin why the split paths need no gate
+fd0bc68c6 feat(authors): add maintenance.author-strip-merge to repair numbered author rows
+c27f501f0 fix(authors): gate the iTunes path against positional filename shrapnel
+77403e1b8 refactor(metadata): collapse three copies of the provider search walk into one
+50893233b refactor(metadata): identify providers by id everywhere, not by display name
+13f647366 feat(metadata): make provider rate limits configurable per provider
+124b7a0db fix(metadata): give bulk fetch a resume key that works and a chain that finishes
+bb43b2980 fix(metadata): stop recording throttled providers as missing books
+08e87368e docs(series): record the bracketed ruling and the rapid-residue false-kill hazard
+a2b4c348b test(mutation-tables): cover the bracketed strip-name-not-sequence ruling
+228e7a2cf fix(series): strip a bracketed number from the name without writing the sequence
+1267b0b4e docs(series): add changelog, todo and executive-summary fragments
+8ea44f54b test(mutation-tables): repair two patterns my own later edits invalidated
+1d210cb10 fix(series): route the stripped-position write through the field-lock guard
+920e726f2 test(series): cover the AI-parse path's series position write-back
+e25a32d6c docs(mutation-tables): record M06 as a known equivalent mutant
+8c71975b9 test(series): add mutation tables for the matcher and all four write paths
+92ee5b4c6 docs(series): name the field-lock guard this write must join after #3054
+0b550d9c1 fix(series): record the position on EVERY version, not just the primary
+0f4d523f2 test(series): pin the position write-back on all four write paths
+d52f0d75b fix(series): move the book's position out of the series name on every write path
+264ae87f3 refactor(metadata): promote the series-position matcher out of the maintenance plugin
+3a93562d0 test(config): make M05 a compiling mutation instead of a build failure
+b7ad64bfd test(config): fix the M04 mutation that deadlocked instead of mutating
+23dce6a9f test(dedup): cover the whole-batch write failure the mutation table found
+fafdb27fe fix(mutation-matrix): stop `go test` from eating the table off stdin
+f938d510b docs(changelog): cover the secret-rotation fix and the endpoint honesty gates
+ed6841b0e fix(dedup): fail startup on a missing declared Needs; name the serialized remedy
+0b105a42a fix(dedup): close the third gate on WriteErrors, and fsync a cancelled re-band
+e801b6d14 fix(config): stop a rejected PUT from rotating secrets into the live config
+224103777 test(dedup): add the mutation tables for the config deep-copy and re-band fixes
+f03b07291 docs(changelog): note the rescore endpoint runs inline without the scan's key
+4ed3288ab docs(dedup): record that the enqueue dedupe compares active ops only
+17da680a7 docs(changelog): cover the enqueue-dedupe hazard and the written counter
+bca25deb6 test(dedup): make the cancelled-rescore test able to observe the bug it names
+2bd775f83 fix(dedup): stop the dispatcher collapsing two re-bands into one; count what was written
+6c0f9237c fix(config): deep-copy config on PUT; make dedup re-band honest and non-blocking
+f03ea278e docs(organize): record #3059 and the field-lock coexistence
+1ca9d58cd fix(metafetch): keep the carried columns inside the field-lock guard
+d929465db test(organize): make the batch-save skip mutant compile
+0f3a3468e docs(organize): changelog fragment, exec summary and todo check-off
+2b93e7ce6 test(itunes): pin the all-or-nothing book_file repoint
+a4a45824a test(metafetch): pin library-copy rows, carried fields and rollback
+cbffc07ea test(organize): pin book_file rows and rollback for the server callers
+6af53a0b6 refactor(organize): route every organize caller through one row-writing path
+10540266f docs(todo): 72, not 71 — the fragment's own two commits moved the count
+d26aca1e6 docs(todo): actually file the deferred LOW items the PR body claims are filed
+f140a3e44 docs(todo): correct the deferred-scope file count to 71
+b6b568621 refactor(dedup): split dedupBookReader so the lock reader fits the width ratchet
+0572724e3 chore(sdkguard): accept internal/metastate in the SDK dependency closure
+f1366fe79 docs(metadata): state the honest gate count for the field-lock fix
+7dc8a99a5 test(server): expect the preference delete, not the tombstone write
+4c5de2bc4 fix(preferences): delete the preference row instead of writing an empty tombstone
+3cc1cb2ef fix(metafetch): respect the library copy's own field locks when syncing
+98094f8e6 fix(metadata): record a lock row on every user-authored metadata write
+23b219a92 fix(metadata): project and record every lockable field on a user edit
+074f05042 test(metadata): pin that unlocking after a legacy-blob migration is not inert
+6f8c6cec9 wip: review round 1 — H1-H4, undo/revert guards, M1 legacy blob retirement
+87ddcf28e docs(executive-summary): link PR #3054 in the locked-fields summary
+47294f31d fix(metadata): honor user field locks on every apply path and fix the inert scanner guard
+2cb51c515 test(web): make the second-author assertion actually observe the id
+936565c42 feat(web): add an author page and make a book's author open it
+674e83de3 feat(api): add GET /authors/:id so a single author can be addressed
+da9e7c54d test(maintenance): make the candidate veto observable by widening the allow-list
+7f57c9b94 fix(review): refuse invalid offsets and derive the candidate veto from the store's vocabulary
+02a542d35 fix(server): resolve maintenance store capabilities through the indexedStore decorator
+4af2da304 docs(changelog): fragment for the review-queue gate fixes
+4def29508 fix(review): paginate replay over every approved item; refuse an unbounded list limit
+4b2d9fc74 fix(regroup): never let a dismissed dedup candidate nominate a merge target
+2c052a105 feat(maintenance): add review-status-index-repair op
+544ab20f8 fix(review): take reviewMu in SetReviewItemDecision; add status-index rebuild
+2cce40fa8 fix(dedup): validate the score ladder before persisting and reload the live engine on every change
+8ee37dd84 fix(dedup): make configured score thresholds actually reach the engine
+65e24e3c6 fix(merge): leave a loser live when its external IDs cannot be moved; typed provisional refusal; 409s on the dedup endpoint
+363082ade fix(merge): keep store failures distinct from not-found; typed match in dedup handler; sync-follow on replay
+7be3e0399 docs(executive-summary): state what was checked about the exposure window
+d6377faa4 docs(executive-summary): #3053 — the file-aware guard read the wrong evidence
+13294b167 test(merge): make M03 a compiling inversion
+5ce81b0b3 test(merge): mutation table for the audio-route / tie-break / typed-error fixes
+6e33b9839 fix(merge): count FilePath as an audio route; order-independent tie-break; typed not-found/refusal errors → 404/409
+73a8cb25f docs(todo): file the hard-delete merge path's missing audio guard [skip changelog]
+00bf88134 docs(organizer): file the #3051 review follow-ups; record the 19/19 mutation result
+8ddf8193c fix(organizer): keep unlanded reasons on a fatal segment; guard the rollback directory; fix the naming-pattern comment drift
+9fcb127fb fix(organizer): refuse in-place landings in CreateOrganizedVersion; carry the book row's size onto the virtual entry
+2a7ca9faa docs(changelog): own fragment for the #3051 landing fixes
+58538764a docs(organizer): record the all-or-nothing landing, InPlace, and stranded-temp checks; test symlink moves
+b7e3715bc test(mutation-matrix): retarget rollback mutants to unlinkCreated, add M13-M16 for the new gates
+a72016382 fix(organizer): make a directory landing all-or-nothing and carry InPlace on the Landing
+55a4eaacc docs(merge): link PR #3047 in the executive summary; state the mutant tally by name
+9dae463d9 docs(merge): changelog fragment and executive summary for the merge guards
+e10ef7092 test(jobs): pin ddSoftDeleteBook error return; probe type cannot hard-delete
+b3a10c403 test(dedup): pin engine-level skip of ungrouped deleted owner and merit election
+0c8079329 fix(merge): file-aware survivor election, refuse soft-deleted inputs, no hard-delete fallback
+49e3d0c7d docs(todo): collect fragments into TODO.md [skip ci]
+c6376e624 test(organizer): make M01/M05 compile
+56bd94820 docs(organizer): changelog + executive summary for the Landing contract
+4d569e534 test(organizer): mutation table for the Landing contract
+8a0352da5 test(organizer): adopted single-file target is not Created and survives rollback
+68c39e323 fix(organizer): carry what landed, fail closed on collisions, one organize decision
+9c0b0e495 fix(organizer): unique O_EXCL temp, exclusive finalize, verified race adoption
+89e642433 docs(applycap): fourteen gates, book-write grain, PR link
+d01b8baa0 feat(applycap): gate audiobooks/batch, batch-operations, metadata/bulk-fetch, dedup/bulk-merge; count book writes in diagnostics
+302b6d44b feat(applycap): refuse bulk applies over a configurable cap
+9a7d1aa1d test(applycap): cover the remaining seven gates with bogus/known-good pairs
+6e92a08e7 feat(applycap): refuse bulk applies over a configurable cap (wip checkpoint)
+2eb6b9a99 docs(audits): dedup and review matching-path audit with unification design
+e815dcb44 docs(executive-summary): moving to the current version of Go (#3039, #3040, #3043)
+b5033ec62 fix(codeql): keep allocation clamps visible to CodeQL after the minmax sweep
+f41f7559b docs(changelog): fragment for the Go 1.27 go fix sweep
+cb9cc62d3 chore(logger): regenerate OperationStore mock after interface{} -> any
+b3b031424 refactor(go): second go fix pass to the fixed point
+664fca3ca refactor(acoustid): apply go fix modernizers for Go 1.27
+385fdb417 refactor(audio): apply go fix modernizers for Go 1.27
+1edaf0283 refactor(auth): apply go fix modernizers for Go 1.27
+49ed00e27 refactor(boilerplate): apply go fix modernizers for Go 1.27
+b8bbb168e refactor(covers): apply go fix modernizers for Go 1.27
+bd740f129 refactor(download): apply go fix modernizers for Go 1.27
+ad785544a refactor(fileops): apply go fix modernizers for Go 1.27
+a1a6e5081 refactor(linkintegrity): apply go fix modernizers for Go 1.27
+a5537cf4b refactor(playlist): apply go fix modernizers for Go 1.27
+1820311c7 refactor(readstatus): apply go fix modernizers for Go 1.27
+c44d472f7 refactor(security): apply go fix modernizers for Go 1.27
+ccc06dc42 refactor(undo): apply go fix modernizers for Go 1.27
+0508c460e refactor(watcher): apply go fix modernizers for Go 1.27
+a651ba496 refactor(itl-diff): apply go fix modernizers for Go 1.27
+adfb5606b refactor(aiscan): apply go fix modernizers for Go 1.27
+e06bd85c4 refactor(oauth): apply go fix modernizers for Go 1.27
+553869b07 refactor(remux): apply go fix modernizers for Go 1.27
+cdedf36a4 refactor(scheduler): apply go fix modernizers for Go 1.27
+eb88d4fc4 refactor(serviceregistry): apply go fix modernizers for Go 1.27
+8b90dbd83 refactor(syncapi): apply go fix modernizers for Go 1.27
+7ac8b5ab1 refactor(telemetry): apply go fix modernizers for Go 1.27
+a87cb8d14 refactor(transcode): apply go fix modernizers for Go 1.27
+766bf7f50 refactor(updater): apply go fix modernizers for Go 1.27
+ac8aed6d8 refactor(audioutil): apply go fix modernizers for Go 1.27
+15da00746 refactor(cache): apply go fix modernizers for Go 1.27
+9133b647e refactor(matcher): apply go fix modernizers for Go 1.27
+065f73421 refactor(plugin): apply go fix modernizers for Go 1.27
+725e0b0ea refactor(versions): apply go fix modernizers for Go 1.27
+a065d130c refactor(deluge): apply go fix modernizers for Go 1.27
+4cbade1c2 refactor(sysinfo): apply go fix modernizers for Go 1.27
+7c2c6199c refactor(backup): apply go fix modernizers for Go 1.27
+b8146c24c refactor(search): apply go fix modernizers for Go 1.27
+18c255517 refactor(activity): apply go fix modernizers for Go 1.27
+3f296c884 refactor(errhandling): apply go fix modernizers for Go 1.27
+6b54c4281 refactor(importer): apply go fix modernizers for Go 1.27
+159c1eac2 refactor(openlibrary): apply go fix modernizers for Go 1.27
+4b875b850 refactor(util): apply go fix modernizers for Go 1.27
+653d7b146 refactor(cmd): apply go fix modernizers for Go 1.27
+d9cbdf2a3 refactor(logger): apply go fix modernizers for Go 1.27
+28f57dcba refactor(metabatch): apply go fix modernizers for Go 1.27
+e36837ec6 refactor(merge): apply go fix modernizers for Go 1.27
+4a514693a refactor(reconcile): apply go fix modernizers for Go 1.27
+99a82c1ae refactor(ai): apply go fix modernizers for Go 1.27
+cf255dfa4 refactor(diagnostics): apply go fix modernizers for Go 1.27
+84b02643b refactor(maintenance): apply go fix modernizers for Go 1.27
+a7301d771 refactor(config): apply go fix modernizers for Go 1.27
+31a8ca74c refactor(fingerprint): apply go fix modernizers for Go 1.27
+f10f4a1d3 refactor(transcribe): apply go fix modernizers for Go 1.27
+b3e9455ed refactor(mediainfo): apply go fix modernizers for Go 1.27
+3b6ffa81f refactor(realtime): apply go fix modernizers for Go 1.27
+53b0d447b refactor(tools): apply go fix modernizers for Go 1.27
+5153c6fc2 refactor(metafetch): apply go fix modernizers for Go 1.27
+b7a80b405 refactor(organizer): apply go fix modernizers for Go 1.27
+1e0326427 refactor(audiobooks): apply go fix modernizers for Go 1.27
+2b83270c4 refactor(scanner): apply go fix modernizers for Go 1.27
+e49ab9461 refactor(operations): apply go fix modernizers for Go 1.27
+919f1e837 refactor(itunes): apply go fix modernizers for Go 1.27
+3ef311330 refactor(metadata): apply go fix modernizers for Go 1.27
+510595927 refactor(dedup): apply go fix modernizers for Go 1.27
+5ff93f55a refactor(plugins): apply go fix modernizers for Go 1.27
+377c5a84c refactor(server): apply go fix modernizers for Go 1.27
+3f9d86053 refactor(database): apply go fix modernizers for Go 1.27
+54558b1db docs(agent-tasks): reconcile the todo-completion package with HEAD
