@@ -1,7 +1,7 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-20
+// last-edited: 2026-09-10
 
 package metadata
 
@@ -60,10 +60,19 @@ func editionToMetadata(ed *openlibrary.OLEdition, store *openlibrary.OLStore) Bo
 	meta := BookMetadata{
 		Title: ed.Title,
 	}
+	// Capture BOTH ISBN types (the edition carries separate arrays); the single
+	// ISBN is kept for back-compat, preferring 13.
 	if len(ed.ISBN13) > 0 {
-		meta.ISBN = ed.ISBN13[0]
-	} else if len(ed.ISBN10) > 0 {
-		meta.ISBN = ed.ISBN10[0]
+		meta.ISBN13 = ed.ISBN13[0]
+	}
+	if len(ed.ISBN10) > 0 {
+		meta.ISBN10 = ed.ISBN10[0]
+	}
+	switch {
+	case meta.ISBN13 != "":
+		meta.ISBN = meta.ISBN13
+	case meta.ISBN10 != "":
+		meta.ISBN = meta.ISBN10
 	}
 	if len(ed.Publishers) > 0 {
 		meta.Publisher = ed.Publishers[0]
@@ -118,6 +127,36 @@ type BookMetadata struct {
 	Series         string
 	SeriesPosition string
 	DurationSec    int // audio runtime in seconds (Audible: runtime_length_min × 60)
+
+	// ISBN10 / ISBN13 preserve BOTH identifiers when a provider returns them.
+	// The single ISBN above collapses to whichever the provider preferred, losing
+	// the other; Book stores ISBN10 and ISBN13 in separate columns, so providers
+	// that decode both (Google Books, Open Library, Hardcover) populate these and
+	// the apply path writes each to its own column. ISBN stays as a fallback for
+	// any provider/path that still sets only the single field.
+	ISBN10 string
+	ISBN13 string
+
+	// Abridged is a tri-state identity signal from Audible's format_type
+	// ("abridged" / "unabridged"): true = abridged, false = unabridged, nil =
+	// unknown/not reported. An abridged edition is a different runtime and chapter
+	// set from the unabridged one, so this discriminates editions during matching.
+	Abridged *bool
+
+	// Subtitle is the work's subtitle when the provider reports it separately from
+	// the title (Audible, Audnexus). Book has no subtitle column today; carried as
+	// signal for matching/provenance.
+	Subtitle string
+
+	// PageCount is the print page count (Hardcover). Weak identity signal, useful
+	// for disambiguating editions.
+	PageCount int
+
+	// SeriesSecondary / SeriesSecondaryPosition hold a second series a book belongs
+	// to (Audnexus seriesSecondary). The primary Series/SeriesPosition above is
+	// unchanged; these capture the secondary membership that was previously dropped.
+	SeriesSecondary         string
+	SeriesSecondaryPosition string
 
 	// PublishYearIsAudiobookRelease disambiguates the OVERLOADED PublishYear.
 	// When true, PublishYear is the audiobook's release/issue year (Audible,
@@ -228,7 +267,26 @@ func (c *OpenLibraryClient) SearchByTitle(ctx context.Context, title string) ([]
 			metadata.Publisher = doc.Publisher[0]
 		}
 
-		if len(doc.ISBN) > 0 {
+		// doc.ISBN is a single mixed array; classify by length so both ISBN types
+		// are preserved. The single ISBN is kept for back-compat (prefer 13).
+		for _, isbn := range doc.ISBN {
+			switch len(isbn) {
+			case 13:
+				if metadata.ISBN13 == "" {
+					metadata.ISBN13 = isbn
+				}
+			case 10:
+				if metadata.ISBN10 == "" {
+					metadata.ISBN10 = isbn
+				}
+			}
+		}
+		switch {
+		case metadata.ISBN13 != "":
+			metadata.ISBN = metadata.ISBN13
+		case metadata.ISBN10 != "":
+			metadata.ISBN = metadata.ISBN10
+		case len(doc.ISBN) > 0:
 			metadata.ISBN = doc.ISBN[0]
 		}
 
@@ -292,7 +350,26 @@ func (c *OpenLibraryClient) SearchByTitleAndAuthor(ctx context.Context, title, a
 			metadata.Publisher = doc.Publisher[0]
 		}
 
-		if len(doc.ISBN) > 0 {
+		// doc.ISBN is a single mixed array; classify by length so both ISBN types
+		// are preserved. The single ISBN is kept for back-compat (prefer 13).
+		for _, isbn := range doc.ISBN {
+			switch len(isbn) {
+			case 13:
+				if metadata.ISBN13 == "" {
+					metadata.ISBN13 = isbn
+				}
+			case 10:
+				if metadata.ISBN10 == "" {
+					metadata.ISBN10 = isbn
+				}
+			}
+		}
+		switch {
+		case metadata.ISBN13 != "":
+			metadata.ISBN = metadata.ISBN13
+		case metadata.ISBN10 != "":
+			metadata.ISBN = metadata.ISBN10
+		case len(doc.ISBN) > 0:
 			metadata.ISBN = doc.ISBN[0]
 		}
 

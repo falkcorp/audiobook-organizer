@@ -1,7 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
-// last-edited: 2026-08-30
+// last-edited: 2026-09-10
 
 package metadata
 
@@ -143,11 +143,23 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 			fmt.Sscanf(vi.PublishedDate, "%d", &meta.PublishYear)
 		}
 		for _, id := range vi.IndustryIdentifiers {
-			if id.Type == "ISBN_13" {
-				meta.ISBN = id.Identifier
-			} else if id.Type == "ISBN_10" && meta.ISBN == "" {
-				meta.ISBN = id.Identifier
+			switch id.Type {
+			case "ISBN_13":
+				if meta.ISBN13 == "" {
+					meta.ISBN13 = id.Identifier
+				}
+			case "ISBN_10":
+				if meta.ISBN10 == "" {
+					meta.ISBN10 = id.Identifier
+				}
 			}
+		}
+		// Single ISBN kept for back-compat: prefer 13, then 10.
+		switch {
+		case meta.ISBN13 != "":
+			meta.ISBN = meta.ISBN13
+		case meta.ISBN10 != "":
+			meta.ISBN = meta.ISBN10
 		}
 		if vi.ImageLinks != nil && vi.ImageLinks.Thumbnail != "" {
 			meta.CoverURL = strings.Replace(vi.ImageLinks.Thumbnail, "http://", "https://", 1)

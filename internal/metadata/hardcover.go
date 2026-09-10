@@ -1,7 +1,7 @@
 // file: internal/metadata/hardcover.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e7e02554-8931-49ba-9528-d3d51279da1d
-// last-edited: 2026-09-03
+// last-edited: 2026-09-10
 
 package metadata
 
@@ -300,16 +300,27 @@ func hardcoverDocumentToMetadata(doc *hardcoverDocument) BookMetadata {
 	if doc.Image != nil && doc.Image.URL != "" {
 		meta.CoverURL = doc.Image.URL
 	}
-	// ISBN: prefer 13 over 10 when both exist. We record the first
-	// one we see since the order within hardcover's isbns array is
-	// not guaranteed.
+	// ISBN: capture BOTH ISBN-13 and ISBN-10 when the doc carries them — Book
+	// stores them in separate columns and both are identity keys. The single
+	// ISBN below is kept for back-compat (prefer 13, then 10, then first seen).
 	for _, isbn := range doc.ISBNs {
-		if len(isbn) == 13 {
-			meta.ISBN = isbn
-			break
+		switch len(isbn) {
+		case 13:
+			if meta.ISBN13 == "" {
+				meta.ISBN13 = isbn
+			}
+		case 10:
+			if meta.ISBN10 == "" {
+				meta.ISBN10 = isbn
+			}
 		}
 	}
-	if meta.ISBN == "" && len(doc.ISBNs) > 0 {
+	switch {
+	case meta.ISBN13 != "":
+		meta.ISBN = meta.ISBN13
+	case meta.ISBN10 != "":
+		meta.ISBN = meta.ISBN10
+	case len(doc.ISBNs) > 0:
 		meta.ISBN = doc.ISBNs[0]
 	}
 	// Series: prefer featured_series (name + position) over
@@ -329,6 +340,16 @@ func hardcoverDocumentToMetadata(doc *hardcoverDocument) BookMetadata {
 	// Genre: Hardcover returns a list; join for storage.
 	if len(doc.Genres) > 0 {
 		meta.Genre = strings.Join(doc.Genres, ", ")
+	}
+	// Runtime: Hardcover reports audio_seconds directly. Map to the DurationSec
+	// sink (previously dropped — Hardcover contributed no runtime even though the
+	// sink is live and feeds duration scoring).
+	if doc.AudioSeconds > 0 {
+		meta.DurationSec = doc.AudioSeconds
+	}
+	// Page count: weak identity signal for disambiguating editions.
+	if doc.Pages > 0 {
+		meta.PageCount = doc.Pages
 	}
 	return meta
 }
