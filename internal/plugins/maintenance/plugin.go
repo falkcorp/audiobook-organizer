@@ -75,7 +75,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// mark-missing-files is the WRITER for the book_file.Missing flag that the
 		// dashboard's BrokenFiles counter now reads. missing-file-audit measures the
 		// same disk truth but is read-only; this op persists it so the counter is
-		// honest without a full stat sweep on every stats refresh.
+		// accurate without a full stat sweep on every stats refresh.
 		p.markMissingFilesDef(),
 		// recover-missing-files is missing-file-repoint's COMPLEMENT: repoint recovers a
 		// missing row when it can DERIVE the new path from the old one's shape; this op
