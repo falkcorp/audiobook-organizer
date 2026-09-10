@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.19.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -37,10 +37,10 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | PR #3192 HELD (16:00); job never run |
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
 | 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 HELD (16:00) |
-| later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | dispatched 15:50 (itl_cleanup.go — no overlap) |
+| later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | PR #3194 HELD (16:06) |
 | later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | dispatched 16:02 (handlers/operations/handler.go) |
 | later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | dispatched 16:02 (writeback_batcher.go) |
-| security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | dispatched 16:02 (realtime/events.go) |
+| security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
 | later | TASK-072, 220, 352, 305, 373, 342, 345, 114, 096; security 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order; 220/114/096 touch files of held PRs |
 
 ## Per-task record
@@ -153,4 +153,16 @@ security) are HELD OPEN for the owner — never admin-merged.
 - `api.ts` 2.84.0: `getBooksByAuthor` throws on non-OK (one caller). `DedupAuthorTab.tsx` 1.2.1: `Promise.allSettled`, `failedCount`, "Could not load N of M" banner with a working Retry; "No books found" only on a successful empty fetch. `group.book_count` verified server-supplied. 3 tests (pre-fix "Unable to find an element with the text: /could not load/i").
 - Gate: lint 0 errors, tsc exit 0, vitest 1070/1070, build exit 0, prettier clean. Rollback: frontend only.
 - PR #3193 — HELD for owner. No `TODO.md` line exists for WEB-04.
+
+### TASK-140 — iTunes P3 cleanup-merged apply path retired
+
+- Worktree `.worktrees/server-140-retire-the-unsafe-cleanup-merged-go-handler-as-a`, branch `agent/server-140-retire-the-unsafe-cleanup-merged-go-handler-as-a`, sha `ebea20fcb`.
+- `itl_cleanup.go` 2.0.0: any request without `dry_run=true` returns 410 with `applied:false` before any `.itl` path resolution; `SafeWriteITL` and the `itunesservice` import removed from the file; dry-run preview unchanged. New `itl_cleanup_test.go` (4 refusal subtests, pre-fix the non-empty case reached the writeback and returned 500; preview test). Gate exit 0 (server suite, `-race`, staticcheck only the pre-existing `server_helpers.go:62`). Rollback: removes reachability of a write path. `web/` has zero references to the endpoint.
+- PR #3194 — HELD for owner. `TODO.md` line to check off on merge: "**iTunes 2-way-sync P3 (cleanup) — decision: MEASURE-AND-STOP, no removal machinery.**" (~L17244).
+
+### TASK-308 — SV-03 SSE ACAO wildcard
+
+- Worktree `.worktrees/server-handlers-308`, branch `agent/server-handlers-308-sse-handler-unconditionally-overrides-th`, sha `0a5f91905`.
+- `events.go` 1.3.0: the `Access-Control-Allow-Origin: *` set in `HandleSSE` deleted; the allowlist from `corsMiddleware` stands. `events_test.go` 1.4.0: `TestHandleSSE_PreservesUpstreamCORSHeader` (pre-fix `got "*"`), and the existing basic-connection test that had asserted `*` corrected. Brief's second anchor range (`:437-449`) was past EOF (file is 334 lines); first anchor sufficed. Only one hardcoded site in `internal/realtime`. Gate exit 0, staticcheck 0.
+- PR #3195 — HELD for owner. No `TODO.md` line for SV-03.
 
