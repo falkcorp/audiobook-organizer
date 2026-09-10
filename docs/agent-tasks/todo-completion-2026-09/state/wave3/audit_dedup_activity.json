@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "repo": "/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer-burndown-2026-09",
+    "head": "9685bd5d1",
+    "scope": ["internal/dedup", "internal/plugins/dedup", "internal/merge", "internal/activity"],
+    "excluded_per_instructions": ["internal/database", "internal/operations", "metafetch", "scanner", "organizer",
+      "TASK-023 MERGE-CACHE-EVICT", "series-dedup apply no undo rows (TODO.md:4967)",
+      "SF-04 auto-merge primary selection on failed GetBookFiles", "OPS-02 unbounded secondary growth"]
+  },
+  "findings": [
+    {
+      "id": "DA-01",
+      "area": "internal/dedup (split-book merge)",
+      "title": "MergeSplitBookCluster performs an unguarded read-modify-write on book/file rows -- it never takes the shared merge.LockMergeRMW, unlike every other merge-family path",
+      "severity": "critical",
+      "risk": "data-loss",
+      "file": "internal/dedup/split_book_merge.go",
+      "line": 67,
+      "evidence": "MergeSplitBookCluster (split_book_merge.go:67-176) does GetBookByID -> GetBookFiles -> MoveBookFilesToBook -> UpdateBook -> merge.SoftDeleteBook with no locking at all -- grep for LockMergeRMW/UnlockMergeRMW in internal/dedup/*.go finds it ONLY in internal/dedup/book_dedup.go:402-403 (the `dedup.MergeBooks` function). internal/merge/serialize.go:10-33 documents the invariant explicitly: 'All three unguarded paths in the codebase acquire this one lock so any two of them are mutually exclusive on a shared book row' and enumerates exactly three: merge.Service.MergeBooks, merge.Service.CombineBooks, and dedup.MergeBooks (book_dedup.go). MergeSplitBookCluster is a FOURTH unguarded read-modify-write over the same book rows (added split_book_merge.go last-edited 2026-09-02, v1.5.0 -- after serialize.go's design was finalised 2026-07-13) and was never wired into the lock. It is reachable from two call sites: internal/plugins/dedup/split_book_bulk_merge.go:73 (the `dedup.split-book-bulk-merge` op, ConcurrencyKey='dedup.split-book-merge' -- serializes against ITSELF only) and internal/server/handlers/split_book.go:142 (a synchronous HTTP handler, no concurrency key at all). Neither call site takes merge.LockMergeRMW either.",
+      "why_it_matters": "merge/service.go's own CombineBooks doc comment (service.go:784-792) names the exact failure class this guards against: 'two combines -- or a combine racing a MergeBooks on a shared book -- can otherwise interleave GetBookByID -> MoveBookFilesToBook -> ReassignExternalIDs -> DeleteBook -> UpdateBook and corrupt the same way #1930 fixed for MergeBooks.' MergeSplitBookCluster does the identical MoveBookFilesToBook+UpdateBook+soft-delete shape on the identical book rows. A user manually merging/combining a book via the dedup review UI (merge.Service.MergeBooks/CombineBooks, both properly locked) while a split-book-bulk-merge op or the single-candidate split-book handler touches the same book id (as keepID or a srcID) can interleave writes with no lock protecting either side -- reproducing the #1930 corruption class (a book left both primary and soft-deleted, files orphaned mid-move, or a row hard/soft-deleted by one path while another is still mutating it).",
+      "suggested_fix": "Wrap MergeSplitBookCluster's body in merge.LockMergeRMW()/defer merge.UnlockMergeRMW(), mirroring dedup.MergeBooks (book_dedup.go:402-403); update serialize.go's doc comment to list it as the fourth guarded path.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "DA-02",
+      "area": "internal/dedup engine (auto-merge / LLM-verdict merge)",
+      "title": "Unattended auto-merge paths (exact file-hash match, LLM high-confidence verdict) and several bulk/manual HTTP merge endpoints bypass MergeJournaled, so they write no reversal journal -- broader than the tracked MERGE-UNDO scope",
+      "severity": "high",
+      "risk": "data-loss",
+      "file": "internal/dedup/engine.go",
+      "line": 1373,
+      "evidence": "internal/dedup/merge_journaled.go's doc comment (lines 17-26) states the design goal explicitly: 'This sequence used to live only inside autoMergeCertain ... Centralising it here is what makes \"every merge is reversible\" a property of the engine rather than a habit of one caller.' Grep for mergeService.MergeBooks vs .MergeJournaled( across the codebase shows only TWO call sites use MergeJournaled: auto_resolve.go:299 (Tier-1 CERTAIN auto-resolve) and internal/server/handlers/dedup/handler.go:1486 (the single-candidate manual-apply endpoint, whose own comment at handler.go:936-941 says 'Refuse rather than merge irreversibly ... a merge a human dispatched by keystroke is precisely the one most likely to be a mistake'). Five other live merge-shaped call sites call mergeService.MergeBooks directly with NO journal entry: engine.go:1373 (checkExactFileHash/handleFileHashMatch -- fires automatically and unattended on every FullScan Layer-1 pass whenever config.Dedup.AutoMergeEnabled is on, with no CERTAIN-band or corroboration gate beyond same-author+same-title+file-hash match), engine.go:4047 (ApplyVerdicts' LLM high-confidence auto-merge path), and internal/server/handlers/dedup/handler.go:940 (bulk cluster-merge), :1125 (bulk candidate-merge -- its own adjacent comment literally calls this 'the hardest write in the system to undo', applycap.Refuse comment ~line 1105-1111), and :1196 (the generic POST /audiobooks/merge endpoint with an explicit body.BookIDs list).",
+      "why_it_matters": "TODO.md:6523 (MERGE-UNDO) already tracks that UnmergeAuto has no production caller and that 'only the auto-resolve path journals', but that description describes the pre-merge_journaled.go state and only names 'the review lane' as the gap. merge_journaled.go was since added specifically to close that gap for human-initiated merges, and handler.go:1486 was updated to require it (refusing to merge at all if the engine is unavailable, rather than merge unjournaled). That fix was not propagated to the two automatic/unattended auto-merge triggers (which are arguably the MOST in need of an undo trail, since no human reviewed the pair before it merged) or to the three bulk/manual HTTP endpoints that can merge many books in one call. The current state is inconsistent: the codebase clearly decided unjournaled merges are unacceptable (handler.go:1486's explicit refusal-over-silent-fallback design) for one endpoint, while five other paths -- including the two that run with zero human review -- still perform the exact unjournaled merge that design was built to prevent.",
+      "suggested_fix": "Route handleFileHashMatch, ApplyVerdicts' auto-merge, and the three HTTP bulk/manual merge handlers through Engine.MergeJournaled (or extend MergeJournaled/expose an equivalent on merge.Service) instead of calling mergeService.MergeBooks directly; update TODO.md's MERGE-UNDO item to reflect the current (larger) scope.",
+      "effort": "M",
+      "confidence": "high",
+      "already_tracked_hint": "TODO.md:6523 MERGE-UNDO (tracks a narrower/stale version of this gap -- pre-dates merge_journaled.go and only names the review lane, not the two automatic auto-merge triggers or the three bulk/manual HTTP endpoints)"
+    },
+    {
+      "id": "DA-03",
+      "area": "internal/plugins/dedup (orphan-embedding cleanup / re-embed)",
+      "title": "Two ops scan the whole embedding/book keyspace with a plain sequential loop doing a per-item DB point-lookup, unlike every sibling op in the same package which uses registry.RunItems -- the exact single-threaded-hotspot shape CLAUDE.md's concurrency mandate exists to catch",
+      "severity": "medium",
+      "risk": "perf",
+      "file": "internal/plugins/dedup/cleanup_orphan_embeddings.go",
+      "line": 184,
+      "evidence": "scanOrphanEmbeddings (cleanup_orphan_embeddings.go:181-220) is a plain `for i := range embeddings` loop over every emb:v:book:* row calling p.store.GetBookByID(e.EntityID) synchronously per item (line 200) -- a full library-scale point-lookup per embedding, no worker pool. The apply-path delete loop (lines 148-164) is likewise a plain sequential `for _, id := range report.OrphanIDs { p.embeddingStore.Delete(...) }`. reembed_embeddings.go's Phase-1 scan (lines 164-214) does the same thing in reverse: for every book returned by paginated GetAllBooksCore, it calls p.embeddingStore.Get(\"book\", b.ID) synchronously per book (line 185). By contrast every other per-item op added to this same package already follows the mandated worker-pool pattern with Concurrency explicitly set: build_candidate_index.go:167-168, mine_gold_labels.go:160-161, quarantine_chapter_artifacts.go:184-185 and 230-231, breakdown_backfill.go:504-505, dataset_backfill.go:286-287, lsh_index_build.go:321-322, rescore_labeled_examples.go:331-332 (all `registry.RunItems(..., registry.RunItemsOptions{Concurrency: runtime.NumCPU(), ...})`). The sibling cleanup_orphan_author_embeddings.go avoids the per-item DB call entirely by precomputing a live-ID set from one GetAllAuthors() call, and its own doc comment (lines 194-201) explicitly contrasts itself with 'the book op's per-row GetBookByID lookups' -- i.e. the codebase's own comments already name this exact hotspot in the sibling file without fixing it.",
+      "why_it_matters": "CLAUDE.md's concurrency mandate exists specifically because of the dedup.full-scan single-core 3h+ stall (2026-07-05); engine.go's FullScan was subsequently reworked into a sharded worker pool for exactly this reason (CONC-2/CONC-4 comments in engine.go). These two ops iterate the same order-of-magnitude collection (every book-embedding row / every book) doing one synchronous KV point-get per item, and on a library the size this codebase operates at (tens of thousands to 100K+ books/embeddings, per docs/AI-REFERENCE.md and project notes) that is minutes of single-core wall time for an op with a 30-minute timeout and no other progress signal beyond periodic percentage logs.",
+      "suggested_fix": "Convert both scan loops to registry.RunItems with Concurrency: runtime.NumCPU(), guarding the shared report counters/slices with a mutex (same shape as quarantine_chapter_artifacts.go); or, cheaper, mirror the author-side op's pattern and precompute a live-book-ID set from one bounded GetAllBooksCore paginated scan instead of one GetBookByID per embedding.",
+      "effort": "S",
+      "confidence": "high",
+      "already_tracked_hint": null
+    },
+    {
+      "id": "DA-04",
+      "area": "internal/activity (writer / batcher)",
+      "title": "isBatchable's Tier gate silently routes only tier=debug high-volume entries through the batcher; a caller that emits the same Type at tier=change (e.g. after the writer.go tier-upgrade rule for warn/error) falls back to one full ActivityEntry per line instead of being coalesced",
+      "severity": "low",
+      "risk": "hygiene",
+      "file": "internal/activity/writer.go",
+      "line": 176,
+      "evidence": "isBatchable (writer.go:176-185) requires `e.Tier == \"debug\"` in addition to the Type allow-list. sendEntry (writer.go:190-251) derives Tier from parsed.Level BEFORE checking isBatchable: warn/error lines always get tier=\"change\" (writer.go:203-209), so a warn- or error-level log line whose Type happens to match one of the batchable types (\"embedded-tag-load\", \"tag-scan\", \"metadata-apply\", \"path-repair\", \"isbn-enrich\") is never batched even during a high-volume run -- it always takes the non-batchable branch and is written/dropped one entry at a time (with the channel-full warning firing on every drop, since parsed.Level != \"debug\" there).",
+      "why_it_matters": "This is a narrow, low-blast-radius gap (it only matters for warn/error-level lines from these five Types during a large op), and only degrades to the pre-batching behavior (still durable, just less coalesced and noisier in the channel-full warning path) rather than losing data -- worth a look during any future batcher-scope change but not urgent on its own.",
+      "suggested_fix": "Either widen isBatchable's gate to route change-tier entries of a batchable Type through the batcher too (dropping the debug-only restriction), or make the restriction and its rationale explicit in a comment so a future reader does not assume warn/error entries of a registered batch type are already coalesced.",
+      "effort": "S",
+      "confidence": "medium",
+      "already_tracked_hint": null
+    }
+  ],
+  "checked_and_correct": [
+    {
+      "area": "internal/dedup/engine.go FullScan",
+      "note": "Layer-1 exact-check pass (checkExactFileHash/ISBN/Title/DurationMatch) and the unified composite-scoring pass are both sharded via registry.RunItems with Concurrency: runtime.NumCPU() (engine.go:3143-3196, 3285-3336), with detailed CONC-2/CONC-4 comments explaining why each shared-write path (UpsertCandidateNew's internal mutex, MergeBooks' own serialization) is safe under concurrency. This is the fix for the exact 2026-07-05 3h-stall incident CLAUDE.md's concurrency section describes -- confirmed fixed at HEAD, not a residual finding."
+    },
+    {
+      "area": "internal/dedup/auto_resolve.go AutoResolveCertain / autoMergeCertain",
+      "note": "Correctly serial by design (candidates snapshotted once; explicit soft-deleted pre-check per pair to avoid double-merging a book two CERTAIN pairs share within one run, auto_resolve.go:153-159). Routes every merge through MergeJournaled with a provisional-then-patch journal write sequence that is deliberately fail-closed (a provisional-write failure skips the merge rather than merging unrecoverably, merge_journaled.go:97-106)."
+    },
+    {
+      "area": "internal/merge/service.go MergeBooks / CombineBooks",
+      "note": "Both correctly take mergeSerializeMu around their entire read-modify-write. VG-DOUBLE-PRIMARY-class demotion logic (the pre-existing-member re-evaluation loop, service.go:544-610) and the documented-but-deliberately-unfixed race with reconcile.ElectMissingPrimaries (service.go:507-512) are already tracked at TODO.md 'VG-DOUBLE-PRIMARY' (TASK-042) -- not re-reported. Per-loser cleanup ordering (external-ID reassign -> ITL enqueue -> soft-delete, only after the earlier steps succeed) is correct and matches its own extensive doc comments."
+    },
+    {
+      "area": "internal/merge/sync_follow.go",
+      "note": "FollowMerge / FollowFileMove / FollowBookIDChange / mergeUserProgress(For) all verified idempotent and ordered correctly (copy-before-drain on the loser side, syncRepointMu scoped correctly to the non-merge scanner path). No issues found."
+    },
+    {
+      "area": "internal/plugins/dedup/*.go RunItems usage",
+      "note": "Every op verified EXCEPT the two named in DA-03 sets registry.RunItemsOptions{Concurrency: runtime.NumCPU()} (or an explicit sized constant for network-bound work, e.g. embedScanConcurrency in embed_scan.go) -- the CLAUDE.md-documented 'Concurrency defaults to 0/1' trap is not present at HEAD in this package."
+    },
+    {
+      "area": "internal/activity/sql_migration.go + sql_migration_report.go (Pebble->SQLite backfill checkpoint/resume)",
+      "note": "Verified the 'digest must never resume' constraint is enforced structurally, not just by convention: the migration deliberately registers NO OperationDef (sql_migration_report.go:42-48), so resumeAfterStartup can never pull a killed run's row into the v2 resume machinery; a shutdown mid-run is recorded as the dedicated terminal status migrationStatusInterruptedByShutdown=\"interrupted_dropped\" specifically because the alternative spelling (\"interrupted_quiesced\") IS resumable per isResumableV2Status and would have been pulled back in. sqlMigrationStarter.Stop joins the backfill goroutine unbounded (deliberate, documented) rather than risking a use-after-close panic on the shared Pebble handle."
+    },
+    {
+      "area": "internal/activity/writer.go / batcher.go concurrency",
+      "note": "ActivityBatcher.Submit/flushKey verified race-free under concurrent early-flush + timer-fire (both funnel through flushKey's own mu-guarded map delete, so a duplicate flush is a no-op, not a double-send). Writer.Stop/Close ordering verified safe (batcher.Close() runs before the drain goroutine is told to stop, so its blocking send into w.ch always has a live reader at that point)."
+    },
+    {
+      "area": "internal/activity/relocate.go",
+      "note": "Boot-time activity-DB relocation is fail-open by design (never blocks server start) and always leaves the source path intact on any failure; verified the logic reads as documented."
+    },
+    {
+      "area": "internal/dedup/series_dedup.go (DedupSeries / MergeSeries)",
+      "note": "Both correctly use UNFILTERED reference counts (SeriesRefCounts) captured once up front and refuse to delete a series that still has a stranded reference after the reassignment loop, with the 'moved' counter (not len(books)) as the subtrahend -- this is the fix for the 6,893-phantom-series-ID prod incident referenced in the file's own comments. Known gap (series-dedup apply writes no undo/reversal record) is the tracked TODO.md:4967 item -- not re-reported per instructions."
+    }
+  ]
+}

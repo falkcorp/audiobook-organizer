@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -164,8 +164,34 @@ Checked CORRECT: UpdateBook/DeleteBook ISBN/ASIN + version-group + work-ID index
 maintenance; `FetchBookFilesForBooks` batch-first; `service_query.go` batched author
 enrichment; activity scan-budget handling; dedup search full scan + filterdata bound
 are self-documented/tracked tradeoffs.
-### Queued: expert (dedup/activity), go-specialist (server/handlers + scheduler),
-typescript-specialist (web), Explore (CI/workflows + scripts), pr-test-analyzer.
+### expert — dedup + activity — `wave3/audit_dedup_activity.json`
+4 findings: 1 critical, 1 high, 1 medium, 1 low; 9 areas verified correct.
+- **DA-01 critical data-loss** — `internal/dedup/split_book_merge.go:67`
+  `MergeSplitBookCluster` mutates book/file rows without `merge.LockMergeRMW` (the lock
+  `internal/merge/serialize.go` says every merge-family RMW must hold); 4th unguarded
+  path, reachable from unkeyed handler `internal/server/handlers/split_book.go:142`;
+  can race a locked `MergeBooks`/`CombineBooks` on the same book.
+- **DA-02 high data-loss** — two unattended auto-merge triggers (`engine.go:1373`
+  exact-hash, `engine.go:4047` LLM high-confidence) and three bulk/manual merge
+  endpoints (`handler.go:940`, `:1125`, `:1196`) call `MergeBooks` directly, not
+  `MergeJournaled` → no undo trail. Broader than TODO.md:6523 MERGE-UNDO (review lane only).
+- DA-03 medium perf — `cleanup_orphan_embeddings.go` and `reembed_embeddings.go` are
+  sequential full-keyspace loops with per-item point lookups; siblings in the same
+  package use `registry.RunItems` + `Concurrency: runtime.NumCPU()`.
+- DA-04 low hygiene — `isBatchable` tier gate: warn/error-level lines of a batchable
+  Type are never coalesced, only debug-tier ones.
+Checked CORRECT: FullScan concurrency fix, auto-resolve journaling, merge service
+locking, sync-follow idempotency, activity migration checkpoint/resume (digest
+never resumes), batcher/writer shutdown ordering, series-dedup reference-count guard.
+
+### go-specialist — server/handlers + scheduler — RUNNING
+### Queued: typescript-specialist (web), Explore (CI/workflows + scripts).
+Dropped: separate pr-test-analyzer pass (audits already record missing tests per finding).
+
+### Cost note (12:50 EDT)
+Parent-only usage: verifiers A/B/C 199k/180k/165k tokens; TODO chunks 1/2 241k/155k;
+audits 233k/171k/206k/279k. Chunk 3 forked 7 children (pre-rule); told to stop and
+consolidate. Remaining prompts carry a ≤60-tool-call budget.
 
 ## Process notes for the next coordinator
 - Hard cap 4 concurrent agents. Agents launched before 12:23 EDT forked children of
