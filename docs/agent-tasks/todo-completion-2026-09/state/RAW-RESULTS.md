@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -98,7 +98,19 @@ location; 5246 MEMDB-LOSSY-READERS sequencing dependency.
 `dup_of`: 6479→TASK-158, 6523→TASK-040, 6560→TASK-143, 6598→TASK-127, 6609→TASK-182.
 Fixed a mislabel (TODO.md:3970 had been tagged 3968).
 
-### Chunk 3 — lines 6642–11021 (147) — RUNNING
+### Chunk 3 — lines 6642–11021, 28 sections (147)
+**REAL 80 · DONE 43 · STALE 11 · UNCLEAR 13.** Agent forked 6 children (pre-rule);
+three overwrite incidents on the shared file, each rebuilt deterministically from the
+per-group source files; final merge validated (147 unique lines, no gaps).
+Top REAL: L9126 SEC-CODEQL-BACKLOG 326 open CodeQL alerts on main incl. 2 critical;
+L10432 CA12 CodeQL log-injection sanitizer modeling never added; L10906 SEC-2 bootstrap
+still writes plaintext credential files; L10908 SEC-4 no CSP header; L6891 SEC-9 OpenAI
+API key still sent from the browser; L7211 `registry.RunItems` Label counter read outside
+its lock; L8042 ITUNES-SMARTCRIT-PARSE; L10306 raw `*bool` post-filters treat nil
+`is_primary_version` as false; L7143 per-chapter split files as own books never
+investigated; L8152 MERGE-CACHE-EVICT (= TASK-023).
+UNCLEAR (13, need prod query / DB census / operator confirmation): 7048, 7214, 7676,
+8798, 8998, 9933, 10075, 10312, 10658, 10830, 10841, 10870, 10916.
 ### Chunk 4 — lines 11073–17789, 6 sections (134)
 **REAL 94 · DONE 33 · STALE 4 · UNCLEAR 3.** No forks; 81k tokens / 234 tool calls.
 Top REAL: 17185 ABS-SYNC TASK-12 three identity gaps (data-loss, L); 15799 duplicate
