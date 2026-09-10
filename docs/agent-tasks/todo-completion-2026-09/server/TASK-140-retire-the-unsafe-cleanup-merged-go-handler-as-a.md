@@ -6,6 +6,7 @@
 # TASK-140 — Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal) (TODO.md L10372)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: internal/server/itl_cleanup.go:53 still calls itunesservice.SafeWriteITL(itlPath, *ops) unguarded on the apply path. grep 'no-op|noop|disabled|guard' in the file = 0 hits. File last touched by 8e8787f43 (merged-track cleanup writeback feature itself, pre-brief) and unrelated later commits (4401d2987 ABS listening-stats, 231c3c396 Store() split) that don't add a guard. Unchanged since 09-02. · risk **data-loss** · effort **S**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — itl_cleanup.go:40-41 dry_run preview exists; :53 apply path calls SafeWriteITL unconditionally with no guard reflecting the owner's census (removable=0).
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — itl_cleanup.go:53 still calls SafeWriteITL(itlPath,*ops) on the apply path; grep 'no-op\|noop\|disabled\|guard' = 0 hits; no commits to the file since 2026-08-21. Recommendation: keep - unguarded apply path still live.
 

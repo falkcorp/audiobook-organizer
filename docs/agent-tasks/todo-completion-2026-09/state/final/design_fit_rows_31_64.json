@@ -1,0 +1,200 @@
+[
+ {
+  "row": 31,
+  "brief": "TASK-040",
+  "verdict": "DEFER",
+  "why": "UnmergeAuto (internal/dedup/auto_resolve.go:389) has no caller outside its own definition — no route or handler wires it. Building full external-ID + iTunes write-back reversal for a function nothing invokes is premature.",
+  "reshape_to": "",
+  "depends_on_decision": "Wire an actual Unmerge trigger (endpoint/UI action) before investing in reversal completeness.",
+  "blast_if_wrong": "Weeks of merge/iTunes-batcher work ship behind a function that stays uncalled; new AutoMergeJournalEntry fields add schema surface nothing reads."
+ },
+ {
+  "row": 32,
+  "brief": "TASK-096",
+  "verdict": "FITS",
+  "why": "Matches the live registry v2 declare-what-you-do pattern (Writes []Resource precedent); ValidateOpDef (internal/operations/registry/registry.go) is the exported registration-time hook the brief targets.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "low"
+ },
+ {
+  "row": 33,
+  "brief": "TASK-109",
+  "verdict": "DEFER",
+  "why": "Feeds Deluge-parsed release-name metadata into the identity matcher, but the torrent-relocation initiative is parked and the active content-matcher plan says residual repointing is matched by CONTENT, never by filename or torrent names.",
+  "reshape_to": "",
+  "depends_on_decision": "Owner decision on the parked Deluge initiative; reconcile with the content-only matching stance first.",
+  "blast_if_wrong": "A second, competing signal source gets wired into the matcher as the content-matcher defines its own scoring — conflicting candidate scores to unwind later."
+ },
+ {
+  "row": 34,
+  "brief": "TASK-110",
+  "verdict": "DEFER",
+  "why": "Read-only audit tier, but net-new Deluge development (0 hits for audit/grouping code in internal/deluge or internal/plugins/deluge); the parked initiative blocks new Deluge work.",
+  "reshape_to": "",
+  "depends_on_decision": "Owner decision on the parked Deluge initiative.",
+  "blast_if_wrong": "Low — read-only — but its output has no consumer until a repair tier (also parked) exists."
+ },
+ {
+  "row": 35,
+  "brief": "TASK-114",
+  "verdict": "FITS",
+  "why": "Never-delete, duration-based template matching for debris book groups mirrors missing_file_repoint.go's report-first/apply=false pattern and pickPrimary's version-grouping; no Deluge dependency; different population (duplicate/debris book rows) than the content-matcher's orphan book_file residual.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Scope creep into the content-matcher's territory if template-match logic is not kept distinct."
+ },
+ {
+  "row": 36,
+  "brief": "TASK-336",
+  "verdict": "DEFER",
+  "why": "The item's own text makes the DB reset valid only after the reverify gate (TASK-335) exists; that gate is unbuilt and itself needs reshaping.",
+  "reshape_to": "",
+  "depends_on_decision": "TASK-335 (reshaped) must ship first.",
+  "blast_if_wrong": "A full-Pebble-store wipe endpoint ships with no step-up auth — the data-loss scenario the item exists to prevent."
+ },
+ {
+  "row": 37,
+  "brief": "TASK-373",
+  "verdict": "FITS",
+  "why": "RepointSyncItem (pebble_store_syncid.go:268) is called only from merge/sync_follow.go:236; dedup.MergeBooks (hard-delete) is reached only from reconcile/itunes_heal.go:314 (book_dedup.go:388 flags the gap as a follow-up); CombineBooks (merge/service.go:776) has no RepointSyncItem call — the brief's 3-unhooked-path claim holds.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a — the hard-delete path is narrower than implied (one caller) but the identity-orphan risk is real."
+ },
+ {
+  "row": 40,
+  "brief": "TASK-342",
+  "verdict": "FITS",
+  "why": "Targets normalized title+author content-duplicate primary rows; merge_same_path_dupes.go is deliberately exact-path only, leaving this population unaddressed; different population from the content-matcher's orphan residual.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 41,
+  "brief": "TASK-345",
+  "verdict": "FITS",
+  "why": "Repairs series IDs already phantom, complementing #2908's SeriesRefCounts guard which only prevents new phantoms (duplicates_helpers.go:235,446 reference the 6,893-phantom incident only in prevention comments; no repair op exists).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 42,
+  "brief": "TASK-361",
+  "verdict": "FITS",
+  "why": "GetBooksByAuthorIDWithRoleCore (pebble_store.go:2357) calls p.mem().GetBooksByAuthorIDAllVersions with no ErrMemdbIncomplete check while the same file uses that guard at :2097 — the memdb async-warmup fallback convention #2839 established.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A memdb read during warmup returns a partial author-book list to merges/deletes/dedup and orphans or mis-links relationships, as the series-side bug did before #2839."
+ },
+ {
+  "row": 45,
+  "brief": "TASK-308",
+  "verdict": "FITS",
+  "why": "EventHub.HandleSSE (realtime/events.go:221) sets Access-Control-Allow-Origin:* after corsMiddleware's allowlisted header (server.go:471-472).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "low severity; exploitable only if credentials mode or the auth model changes"
+ },
+ {
+  "row": 48,
+  "brief": "TASK-080",
+  "verdict": "FITS",
+  "why": "cover.go has scheme allowlist + IP-blocking DialContext; covers.go's http.Get has only a hostname-prefix allowlist with no DialContext-level IP check — the mixed action (dismiss #662, fix #645) matches.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 49,
+  "brief": "TASK-083",
+  "verdict": "FITS",
+  "why": "Scope narrowed to the 2 safe_operations.go findings (#1477/#1478) after #2781 closed the other two; directs reuse of fileops.IsAllowedPath rather than the lgtm[] suppression shown not to work at service_mutation.go:63.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 50,
+  "brief": "TASK-160",
+  "verdict": "FITS",
+  "why": "WelcomeWizard.tsx:160 still calls api.openai.com directly from the browser.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 52,
+  "brief": "TASK-335",
+  "verdict": "RESHAPE",
+  "why": "No WebAuthn/passkey code exists anywhere (0 hits across internal/); auth is BasicAuth + API-key middleware (server.go:472). A full passkey subsystem to gate two unbuilt features is disproportionate.",
+  "reshape_to": "Step-up reauth by re-prompting the existing BasicAuth/API-key credential (or a short-lived reauth token), per the item's own 'or other 2FA' language.",
+  "depends_on_decision": "Whether real WebAuthn/passkey support is wanted at all, independent of this gate.",
+  "blast_if_wrong": "A new credential subsystem (enrollment, storage, UI) gets built to gate two features that do not exist yet."
+ },
+ {
+  "row": 53,
+  "brief": "TASK-365",
+  "verdict": "FITS",
+  "why": "bootstrap.go:108-112 still writes a plaintext 0600 credential file; #3171 changed WHERE it lives, not WHETHER it is plaintext.",
+  "reshape_to": "",
+  "depends_on_decision": "Opt-in vs local-only policy for plaintext credential files.",
+  "blast_if_wrong": "Skipping it as 'handled by #3171' — it is not."
+ },
+ {
+  "row": 54,
+  "brief": "TASK-366",
+  "verdict": "FITS",
+  "why": "No Content-Security-Policy header in server_middleware.go (0 hits).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "low"
+ },
+ {
+  "row": 55,
+  "brief": "TASK-367",
+  "verdict": "SUPERSEDED",
+  "why": "TriggerOperationV2 (handlers/operations_v2.go:578-588) already enforces def.Permissions behind h.enforcePerms; NewOperationsV2Handler takes enforcePerms as a required constructor param wired to config.AppConfig.EnableAuth (wire_handlers.go:172). The item's evidence is dated 2026-08-17 and stale.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Re-implementing enforcement that exists; a second enforcement path could drift from the documented AND-semantics."
+ },
+ {
+  "row": 56,
+  "brief": "TASK-368",
+  "verdict": "FITS",
+  "why": "web/package.json: react ^19.2.8, react-router-dom ^7.18.3 — the item's own trigger ('revisit when the app moves to React 19') has fired; re-evaluating the v8 upgrade is what the item asks.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "n/a"
+ },
+ {
+  "row": 61,
+  "brief": "TASK-348",
+  "verdict": "FITS",
+  "why": "MaskSecrets (config/update_service.go:82-101) masks 5 named fields and has no reference to OAuthGithub/GoogleClientSecret, DelugeWebPassword, or the three DownloadClient credentials.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "GET /api/v1/config leaks 6 more secret fields to any caller with read access."
+ },
+ {
+  "row": 62,
+  "brief": "TASK-309",
+  "verdict": "FITS",
+  "why": "scanner.go still discards AIPhaseSummary at both call sites; ProcessBooksParallel returns nil unconditionally; fix shape proven in library_ai_parse_op.go.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A fully-aborted LLM phase reports library.scan green with a complete progress bar — the incident class ai_failure.go already documents."
+ },
+ {
+  "row": 63,
+  "brief": "TASK-310",
+  "verdict": "FITS",
+  "why": "isbn.go:399/402/423/426 still discard search errors; this week's ISBN/ASIN commits touched enrichment logic but not the discards; fix matches the ProtectedSource circuit-breaker pattern.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A breaker-open or throttled provider (e.g. the recurring Google Books daily-quota exhaustion) is indistinguishable from zero results — books silently never get enriched while the sweep reports healthy."
+ }
+]

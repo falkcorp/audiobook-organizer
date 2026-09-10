@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-307-frontend-ci-yml-grants-an-unjustified-broad-perm.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 3ffe9d6c-690f-43a9-8eb5-5decf64dc13c -->
 <!-- last-edited: 2026-09-10 -->
 

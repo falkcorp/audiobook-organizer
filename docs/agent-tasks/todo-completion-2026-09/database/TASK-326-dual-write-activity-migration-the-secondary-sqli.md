@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-326-dual-write-activity-migration-the-secondary-sqli.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 9a9adb87-d630-4fe4-838c-e7a0371d9487 -->
 <!-- last-edited: 2026-09-10 -->
 

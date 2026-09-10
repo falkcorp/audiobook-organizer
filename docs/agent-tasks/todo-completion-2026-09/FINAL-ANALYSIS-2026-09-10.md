@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/FINAL-ANALYSIS-2026-09-10.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3c9f2a8e-6b4d-4f17-9e2a-8d5c1b7f0e46 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -126,3 +126,47 @@ Proposed dispatch, 4 workers max, review-critical PRs held for the owner:
 6. The 13 held briefs: answer the decision each one asks, or leave them held.
 
 Nothing executes until that reply. The package regenerates from `state/` in one command chain (`gen_new_package.py` → `build_matrix.py` → `build_reconciliation.py`); never hand-edit a brief or a table.
+
+## 6. Design-fit review (added 14:10) — do the tasks still make sense for today's design?
+
+The reconciliation above answered "does the gap still exist"; this pass asked the repo
+expert agent "is this still the right thing to build" for every dispatchable row of the cut,
+CI/CD rows excluded at the owner's request (TASK-307, 311, 364). Two
+`audiobook-organizer:expert` agents, read-only, 45 tool calls and ~257k tokens together;
+raw verdicts in [`state/final/design_fit_rows_1_29.json`](state/final/design_fit_rows_1_29.json)
+and [`state/final/design_fit_rows_31_64.json`](state/final/design_fit_rows_31_64.json).
+
+**46 rows: 37 FITS · 3 RESHAPE · 5 DEFER · 1 SUPERSEDED.** Every non-FITS verdict is now
+stamped on its brief (`> **Design fit …**` line), RESHAPE rewrites the Goal, DEFER/SUPERSEDED
+gate the row in the matrix and list the brief under *Held* in the BREAKDOWN.
+
+| Brief | Verdict | What changed |
+|---|---|---|
+| TASK-301 (DA-02) | RESHAPE | `MergeJournaled` is pairwise and candidate-keyed; two of the five bypass sites merge N-ary clusters with no candidate row. Goal is now: a bulk, candidate-optional journaling helper all five can call. This also answers decision 3 in §5. |
+| TASK-338 (fix-library-states) | RESHAPE | "fix" is not a viable branch: the job writes `present`/`missing`, a vocabulary nothing reads; #3097 governs the vocabulary ABS reads. Goal: retire the job. |
+| TASK-335 (reauth gate) | RESHAPE | no WebAuthn/passkey code exists; auth is BasicAuth + API key. Goal: step-up reauth by re-prompting the existing credential (or a short-lived reauth token), not a passkey subsystem. |
+| TASK-367 (`OperationDef.Permissions` enforced by nothing) | **SUPERSEDED** | `TriggerOperationV2` (`handlers/operations_v2.go:558-588`) enforces `def.Permissions` behind `enforcePerms`, a required constructor parameter wired to `EnableAuth` (`wire_handlers.go:170-173`); verified by the coordinator. The TODO item (L11964, evidence dated 2026-08-17) is DONE — check it off in the execution PR that touches TODO.md. |
+| TASK-040 (UnmergeAuto reversal) | DEFER | `UnmergeAuto` has zero production callers (grep: 0). Wire a trigger first. |
+| TASK-109, TASK-110 (Deluge release-name parser, torrent membership audit) | DEFER | the torrent-relocation initiative is parked, and the content-matcher plan matches the residual by CONTENT, never by torrent name. |
+| TASK-336 (full-DB reset) | DEFER | its own text gates it on the reauth gate (TASK-335), which is unbuilt. |
+| dedup-pipeline-hardening/TASK-06 (prod drain) | DEFER | mechanism fits; the gate is an owner apply decision, not a worker task. |
+
+Notable FITS confirmations with fresh evidence: TASK-360 (orphan-file hard delete reads
+memdb without `requireTablesComplete`, unlike `memdb_reads.go:506`), TASK-361 (same hazard
+on `GetBooksByAuthorIDWithRoleCore`, guard pattern already at `pebble_store.go:2097`),
+TASK-346/347/358/359 (the getter's own doc comment at `pebble_store.go:2053-2055` prescribes
+the `SeriesRefCounts` guard these four briefs add), TASK-373 (the three unhooked
+`RepointSyncItem` paths confirmed), TASK-365 (#3171 moved the credential file, it is still
+plaintext).
+
+Package after this pass: 187 briefs, **18 held** (13 owner decisions/prod runs + 5
+design-fit), 3 reclassified, 166 dispatchable. Inside the recommended cut (§A rows 1–64):
+20 gated, 44 dispatchable, of which 41 are app work (3 CI rows excluded).
+
+### Why 187 briefs
+
+Not decomposition. One brief per atomic unit: the 111 carried briefs were already 1:1 with
+`TODO.md` items in the 08-21 package, the 35 are one per audit finding, the 41 are one per
+bold-named `TODO.md` item. Effort is sized per brief (S 150 / M 117 / L 36 across the matrix).
+The volume is the backlog: 412 REAL open items in `TODO.md`.
+

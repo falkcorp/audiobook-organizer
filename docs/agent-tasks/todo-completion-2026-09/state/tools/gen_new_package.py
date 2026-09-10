@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: docs/agent-tasks/todo-completion-2026-09/state/tools/gen_new_package.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7f0a3c6e-5d2b-4e81-a9c4-1b8d6f2e0a57
 # last-edited: 2026-09-10
 """Generate the 2026-09 todo-completion package from state/merged.json.
@@ -46,6 +46,33 @@ for r in load_final("todo_line_overrides.json", "line").values():
     base.update(r)
     SECTION_BY_LINE[r["line"]] = base
 DRIFT = load_final("carried_anchor_drift.json", "task_id")          # carried brief id -> stale re-verify anchor
+DESIGN = {}                                                          # brief id -> design-fit verdict (expert agents, 2026-09-10)
+for _n in ("design_fit_rows_1_29.json", "design_fit_rows_31_64.json"):
+    DESIGN.update(load_final(_n, "brief"))
+NOT_WORKER = ("HOLD-FOR-OWNER", "DROP", "UNVALIDATED", "DEFER", "SUPERSEDED")
+
+
+def design_note(tid):
+    """One blockquote line stating the design-fit verdict for a brief, or ''."""
+    dfit = DESIGN.get(tid)
+    if not dfit:
+        return ""
+    line = f"> **Design fit {DATE} (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): {dfit['verdict']}** — {dfit['why']}"
+    if dfit.get("reshape_to"):
+        line += f"\n> **Reshape to:** {dfit['reshape_to']}"
+    if dfit.get("depends_on_decision"):
+        line += f"\n> **Needs first:** {dfit['depends_on_decision']}"
+    if dfit["verdict"] in ("DEFER", "SUPERSEDED"):
+        line += "\n> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX."
+    return line
+
+
+def design_dispatch(tid, current):
+    """DEFER / SUPERSEDED override the dispatch verdict; everything else keeps it."""
+    dfit = DESIGN.get(tid)
+    if dfit and dfit["verdict"] in ("DEFER", "SUPERSEDED"):
+        return dfit["verdict"], dfit["why"]
+    return current, ""
 DISPATCH_RANK = {"HOLD-FOR-OWNER": 0, "DROP": 1, "RECLASSIFY": 2, "DISPATCH": 3}
 TODO_LINES = open(os.path.join(REPO, "TODO.md"), encoding="utf-8").read().split("\n")
 
@@ -287,12 +314,15 @@ for b in carried:
         dr = DRIFT[b["task_id"]]
         status += (f"\n> ⚠️ **Anchor drift ({DATE}, plan-auditor):** `{dr['anchor']}` → {dr['finding']}. "
                    f"Re-derive the anchor before editing; the brief body below is unchanged from 08-21.")
+    if design_note(b["task_id"]):
+        status += "\n" + design_note(b["task_id"])
+    c_disp, c_why = design_dispatch(b["task_id"], "DISPATCH")
     text = re.sub(r"^(# TASK-\d+ — .*?\n)", lambda mm: mm.group(1) + "\n" + status + "\n", text, count=1, flags=re.M)
     write(os.path.join(NEW, ws, fname), text)
     tasks.append({"ws": ws, "id": b["task_id"], "title": b["title"], "kind": "carried", "risk": b.get("risk", "hygiene"),
                   "effort": b.get("effort", "M"), "sev": None, "evidence": b.get("evidence", ""), "path": new_rel,
                   "gate": None, "prio": priority(b.get("risk"), "high" if b.get("risk") in ("data-loss", "security") else "medium"),
-                  "files": files_in(text), "source_key": b["path"], "dispatch": "DISPATCH", "dispatch_why": ""})
+                  "files": files_in(text), "source_key": b["path"], "dispatch": c_disp, "dispatch_why": c_why})
 
 # ---------------------------------------------------------------------------
 # 2. New briefs from Wave 3 findings (TASK-300+)
@@ -432,6 +462,10 @@ for f in findings:
         if adv.get("fix_in_brief_correct") is False:
             goal = (f"**Correction from the adversarial re-check ({DATE}) — this overrides the audit's suggested fix where they differ:** "
                     f"{adv.get('notes') or adv.get('evidence')}\n\n") + goal
+    if DESIGN.get(tid, {}).get("verdict") == "RESHAPE":
+        goal = (f"**Reshaped by the design-fit review ({DATE}) — build THIS, not the original suggestion:** "
+                f"{DESIGN[tid]['reshape_to']}\n\n") + goal
+    f_disp, f_why = design_dispatch(tid, "DISPATCH")
     steps = [
         "Re-run the re-verify anchors; read the surrounding function end-to-end and confirm the finding still holds at HEAD (if it does not, STOP and report).",
         f"Implement the fix described under Goal in `{file_}` (and any sibling that shares the same shape — grep for the pattern before assuming there is one copy).",
@@ -445,11 +479,12 @@ for f in findings:
     if review_critical:
         tests.append("ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.")
     text = header(path) + brief_body(tid, title, ws, prio, effort, tier(effort, risk), src_line,
-                                     goal, background, anchors, steps, tests, gate, review_critical, f["id"])
+                                     goal, background, anchors, steps, tests, gate, review_critical, f["id"],
+                                     dispatch=design_note(tid), wave=("design-gated — not a worker task" if f_disp != "DISPATCH" else "per ../orchestration.md (collision-aware)"))
     write(os.path.join(NEW, ws, fname), text)
     tasks.append({"ws": ws, "id": tid, "title": title, "kind": "new-finding", "risk": risk, "effort": effort, "sev": sev,
                   "evidence": f"{file_}:{line}", "path": path, "gate": None, "prio": prio,
-                  "files": [file_] + files_in(f.get("evidence", "")), "source_key": f["id"], "dispatch": "DISPATCH", "dispatch_why": ""})
+                  "files": [file_] + files_in(f.get("evidence", "")), "source_key": f["id"], "dispatch": f_disp, "dispatch_why": f_why})
     fragments.append((f"todo.d/{DATE}-{slug(title, 40)}-{f['id'].lower()}.md",
                       f"- [ ] **{f['id']}** {title} — `{file_}:{line}`. {f.get('why_it_matters', '').strip()[:300]} Brief: `{path}`.\n"))
 
@@ -492,6 +527,12 @@ for (hline, sec, _v, _k), items in sections.items():
                      + (f" · ⛔ standing-ban contact: {bans}" if bans else "") + f" · {why}")
     if hold:
         dispatch_line += "\n> **Do NOT dispatch this brief to a worker.** It needs an owner decision or a prod run; it is listed in BREAKDOWN under *Held for the owner* and gated in PRIORITY-MATRIX."
+    if design_note(tid):
+        dispatch_line += "\n" + design_note(tid)
+    verdict, d_why = design_dispatch(tid, verdict)
+    if d_why:
+        why = d_why
+        hold = True
     anchors = []
     for t in items[:4]:
         q = todo_text(t["line"])[:60].replace('"', "").replace("\\", "")
@@ -503,6 +544,9 @@ for (hline, sec, _v, _k), items in sections.items():
     goal = (f"Close the {len(items)} still-open `TODO.md` item(s) under the heading “{sec}” (TODO.md line {hline}; items at lines {lines} as of HEAD 42d187168):\n{item_list}\n\n"
             f"Each item's own text is the spec; the reconciliation evidence below says what still shows the gap. "
             + ("Items whose text says *decide* / *measure* / *run in prod* end at the measurement or the decision request — do not improvise the write." if shape != "CODE" else ""))
+    if DESIGN.get(tid, {}).get("verdict") == "RESHAPE":
+        goal = (f"**Reshaped by the design-fit review ({DATE}) — build THIS, not the item's literal wording:** "
+                f"{DESIGN[tid]['reshape_to']}\n\n") + goal
     background = "\n".join(f"- L{t['line']} — {todo_item_text(t['line'])[:300]} — evidence: {t.get('evidence', '')}" for t in items)
     steps = [
         "Read the full `TODO.md` section (prose + every item), not just the checkbox lines; the section carries the constraints.",
@@ -551,7 +595,7 @@ for ws, rows in by_ws.items():
     # Waves: effort order (S -> M -> L), then the same-file rule — a brief joins the earliest wave
     # in which no already-placed brief names one of its files (plan-auditor 2026-09-10 found
     # 3 same-wave collisions in the effort-only grouping). Held briefs are not placed.
-    held = [r for r in rows if r["dispatch"] in ("HOLD-FOR-OWNER", "DROP", "UNVALIDATED")]
+    held = [r for r in rows if r["dispatch"] in NOT_WORKER]
     placed = []  # list of (wave_no, row)
     for r in sorted((r for r in rows if r not in held), key=lambda r: ({"S": 0, "M": 1, "L": 2}.get(r["effort"], 1), RISK_RANK.get(r["risk"], 6), r["id"])):
         w = 1
@@ -595,7 +639,7 @@ for ws, rows in by_ws.items():
     for r in sorted(rows, key=lambda r: (RISK_RANK.get(r["risk"], 6), SEV_RANK.get(r["sev"], 4), r["id"])):
         disp = r["dispatch"] if r["dispatch"] == "DISPATCH" else f"**{r['dispatch']}**"
         ws_tables.append(f"| [{r['id']}]({ws}/{os.path.basename(r['path'])}) | {r['kind']} | {r['risk']} | {r['sev'] or '—'} | {r['prio']} | {r['effort']} | {disp} | {r['title'][:90]} | {r['evidence'][:100].replace('|', '/')} |")
-held_all = [t for t in tasks if t["dispatch"] in ("HOLD-FOR-OWNER", "DROP", "UNVALIDATED")]
+held_all = [t for t in tasks if t["dispatch"] in NOT_WORKER]
 reclass_all = [t for t in tasks if t["dispatch"] == "RECLASSIFY"]
 held_md = "\n".join(f"- [{t['id']}]({t['ws']}/{os.path.basename(t['path'])}) — {t['title'][:80]} — **{t['dispatch']}**: {t['dispatch_why'][:200]}" for t in held_all) or "- none"
 reclass_md = "\n".join(f"- [{t['id']}]({t['ws']}/{os.path.basename(t['path'])}) — {t['title'][:80]} — now `{t['risk']}` (standard lane): {t['dispatch_why'][:200]}" for t in reclass_all) or "- none"
@@ -627,7 +671,7 @@ Not in this package, deliberately: {len(gated)} REAL sibling briefs that are **o
 ## Per-workstream briefs
 {chr(10).join(ws_tables)}
 
-## Held for the owner — {len(held_all)} briefs (decision or prod run; never dispatch as code)
+## Held — {len(held_all)} briefs (owner decision, prod run, or design-fit DEFER/SUPERSEDED; never dispatch as code)
 
 {held_md}
 

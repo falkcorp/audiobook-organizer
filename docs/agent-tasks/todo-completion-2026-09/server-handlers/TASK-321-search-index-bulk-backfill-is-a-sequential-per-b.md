@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-321-search-index-bulk-backfill-is-a-sequential-per-b.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 4bef8cdb-9afc-4cc8-b54e-5a25c3bc2858 -->
 <!-- last-edited: 2026-09-10 -->
 

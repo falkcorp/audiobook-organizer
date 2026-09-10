@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)” (L1335), items at lines 1461
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: mixed — 1366 (no delete-one-op endpoint) is a hygiene/feature gap; 1461 (writeback_batcher.Stop() doesn't join goroutines) is a real concurrent-write hazard to iTunes library files · Neither item is literally about completed_at/zombie ops — both are follow-ons bundled under that heading. 1366 should be reclassified down; 1461 is the genuine risk.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — writeback_batcher.go Stop() (:814-825) sets b.stopped, stops the timer, flushes once, no WaitGroup join for the three goroutines, stopCh never closed. Independent of the iTunes 2-way-sync design work.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · itunes subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)” (L1335), items at lines 1461. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

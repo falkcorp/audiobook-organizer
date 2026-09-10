@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Activity SQLite backend — follow-ups after the cutover” (L2006), items at lines 2088
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE (large repair job, needs a folding/merge design) · class: correctness/data-hygiene (duplicate & placeholder book records) with real data-loss risk in any merge/fold repair if not done via repoint · ⛔ standing-ban contact: none directly, but any merge of the 8,235-row dedup set must repoint not delete · Section matches; scope is very large (three separate repair populations) for one brief, flag for splitting.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — Targets normalized title+author content-duplicate primary rows; merge_same_path_dupes.go is deliberately exact-path only, leaving this population unaddressed; different population from the content-matcher's orphan residual.
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · maintenance subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Activity SQLite backend — follow-ups after the cutover” (L2006), items at lines 2088. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

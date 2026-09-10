@@ -6,6 +6,9 @@
 # TASK-110 — Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -rn 'audit|grouping' internal/deluge/*.go -> 0 hits. internal/plugins/deluge/ contains centralization.go, import.go, path_update.go, plugin.go, protected_paths.go, register.go — none implement a grouping audit or contain 'audit'/'grouping'. internal/deluge/client.go:200 fields list is still exactly hash/name/save_path/state/progress — no file-list field requested, confirming the client itself needs extending before this audit tier could even fetch torrent contents. · risk **data-loss** · effort **L**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): DEFER** — Read-only audit tier, but net-new Deluge development (0 hits for audit/grouping code in internal/deluge or internal/plugins/deluge); the parked initiative blocks new Deluge work.
+> **Needs first:** Owner decision on the parked Deluge initiative.
+> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/deluge/grouping_audit.go ABSENT; 'audit\|grouping' in deluge pkgs -> 0 hits. client.go:199 requests only hash/name/save_path/state/progress — no file list yet. Recommendation: keep — audit tier only; note client.go's field list needs extending to get 'files'.
 

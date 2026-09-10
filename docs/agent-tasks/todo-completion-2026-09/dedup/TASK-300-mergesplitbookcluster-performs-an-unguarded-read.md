@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-300-mergesplitbookcluster-performs-an-unguarded-read.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d762bd18-5f6a-4435-9b24-94c393890bb0 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-300 — MergeSplitBookCluster performs an unguarded read-modify-write on book/file rows -- it never takes the shared merge.LockMergeRMW, unlike every other merge-family path (DA-01)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-01` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — merge.LockMergeRMW absent from split_book_merge.go; serialize.go and book_dedup.go:402-403 already use this lock for the same race class — drop-in mirror of an established pattern.
 **Priority:** P0 · **Effort:** S · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `DA-01` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

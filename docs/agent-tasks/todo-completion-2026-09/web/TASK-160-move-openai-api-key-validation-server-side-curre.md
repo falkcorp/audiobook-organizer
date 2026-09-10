@@ -6,6 +6,7 @@
 # TASK-160 — Move OpenAI API key validation server-side (currently sent from the browser) (SEC-9)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: web/src/components/wizard/WelcomeWizard.tsx:160 still `fetch('https://api.openai.com/v1/models', ...)` directly from the browser. grep 'validate-openai|ValidateOpenAI' across internal/server and web/src = 0 hits. Unchanged since 09-02 (live SEC-9 finding). · risk **security** · effort **M**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — WelcomeWizard.tsx:160 still calls api.openai.com directly from the browser.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — WelcomeWizard.tsx:160 still fetch('https://api.openai.com/v1/models') from the browser; grep 'validate-openai\|ValidateOpenAI' internal/server web/src = 0 hits; no commits to either file since 08-21. Recommendation: keep - live SEC-9 finding.
 

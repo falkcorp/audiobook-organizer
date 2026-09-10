@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: a82106f3-5194-4346-8a15-1f2cf8718f50 -->
 <!-- last-edited: 2026-09-10 -->
 

@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5282
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — severe: the purge-empty-authors safety counter misses three populations (junction co-authors, all-trashed, all-non-primary), so it can wrongly clear an author who still has files · A broken safety-net feeding a destructive purge; high priority. Same file family as DB-01 (TASK-302).
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — GetAllAuthorFileCounts (memdb_reads.go:299-317) scans IsPrimaryVersion-only and skips soft-deleted; author_purge_empty.go:205 gates its 'safety that matters' on that filtered source while the real deletion gate (AuthorRefCounts) is separate and correct.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5282. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

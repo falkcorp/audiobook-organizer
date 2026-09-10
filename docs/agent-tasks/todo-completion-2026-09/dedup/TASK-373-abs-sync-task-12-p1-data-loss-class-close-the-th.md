@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “SEC: origin is reachable from the LAN — "bind loopback" is NOT achievable as specified” (L17116), items at lines 17185
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: MIXED — 17185 is CODE (hook RepointSyncItem into the 3 remaining call sites); 17307/17329 are DECISION · class: 17185 is legit data-loss (unrepointed sync ID orphaned on a hard-delete path); 17307 and 17329 are blocked on unresolved owner design decisions · Dispatch the 17185 fix now; 17307/17329 cannot be closed by code alone and wait on the owner's design calls.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — RepointSyncItem (pebble_store_syncid.go:268) is called only from merge/sync_follow.go:236; dedup.MergeBooks (hard-delete) is reached only from reconcile/itunes_heal.go:314 (book_dedup.go:388 flags the gap as a follow-up); CombineBooks (merge/service.go:776) has no RepointSyncItem call — the brief's 3-unhooked-path claim holds.
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “SEC: origin is reachable from the LAN — "bind loopback" is NOT achievable as specified” (L17116), items at lines 17185. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

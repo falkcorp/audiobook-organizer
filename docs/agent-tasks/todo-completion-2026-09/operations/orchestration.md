@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/operations/orchestration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: eb962f1b-836e-4399-9ba9-07b252eb6d7f -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -13,7 +13,8 @@ flowchart LR
       TASK316[TASK-316 S resumerestart-proceeds-to-an]
       TASK117[TASK-117 S give-prodschedulerstore-an-u]
       TASK118[TASK-118 S delete-internal-operations-m]
-      TASK367[TASK-367 M operationdef-permissions-is]
       TASK116[TASK-116 M forward-iscanceled-through-r]
     end
 ```
+
+**Held for the owner (not dispatchable as code):** TASK-367 (SUPERSEDED)

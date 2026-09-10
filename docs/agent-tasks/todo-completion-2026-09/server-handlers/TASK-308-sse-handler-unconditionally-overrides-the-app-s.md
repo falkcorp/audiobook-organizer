@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-308-sse-handler-unconditionally-overrides-the-app-s.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 5d6955e4-6260-4f2c-bb7e-2c50838eb864 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-308 — SSE handler unconditionally overrides the app's restrictive CORS policy with Access-Control-Allow-Origin: * (SV-03)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-03` (audit_server_handlers.json)
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — EventHub.HandleSSE (realtime/events.go:221) sets Access-Control-Allow-Origin:* after corsMiddleware's allowlisted header (server.go:471-472).
 **Priority:** P3 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `SV-03` (audit_server_handlers.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

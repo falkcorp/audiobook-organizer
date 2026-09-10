@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)” (L2270), items at lines 2304
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — dedup.MergeBooks hard-delete path has no audio-route guard before deleting merged rows · ⛔ standing-ban contact: none — fix adds a guard · Cited item was found while investigating the watchdog incident but is a distinct bug from the section heading; class is correctly severe.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — book_dedup.go MergeBooks (:395) has zero HasAudioRoute references; itunes_heal.go:314 still calls it directly.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)” (L2270), items at lines 2304. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

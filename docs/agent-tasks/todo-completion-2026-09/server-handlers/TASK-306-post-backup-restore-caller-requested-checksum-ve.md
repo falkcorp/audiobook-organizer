@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-306-post-backup-restore-caller-requested-checksum-ve.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: dd58d727-201e-4647-b364-871131314349 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-306 — POST /backup/restore: caller-requested checksum verification is silently skipped, no signal in the response (SV-02)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-02` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — handler.go:697-699 warns to slog only, proceeds with req.Verify regardless; response has no verify field.
 **Priority:** P2 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `SV-02` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

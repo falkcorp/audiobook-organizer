@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-315-the-real-pebbledb-corrupted-organize-path-repair.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 7d6228c2-048e-4af7-8ae4-24a7a9316eb7 -->
 <!-- last-edited: 2026-09-10 -->
 

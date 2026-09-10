@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-324-authors-page-fetches-the-entire-authors-table-on.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 56f64ec2-0b86-409f-a529-cf481c9b1768 -->
 <!-- last-edited: 2026-09-10 -->
 

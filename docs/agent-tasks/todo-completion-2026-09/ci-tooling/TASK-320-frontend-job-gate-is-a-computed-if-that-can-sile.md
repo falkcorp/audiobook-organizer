@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 9c524384-ce2e-4766-ac7b-aa81fb2e2ce2 -->
 <!-- last-edited: 2026-09-10 -->
 

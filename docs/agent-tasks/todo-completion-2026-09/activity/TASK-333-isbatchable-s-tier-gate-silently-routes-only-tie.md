@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/activity/TASK-333-isbatchable-s-tier-gate-silently-routes-only-tie.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 88ddf15e-a84e-478e-846c-9adfeef798bb -->
 <!-- last-edited: 2026-09-10 -->
 

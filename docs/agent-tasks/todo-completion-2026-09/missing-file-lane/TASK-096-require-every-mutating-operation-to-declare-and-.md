@@ -6,6 +6,7 @@
 # TASK-096 — Require every mutating operation to declare and enforce dry_run support at the registry (TODO.md L7435)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: Re-verified at HEAD: `grep -c 'DryRun' internal/operations/registry/types.go` = 0 (OperationDef still has no dry-run declaration field). `grep -n 'func ValidateOpDef' internal/operations/registry/registry.go` = 1 hit at L468 (drifted from L434, still present and exported as the ready hook point). `grep -n 'DryRun \*bool' internal/plugins/maintenance/intro_transcribe.go` = 1 hit at L102 (drifted from L90, still per-op, no shared/enforced contract). `grep -n 'SupportsDryRun'` anywhere in internal/operations/registry = 0 hits. No registry-level enforcement exists at HEAD. · risk **data-loss** · effort **L**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — Matches the live registry v2 declare-what-you-do pattern (Writes []Resource precedent); ValidateOpDef (internal/operations/registry/registry.go) is the exported registration-time hook the brief targets.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -c DryRun registry/types.go -> 0; ValidateOpDef exists registry.go:434 (exported by 73e6815ec 2026-08-20), so the hook point is ready; DryRun *bool still per-op (intro_transcribe.go:90). Recommendation: keep — ValidateOpDef being exported makes this smaller than when the brief was written.
 

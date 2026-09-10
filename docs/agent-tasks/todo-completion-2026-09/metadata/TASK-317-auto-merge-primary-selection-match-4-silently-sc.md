@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/metadata/TASK-317-auto-merge-primary-selection-match-4-silently-sc.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 730ccffe-ac3f-4791-a5f4-d47d66e6d769 -->
 <!-- last-edited: 2026-09-10 -->
 

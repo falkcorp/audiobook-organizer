@@ -6,6 +6,9 @@
 # TASK-040 — Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record (MERGE-UNDO)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: internal/database/dedup_automerge_journal.go:36-51 AutoMergeJournalEntry still has only Key/CandidateID/WinnerID/LoserID/WinnerPreMergeTS/LoserPreMergeTS (and Tag/MergedAt further down) -- no ext-id or PID field. · risk **data-loss** · effort **L**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): DEFER** — UnmergeAuto (internal/dedup/auto_resolve.go:389) has no caller outside its own definition — no route or handler wires it. Building full external-ID + iTunes write-back reversal for a function nothing invokes is premature.
+> **Needs first:** Wire an actual Unmerge trigger (endpoint/UI action) before investing in reversal completeness.
+> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — AutoMergeJournalEntry (dedup_automerge_journal.go:36-60) still has only Key/CandidateID/Winner/Loser/PreMergeTS/Tag/MergedAt - no ext-id or PID field. Recommendation: keep - highest-value item in this set: an unmerge that leaves ext-ids reassigned is silent, unrecoverable data loss.
 

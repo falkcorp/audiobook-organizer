@@ -6,6 +6,7 @@
 # TASK-220 — Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active (DUPROW-3)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -n 'CreateOperationChange|OperationQueueStore|ListActiveOperationsV2' internal/plugins/maintenance/dedupe_book_file_rows.go internal/plugins/maintenance/deps.go -> only the pre-existing CreateOperationChange interface declaration in deps.go (matches 09-02). No call site in dedupe_book_file_rows.go, no OperationQueueStore accessor, no scan guard. · risk **data-loss** · effort **M**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — dedupe_book_file_rows.go never calls CreateOperationChange despite deps.go:165 declaring the capability; ListActiveOperationsV2 exists, so the proposed accessor wraps an existing method.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — CreateOperationChange still decl-only (deps.go:148, 1 hit in internal/plugins); ListActiveOperationsV2 absent from maintenance/deps.go though it exists iface_ops_v2.go:156; library.scan library_core_ops.go:48. Recommendation: keep — this is the safety gate before any apply=true run in prod; do before TASK-219.
 

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-329-dashboard-count-widgets-silently-show-0-when-the.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 18490850-f6c4-45d5-b7d1-60ad62e16e91 -->
 <!-- last-edited: 2026-09-10 -->
 

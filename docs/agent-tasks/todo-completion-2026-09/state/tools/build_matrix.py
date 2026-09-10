@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: docs/agent-tasks/todo-completion-2026-09/state/tools/build_matrix.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5d1f8b2c-3e7a-4a95-b6c0-7f2e9d4a1c83
 # last-edited: 2026-09-10
 """Build PRIORITY-MATRIX.md (risk-ordered + effort-ordered) from merged.json.
@@ -72,7 +72,7 @@ for b in d["briefs"]:
         "effort": b.get("effort") or "M",
         "count": 1,
         "anchor": carried["path"] if carried else b["path"],  # carried briefs live in the 2026-09 package now
-        "gate": gate,
+        "gate": gate or (f"{carried['dispatch']} — {carried['dispatch_why'][:120]}" if carried and carried["dispatch"] != "DISPATCH" else None),
         "brief": carried["id"] if carried else "",
     })
 
@@ -87,7 +87,7 @@ for f in d["findings"]:
         "effort": f.get("effort") or "M",
         "count": 1,
         "anchor": f"{f.get('file')}:{f.get('line')}",
-        "gate": None,
+        "gate": (lambda fb: f"{fb['dispatch']} — {fb['dispatch_why'][:120]}" if fb and fb["dispatch"] != "DISPATCH" else None)(BRIEF_BY_SOURCE.get(f["id"])),
         "brief": (BRIEF_BY_SOURCE.get(f["id"]) or {}).get("id", ""),
     })
 
@@ -144,7 +144,7 @@ by_risk = collections.Counter(r["risk"] for r in rows)
 by_effort = collections.Counter(r["effort"] for r in rows)
 
 md = f"""<!-- file: docs/agent-tasks/todo-completion-2026-09/PRIORITY-MATRIX.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8e2c4f7a-1d5b-4b39-9a6e-3c8f0d2b7e41 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -158,9 +158,10 @@ the row (findings → TASK-300+, data-loss/security TODO sections → TASK-335+;
 are their own id); `—` means no brief yet — brief it on demand when the cut line reaches it.
 Pick a cut line in either table; the two orderings are the same rows.
 
-`GATED` rows: owner-gated sibling initiatives, plus `HOLD-FOR-OWNER` TODO sections whose
-items are decisions or prod runs (2026-09-10 validation, `state/final/todo_sections_validation.json`)
-— they stay in the ranking so the cut line is complete, but they are not worker tasks.
+`GATED` rows: owner-gated sibling initiatives; `HOLD-FOR-OWNER` TODO sections whose
+items are decisions or prod runs (`state/final/todo_sections_validation.json`); and `DEFER` /
+`SUPERSEDED` rows from the design-fit review (`state/final/design_fit_rows_*.json`) — they stay
+in the ranking so the cut line is complete, but they are not worker tasks.
 
 **Rows: {len(rows)}** — {dict(by_kind)}.
 By risk: {dict(sorted(by_risk.items(), key=lambda kv: RISK_RANK.get(kv[0], 6)))}.

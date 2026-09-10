@@ -7,7 +7,10 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Activity-log reset feature + reauth gate (2026-09-07)” (L1031), items at lines 1049
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: security (step-up reauth) + data-loss-prevention (gated full-DB wipe) — both legit · Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately.
-**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): DEFER** — The item's own text makes the DB reset valid only after the reverify gate (TASK-335) exists; that gate is unbuilt and itself needs reshaping.
+> **Needs first:** TASK-335 (reshaped) must ship first.
+> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX.
+**Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** owner-gated — not a worker task · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Activity-log reset feature + reauth gate (2026-09-07)” (L1031), items at lines 1049. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 

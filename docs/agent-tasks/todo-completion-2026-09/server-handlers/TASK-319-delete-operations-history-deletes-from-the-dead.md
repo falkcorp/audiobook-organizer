@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-319-delete-operations-history-deletes-from-the-dead.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 7e26ae98-8a72-4285-b93c-ab494b7a68f1 -->
 <!-- last-edited: 2026-09-10 -->
 

@@ -7,6 +7,9 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Activity-log reset feature + reauth gate (2026-09-07)” (L1031), items at lines 1045
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: security (step-up reauth) + data-loss-prevention (gated full-DB wipe) — both legit · Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): RESHAPE** — No WebAuthn/passkey code exists anywhere (0 hits across internal/); auth is BasicAuth + API-key middleware (server.go:472). A full passkey subsystem to gate two unbuilt features is disproportionate.
+> **Reshape to:** Step-up reauth by re-prompting the existing BasicAuth/API-key credential (or a short-lived reauth token), per the item's own 'or other 2FA' language.
+> **Needs first:** Whether real WebAuthn/passkey support is wanted at all, independent of this gate.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · misc-go subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Activity-log reset feature + reauth gate (2026-09-07)” (L1031), items at lines 1045. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
@@ -26,6 +29,8 @@ git rebase origin/main
 (Protocol in `../ORCHESTRATION.md` and `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)
 
 ## Goal
+
+**Reshaped by the design-fit review (2026-09-10) — build THIS, not the item's literal wording:** Step-up reauth by re-prompting the existing BasicAuth/API-key credential (or a short-lived reauth token), per the item's own 'or other 2FA' language.
 
 Close the 1 still-open `TODO.md` item(s) under the heading “Activity-log reset feature + reauth gate (2026-09-07)” (TODO.md line 1031; items at lines 1045 as of HEAD 42d187168):
   - L1045: **Reauth / passkey reverify gate (future).** Require a step-up reauth (passkey reverify or other 2FA) before (a) pulling the **unredacted** activity export and (b) any destructive reset. Not built yet; the reset feature 

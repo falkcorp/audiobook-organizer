@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/orchestration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: e9f436ef-bb62-4ce6-8453-8b425205ead8 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -27,7 +27,6 @@ flowchart LR
       TASK339[TASK-339 M there-is-no-delete-one-op-en]
       TASK321[TASK-321 M search-index-bulk-backfill-i]
       TASK147[TASK-147 M align-abs-conformance-fixtur]
-      TASK336[TASK-336 L full-application-database-re]
     end
     subgraph Wave2
       TASK337[TASK-337 M add-a-dry-run-count-mode-to]
@@ -36,3 +35,5 @@ flowchart LR
       TASK345[TASK-345 L series-phantom-repair-repair]
     end
 ```
+
+**Held for the owner (not dispatchable as code):** TASK-336 (DEFER)

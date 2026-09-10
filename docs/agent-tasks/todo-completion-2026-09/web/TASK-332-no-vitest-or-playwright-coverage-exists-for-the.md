@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-332-no-vitest-or-playwright-coverage-exists-for-the.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 0abc956e-6a28-417e-a731-0eb3edbf326d -->
 <!-- last-edited: 2026-09-10 -->
 
