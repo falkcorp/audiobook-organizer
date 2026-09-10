@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -141,7 +141,29 @@ dispatcher/worker/watchdog/batch.go, embedding_store candidate-index invariant.
   may pick the wrong merge primary.
 Checked CORRECT: move.go, apply_failure.go, field_locks.go, cache.go preserve-on-empty,
 ai_batch_phase.go, write_tags_safe.go, ai/retry.go (+4 more in the JSON).
-### schema-auditor — queries/indexes/migrations — RUNNING
+### schema-auditor — queries/indexes/migrations — `wave3/audit_schema_queries.json`
+5 findings: 3 high, 2 medium; 7 items verified correct.
+- **SQ-01 high perf** — `buildSearchIndexIfEmpty` reindexes the whole library serially
+  and `BookToDoc` does 3 point-gets per book (author/series/tags) instead of the batch
+  `GetAuthorsByIDs` used elsewhere (`internal/server/server_search.go:44-100`,
+  `internal/search/index_builder.go:82-165`).
+- **SQ-02 high perf** — no persisted author→books secondary index (docs describe one);
+  pre-memdb-warmup fallback does two full-keyspace scans per single-author lookup, and
+  that window recurs ~130s after every restart (`internal/database/pebble_store.go:2254-2339`).
+- **SQ-04 high perf** — `external_id_backfill_v4_done` is written but never read; the
+  full-library iTunes external-ID backfill (with an acknowledged N+1 `GetBookFiles`)
+  reruns on every boot despite "one-time, idempotent" comment
+  (`internal/itunes/backfill.go:29-58`, `internal/server/server_lifecycle.go:856-874`).
+- SQ-03 medium hygiene — `DeleteBook` never deletes `book_authors:`/`book_narrators:`
+  sidecar rows written by `SetBookAuthors`/`SetBookNarrators`; same dangling-row class
+  this function already fixed twice (`internal/database/pebble_store.go:3112-3291`).
+- SQ-05 medium correctness — ABS filterdata "published decades" built from an offset-0
+  scan of the first 5,000 books in creation order; later decades permanently omitted,
+  no truncation signal (`internal/server/handlers/abs/browse.go:1959-1995`).
+Checked CORRECT: UpdateBook/DeleteBook ISBN/ASIN + version-group + work-ID index
+maintenance; `FetchBookFilesForBooks` batch-first; `service_query.go` batched author
+enrichment; activity scan-budget handling; dedup search full scan + filterdata bound
+are self-documented/tracked tradeoffs.
 ### Queued: expert (dedup/activity), go-specialist (server/handlers + scheduler),
 typescript-specialist (web), Explore (CI/workflows + scripts), pr-test-analyzer.
 
