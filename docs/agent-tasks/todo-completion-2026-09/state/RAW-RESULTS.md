@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -213,7 +213,25 @@ timeline `?status=` (fixed 2026-09-09), config masking gaps (TODO.md), scheduler
 - SV-04 low perf — `IPRateLimiter.limiterForIP` O(n) sweep under one mutex per
   rate-limited request (`internal/server/middleware/ratelimit.go:47`).
 
-### typescript-specialist (web) — RUNNING · Explore (CI/workflows + scripts) — RUNNING
+### typescript-specialist — web — `wave3/audit_web.json`
+6 findings: 3 high, 3 medium; 9 items verified correct (apiFetch timeout/auth-redirect,
+useLibraryQuery abort/retry/stale-cache, eventSourceManager backoff, SSE cleanup,
+optimistic-op rollback, link `rel`, no `dangerouslySetInnerHTML`, no tokens in
+localStorage, no auto-retry on mutations). 27 tool calls.
+- **WEB-01 high perf** — `GET /authors` has no pagination; `Authors.tsx` loads the whole
+  ~17k-author table on every mount, paginates client-side.
+- **WEB-03 high ux** — `Dashboard.tsx` count loaders `catch { setCount(0) }`; a failed
+  count API and an empty library render identically.
+- **WEB-04 high data-loss** — `DedupAuthorTab.tsx` `AuthorBooksPopover` has no error
+  state; `getBooksByAuthor` swallows non-2xx as `[]`, so a populated author can look
+  like a safe empty duplicate right before a human merges it.
+- WEB-02 medium perf — same whole-table fetch for `GET /series` in `Series.tsx`.
+- WEB-05 medium ux — `getOperationTimeline` returns `[]` on non-2xx and network
+  failure; the operations bell shows "no recent operations" when the endpoint is down.
+- WEB-06 medium hygiene — `Authors.tsx` / `Series.tsx` have zero Vitest/Playwright
+  coverage despite destructive bulk delete/merge actions.
+
+### Explore — CI/workflows + scripts — RUNNING
 Dropped: separate pr-test-analyzer pass (audits already record missing tests per finding).
 
 ### Cost note (12:50 EDT)
