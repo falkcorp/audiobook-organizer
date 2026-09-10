@@ -1,5 +1,5 @@
 // file: internal/covers/covers.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
 // last-edited: 2026-09-10
 //
@@ -10,6 +10,7 @@ package covers
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,8 +80,14 @@ func GetCachePath(coverURL, cacheDir string) string {
 // and the response cached (CodeQL alert #645, go/request-forgery). The client
 // below applies the scheme allowlist, blocks private/reserved resolved
 // addresses on every hop, and caps the redirect chain.
+//
+// The client is built once. safehttp.NewClient constructs an http.Transport,
+// and a Transport per request means no connection reuse plus an idle-connection
+// pool that nothing ever closes — this path runs once per proxied image.
+var coverFetchClient = safehttp.NewClient(coverFetchTimeout)
+
 func FetchAndCacheCover(coverURL, cacheDir string) (string, string) {
-	return fetchAndCacheCoverWithClient(safehttp.NewClient(coverFetchTimeout), coverURL, cacheDir)
+	return fetchAndCacheCoverWithClient(coverFetchClient, coverURL, cacheDir)
 }
 
 // fetchAndCacheCoverWithClient is the implementation, split out so tests can
@@ -111,6 +118,12 @@ func fetchAndCacheCoverWithClient(client *http.Client, coverURL, cacheDir string
 	// which FetchAndCacheCover has no parameter for.
 	resp, err := client.Get(coverURL) //nolint:noctx // no caller-supplied context; client.Timeout bounds this
 	if err != nil {
+		// A refused address is reported distinctly from an unreachable one.
+		// The caller only ever sees this string, so collapsing the two would
+		// make a blocked SSRF attempt indistinguishable from a dead upstream.
+		if errors.Is(err, safehttp.ErrBlockedAddress) || errors.Is(err, safehttp.ErrBlockedScheme) || errors.Is(err, safehttp.ErrTooManyRedirects) {
+			return "", "cover URL not allowed"
+		}
 		return "", "failed to fetch cover"
 	}
 	defer resp.Body.Close()
