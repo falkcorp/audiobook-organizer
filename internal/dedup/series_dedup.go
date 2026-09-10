@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -290,6 +290,26 @@ type SeriesDedupResult struct {
 	Errors []string
 }
 
+// ScanStandDownController is the narrow slice of the operations registry that
+// an unattended apply path in this package needs in order to keep a library.scan
+// off the rows it is rewriting. *server.Server satisfies it structurally
+// (internal/server/server_maintenance_deps.go), which is why this is declared
+// here rather than imported: internal/dedup must not depend on the server or on
+// a plugin package.
+//
+// The contract is the one AcquireScanStandDown documents: acquire before the
+// first write, renew on the progress heartbeat, and treat a lost lease as a HARD
+// ABORT of the remaining writes — a lapsed lease resumes the scanner, so writing
+// past it means two writers on the same rows with no gate.
+type ScanStandDownController interface {
+	// AcquireScanStandDown parks any running library.scan and blocks a queued
+	// one from dispatching until the returned release closure is called.
+	AcquireScanStandDown(ctx context.Context, holderOpID, reason string) (release func(), err error)
+	// RenewScanStandDown extends the holder's lease. False means the holder is
+	// no longer registered and the scanner has been (or is about to be) resumed.
+	RenewScanStandDown(holderOpID string) bool
+}
+
 // DedupSeries groups all series by normalised name and merges every duplicate
 // group, keeping the series with the lowest ID (preferring one with an author).
 // It does NOT invalidate the server cache — the caller must do that.
@@ -308,9 +328,25 @@ type SeriesDedupResult struct {
 // One divergence is unavoidable and deliberate: the apply counts a merge only
 // after DeleteSeries SUCCEEDS, whereas the dry run counts what it would
 // attempt. A preview can predict the plan, not the store's failures.
+//
+// opID and scan are the APPLY path's two obligations, and both are ignored on a
+// dry run because a dry run writes nothing:
+//
+//   - opID keys the OperationChange rows every successful UpdateBook and
+//     DeleteSeries writes, which is what makes an apply reversible through
+//     internal/undo. It is also the stand-down gate's holder key, so one id ties
+//     the journal rows to the gate that was held while they were made.
+//   - scan stands the library scanner down for the duration of the apply. A
+//     concurrent library.scan rewrites the same book rows this loop repoints.
+//
+// Both are REQUIRED on an apply and the function refuses without them. MergeSeries
+// below has taken an opID for the same journalling reason since PR #2821; this
+// function did not, which is the gap TODO.md L4967 records.
 func DedupSeries(
-	_ context.Context,
+	ctx context.Context,
 	store Store,
+	opID string,
+	scan ScanStandDownController,
 	progress ProgressReporter,
 	dryRun bool,
 ) (SeriesDedupResult, error) {
@@ -318,6 +354,53 @@ func DedupSeries(
 		_ = progress.Log("info",
 			fmt.Sprintf("Starting series deduplication... (dry_run=%v)", dryRun), nil)
 		_ = progress.UpdateProgress(0, 1, "Starting series deduplication... (0/1, 0.00%)")
+	}
+
+	// standDownHolder is the stand-down gate's holder key while an apply holds
+	// the gate, and "" whenever no gate is held (every dry run).
+	standDownHolder := ""
+	if !dryRun {
+		// APPLY ONLY, and BEFORE the first read that a write depends on — the
+		// unfiltered reference counts below are then read under the gate, so a
+		// scan cannot move a book between that count and the delete decision it
+		// feeds.
+		//
+		// A library.scan running or queued concurrently rewrites the same book
+		// rows this loop repoints, so a scan can clobber the reassignments.
+		// AcquireScanStandDown parks a running library.scan and blocks a queued
+		// one from dispatching for as long as the lease is held; it is the same
+		// gate the retrofitted apply ops in internal/plugins/maintenance take.
+		//
+		// Fails CLOSED, which is a deliberate divergence from that plugin's
+		// acquireScanStandDownForApply helper: that one returns "not held, no
+		// error" and runs with NO interlock when it has no controller or no op
+		// id. Here both are refusals. An apply with no opID cannot write an
+		// undo-ledger row anything can find again (OperationChange.OperationID
+		// would be empty), and an apply with no controller cannot know whether a
+		// scan is in flight — writing in either state is exactly what this guard
+		// exists to prevent.
+		//
+		// A dry run deliberately does NOT acquire. It writes nothing, and
+		// acquiring would cancel and re-queue the production scanner merely to
+		// produce a preview — and dry_run DEFAULTS TO TRUE for this op, so an
+		// unconditional acquire would park the scanner on the common path.
+		if opID == "" {
+			return SeriesDedupResult{}, fmt.Errorf(
+				"series dedup refusing to apply without an operation id: its undo-ledger rows would be unattributable")
+		}
+		if scan == nil {
+			return SeriesDedupResult{}, fmt.Errorf(
+				"series dedup refusing to apply without a scan controller: a concurrent library.scan would clobber the reassignments")
+		}
+		release, aerr := scan.AcquireScanStandDown(ctx, opID, "series-dedup apply")
+		if aerr != nil {
+			return SeriesDedupResult{}, fmt.Errorf(
+				"series dedup refusing to apply while a library.scan is running or queued: %w", aerr)
+		}
+		if release != nil {
+			defer release()
+		}
+		standDownHolder = opID
 	}
 
 	allSeries, err := store.GetAllSeries()
@@ -467,6 +550,19 @@ func DedupSeries(
 						continue
 					}
 				}
+				// The before-image, captured from the row that is about to be
+				// OVERWRITTEN and before the assignment below. Read after it,
+				// this is keepID and the ledger row is worthless in the exact
+				// way that is hardest to notice: undo would "restore" the
+				// merged-into id and report success while nothing moved back.
+				//
+				// full.SeriesID rather than bookCore.SeriesID (which is what
+				// MergeSeries reads) because full is the row UpdateBook writes;
+				// the index copy is a second source that can only disagree.
+				oldSeriesID := ""
+				if full.SeriesID != nil {
+					oldSeriesID = fmt.Sprintf("%d", *full.SeriesID)
+				}
 				full.SeriesID = &keepID
 				if dryRun {
 					result.TotalBooksReassigned++
@@ -477,6 +573,32 @@ func DedupSeries(
 					result.Errors = append(result.Errors,
 						fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 					continue
+				}
+				// Undo ledger. internal/undo reverses a "metadata_update" row by
+				// writing OldValue back into FieldName, so this row is what makes
+				// a dry_run=false run undoable at all — without it git revert
+				// restores the code and nothing restores the data.
+				//
+				// Written AFTER the write succeeded, never before: a row for a
+				// write that did not land makes undo restore a value that was
+				// never overwritten.
+				//
+				// The failure is REPORTED, not swallowed with the `_ =` that
+				// MergeSeries uses. A book that was reassigned but not journalled
+				// is an un-undoable write, which is precisely the state this
+				// guard exists to remove; it must not be silent.
+				if cerr := store.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: opID,
+					BookID:      full.ID,
+					ChangeType:  "metadata_update",
+					FieldName:   "series_id",
+					OldValue:    oldSeriesID,
+					NewValue:    fmt.Sprintf("%d", keepID),
+				}); cerr != nil {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("book %s was reassigned from series %s to %d but its undo-ledger row could not be written (%v); this reassignment is not undoable",
+							full.ID, oldSeriesID, keepID, cerr))
 				}
 				result.TotalBooksReassigned++
 				moved++
@@ -518,6 +640,26 @@ func DedupSeries(
 					fmt.Sprintf("failed to delete series %d: %v", s.ID, err))
 			} else {
 				result.TotalMerged++
+				// The audit half of the ledger. internal/undo does not know how
+				// to recreate a series row from a "series_delete" change, so
+				// this is a record rather than a reversal — but it is the ONLY
+				// record that the row existed, what it was called and where its
+				// books went, and MergeSeries writes exactly the same shape.
+				// s.Name is already in hand from the group iteration, so no
+				// extra GetSeriesByID read is needed to fill it.
+				if cerr := store.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: opID,
+					BookID:      "",
+					ChangeType:  "series_delete",
+					FieldName:   "series",
+					OldValue:    fmt.Sprintf("%d:%s", s.ID, s.Name),
+					NewValue:    fmt.Sprintf("merged_into:%d", keepID),
+				}); cerr != nil {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("series %d (%q) was deleted but its undo-ledger row could not be written (%v); nothing now records that it existed",
+							s.ID, s.Name, cerr))
+				}
 			}
 		}
 
@@ -526,6 +668,28 @@ func DedupSeries(
 			_ = progress.UpdateProgress(gi+1, len(dupGroups),
 				fmt.Sprintf("Merged %d/%d groups (%d series merged, %.2f%%)",
 					gi+1, len(dupGroups), result.TotalMerged, pct))
+		}
+
+		// Heartbeat the stand-down lease on the same per-group boundary the
+		// progress stream uses, and treat a lost lease as a HARD ABORT.
+		//
+		// The gate's lease is five minutes and a whole-library dedup can run
+		// far longer than that. Acquiring without renewing lets the lease lapse
+		// silently: the scanner is resumed, this loop keeps writing, and the
+		// interlock is gone exactly when the run is longest — the failure the
+		// registry's contract warns about. Renewing without aborting is the same
+		// bug one step later. Same shape as the cancellation exit above:
+		// whatever was applied stays applied and is reported, and nothing
+		// further is written.
+		if standDownHolder != "" && !scan.RenewScanStandDown(standDownHolder) {
+			msg := fmt.Sprintf(
+				"scan stand-down lease lost after %d/%d groups; aborting the remaining merges before the library scanner resumes",
+				gi+1, len(dupGroups))
+			result.Errors = append(result.Errors, msg)
+			if progress != nil {
+				_ = progress.Log("error", msg, nil)
+			}
+			return result, fmt.Errorf("series dedup aborted: %s", msg)
 		}
 	}
 

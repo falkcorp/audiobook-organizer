@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package dedup
 
@@ -159,7 +159,7 @@ func TestDedupSeries_MergesDuplicates(t *testing.T) {
 
 	// dryRun=false: the anti-over-suppression case. The new guard must not
 	// become the only path — a real run still deletes and still reassigns.
-	result, err := DedupSeries(context.Background(), mock, nil, false)
+	result, err := DedupSeries(context.Background(), mock, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 	assert.False(t, result.DryRun)
 	assert.Equal(t, 1, result.TotalMerged)
@@ -186,7 +186,7 @@ func TestDedupSeries_NoDuplicates(t *testing.T) {
 
 	// Edge case from the brief: dryRun=true over zero duplicate groups is
 	// TotalMerged=0 and no error, not a failure.
-	result, err := DedupSeries(context.Background(), mock, nil, true)
+	result, err := DedupSeries(context.Background(), mock, testDedupOpID, newFakeScanController(), nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.TotalMerged)
 	assert.Equal(t, 0, result.TotalBooksReassigned)
@@ -335,7 +335,7 @@ func TestDedupSeries_DryRunMakesNoChanges(t *testing.T) {
 	store := newSeriesDedupFixture()
 	before := store.snapshot()
 
-	dry, err := DedupSeries(context.Background(), store, nil, true)
+	dry, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, true)
 	require.NoError(t, err)
 	assert.Empty(t, dry.Errors)
 	assert.True(t, dry.DryRun, "result must echo the mode it ran in")
@@ -355,7 +355,7 @@ func TestDedupSeries_DryRunMakesNoChanges(t *testing.T) {
 	assert.Equal(t, 2, dry.TotalBooksReassigned, "two books WOULD move to series 1")
 
 	// (2) the apply matches the prediction, on the same fixture.
-	applied, err := DedupSeries(context.Background(), store, nil, false)
+	applied, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 	assert.Empty(t, applied.Errors)
 	assert.False(t, applied.DryRun)
@@ -382,7 +382,7 @@ func TestDedupSeries_DryRunMakesNoChanges(t *testing.T) {
 	assert.Equal(t, 3, *store.books["BOOK3"].SeriesID, "the non-duplicate book must be untouched")
 
 	// Idempotency: a dry run after a successful apply reports nothing pending.
-	post, err := DedupSeries(context.Background(), store, nil, true)
+	post, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, post.TotalMerged, "re-running dry after apply must report 0 pending")
 	assert.Equal(t, after, store.snapshot())
@@ -525,7 +525,7 @@ func TestDedupSeries_RefusesDeleteThatWouldStrandHiddenBooks(t *testing.T) {
 	// reassignment, and orphaned if the row is deleted.
 	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 3})
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 
 	assert.NotContains(t, *deleted, 2, "series 2 must survive: two rows still reference it that the merge could not reassign")
@@ -544,7 +544,7 @@ func TestDedupSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
 	// the test above and the op silently stops doing its job.
 	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 1})
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 
 	assert.Contains(t, *deleted, 2, "the one reference was reassigned, so the row is genuinely unreferenced and must be deleted")
@@ -559,7 +559,7 @@ func TestDedupSeries_DryRunMakesTheSameRefusalAsApply(t *testing.T) {
 	// queued to edit this same loop.
 	store, deleted := newSeriesMergeFixture(t, map[int]int{2: 3})
 
-	result, err := DedupSeries(context.Background(), store, nil, true)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, true)
 	require.NoError(t, err)
 
 	assert.True(t, result.DryRun)
@@ -609,7 +609,7 @@ func TestDedupSeries_RefusesDeleteWhenAReassignmentFailed(t *testing.T) {
 	// Unfiltered count agrees with the filtered getter: 2 books, nothing hidden.
 	store := seriesRefStore{MockStore: mock, refCounts: map[int]int{2: 2}}
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 
 	assert.NotContains(t, deleted, 2,
@@ -636,7 +636,7 @@ func TestDedupSeries_RefusesToRunWithoutTheUnfilteredCount(t *testing.T) {
 	// the struct is what removes the promoted method.
 	store := noRefCountStore{Store: mock}
 
-	_, err := DedupSeries(context.Background(), store, nil, false)
+	_, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.Error(t, err, "a store that cannot count unfiltered references must abort the op, not proceed")
 	assert.Contains(t, err.Error(), "unfiltered reference counts")
 }
@@ -735,7 +735,7 @@ func TestDedupSeries_RelinksNonPrimaryVersionBooks(t *testing.T) {
 	// what makes the delete assertion below meaningful.
 	store := seriesRefStore{MockStore: mock, refCounts: map[int]int{mergeSeriesID: 2}}
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 
 	// The point of the whole task: the hidden row is RELINKED, not orphaned.

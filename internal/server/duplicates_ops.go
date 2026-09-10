@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-08-30
+// last-edited: 2026-09-10
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -524,7 +524,12 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 
 			logging.Info(ctx, "series deduplication starting", "dry_run", dryRun)
 
-			result, err := dedup.DedupSeries(ctx, store, progress, dryRun)
+			// opID is both the undo-ledger OperationChange.OperationID and the
+			// scan stand-down holder key: one id ties the journal rows to the
+			// run that made them and to the gate that kept the scanner off
+			// those rows while it did. s is the ScanStandDownController — the
+			// *Server methods in server_maintenance_deps.go satisfy it.
+			result, err := dedup.DedupSeries(ctx, store, opID, s, progress, dryRun)
 			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "series deduplication failed", "dry_run", dryRun, "err", err)

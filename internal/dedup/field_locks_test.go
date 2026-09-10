@@ -1,7 +1,7 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package dedup
 
@@ -136,7 +136,7 @@ func TestDedupSeries_LockedSeriesNameIsNotRepointedToADifferentSpelling(t *testi
 	store := withRefCounts(newSeriesDedupFixture())
 	store.GetMetadataFieldStatesFunc = lockRows("BOOK1", database.FieldKeySeriesName)
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 
 	require.NotNil(t, store.books["BOOK1"].SeriesID)
@@ -160,7 +160,7 @@ func TestDedupSeries_LockedSeriesNameMovesWhenSpellingIsIdentical(t *testing.T) 
 	))
 	store.GetMetadataFieldStatesFunc = lockRows("BOOK1", database.FieldKeySeriesName)
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 	assert.Empty(t, result.Errors)
 	require.NotNil(t, store.books["BOOK1"].SeriesID)
@@ -174,7 +174,7 @@ func TestDedupSeries_LockReadErrorKeepsTheBookAndItsSeries(t *testing.T) {
 		return nil, errors.New("pebble: closed")
 	}
 
-	result, err := DedupSeries(context.Background(), store, nil, false)
+	result, err := DedupSeries(context.Background(), store, testDedupOpID, newFakeScanController(), nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 2, *store.books["BOOK1"].SeriesID)
 	assert.Equal(t, 2, *store.books["BOOK2"].SeriesID)
