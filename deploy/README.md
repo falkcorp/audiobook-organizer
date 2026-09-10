@@ -1,5 +1,5 @@
 <!-- file: deploy/README.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 67014893-53d8-4968-8ba4-2208288e61f2 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -120,6 +120,44 @@ reads the old location as a fallback and logs where to move the file, so nothing
 breaks in the meantime. It will not copy the file for you: one secret in two
 places is a second place it can leak from.
 
+#### Finishing the move on a host: deploy first, move second
+
+Use `scripts/finish_credential_migration.py` — it removes stale `.bootstrap-token`
+files, moves the key, and reports on `.readonly-key`:
+
+```bash
+sudo python3 scripts/finish_credential_migration.py               # dry run, changes nothing
+sudo python3 scripts/finish_credential_migration.py --apply
+sudo python3 scripts/finish_credential_migration.py --remove-legacy-key --apply
+```
+
+Run it as root. The app-data directory is `0700 audiobook:audiobook`, so an
+unprivileged run cannot see inside it and reports every path there as *unknown*
+rather than absent — which blocks the key move rather than silently mis-deciding it.
+
+**Do not move the key before deploying the binary that looks for it.** A pre-#3171
+binary reads the key only from `filepath.Dir(database_path)`; move it out from under
+one and the next restart generates a fresh key, after which
+`LoadConfigFromDatabase` re-encrypts the four secrets recoverable from the config
+file and `DeleteSetting`s the rest, exiting 0. Deploying **before** the move is
+safe and needs no preparation — `InitEncryption` probes its legacy directories and
+uses the key it finds, warning where to move it. So: deploy, then move.
+
+The script will not take your word for the deploy. It requires the *running*
+invocation to have written its bootstrap token into the state directory, which only
+a post-#3171 process does, and it reads the destination from that same observation
+instead of assuming the constant — `EnsureSecureStateDir` has a fallback branch, and
+a script that hardcoded the answer would be one more place for these paths to
+diverge. `git log` proves nothing here; a merged branch that was never deployed must
+not unlock the move.
+
+The move renames the source aside (`.encryption_key.migrated-<timestamp>`) rather
+than deleting it. `--remove-legacy-key` retires that file, but only once the service
+has been observed running, started *after* the rename, with the legacy name gone —
+at which point `guardAgainstKeyRegeneration` would have refused to boot had the new
+location not worked, so a live service is the proof.
+
+The script never restarts the service: a restart resumes the interrupted library scan.
 
 As of 2026-09-09 an explicitly supplied `DATABASE_PATH` or `--db` **overrides**
 the path stored in the config blob (PR #3168). Before that the stored value won,

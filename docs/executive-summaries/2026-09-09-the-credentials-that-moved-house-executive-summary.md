@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-09-the-credentials-that-moved-house-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7a3f5c81-4e29-4b06-95d7-1c8e04b6f293 -->
 <!-- last-edited: 2026-09-09 -->
 
@@ -66,9 +66,28 @@
 
 ## What still needs a person
 
+Both remaining jobs need administrator rights, so they cannot be done from the app.
+There is now a tool that does them: `scripts/finish_credential_migration.py`. It
+reports what it sees and changes nothing until asked, and it refuses anything it
+cannot justify from the state of the machine in front of it.
+
 - Two leftover token files should be deleted, because both still answer and both are
   long expired. Anyone following the recovery steps could pick up either one and get an
   unexplained rejection. Removing them makes the old paths fail obviously instead of
   misleadingly.
 - The encryption key file itself should be moved to its new home when convenient. Until
   then the server is relying on the fallback, and says so in its logs on every start-up.
+
+**The order matters, and it is the opposite of what caution suggests.** Update the
+server software first; move the key afterwards. Moving the key first is the one
+sequence that loses credentials: the older software looks for the key only beside
+the database, so it would find nothing, make a new one, and delete the secrets that
+the old key protected. Updating first is safe on its own — the new software reads
+the old location, uses the key it finds, and simply notes in its log that the file
+should be moved. There is no hurry, and no window where anything is at risk.
+
+The tool enforces that order rather than trusting anyone to remember it. It will not
+move the key until it has watched the running server put its own files in the new
+place, which is something only the updated software does. Nor does it delete the
+original: it renames it, keeps it as a way back, and only offers to remove it later,
+once the server has actually started up from the new location at least once.
