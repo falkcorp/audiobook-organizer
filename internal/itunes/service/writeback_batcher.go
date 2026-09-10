@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 5.7.1
+// version: 5.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 //
 // Combined write-back batcher: handles location updates, track additions,
 // and track removals in a single ITL read-modify-write cycle.
@@ -90,8 +90,27 @@ type WriteBackBatcher struct {
 	delay          time.Duration
 	maxDelay       time.Duration
 	firstEnqueue   time.Time // when the first enqueue in this batch happened
-	stopCh         chan struct{}
-	stopped        bool
+	// stopCh is closed by Stop and gates FLUSH SCHEDULING: a goroutine that
+	// was queued to flush but has not started yet returns without doing any
+	// work. b.stopped (under b.mu) gates ENQUEUEING and timer re-arming.
+	// Both are set in the same Stop critical section. May be nil on a
+	// batcher built as a struct literal (tests) — every read nil-guards.
+	stopCh  chan struct{}
+	stopped bool
+
+	// wg tracks every goroutine the batcher starts: the EnqueueRemove
+	// tombstone marker, resetTimer's past-maxDelay `go b.flush()`, and the
+	// debounce timer's callback. Stop joins it so shutdown never returns
+	// with a flush still inside the ITL writer. Every Add happens under
+	// b.mu and after the b.stopped check, so no Add can race Wait.
+	wg sync.WaitGroup
+
+	// flushMu serializes the whole flush read-modify-write cycle so only one
+	// goroutine is ever inside SafeWriteITL for this batcher. It is
+	// deliberately separate from mu: mu is released before the disk I/O
+	// precisely so Enqueue* callers never block behind an ITL re-encode.
+	// Lock order is always flushMu → mu, never the reverse.
+	flushMu sync.Mutex
 
 	// Config fields — populated at construction, mutable via UpdateConfig.
 	// Reads use cfgMu (separate from mu so config-reload doesn't block the
@@ -232,7 +251,14 @@ func (b *WriteBackBatcher) EnqueueRemove(pid string) {
 	// stale external-id mapping that later re-triggers dispatch for an
 	// already-removed track — log it so the drift is visible instead of
 	// discarding the error.
+	//
+	// Registered on b.wg (the Add is here, under b.mu and after the
+	// b.stopped check, so Stop can never Add after Wait) and deliberately
+	// NOT gated on stopCh: abandoning the tombstone at shutdown would leave
+	// exactly the drift this write exists to prevent, so Stop waits for it.
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		if b.store == nil {
 			return
 		}
@@ -242,9 +268,46 @@ func (b *WriteBackBatcher) EnqueueRemove(pid string) {
 	}()
 }
 
+// stopTimerLocked cancels the pending debounce timer, if any, and releases the
+// b.wg slot resetTimer reserved for its callback when the cancel wins the
+// race. time.Timer.Stop reports true only when the callback had not yet fired;
+// a false return means timerFlush is already running and will call Done
+// itself. Callers must hold b.mu.
+func (b *WriteBackBatcher) stopTimerLocked() {
+	if b.timer == nil {
+		return
+	}
+	if b.timer.Stop() {
+		b.wg.Done()
+	}
+	b.timer = nil
+}
+
+// timerFlush is the debounce timer's callback. It owns the b.wg slot that
+// resetTimer reserved when it armed the timer, and returns without work if
+// Stop closed stopCh while the timer was in flight.
+func (b *WriteBackBatcher) timerFlush() {
+	defer b.wg.Done()
+	select {
+	case <-b.stopCh:
+		return
+	default:
+	}
+	b.flush()
+}
+
+// resetTimer (re)arms the debounce window. Callers must hold b.mu.
+//
+// Every goroutine scheduled here is registered on b.wg first so Stop can join
+// it. The b.stopped guard is load-bearing: reEnqueue calls resetTimer from the
+// deferred/parse-failure/write-failure paths of a flush, including Stop's own
+// final drain, and without the guard that drain would arm fresh work after
+// Stop had already joined — both a goroutine that outlives shutdown and a
+// WaitGroup Add after Wait.
 func (b *WriteBackBatcher) resetTimer() {
-	if b.timer != nil {
-		b.timer.Stop()
+	b.stopTimerLocked()
+	if b.stopped {
+		return
 	}
 	// Track when the first enqueue in this batch happened
 	if b.firstEnqueue.IsZero() {
@@ -253,13 +316,23 @@ func (b *WriteBackBatcher) resetTimer() {
 	// If we've been accumulating for longer than maxDelay, flush now
 	elapsed := time.Since(b.firstEnqueue)
 	if elapsed >= b.maxDelay {
-		go b.flush()
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			select {
+			case <-b.stopCh:
+				return
+			default:
+			}
+			b.flush()
+		}()
 		return
 	}
 	// Otherwise, extend the timer (but don't exceed maxDelay from first enqueue)
 	remaining := b.maxDelay - elapsed
 	delay := min(b.delay, remaining)
-	b.timer = time.AfterFunc(delay, b.flush)
+	b.wg.Add(1)
+	b.timer = time.AfterFunc(delay, b.timerFlush)
 }
 
 // HasPendingBook reports whether bookID is currently queued for a
@@ -295,8 +368,41 @@ func (b *WriteBackBatcher) reEnqueue(bookIDs []string, adds []itunes.ITLNewTrack
 	b.resetTimer()
 }
 
-// flush writes all pending operations to the iTunes ITL binary in one pass.
+// flush is the entry point for every SCHEDULED flush (debounce timer, the
+// past-maxDelay fast path). It refuses to run once Stop has been called: Stop
+// performs the single final drain itself, after joining the workers, so
+// shutdown can never interleave two write cycles.
 func (b *WriteBackBatcher) flush() {
+	b.mu.Lock()
+	stopped := b.stopped
+	b.mu.Unlock()
+	if stopped {
+		return
+	}
+	b.drainFlush()
+}
+
+// drainFlush writes all pending operations to the iTunes ITL binary in one
+// pass. Call it directly only from Stop's final drain — every other caller
+// goes through flush, which honors b.stopped.
+func (b *WriteBackBatcher) drainFlush() {
+	// SINGLE WRITER: the entire read-modify-write cycle (ParseITL → diff →
+	// SafeWriteITL, which backs up, writes a shared `.tmp` and renames it
+	// over the live library) is serialized on flushMu. Before this, b.mu was
+	// released after the snapshot and two flushes could sit inside
+	// SafeWriteITL at once, racing through the same `.tmp`.
+	//
+	// flushMu rather than b.mu on purpose: b.mu is released before the disk
+	// I/O so Enqueue* callers never block behind an ITL re-encode, and
+	// holding it across the write would transfer that stall to every
+	// enqueuer. Lock order is always flushMu → b.mu, never the reverse.
+	//
+	// Scope of the guarantee: flushMu is per-batcher, so it serializes THIS
+	// batcher's flushes. Two batcher instances aimed at the same ITL path,
+	// or the other writers of that path, are outside it.
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+
 	b.mu.Lock()
 	if !b.hasPending() {
 		b.mu.Unlock()
@@ -807,20 +913,43 @@ func (b *WriteBackBatcher) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop flushes any pending writes and stops the batcher. Signature
-// matches serviceregistry.Stopper so Container.Stop can drive shutdown
-// directly. The context is unused — flushing has its own timeout
-// behavior inside the worker.
+// Stop quiesces the batcher, joins every goroutine it started, and then
+// flushes any pending writes exactly once. Signature matches
+// serviceregistry.Stopper so Container.Stop can drive shutdown directly.
+//
+// The context is still unused: the wg.Wait below is unbounded by design.
+// Returning early on a context deadline would skip the final drain and
+// silently drop pending ITL writes, which on this path is worse than a slow
+// shutdown. (The file_io_pool sibling in the same TODO section wraps its
+// wg.Wait in a 30s budget; adopting that here would need an answer for the
+// dropped batch first.)
 func (b *WriteBackBatcher) Stop(_ context.Context) error {
 	if b == nil {
 		return nil
 	}
 	b.mu.Lock()
+	if b.stopped {
+		// Idempotent: never close stopCh twice or run a second drain.
+		b.mu.Unlock()
+		return nil
+	}
 	b.stopped = true
-	if b.timer != nil {
-		b.timer.Stop()
+	b.stopTimerLocked()
+	if b.stopCh != nil {
+		// Releases any flush goroutine that was scheduled but has not
+		// started. Nil on a struct-literal batcher (tests).
+		close(b.stopCh)
 	}
 	b.mu.Unlock()
-	b.flush()
+
+	// Join before draining. b.mu MUST be released first — a spawned flush
+	// needs it to snapshot, and holding it here would deadlock shutdown.
+	// b.stopped is already set, so no new goroutine can be scheduled.
+	b.wg.Wait()
+
+	// Exactly one final drain, with every worker joined, so nothing else can
+	// be inside the writer. drainFlush, not flush: flush now refuses to run
+	// after stop.
+	b.drainFlush()
 	return nil
 }
