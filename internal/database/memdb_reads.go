@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-09-10
 
@@ -589,7 +589,28 @@ func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, 
 // co-author credits on non-primary versions belonging to author 46627, and
 // merging that row warm would have deleted the author while they still existed.
 // See internal/database/author_getter_conformance_test.go.
+//
+// It REFUSES with ErrMemdbIncomplete when memdb is known to be missing rows
+// from EITHER table it reads. This is the author twin of the guard
+// GetBooksBySeriesIDAllVersions has carried since 2026-08-24, and it was
+// missing for the same 17 days that TODO.md's AUTHOR-MEMBERSHIP-UNGUARDED
+// entry records the shape firing on production (2026-08-24 05:00). Two tables,
+// not one, because a co-author exists ONLY as a book_authors row: a lost
+// junction row is a credit that pass 2 (legacy Book.AuthorID) cannot recover,
+// so a guard that named memTableBooks alone would answer short by exactly the
+// link the merge exists to rewrite. author_bookref.go made the same call for
+// the counter.
+//
+// The guard is on this wrapper and not on the shared getBooksByAuthorID body,
+// for the reason GetBooksBySeriesIDAllVersions gives: GetBooksByAuthorID is
+// the listing view, and a lost row stays lost until restart, so guarding the
+// body would turn every author page into a full Pebble scan for the rest of
+// the process's life. Callers reaching this through PebbleStore never see the
+// refusal -- that wrapper falls through to the authoritative Pebble scan.
 func (m *MemStore) GetBooksByAuthorIDAllVersions(authorID int, limit, offset int) ([]Book, error) {
+	if err := m.requireTablesComplete("books by author (merge path)", memTableBooks, memTableBookAuthors); err != nil {
+		return nil, err
+	}
 	return m.getBooksByAuthorID(authorID, limit, offset, false)
 }
 

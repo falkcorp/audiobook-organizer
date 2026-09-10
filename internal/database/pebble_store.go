@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.146.0
+// version: 1.147.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-10
 
@@ -2124,7 +2124,9 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 //
 // This was the only membership getter with the guard until 2026-09-10, when
 // GetAllBooksCoreComplete and ListSoftDeletedBooks joined it for the orphan
-// book_file sweep's hard delete. The guarded set is not "every getter that
+// book_file sweep's hard delete, and GetBooksByAuthorIDWithRoleCore -- the
+// author twin of this method, and the one TODO.md records FIRING on production
+// on 2026-08-24 -- joined it the same day. The guarded set is not "every getter that
 // could be short" — it is every getter whose ABSENCES authorize destroying
 // something. Its complement is deliberate for the same reason in every case:
 // see MemStore.GetBooksBySeriesIDAllVersions for why pushing the check down to
@@ -2298,6 +2300,18 @@ func (p *PebbleStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {
 // at all, so the Pebble listing path could only ever see an author through the
 // denormalized Book.AuthorID field. Authors 2..n of a credit list exist ONLY as
 // junction rows, so a co-author's books were invisible to that path entirely.
+//
+// FAIL-CLOSED since 2026-09-10: a credit list that will not decode, or an
+// iterator that stops early, is an error naming the row, not a `continue`. This
+// scan is the ONLY way the Pebble path finds a co-author, and one of the
+// triggers that sends GetBooksByAuthorIDWithRoleCore here is memdb warmup
+// having failed to decode a row -- so skipping the same corrupt value again
+// would hand the merge the same short list the fall-through exists to repair,
+// with the log line claiming it had fallen through to safety. Identical to the
+// getBooksBySeriesIDFull hardening and to author_bookref.go's pass 1, which
+// already made this call for the counter. The listing path shares the cost:
+// getBooksByAuthorIDFull only runs before memdb publishes, and an unreadable
+// credit list is an operator-visible fault either way.
 func (p *PebbleStore) bookIDsInAuthorJunction(authorID int) (map[string]struct{}, error) {
 	bookIDSet := make(map[string]struct{})
 	iter, err := p.db.NewIter(&pebble.IterOptions{
@@ -2310,17 +2324,21 @@ func (p *PebbleStore) bookIDsInAuthorJunction(authorID int) (map[string]struct{}
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
 		var authors []BookAuthor
 		if err := json.Unmarshal(iter.Value(), &authors); err != nil {
-			continue
+			return nil, fmt.Errorf("books by author scan: undecodable book_authors row %q: %w", key, err)
 		}
 		for _, a := range authors {
 			if a.AuthorID == authorID {
 				// Key is "book_authors:<bookID>".
-				bookIDSet[strings.TrimPrefix(string(iter.Key()), "book_authors:")] = struct{}{}
+				bookIDSet[strings.TrimPrefix(key, "book_authors:")] = struct{}{}
 				break
 			}
 		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("books by author junction scan truncated, refusing to answer from a partial list: %w", err)
 	}
 	return bookIDSet, nil
 }
@@ -2400,23 +2418,43 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 // type system. A caller that needs any of the heavy fields MUST fetch via
 // GetBookByID / GetAllBooksFullFrom (full Pebble). See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+//
+// GUARDED since 2026-09-10 (AUTHOR-MEMBERSHIP-UNGUARDED, TODO.md): when memdb
+// is known to be missing rows from books OR book_authors, the memdb getter
+// refuses with ErrMemdbIncomplete and this wrapper falls through to the
+// authoritative Pebble scan below, so the caller still gets the COMPLETE set
+// rather than a short one. This is the author twin of the guard
+// GetBooksBySeriesIDAllVersions has carried since 2026-08-24; the 17 days it
+// was missing here are the window in which the series fix shipped while the
+// identical author shape kept firing on production. The Pebble scan is also
+// fail-closed (undecodable row -> error, iterator error -> error), because
+// one of the triggers that sends a caller here is memdb warmup having failed
+// to decode a row -- skipping the same corrupt value again would re-create the
+// short answer through the repair path.
+//
+// Any other memdb error is propagated unchanged — falling back on an
+// unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
-	if p.UseMemDB && p.mem() != nil {
+	if m := p.mem(); p.UseMemDB && m != nil {
 		// AllVersions, not the plain getter: this method's callers are merges,
 		// deletes and dedup, and a link they cannot see is one they will not
 		// rewrite before deleting the author — which orphans it. The Pebble
 		// branch below has never filtered non-primary versions, so using the
 		// filtered memdb view here also made the two paths disagree. See
 		// internal/database/author_getter_conformance_test.go.
-		books, err := p.mem().GetBooksByAuthorIDAllVersions(authorID, 0, 0)
-		if err != nil {
+		books, err := m.GetBooksByAuthorIDAllVersions(authorID, 0, 0)
+		if err == nil {
+			cores := make([]BookCore, len(books))
+			for i := range books {
+				cores[i] = books[i].Core()
+			}
+			return cores, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
 			return nil, err
 		}
-		cores := make([]BookCore, len(books))
-		for i := range books {
-			cores[i] = books[i].Core()
-		}
-		return cores, nil
+		slog.Error("books by author (merge path): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+			"error", err, "author_id", authorID, "lost_rows", m.LostRows())
 	}
 	// Collect book IDs from the book_authors junction table. Shared with the
 	// listing path so the two Pebble getters cannot drift apart on what
@@ -2460,7 +2498,10 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 		}
 		var book Book
 		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
-			continue
+			// Fail closed: this row may credit the author, and a `continue`
+			// here is the short list the guard above exists to prevent,
+			// reached through the repair path. See the doc comment.
+			return nil, fmt.Errorf("books by author scan: undecodable book row %q: %w", key, err)
 		}
 		if bookIsSoftDeleted(&book) {
 			continue
@@ -2471,6 +2512,9 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 		} else if book.AuthorID != nil && *book.AuthorID == authorID {
 			books = append(books, book)
 		}
+	}
+	if err := bookIter.Error(); err != nil {
+		return nil, fmt.Errorf("books by author scan truncated, refusing to answer from a partial list: %w", err)
 	}
 	cores := make([]BookCore, len(books))
 	for i := range books {
