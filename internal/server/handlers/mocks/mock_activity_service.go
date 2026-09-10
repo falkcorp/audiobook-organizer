@@ -6,7 +6,6 @@ package handlersmocks
 
 import (
 	"context"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	mock "github.com/stretchr/testify/mock"
@@ -113,72 +112,6 @@ func (_c *MockActivityService_ClampSummaries_Call) Return(clampSummariesResult d
 }
 
 func (_c *MockActivityService_ClampSummaries_Call) RunAndReturn(run func(ctx context.Context, max int, dryRun bool, vacuum bool) (database.ClampSummariesResult, error)) *MockActivityService_ClampSummaries_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CompactByDay provides a mock function for the type MockActivityService
-func (_mock *MockActivityService) CompactByDay(ctx context.Context, cutoff time.Time) (database.CompactResult, error) {
-	ret := _mock.Called(ctx, cutoff)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CompactByDay")
-	}
-
-	var r0 database.CompactResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time) (database.CompactResult, error)); ok {
-		return returnFunc(ctx, cutoff)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, time.Time) database.CompactResult); ok {
-		r0 = returnFunc(ctx, cutoff)
-	} else {
-		r0 = ret.Get(0).(database.CompactResult)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, time.Time) error); ok {
-		r1 = returnFunc(ctx, cutoff)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockActivityService_CompactByDay_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompactByDay'
-type MockActivityService_CompactByDay_Call struct {
-	*mock.Call
-}
-
-// CompactByDay is a helper method to define mock.On call
-//   - ctx context.Context
-//   - cutoff time.Time
-func (_e *MockActivityService_Expecter) CompactByDay(ctx any, cutoff any) *MockActivityService_CompactByDay_Call {
-	return &MockActivityService_CompactByDay_Call{Call: _e.mock.On("CompactByDay", ctx, cutoff)}
-}
-
-func (_c *MockActivityService_CompactByDay_Call) Run(run func(ctx context.Context, cutoff time.Time)) *MockActivityService_CompactByDay_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 time.Time
-		if args[1] != nil {
-			arg1 = args[1].(time.Time)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockActivityService_CompactByDay_Call) Return(compactResult database.CompactResult, err error) *MockActivityService_CompactByDay_Call {
-	_c.Call.Return(compactResult, err)
-	return _c
-}
-
-func (_c *MockActivityService_CompactByDay_Call) RunAndReturn(run func(ctx context.Context, cutoff time.Time) (database.CompactResult, error)) *MockActivityService_CompactByDay_Call {
 	_c.Call.Return(run)
 	return _c
 }
