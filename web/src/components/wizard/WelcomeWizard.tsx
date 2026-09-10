@@ -1,7 +1,7 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-08-19
+// last-edited: 2026-09-10
 
 import { useState, useEffect } from 'react';
 import {
@@ -156,18 +156,11 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
     setKeyTestResult(null);
 
     try {
-      // Test the key by making a simple API call
-      const response = await fetch('https://api.openai.com/v1/models', {
-        headers: {
-          Authorization: `Bearer ${openaiKey}`,
-        },
-      });
-
-      if (response.ok) {
-        setKeyTestResult('success');
-      } else {
-        setKeyTestResult('error');
-      }
+      // SEC-9: the backend makes the outbound OpenAI call, so the raw key never
+      // appears in the browser's network log. The result shape is unchanged
+      // from the caller's point of view.
+      const result = await api.validateOpenAIKey(openaiKey);
+      setKeyTestResult(result.valid ? 'success' : 'error');
     } catch (_error) {
       setKeyTestResult('error');
     } finally {
