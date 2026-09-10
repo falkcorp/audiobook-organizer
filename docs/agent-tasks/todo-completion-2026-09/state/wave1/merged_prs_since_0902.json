@@ -1,0 +1,1244 @@
+[
+  {
+    "headRefName": "fix/isbn-enrichment-cursor",
+    "mergeCommit": {
+      "oid": "42d187168090740a798e2a285afb45d7652f186e"
+    },
+    "mergedAt": "2026-09-10T15:38:25Z",
+    "number": 3178,
+    "title": "fix(metafetch): sweep the whole library for ISBN/ASIN enrichment"
+  },
+  {
+    "headRefName": "feat/metadata-signal-widening",
+    "mergeCommit": {
+      "oid": "27c53ed30e98076574e8a6849211159cda59914b"
+    },
+    "mergedAt": "2026-09-10T14:33:19Z",
+    "number": 3177,
+    "title": "feat(metadata): persist provider fields previously decoded and dropped"
+  },
+  {
+    "headRefName": "fix/isbn-enrichment-gate-asin",
+    "mergeCommit": {
+      "oid": "ef9681ef21f8dc4ad28d78f3acb2e8fd99f857fa"
+    },
+    "mergedAt": "2026-09-10T13:51:30Z",
+    "number": 3176,
+    "title": "fix(metafetch): enrich ASIN for books that already have an ISBN"
+  },
+  {
+    "headRefName": "feat/enrich-file-signals",
+    "mergeCommit": {
+      "oid": "08ec6c882c07ac235bb1a4462ef6eed8d2ae498b"
+    },
+    "mergedAt": "2026-09-10T13:15:08Z",
+    "number": 3175,
+    "title": "perf(maintenance): parallelize backfill-file-hashes"
+  },
+  {
+    "headRefName": "docs/scan-progress-followup-folder-denominator",
+    "mergeCommit": {
+      "oid": "0ee35ebcb5b09851bbe300ba9474b098a785854d"
+    },
+    "mergedAt": "2026-09-10T05:28:40Z",
+    "number": 3174,
+    "title": "docs(todo): scan per-book denominator climbs on many-folder scans [skip changelog]"
+  },
+  {
+    "headRefName": "fix/scan-progress-indeterminate",
+    "mergeCommit": {
+      "oid": "6c430581666f72e03d8fddb66684acb8970c237c"
+    },
+    "mergedAt": "2026-09-10T04:34:53Z",
+    "number": 3173,
+    "title": "fix(scanner): correct scan-progress denominators, drop counts-up total"
+  },
+  {
+    "headRefName": "chore/finish-credential-migration",
+    "mergeCommit": {
+      "oid": "98f15ac94699cbf642f84a558ee5f0556d5895a1"
+    },
+    "mergedAt": "2026-09-10T01:31:35Z",
+    "number": 3172,
+    "title": "chore(scripts): add a gated finisher for the credential relocation"
+  },
+  {
+    "headRefName": "fix/secure-state-dir",
+    "mergeCommit": {
+      "oid": "e7c40b9bd612735f511627e2ae2458c78e4eae03"
+    },
+    "mergedAt": "2026-09-10T00:05:51Z",
+    "number": 3171,
+    "title": "fix(config): stop the credentials following the database around"
+  },
+  {
+    "headRefName": "fix/appdirs-knows-the-database",
+    "mergeCommit": {
+      "oid": "344d71724b1f4843d31795456630f3bc27689512"
+    },
+    "mergedAt": "2026-09-09T23:48:45Z",
+    "number": 3170,
+    "title": "fix(pathutil): exclude the database directory from library walks by rule"
+  },
+  {
+    "headRefName": "feat/database-path-setting",
+    "mergeCommit": {
+      "oid": "e6e696d6a4344751612a5a3dd23faec108f25597"
+    },
+    "mergedAt": "2026-09-09T20:14:44Z",
+    "number": 3169,
+    "title": "feat(settings): make the main database location a settable option"
+  },
+  {
+    "headRefName": "fix/config-flag-precedence",
+    "mergeCommit": {
+      "oid": "1803f3c4d95f81225eefdd2176bd69b4fba68db2"
+    },
+    "mergedAt": "2026-09-09T19:52:25Z",
+    "number": 3168,
+    "title": "fix(config): honour --db and DATABASE_PATH over the persisted config blob"
+  },
+  {
+    "headRefName": "fix/activity-compaction",
+    "mergeCommit": {
+      "oid": "24cbf7831265977fbbdf027598707df5cff2e0a9"
+    },
+    "mergedAt": "2026-09-09T18:24:52Z",
+    "number": 3167,
+    "title": "fix(activity): make compaction chunk-atomic so interrupts cannot double-count"
+  },
+  {
+    "headRefName": "docs/resume-policy-checkpoint-gap",
+    "mergeCommit": {
+      "oid": "22996df587675e4de2d13444f60e8fdcf990122a"
+    },
+    "mergedAt": "2026-09-09T15:44:12Z",
+    "number": 3166,
+    "title": "docs(todo): file two operations-correctness findings from prod verification"
+  },
+  {
+    "headRefName": "docs/llm-backend-mac",
+    "mergeCommit": {
+      "oid": "49abc66023ec9e42707c319c0d7225eaf82c78fd"
+    },
+    "mergedAt": "2026-09-09T14:49:34Z",
+    "number": 3165,
+    "title": "docs(ai): correct the batch comments for the GPU backend prod now uses"
+  },
+  {
+    "headRefName": "docs/ai-parse-model-comparison",
+    "mergeCommit": {
+      "oid": "bc51e511f071181c797db850298f9bd4013cfc1e"
+    },
+    "mergedAt": "2026-09-09T13:24:17Z",
+    "number": 3164,
+    "title": "docs(ai): settle 7B vs 3B with a real sample, and measure where 30s actually breaks [skip changelog]"
+  },
+  {
+    "headRefName": "docs/ai-parse-followup-corrections",
+    "mergeCommit": {
+      "oid": "82304bb3985c45934684275638cd3bdb75223094"
+    },
+    "mergedAt": "2026-09-09T12:07:02Z",
+    "number": 3163,
+    "title": "docs(ai): record the measured local embedding budget, correct the parse follow-ups"
+  },
+  {
+    "headRefName": "fix/ai-parse-batch-workers-configurable",
+    "mergeCommit": {
+      "oid": "9921c76133cd0a00c4103c222402cd9cc0cca964"
+    },
+    "mergedAt": "2026-09-09T11:33:46Z",
+    "number": 3162,
+    "title": "fix(ai): make in-flight parse batches configurable, not a hardcoded 4"
+  },
+  {
+    "headRefName": "fix/ai-parse-batch-timeout-configurable",
+    "mergeCommit": {
+      "oid": "25f3b269c99b962c9debdb22ee8d449cd3bdc953"
+    },
+    "mergedAt": "2026-09-09T10:55:45Z",
+    "number": 3161,
+    "title": "fix(ai): make the parse batch size and per-batch timeout configurable"
+  },
+  {
+    "headRefName": "fix/ai-test-connection-misleading",
+    "mergeCommit": {
+      "oid": "944cdaf21be6be56ed3669d3fd5d266fb5f5903e"
+    },
+    "mergedAt": "2026-09-09T10:26:02Z",
+    "number": 3160,
+    "title": "docs(todo): file that /ai/test-connection only ever tests OpenAI [skip changelog]"
+  },
+  {
+    "headRefName": "fix/timeline-honors-status-filter",
+    "mergeCommit": {
+      "oid": "92387343dda975a01d719b171024ec81e27f99bd"
+    },
+    "mergedAt": "2026-09-09T09:18:04Z",
+    "number": 3159,
+    "title": "fix(operations): honor the status filter on the timeline endpoint"
+  },
+  {
+    "headRefName": "docs/cached-limit-stale-caller-claims",
+    "mergeCommit": {
+      "oid": "49dad43282705b6f2e02d28103972d2fcd5949d4"
+    },
+    "mergedAt": "2026-09-09T09:07:08Z",
+    "number": 3158,
+    "title": "docs(handlers): correct stale caller claims about the cached listing's limit [skip changelog]"
+  },
+  {
+    "headRefName": "fix/copyfile-pinned-nonce-flake",
+    "mergeCommit": {
+      "oid": "bb7c9705fd35d620f14cef7c08aab29e9fb26fa7"
+    },
+    "mergedAt": "2026-09-09T08:39:25Z",
+    "number": 3157,
+    "title": "test(organizer): the pinned-nonce race test rejected a safe interleaving [skip changelog]"
+  },
+  {
+    "headRefName": "perf/resume-review-count-only",
+    "mergeCommit": {
+      "oid": "b355ad99ece8ac33bbe6602471adf225a19d902f"
+    },
+    "mergedAt": "2026-09-09T08:23:58Z",
+    "number": 3156,
+    "title": "perf(web): Resume Review asks for a count, not the whole backlog"
+  },
+  {
+    "headRefName": "docs/chromem-fragment-crossref",
+    "mergeCommit": {
+      "oid": "a9a9ead5d9b5df69bebe2c8a5c0771bf25d081ab"
+    },
+    "mergedAt": "2026-09-09T08:00:03Z",
+    "number": 3155,
+    "title": "docs(todo): cross-reference the existing rapid-failfile section [skip changelog]"
+  },
+  {
+    "headRefName": "fix/quarantine-count-comment-and-error",
+    "mergeCommit": {
+      "oid": "b14dc506ac034601853eb36ca7b111e10bbfd33a"
+    },
+    "mergedAt": "2026-09-09T07:44:32Z",
+    "number": 3154,
+    "title": "fix(quarantine): stop swallowing the count error and correct a false comment"
+  },
+  {
+    "headRefName": "docs/todo-series-pagination-done",
+    "mergeCommit": {
+      "oid": "0adfb5ebfdc9a1f41e355bd4267be8dc710cd384"
+    },
+    "mergedAt": "2026-09-09T07:11:37Z",
+    "number": 3153,
+    "title": "docs(todo): the series list already paginates — close the stale entry [skip changelog]"
+  },
+  {
+    "headRefName": "fix/metadata-cached-limit-and-batch",
+    "mergeCommit": {
+      "oid": "9ef923ba720d95fe5f3c16ab86455c22529a09e4"
+    },
+    "mergedAt": "2026-09-09T07:04:09Z",
+    "number": 3152,
+    "title": "fix(metadata): the cached listing honours limit and offset"
+  },
+  {
+    "headRefName": "docs/ai-parse-executive-summary",
+    "mergeCommit": {
+      "oid": "d854c39082d8741ac0b04dd0211540ab7a5b1387"
+    },
+    "mergedAt": "2026-09-09T06:57:11Z",
+    "number": 3151,
+    "title": "docs(summaries): the AI filename parser could not reach its backend [skip changelog]"
+  },
+  {
+    "headRefName": "fix/bell-uses-operation-display-name",
+    "mergeCommit": {
+      "oid": "9dd714fd4640163c6923c474b49c94846d784a32"
+    },
+    "mergedAt": "2026-09-09T06:35:13Z",
+    "number": 3150,
+    "title": "fix(web): the notification bell calls an operation by its real name"
+  },
+  {
+    "headRefName": "fix/ai-dial-failure-fast-fallthrough",
+    "mergeCommit": {
+      "oid": "57ab94321a1128f52bcc1854ce240d6c0a71c21b"
+    },
+    "mergedAt": "2026-09-09T06:35:09Z",
+    "number": 3149,
+    "title": "fix(ai): an unreachable backend no longer eats the fallback chain's budget"
+  },
+  {
+    "headRefName": "feat/queued-op-book-counts",
+    "mergeCommit": {
+      "oid": "a9f367c8b3747bbd5cb825b56aea318863616bba"
+    },
+    "mergedAt": "2026-09-09T06:07:59Z",
+    "number": 3148,
+    "title": "feat(ops): a queued operation reports how many books it is holding"
+  },
+  {
+    "headRefName": "fix/ai-parse-reporting",
+    "mergeCommit": {
+      "oid": "4fa123bc92f6c785b8a52f8eeed0546048cebc88"
+    },
+    "mergedAt": "2026-09-09T00:23:49Z",
+    "number": 3147,
+    "title": "fix(ops): AI-parse runs that failed reported success, and said nothing about why"
+  },
+  {
+    "headRefName": "feat/ops-section-pagination",
+    "mergeCommit": {
+      "oid": "f1da7dbe5b78ea03a2d0dc3e683fe134840c4d3d"
+    },
+    "mergedAt": "2026-09-08T23:07:41Z",
+    "number": 3146,
+    "title": "feat(web): paginate each operations section on the Activity page"
+  },
+  {
+    "headRefName": "fix/backfill-reading-guide",
+    "mergeCommit": {
+      "oid": "f4de12645916d567e7e53087479c8af9da50ccd9"
+    },
+    "mergedAt": "2026-09-08T20:31:46Z",
+    "number": 3145,
+    "title": "docs(activity): stop diagnosing the backfill from scanned vs copied [skip changelog]"
+  },
+  {
+    "headRefName": "fix/operation-display-name",
+    "mergeCommit": {
+      "oid": "1cbe78dfbe8416a71fd2142ddb1e4eed900bd212"
+    },
+    "mergedAt": "2026-09-08T20:10:34Z",
+    "number": 3144,
+    "title": "fix(web): one operation display name for the bell and the Activity page"
+  },
+  {
+    "headRefName": "feat/activity-migration-status",
+    "mergeCommit": {
+      "oid": "e62e304128041799ead8f9f55ea4408b2a9405d5"
+    },
+    "mergedAt": "2026-09-08T19:27:17Z",
+    "number": 3143,
+    "title": "feat(activity): visible, live-updating status for the Pebble→SQLite migration"
+  },
+  {
+    "headRefName": "fix/activity-digest-tier-no-resume",
+    "mergeCommit": {
+      "oid": "d22762f356ccf1f7b83c849dd149b158f17e9b26"
+    },
+    "mergedAt": "2026-09-08T17:36:51Z",
+    "number": 3142,
+    "title": "fix(activity): never resume the migration's digest tier — a backdated row could be skipped and still verify"
+  },
+  {
+    "headRefName": "feat/activity-migration-checkpoint",
+    "mergeCommit": {
+      "oid": "089d8410f7d7de4cd8ffadf1e06a686e2a6d6d81"
+    },
+    "mergedAt": "2026-09-08T17:02:19Z",
+    "number": 3141,
+    "title": "fix(activity): checkpoint the Pebble→SQLite migration, and make its parity verdict durable"
+  },
+  {
+    "headRefName": "fix/ops-timeline-24h-completed",
+    "mergeCommit": {
+      "oid": "171fe25ac42d19710e2a4fa9a6bf7f835154373c"
+    },
+    "mergedAt": "2026-09-08T16:17:17Z",
+    "number": 3140,
+    "title": "fix(operations): show 24h of completed operations, and match finished ops on completion time"
+  },
+  {
+    "headRefName": "feat/activity-space-reclaim",
+    "mergeCommit": {
+      "oid": "d8909c566cde75a352b1af6d92e3236a23f3a156"
+    },
+    "mergedAt": "2026-09-08T16:08:07Z",
+    "number": 3139,
+    "title": "feat(maintenance): add activity-reclaim op to free the migrated Pebble copy"
+  },
+  {
+    "headRefName": "fix/db-optimize-progress",
+    "mergeCommit": {
+      "oid": "50e8e82dfb794e13a71acaf447815d97d6e12709"
+    },
+    "mergedAt": "2026-09-08T15:37:06Z",
+    "number": 3138,
+    "title": "fix(maintenance): make db-optimize report real progress and honour cancellation"
+  },
+  {
+    "headRefName": "fix/metadata-review-buckets",
+    "mergeCommit": {
+      "oid": "49b7a2ca5ba212d876474828f163b2eb35ea6ccd"
+    },
+    "mergedAt": "2026-09-08T15:03:16Z",
+    "number": 3137,
+    "title": "fix(metadata): stop empty refetches destroying candidates; fix review chips"
+  },
+  {
+    "headRefName": "dependabot/dependencies-8039da9bb0",
+    "mergeCommit": {
+      "oid": "36435bb3f93f71a8f248277a2ff4f350b47dcd58"
+    },
+    "mergedAt": "2026-09-08T16:15:31Z",
+    "number": 3136,
+    "title": "deps(deps): Bump the \"dependencies\" group with 3 updates across multiple ecosystems"
+  },
+  {
+    "headRefName": "fix/sidebar-scroll-and-expand-all",
+    "mergeCommit": {
+      "oid": "2de382b011dcdf734538aa119dd53b7a066ebba1"
+    },
+    "mergedAt": "2026-09-08T13:19:35Z",
+    "number": 3135,
+    "title": "fix(web): make the sidebar scrollable and Expand/Collapse All functional"
+  },
+  {
+    "headRefName": "fix/vacuum-honors-explicit-request",
+    "mergeCommit": {
+      "oid": "9773ac8b0f98a30264c7f9e967e58a5744de2c44"
+    },
+    "mergedAt": "2026-09-08T13:01:13Z",
+    "number": 3134,
+    "title": "fix(activity): honor an explicit vacuum request when nothing needed clamping"
+  },
+  {
+    "headRefName": "fix/vacuum-truncates-wal",
+    "mergeCommit": {
+      "oid": "06a1b51ecdc41ea321540df1d9bbb70ef9c48d5f"
+    },
+    "mergedAt": "2026-09-08T12:45:04Z",
+    "number": 3133,
+    "title": "fix(activity): truncate the WAL after VACUUM so space is actually reclaimed"
+  },
+  {
+    "headRefName": "fix/codeql-sanitizer-model",
+    "mergeCommit": {
+      "oid": "397a6890584f5b2a2bfebb66d71e47d61e3036e4"
+    },
+    "mergedAt": "2026-09-08T12:03:16Z",
+    "number": 3132,
+    "title": "fix(codeql): drop a model file declaring a predicate the Go pack lacks"
+  },
+  {
+    "headRefName": "fix/activity-summary-clamp-backfill",
+    "mergeCommit": {
+      "oid": "b1d526a79ea688667a62cf32e6524401b31b7c6a"
+    },
+    "mergedAt": "2026-09-08T12:03:07Z",
+    "number": 3131,
+    "title": "feat(activity): retroactively clamp oversized activity summaries"
+  },
+  {
+    "headRefName": "perf/cover-path-stat-probe",
+    "mergeCommit": {
+      "oid": "118e7fe01218986d7f7e1d3c7ec7160c45e43642"
+    },
+    "mergedAt": "2026-09-08T08:50:18Z",
+    "number": 3130,
+    "title": "perf(metadata): resolve covers by stat probe instead of globbing 9,288 files"
+  },
+  {
+    "headRefName": "docs/search-profile-after-mintlock",
+    "mergeCommit": {
+      "oid": "b8fe49faacee1cc4117170ce5cfeb3be99380a95"
+    },
+    "mergedAt": "2026-09-08T08:01:43Z",
+    "number": 3129,
+    "title": "docs(todo): post-mint-lock CPU profile of ABS search on prod"
+  },
+  {
+    "headRefName": "perf/syncid-mint-lock",
+    "mergeCommit": {
+      "oid": "11c045920c512204cb6520694b36ba316af9ff39"
+    },
+    "mergedAt": "2026-09-08T07:26:20Z",
+    "number": 3128,
+    "title": "perf(abs): take the sync-identity mint lock only to mint, and batch it per book"
+  },
+  {
+    "headRefName": "fix/resume-scan-dedupe",
+    "mergeCommit": {
+      "oid": "f570a2d5e8d2ea5767554f8e5987692f5d49ab23"
+    },
+    "mergedAt": "2026-09-08T07:06:30Z",
+    "number": 3127,
+    "title": "fix(scan): stop a duplicate library scan queueing behind a running one"
+  },
+  {
+    "headRefName": "perf/search-memdb-fast-path",
+    "mergeCommit": {
+      "oid": "dd80af53e38da4cc575c9030e6d120066a71555a"
+    },
+    "mergedAt": "2026-09-08T05:58:33Z",
+    "number": 3126,
+    "title": "perf(search): match in memdb instead of scanning the library from disk"
+  },
+  {
+    "headRefName": "fix/abs-search-limit",
+    "mergeCommit": {
+      "oid": "b61056a2b1e9bf0b69bcf60041b3dca82229ff9a"
+    },
+    "mergedAt": "2026-09-08T04:43:40Z",
+    "number": 3125,
+    "title": "fix(abs): honour the search limit and rank hits before truncating them"
+  },
+  {
+    "headRefName": "fix/activity-summary-bloat",
+    "mergeCommit": {
+      "oid": "ea7f62abc6621cd32667863df5a003b88fd8aff4"
+    },
+    "mergedAt": "2026-09-08T04:32:46Z",
+    "number": 3124,
+    "title": "fix(activity): bound the summary column; the 5.3 GB was never the details blobs"
+  },
+  {
+    "headRefName": "feat/dashboard-stats-swr",
+    "mergeCommit": {
+      "oid": "b7747f8f74527795ed7ab5029a427b548243d505"
+    },
+    "mergedAt": "2026-09-08T04:32:39Z",
+    "number": 3123,
+    "title": "fix(database): make dashboard stats actually stale-while-revalidate"
+  },
+  {
+    "headRefName": "fix/file-io-pool-join",
+    "mergeCommit": {
+      "oid": "ba9b4a4525189e96d30eabd4702df8f414e0e9d2"
+    },
+    "mergedAt": "2026-09-08T03:32:13Z",
+    "number": 3122,
+    "title": "fix(server): close the FileIOPool submit/Stop window and join overflow goroutines"
+  },
+  {
+    "headRefName": "fix/acoustid-backfill-concurrency",
+    "mergeCommit": {
+      "oid": "42f4b1139b5b201ac142e3f98a587ace4bf96b88"
+    },
+    "mergedAt": "2026-09-08T02:50:16Z",
+    "number": 3121,
+    "title": "fix(acoustid): run the nightly fingerprint backfill on a worker pool"
+  },
+  {
+    "headRefName": "feat/activity-db-relocate",
+    "mergeCommit": {
+      "oid": "0fc11a9ab406476a853d1a9125785c378717bc17"
+    },
+    "mergedAt": "2026-09-08T02:19:46Z",
+    "number": 3120,
+    "title": "feat(activity): put the activity database in the library folder, and relocate it when the path changes"
+  },
+  {
+    "headRefName": "fix/activity-migration-shutdown",
+    "mergeCommit": {
+      "oid": "254f69a14798dde0e8ff6b9c7eaa425b9e840bf1"
+    },
+    "mergedAt": "2026-09-08T01:32:39Z",
+    "number": 3119,
+    "title": "fix(activity): make the SQLite backfill cancellable and joinable at shutdown"
+  },
+  {
+    "headRefName": "fix/apikey-touch-lost-update",
+    "mergeCommit": {
+      "oid": "ab266748dceb8293d454f07c81033d9b5c7bc2a5"
+    },
+    "mergedAt": "2026-09-08T01:09:27Z",
+    "number": 3118,
+    "title": "fix(auth): stop losing API-key usage increments to a read-modify-write race"
+  },
+  {
+    "headRefName": "fix/reporter-flush-join",
+    "mergeCommit": {
+      "oid": "5a32b1d4d26c8c0b8a2e8b8c023d2c75d8483329"
+    },
+    "mergedAt": "2026-09-08T01:00:03Z",
+    "number": 3117,
+    "title": "fix(operations): join the op-reporter flush loop before the store can close"
+  },
+  {
+    "headRefName": "fix/activity-db-path-env-authoritative",
+    "mergeCommit": {
+      "oid": "61523744cbc878fc5eaf55a965418cde57bb9eeb"
+    },
+    "mergedAt": "2026-09-08T00:44:01Z",
+    "number": 3116,
+    "title": "fix(config): stop wiping the activity DB path setting on every boot"
+  },
+  {
+    "headRefName": "perf/activity-backfill-progress",
+    "mergeCommit": {
+      "oid": "6e3f3ef058fcd67f0941fcae0f142f45fb6cf331"
+    },
+    "mergedAt": "2026-09-08T00:44:08Z",
+    "number": 3115,
+    "title": "feat(activity): make the Pebble→SQLite backfill legible while it runs"
+  },
+  {
+    "headRefName": "perf/activity-sources-decode",
+    "mergeCommit": {
+      "oid": "b81c6b50db44ca74af1694e229bacf0d683b83e8"
+    },
+    "mergedAt": "2026-09-08T00:14:38Z",
+    "number": 3114,
+    "title": "perf(activity): stop decoding 9.6 MB detail blobs to read one string"
+  },
+  {
+    "headRefName": "refactor/delete-v1-startup-resume-sweep",
+    "mergeCommit": {
+      "oid": "ae052046434a071ca1edce9ca78f94f11e498c19"
+    },
+    "mergedAt": "2026-09-07T23:26:25Z",
+    "number": 3113,
+    "title": "refactor(server): delete the superseded v1 startup resume sweep"
+  },
+  {
+    "headRefName": "docs/v1-resume-sweep-superseded",
+    "mergeCommit": {
+      "oid": "d22e86498a444789b180b709f5a9e39184983064"
+    },
+    "mergedAt": "2026-09-07T23:00:04Z",
+    "number": 3112,
+    "title": "docs(todo): the v1 startup resume sweep is a superseded duplicate [skip changelog]"
+  },
+  {
+    "headRefName": "fix/revert-metadata-fetch-v2-lookup",
+    "mergeCommit": {
+      "oid": "bcd5df26bf7cd7678bc5299cf7c0f25142d04ef5"
+    },
+    "mergedAt": "2026-09-07T22:25:33Z",
+    "number": 3111,
+    "title": "fix(maintenance): revert-metadata-fetch resolves operations in both keyspaces"
+  },
+  {
+    "headRefName": "fix/collect-stale-operations-v2",
+    "mergeCommit": {
+      "oid": "c344068e03ec3233b3d30f66379295828e9b83e3"
+    },
+    "mergedAt": "2026-09-07T22:23:24Z",
+    "number": 3110,
+    "title": "docs(todo): the v1 stale-operation reaper is inert on both ends [skip changelog]"
+  },
+  {
+    "headRefName": "docs/todo-v2-operation-retention-gap",
+    "mergeCommit": {
+      "oid": "eab24ce1b69eb07672ddc6d23f43b545ab272a2f"
+    },
+    "mergedAt": "2026-09-07T22:23:20Z",
+    "number": 3109,
+    "title": "docs(todo): no retention sweep exists for v2 operations [skip changelog]"
+  },
+  {
+    "headRefName": "fix/retention-opstate-v2-liveness",
+    "mergeCommit": {
+      "oid": "48a90f045c47f8e8d6f615dabac94a61f61b5aef"
+    },
+    "mergedAt": "2026-09-07T22:09:47Z",
+    "number": 3108,
+    "title": "fix(maintenance): retention opstate sweep reads both operation keyspaces"
+  },
+  {
+    "headRefName": "refactor/ops-handler-v2",
+    "mergeCommit": {
+      "oid": "c505b2c327f66ec5e6c164f8cc4af312feddf5a5"
+    },
+    "mergedAt": "2026-09-07T22:36:51Z",
+    "number": 3107,
+    "title": "refactor(operations): drop the v1 keyspace reads from the operations handlers"
+  },
+  {
+    "headRefName": "refactor/sysinfo-ops-v2",
+    "mergeCommit": {
+      "oid": "2f9afad44d1202e2789ce43fd1699996f69466b5"
+    },
+    "mergedAt": "2026-09-07T21:45:36Z",
+    "number": 3106,
+    "title": "fix(dashboard): unfreeze Recent Operations; stop reading the retired v1 keyspace"
+  },
+  {
+    "headRefName": "refactor/diagnostics-ops-v2",
+    "mergeCommit": {
+      "oid": "347eefb985ccec3e780d083928d8f4db50ab481a"
+    },
+    "mergedAt": "2026-09-07T21:15:02Z",
+    "number": 3105,
+    "title": "fix(diagnostics): read operations from the v2 keyspace, not retired v1"
+  },
+  {
+    "headRefName": "refactor/purge-v1-operations",
+    "mergeCommit": {
+      "oid": "e1b1be2ef9992aa886db98ffd81e14226e6a1550"
+    },
+    "mergedAt": "2026-09-07T21:39:17Z",
+    "number": 3104,
+    "title": "refactor(operations): stop reading the v1 keyspace from the op indexes"
+  },
+  {
+    "headRefName": "fix/op-result-writes-v2-row",
+    "mergeCommit": {
+      "oid": "d844f20c0067f2a4e508ec86db85d3f5f6e54b99"
+    },
+    "mergedAt": "2026-09-07T20:53:13Z",
+    "number": 3103,
+    "title": "fix(operations): persist op results on the v2 row, not a v1 row that never exists"
+  },
+  {
+    "headRefName": "fix/clear-stale-repairs-v2-phantom-live",
+    "mergeCommit": {
+      "oid": "7be432016e40894f841400049aa2a8c6a3ac2c46"
+    },
+    "mergedAt": "2026-09-07T20:22:34Z",
+    "number": 3102,
+    "title": "fix(operations): make Clear Stale repair v2 rows stuck reading as in-flight"
+  },
+  {
+    "headRefName": "fix/terminal-op-missing-completed-at",
+    "mergeCommit": {
+      "oid": "d487c2098a67aab4abbd7dd28d07c47346c776ec"
+    },
+    "mergedAt": "2026-09-07T19:39:05Z",
+    "number": 3101,
+    "title": "fix(operations): stamp completed_at when a queued op is canceled"
+  },
+  {
+    "headRefName": "fix/organize-restamp-gate",
+    "mergeCommit": {
+      "oid": "1a67a7371c28d5e767643dffe35bd06a05456a48"
+    },
+    "mergedAt": "2026-09-07T18:53:22Z",
+    "number": 3100,
+    "title": "fix(organize): restamp already-correct books when no operation started the run"
+  },
+  {
+    "headRefName": "feat/batch-apply-resume-checkpoint",
+    "mergeCommit": {
+      "oid": "601d67192256d3cb1e456b796706cb042084ce11"
+    },
+    "mergedAt": "2026-09-07T19:38:57Z",
+    "number": 3099,
+    "title": "feat(metadata): resume an interrupted batch apply instead of abandoning it"
+  },
+  {
+    "headRefName": "fix/scanner-library-state-guard",
+    "mergeCommit": {
+      "oid": "962eaa46e8bec305c2e1cb4dfab6a2cc9280d689"
+    },
+    "mergedAt": "2026-09-07T18:12:15Z",
+    "number": 3098,
+    "title": "fix(scanner): stop a rescan reverting library_state and hiding organized books"
+  },
+  {
+    "headRefName": "fix/scanner-clobbers-library-state",
+    "mergeCommit": {
+      "oid": "ca144f83d4d01c9b6e56ecc371ddf08f428bd714"
+    },
+    "mergedAt": "2026-09-07T18:00:05Z",
+    "number": 3097,
+    "title": "chore(todo): every rescan reverts library_state, emptying ABS [skip changelog]"
+  },
+  {
+    "headRefName": "fix/apply-path-collision-resolver",
+    "mergeCommit": {
+      "oid": "df888eef9cf978342302ea7027cab13613034f9f"
+    },
+    "mergedAt": "2026-09-07T19:03:57Z",
+    "number": 3096,
+    "title": "fix(metafetch): resolve occupied apply targets instead of failing forever"
+  },
+  {
+    "headRefName": "fix/abs-hides-imported-books",
+    "mergeCommit": {
+      "oid": "b2b12fd5e006c79868135115ff9a0df03b79c757"
+    },
+    "mergedAt": "2026-09-07T17:48:50Z",
+    "number": 3095,
+    "title": "chore(todo): record ABS hiding imported books, confirmed on prod [skip changelog]"
+  },
+  {
+    "headRefName": "chore/todo-zdb-reflink-detection",
+    "mergeCommit": {
+      "oid": "6d835c31232b85a631a68f1536abd48e531375b3"
+    },
+    "mergedAt": "2026-09-07T17:41:54Z",
+    "number": 3094,
+    "title": "chore(todo): file real zdb-based reflink detection as a follow-up [skip changelog]"
+  },
+  {
+    "headRefName": "chore/todo-envelope-sweep-and-terminal-op",
+    "mergeCommit": {
+      "oid": "f95a9a09bf5df76f475075ee6c8f14a72a2f49d2"
+    },
+    "mergedAt": "2026-09-07T17:28:04Z",
+    "number": 3093,
+    "title": "chore(todo): file the api.ts envelope-unwrap sweep and terminal-op zombie bugs [skip changelog]"
+  },
+  {
+    "headRefName": "fix/batch-fetch-candidates-envelope",
+    "mergeCommit": {
+      "oid": "1155f9c5479de279441d2d47ee9964e2a7ce0700"
+    },
+    "mergedAt": "2026-09-07T17:27:58Z",
+    "number": 3092,
+    "title": "fix(web): unwrap the data envelope in batchFetchCandidates"
+  },
+  {
+    "headRefName": "feat/activity-details-zstd",
+    "mergeCommit": {
+      "oid": "9b9e7d73f33d0143a58d8b2f9b10ba3fdd9d196a"
+    },
+    "mergedAt": "2026-09-07T16:19:43Z",
+    "number": 3091,
+    "title": "feat(activity): zstd-compress the SQLite details column (pure-Go)"
+  },
+  {
+    "headRefName": "fix/activity-backfill-streaming",
+    "mergeCommit": {
+      "oid": "eda5a541b4a341d06af4703047fd226eaef43bd6"
+    },
+    "mergedAt": "2026-09-07T13:58:37Z",
+    "number": 3090,
+    "title": "fix(activity): stream the Pebble→SQLite backfill in bounded batches"
+  },
+  {
+    "headRefName": "docs/activity-oom-incident",
+    "mergeCommit": {
+      "oid": "edf2652203de4bd3172ad5b1f54af20840509543"
+    },
+    "mergedAt": "2026-09-07T08:10:37Z",
+    "number": 3089,
+    "title": "docs(activity): record the 2026-09-07 SQLite-backfill OOM incident"
+  },
+  {
+    "headRefName": "fix/activity-backend-env-rollback",
+    "mergeCommit": {
+      "oid": "192decd12dcdd0ba2e8ea013d153b1f2973fa3c5"
+    },
+    "mergedAt": "2026-09-07T07:47:45Z",
+    "number": 3088,
+    "title": "fix(config): wire ACTIVITY_BACKEND env so the Pebble activity rollback lever works"
+  },
+  {
+    "headRefName": "feat/activity-sql-backend",
+    "mergeCommit": {
+      "oid": "15489db40f95d510530b5e1ebf029d0ad1691d50"
+    },
+    "mergedAt": "2026-09-07T07:01:35Z",
+    "number": 3087,
+    "title": "feat(activity): backend-agnostic SQLite activity store + verified Pebble→SQLite cutover"
+  },
+  {
+    "headRefName": "fix/transcribe-skip-durable-failures",
+    "mergeCommit": {
+      "oid": "33597e8f67b65317ea2c317d2e28965504805ad0"
+    },
+    "mergedAt": "2026-09-07T05:46:45Z",
+    "number": 3086,
+    "title": "fix(transcribe): skip durably-failed books, self-heal when their source returns"
+  },
+  {
+    "headRefName": "fix/scan-standdown-resumed-handle",
+    "mergeCommit": {
+      "oid": "0016c7558ba749510bf011fbb06eed648e894840"
+    },
+    "mergedAt": "2026-09-07T03:10:20Z",
+    "number": 3085,
+    "title": "fix(scanner): quiesce scans by observing ctx in the discovery phase + show resumed ops in UI"
+  },
+  {
+    "headRefName": "chore/todo-log-download-corrupt",
+    "mergeCommit": {
+      "oid": "bce09dd6345161000e3918a3c748e53ed4a60e6a"
+    },
+    "mergedAt": "2026-09-07T01:08:05Z",
+    "number": 3084,
+    "title": "chore(todo): file operation-log download corruption [skip changelog]"
+  },
+  {
+    "headRefName": "fix/recover-reflink-skip-standdown",
+    "mergeCommit": {
+      "oid": "a867f9ba03b071db35aff534d6f282953fde31a2"
+    },
+    "mergedAt": "2026-09-07T01:08:47Z",
+    "number": 3083,
+    "title": "fix(maintenance): reflink-only recover runs skip the scan stand-down"
+  },
+  {
+    "headRefName": "feat/reflink-outside-recover",
+    "mergeCommit": {
+      "oid": "b76439f1cb2d89eb6f315c08874812211fb68027"
+    },
+    "mergedAt": "2026-09-06T23:47:37Z",
+    "number": 3082,
+    "title": "feat(maintenance): reflink outside sources into the tree (recover-missing-files reflinkOutside, Branch B)"
+  },
+  {
+    "headRefName": "feat/reflink-repoint-standdown",
+    "mergeCommit": {
+      "oid": "2fca5851fe2c4a11106061dba7355e24c2dd3719"
+    },
+    "mergedAt": "2026-09-06T14:36:29Z",
+    "number": 3081,
+    "title": "feat(maintenance): retrofit file-repointing applies onto the scan stand-down"
+  },
+  {
+    "headRefName": "feat/scanner-standdown-control",
+    "mergeCommit": {
+      "oid": "ea3c469ddc78aef202f83f94660ed4a42d1bf773"
+    },
+    "mergedAt": "2026-09-06T10:53:55Z",
+    "number": 3080,
+    "title": "feat(registry): scan stand-down control so an op can quiesce the scanner"
+  },
+  {
+    "headRefName": "feat/recover-missing-by-size-match",
+    "mergeCommit": {
+      "oid": "7e09e558bd0dcb63dd18f77d6e6ce13a805b3541"
+    },
+    "mergedAt": "2026-09-06T10:08:40Z",
+    "number": 3079,
+    "title": "feat(maintenance): recover-missing-files op — size-matched in-tree repoint + census"
+  },
+  {
+    "headRefName": "feat/honest-broken-files-counter",
+    "mergeCommit": {
+      "oid": "feb180c575dd8f86fcbe2287d3741553d57f0db2"
+    },
+    "mergedAt": "2026-09-06T01:42:40Z",
+    "number": 3078,
+    "title": "feat(maintenance): honest Broken Files counter + mark-missing-files op"
+  },
+  {
+    "headRefName": "fix/organizer-author-from-join",
+    "mergeCommit": {
+      "oid": "8d0b93b9355ae31f2dd02b06467d963fda45341e"
+    },
+    "mergedAt": "2026-09-05T16:00:56Z",
+    "number": 3077,
+    "title": "fix(organizer): resolve author from the join table before the scalar"
+  },
+  {
+    "headRefName": "fix/merge-same-path-dupes",
+    "mergeCommit": {
+      "oid": "3b6c9110e6672577914dd29013e7ab38d474dc94"
+    },
+    "mergedAt": "2026-09-05T15:25:24Z",
+    "number": 3076,
+    "title": "feat(maintenance): merge-same-path-dupes — collapse one-file duplicate books"
+  },
+  {
+    "headRefName": "fix/reorganize-bookfile-rows",
+    "mergeCommit": {
+      "oid": "ae364cb439deb845d12fdd76beb67f5ed647a380"
+    },
+    "mergedAt": "2026-09-05T15:11:26Z",
+    "number": 3075,
+    "title": "fix(organizer): repoint single-file book_file rows on move (downloads 404 after apply)"
+  },
+  {
+    "headRefName": "fix/search-title-variants",
+    "mergeCommit": {
+      "oid": "43488527919b8b3a3ca7723ffad1c9c974b35265"
+    },
+    "mergedAt": "2026-09-05T09:32:27Z",
+    "number": 3074,
+    "title": "fix(metafetch): retry a series-decorated title without its decoration before calling it not found"
+  },
+  {
+    "headRefName": "docs/todo-overnight-followups",
+    "mergeCommit": {
+      "oid": "a4b1f16f999471b7bc18d2d17819d855bc7cdfa5"
+    },
+    "mergedAt": "2026-09-05T08:05:04Z",
+    "number": 3073,
+    "title": "docs(todo): file the scan-vs-auto-backup watchdog kill and the copyfile race-test flake [skip changelog]"
+  },
+  {
+    "headRefName": "fix/abs-search-drop-empty-series",
+    "mergeCommit": {
+      "oid": "3baf104d6858dde7996618eddec36c474aafa932"
+    },
+    "mergedAt": "2026-09-05T05:45:35Z",
+    "number": 3072,
+    "title": "fix(abs): search drops series with no books and ranks the populated exact match first"
+  },
+  {
+    "headRefName": "docs/author-numbering-cleanup-summary",
+    "mergeCommit": {
+      "oid": "f1badb119e57fa85a646f708f5aecba72ab8a5b1"
+    },
+    "mergedAt": "2026-09-05T05:09:30Z",
+    "number": 3071,
+    "title": "docs(executive-summaries): the numbered-author cleanup, its numbers and its follow-ups"
+  },
+  {
+    "headRefName": "fix/transcribe-progress-accounting",
+    "mergeCommit": {
+      "oid": "b9c1691918cb73a17698794c1998d17f45a14efc"
+    },
+    "mergedAt": "2026-09-05T05:23:28Z",
+    "number": 3070,
+    "title": "fix(maintenance): transcribe progress denominator counts books needing work, not the library"
+  },
+  {
+    "headRefName": "fix/abs-search-series-books-author-include",
+    "mergeCommit": {
+      "oid": "4aa010b5672cc2ab3a4357b5eaf8fed42b6bc6a2"
+    },
+    "mergedAt": "2026-09-05T04:55:24Z",
+    "number": 3069,
+    "title": "fix(abs): series search hits carry their books; author detail honours include; search cached 2 min"
+  },
+  {
+    "headRefName": "feat/author-strip-merge-delete-unmatched",
+    "mergeCommit": {
+      "oid": "69eddfe09c0b7fe3251d272a8af0bed84a2159d7"
+    },
+    "mergedAt": "2026-09-05T03:51:59Z",
+    "number": 3068,
+    "title": "feat(maintenance): opt-in delete_unmatched for author-strip-merge's no-target rows"
+  },
+  {
+    "headRefName": "feat/provider-global-throttle",
+    "mergeCommit": {
+      "oid": "1d55c74ac9a4598ce12299e766dfeb6a1f71833a"
+    },
+    "mergedAt": "2026-09-05T02:22:32Z",
+    "number": 3066,
+    "title": "feat(metadata): global, persisted, reason-aware provider throttling"
+  },
+  {
+    "headRefName": "refactor/author-name-predicates-leaf",
+    "mergeCommit": {
+      "oid": "d69939e47c294c97338407bdefc31653c6b4b6c2"
+    },
+    "mergedAt": "2026-09-03T12:23:10Z",
+    "number": 3065,
+    "title": "refactor(personname): move the author-name predicates to a leaf, and gate Combine"
+  },
+  {
+    "headRefName": "fix/author-gate-remaining-sites",
+    "mergeCommit": {
+      "oid": "92854d05f58c635a48717aa7b8489c2c78e3bf73"
+    },
+    "mergedAt": "2026-09-03T10:37:16Z",
+    "number": 3064,
+    "title": "fix(authors): gate the book-edit author path, and pin why the split paths need no gate"
+  },
+  {
+    "headRefName": "feat/author-strip-merge-op",
+    "mergeCommit": {
+      "oid": "fd0bc68c6cd5187648ec64768bab98e78e1a178a"
+    },
+    "mergedAt": "2026-09-03T10:24:43Z",
+    "number": 3063,
+    "title": "feat(authors): add maintenance.author-strip-merge to repair numbered author rows"
+  },
+  {
+    "headRefName": "fix/author-junk-gate-and-purge",
+    "mergeCommit": {
+      "oid": "c27f501f030b487944fce4e3cb9881bd8b17fb82"
+    },
+    "mergedAt": "2026-09-03T04:37:26Z",
+    "number": 3062,
+    "title": "fix(authors): gate the iTunes path against positional filename shrapnel"
+  },
+  {
+    "headRefName": "feat/bulk-fetch-continuation-and-provider-limits",
+    "mergeCommit": {
+      "oid": "77403e1b857d1ad2e673ab4d557e2fcfccd64022"
+    },
+    "mergedAt": "2026-09-03T04:09:58Z",
+    "number": 3061,
+    "title": "fix(metadata): bulk fetch finishes, resumes, and reports throttling honestly"
+  },
+  {
+    "headRefName": "fix/strip-series-position-at-write-time",
+    "mergeCommit": {
+      "oid": "08e87368eb1af36a755c58d24e0d48dcc16874d2"
+    },
+    "mergedAt": "2026-09-02T23:30:25Z",
+    "number": 3060,
+    "title": "fix(series): move the book's position out of the series name on every write path"
+  },
+  {
+    "headRefName": "fix/organize-callers-write-book-file-rows",
+    "mergeCommit": {
+      "oid": "f03ea278ee9920cc1249fed3919e01ee843bea9d"
+    },
+    "mergedAt": "2026-09-02T22:21:33Z",
+    "number": 3059,
+    "title": "fix(organize): write book_file rows on every path that moves audio; rollback created copies"
+  },
+  {
+    "headRefName": "fix/dedup-score-config-copy-rollback",
+    "mergeCommit": {
+      "oid": "3a93562d0013d4ab90b325312c9a1fe6c2a77e0f"
+    },
+    "mergedAt": "2026-09-02T23:18:06Z",
+    "number": 3058,
+    "title": "fix(config): deep-copy config on PUT; make dedup re-band failure honest and non-blocking"
+  },
+  {
+    "headRefName": "feat/author-detail-page",
+    "mergeCommit": {
+      "oid": "2cb51c515147143b29e9027c5f51b2fbfb605d05"
+    },
+    "mergedAt": "2026-09-02T20:34:53Z",
+    "number": 3057,
+    "title": "feat(web): add an author page and make a book's author open it"
+  },
+  {
+    "headRefName": "docs/todo-hard-delete-merge-no-audio-guard",
+    "mergeCommit": {
+      "oid": "73a8cb25f072bd49034a5f7fce054092f00857b5"
+    },
+    "mergedAt": "2026-09-02T16:29:49Z",
+    "number": 3056,
+    "title": "docs(todo): file the hard-delete merge path's missing audio guard [skip changelog]"
+  },
+  {
+    "headRefName": "fix/review-queue-dismissed-veto-status-lock",
+    "mergeCommit": {
+      "oid": "da9e7c54d66facc1c2e817418c6f2ec4ae18f9ba"
+    },
+    "mergedAt": "2026-09-02T18:57:05Z",
+    "number": 3055,
+    "title": "fix(review): dismissed-candidate veto, status-index lock + repair op, paginated replay"
+  },
+  {
+    "headRefName": "fix/metadata-field-locks-honored",
+    "mergeCommit": {
+      "oid": "10540266f29df6cc28648e775d87d2fff6402a92"
+    },
+    "mergedAt": "2026-09-02T21:14:02Z",
+    "number": 3054,
+    "title": "fix(metadata): honor user field locks on 19 of 20 write paths (maintenance repair ops deferred)"
+  },
+  {
+    "headRefName": "fix/merge-audio-route-tiebreak-typed-errors",
+    "mergeCommit": {
+      "oid": "65e24e3c6b5878dd1ef95d37b38c7f0af64a13e5"
+    },
+    "mergedAt": "2026-09-02T17:09:45Z",
+    "number": 3053,
+    "title": "fix(merge): count FilePath as an audio route; order-independent tie-break; typed refusals → 404/409"
+  },
+  {
+    "headRefName": "fix/dedup-score-config-reaches-engine",
+    "mergeCommit": {
+      "oid": "2cce40fa878fee8d3f7358c8760b7dc5efbd3725"
+    },
+    "mergedAt": "2026-09-02T17:13:28Z",
+    "number": 3052,
+    "title": "fix(dedup): make configured score thresholds actually reach the engine"
+  },
+  {
+    "headRefName": "fix/organize-unique-temp-exclusive-finalize",
+    "mergeCommit": {
+      "oid": "00bf881346e88f9a6b03cc94588c81cc94003bd6"
+    },
+    "mergedAt": "2026-09-02T14:42:39Z",
+    "number": 3051,
+    "title": "fix(organizer): all-or-nothing directory landing, Landing.InPlace, verified stranded-temp resume (#3046 review fixes)"
+  },
+  {
+    "headRefName": "fix/merge-file-aware-survivor-and-soft-delete-guards",
+    "mergeCommit": {
+      "oid": "55a4eaacce7a8243a5a54a4102548fede6518875"
+    },
+    "mergedAt": "2026-09-02T12:45:25Z",
+    "number": 3047,
+    "title": "fix(merge): file-aware survivor election, refuse soft-deleted inputs, no hard-delete fallback"
+  },
+  {
+    "headRefName": "fix/organize-unique-temp-exclusive-finalize",
+    "mergeCommit": {
+      "oid": "c6376e6247f4ce0b7b8bc491ba22d2973abcd7d9"
+    },
+    "mergedAt": "2026-09-02T11:40:24Z",
+    "number": 3046,
+    "title": "fix(organizer): unique temps, exclusive finalize, Landing contract, one organize decision"
+  },
+  {
+    "headRefName": "feat/bulk-apply-cap",
+    "mergeCommit": {
+      "oid": "89e642433d6b15f2d86e160c5f6016eb4e2f2079"
+    },
+    "mergedAt": "2026-09-02T08:49:31Z",
+    "number": 3045,
+    "title": "feat(applycap): refuse bulk applies over a configurable cap"
+  },
+  {
+    "headRefName": "docs/dedup-review-matching-audit",
+    "mergeCommit": {
+      "oid": "2eb6b9a9914920a1ec5b015322f73271f99093d1"
+    },
+    "mergedAt": "2026-09-02T06:18:25Z",
+    "number": 3044,
+    "title": "docs(audits): dedup and review matching-path audit with unification design"
+  },
+  {
+    "headRefName": "refactor/go-fix-127",
+    "mergeCommit": {
+      "oid": "e815dcb44fc7533ff789226368cd30b69f6c0b83"
+    },
+    "mergedAt": "2026-09-02T06:17:33Z",
+    "number": 3043,
+    "title": "refactor(go): apply Go 1.27 go fix modernizers tree-wide"
+  },
+  {
+    "headRefName": "docs/burndown-reconcile",
+    "mergeCommit": {
+      "oid": "54558b1dbe9c80a80d01a9dd2672956cd3051ea9"
+    },
+    "mergedAt": "2026-09-02T05:42:57Z",
+    "number": 3042,
+    "title": "docs(agent-tasks): reconcile the todo-completion package with HEAD"
+  },
+  {
+    "headRefName": "docs/go-ts-work-discovery",
+    "mergeCommit": {
+      "oid": "d2fcef16a03db13307f49ba4af3cd9baeb9686a0"
+    },
+    "mergedAt": "2026-09-02T04:02:37Z",
+    "number": 3041,
+    "title": "docs(audits): record the Go and TypeScript work-discovery survey"
+  },
+  {
+    "headRefName": "chore/standards-go127",
+    "mergeCommit": {
+      "oid": "fc92cd33c0f06574a0484ffb7754a2279ca58fed"
+    },
+    "mergedAt": "2026-09-02T03:45:16Z",
+    "number": 3040,
+    "title": "chore(standards): pull the Go 1.27 revision of instructions/go.md [skip changelog]"
+  },
+  {
+    "headRefName": "refactor/go-modernize",
+    "mergeCommit": {
+      "oid": "fe57e6701e7b28ec4370e843b46056871a637b99"
+    },
+    "mergedAt": "2026-09-02T04:02:24Z",
+    "number": 3039,
+    "title": "build(go): move the toolchain to 1.27.1 and retire the GOEXPERIMENT=jsonv2 pin"
+  },
+  {
+    "headRefName": "perf/shared-progressive-mount",
+    "mergeCommit": {
+      "oid": "ad72898a1381d74914466807389f33d8c6a20a58"
+    },
+    "mergedAt": "2026-09-02T02:43:58Z",
+    "number": 3038,
+    "title": "fix(bench): make the review-lane harness measure what it claims"
+  },
+  {
+    "headRefName": "feat/dedup-server-side-search",
+    "mergeCommit": {
+      "oid": "df642d11c6884c69cab53636073aa1a5cc35b623"
+    },
+    "mergedAt": "2026-09-02T01:14:30Z",
+    "number": 3037,
+    "title": "feat(dedup): server-side search for the Dupes review panel"
+  }
+]

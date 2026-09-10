@@ -1,0 +1,902 @@
+[
+ {
+  "line": 3326,
+  "section": "Applied books stay in the list in BulkMetadataSearchDialog",
+  "subsection": null,
+  "text": "- [ ] Make the filter session-aware (also exclude `bookStatuses.get(id) === 'applied'`)."
+ },
+ {
+  "line": 3327,
+  "section": "Applied books stay in the list in BulkMetadataSearchDialog",
+  "subsection": null,
+  "text": "- [ ] Decide whether `skipApplied` should default to `true`."
+ },
+ {
+  "line": 3344,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": null,
+  "text": "- [ ] `OAuthGithubClientSecret` and `OAuthGoogleClientSecret` (`internal/config/config.go:895-898`)"
+ },
+ {
+  "line": 3345,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": null,
+  "text": "- [ ] `DelugeWebPassword` (`internal/config/config.go:991`)"
+ },
+ {
+  "line": 3346,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": null,
+  "text": "- [ ] `DownloadClient.Torrent.Deluge.Password` (`config.go:172`)"
+ },
+ {
+  "line": 3347,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": null,
+  "text": "- [ ] `DownloadClient.Torrent.QBittorrent.Password` (`config.go:180`)"
+ },
+ {
+  "line": 3348,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": null,
+  "text": "- [ ] `DownloadClient.Usenet.Sabnzbd.APIKey` (`config.go:188`)"
+ },
+ {
+  "line": 3380,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": "Metadata review: a book can be dispatched to apply twice",
+  "text": "- [ ] Confirm server-side idempotency for a repeated apply of the same book"
+ },
+ {
+  "line": 3381,
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "subsection": "Metadata review: a book can be dispatched to apply twice",
+  "text": "- [ ] If not idempotent, have `applyMany` drain `applyQueueRef` (and cancel the"
+ },
+ {
+  "line": 3392,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": null,
+  "text": "- [ ] Make `BackupConfig.BackupDir` configurable to an absolute path on another"
+ },
+ {
+  "line": 3395,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": null,
+  "text": "- [ ] Decide whether a backup that lands on the same filesystem should warn at"
+ },
+ {
+  "line": 3397,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": null,
+  "text": "- [ ] Revisit `defaultMaxTotalBytes` (currently 40 GiB) once the destination is"
+ },
+ {
+  "line": 3423,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "A running scan does not say which kind of scan it is",
+  "text": "- [ ] Give the running operation a display name that names the mode"
+ },
+ {
+  "line": 3425,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "A running scan does not say which kind of scan it is",
+  "text": "- [ ] Check the progress/log lines too \u2014 \"Reading tags: N files\" never says"
+ },
+ {
+  "line": 3428,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "A running scan does not say which kind of scan it is",
+  "text": "- [ ] **Audible metadata upgrade job** \u2014 add a dry-run-first maintenance"
+ },
+ {
+  "line": 3436,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "A running scan does not say which kind of scan it is",
+  "text": "- [ ] **Operation bell: name metadata subjects** \u2014 render a single-book cached"
+ },
+ {
+  "line": 3445,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "Metal Whisper worker follow-up",
+  "text": "- [ ] Validate the Mac MLX/Metal Whisper worker locally, then benchmark and add"
+ },
+ {
+  "line": 3449,
+  "section": "Move database backups off the database's own filesystem",
+  "subsection": "Metal Whisper worker follow-up",
+  "text": "- [ ] **Metadata Review: hide runtime mismatches** \u2014 add a filter that excludes"
+ },
+ {
+  "line": 3475,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] Have the organize path record the old->new relationship when it creates the second"
+ },
+ {
+  "line": 3478,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] Decide whether reflink/hardlink cases should be version-linked at all \u2014 they share"
+ },
+ {
+  "line": 3480,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] Confirm on prod whether original import locations remain in the scan paths. If they"
+ },
+ {
+  "line": 3482,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] Re-check the single-member version group finding with `RootDir` SET. It was measured"
+ },
+ {
+  "line": 3489,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] **Check whether `/filterdata`'s SERIES list has the same zero-book"
+ },
+ {
+  "line": 3502,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] **Make `/filterdata` stop walking the whole book keyspace twice to read"
+ },
+ {
+  "line": 3514,
+  "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+  "subsection": null,
+  "text": "- [ ] **Decide what to do about the 6 ABS client sorts this server has no field"
+ },
+ {
+  "line": 3587,
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "subsection": null,
+  "text": "- [ ] Set the production value back to 10. **Fixes future scans only.** Production"
+ },
+ {
+  "line": 3589,
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "subsection": null,
+  "text": "- [ ] Repair the 12,525 existing books with no `book_file` rows, and the ~1,710"
+ },
+ {
+  "line": 3592,
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "subsection": null,
+  "text": "- [ ] Fix the silent-disable defect: `ChapterConsolidationThresholdMin` has no"
+ },
+ {
+  "line": 3604,
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "subsection": null,
+  "text": "- [ ] **CI never fetches Git LFS, so every audio-fixture test runs against a"
+ },
+ {
+  "line": 3720,
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "subsection": null,
+  "text": "- [ ] **Make the `has_file_errors` fast path honor the rest of the query, or"
+ },
+ {
+  "line": 3812,
+  "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+  "subsection": null,
+  "text": "- [ ] Decide which contract `/reconcile/latest-scan` should honour"
+ },
+ {
+  "line": 3813,
+  "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+  "subsection": null,
+  "text": "- [ ] If falling through: name the source op in the response so a stale preview is identifiable"
+ },
+ {
+  "line": 3814,
+  "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+  "subsection": null,
+  "text": "- [ ] Either way, stop discarding the `json.Unmarshal` error without a log line"
+ },
+ {
+  "line": 3836,
+  "section": "Finish the LLM fallback chain \u2014 stages 2 through 4",
+  "subsection": null,
+  "text": "- [ ] **Stage 2 \u2014 make the local rung start a backend.** Today the local rung's"
+ },
+ {
+  "line": 3842,
+  "section": "Finish the LLM fallback chain \u2014 stages 2 through 4",
+  "subsection": null,
+  "text": "- [ ] **Stage 3 \u2014 durable deferral.** When no rung answers, the candidates are"
+ },
+ {
+  "line": 3855,
+  "section": "Finish the LLM fallback chain \u2014 stages 2 through 4",
+  "subsection": null,
+  "text": "- [ ] **Stage 4 \u2014 poll for the remote and drain what is owed.**"
+ },
+ {
+  "line": 3901,
+  "section": "The path\u2192author parser exists twice, the copies have diverged, and only one of them runs",
+  "subsection": null,
+  "text": "- [ ] Collapse the two into one parser (its own package, as"
+ },
+ {
+  "line": 3904,
+  "section": "The path\u2192author parser exists twice, the copies have diverged, and only one of them runs",
+  "subsection": null,
+  "text": "- [ ] Reconcile the divergent directory validation deliberately rather than"
+ },
+ {
+  "line": 3906,
+  "section": "The path\u2192author parser exists twice, the copies have diverged, and only one of them runs",
+  "subsection": null,
+  "text": "- [ ] Add a conformance test over a shared corpus, in the shape of"
+ },
+ {
+  "line": 3965,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Dry-run the 1,291 reconciliation and report per-bucket counts"
+ },
+ {
+  "line": 3966,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Apply it, REPOINTING rather than deleting"
+ },
+ {
+  "line": 3967,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Decide the route for the 2,307"
+ },
+ {
+  "line": 3968,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Re-census afterwards to confirm the cohort actually shrank"
+ },
+ {
+  "line": 3970,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] **The quarantine \"safety net\" in `buildAudiobookListResponse` is justified"
+ },
+ {
+  "line": 4005,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Apply `ExcludeQuarantined` in the service post-filter and add it to"
+ },
+ {
+  "line": 4010,
+  "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+  "subsection": "Task 2 \u2014 decide the route for the 2,307 (needs a decision, not code yet)",
+  "text": "- [ ] Then delete the safety net in `audiobooks_helpers.go`, or rewrite its"
+ },
+ {
+  "line": 4019,
+  "section": "Data repair",
+  "subsection": null,
+  "text": "- [ ] **Decide how to repair the duplicate author rows that already exist.** The"
+ },
+ {
+  "line": 4058,
+  "section": "`ensureSingleFileBookFile` is now a backlog-only backfill \u2014 decide its retirement",
+  "subsection": null,
+  "text": "- [ ] Size the backlog: how many books have zero `book_file` rows and a"
+ },
+ {
+  "line": 4061,
+  "section": "`ensureSingleFileBookFile` is now a backlog-only backfill \u2014 decide its retirement",
+  "subsection": null,
+  "text": "- [ ] Repair the backlog once, from the scan's writer rather than the thin one,"
+ },
+ {
+  "line": 4063,
+  "section": "`ensureSingleFileBookFile` is now a backlog-only backfill \u2014 decide its retirement",
+  "subsection": null,
+  "text": "- [ ] Then delete `ensureSingleFileBookFile` and its call, rather than leaving a"
+ },
+ {
+  "line": 4065,
+  "section": "`ensureSingleFileBookFile` is now a backlog-only backfill \u2014 decide its retirement",
+  "subsection": null,
+  "text": "- [ ] Until then, do not \"simplify\" the two into one by keeping the thin version"
+ },
+ {
+  "line": 4106,
+  "section": "staticcheck gates nothing on a PR \u2014 decide whether it should",
+  "subsection": null,
+  "text": "- [ ] Verify whether `nightly.yml`'s reusable workflow actually runs staticcheck"
+ },
+ {
+  "line": 4107,
+  "section": "staticcheck gates nothing on a PR \u2014 decide whether it should",
+  "subsection": null,
+  "text": "- [ ] Decide: add to PR CI, or document it as local/nightly-only"
+ },
+ {
+  "line": 4108,
+  "section": "staticcheck gates nothing on a PR \u2014 decide whether it should",
+  "subsection": null,
+  "text": "- [ ] Audit the other `command -v <tool>` guards in the Makefile for the same skip-and-pass shape"
+ },
+ {
+  "line": 4112,
+  "section": "Scanner / scan cache",
+  "subsection": null,
+  "text": "- [ ] **Wire `BackfillBookFileScanCache` so it can actually be invoked before the"
+ },
+ {
+  "line": 4137,
+  "section": "AI filename parsing is queued now \u2014 what to verify after deploy",
+  "subsection": null,
+  "text": "- [ ] **Confirm a real scan actually queues.** After deploying, run a scan and"
+ },
+ {
+  "line": 4145,
+  "section": "AI filename parsing is queued now \u2014 what to verify after deploy",
+  "subsection": null,
+  "text": "- [ ] **Confirm queued results land on the version-group PRIMARY.** This is the"
+ },
+ {
+  "line": 4156,
+  "section": "AI filename parsing is queued now \u2014 what to verify after deploy",
+  "subsection": null,
+  "text": "- [ ] **Decide what to do about organize running before the parse.** Named as a"
+ },
+ {
+  "line": 4168,
+  "section": "AI filename parsing is queued now \u2014 what to verify after deploy",
+  "subsection": null,
+  "text": "- [ ] **Two books from one version group in one batch can lose a field.** The"
+ },
+ {
+  "line": 4175,
+  "section": "AI filename parsing is queued now \u2014 what to verify after deploy",
+  "subsection": null,
+  "text": "- [ ] **Watch the params row size once.** A batch carries only the seven fields"
+ },
+ {
+  "line": 4190,
+  "section": "Update Deluge when the organizer moves a book's files",
+  "subsection": null,
+  "text": "- [ ] Decide the mechanism: Deluge `move_storage` per torrent vs. re-announce, and what"
+ },
+ {
+  "line": 4192,
+  "section": "Update Deluge when the organizer moves a book's files",
+  "subsection": null,
+  "text": "- [ ] Decide failure policy: does a Deluge update failure roll the move back, or is the"
+ },
+ {
+  "line": 4195,
+  "section": "Update Deluge when the organizer moves a book's files",
+  "subsection": null,
+  "text": "- [ ] Wire it into the organize path, not just the manual move endpoint"
+ },
+ {
+  "line": 4196,
+  "section": "Update Deluge when the organizer moves a book's files",
+  "subsection": null,
+  "text": "- [ ] Only then schedule option B"
+ },
+ {
+  "line": 4241,
+  "section": "\ud83d\udfe0 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+  "subsection": "Fix",
+  "text": "- [ ] Dedup by FilePath within a single batch, before staging"
+ },
+ {
+  "line": 4242,
+  "section": "\ud83d\udfe0 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+  "subsection": "Fix",
+  "text": "- [ ] Same for iTunes PID \u2014 `enforceBookFilePIDUniqueness` has the identical read-committed gap"
+ },
+ {
+  "line": 4243,
+  "section": "\ud83d\udfe0 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+  "subsection": "Fix",
+  "text": "- [ ] Regression test: batch two rows with one path, assert 1 stored row and the un-doubled total"
+ },
+ {
+  "line": 4244,
+  "section": "\ud83d\udfe0 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+  "subsection": "Fix",
+  "text": "- [ ] Decide whether existing duplicate rows need a repair pass, and measure how many exist"
+ },
+ {
+  "line": 4267,
+  "section": "Scan cache is keyed per-book but the skip decision is per-file",
+  "subsection": null,
+  "text": "- [ ] Decide per-file scan-cache keying and write it up before coding"
+ },
+ {
+  "line": 4268,
+  "section": "Scan cache is keyed per-book but the skip decision is per-file",
+  "subsection": null,
+  "text": "- [ ] Confirm whether the directory-rooted book branch (`scanner.go:1229`, never calls"
+ },
+ {
+  "line": 4270,
+  "section": "Scan cache is keyed per-book but the skip decision is per-file",
+  "subsection": null,
+  "text": "- [ ] Open question, not yet measured: does the real `saveBookToDatabase` create a"
+ },
+ {
+  "line": 4274,
+  "section": "Scan cache is keyed per-book but the skip decision is per-file",
+  "subsection": null,
+  "text": "- [ ] **Fix the RC-ordinal guard's 200-release truncation window.**"
+ },
+ {
+  "line": 4357,
+  "section": "\ud83d\udfe1 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it",
+  "subsection": "Fix",
+  "text": "- [ ] Check prod: is `system:backfill:book_aggregates_v1_done` currently set? \u2014 still"
+ },
+ {
+  "line": 4365,
+  "section": "\ud83d\udfe1 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it",
+  "subsection": "Fix",
+  "text": "- [ ] The web UI's Run button (`api.runMaintenanceJob`) sends `{dry_run}` only, so `force`"
+ },
+ {
+  "line": 4383,
+  "section": "Repair the book rows that were written one-per-track",
+  "subsection": null,
+  "text": "- [ ] **Measure the real size of the affected population first.** One folder is"
+ },
+ {
+  "line": 4388,
+  "section": "Repair the book rows that were written one-per-track",
+  "subsection": null,
+  "text": "- [ ] **Decide the repair shape with the user before writing it.** Collapsing a"
+ },
+ {
+  "line": 4393,
+  "section": "Repair the book rows that were written one-per-track",
+  "subsection": null,
+  "text": "- [ ] **Check whether the author is correct once grouping works.** The folder-name"
+ },
+ {
+  "line": 4447,
+  "section": "Scan cache: size and fix the \"no book row at this path\" population",
+  "subsection": "Tasks",
+  "text": "- [ ] Read `scanCacheNoRowCount` off a completed production scan summary to size"
+ },
+ {
+  "line": 4471,
+  "section": "Scan cache: size and fix the \"no book row at this path\" population",
+  "subsection": "Tasks",
+  "text": "- [ ] Also check `scanCacheStatErrCount` and `scanCacheLookupErrCount` on the"
+ },
+ {
+  "line": 4474,
+  "section": "Scan cache: size and fix the \"no book row at this path\" population",
+  "subsection": "Tasks",
+  "text": "- [ ] Note when sizing: version-linking is *a* cause of a row-less path, not"
+ },
+ {
+  "line": 4484,
+  "section": "Scan cache: size and fix the \"no book row at this path\" population",
+  "subsection": "Tasks",
+  "text": "- [ ] **Decide how a forced per-book rescan gets picked up immediately.**"
+ },
+ {
+  "line": 4529,
+  "section": "Scan cache: size and fix the \"no book row at this path\" population",
+  "subsection": "Tasks",
+  "text": "- [ ] **Watch `too-fresh` in the scan summary on the first real run after deploy.**"
+ },
+ {
+  "line": 4544,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "Blocked on a deploy, not on code",
+  "text": "- [ ] **Deploy `main` and trigger the first `library_scan_full` sweep via \"Run now\".**"
+ },
+ {
+  "line": 4560,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "Blocked on a deploy, not on code",
+  "text": "- [ ] **The prod `library.scan` canceled at 8,367/40,108 stays canceled.**"
+ },
+ {
+  "line": 4567,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "The real fix, and the home for the path-keyed cache",
+  "text": "- [ ] **Implement the staged library scan pipeline.** Spec is on main at"
+ },
+ {
+  "line": 4582,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "Measurement that needs a real run",
+  "text": "- [ ] **Read `scanCacheNoRowCount`, `scanCacheStatErrCount` and"
+ },
+ {
+  "line": 4589,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "Measurement that needs a real run",
+  "text": "- [ ] **Read `too-fresh` off the same summary.** New in the age-gate PR, and"
+ },
+ {
+  "line": 4596,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "resume-sweep \u2014 never started, needs the user's go-ahead",
+  "text": "- [ ] **resume-sweep PR1: `userCanceled` marker on `runHandle` + correct shutdown"
+ },
+ {
+  "line": 4601,
+  "section": "Scan/rescan lane \u2014 what is left after the rescan-age gate",
+  "subsection": "resume-sweep \u2014 never started, needs the user's go-ahead",
+  "text": "- [ ] **resume-sweep PR2 \u2014 do NOT ship without the user's explicit say-so.**"
+ },
+ {
+  "line": 4628,
+  "section": "`CreateAuthor` is check-then-create with no atomicity \u2014 mints duplicate author rows",
+  "subsection": null,
+  "text": "- [ ] Make the lookup and insert atomic (single Pebble batch with a conditional"
+ },
+ {
+  "line": 4630,
+  "section": "`CreateAuthor` is check-then-create with no atomicity \u2014 mints duplicate author rows",
+  "subsection": null,
+  "text": "- [ ] Decide how to merge the duplicate author rows already present, and whether"
+ },
+ {
+  "line": 4633,
+  "section": "`CreateAuthor` is check-then-create with no atomicity \u2014 mints duplicate author rows",
+  "subsection": null,
+  "text": "- [ ] Add a concurrency test asserting N concurrent `CreateAuthor` calls with one"
+ },
+ {
+  "line": 4667,
+  "section": "The directory author fallback reads the TITLE as the author on organized books",
+  "subsection": null,
+  "text": "- [ ] Decide the correct rule. The author is the **grandparent** under the"
+ },
+ {
+  "line": 4671,
+  "section": "The directory author fallback reads the TITLE as the author on organized books",
+  "subsection": null,
+  "text": "- [ ] Apply it in both copies, or collapse the two parsers into one \u2014 they are"
+ },
+ {
+  "line": 4673,
+  "section": "The directory author fallback reads the TITLE as the author on organized books",
+  "subsection": null,
+  "text": "- [ ] Quantify how many of the 4,643 junk author rows came from this specific"
+ },
+ {
+  "line": 4714,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] Widen the sentinel check to cover the WAL-write error as well as"
+ },
+ {
+  "line": 4718,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] Better: make the registry's `dbReporter` stop its flush loop before the"
+ },
+ {
+  "line": 4726,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SEC-BACKUP-ABSPATH** Decide whether the backup restore path should"
+ },
+ {
+  "line": 4740,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **PEBBLE-KEY-BOUND-CENSUS** Two related gaps surfaced while fixing"
+ },
+ {
+  "line": 4861,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **The dedup UI's \"Merge All\" button now previews instead of merging.**"
+ },
+ {
+  "line": 4875,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **`/api/v1/audiobooks` reports the PRIMARY count as `count` whenever no"
+ },
+ {
+  "line": 4932,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **DATABASE-RUNMIGRATIONS-TEST-COST** `internal/database`'s"
+ },
+ {
+  "line": 4967,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **`dedup.series-dedup`'s apply path writes no undo-ledger rows and does"
+ },
+ {
+  "line": 5007,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] (4) **NEW, found reviewing the above:** both `duplicates_helpers.go`"
+ },
+ {
+  "line": 5018,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `\u2026-TRASHED-ROWS-RESIDUAL`; renamed"
+ },
+ {
+  "line": 5119,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-NORMALIZE-WRITEBACK-SPLIT** `executeSeriesNormalizeCore` returns"
+ },
+ {
+  "line": 5131,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-MERGE-PRIMITIVE-UNGUARDED** `MergeSeries` \u2014 the store-level"
+ },
+ {
+  "line": 5139,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udd34 **ORPHAN-FILES-HARD-DELETE-FAIL-OPEN** `internal/plugins/maintenance/orphan_book_files.go`"
+ },
+ {
+  "line": 5163,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udd34\ud83d\udd25 **AUTHOR-MEMBERSHIP-UNGUARDED \u2014 CONFIRMED FIRED IN PROD 2026-08-24"
+ },
+ {
+  "line": 5246,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **MEMDB-LOSSY-READERS headline is STALE \u2014 correct it before acting on it.**"
+ },
+ {
+  "line": 5264,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-MERGE-PERSERIES-SCAN-COST** Four callers of"
+ },
+ {
+  "line": 5282,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **AUTHOR-FILE-SAFETY: `purge-empty-authors`' \"safety that matters\" is itself a"
+ },
+ {
+  "line": 5300,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **BOOKDETAIL-PROTO-READ: three membership checks in `web/src/pages/BookDetail.tsx` read"
+ },
+ {
+  "line": 5313,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **`DeleteAuthor` scans the whole `book_authors:` keyspace once per author deleted.**"
+ },
+ {
+  "line": 5338,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **DEMO-RECORDING-BROKEN: `scripts/record_demo.js` fails at Phase 2 on `main` \u2014 the"
+ },
+ {
+  "line": 5357,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **OPS-V2-DISPATCH-RACE \u2014 `dispatchCycle` can start a brand-new run after `Shutdown()` has been entered.**"
+ },
+ {
+  "line": 5379,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SCAN-STALL-ITEM** Find what wedges `library.scan` at ~14912 \u2014 and fix the"
+ },
+ {
+  "line": 5477,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **BOOK-ID-RANGE: measure whether any `book:` key has a non-digit first byte, then"
+ },
+ {
+  "line": 5492,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **MEMDB-LOSSY-READERS** The known-incomplete guard added in #2794 covers"
+ },
+ {
+  "line": 5532,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **MEMDB-SYNC-DROPPED-ERRORS: seven delete helpers in `memdb_sync.go` treat a"
+ },
+ {
+  "line": 5547,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **METADATA-GUARD-ASYMMETRY** Decide whether"
+ },
+ {
+  "line": 5587,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **JSONV2-OMITEMPTY** `omitempty` means something different in"
+ },
+ {
+  "line": 5640,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **RECORD-DEMO-TEMPDIR-LEAK: `scripts/record_demo.js` never removes the temp directory"
+ },
+ {
+  "line": 5647,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **`regroup_apply.go` skips nil members when demoting, so it can still leave a"
+ },
+ {
+  "line": 5728,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-DELETE-UNGUARDED** Two series-delete paths consult **no"
+ },
+ {
+  "line": 5979,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SERIES-NORMALIZE-PREVIEW-SWALLOWS-ERROR** `buildSeriesNormalizePreview`"
+ },
+ {
+  "line": 5987,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two"
+ },
+ {
+  "line": 6000,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own \"File the bug\" step"
+ },
+ {
+  "line": 6011,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **TODO-051-UNDOC** `docs/api/openapi.json` is missing correctly-prefixed"
+ },
+ {
+  "line": 6022,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **SCAN-PHASE** Restructure the library scan into discrete, resumable phases \u2014"
+ },
+ {
+  "line": 6101,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **TODO-MOCKORDER** Decide whether to add a permanent guard against shadowed"
+ },
+ {
+  "line": 6117,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **TODO-MOCKWORKS** `web/tests/e2e/utils/test-helpers.ts` ~L1750:"
+ },
+ {
+  "line": 6126,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": null,
+  "text": "- [ ] **COLLECTION-NAME-CONFLICT-SENTINEL** `PebbleStore.UpdateCollection`'s"
+ },
+ {
+  "line": 6149,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\uddf9 DEAD-1 residue \u2014 `linkAsVersion` is dead production code",
+  "text": "- [ ] **Remove `Importer.linkAsVersion`** (`internal/itunes/service/importer.go:1780`) and the"
+ },
+ {
+  "line": 6192,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83d\udccb `DECISIONS-PENDING.md` contradicts itself \u2014 settled decisions still listed as open",
+  "text": "- [ ] **Reconcile `docs/plans/DECISIONS-PENDING.md`'s open table with its own recorded-decisions"
+ },
+ {
+  "line": 6229,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "Bulk book-merge shows \"Merged all\" even when individual merges failed",
+  "text": "- [ ] Track per-group outcomes in the loop and report \"Merged N of M\" (naming the"
+ },
+ {
+  "line": 6242,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\uddf9 DEP-1e \u2014 drop the deprecated `Book.ITunesPath` field",
+  "text": "- [ ] **Remove `ITunesPath *string` from `database.Book`** and the `BookCore` round-trip that"
+ },
+ {
+  "line": 6365,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] **B (do first):** give each maintenance def a per-job `ConcurrencyKey` so a job can never run"
+ },
+ {
+  "line": 6373,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] **Then: the consolidator.** Once ~3\u20134 ops for the same def are QUEUED, open one new op whose"
+ },
+ {
+  "line": 6450,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] **Decide the fate of `api.startBulkMetadataFetch`, now caller-less.** Deleting"
+ },
+ {
+  "line": 6479,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] Add a Settings panel for `path_aliases` (root / Windows prefix / UNC /"
+ },
+ {
+  "line": 6482,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] Make `PathAliases` the single source for the Windows prefix and have"
+ },
+ {
+  "line": 6490,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] Decide how `path_aliases` re-derives after a normalization change."
+ },
+ {
+  "line": 6498,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] Replace the fixed `resume_policy` enum with a **condition-based** resume"
+ },
+ {
+  "line": 6523,
+  "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+  "subsection": "\ud83e\udde9 Queued-op consolidator \u2014 collapse N queued runs of one def into a single merged op",
+  "text": "- [ ] **MERGE-UNDO** Make a review-initiated merge reversible. The machinery is"
+ },
+ {
+  "line": 6548,
+  "section": "CI / automation",
+  "subsection": null,
+  "text": "- [ ] Decide whether the 22 `gha-*` repos (plus `magnet-handler`) should keep their"
+ },
+ {
+  "line": 6560,
+  "section": "CI / automation",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udd0c **ABS coverage gaps N-1 \u2026 N-10** (audit:"
+ },
+ {
+  "line": 6598,
+  "section": "CI / automation",
+  "subsection": null,
+  "text": "- [ ] \u2699\ufe0f **Decide `ABS_API_ENABLED` for production (N-11).** It defaults to `false`"
+ },
+ {
+  "line": 6604,
+  "section": "CI / automation",
+  "subsection": null,
+  "text": "- [ ] \ud83c\udf10 **Per-stream `language` is always `nil` (N-12).** `mapper.go:676` returns nil"
+ },
+ {
+  "line": 6609,
+  "section": "CI / automation",
+  "subsection": null,
+  "text": "- [ ] \ud83d\udcda **Docs consolidation follow-ups (from the 2026-08-11 inventory).** Full evidence in"
+ }
+]

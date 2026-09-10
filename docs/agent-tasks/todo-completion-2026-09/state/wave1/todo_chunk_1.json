@@ -1,0 +1,932 @@
+[
+ {
+  "line": 45,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Wire `WithRequestTimeout` to config \u2014 a cold model load is 84% of the 30s budget",
+  "text": "- [ ] Add an `embedding.request_timeout_seconds` config key, resolve it the way"
+ },
+ {
+  "line": 49,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Wire `WithRequestTimeout` to config \u2014 a cold model load is 84% of the 30s budget",
+  "text": "- [ ] While there: `OLLAMA_KEEP_ALIVE=30m` on the Mac was set with"
+ },
+ {
+  "line": 57,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Wire `WithRequestTimeout` to config \u2014 a cold model load is 84% of the 30s budget",
+  "text": "- [ ] **8 ops declare `ResumeRestart` but never checkpoint \u2014 they silently"
+ },
+ {
+  "line": 110,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Wire `WithRequestTimeout` to config \u2014 a cold model load is 84% of the 30s budget",
+  "text": "- [ ] **`ai parse summary` reports a fully-green line for a batch where nothing"
+ },
+ {
+  "line": 180,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Wire `WithRequestTimeout` to config \u2014 a cold model load is 84% of the 30s budget",
+  "text": "- [ ] **`ParsedMetadata.Confidence` is asked for, paid for, and never read \u2014"
+ },
+ {
+  "line": 247,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Activity compaction \u2014 three follow-ups found while fixing the double-count",
+  "text": "- [ ] **`RepairActivityIndexes` is time-unbounded and runs nightly inside the job"
+ },
+ {
+  "line": 253,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Activity compaction \u2014 three follow-ups found while fixing the double-count",
+  "text": "- [ ] **`maintenance.window` has no per-task panic isolation.** A nil-deref panic"
+ },
+ {
+  "line": 258,
+  "section": "\ud83d\udce5 Inbox",
+  "subsection": "Activity compaction \u2014 three follow-ups found while fixing the double-count",
+  "text": "- [ ] **Re-derive the \"scheduled ops that never fire\" list before acting on it.**"
+ },
+ {
+  "line": 290,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": null,
+  "text": "- [ ] Grep every read of `AppConfig.DatabasePath` and `filepath.Dir(...DatabasePath)`"
+ },
+ {
+  "line": 292,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": null,
+  "text": "- [ ] Decide which of them SHOULD follow a relocation and which should be"
+ },
+ {
+  "line": 295,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": null,
+  "text": "- [ ] Check whether a stale `/var/lib/audiobook-organizer/library.bleve` is left"
+ },
+ {
+  "line": 371,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+  "text": "- [ ] **Deploy #3171** (`make deploy-debug` from the PRIMARY checkout, only at"
+ },
+ {
+  "line": 376,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+  "text": "- [ ] **Then** `sudo python3 scripts/finish_credential_migration.py --apply` on the"
+ },
+ {
+  "line": 381,
+  "section": "Audit every path derived from `database_path` for overlay-order dependence",
+  "subsection": "Finish the credential relocation on the prod host (needs root, in this order)",
+  "text": "- [ ] **Later, after the next restart for any other reason:**"
+ },
+ {
+  "line": 470,
+  "section": "Operation parent/child lineage is never populated by the BACKEND",
+  "subsection": null,
+  "text": "- [ ] Decide whether SERVER-SIDE op lineage should be wired up. Several ops obviously"
+ },
+ {
+  "line": 515,
+  "section": "Two db-optimize ops exist; only one reports progress",
+  "subsection": null,
+  "text": "- [ ] **Consolidate the space-reclaim maintenance ops into one job.**"
+ },
+ {
+  "line": 708,
+  "section": "Decide whether to cap openai-go's own retry loop",
+  "subsection": null,
+  "text": "- [ ] Decide whether to pass `option.WithMaxRetries(0)` and let `DoWithRetry`"
+ },
+ {
+  "line": 713,
+  "section": "Decide whether to cap openai-go's own retry loop",
+  "subsection": null,
+  "text": "- [ ] If the answer is \"only for local backends\", scope it to"
+ },
+ {
+  "line": 717,
+  "section": "Decide whether to cap openai-go's own retry loop",
+  "subsection": null,
+  "text": "- [ ] Whichever way it goes, `DoWithRetry`'s doc comment names the current"
+ },
+ {
+  "line": 724,
+  "section": "Decide whether to cap openai-go's own retry loop",
+  "subsection": null,
+  "text": "- [ ] **Find out why scanning the `metadata_cache:` prefix takes ~28s.**"
+ },
+ {
+  "line": 770,
+  "section": "Decide whether to cap openai-go's own retry loop",
+  "subsection": null,
+  "text": "- [ ] **`TestProp_ChromemMatchesSqlite` has a reproducible counterexample \u2014 chromem returns an EMPTY set where sqlite returns a match.** Found 2026-09-09 by a routine full-package `go test ./internal/server/ -count=1` on an unrelated branch; `rapid` hit it on a random seed after 0 shrink steps. Failure: `sqlite\u2192chromem overlap too low: 0 of 1 matched (chromem set=0)` at `internal/server/dedup_engine_prop_test.go:387`."
+ },
+ {
+  "line": 823,
+  "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+  "subsection": null,
+  "text": "- [ ] **`POST /ai/test-connection` tests OpenAI unconditionally \u2014 it can never"
+ },
+ {
+  "line": 900,
+  "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+  "subsection": null,
+  "text": "- [ ] **Run one embedding through the APP to close out the local-embedding"
+ },
+ {
+  "line": 917,
+  "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+  "subsection": null,
+  "text": "- [ ] **The AI parser CHAIN is unexercised on this deployment.** Prod is"
+ },
+ {
+  "line": 924,
+  "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+  "subsection": null,
+  "text": "- [ ] **Four `library.ai-parse` failure rows on prod dated 2026-09-09 are probe"
+ },
+ {
+  "line": 972,
+  "section": "ABS layer hides every `imported` book \u2014 author pages undercount (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Decide the intended semantics and make the filter match them.** Should the"
+ },
+ {
+  "line": 992,
+  "section": "ABS layer hides every `imported` book \u2014 author pages undercount (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Add a test that a non-`organized` book is reachable wherever it is"
+ },
+ {
+  "line": 1015,
+  "section": "Why the books are `imported` is NOT yet established",
+  "subsection": null,
+  "text": "- [ ] **Determine what `library_state` actually means and why these 6 are"
+ },
+ {
+  "line": 1021,
+  "section": "Why the books are `imported` is NOT yet established",
+  "subsection": null,
+  "text": "- [ ] **Re-measure after the collision resolver lands** before changing the ABS"
+ },
+ {
+  "line": 1035,
+  "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Reset Activity Log \u2014 admin feature (PR in progress).** Let a user reset"
+ },
+ {
+  "line": 1045,
+  "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Reauth / passkey reverify gate (future).** Require a step-up reauth"
+ },
+ {
+  "line": 1049,
+  "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Full-application-database reset (future, GATED).** A \"reset everything\""
+ },
+ {
+  "line": 1061,
+  "section": "Re-enable SQLite activity backend after details compression (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Re-run the migration with compression in place and confirm the size is"
+ },
+ {
+  "line": 1069,
+  "section": "Re-enable SQLite activity backend after details compression (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Only then** consider retiring the Pebble activity path and reclaiming the"
+ },
+ {
+  "line": 1084,
+  "section": "Sweep `api.ts` for missing `{data:\u2026}` envelope unwraps (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Fix the 18 confirmed functions.** Each was verified against its actual Go"
+ },
+ {
+  "line": 1087,
+  "section": "Sweep `api.ts` for missing `{data:\u2026}` envelope unwraps (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Verify the 11 bare-return candidates**: `patchAudiobookRating`,"
+ },
+ {
+  "line": 1092,
+  "section": "Sweep `api.ts` for missing `{data:\u2026}` envelope unwraps (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Triage the ~30 second-shape candidates.** `searchBooks` (~`api.ts:1113`)"
+ },
+ {
+  "line": 1111,
+  "section": "Sweep `api.ts` for missing `{data:\u2026}` envelope unwraps (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **`metadata.batch-apply-cached` still has no resume \u2014 and a bare"
+ },
+ {
+  "line": 1192,
+  "section": "`GET /operations/timeline` silently ignores its query filters (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider"
+ },
+ {
+  "line": 1270,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Work",
+  "text": "- [ ] **Stop the clobber.** Guard `LibraryState` in `applyScannerFields`"
+ },
+ {
+  "line": 1274,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Work",
+  "text": "- [ ] **Close the re-stamp gate** at `server.go:1230` / `service.go:1268` so the"
+ },
+ {
+  "line": 1276,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Work",
+  "text": "- [ ] **Backfill** the reverted rows, keyed on `library_state='imported' AND"
+ },
+ {
+  "line": 1278,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Work",
+  "text": "- [ ] **Pin it with a test.** `internal/scanner/rescan_preserve_test.go` and"
+ },
+ {
+  "line": 1294,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "\ud83d\udd34 DO NOT RUN `fix-library-states`",
+  "text": "- [ ] **Fix or unregister `fix-library-states`** before someone clicks it."
+ },
+ {
+  "line": 1311,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Two incidental defects found en route",
+  "text": "- [ ] **Broken undo record.** `internal/organizer/rename.go:230` assigns"
+ },
+ {
+  "line": 1317,
+  "section": "Every rescan reverts `library_state` organized\u2192imported, emptying ABS (2026-09-07)",
+  "subsection": "Two incidental defects found en route",
+  "text": "- [ ] **A false agreement claim.** `internal/server/handlers/abs/browse.go:176-178`"
+ },
+ {
+  "line": 1344,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Set `completed_at` when an op reaches a terminal status.** `canceled` is"
+ },
+ {
+  "line": 1350,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Age out / visually distinguish terminal ops in the timeline** so a"
+ },
+ {
+  "line": 1366,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **There is no delete-one-op endpoint.** `DELETE /operations/history` deletes"
+ },
+ {
+  "line": 1373,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Concurrency audit 2026-09-07: unjoined goroutines + serial whole-library loops.**"
+ },
+ {
+  "line": 1461,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] `internal/itunes/service/writeback_batcher.go` \u2014 `Stop()` (`:814`) sets a"
+ },
+ {
+  "line": 1472,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] `internal/scanner/scanner.go:1398-1406` \u2014 bare `recover()` whose comment"
+ },
+ {
+  "line": 1477,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] `internal/plugins/maintenance/extract_wav_clips.go:127` \u2014 8-slot ffmpeg pool"
+ },
+ {
+  "line": 1483,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] Remaining unjoined-goroutine sites: `metafetch/service.go:746`,"
+ },
+ {
+  "line": 1495,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] Serial whole-library loops needing a worker pool (several need a"
+ },
+ {
+  "line": 1505,
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] `maintenance/merge_same_path_dupes.go:366-372` \u2014 safe today only because"
+ },
+ {
+  "line": 1535,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": null,
+  "text": "- [ ] **Upgrade the reflink predicate from the size+re-stat proxy to real DVA"
+ },
+ {
+  "line": 1701,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "Finish the v1 resume teardown: the `opstate:params` side table and `GetInterruptedOperations`",
+  "text": "- [ ] **`GET /system/logs` returns nothing and has for a long time \u2014 point it at the activity store.**"
+ },
+ {
+  "line": 1735,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **abs mapper: batch the per-book file fetch** \u2014 `mapper.go:163`"
+ },
+ {
+  "line": 1746,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **`ListCachedCandidates`: use `GetBooksByIDs`** \u2014 `metadata_cache.go:129`."
+ },
+ {
+  "line": 1750,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **Fix `mapper.go:82-84`, which claims the relation lookups are batched.**"
+ },
+ {
+  "line": 1755,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **Add memdb-backed author/series/narrator batch getters.**"
+ },
+ {
+  "line": 1760,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **`OptimizeDatabase`: batch the per-author read** \u2014"
+ },
+ {
+  "line": 1764,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **dedup handlers: batch the point-gets** \u2014 `dedup/handler.go:769,894,626,674,281`,"
+ },
+ {
+  "line": 1767,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **`/api/me`: hoist `GetBookFilesForIDsCore` above the errgroup** \u2014"
+ },
+ {
+  "line": 1769,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **Add a batch chapter getter.** `GetChaptersForBook`"
+ },
+ {
+  "line": 1773,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **`GetSyncFileIDsForBook` prefix scan** (follow-up to #3128) \u2014 the"
+ },
+ {
+  "line": 1778,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **Background loops with an existing batch fix** \u2014 `relink_unlinked.go:119/126`,"
+ },
+ {
+  "line": 1783,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "N+1 / batch-endpoint audit follow-ups (2026-09-08)",
+  "text": "- [ ] **Group-by-BookID, not a batch swap** \u2014 `fix_book_file_paths.go:56`,"
+ },
+ {
+  "line": 1826,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+  "text": "- [ ] **`searchSeriesHits` \u2014 29.26 s cum (6.69 %), now larger than the entire"
+ },
+ {
+  "line": 1883,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+  "text": "- [ ] **`minifiedItem` \u2014 23.17 s (5.30 %).**"
+ },
+ {
+  "line": 1884,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+  "text": "- [ ] `loadItemViews` / `loadOneItemView` \u2014 17.80 s (4.07 %); `GetBookFiles`"
+ },
+ {
+  "line": 1896,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+  "text": "- [ ] **`MintOrGetSyncFileIDs` at 10.80 s (2.47 %) is now worth the prefix-scan"
+ },
+ {
+  "line": 1901,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "ABS search: post-mint-lock CPU profile (2026-09-08 03:34 EDT)",
+  "text": "- [ ] **Investigate the 47 % GC directly.** A 3 MB response per search is a large"
+ },
+ {
+  "line": 1935,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+  "text": "- [ ] **\ud83d\udd34 The barrier still does not fire, and deleting the invalid file did not fix it.**"
+ },
+ {
+  "line": 1952,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+  "text": "- [ ] **Every language is analyzed by CodeQL twice per run, and Go costs ~8.5 min each time.**"
+ },
+ {
+  "line": 1966,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+  "text": "- [ ] **Operation log download (`GET /operations/v2/:id/logs/download`) delivers a"
+ },
+ {
+  "line": 1999,
+  "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+  "subsection": "CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin, and we now know it is not the predicate names",
+  "text": "- [ ] **Defense-in-depth: the abandonment path never closes `parked`.** Independent"
+ },
+ {
+  "line": 2022,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Audit `scanTierKVs` callers for the same OOM shape.** `Summarize` /"
+ },
+ {
+  "line": 2025,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Scheduled auto-compaction toggle.** A `ScheduledTaskConfig` (like"
+ },
+ {
+  "line": 2030,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Make the \"Compact after N days\" button async.** The handler"
+ },
+ {
+  "line": 2035,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Retire the Pebble activity path** once SQLite reads have soaked in prod."
+ },
+ {
+  "line": 2044,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Stop dual-writing.** `MigratingActivityStore.Record` fans out to BOTH"
+ },
+ {
+  "line": 2053,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **MySQL/Postgres dialects.** The `sqlDialect` seam is built; adding a"
+ },
+ {
+  "line": 2056,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **A canceled operation can linger forever in the Active-Operations timeline"
+ },
+ {
+  "line": 2073,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **After the download-fix set (#3075/#3076/#3077) is deployed, run the two repair ops** to clean up books already broken by the stale `book_file` pointer. Order and both report-only first:"
+ },
+ {
+  "line": 2078,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Provider quota + \"last resort\" tier refactor (big \u2014 scan change + provider-model change).** Google Books enforces a hard **1,000 requests/day** quota per API key (project 157967346493) and is unforgiving about it \u2014 once exhausted, every lookup 429s for the rest of the day and the scan/backfill silently stalls on that provider. The 2026-09-05 throttle (#3066) only *slows* a provider after it reports a limit; it does not budget a finite daily quota or let us prefer cheaper providers first. We need a real provider-economics model:"
+ },
+ {
+  "line": 2084,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Series identity fragmented by (name, author-combo) instead of name \u2014 PRIORITY 1 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`docs/audits/` / scratchpad `library-health-audit-2026-09-05.md`) found **8,530 distinct series names with >1 series ID and 15,448 redundant series rows** \u2014 the largest raw-count data-quality problem in the library. Series appear to be keyed on the (name, author/narrator combination) rather than the name alone, so any installment credited to a different co-author/narrator combination mints a brand-new series entity for what a human calls one series. Worst cases: \"Doctor Who\" ~90 series IDs, \"Night of the Hunter\" 118 IDs (nearly all `book_count:2` \u2014 one row minted per book pair), \"KGUniverse\" ~70 IDs, \"Doctor Who BF Monthly Range\" ~50. Clean spot-check cases: \"Discworld\" 4 IDs (1 real @128 books + 3 near-empty), \"The Dresden Files\" 2 IDs (107 vs 2), \"Eldest\" 2 IDs (349 vs 0). Also: 51.8% of series have `book_count:0` and 35.3% have exactly 1 book \u2192 87% of series entities hold 0 or 1 books; 91% of primary books belong to *some* series (suspiciously high, consistent with auto-create-per-book). Work: (1) find the series-create/resolve path and change the identity key from (name,author-combo) to a normalized name (with a deliberate co-author/narrator disambiguation rule only where genuinely distinct); (2) a plan-first, dry-run-first merge op to collapse the redundant rows and re-point book\u2192series FKs; (3) prune the 0-book series. Note the `series[].book_count` field drifts low vs a direct census tally (cached counter) \u2014 measure from the book census, not the field. Plan-first + dry-run before any prod write; NEVER during a scan."
+ },
+ {
+  "line": 2086,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Author table is ~half junk \u2014 PRIORITY 2 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`) over all 17,498 author rows: (1) **7,890 (45.1%) have `book_count == 0`** \u2014 dead weight; (2) **1,204 (6.9%) are book/chapter titles mis-filed as author names** (e.g. `\"[PZG] Arifureta, Vol. 01 (Audiobook) [JNC Audio]\"`, heuristic: len>45 + digit/`:`/`-`); (3) **221 are narrator credits mis-filed as authors** (`read by|narrated by|narrator`, e.g. `\"- Bag of Bones (read by Stephen King)\"`); (4) **\"Unknown Author\" is \u226512 distinct rows** (`\"- Unknown Author\"`, `\"Unknown Author\"`, `\"Author Unknown Note 01\"`, plus `\"Unknown Title\"`/`\"Unknown Album\"`/`\"Unknown Artist\"` used as the same dumping ground), ~260+ book rows attributed; (5) **24 author-name clusters (180 rows) match the known `CreateAuthor` check-then-create race** \u2014 \"Mythos\" 41 IDs (40 empty), two `jennsen, gs_\u2026` clusters 9 & 12 IDs, \"cthulhu armageddon (unabridged)\" 25 IDs; (6) **6 clean two-way splits need a HUMAN merge decision** (both sides have real books): \"Terry Pratchett\" 375 vs 1, \"Tamora Pierce\" 63 vs 7, \"Ian Irvine\" 7 vs 5, \"James A. Hunter\" 18 vs 14, \"Gardner Dozois\" 4 vs 2, \"Daniel Jos\u00e9 Older\" 1 vs 1. Related memory: [[project_createauthor_check_then_create_race]], [[project_author_dangling_authorid_leak]] (dangling AuthorID improved to 140/33-primary from ~212). Work: canonicalize the CreateAuthor race (upsert-by-normalized-name, not check-then-create) so it stops minting; a plan-first dry-run merge/prune op for empty dupes and race clusters; a classifier + repair for title-as-author and narrator-as-author rows (re-parse from path/folder or move narrator\u2192narrator field). The `authors[].book_count` field drifts low \u2014 count from the book census. Plan-first + dry-run; NEVER during a scan."
+ },
+ {
+  "line": 2088,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Duplicate & placeholder book records \u2014 PRIORITY 3 of the 2026-09-05 audit cleanup.** Full-census audit 2026-09-05 (`library-health-audit-2026-09-05.md`). (1) **8,235 redundant primary book rows are true content/metadata duplicates** (same normalized title+author, placeholders excluded; 5,671 distinct clean (title,author) pairs with >1 primary) \u2014 top clusters: \"PZG\" bundle 57 copies, Jim Butcher \"Skin Game\" **51 rows split per-chapter as separate books** (`Skin Game - 1`, `Skin Game - 11`, \u2026), \"For We Are Many\" (Bobiverse 2) 39, \"Prince of Fools\" 31. (2) **839 distinct `file_path`s are shared by >1 primary book** (1,334 redundant rows) \u2014 strongest duplicate signal; includes front-matter minted as its own book: `.../Unknown Author/Introduction` (37 book IDs), `/Prologue` (35), `/About the Author` (20), `/Audible Opening Message` (19). (3) **Front-matter tracks stored as their own books** (37 \"Introduction\", 35 \"Prologue\", 20 \"About the Author\", 19 \"Audible Opening Message\" under Unknown Author) \u2014 these should be chapters/tracks of their parent book, not standalone records. (4) **5,421 primary books (12.5%) carry placeholder title/author** (`\"read by narrator\"` \u00d71,182+520, `\"unknown title\"`/`\"unknown author\"` \u00d7153) \u2014 folder-parser fallback strings persisted as real metadata; re-parse or re-fetch. (5) 414 book rows (333 primary) have an empty `title` even though most have a usable `transcribed_title` fallback. Related: [[project_repoint_collision_bucket_is_duplicate_books]] (repoint collisions ARE duplicate books \u2014 dedup is upstream), the dedup sandbox work. Do AFTER the missing-file recovery and series/author cleanup, because merging duplicate books changes which rows the missing-file repointer must consider. Work: a plan-first dry-run merge op keyed on `file_path` collision first (exact, safe), then normalized title+author with hash confirmation; fold per-chapter split books back into one book with track/chapter files; a placeholder-title re-parse/re-fetch pass. Plan-first + dry-run; NEVER during a scan (a scan re-mints duplicates)."
+ },
+ {
+  "line": 2090,
+  "section": "Activity SQLite backend \u2014 follow-ups after the cutover",
+  "subsection": null,
+  "text": "- [ ] **Evaluate store-level optimistic concurrency (compare-and-swap) for DB writes \u2014 a general \"recheck before write\" guard.** Raised by the user 2026-09-05 while building the missing-file recovery ops: \"can we guard at [the central write] level making everything idempotent.\" Findings from that session: (1) **Filesystem writes are already centrally guarded** \u2014 `internal/fileops` refuses clobber (`ReflinkOrCopy` \u2192 `TestReflinkOrCopyRefusesExistingDestination`, `reflink_test.go:51`; plus `CopyFileExclusive` O_EXCL and `CopyFileAtomic` write-temp-then-rename). New file-moving ops should ROUTE through fileops and inherit that idempotency rather than reimplement it. (2) **DB writes have NO concurrency guard** \u2014 `PebbleStore.UpdateBookFile(id, *BookFile)` (`pebble_store_bookfiles.go:519`) is an unconditional full-record replace; `BookFile` carries no CAS revision. A per-op stat-recheck (as added to mark-missing/recover) CANNOT be centralized into the write function, because it rechecks a **disk fact** the store can't see \u2014 the store writes rows, not files. The centralizable mechanism is different: **optimistic concurrency** \u2014 add a monotonic `rev` to `BookFile`, have `UpdateBookFile` take the expected rev and reject the write if the row changed since it was read (compare-and-swap). That makes every DB write *conflict-detecting* for all ops at once. Scope/cost: a rev field on the model + threading expected-rev through the write surface (`UpdateBookFile`, `BatchCreateBookFiles`, `UpdateBookFileHashes`, and the memdb sync path) + deciding fail-closed (reject) vs fail-open (retry-read-merge) per caller. Wide but bounded; its own PR with its own plan. Related: the per-op stat-interlock in `mark_missing_files.go` / the recover op is the disk\u2194row coherence tool and stays; this todo is the row\u2194row (concurrent-writer) tool. Consider whether the CoW `book_ver:` history already gives a natural rev to CAS on. Plan-first; no behavior change until reviewed."
+ },
+ {
+  "line": 2187,
+  "section": "Provider throttling \u2014 follow-ups",
+  "subsection": null,
+  "text": "- [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns"
+ },
+ {
+  "line": 2192,
+  "section": "Provider throttling \u2014 follow-ups",
+  "subsection": null,
+  "text": "- [ ] **Unify the two metadata source-chain builders.** `metafetch.buildSourceChainFromConfig`"
+ },
+ {
+  "line": 2198,
+  "section": "Provider throttling \u2014 follow-ups",
+  "subsection": null,
+  "text": "- [ ] **`internal/metadata/wikipedia.go` drops three non-200s on the floor** (lines ~173,"
+ },
+ {
+  "line": 2202,
+  "section": "Provider throttling \u2014 follow-ups",
+  "subsection": null,
+  "text": "- [ ] **`internal/metadata/cover.go` still returns a bare status error.** Cover downloads"
+ },
+ {
+  "line": 2206,
+  "section": "Provider throttling \u2014 follow-ups",
+  "subsection": null,
+  "text": "- [ ] **Chase the Google Books quota itself.** Re-tested from prod past the Pacific"
+ },
+ {
+  "line": 2213,
+  "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+  "subsection": null,
+  "text": "- [ ] `PebbleStore.DeleteAuthor` \u2192 `sweepAuthorFromBookAuthors` scans the whole"
+ },
+ {
+  "line": 2218,
+  "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+  "subsection": null,
+  "text": "- [ ] 3,372 books were left with no author row (`books-left-authorless` 896 + 2,476)."
+ },
+ {
+  "line": 2221,
+  "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+  "subsection": null,
+  "text": "- [ ] 662 `out-of-scope` rows (publisher/copyright/translator shrapnel that fails"
+ },
+ {
+  "line": 2260,
+  "section": "Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] Prod has 43,592 `series` rows for 83,229 books. \"The Primal Hunter\" exists 8"
+ },
+ {
+  "line": 2267,
+  "section": "Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] `GET /api/v1/series?search=\u2026` (also `q=`, `name=`) ignores its filter and returns"
+ },
+ {
+  "line": 2272,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] The weekly `library.scan` (`01M1M51FCKD1KA4XQ9AQ63XZWD`) organized a book at 02:31"
+ },
+ {
+  "line": 2288,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **CFG-VALIDATE-AFTER-PERSIST** `PUT /api/v1/config` still calls"
+ },
+ {
+  "line": 2304,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **`dedup.MergeBooks` hard-delete path has no audio-route guard** \u2014 surfaced by the"
+ },
+ {
+  "line": 2319,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **`extractSeriesName` truncates an album on the first `,`, `-` or `:`.**"
+ },
+ {
+  "line": 2333,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **~17 maintenance/regroup ops write `Book` columns without consulting a field"
+ },
+ {
+  "line": 2380,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** \u2014 none of these"
+ },
+ {
+  "line": 2406,
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "subsection": null,
+  "text": "- [ ] **Organize landing follow-ups accepted as non-blocking in the #3051 review** \u2014"
+ },
+ {
+  "line": 2488,
+  "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+  "subsection": null,
+  "text": "- [ ] Replace the literal with an ffprobe-derived expected sum; confirm which ffprobe CI installs"
+ },
+ {
+  "line": 2490,
+  "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+  "subsection": null,
+  "text": "- [ ] **Unify `folder_parser.looksLikeAuthorSegment` with `personname.LooksLikePersonName`**"
+ },
+ {
+  "line": 2506,
+  "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+  "subsection": null,
+  "text": "- [ ] **Release builds take Go from `go.mod`, not the 1.27.1 pin** \u2014 `release-prod.yml` and"
+ },
+ {
+  "line": 2515,
+  "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+  "subsection": null,
+  "text": "- [ ] **Add an op that reports undecodable review-hold payloads.** `ListReviewItems`'"
+ },
+ {
+  "line": 2525,
+  "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+  "subsection": null,
+  "text": "- [ ] **Consolidate the four `IsPlaceholder(StripEditionSuffix(...))` call sites**"
+ },
+ {
+  "line": 2551,
+  "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+  "subsection": null,
+  "text": "- [ ] Decide: populate `author_name` server-side, or drop it from the TS interface"
+ },
+ {
+  "line": 2552,
+  "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+  "subsection": null,
+  "text": "- [ ] Grep for other readers of `book.author_name` that are silently getting `undefined`"
+ },
+ {
+  "line": 2553,
+  "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+  "subsection": null,
+  "text": "- [ ] Prefer whichever option makes the absence a compile error rather than an empty string"
+ },
+ {
+  "line": 2569,
+  "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+  "subsection": null,
+  "text": "- [ ] Measure the real cost of a dedup search against the production library first"
+ },
+ {
+  "line": 2570,
+  "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+  "subsection": null,
+  "text": "- [ ] If it warrants the change: add the projection to `BookBulkReader`, implement on"
+ },
+ {
+  "line": 2572,
+  "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+  "subsection": null,
+  "text": "- [ ] Keep the author-name join \u2014 the projection has to see author names, not just books"
+ },
+ {
+  "line": 2615,
+  "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+  "subsection": null,
+  "text": "- [ ] Decide the exception mechanism, then fix `LooksLikePersonName` and add"
+ },
+ {
+  "line": 2618,
+  "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+  "subsection": null,
+  "text": "- [ ] Until then, record Georgian and lowercase-Armenian in the package doc's"
+ },
+ {
+  "line": 2661,
+  "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+  "subsection": "\"Last, First\" is not used as a discriminator when choosing the author side",
+  "text": "- [ ] **`internal/metadata` and `internal/scanner` filename parsing still disagrees on 1,110 of 40,261 real library paths.**"
+ },
+ {
+  "line": 2734,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] Measure how many authors normalize to something other than their lower-cased name"
+ },
+ {
+  "line": 2735,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] Decide whether the query should be normalized, or the stored side lower-cased only"
+ },
+ {
+  "line": 2736,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] Check the other `SearchBooks` callers before changing the predicate"
+ },
+ {
+  "line": 2741,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] **On the `\"_\"` filename path, a refusal from `ChooseAuthorSide` produces a worse answer than a guess, and the directory fallback can mint a genre folder as an author.**"
+ },
+ {
+  "line": 2789,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] **TODO-REVIEW-PUSHDOWN** Push the metadata review lane's filters down to"
+ },
+ {
+  "line": 2811,
+  "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+  "subsection": null,
+  "text": "- [ ] **TODO-ORIGHASH-SPLIT** `book_files.original_file_hash` has the same"
+ },
+ {
+  "line": 2857,
+  "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+  "subsection": null,
+  "text": "- [ ] **TODO-FILEHASH-REPAIR** Repair `book_files.file_hash` rows written by the three"
+ },
+ {
+  "line": 2872,
+  "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+  "subsection": null,
+  "text": "- [ ] **SERIES-PHANTOM-REPAIR** Repair the series IDs that are ALREADY phantom."
+ },
+ {
+  "line": 2887,
+  "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+  "subsection": null,
+  "text": "- [ ] **SERIES-NORMALIZE-TRASHED-GAP** `mergeSeriesGroupHelper`"
+ },
+ {
+  "line": 2901,
+  "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+  "subsection": null,
+  "text": "- [ ] **SERIES-DENUMBER-TRASHED-GAP** `internal/plugins/maintenance/series_denumber_op.go`"
+ },
+ {
+  "line": 2933,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 1 \u2014 highest value, do next",
+  "text": "- [ ] **`internal/operations/registry` (24 test files, ~80 waits, ~5.7s of"
+ },
+ {
+  "line": 2948,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 1 \u2014 highest value, do next",
+  "text": "- [ ] **`internal/realtime/events_test.go` \u2014 the remaining 25 waits.** The 26s"
+ },
+ {
+  "line": 2960,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 1 \u2014 highest value, do next",
+  "text": "- [ ] **`internal/activity/batcher_test.go` (4 waits, 2.2s package).** Flush-timer"
+ },
+ {
+  "line": 2966,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 2 \u2014 worth doing, needs a per-test read",
+  "text": "- [ ] `internal/metadata/circuitbreaker_test.go` \u2014 open/half-open/closed state"
+ },
+ {
+  "line": 2968,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 2 \u2014 worth doing, needs a per-test read",
+  "text": "- [ ] `internal/scheduler/periodic_library_scan_test.go`, `full_sweep_test.go` \u2014"
+ },
+ {
+  "line": 2970,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 2 \u2014 worth doing, needs a per-test read",
+  "text": "- [ ] `internal/metrics/metrics_test.go`, `internal/plugin/events_test.go`,"
+ },
+ {
+  "line": 2973,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tier 2 \u2014 worth doing, needs a per-test read",
+  "text": "- [ ] `internal/scanner/process_file_timeout_test.go` \u2014 timeout logic; confirm it"
+ },
+ {
+  "line": 2985,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Do NOT convert \u2014 with the reason",
+  "text": "- [ ] `internal/server/server_more_test.go` :: `TestServerStartGracefulShutdown`."
+ },
+ {
+  "line": 2996,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Do NOT convert \u2014 with the reason",
+  "text": "- [ ] `internal/watcher/*`, `internal/itunes/library_watcher_test.go` \u2014 fsnotify"
+ },
+ {
+  "line": 2998,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Do NOT convert \u2014 with the reason",
+  "text": "- [ ] `internal/plugins/webhook`, `internal/mtls`, `internal/metadata/audnexus_test.go`"
+ },
+ {
+  "line": 3000,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Do NOT convert \u2014 with the reason",
+  "text": "- [ ] `internal/transcode/transcode_coverage_test.go` \u2014 spawns ffmpeg/ffprobe."
+ },
+ {
+  "line": 3001,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Do NOT convert \u2014 with the reason",
+  "text": "- [ ] Everything using a real Pebble/NutsDB store in the wait window"
+ },
+ {
+  "line": 3020,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Docs",
+  "text": "- [ ] **Decide the fate of `docs/CODING_STANDARDS.md` \u2014 it is an unreferenced stale"
+ },
+ {
+  "line": 3063,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Concurrency",
+  "text": "- [ ] **`internal/scanner/scanner.go` spawns one goroutine per directory and per"
+ },
+ {
+  "line": 3114,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tooling / CI",
+  "text": "- [ ] **~44 repos still pin `.standards` at a stale commit; none of them is at"
+ },
+ {
+  "line": 3136,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tooling / CI",
+  "text": "- [ ] **Decide the sweep's real scope before running it \u2014 it is not free after"
+ },
+ {
+  "line": 3151,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Tooling / CI",
+  "text": "- [ ] **`falkcorp/magnet-handler` `main` has a `toolchain` directive below its"
+ },
+ {
+  "line": 3172,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Testing",
+  "text": "- [ ] **Five goroutine bodies converted to `wg.Go` in #2992 have ZERO test"
+ },
+ {
+  "line": 3196,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Testing",
+  "text": "- [ ] **The `wg.Go` parameter-capture sites rest on review, not on tests.**"
+ },
+ {
+  "line": 3218,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Testing",
+  "text": "- [ ] **DEDUP-ORPHAN-BOOK-EMB** Act on `HydrateChromem`'s new `books_orphaned`"
+ },
+ {
+  "line": 3260,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Investigate kektordb as a vector-store option",
+  "text": "- [ ] Investigate app-dir guard tests failing only under heavy cross-package test load"
+ },
+ {
+  "line": 3288,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Investigate kektordb as a vector-store option",
+  "text": "- [ ] **Activity `Summarize` writes a summary row with an `OperationID` but no `act:op:` index entry.**"
+ },
+ {
+  "line": 3297,
+  "section": "testing/synctest adoption \u2014 remaining candidates (follow-up to the scoped pilot)",
+  "subsection": "Investigate kektordb as a vector-store option",
+  "text": "- [ ] **Verify against production whether `act:digest:` and `act:debug:` keys actually exist.**"
+ }
+]

@@ -1,0 +1,686 @@
+[
+  {
+    "line": 8,
+    "section": "📥 Inbox",
+    "open_items": 8,
+    "checked_items": 0
+  },
+  {
+    "line": 273,
+    "section": "Audit every path derived from `database_path` for overlay-order dependence",
+    "open_items": 6,
+    "checked_items": 0
+  },
+  {
+    "line": 463,
+    "section": "Operation parent/child lineage is never populated by the BACKEND",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 490,
+    "section": "Two db-optimize ops exist; only one reports progress",
+    "open_items": 1,
+    "checked_items": 4
+  },
+  {
+    "line": 688,
+    "section": "Decide whether to cap openai-go's own retry loop",
+    "open_items": 5,
+    "checked_items": 0
+  },
+  {
+    "line": 785,
+    "section": "The review lane still downloads the entire candidate set (2026-09-09)",
+    "open_items": 4,
+    "checked_items": 2
+  },
+  {
+    "line": 932,
+    "section": "ABS layer hides every `imported` book — author pages undercount (2026-09-07)",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 995,
+    "section": "Why the books are `imported` is NOT yet established",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 1031,
+    "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 1055,
+    "section": "Re-enable SQLite activity backend after details compression (2026-09-07)",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 1072,
+    "section": "Sweep `api.ts` for missing `{data:…}` envelope unwraps (2026-09-07)",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 1134,
+    "section": "`GET /operations/timeline` silently ignores its query filters (2026-09-07)",
+    "open_items": 1,
+    "checked_items": 3
+  },
+  {
+    "line": 1209,
+    "section": "Every rescan reverts `library_state` organized→imported, emptying ABS (2026-09-07)",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 1335,
+    "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+    "open_items": 10,
+    "checked_items": 4
+  },
+  {
+    "line": 1511,
+    "section": "Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07)",
+    "open_items": 22,
+    "checked_items": 4
+  },
+  {
+    "line": 2006,
+    "section": "Activity SQLite backend — follow-ups after the cutover",
+    "open_items": 13,
+    "checked_items": 4
+  },
+  {
+    "line": 2185,
+    "section": "Provider throttling — follow-ups",
+    "open_items": 5,
+    "checked_items": 0
+  },
+  {
+    "line": 2211,
+    "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 2226,
+    "section": "`TestCopyFile_PinnedNonce_OnlyOneWriterOpensTheTemp` is flaky in CI (2026-09-05)",
+    "open_items": 0,
+    "checked_items": 1
+  },
+  {
+    "line": 2258,
+    "section": "Orphan duplicate series rows (found fixing the ABS black tiles, 2026-09-05)",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 2270,
+    "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 2470,
+    "section": "`TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` asserts on the ffprobe version, not the code",
+    "open_items": 5,
+    "checked_items": 0
+  },
+  {
+    "line": 2540,
+    "section": "`Book.author_name` is declared in TypeScript but the API never sends it",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 2555,
+    "section": "Dedup search resolves book IDs with a full `GetAllBooksCore` read",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 2574,
+    "section": "`internal/personname` silently drops every Georgian author (and the obvious fix is inert)",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 2722,
+    "section": "`SearchBooks` compares a NORMALIZED author name against a raw lower-cased query",
+    "open_items": 6,
+    "checked_items": 0
+  },
+  {
+    "line": 2824,
+    "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 2917,
+    "section": "testing/synctest adoption — remaining candidates (follow-up to the scoped pilot)",
+    "open_items": 23,
+    "checked_items": 0
+  },
+  {
+    "line": 3309,
+    "section": "Applied books stay in the list in BulkMetadataSearchDialog",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 3339,
+    "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 3384,
+    "section": "Move database backups off the database's own filesystem",
+    "open_items": 9,
+    "checked_items": 0
+  },
+  {
+    "line": 3456,
+    "section": "Auto-organize throws away a relationship it already has, then a later scan rediscovers it",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 3544,
+    "section": "P0: `book_file` row creation regressed between 2026-08-11 and 2026-08-14",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 3573,
+    "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+    "open_items": 5,
+    "checked_items": 2
+  },
+  {
+    "line": 3780,
+    "section": "`/reconcile/latest-scan` hides an older, usable preview behind an unparseable newer one",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 3816,
+    "section": "Finish the LLM fallback chain — stages 2 through 4",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 3872,
+    "section": "The path→author parser exists twice, the copies have diverged, and only one of them runs",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 3914,
+    "section": "The \"Unknown Author\" repair is two populations, and only one is cheap",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 4017,
+    "section": "Data repair",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 4033,
+    "section": "`ensureSingleFileBookFile` is now a backlog-only backfill — decide its retirement",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 4067,
+    "section": "staticcheck gates nothing on a PR — decide whether it should",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 4110,
+    "section": "Scanner / scan cache",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 4130,
+    "section": "AI filename parsing is queued now — what to verify after deploy",
+    "open_items": 5,
+    "checked_items": 0
+  },
+  {
+    "line": 4180,
+    "section": "Update Deluge when the organizer moves a book's files",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 4202,
+    "section": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 4246,
+    "section": "Scan cache is keyed per-book but the skip decision is per-file",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 4290,
+    "section": "🟡 `recompute-book-aggregates`'s `Force` flag is inert, and two log lines advertise it",
+    "open_items": 2,
+    "checked_items": 2
+  },
+  {
+    "line": 4369,
+    "section": "Repair the book rows that were written one-per-track",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 4398,
+    "section": "Scan cache: size and fix the \"no book row at this path\" population",
+    "open_items": 5,
+    "checked_items": 2
+  },
+  {
+    "line": 4537,
+    "section": "Scan/rescan lane — what is left after the rescan-age gate",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 4604,
+    "section": "`CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 4639,
+    "section": "The directory author fallback reads the TITLE as the author on organized books",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 4679,
+    "section": "`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics",
+    "open_items": 50,
+    "checked_items": 17
+  },
+  {
+    "line": 6546,
+    "section": "CI / automation",
+    "open_items": 5,
+    "checked_items": 2
+  },
+  {
+    "line": 6640,
+    "section": "ABS",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 6670,
+    "section": "Dedup",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 6695,
+    "section": "🧪 `internal/database` short tests intermittently HANG in CI, and raising the timeout has stopped working",
+    "open_items": 3,
+    "checked_items": 1
+  },
+  {
+    "line": 6762,
+    "section": "✅ Second, unrelated Coverage Floor failure — FIXED in this PR",
+    "open_items": 1,
+    "checked_items": 1
+  },
+  {
+    "line": 6809,
+    "section": "Docs / API",
+    "open_items": 0,
+    "checked_items": 1
+  },
+  {
+    "line": 6889,
+    "section": "Security",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 6910,
+    "section": "Docs",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 6971,
+    "section": "ABS surface — what is still missing after the series/playlist fix",
+    "open_items": 7,
+    "checked_items": 3
+  },
+  {
+    "line": 7151,
+    "section": "Library data integrity — surfaced by the chapters-backfill cohort run",
+    "open_items": 6,
+    "checked_items": 0
+  },
+  {
+    "line": 7209,
+    "section": "Follow-up on the op itself",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 7219,
+    "section": "BUG: 10,780 version groups elect MORE than one primary",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 7352,
+    "section": "Organize/apply rename paths: three hand-verified silent failures",
+    "open_items": 13,
+    "checked_items": 1
+  },
+  {
+    "line": 7575,
+    "section": "Config",
+    "open_items": 2,
+    "checked_items": 2
+  },
+  {
+    "line": 7674,
+    "section": "Dedup",
+    "open_items": 3,
+    "checked_items": 0
+  },
+  {
+    "line": 7759,
+    "section": "Config",
+    "open_items": 26,
+    "checked_items": 9
+  },
+  {
+    "line": 9029,
+    "section": "⚠️ The activity channel overflows during organize and DROPS records",
+    "open_items": 4,
+    "checked_items": 1
+  },
+  {
+    "line": 9213,
+    "section": "✅ FIXED — `EmbeddingStore.Close()` deadlocked against in-flight writes",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9345,
+    "section": "🔴 An empty `FieldFilter` value silently returns the WHOLE library",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9386,
+    "section": "✅ ANSWERED — the organize target-path collisions are DISTINCT BOOKS, not one book's files",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9509,
+    "section": "🔴 `RecomputeBookAggregates` is O(N²) on one write path and never runs on the other",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9669,
+    "section": "🔴 Stored ZERO values shadow every `scheduled.*` default — nothing has been scanning",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 9780,
+    "section": "✅ Six scheduled tasks were enabled but could never run",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9845,
+    "section": "✅ An empty `FieldFilter` value matched the WHOLE LIBRARY (fixed)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 9895,
+    "section": "Search: \"keyword\" fields are not exact-match at all",
+    "open_items": 17,
+    "checked_items": 5
+  },
+  {
+    "line": 10180,
+    "section": "Author table: copyright text and HTML entities leaked into artist tags",
+    "open_items": 5,
+    "checked_items": 0
+  },
+  {
+    "line": 10205,
+    "section": "Author table: book titles are being comma-split into author rows",
+    "open_items": 6,
+    "checked_items": 0
+  },
+  {
+    "line": 10231,
+    "section": "Author table: misspelling shared by both rows of a duplicate pair",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 10238,
+    "section": "B06 chapters end-to-end: VERIFIED on prod — E02 backfill only needs the residue",
+    "open_items": 1,
+    "checked_items": 0
+  },
+  {
+    "line": 10276,
+    "section": "C111 census: the nil `is_primary_version` population is 5,702 (all ungrouped) — \"22,552 nils\" was a misread",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 10315,
+    "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes to 3,953 instrument + 2 quarantined + 0 unexplained",
+    "open_items": 2,
+    "checked_items": 1
+  },
+  {
+    "line": 10446,
+    "section": "56 duplicate-name author groups, and most of them are not authors",
+    "open_items": 4,
+    "checked_items": 0
+  },
+  {
+    "line": 10511,
+    "section": "F110 measured: playlist-item PID coverage is 88.5% via ExternalIDMapping — F111 is GO",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 10538,
+    "section": "`is_primary_version` means different things on the library path and the author path",
+    "open_items": 2,
+    "checked_items": 1
+  },
+  {
+    "line": 10600,
+    "section": "PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`",
+    "open_items": 8,
+    "checked_items": 5
+  },
+  {
+    "line": 10723,
+    "section": "memdb and Pebble disagree about author→book links — ROOT-CAUSED, one step left",
+    "open_items": 2,
+    "checked_items": 2
+  },
+  {
+    "line": 10806,
+    "section": "Offset-pagination walkers: 5 remaining + the CI flake is NOT the cross-page swap",
+    "open_items": 7,
+    "checked_items": 0
+  },
+  {
+    "line": 10881,
+    "section": "Bleve index holds ~3,953 docs for soft-deleted books",
+    "open_items": 2,
+    "checked_items": 0
+  },
+  {
+    "line": 10899,
+    "section": "2026-06-22 security-sweep: the items still open after the status pass",
+    "open_items": 10,
+    "checked_items": 3
+  },
+  {
+    "line": 11038,
+    "section": "Soft-deleting a book UPSERTS it into the search index",
+    "open_items": 0,
+    "checked_items": 2
+  },
+  {
+    "line": 11054,
+    "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+    "open_items": 37,
+    "checked_items": 15
+  },
+  {
+    "line": 11760,
+    "section": "Update 2026-08-16: one of these was NOT pre-existing",
+    "open_items": 67,
+    "checked_items": 42
+  },
+  {
+    "line": 16332,
+    "section": "DATA: BookFile rows are duplicated 2× AND their durations are milliseconds, not seconds",
+    "open_items": 4,
+    "checked_items": 7
+  },
+  {
+    "line": 16531,
+    "section": "BUG: `AssignOrphanVGs` can silently skip books — offset pagination over an async memdb snapshot",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16585,
+    "section": "⚠️ DEPLOY GATE: /metrics now requires auth — configure Prometheus BEFORE the next deploy",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16632,
+    "section": "LATENT: web OAuth callback silently discards a custom-scheme `return`, falling back to `/`",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16699,
+    "section": "GAP: only ~19.5% of books have cover art, so most ABS clients show placeholders",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16747,
+    "section": "UNSPECIFIED: play counts and listening history have no designed ABS surface",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16785,
+    "section": "✅ SHIPPED — ABS progress-mutation endpoints exist (verified against `router.Routes()` 2026-08-14: `PATCH/DELETE /api/me/progress/:id`, batch update, all four remove-from-continue-listening forms, bookmarks CRUD — see `docs/reference/abs-implementation-status.md`)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 16842,
+    "section": "MISSING (op now built, run pending): no book had stored chapters — `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+    "open_items": 5,
+    "checked_items": 2
+  },
+  {
+    "line": 17116,
+    "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+    "open_items": 19,
+    "checked_items": 2
+  },
+  {
+    "line": 17358,
+    "section": "Dedup (10)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17402,
+    "section": "Identification / metadata (5)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17416,
+    "section": "Pipeline (8)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17467,
+    "section": "Workflow / ops (4)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17484,
+    "section": "Logging / verification / security-ops (5)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17498,
+    "section": "Infra (5)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17551,
+    "section": "UX (4)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17561,
+    "section": "Other / close-out (10)",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17673,
+    "section": "Dedup + review consolidation (3) — 2026-07-18 owner request",
+    "open_items": 0,
+    "checked_items": 0
+  },
+  {
+    "line": 17735,
+    "section": "2026-07-17 review findings — remaining (post-fix-wave)",
+    "open_items": 2,
+    "checked_items": 11
+  }
+]

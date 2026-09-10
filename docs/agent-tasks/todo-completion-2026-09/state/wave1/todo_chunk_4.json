@@ -1,0 +1,806 @@
+[
+ {
+  "line": 11073,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": null,
+  "text": "- [ ] Decide whether the list should filter on `version_group_id` at all. There"
+ },
+ {
+  "line": 11077,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": null,
+  "text": "- [ ] If yes: add a `case \"version_group_id\"` to `bookFieldValue` and the name"
+ },
+ {
+  "line": 11082,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": null,
+  "text": "- [ ] If no: it still must not answer with the whole library. Extend the guard"
+ },
+ {
+  "line": 11092,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": null,
+  "text": "- [ ] **124 files remain 0600 after the fix-file-modes repair (1,547 repaired),"
+ },
+ {
+  "line": 11134,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **ABS series list emits a non-ABS `books[]` shape, and no series render in ABS clients.**"
+ },
+ {
+  "line": 11166,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **The AI-scan cancel wiring is unverified, and it fails silently.**"
+ },
+ {
+  "line": 11195,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md`"
+ },
+ {
+  "line": 11230,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **\"Dynamic\" collections are currently *manually* refreshed.** A query-backed"
+ },
+ {
+  "line": 11246,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **`POST /api/session/local-all` 404s.** Observed from the app alongside the"
+ },
+ {
+  "line": 11252,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **Finish (or delete) the iTunes plugin op migration.** `internal/plugins/itunes/`"
+ },
+ {
+  "line": 11260,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **Wire `itunes.position-sync` or drop it.** `internal/itunes/service/position_sync.go`"
+ },
+ {
+  "line": 11287,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **`ClearStaleOperations` is still wired, deliberately.** `POST"
+ },
+ {
+  "line": 11332,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **`library.import`, `library.organize` and `library.transcode` still carry the"
+ },
+ {
+  "line": 11338,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **Convert the remaining long-running `ResumeDrop` ops to real resume.** The"
+ },
+ {
+  "line": 11349,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **Forward `IsCanceled()` through `reporterLogger` and exercise the four guards it wakes up.**"
+ },
+ {
+  "line": 11368,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Search placeholder hint missing when navigating to All Books from Finished",
+  "text": "- [ ] **Audit the other two silently-stubbed `StandardLogger` methods.**"
+ },
+ {
+  "line": 11423,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Import-path scan no longer surfaces per-file scan errors",
+  "text": "- [ ] **3 scheduled tasks are ENABLED but can never run.** Startup logs"
+ },
+ {
+  "line": 11448,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/server/wire_abs_routes.go:494` \u2014 bare `s.Store().(*database.PebbleStore)`"
+ },
+ {
+  "line": 11461,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/merge/service.go:34-42` \u2014 `AsExternalIDReassigner` uses a bare"
+ },
+ {
+  "line": 11466,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/operations/registry/register.go:40-42` \u2014 `prodSchedulerStore` embeds"
+ },
+ {
+  "line": 11477,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/importer/service.go:27-31` \u2014 `type Store = database.Store` justified by"
+ },
+ {
+  "line": 11479,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/server/handlers/organize.go:57-62` \u2014 `type OrganizeStore = database.Store`"
+ },
+ {
+  "line": 11510,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Store-interface audit \u2014 defects found incidentally (each independent of the refactor)",
+  "text": "- [ ] `internal/operations/mocks` \u2014 206 generated lines, effectively unreferenced."
+ },
+ {
+  "line": 11599,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Stranded `.tmp-rename` recovery \u2014 bisect complete, recovery outstanding",
+  "text": "- [ ] Recovery tool. Dry-run by default, full report before anything moves."
+ },
+ {
+  "line": 11607,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Stranded `.tmp-rename` recovery \u2014 bisect complete, recovery outstanding",
+  "text": "- [ ] Compare with per-file SHA-256; where hashes differ because of embedded"
+ },
+ {
+  "line": 11611,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Stranded `.tmp-rename` recovery \u2014 bisect complete, recovery outstanding",
+  "text": "- [ ] Investigate book rows affected as a side effect. `scrubVar`'s own comment"
+ },
+ {
+  "line": 11615,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Stranded `.tmp-rename` recovery \u2014 bisect complete, recovery outstanding",
+  "text": "- [ ] Confirm no new bogus directories appear now that both the pattern and the"
+ },
+ {
+  "line": 11628,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "Stranded `.tmp-rename` recovery \u2014 bisect complete, recovery outstanding",
+  "text": "- [ ] **Maintenance window: watchdog cancels it, then the plugin reports success.** Prod"
+ },
+ {
+  "line": 11661,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **Classify the 71,954 missing `book_file` rows by shape before any"
+ },
+ {
+  "line": 11668,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **Decide the 16,265 books with no surviving file** (was believed to be 5,"
+ },
+ {
+  "line": 11670,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **`missing-file-repair` dry run hit the 20,000 `max_deletes` cap.** The true"
+ },
+ {
+  "line": 11672,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **1,006 missing rows are under the iTunes tree**, contradicting the"
+ },
+ {
+  "line": 11675,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **61 rows carry a mangled `/X:/books/itunes/Audiobooks` Windows path.**"
+ },
+ {
+  "line": 11677,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **Decide what to do with the books whose EVERY `book_file` row is dead.** The"
+ },
+ {
+  "line": 11686,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **Answer why the organizer recorded destination rows it never populated.**"
+ },
+ {
+  "line": 11691,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udc1b `book_file.missing` / `file_exists` are stale \u2014 nothing maintains them",
+  "text": "- [ ] **Register `HEAD` for the audio/file routes.** The server registers no `HEAD` handler"
+ },
+ {
+  "line": 11727,
+  "section": "`?version_group_id=` lists the whole library, and cannot be guarded",
+  "subsection": "\ud83d\udd34 `dedup.llm-review` holds a library write with no `ConcurrencyKey` \u2014 it can run concurrently with itself",
+  "text": "- [ ] **Six E2E mocks point at operation URLs that no longer exist, and two"
+ },
+ {
+  "line": 11788,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": null,
+  "text": "- [ ] **Add an `{edition_suffix}` folder-pattern token.** Two editions of the same"
+ },
+ {
+  "line": 11804,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": null,
+  "text": "- [ ] **Investigate the LLM host's GPU cooling before running another full `library.scan`.**"
+ },
+ {
+  "line": 11821,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": null,
+  "text": "- [ ] **`make ci` cannot pass on `main` \u2014 staticcheck has 10 findings and aborts the target**"
+ },
+ {
+  "line": 11964,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Compound narrator names are not split into individual narrators",
+  "text": "- [ ] **`OperationDef.Permissions` is enforced by nothing \u2014 and PR-3 is about to delete the code that *is* doing the enforcing**"
+ },
+ {
+  "line": 12038,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Contributor data cleanup \u2014 follow-ups to `maintenance.purge-empty-authors`",
+  "text": "- [ ] **Narrator equivalent of the empty-author purge.** There is no"
+ },
+ {
+  "line": 12042,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Contributor data cleanup \u2014 follow-ups to `maintenance.purge-empty-authors`",
+  "text": "- [ ] **Decide what the 822 zero-book-but-has-files authors actually are.** Measured"
+ },
+ {
+  "line": 12048,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Contributor data cleanup \u2014 follow-ups to `maintenance.purge-empty-authors`",
+  "text": "- [ ] **Author\u2194narrator swap repair.** Measured lower bound: 1,052 names appear in"
+ },
+ {
+  "line": 12226,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "`ResumeRequeue` has two live implementations that disagree about params",
+  "text": "- [ ] **Store-parameter narrowing: 54 declarations remain.** Re-measured 2026-08-17 by AST."
+ },
+ {
+  "line": 12251,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Run the classify pass in prod** and record the numbers."
+ },
+ {
+  "line": 12256,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Build the re-point repair.** It must UPDATE `file_path` to the flat name the"
+ },
+ {
+  "line": 12260,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Decide what happens to the 16,265 fully-broken books** (every file entry dead)."
+ },
+ {
+  "line": 12263,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Missing-file audit Phase 1a still has no PR and is not mutation-tested.**"
+ },
+ {
+  "line": 12268,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **`database.Store` is grouped, not yet unreachable.** `.interface-width-baseline`"
+ },
+ {
+  "line": 12296,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **AudiobookShelf-compatible API: series are broken, and collections/playlists are"
+ },
+ {
+  "line": 12456,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **`book-detail.spec.ts` \"soft delete, restore, and purge flow\" fails only in the full"
+ },
+ {
+  "line": 12732,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **You cannot sort the library from the UI.** The \"Sort by\" and \"Order\""
+ },
+ {
+  "line": 12800,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Per-field \"Use File\" / \"Use Fetched\" one-click apply is gone from Book Detail"
+ },
+ {
+  "line": 12815,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Visual-regression goldens exist only for darwin.**"
+ },
+ {
+  "line": 12915,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Replace library sorting with server-side Go sorting.** Owner decision 2026-08-09:"
+ },
+ {
+  "line": 12961,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The checked-in `.api-token` no longer authenticates, and it blocked a real"
+ },
+ {
+  "line": 13069,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **You can no longer navigate between versions of a book.** Book Detail used to"
+ },
+ {
+  "line": 13086,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The library card's overflow menu button has no accessible name.**"
+ },
+ {
+  "line": 13222,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **`scan-import-organize.spec.ts` (7 failures) \u2014 Settings tab deep-link"
+ },
+ {
+  "line": 13253,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **E2E repair progress \u2014 measured 2026-08-09. Supersedes the stale"
+ },
+ {
+  "line": 13312,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **`version-management.spec.ts` (6 failures) \u2014 version management MOVED off"
+ },
+ {
+  "line": 13529,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **\u2696\ufe0f DECIDE which sort indexes to enable \u2014 the design-doc cost estimate was ~10\u00d7"
+ },
+ {
+  "line": 13816,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Audit every e2e mock handler against whether its app-side reader"
+ },
+ {
+  "line": 14037,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The library \"Sort by\" control no longer exists \u2014 4 e2e tests target a"
+ },
+ {
+  "line": 14082,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The unified Dedup view has no e2e coverage at all.** Found 2026-08-09"
+ },
+ {
+  "line": 14232,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Stop Deluge writing in-progress downloads directly into the new-books"
+ },
+ {
+  "line": 14263,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Require every operation to support `dry_run`, and enforce it at the"
+ },
+ {
+  "line": 14377,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **TODO-MUI-1** MUI upgrade Step 1 \u2014 `@mui/*` 5.14 \u2192 6.x (brief:"
+ },
+ {
+  "line": 14401,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **TODO-MUI-2** MUI upgrade Step 2 \u2014 `@mui/*` 6.x \u2192 7.x including the"
+ },
+ {
+  "line": 14462,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **TODO-MUI-4** MUI upgrade Step 4 \u2014 `@mui/*` 7.x \u2192 9.x (final hop; there"
+ },
+ {
+  "line": 14572,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Move library filtering/search into the Go server as a real, declared"
+ },
+ {
+  "line": 14655,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Fix the Library \"In Progress\" nav item \u2014 the selection highlight never"
+ },
+ {
+  "line": 14773,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The Library must never show an empty \"no items\" state unless the"
+ },
+ {
+  "line": 14880,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Never accumulate more than 10 RCs on a version \u2014 cut the stable release"
+ },
+ {
+  "line": 14947,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **~180 \"bracketed series\" are actually one shattered book each** \u2014 found by"
+ },
+ {
+  "line": 14978,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Give the 466 low-confidence series positions somewhere to go** \u2014 deferred"
+ },
+ {
+  "line": 15004,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **react-router GHSA-qwww-vcr4-c8h2 \u2014 accepted, not reachable, do not"
+ },
+ {
+  "line": 15092,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **`DeleteBookFilesForBook` leaves stale memdb rows behind.** It never calls"
+ },
+ {
+  "line": 15101,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **The 3 dangerous multidisc holds are DUPLICATES, not series \u2014 feed them to"
+ },
+ {
+  "line": 15129,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Frontend framework versions \u2014 how far behind we actually are, and the"
+ },
+ {
+  "line": 15172,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Per-file intro transcription as the primary book-identity signal** \u2014 owner"
+ },
+ {
+  "line": 15220,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Tiered backfill.** Naive \"every file\" is ~284,000 files \u2248 12\u201314 days of"
+ },
+ {
+  "line": 15227,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Wire into the regroup classifier**, outranking runtime where both exist."
+ },
+ {
+  "line": 15230,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Wire into First Aid** as a tier-2 signal beside the duration probe, and"
+ },
+ {
+  "line": 15255,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Stand up a second Whisper worker on the spare CPU node.** Owner request"
+ },
+ {
+  "line": 15289,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Investigate: 79% of books with a stored transcript are marked"
+ },
+ {
+  "line": 15407,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Version-group acoustic audit op** \u2014 verify that books marked as VERSIONS"
+ },
+ {
+  "line": 15439,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Verify the server actually returns chapters to clients** \u2014 confirm the"
+ },
+ {
+  "line": 15467,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Backfill chapters into files that lack them, using a duplicate as the"
+ },
+ {
+  "line": 15502,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Playlists \u2014 implement the whole surface** \u2014 owner request 2026-08-05:"
+ },
+ {
+  "line": 15531,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Reading status and review/rating must sync from the app back to the"
+ },
+ {
+  "line": 15563,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Use Deluge as a metadata and identity source** \u2014 owner idea 2026-08-05:"
+ },
+ {
+  "line": 15594,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Use Deluge's per-torrent file list as ground truth for GROUPING** \u2014 owner"
+ },
+ {
+  "line": 15693,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Canary the multidisc applies behind a before/after snapshot** \u2014 owner"
+ },
+ {
+  "line": 15746,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **\"First Aid\" \u2014 one sequenced library validate + repair system** \u2014 owner"
+ },
+ {
+  "line": 15766,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] Tier-2 duration probe for the **1,019** directory-shaped books that went"
+ },
+ {
+  "line": 15769,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] Duplicate detection + **combine-by-template** + version-group (the"
+ },
+ {
+  "line": 15771,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] Orchestrator + frontend button, dry-run by default, no schedule."
+ },
+ {
+  "line": 15772,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Missing-input triggering:** when a check's input is absent, ENQUEUE the"
+ },
+ {
+  "line": 15799,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Never delete \u2014 re-associate (duplicate resolution)**. Deleting a"
+ },
+ {
+  "line": 15856,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Remaining after the first apply:** 1,019 directory-shaped books held for"
+ },
+ {
+  "line": 15876,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Re-run `regroup-shattered-ai` after relink and re-measure the queue.**"
+ },
+ {
+  "line": 16115,
+  "section": "Update 2026-08-16: one of these was NOT pre-existing",
+  "subsection": "Missing-file lane \u2014 follow-ups after the report-only change (#2614)",
+  "text": "- [ ] **Corrected book aggregates are invisible until memdb refreshes.**"
+ },
+ {
+  "line": 16515,
+  "section": "DATA: BookFile rows are duplicated 2\u00d7 AND their durations are milliseconds, not seconds",
+  "subsection": "Status 2026-08-04",
+  "text": "- [ ] **`The Trapped Mind Project` is a 13-second stub, not an audiobook**"
+ },
+ {
+  "line": 16522,
+  "section": "DATA: BookFile rows are duplicated 2\u00d7 AND their durations are milliseconds, not seconds",
+  "subsection": "Status 2026-08-04",
+  "text": "- [ ] **5 books are multi-copy, not row-duplicated** \u2014 distinct paths for the same"
+ },
+ {
+  "line": 16525,
+  "section": "DATA: BookFile rows are duplicated 2\u00d7 AND their durations are milliseconds, not seconds",
+  "subsection": "Status 2026-08-04",
+  "text": "- [ ] **`Call to Arms` (9,957h)** \u2014 96 *distinct* files, unchanged by the dedupe run."
+ },
+ {
+  "line": 16527,
+  "section": "DATA: BookFile rows are duplicated 2\u00d7 AND their durations are milliseconds, not seconds",
+  "subsection": "Status 2026-08-04",
+  "text": "- [ ] **Corrected aggregates are invisible until memdb refreshes** \u2014 see the"
+ },
+ {
+  "line": 16927,
+  "section": "MISSING (op now built, run pending): no book had stored chapters \u2014 `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+  "subsection": "Decision needed",
+  "text": "- [ ] **TODO-SSO-EDGE** Neither native-app auth mode is actually configured at"
+ },
+ {
+  "line": 16949,
+  "section": "MISSING (op now built, run pending): no book had stored chapters \u2014 `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+  "subsection": "Decision needed",
+  "text": "- [ ] **TODO-SEC-BIND** The service binds every interface"
+ },
+ {
+  "line": 16960,
+  "section": "MISSING (op now built, run pending): no book had stored chapters \u2014 `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+  "subsection": "Decision needed",
+  "text": "- [ ] **TODO-SEC-JWT** Rotate `ABS_JWT_SECRET` \u2014 it was pasted in plaintext into"
+ },
+ {
+  "line": 16966,
+  "section": "MISSING (op now built, run pending): no book had stored chapters \u2014 `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+  "subsection": "Decision needed",
+  "text": "- [ ] **TODO-SEC-SYSTEMD** The unit has `User=audiobook`, `NoNewPrivileges`,"
+ },
+ {
+  "line": 16976,
+  "section": "MISSING (op now built, run pending): no book had stored chapters \u2014 `maintenance.chapters-backfill` shipped (#2364, fixed #2368/#2370, path-fallback #2372) but has NOT been run library-wide; the run decision is tracked as E02 in the 2026-08-14 task breakdown",
+  "subsection": "Decision needed",
+  "text": "- [ ] **TODO-SRVTIMEOUT** Split or speed up the `internal/server` test package \u2014"
+ },
+ {
+  "line": 17162,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`"
+ },
+ {
+  "line": 17175,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: consolidate the two DRM detection paths, and wire one into the"
+ },
+ {
+  "line": 17185,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so \u00a74.3's"
+ },
+ {
+  "line": 17201,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: wave 2 \u2014 scanner + merge wiring.** Briefs in"
+ },
+ {
+  "line": 17205,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: wave 3 \u2014 backfill + survival proof.** TASK-04 (idempotent sync-ID"
+ },
+ {
+  "line": 17209,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: TASK-11 \u2014 auth core, both credential modes.** Brief not yet written."
+ },
+ {
+  "line": 17216,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: Phase 3 \u2014 DTO mapping + library browse.** Depends on waves 1\u20132 and"
+ },
+ {
+  "line": 17222,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: Phase 5b \u2014 playback routes.** `POST /api/items/:id/play`,"
+ },
+ {
+  "line": 17226,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: Phase 7 \u2014 socket.io (Absorb only).** AudioBooth needs no websocket at"
+ },
+ {
+  "line": 17230,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **ABS-SYNC: Phase 8 \u2014 topology, runbook, migration guide.** Cloudflare Access"
+ },
+ {
+  "line": 17238,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **REGROUP-PARTCHAPTER-PARSER** The Mistborn-style \"Ambiguous folder\" case"
+ },
+ {
+  "line": 17244,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes 2-way-sync P3 (cleanup) \u2014 decision: MEASURE-AND-STOP, no removal machinery.**"
+ },
+ {
+  "line": 17255,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes 2-way-sync \u2014 remaining P0 measurements.** (a) Cross-type PID collisions"
+ },
+ {
+  "line": 17262,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes 2-way-sync P2 \u2014 relocate-only sync cycle (MVP end).** All prerequisites are"
+ },
+ {
+  "line": 17278,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**"
+ },
+ {
+  "line": 17290,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **\ud83d\udea7 P2 BLOCKER \u2014 location-form guard rejects the entire live AO library (F7).** The"
+ },
+ {
+  "line": 17307,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes 2-way-sync \u2014 continuation (P3 redefine + reverse sync + footgun audit).**"
+ },
+ {
+  "line": 17319,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes book_file PID uniqueness \u2014 apply the backfill repair (gated).** Forward"
+ },
+ {
+  "line": 17329,
+  "section": "SEC: origin is reachable from the LAN \u2014 \"bind loopback\" is NOT achievable as specified",
+  "subsection": null,
+  "text": "- [ ] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed"
+ },
+ {
+  "line": 17771,
+  "section": "2026-07-17 review findings \u2014 remaining (post-fix-wave)",
+  "subsection": "Remaining \u2014 execution state (briefs)",
+  "text": "- [ ] **T03** \u2014 **sandbox** purge wave: `maintenance.dedup-exact-triage {\"apply\":true}` (dismiss"
+ },
+ {
+  "line": 17789,
+  "section": "2026-07-17 review findings \u2014 remaining (post-fix-wave)",
+  "subsection": "Remaining \u2014 execution state (briefs)",
+  "text": "- [ ] **T13** \u2014 docs truth-up with measured sandbox/prod numbers (dedup/STATUS.md, pending-prod-actions.md, exec summary) \u2014 in progress"
+ }
+]
