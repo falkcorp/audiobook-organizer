@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -28,7 +28,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
-| 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:25 (duplicates_helpers.go) |
+| 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 HELD (15:44) |
 | 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:27 (series_denumber_op.go) |
 | 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | dispatched 15:36 (series_dedup.go) |
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
@@ -115,4 +115,10 @@ security) are HELD OPEN for the owner — never admin-merged.
 - L4244 measure-only: existing `maintenance.dedupe-book-file-rows` (dry-run default) counts a FLOOR (groups BookID+FilePath; misses cross-book path dupes and all PID dupes). Owner decision: run dry / run apply / fund an ~80-line read-only PID+cross-book count op. Nothing run on prod.
 - Anchor drift: `enforceBookFilePIDUniqueness` no longer exists (`stagePIDTransfer` replaced it); the gap is real.
 - PR #3188 — HELD for owner. On merge check off L4241, L4242, L4243 (test exists verbatim); L4244 stays open.
+
+### TASK-346 — TODO L2887 series-normalize trashed-row guard
+
+- Worktree `.worktrees/server-handlers-346`, branch `agent/server-handlers-346-series-normalize-trashed-gap-mergeseries`, sha `a32008be5`.
+- `executeSeriesNormalizeCore` reads unfiltered `SeriesRefCounts` once (read failure refuses the pass); `mergeSeriesGroupHelper(store, keep, merges, refCounts) (merged, refused, err)` refuses `DeleteSeries` when `refCounts[from] - moved > 0`, reporting into `errs`. New test + 2 signature updates. Gate exit 0; staticcheck 0 in touched files.
+- PR #3189 — HELD for owner. `TODO.md` L2887 to check off on merge.
 
