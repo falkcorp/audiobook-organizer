@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -240,7 +240,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// a new terminal state is added, and silently under-reports until someone
 	// remembers"), and a whitelist here would import that same rot — a newly added
 	// status would become unqueryable with a 400 until someone updated this file.
-	// An unknown value is instead answered honestly: scope echoes the status that
+	// An unknown value is instead answered as-is: scope echoes the status that
 	// was asked for, and matched is 0.
 	status := c.Query("status")
 
@@ -455,7 +455,7 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 // It exists because the legacy operations handler used to provide this and the
 // system/diagnostics routes consumed it from there. That implementation fell back
 // to the legacy `operations` table, which never moves rows out of `pending`; this
-// one reads v2 only. Same interface, honest source.
+// one reads v2 only. Same interface, truthful source.
 func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 	id := c.Param("id")
 	if h.opsStore == nil {
@@ -555,36 +555,8 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 		return
 	}
 
-	// Enforce the def's declared Permissions.
-	//
-	// The route-level guard on POST /operations/v2 is a single blanket
-	// scan.trigger for EVERY op (wire_operations_routes.go), so without this the
-	// per-def Permissions field is written to op_definitions_v2 and never read —
-	// it reads like a gate and behaves like a comment. The seeded editor role
-	// holds scan.trigger but not settings.manage, so the 37 maintenance ops were
-	// reachable by a role the v1 maintenance route rejects.
-	//
-	// This lives in the handler and NOT in registry.EnqueueOp on purpose:
-	// EnqueueOp has ~20 non-HTTP callers (internal/scheduler/tasks.go alone
-	// enqueues 15 op types from context.Background(), plus internal/importer and
-	// the dedup/maintenance plugins). Those carry no user and no permission set,
-	// so a check down there would fail closed on every scheduled run.
-	//
-	// Semantics are AND: every permission the def declares must be held. All defs
-	// carry exactly one today, so this is untestable by behaviour — it is stated
-	// here so the first two-permission def is not a coin flip.
-	//
-	// An unknown def_id deliberately skips the check and falls through to
-	// EnqueueOp, preserving today's error response. Nothing runs either way.
-	if h.enforcePerms {
-		if def, ok := h.registry.Def(body.DefID); ok {
-			for _, p := range def.Permissions {
-				if !auth.Can(c.Request.Context(), p) {
-					httputil.RespondWithForbidden(c, "permission denied: "+string(p))
-					return
-				}
-			}
-		}
+	if !h.defPermissionsHeld(c, body.DefID) {
+		return
 	}
 
 	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params)
@@ -594,6 +566,138 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"op_id": opID})
+}
+
+// defPermissionsHeld enforces the def's declared Permissions for the caller,
+// writing a 403 and returning false when one is missing. Shared by every
+// handler that enqueues a run on the caller's behalf (TriggerOperationV2,
+// RetryOperationV2) so the two cannot drift.
+//
+// The route-level guard on POST /operations/v2 is a single blanket
+// scan.trigger for EVERY op (wire_operations_routes.go), so without this the
+// per-def Permissions field is written to op_definitions_v2 and never read —
+// it reads like a gate and behaves like a comment. The seeded editor role
+// holds scan.trigger but not settings.manage, so the 37 maintenance ops were
+// reachable by a role the v1 maintenance route rejects.
+//
+// This lives in the handler and NOT in registry.EnqueueOp on purpose:
+// EnqueueOp has ~20 non-HTTP callers (internal/scheduler/tasks.go alone
+// enqueues 15 op types from context.Background(), plus internal/importer and
+// the dedup/maintenance plugins). Those carry no user and no permission set,
+// so a check down there would fail closed on every scheduled run.
+//
+// Semantics are AND: every permission the def declares must be held. All defs
+// carry exactly one today, so this is untestable by behaviour — it is stated
+// here so the first two-permission def is not a coin flip.
+//
+// An unknown def_id deliberately skips the check and falls through to
+// EnqueueOp, preserving today's error response. Nothing runs either way.
+func (h *OperationsV2Handler) defPermissionsHeld(c *gin.Context, defID string) bool {
+	if !h.enforcePerms {
+		return true
+	}
+	def, ok := h.registry.Def(defID)
+	if !ok {
+		return true
+	}
+	for _, p := range def.Permissions {
+		if !auth.Can(c.Request.Context(), p) {
+			httputil.RespondWithForbidden(c, "permission denied: "+string(p))
+			return false
+		}
+	}
+	return true
+}
+
+// isRetryableV2Status reports whether a v2 row is finished from the caller's
+// point of view and may be re-run: completed, failed, canceled, or any of the
+// interrupted_* family (quiesced, dropped, ask, restart). Everything else —
+// queued, running, waiting_deps — is still owned by the scheduler, and a
+// "retry" of it would be a duplicate run rather than a new attempt.
+func isRetryableV2Status(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled":
+		return true
+	}
+	return strings.HasPrefix(status, "interrupted_")
+}
+
+// RetryOperationV2 implements POST /api/v1/operations/v2/:id/retry.
+//
+// It enqueues a NEW run with the same def_id and the same params as the
+// finished op :id, through registry.EnqueueOp — the exact path POST
+// /operations/v2 takes, so the def's ConcurrencyKey dedupe, MergeQueuedParams
+// and Batchable handling all apply unchanged. Responds 202 with the new op's
+// id, def_id and status. 404 for an unknown id; 409 when the row is not in a
+// finished status (see isRetryableV2Status).
+//
+// Whether the new run continues from the old one's checkpoint is the def's
+// ResumePolicy's business, not this handler's: params are copied verbatim.
+// For a ResumeRestart def such as library.scan, resumeRestart merges the saved
+// checkpoint into the row's params on every resume, so a row that was resumed
+// at least once hands its resume_* position to the new run; a row that was
+// never resumed still has its checkpoint in op_state keyed by the OLD id, which
+// the new id never reads, so that run starts from the beginning.
+//
+// The status in the response is read back from the store rather than assumed:
+// a def with a ConcurrencyKey and DedupeQueuedRuns (library.scan again) makes
+// EnqueueOp return the id of an already-active run instead of minting one, and
+// that run may be "running". A batchable def returns an empty id — the run is
+// bucketed and gets its id at flush time — and is reported as queued.
+func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
+	id := c.Param("id")
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
+		return
+	}
+	if h.opsStore == nil {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+
+	row, err := h.opsStore.GetOperationV2(id)
+	if err != nil || row == nil || row.ID == "" {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+	if !isRetryableV2Status(row.Status) {
+		httputil.RespondWithConflict(c, fmt.Sprintf(
+			"operation %s is %s; only a completed, failed, canceled or interrupted operation can be retried",
+			id, row.Status))
+		return
+	}
+	if !h.defPermissionsHeld(c, row.DefID) {
+		return
+	}
+
+	// Pass the stored JSON through as-is. EnqueueOp marshals whatever it is
+	// given; a json.RawMessage marshals to its own bytes, so the new row carries
+	// byte-identical params. An empty stored value is left nil, which EnqueueOp
+	// normalizes to "{}" exactly as a fresh trigger with no params would.
+	var params any
+	if strings.TrimSpace(row.Params) != "" {
+		params = json.RawMessage(row.Params)
+	}
+
+	newID, err := h.registry.EnqueueOp(c.Request.Context(), row.DefID, params)
+	if err != nil {
+		httputil.InternalError(c, "enqueue failed", err)
+		return
+	}
+
+	status := "queued"
+	if newID != "" {
+		if fresh, gerr := h.opsStore.GetOperationV2(newID); gerr == nil && fresh != nil && fresh.Status != "" {
+			status = fresh.Status
+		}
+	}
+	slog.Info("retry: enqueued new run of finished operation",
+		"old_op_id", id, "old_status", row.Status, "new_op_id", newID, "def_id", row.DefID)
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"id":     newID,
+		"def_id": row.DefID,
+		"status": status,
+	})
 }
 
 // ListOpDefs implements GET /api/v1/op-defs.

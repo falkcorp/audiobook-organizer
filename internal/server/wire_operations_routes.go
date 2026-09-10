@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-08-26
+// last-edited: 2026-09-10
 
 package server
 
@@ -26,6 +26,9 @@ func (s *Server) wireOperationsRoutes(
 	protected.GET("/operations/v2/:id/logs/download", s.perm(auth.PermLibraryView), opsV2H.DownloadOperationLogs)
 	protected.GET("/operations/v2/:id", s.perm(auth.PermLibraryView), opsV2H.GetOperationV2)
 	protected.DELETE("/operations/v2/:id", s.perm(auth.PermSettingsManage), opsV2H.CancelOperationV2)
+	// Same guard as cancel: re-running a finished op is an operator action on
+	// an existing run, not a fresh scan trigger.
+	protected.POST("/operations/v2/:id/retry", s.perm(auth.PermSettingsManage), opsV2H.RetryOperationV2)
 	protected.POST("/operations/v2", s.perm(auth.PermScanTrigger), opsV2H.TriggerOperationV2)
 	protected.GET("/op-defs", s.perm(auth.PermLibraryView), opsV2H.ListOpDefs)
 	protected.GET("/op-defs/:id", s.perm(auth.PermLibraryView), opsV2H.GetOpDef)
