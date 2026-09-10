@@ -1,7 +1,7 @@
 // file: internal/covers/covers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
-// last-edited: 2026-05-18
+// last-edited: 2026-09-10
 //
 // Cover service logic for proxy caching and validation.
 // Business logic extracted from internal/server/covers.go.
@@ -16,9 +16,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
+
+// coverFetchTimeout bounds one proxied cover fetch. http.DefaultClient, which
+// this path used until 2026-09-10, has no timeout at all.
+const coverFetchTimeout = 30 * time.Second
 
 // ProxyCoverRequest holds parameters for proxying a cover image.
 type ProxyCoverRequest struct {
@@ -65,7 +71,29 @@ func GetCachePath(coverURL, cacheDir string) string {
 
 // FetchAndCacheCover fetches a cover from a URL and caches it.
 // Returns the cache path on success or an error string.
+//
+// IsAllowedCoverSource, which the HTTP handler applies before calling this, is
+// a string-prefix check on the FIRST URL only. It cannot see what an allowed
+// hostname resolves to, and it never sees a redirect target at all — so until
+// 2026-09-10 a 302 from covers.openlibrary.org to 169.254.169.254 was followed
+// and the response cached (CodeQL alert #645, go/request-forgery). The client
+// below applies the scheme allowlist, blocks private/reserved resolved
+// addresses on every hop, and caps the redirect chain.
 func FetchAndCacheCover(coverURL, cacheDir string) (string, string) {
+	return fetchAndCacheCoverWithClient(safehttp.NewClient(coverFetchTimeout), coverURL, cacheDir)
+}
+
+// fetchAndCacheCoverWithClient is the implementation, split out so tests can
+// substitute a plain client pointing at a loopback httptest server — the same
+// seam metadata.downloadCoverArtWithClient uses, and the only way to assert
+// that a permitted fetch still succeeds once the guard refuses loopback.
+func fetchAndCacheCoverWithClient(client *http.Client, coverURL, cacheDir string) (string, string) {
+	// Checked before the directory is created so a rejected URL leaves nothing
+	// behind on disk.
+	if err := safehttp.ValidateURL(coverURL); err != nil {
+		return "", "cover URL not allowed"
+	}
+
 	// Create cache directory
 	if err := os.MkdirAll(cacheDir, 0775); err != nil {
 		return "", "failed to create cache directory"
@@ -78,8 +106,10 @@ func FetchAndCacheCover(coverURL, cacheDir string) (string, string) {
 		return cachePath, ""
 	}
 
-	// Fetch from source
-	resp, err := http.Get(coverURL) //nolint:gosec // URL is validated by caller
+	// Fetch from source. The guard is in the client's transport and redirect
+	// hook, not on this line; the nolint is only about the missing context,
+	// which FetchAndCacheCover has no parameter for.
+	resp, err := client.Get(coverURL) //nolint:noctx // no caller-supplied context; client.Timeout bounds this
 	if err != nil {
 		return "", "failed to fetch cover"
 	}
