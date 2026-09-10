@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-10
 
