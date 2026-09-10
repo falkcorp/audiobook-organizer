@@ -1,5 +1,5 @@
 // file: internal/covers/covers_ssrf_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2da127b7-65dc-4e3a-9bcd-a25e71c11fd0
 // last-edited: 2026-09-10
 
@@ -39,6 +39,12 @@ func TestFetchAndCacheCover_RefusesLoopbackAddress(t *testing.T) {
 	}
 	if _, err := os.Stat(GetCachePath(srv.URL+"/cover.jpg", cacheDir)); err == nil {
 		t.Fatal("a cache file was written for a refused fetch")
+	}
+	// The caller only ever sees this string, so it is the one place a blocked
+	// address is distinguishable from an unreachable upstream. Asserting it
+	// also proves the guard's error survives net/http's wrapping intact.
+	if errMsg != "cover URL not allowed" {
+		t.Fatalf("errMsg = %q, want the blocked-address message; a refusal reported as a generic fetch failure is a silent failure", errMsg)
 	}
 }
 
