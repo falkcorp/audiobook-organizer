@@ -1,5 +1,5 @@
 // file: internal/metafetch/isbn.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
 // last-edited: 2026-09-10
 
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -25,12 +27,75 @@ import (
 type ISBNService struct {
 	db      isbnEnrichmentStore
 	sources []metadata.MetadataSource
+
+	// sourceSearchErrSamples rate-limits the WARN in sampleSourceSearchError
+	// per source name (map[string]*atomic.Int64, lazily populated). SF-03
+	// found isbn.go discarding every provider search error outright, so a
+	// throttled or circuit-open provider read identically to a legitimate
+	// zero-result search; this field only bounds log volume during a
+	// sustained outage across a whole-library sweep, it does not gate
+	// correctness -- see sourceSearchError.allErrored for that.
+	sourceSearchErrSamples sync.Map
 }
 
 // NewISBNService creates an enrichment service that will search the
 // given metadata sources for ISBN/ASIN data.
 func NewISBNService(db isbnEnrichmentStore, sources []metadata.MetadataSource) *ISBNService {
 	return &ISBNService{db: db, sources: sources}
+}
+
+// ErrAllSourcesErrored is the sentinel a run-level error from
+// EnrichMissingISBNs wraps (via fmt.Errorf's %w, so errors.Is finds it) when
+// every book it attempted this run had every provider source error rather
+// than return a genuine result. It is also the sentinel sourceSearchError
+// represents at the single-book level (see allErrored below). Distinguishing
+// this from a real zero-result search is the point of SF-03: without it, a
+// provider outage renders identically to "this book genuinely has no
+// ISBN/ASIN anywhere".
+var ErrAllSourcesErrored = errors.New("isbn enrichment: every provider source errored during search, no genuine result was obtained")
+
+// sourceSearchError carries provider search failures out of EnrichBookISBN
+// without changing its (bool, error) signature, so every existing caller
+// keeps compiling unchanged. EnrichMissingISBNs unwraps it with errors.As to
+// fold per-source error counts into its own run summary and to decide
+// whether the book counts as genuinely "checked" or as "errored".
+type sourceSearchError struct {
+	// bySource counts one entry per source name for every search call that
+	// returned an error while enriching this book (a source can appear
+	// twice: once from the ISBN loop, once from the ASIN loop).
+	bySource map[string]int
+	// allErrored is true when this book needed at least one identifier and
+	// no source call attempted for it ever returned a genuine (error-free)
+	// result -- i.e. this book contributed no information either way.
+	allErrored bool
+}
+
+func (e *sourceSearchError) Error() string {
+	total := 0
+	for _, n := range e.bySource {
+		total += n
+	}
+	return fmt.Sprintf("isbn enrichment: %d provider search error(s) across %d source(s) (all_errored=%t)",
+		total, len(e.bySource), e.allErrored)
+}
+
+// sourceSearchErrorLogSampleEvery bounds how often a repeated provider
+// search error gets a WARN log line: the first occurrence per source, then
+// every Nth after that -- so an outage spanning thousands of books during a
+// nightly sweep does not flood the log.
+const sourceSearchErrorLogSampleEvery = 20
+
+// sampleSourceSearchError logs a sampled WARN naming the source and the
+// error, instead of the previous behavior (isbn.go discarding the error
+// entirely at the `results, _ = src.Search...` call sites).
+func (s *ISBNService) sampleSourceSearchError(ctx context.Context, bookID, title, source string, err error) {
+	v, _ := s.sourceSearchErrSamples.LoadOrStore(source, new(atomic.Int64))
+	counter := v.(*atomic.Int64)
+	n := counter.Add(1)
+	if n == 1 || n%sourceSearchErrorLogSampleEvery == 0 {
+		logging.Warn(ctx, "ISBN enrichment: provider search errored",
+			"id", bookID, "title", title, "source", source, "error", err, "occurrence", n)
+	}
 }
 
 // EnrichBookISBN searches external sources for ISBN if the book doesn't have one.
@@ -82,11 +147,21 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 	author := s.resolveAuthor(book)
 
 	updated := false
+	bookErrBySource := map[string]int{}
 
 	// --- ISBN enrichment ---
+	isbnAttempted := false
+	isbnGenuine := false
 	if !hasISBN {
+		isbnAttempted = true
 		for _, src := range s.sources {
-			isbn, isbnLen := s.searchSourceForISBN(src, title, author)
+			isbn, isbnLen, serr := s.searchSourceForISBN(src, title, author)
+			if serr != nil {
+				bookErrBySource[src.Name()]++
+				s.sampleSourceSearchError(ctx, bookID, title, src.Name(), serr)
+				continue
+			}
+			isbnGenuine = true
 			if isbn == "" {
 				continue
 			}
@@ -114,12 +189,21 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 	}
 
 	// --- ASIN enrichment ---
+	asinAttempted := false
+	asinGenuine := false
 	if !hasASIN {
 		for _, src := range s.sources {
 			if src.Name() != "Audible" {
 				continue
 			}
-			asin := s.searchSourceForASIN(src, title, author)
+			asinAttempted = true
+			asin, serr := s.searchSourceForASIN(src, title, author)
+			if serr != nil {
+				bookErrBySource[src.Name()]++
+				s.sampleSourceSearchError(ctx, bookID, title, src.Name(), serr)
+				break
+			}
+			asinGenuine = true
 			if asin == "" {
 				break
 			}
@@ -131,6 +215,16 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 			updated = true
 			break
 		}
+	}
+
+	if len(bookErrBySource) > 0 {
+		// allErrored: this book needed at least one identifier, and neither
+		// loop it ran ever got a genuine (error-free) result -- the book
+		// contributed zero information, so the caller must not count it as
+		// a real "checked, found nothing" outcome.
+		attemptedAny := isbnAttempted || asinAttempted
+		gotGenuine := (isbnAttempted && isbnGenuine) || (asinAttempted && asinGenuine)
+		return updated, &sourceSearchError{bySource: bookErrBySource, allErrored: attemptedAny && !gotGenuine}
 	}
 
 	return updated, nil
@@ -162,7 +256,16 @@ type isbnEnrichCursor struct {
 // EnrichMissingISBNs scans books missing ISBN/ASIN data and enriches up to a
 // batch limit of them, resuming across runs via a persistent last-seen-book-ID
 // cursor so successive runs sweep the whole library rather than re-walking the
-// front. It returns the number of candidate books checked and the number updated.
+// front. It returns the number of candidate books genuinely checked (a real,
+// error-free search happened) and the number updated.
+//
+// checked deliberately excludes books where every provider source errored
+// during search (throttled or circuit-open) -- those contributed no real
+// information and would otherwise be indistinguishable from a book that
+// genuinely has no ISBN/ASIN anywhere (SF-03). See the returned error: if
+// every book attempted this run fell into that bucket, EnrichMissingISBNs
+// returns a non-nil error wrapping ErrAllSourcesErrored so the run reports as
+// failed through the caller's existing reporter instead of only logging.
 //
 // limit <= 0 means "resolve the limit from the isbn_enrichment_batch_limit
 // setting, falling back to the default"; a positive limit is honoured verbatim
@@ -177,8 +280,20 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 	}
 
 	const pageSize = 250
+	// attempted paces the batch (loop bound + resume position) and includes
+	// every book EnrichBookISBN was called for, whether or not it got a
+	// genuine result. checked is the subset that actually got a genuine
+	// (error-free) result from at least one source -- what a caller should
+	// read as "we searched and this is the true state". errored is the
+	// complement: every source call for that book errored, so nothing was
+	// learned about it (SF-03). attempted, not checked, bounds the loop so a
+	// full provider outage still stops after `limit` books per run rather
+	// than free-running through the whole library retrying nothing.
+	attempted := 0
 	checked := 0
+	errored := 0
 	updated := 0
+	sourceErrTotals := map[string]int{}
 
 	// Load the persisted sweep position. Fail-open: an unreadable cursor starts
 	// the sweep from the top rather than aborting enrichment, but we surface the
@@ -191,7 +306,7 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 	lastID := afterID
 	pages := 0
 
-	for checked < limit {
+	for attempted < limit {
 		if ctx != nil && ctx.Err() != nil {
 			return checked, updated, ctx.Err()
 		}
@@ -230,16 +345,35 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 				continue
 			}
 
-			checked++
+			attempted++
 			found, err := s.EnrichBookISBN(ctx, books[i].ID)
-			if err != nil {
-				logging.Warn(ctx, "ISBN enrichment failed during batch scan", "id", books[i].ID, "error", err)
-			} else if found {
+			if found {
 				updated++
 				activity.LogBatch(w, opID, "isbn-enrich", "isbn-enrichment",
 					activity.BatchItem{Name: books[i].Title, Detail: books[i].ID})
 			}
-			if checked >= limit {
+			var se *sourceSearchError
+			switch {
+			case err == nil:
+				checked++
+			case errors.As(err, &se):
+				// Real provider search errors, not discarded (SF-03): fold
+				// into the run's per-source tally, and only count the book
+				// as genuinely "checked" if some source call for it did
+				// return a real (possibly empty) result.
+				for name, n := range se.bySource {
+					sourceErrTotals[name] += n
+				}
+				if se.allErrored {
+					errored++
+				} else {
+					checked++
+				}
+			default:
+				logging.Warn(ctx, "ISBN enrichment failed during batch scan", "id", books[i].ID, "error", err)
+				checked++
+			}
+			if attempted >= limit {
 				break
 			}
 		}
@@ -249,7 +383,7 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 		// If we stopped because we hit the batch limit, keep the position so the
 		// next run resumes mid-library -- do NOT let a short final page wrap us
 		// back to the top (that would reintroduce the front-only bug, limit-gated).
-		if checked >= limit {
+		if attempted >= limit {
 			break
 		}
 		// A short page with budget to spare means the library is exhausted -> wrap.
@@ -272,12 +406,30 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 	// swept a region that was already fully identified; without the window that
 	// reads as "nothing to do" (and the scheduler tags updated==0 as a no-op).
 	// The window makes it clear the sweep advanced.
-	activity.EmitInfo(w, opID, "isbn-enrich", "isbn-enrichment",
-		fmt.Sprintf("ISBN enrichment swept %s→%s (wrapped=%t): checked %d, updated %d",
-			cursorLabel(startAfterID), cursorLabel(next), wrapped, checked, updated),
-		activity.AlwaysShow)
+	summary := fmt.Sprintf("ISBN enrichment swept %s→%s (wrapped=%t): checked %d, updated %d",
+		cursorLabel(startAfterID), cursorLabel(next), wrapped, checked, updated)
+	if errored > 0 {
+		// SF-03: this is what makes a provider outage visible in the sweep's
+		// own summary instead of reading identically to a legitimate
+		// zero-result search. errored books are excluded from `checked`
+		// above -- they never got a real determination.
+		summary += fmt.Sprintf(", errored %d (every source errored, not counted as checked; per-source error counts %v)",
+			errored, sourceErrTotals)
+	}
+	activity.EmitInfo(w, opID, "isbn-enrich", "isbn-enrichment", summary, activity.AlwaysShow)
 
-	return checked, updated, nil
+	var runErr error
+	if attempted > 0 && errored == attempted {
+		// Every book attempted this run had every provider source error --
+		// nothing was actually searched. Report the run as failed through
+		// the existing reporter (both callers already do `if err != nil {
+		// return err }`), rather than leaving a healthy-looking log line as
+		// the only trace of a total provider outage.
+		runErr = fmt.Errorf("%w: all %d book(s) attempted this run had every provider source error (per-source error counts: %v)",
+			ErrAllSourcesErrored, errored, sourceErrTotals)
+	}
+
+	return checked, updated, runErr
 }
 
 // cursorLabel renders a sweep cursor for a human: the empty cursor is the start
@@ -391,15 +543,28 @@ func needsIdentifierEnrichment(book *database.BookCore) bool {
 
 // searchSourceForISBN queries a single metadata source and returns the first
 // ISBN that matches the title strictly, along with its length (10 or 13).
-func (s *ISBNService) searchSourceForISBN(src metadata.MetadataSource, title, author string) (string, int) {
+//
+// The returned error is non-nil only when no genuine result was obtained at
+// all -- i.e. every call attempted for this source errored. A source that
+// returns a real (possibly empty) result set at any point in the
+// title+author -> title fallback is reported with a nil error, even if an
+// earlier call in that fallback errored, because we did get a genuine
+// determination. Previously this discarded the error entirely (SF-03),
+// making "provider throttled/circuit-open" indistinguishable from "no such
+// book at this source".
+func (s *ISBNService) searchSourceForISBN(src metadata.MetadataSource, title, author string) (string, int, error) {
 	var results []metadata.BookMetadata
+	var err error
 	ctx := context.Background()
 
 	if author != "" {
-		results, _ = src.SearchByTitleAndAuthor(ctx, title, author)
+		results, err = src.SearchByTitleAndAuthor(ctx, title, author)
 	}
 	if len(results) == 0 {
-		results, _ = src.SearchByTitle(ctx, title)
+		results, err = src.SearchByTitle(ctx, title)
+	}
+	if err != nil {
+		return "", 0, err
 	}
 
 	for _, r := range results {
@@ -407,31 +572,36 @@ func (s *ISBNService) searchSourceForISBN(src metadata.MetadataSource, title, au
 			continue
 		}
 		if r.ISBN != "" {
-			return r.ISBN, len(r.ISBN)
+			return r.ISBN, len(r.ISBN), nil
 		}
 	}
-	return "", 0
+	return "", 0, nil
 }
 
 // searchSourceForASIN queries a single metadata source and returns the first
-// ASIN that matches the title strictly.
-func (s *ISBNService) searchSourceForASIN(src metadata.MetadataSource, title, author string) string {
+// ASIN that matches the title strictly. See searchSourceForISBN for how the
+// returned error is derived.
+func (s *ISBNService) searchSourceForASIN(src metadata.MetadataSource, title, author string) (string, error) {
 	var results []metadata.BookMetadata
+	var err error
 	ctx := context.Background()
 
 	if author != "" {
-		results, _ = src.SearchByTitleAndAuthor(ctx, title, author)
+		results, err = src.SearchByTitleAndAuthor(ctx, title, author)
 	}
 	if len(results) == 0 {
-		results, _ = src.SearchByTitle(ctx, title)
+		results, err = src.SearchByTitle(ctx, title)
+	}
+	if err != nil {
+		return "", err
 	}
 
 	for _, r := range results {
 		if IsStrictTitleMatch(title, r.Title) && r.ASIN != "" {
-			return r.ASIN
+			return r.ASIN, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // isStrictTitleMatch returns true if titles are close enough to be the same book.

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-09-10
 
@@ -1969,7 +1969,8 @@ func TestSearchSourceForISBN(t *testing.T) {
 				{Title: "Mistborn", ISBN: "9781234567890"},
 			},
 		}
-		isbn, length := svc.searchSourceForISBN(src, "Mistborn", "Brandon Sanderson")
+		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "Brandon Sanderson")
+		require.NoError(t, err)
 		assert.Equal(t, "9781234567890", isbn)
 		assert.Equal(t, 13, length)
 	})
@@ -1981,14 +1982,16 @@ func TestSearchSourceForISBN(t *testing.T) {
 				{Title: "Completely Different Book", ISBN: "9781234567890"},
 			},
 		}
-		isbn, length := svc.searchSourceForISBN(src, "Mistborn", "")
+		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "")
+		require.NoError(t, err)
 		assert.Equal(t, "", isbn)
 		assert.Equal(t, 0, length)
 	})
 
 	t.Run("no_results", func(t *testing.T) {
 		src := &mockMetadataSource{name: "test", results: nil}
-		isbn, length := svc.searchSourceForISBN(src, "Mistborn", "")
+		isbn, length, err := svc.searchSourceForISBN(src, "Mistborn", "")
+		require.NoError(t, err)
 		assert.Equal(t, "", isbn)
 		assert.Equal(t, 0, length)
 	})
@@ -2005,7 +2008,8 @@ func TestSearchSourceForASIN(t *testing.T) {
 				{Title: "Mistborn", ASIN: "B01N5AZR76"},
 			},
 		}
-		asin := svc.searchSourceForASIN(src, "Mistborn", "")
+		asin, err := svc.searchSourceForASIN(src, "Mistborn", "")
+		require.NoError(t, err)
 		assert.Equal(t, "B01N5AZR76", asin)
 	})
 
@@ -2016,7 +2020,8 @@ func TestSearchSourceForASIN(t *testing.T) {
 				{Title: "Other Book", ASIN: "B01N5AZR76"},
 			},
 		}
-		asin := svc.searchSourceForASIN(src, "Mistborn", "")
+		asin, err := svc.searchSourceForASIN(src, "Mistborn", "")
+		require.NoError(t, err)
 		assert.Equal(t, "", asin)
 	})
 }
