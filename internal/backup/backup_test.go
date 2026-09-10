@@ -1,5 +1,5 @@
 // file: internal/backup/backup_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-10
 
@@ -1154,24 +1154,62 @@ func TestBackupDatabaseNilStore(t *testing.T) {
 }
 
 // TestRestoreBackupWithVerification tests restore with checksum verification enabled
-// TestRestoreBackupWithVerification is the TASK-306 regression test.
-//
-// Before the fix, RestoreBackup(..., verify=true) logged
-// "checksum verification not yet implemented" and then proceeded exactly as
-// if verify had been false -- a caller who explicitly asked to verify (most
-// likely because they suspect corruption, or because this is a
-// disaster-recovery path they cannot easily re-check afterward) got a
-// success response indistinguishable from a verified restore.
-//
-// Backups carry no persisted checksum to verify against: CreateBackup
-// computes a SHA-256 of the finished archive (BackupInfo.Checksum) but never
-// writes it to a sidecar/manifest file, so there is nothing durable on disk
-// for a later RestoreBackup call to compare against. With no reference value,
-// "verifying" would just be re-hashing the same bytes and declaring success --
-// a silent skip wearing a different name. So RestoreBackup must fail closed
-// on verify=true instead of quietly restoring unverified.
+// TestCreateBackupWritesChecksumSidecar is the TASK-306 regression test for
+// CreateBackup's half of the fix: every archive it writes must get a
+// "<archive>.sha256" sidecar next to it, in sha256sum(1) format, so a later
+// RestoreBackup(verify=true) has something durable to check against.
+func TestCreateBackupWritesChecksumSidecar(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+
+	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	sidecarPath := checksumSidecarPath(info.Path)
+	raw, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		t.Fatalf("checksum sidecar %q was not written: %v", sidecarPath, err)
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		t.Fatalf("sidecar content = %q, want \"<hex>  <basename>\"", raw)
+	}
+	if fields[0] != info.Checksum {
+		t.Errorf("sidecar digest = %q, want %q (BackupInfo.Checksum)", fields[0], info.Checksum)
+	}
+	if fields[1] != filepath.Base(info.Path) {
+		t.Errorf("sidecar basename = %q, want %q", fields[1], filepath.Base(info.Path))
+	}
+
+	// The sidecar must never be mistaken for a backup by listing/retention.
+	backups, err := ListBackups(backupDir)
+	if err != nil {
+		t.Fatalf("ListBackups failed: %v", err)
+	}
+	for _, b := range backups {
+		if b.Filename == filepath.Base(sidecarPath) {
+			t.Errorf("ListBackups returned the checksum sidecar %q as a backup", b.Filename)
+		}
+	}
+	if len(backups) != 1 {
+		t.Fatalf("ListBackups returned %d entries, want 1 (just the archive)", len(backups))
+	}
+}
+
+// TestRestoreBackupWithVerification is the TASK-306 regression test for the
+// happy path: a fresh backup carries a checksum sidecar, so verify=true must
+// now actually verify and succeed -- not fail closed. (A prior version of
+// this fix failed closed unconditionally on verify=true, which broke the
+// Settings UI's default of verify=true on every restore; see the coordinator
+// review that requested this rework.)
 func TestRestoreBackupWithVerification(t *testing.T) {
-	// Arrange
 	tempDir := t.TempDir()
 	backupDir := filepath.Join(tempDir, "backups")
 	dbPath := filepath.Join(tempDir, "test.db")
@@ -1182,32 +1220,97 @@ func TestRestoreBackupWithVerification(t *testing.T) {
 		t.Fatalf("Failed to create test database: %v", err)
 	}
 
-	config := BackupConfig{
-		BackupDir:        backupDir,
-		MaxBackups:       10,
-		CompressionLevel: 1,
-	}
-
-	// Create backup
+	config := BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}
 	info, err := CreateBackup(dbPath, "sqlite", config)
 	if err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
 
-	// Act - Restore with verification enabled
-	err = RestoreBackup(info.Path, restoreDir, true)
+	if err := RestoreBackup(info.Path, restoreDir, true); err != nil {
+		t.Fatalf("RestoreBackup with verify=true failed on a freshly created (unmodified) backup: %v", err)
+	}
 
-	// Assert - verify=true must fail closed with a distinguishable error: this
-	// backup format has no stored checksum to verify against.
+	restoredFile := filepath.Join(restoreDir, "test.db")
+	if _, err := os.Stat(restoredFile); os.IsNotExist(err) {
+		t.Error("Restored file does not exist")
+	}
+}
+
+// TestRestoreBackupVerifyTrueTamperedArchive proves verify=true fails closed
+// -- ErrChecksumMismatch, no extraction -- when the archive bytes no longer
+// match the checksum recorded at creation time.
+func TestRestoreBackupVerifyTrueTamperedArchive(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+	restoreDir := filepath.Join(tempDir, "restored")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+
+	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	// Flip one byte in the archive, after the checksum sidecar was already
+	// written, to simulate corruption/tampering since creation.
+	raw, err := os.ReadFile(info.Path)
+	if err != nil {
+		t.Fatalf("failed to read archive: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Fatal("archive is empty, cannot tamper")
+	}
+	raw[0] ^= 0xFF
+	if err := os.WriteFile(info.Path, raw, 0644); err != nil {
+		t.Fatalf("failed to tamper archive: %v", err)
+	}
+
+	err = RestoreBackup(info.Path, restoreDir, true)
 	if err == nil {
-		t.Fatal("RestoreBackup with verify=true succeeded; expected it to fail closed because no checksum is stored to verify against")
+		t.Fatal("RestoreBackup with verify=true succeeded on a tampered archive; expected ErrChecksumMismatch")
+	}
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("RestoreBackup returned %v, want an error wrapping ErrChecksumMismatch", err)
+	}
+	if _, statErr := os.Stat(restoreDir); !os.IsNotExist(statErr) {
+		t.Errorf("restore target %q should not exist after a checksum-mismatch failure", restoreDir)
+	}
+}
+
+// TestRestoreBackupVerifyTrueMissingSidecar proves verify=true still fails
+// closed -- ErrVerificationUnsupported, no extraction -- for a legacy backup
+// that predates the checksum-sidecar feature (no "<archive>.sha256" file).
+func TestRestoreBackupVerifyTrueMissingSidecar(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+	restoreDir := filepath.Join(tempDir, "restored")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+
+	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	// Simulate a pre-existing backup from before this feature: delete the
+	// sidecar CreateBackup just wrote.
+	if err := os.Remove(checksumSidecarPath(info.Path)); err != nil {
+		t.Fatalf("failed to remove sidecar for test setup: %v", err)
+	}
+
+	err = RestoreBackup(info.Path, restoreDir, true)
+	if err == nil {
+		t.Fatal("RestoreBackup with verify=true succeeded with no checksum sidecar; expected ErrVerificationUnsupported")
 	}
 	if !errors.Is(err, ErrVerificationUnsupported) {
-		t.Fatalf("RestoreBackup with verify=true returned %v, want an error wrapping ErrVerificationUnsupported", err)
+		t.Fatalf("RestoreBackup returned %v, want an error wrapping ErrVerificationUnsupported", err)
 	}
-
-	// Assert - nothing was extracted: a failed-closed verify request must not
-	// perform a partial (or full) unverified restore.
 	if _, statErr := os.Stat(restoreDir); !os.IsNotExist(statErr) {
 		t.Errorf("restore target %q should not exist after a failed-closed verify request", restoreDir)
 	}
@@ -1253,6 +1356,37 @@ func TestDeleteBackupNonexistent(t *testing.T) {
 	// Assert - Should return error
 	if err == nil {
 		t.Error("Expected error when deleting nonexistent backup")
+	}
+}
+
+// TestDeleteBackupRemovesChecksumSidecar proves DeleteBackup cleans up the
+// "<archive>.sha256" sidecar alongside the archive, so a deleted-then-recreated
+// backup at the same path (or an operator's directory listing) never sees a
+// stale checksum from a prior archive.
+func TestDeleteBackupRemovesChecksumSidecar(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+
+	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+	sidecarPath := checksumSidecarPath(info.Path)
+	if _, err := os.Stat(sidecarPath); err != nil {
+		t.Fatalf("sidecar %q missing before delete: %v", sidecarPath, err)
+	}
+
+	if err := DeleteBackup(info.Path); err != nil {
+		t.Fatalf("DeleteBackup failed: %v", err)
+	}
+
+	if _, err := os.Stat(sidecarPath); !os.IsNotExist(err) {
+		t.Errorf("sidecar %q still exists after DeleteBackup", sidecarPath)
 	}
 }
 
