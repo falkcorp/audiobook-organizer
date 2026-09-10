@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 46c672d7-9597-46c9-b29b-0df51d04916e -->
+<!-- guid: b06e40e5-183d-5bb2-b674-29185945e776 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-158 — Add a Settings panel section to edit path_aliases (2026-08-20-dual-path-settings-panel.md#1)

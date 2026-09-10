@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 02ac1b2b-45da-4c39-9d22-e41194328161 -->
+<!-- guid: 3b3ca277-d8d8-56e6-b619-efa277dd69fc -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-046 — Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion (TODO.md L4698)

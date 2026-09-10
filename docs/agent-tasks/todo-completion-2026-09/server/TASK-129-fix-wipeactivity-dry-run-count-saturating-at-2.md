@@ -1,11 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 9a834dcd-7168-428e-b196-721739895af4 -->
+<!-- guid: ae2a7921-eab8-53b8-9b63-8dc0a6f1158d -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-129 — Fix wipeActivity dry-run count saturating at 2 (TODO.md L1957)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: git log --oneline d2fcef16a..HEAD -- internal/server/maintenance_fixups.go shows exactly 1 commit (1d210cb10, unrelated: adds database.MetadataFieldStateReader to maintenanceStore for a series field-lock guard). wipeActivity itself (now at line 450, was ~445) is untouched by that diff: dry-run branch still calls svc.Query(ctx, database.ActivityFilter{Limit: 1}) and returns int64(total) -- same saturating-at-2 shape. A new comment block directly above the function (added by an earlier commit, present before and after 1d210cb10) explicitly documents the bug as 'left alone deliberately.' · risk **correctness** · effort **S**
+> ⚠️ **Anchor drift (2026-09-10, plan-auditor):** `grep 'WipeAllActivity()' internal/server/maintenance_fixups.go` → 0 hits; call is now svc.Store().WipeAllActivity(ctx) at line 459 — signature gained ctx. Re-derive the anchor before editing; the brief body below is unchanged from 08-21.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — maintenance_fixups.go:445 wipeActivity dry-run still returns svc.Query(Limit:1) total; NOTE comment intact; no count path added; no commit touches it since 08-21. Recommendation: keep - unchanged, still actionable.
 

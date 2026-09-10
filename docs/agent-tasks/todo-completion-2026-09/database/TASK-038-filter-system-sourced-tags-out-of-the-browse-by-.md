@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 0c3440bd-1f9a-4a93-b4aa-3e0ece62781d -->
+<!-- guid: 1d3b0b6f-77cb-588b-8286-b3e4c72fe4a4 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-038 — Filter system-sourced tags out of the Browse-by-Tag cloud (TODO.md L10526)

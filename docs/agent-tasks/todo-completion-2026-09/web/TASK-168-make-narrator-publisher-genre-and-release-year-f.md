@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: fb88ea2f-3ff4-4054-ac78-78e78a2bbb85 -->
+<!-- guid: fbe6d596-771c-5f45-9b53-391cc5734697 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-168 — Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them) (TODO.md L3164)

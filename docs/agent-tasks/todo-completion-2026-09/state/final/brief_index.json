@@ -1,0 +1,3942 @@
+[
+ {
+  "id": "TASK-001",
+  "kind": "carried",
+  "ws": "audiobooks",
+  "path": "docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/audiobooks/service_query.go",
+   "internal/server/search_reconciler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Add a short-TTL cache to the search branch of GetAudiobooksWithTotal"
+ },
+ {
+  "id": "TASK-004",
+  "kind": "carried",
+  "ws": "audiobooks",
+  "path": "docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/audiobooks/service_query.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically"
+ },
+ {
+  "id": "TASK-005",
+  "kind": "carried",
+  "ws": "audiobooks",
+  "path": "docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/audiobooks/service_types.go",
+   "internal/server/handlers/audiobooks/handler.go",
+   "internal/operations/types.go",
+   "internal/server/metadata_ops.go",
+   "internal/audiobooks/service_filtering.go",
+   "internal/audiobooks/service_query.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint"
+ },
+ {
+  "id": "TASK-009",
+  "kind": "carried",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "scripts/abs_capture_fixtures.py"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/ci-tooling/TASK-009-teach-the-abs-fixture-capture-harness-to-record-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Teach the ABS fixture-capture harness to record request headers"
+ },
+ {
+  "id": "TASK-014",
+  "kind": "carried",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "scripts/setup-git-hooks.sh",
+   "scripts/test-git-hooks.sh"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/ci-tooling/TASK-014-remove-committed-mtls-bridge-build-artifact-and-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Remove committed mtls-bridge build artifact and gitignore it"
+ },
+ {
+  "id": "TASK-191",
+  "kind": "carried",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first"
+ },
+ {
+  "id": "TASK-016",
+  "kind": "carried",
+  "ws": "config",
+  "path": "docs/agent-tasks/todo-completion-2026-09/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/config/config.go",
+   "internal/config/persistence.go",
+   "internal/metafetch/service_fetch.go",
+   "internal/metafetch/service_writeback.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration"
+ },
+ {
+  "id": "TASK-020",
+  "kind": "carried",
+  "ws": "config",
+  "path": "docs/agent-tasks/todo-completion-2026-09/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "cmd/diagnostics.go",
+   "cmd/dedup_bench.go",
+   "cmd/seed.go",
+   "cmd/root.go",
+   "cmd/child_mode.go",
+   "internal/config/config.go",
+   "internal/database/store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option"
+ },
+ {
+  "id": "TASK-023",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/merge/service.go",
+   "internal/database/memdb_sync.go",
+   "internal/server/search_reconciler.go",
+   "internal/database/pebble_store.go",
+   "internal/search/bleve_index.go",
+   "internal/audiobooks/service_query.go",
+   "internal/dedup/book_dedup.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-023-investigate-then-evict-dirty-flag-merged-away-bo.md",
+  "todo_lines": null,
+  "wave": 6,
+  "title": "Investigate then evict/dirty-flag merged-away book/file IDs from every read cache so losers stop appearing after a merge"
+ },
+ {
+  "id": "TASK-035",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/iface_catalog.go",
+   "internal/database/pebble_store_authors.go",
+   "internal/database/memdb_sync.go",
+   "internal/database/mock_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add DeleteNarrator to the store (CRUD building block only)"
+ },
+ {
+  "id": "TASK-037",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/bookcore.go",
+   "internal/database/migrations.go",
+   "internal/database/pebble_store.go",
+   "internal/server/handlers/audiobooks/handler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md",
+  "todo_lines": null,
+  "wave": 7,
+  "title": "Omnibus/anthology book_type field -- Part 1 of the omnibus-detection-and-dedup spec"
+ },
+ {
+  "id": "TASK-038",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/audiobooks/service_tags.go",
+   "web/src/hooks/useLibraryFilters.ts",
+   "web/src/services/api.ts",
+   "internal/database/pebble_store_tags.go",
+   "internal/database/tag_helpers.go",
+   "internal/database/iface_tags.go",
+   "internal/database/mock_store.go",
+   "internal/database/mocks/mock_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Filter system-sourced tags out of the Browse-by-Tag cloud"
+ },
+ {
+  "id": "TASK-039",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/store.go",
+   "internal/plugins/maintenance/intro_transcribe.go",
+   "web/src/hooks/useColumnConfig.ts",
+   "web/src/pages/Library.tsx",
+   "internal/database/pebble_store.go",
+   "internal/database/memdb_summaries.go",
+   "internal/audiobooks/service_types.go",
+   "web/src/services/api.ts"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md",
+  "todo_lines": null,
+  "wave": 4,
+  "title": "Add transcribe_status to the book-summary list projection and a frontend quality filter control"
+ },
+ {
+  "id": "TASK-177",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers"
+ },
+ {
+  "id": "TASK-179",
+  "kind": "carried",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "scripts/check-interface-width.sh",
+   "internal/database/store.go",
+   "tools/cmd/oplint/main.go",
+   "tools/cmd/storewidthgate/main.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/database/TASK-179-database-store-40-build-the-ast-go-types-ci-gate.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "database.Store (40) -- build the AST/go-types CI gate that makes it unreachable in new files"
+ },
+ {
+  "id": "TASK-040",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/dedup_automerge_journal.go",
+   "internal/merge/service.go",
+   "internal/database/pebble_store_externalids.go",
+   "internal/dedup/merge_journaled.go",
+   "internal/dedup/auto_resolve.go",
+   "internal/database/mock_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md",
+  "todo_lines": null,
+  "wave": 4,
+  "title": "Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record"
+ },
+ {
+  "id": "TASK-045",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/series_title_leak_audit.go",
+   "internal/plugins/maintenance/dedup_triage.go",
+   "internal/operations/registry/run_items.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Build a dry-run report-only classifier for series that look like they were minted from a book title"
+ },
+ {
+  "id": "TASK-046",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/merge/service.go",
+   "internal/database/store_capability.go",
+   "internal/plugins/acoustid/reset_all.go",
+   "internal/server/wire_handlers.go",
+   "internal/server/duplicates_ops.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion"
+ },
+ {
+  "id": "TASK-048",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/merge/service.go",
+   "internal/organizer/organizer.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-048-physically-co-locate-a-combine-survivor-s-files-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Physically co-locate a Combine survivor's files under RootDir after CombineBooks"
+ },
+ {
+  "id": "TASK-049",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/dedup/auto_resolve.go",
+   "internal/dedup/engine.go",
+   "internal/dedup/collectors_acoustid.go",
+   "internal/fingerprint/wholefile.go",
+   "internal/config/config.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-049-acoustic-confirm-signal-promote-near-dupe-title-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Acoustic-confirm signal: promote near-dupe title-leak pairs using WholeFileSimilarity"
+ },
+ {
+  "id": "TASK-050",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/dedup/split_book_detector.go",
+   "internal/database/pebble_store_lsh.go",
+   "internal/fingerprint/lsh.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment"
+ },
+ {
+  "id": "TASK-180",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/dedup_abridged_measure.go",
+   "internal/dedup/collectors_metadata.go",
+   "internal/plugins/metafetch/calibrate_scoring.go",
+   "internal/plugins/maintenance/dedup_triage.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display"
+ },
+ {
+  "id": "TASK-192",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/dedup/calibrate_composite.go",
+   "internal/server/registry_wire.go",
+   "internal/dedup/unified/compose.go",
+   "internal/config/config.go",
+   "internal/dedup/unified/config.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Clamp ComposeScore against per-kind confidence bounds; route calibrate-composite Round 2 through a new apply_confidence param"
+ },
+ {
+  "id": "TASK-193",
+  "kind": "carried",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/registry_wire.go",
+   "internal/dedup/engine.go",
+   "internal/dedup/rescore.go",
+   "internal/dedup/unified/compose.go",
+   "internal/dedup/auto_resolve.go",
+   "internal/dedup/unified/score.go",
+   "internal/models/dedup_score.go",
+   "internal/plugins/dedup/calibrate_composite.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw"
+ },
+ {
+  "id": "TASK-057",
+  "kind": "carried",
+  "ws": "docs",
+  "path": "docs/agent-tasks/todo-completion-2026-09/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Phase 8 -- write the ABS topology, runbook, and migration guide"
+ },
+ {
+  "id": "TASK-182",
+  "kind": "carried",
+  "ws": "docs",
+  "path": "docs/agent-tasks/todo-completion-2026-09/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/docs/TASK-182-record-the-docs-system-vs-top-level-architecture.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Record the docs/system vs top-level architecture classification decision in the docs inventory"
+ },
+ {
+  "id": "TASK-062",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/backfill.go",
+   "internal/database/pebble_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor"
+ },
+ {
+  "id": "TASK-063",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/backfill.go",
+   "internal/database/pebble_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug"
+ },
+ {
+  "id": "TASK-064",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/service/fs_regroup_shape.go",
+   "internal/itunes/fs_regroup_shape.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous"
+ },
+ {
+  "id": "TASK-065",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/relocate_sync_cycle.go",
+   "internal/server/itl_sync_cycle.go",
+   "internal/server/itl_rebuild.go",
+   "internal/server/itl_cleanup.go",
+   "internal/server/server_lifecycle.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-065-p2-relocate-only-sync-cycle-the-composed-cycle-a.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "P2 relocate-only sync cycle -- wire RunRelocateSyncCycle to a caller and add an end-to-end test"
+ },
+ {
+  "id": "TASK-184",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/pid_coverage.go",
+   "cmd/pid-census/main.go",
+   "internal/itunes/pid_integrity.go",
+   "internal/database/pebble_store.go",
+   "internal/itunes/plist_parser.go",
+   "internal/itunes/service/playlist_sync.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-184-measure-itunes-xml-track-persistent-id-coverage-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Measure iTunes XML track Persistent ID coverage against the local DB before promising a Playlist-Items snapshot import"
+ },
+ {
+  "id": "TASK-185",
+  "kind": "carried",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/service/service.go",
+   "internal/plugins/itunes/position_sync.go",
+   "internal/readstatus/readstatus.go",
+   "internal/database/pebble_store_playback.go",
+   "internal/itunes/plist_parser.go",
+   "internal/itunes/import.go",
+   "internal/itunes/service/importer.go",
+   "internal/itunes/service/position_sync.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Report the iTunes listened/in-progress status pipeline's actual wiring gap"
+ },
+ {
+  "id": "TASK-066",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/freshness/freshness.go",
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/database/pebble_store.go",
+   "internal/database/tag_helpers.go",
+   "internal/server/server.go",
+   "internal/plugins/maintenance/chapters_backfill.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-066-wire-a-durable-freshness-stamp-for-maintenance-c.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Wire a durable freshness stamp for maintenance.chapters-backfill before it is ever scheduled"
+ },
+ {
+  "id": "TASK-068",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/deps.go",
+   "internal/operations/registry/run_items.go",
+   "internal/plugins/maintenance/missing_file_audit.go",
+   "internal/plugins/maintenance/filepath_collision_report.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-068-build-a-report-only-counter-for-book-filepath-co.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Build a REPORT-ONLY counter for Book.FilePath collisions"
+ },
+ {
+  "id": "TASK-070",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/config/config.go",
+   "internal/plugins/maintenance/cleanup.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/server/audiobooks_helpers.go",
+   "web/src/hooks/useSettingsHandlers.ts",
+   "internal/plugins/maintenance/deps.go",
+   "web/src/services/api.ts",
+   "web/src/pages/ActivityLog.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md",
+  "todo_lines": null,
+  "wave": 4,
+  "title": "Add a user-configurable activity-log retention window (default 7 days, 0=never)"
+ },
+ {
+  "id": "TASK-071",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/dedup/author.go",
+   "internal/personname/personname.go",
+   "internal/plugins/maintenance/author.go",
+   "internal/plugins/maintenance/author_title_fragment_report.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Build a detection-only report of other title-fragment author rows"
+ },
+ {
+  "id": "TASK-072",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/author_conjunction_repair.go",
+   "internal/database/pebble_store_authors.go",
+   "internal/util/normalize.go",
+   "internal/plugins/maintenance/author_duplicate_merge.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-072-new-maintenance-op-merge-an-operator-confirmed-l.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "New maintenance op: merge an operator-confirmed list of duplicate real-author rows"
+ },
+ {
+  "id": "TASK-073",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/deps.go",
+   "internal/server/op_run_context.go",
+   "internal/plugins/maintenance/series.go",
+   "internal/plugins/maintenance/cleanup.go",
+   "internal/plugins/maintenance/write_back.go",
+   "internal/plugins/maintenance/reconcile.go",
+   "internal/plugins/maintenance/dedup_ops.go",
+   "internal/plugins/maintenance/optimize.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md",
+  "todo_lines": null,
+  "wave": 5,
+  "title": "Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive"
+ },
+ {
+  "id": "TASK-074",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/organizer/organizer.go",
+   "internal/plugins/maintenance/dedup_triage.go",
+   "internal/operations/registry/run_items.go",
+   "internal/plugins/maintenance/unknown_author_audit.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-074-build-a-report-only-census-of-books-with-a-place.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Build a report-only census of books with a placeholder author already baked into their organizer-tree path but resolvable metadata"
+ },
+ {
+  "id": "TASK-075",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/author_purge_empty.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-075-extend-purge-empty-authors-report-to-categorize-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Extend purge-empty-authors' report to categorize the 822 zero-book-but-has-files authors"
+ },
+ {
+  "id": "TASK-076",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/iface_review.go",
+   "internal/maintenance/jobs/fix_author_narrator_swap.go",
+   "internal/plugins/maintenance/regroup_shattered_ai.go",
+   "internal/database/review_store.go",
+   "internal/database/pebble_store_authors.go",
+   "internal/plugins/maintenance/author_narrator_swap_review.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md",
+  "todo_lines": null,
+  "wave": 4,
+  "title": "Author-narrator swap repair, routed through the review queue"
+ },
+ {
+  "id": "TASK-077",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/maintenance/jobs/fix_version_groups.go",
+   "internal/maintenance/jobs/backfill_itunes_positions.go",
+   "internal/maintenance/jobs/dedup_books.go",
+   "internal/plugins/maintenance/intro_transcribe.go",
+   "internal/plugins/maintenance/probe_directory_books.go",
+   "internal/plugins/maintenance/relink_unlinked.go",
+   "internal/plugins/maintenance/regroup_apply.go",
+   "internal/plugins/maintenance/store_slices.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore"
+ },
+ {
+  "id": "TASK-080",
+  "kind": "carried",
+  "ws": "metadata",
+  "path": "docs/agent-tasks/todo-completion-2026-09/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/metadata/cover.go",
+   "internal/covers/covers.go",
+   "internal/audiobooks/service_mutation.go",
+   "internal/server/covers.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/metadata/TASK-080-assess-the-2-critical-go-request-forgery-ssrf-co.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Assess the 2 critical go/request-forgery (SSRF) CodeQL alerts on cover-fetch paths (SEC-CODEQL-BACKLOG)"
+ },
+ {
+  "id": "TASK-083",
+  "kind": "carried",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/fileops/safe_operations.go",
+   "internal/metadata/assemble.go",
+   "internal/server/handlers/filesystem.go",
+   "internal/audiobooks/service_mutation.go",
+   "internal/fileops/hash.go",
+   "internal/metafetch/service.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/misc-go/TASK-083-fix-or-verify-the-4-still-open-go-path-injection.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Fix or verify the 4 still-open go/path-injection findings"
+ },
+ {
+  "id": "TASK-086",
+  "kind": "carried",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/util/normalize.go",
+   "internal/database/pebble_store_authors.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly"
+ },
+ {
+  "id": "TASK-095",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/audiobooks/handler.go",
+   "internal/database/memdb_sort_indexers.go",
+   "internal/config/config.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-095-instrument-sort-by-usage-to-inform-the-enabled-s.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Instrument sort_by usage to inform the enabled_sort_indexes decision"
+ },
+ {
+  "id": "TASK-096",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/types.go",
+   "internal/operations/registry/registry.go",
+   "internal/plugins/maintenance/intro_transcribe.go",
+   "internal/plugins/maintenance/missing_file_repoint.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-096-require-every-mutating-operation-to-declare-and-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Require every mutating operation to declare and enforce dry_run support at the registry"
+ },
+ {
+  "id": "TASK-098",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/audiobooks/handler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Echo which filters the server actually applied in the /audiobooks list response"
+ },
+ {
+  "id": "TASK-102",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-102-typescript-6-0-3-7-0-2-migration-the-one-remaini.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "TypeScript 6.0.3 → 7.0.2 migration (the one remaining piece of the frontend-framework-versions survey) (TODO.md L8273)"
+ },
+ {
+  "id": "TASK-103",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/intro_transcribe.go",
+   "internal/plugins/maintenance/missing_file_repoint.go",
+   "internal/plugins/maintenance/transcribe_status_drift_report.go",
+   "internal/plugins/acoustid/lsh_backfill.go",
+   "internal/database/bookcore.go",
+   "internal/database/store.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-103-build-a-report-only-op-categorizing-the-transcri.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Build a report-only op categorizing the transcribe_status vs IntroTranscription drift (79.3% whisper_error-with-transcript sample) (TODO.md L8433)"
+ },
+ {
+  "id": "TASK-106",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/scanner/scanner.go",
+   "internal/playlist/import.go",
+   "internal/database/pebble_store_playlists.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-106-import-found-playlist-files-m3u-m3u8-pls-cue-xsp.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Import found playlist files (.m3u/.m3u8/.pls/.cue/.xspf) during scan, resolving entries to book_file rows (TODO.md L8646)"
+ },
+ {
+  "id": "TASK-108",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/abs/progress.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add the review/rating half of app-to-server reading-state sync (reading status half already exists) (TODO.md L8675)"
+ },
+ {
+  "id": "TASK-109",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/deluge/discovery.go",
+   "internal/deluge/client.go",
+   "internal/deluge/metadata_candidate.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)"
+ },
+ {
+  "id": "TASK-110",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/deluge/client.go",
+   "internal/deluge/grouping_audit.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)"
+ },
+ {
+  "id": "TASK-111",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/regroup_apply.go",
+   "internal/database/review_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Build the pre-apply snapshot tool for the 138 pending multidisc holds (TODO.md L8837)"
+ },
+ {
+  "id": "TASK-112",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/pages/System.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-112-build-the-first-aid-orchestrator-frontend-trigge.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Build the First Aid orchestrator + frontend trigger button (dry-run by default, no schedule) (TODO.md L8890)"
+ },
+ {
+  "id": "TASK-113",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/deps.go",
+   "internal/operations/registry/deps_scheduler.go",
+   "internal/operations/registry/registry.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-113-missing-input-triggering-enqueue-the-producer-op.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Missing-input triggering: enqueue the producer op when a waiting_deps requirement's input has never run (TODO.md L8890)"
+ },
+ {
+  "id": "TASK-114",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/missing_file_repoint.go",
+   "internal/plugins/maintenance/regroup_apply.go",
+   "internal/merge/serialize.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)"
+ },
+ {
+  "id": "TASK-116",
+  "kind": "carried",
+  "ws": "operations",
+  "path": "docs/agent-tasks/todo-completion-2026-09/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/progress.go",
+   "internal/scanner/service.go",
+   "internal/reconcile/reconcile.go",
+   "internal/organizer/service.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal (TODO.md L4586)"
+ },
+ {
+  "id": "TASK-117",
+  "kind": "carried",
+  "ws": "operations",
+  "path": "docs/agent-tasks/todo-completion-2026-09/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/register.go",
+   "internal/database/store_capability.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/operations/TASK-117-give-prodschedulerstore-an-unwrap-so-capability-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Give prodSchedulerStore an Unwrap() so capability lookups can see past it (TODO.md L4703)"
+ },
+ {
+  "id": "TASK-118",
+  "kind": "carried",
+  "ws": "operations",
+  "path": "docs/agent-tasks/todo-completion-2026-09/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/mocks/mock_progress_reporter.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/operations/TASK-118-delete-internal-operations-mocks-its-only-refere.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Delete internal/operations/mocks — its only referencer is dead, permanently-untagged, currently-broken test code (TODO.md L4743)"
+ },
+ {
+  "id": "TASK-121",
+  "kind": "carried",
+  "ws": "organize",
+  "path": "docs/agent-tasks/todo-completion-2026-09/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/organizer/service.go",
+   "internal/organizer/organizer.go",
+   "internal/organizer/pathbuild.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/organize/TASK-121-make-resolveorganizedfilepath-s-plan-on-faith-fa.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Make resolveOrganizedFilePath's plan-on-faith fallback loud and verify-before-write (TODO.md L4919)"
+ },
+ {
+  "id": "TASK-122",
+  "kind": "carried",
+  "ws": "organize",
+  "path": "docs/agent-tasks/todo-completion-2026-09/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/organizer/pathbuild.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/organize/TASK-122-add-an-edition-suffix-folder-pattern-token.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add an {edition_suffix} folder-pattern token (TODO.md L5021)"
+ },
+ {
+  "id": "TASK-186",
+  "kind": "carried",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/pebble_store.go",
+   "internal/reconcile/elect_primaries.go",
+   "internal/server/reconcile.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/misc-go/TASK-186-measure-the-real-double-primary-rate-library-wid.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Measure the real double-primary rate library-wide, then build the demote-extras sibling of ElectMissingPrimaries"
+ },
+ {
+  "id": "TASK-195",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/missing_file_audit.go",
+   "internal/plugins/maintenance/plugin.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Add a zero-size bucket to maintenance.missing-file-audit"
+ },
+ {
+  "id": "TASK-197",
+  "kind": "carried",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/run_items.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/misc-go/TASK-197-audit-every-registry-runitems-caller-s-custom-la.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Audit every registry.RunItems caller's custom Label closure for the post-fn re-render timing change"
+ },
+ {
+  "id": "TASK-200",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/transcribe/classify.go",
+   "internal/plugins/maintenance/intro_transcribe.go",
+   "internal/plugins/maintenance/intro_migrate_single_file.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-200-build-the-tiered-per-file-intro-transcription-ba.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Build the tiered per-file intro-transcription backfill (Tiers 0/1/1b/2/3) (TODO.md L8316)"
+ },
+ {
+  "id": "TASK-201",
+  "kind": "carried",
+  "ws": "missing-file-lane",
+  "path": "docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/regroup_shattered_ai.go",
+   "internal/transcribe/classify.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-201-wire-per-file-intro-classification-into-the-regr.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Wire per-file intro classification into the regroup-shattered-books classifier, outranking runtime (TODO.md L8316)"
+ },
+ {
+  "id": "TASK-203",
+  "kind": "carried",
+  "ws": "organize",
+  "path": "docs/agent-tasks/todo-completion-2026-09/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/organizer/organizer.go",
+   "internal/organizer/service.go",
+   "internal/metrics/metrics.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)"
+ },
+ {
+  "id": "TASK-219",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/dedupe_book_file_rows.go",
+   "internal/plugins/maintenance/metadata_cache_reap.go",
+   "internal/plugins/maintenance/plugin.go",
+   "internal/plugins/maintenance/missing_file_repoint.go",
+   "internal/plugins/maintenance/missing_file_audit.go",
+   "internal/plugins/maintenance/deps.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md",
+  "todo_lines": null,
+  "wave": 6,
+  "title": "Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run"
+ },
+ {
+  "id": "TASK-220",
+  "kind": "carried",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/maintenance/dedupe_book_file_rows.go",
+   "internal/plugins/maintenance/deps.go",
+   "internal/organizer/service.go",
+   "internal/server/server_maintenance_deps.go",
+   "internal/server/server.go",
+   "internal/database/mock_store.go",
+   "internal/database/iface_ops_v2.go",
+   "internal/server/library_core_ops.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active"
+ },
+ {
+  "id": "TASK-125",
+  "kind": "carried",
+  "ws": "search",
+  "path": "docs/agent-tasks/todo-completion-2026-09/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/search/document.go",
+   "internal/search/bleve_index.go",
+   "internal/search/index_builder.go",
+   "internal/database/iface_bookfile.go",
+   "internal/database/store.go",
+   "internal/database/pebble_store_bookfiles.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/search/TASK-125-index-track-names-on-bookdocument-so-smart-playl.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Index track names on BookDocument so smart playlists can match them"
+ },
+ {
+  "id": "TASK-126",
+  "kind": "carried",
+  "ws": "search",
+  "path": "docs/agent-tasks/todo-completion-2026-09/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/search/bleve_translator.go",
+   "web/src/pages/Library.tsx",
+   "internal/server/handlers/search.go",
+   "web/src/pages/Library.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query"
+ },
+ {
+  "id": "TASK-129",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/maintenance_fixups.go",
+   "internal/database/pebble_store.go",
+   "internal/database/pebble_activity_store.go",
+   "internal/database/activity_storer.go",
+   "internal/database/nuts_activity_store.go",
+   "internal/database/dual_write_activity_store.go",
+   "internal/database/activity_store_instrumented.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-129-fix-wipeactivity-dry-run-count-saturating-at-2.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Fix wipeActivity dry-run count saturating at 2"
+ },
+ {
+  "id": "TASK-130",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/metrics/metrics.go",
+   "internal/server/search_reconciler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics"
+ },
+ {
+  "id": "TASK-131",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/metrics/metrics.go",
+   "internal/server/server_lifecycle.go",
+   "internal/database/pebble_store.go",
+   "internal/server/server_ops_store.go",
+   "internal/database/mock_store.go",
+   "internal/database/mocks/mock_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-131-fix-audiobook-organizer-books-total-to-report-th.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Fix audiobook_organizer_books_total to report the true total, not just primary books (or rename it)"
+ },
+ {
+  "id": "TASK-134",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/operations_v2.go",
+   "internal/server/wire_handlers.go",
+   "internal/aiscan/pipeline.go",
+   "internal/database/ai_scan_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-134-add-a-wiring-level-test-proving-the-server-actua.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add a wiring-level test proving the server actually constructs CancelOperationV2 with AI-scan cancellation attached"
+ },
+ {
+  "id": "TASK-136",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/reconcile_ops.go",
+   "internal/server/reconcile.go",
+   "internal/plugins/maintenance/chapters_backfill.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-136-convert-reconcile-apply-from-resumedrop-to-real-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Convert reconcile.apply from ResumeDrop to real checkpoint/resume"
+ },
+ {
+  "id": "TASK-138",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/middleware/basicauth.go",
+   "internal/server/server.go",
+   "internal/server/basicauth.go",
+   "internal/server/handlers/abs/handler.go",
+   "internal/server/middleware/absauth.go",
+   "internal/server/wire_abs_routes.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Exempt the ABS router group from the global BasicAuth() middleware"
+ },
+ {
+  "id": "TASK-140",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/itl_cleanup.go",
+   "internal/itunes/cleanup_merged.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal)"
+ },
+ {
+  "id": "TASK-205",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/server.go",
+   "internal/server/server_lifecycle.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll"
+ },
+ {
+  "id": "TASK-206",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/registry.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-206-split-or-speed-up-the-internal-server-test-packa.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Split or speed up the internal/server test package -- migrate call sites to a lighter newTestServer helper"
+ },
+ {
+  "id": "TASK-208",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/testutil/integration.go",
+   "internal/plugins/itunes/register.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-208-migrate-internal-server-test-fixtures-to-setupte.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_error_test.go, version_lifecycle_test.go"
+ },
+ {
+  "id": "TASK-209",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/itunes/register.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-209-migrate-internal-server-test-fixtures-to-setupte.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Migrate internal/server test fixtures to setupTestServerWithStore — itunes_integration_test.go, indexed_store_test.go, similar_books_test.go, e2e_workflow_test.go"
+ },
+ {
+  "id": "TASK-210",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go"
+ },
+ {
+  "id": "TASK-211",
+  "kind": "carried",
+  "ws": "server",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "L",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/server/TASK-211-migrate-internal-server-test-fixtures-to-setupte.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Migrate internal/server test fixtures to setupTestServerWithStore — cover_history_test.go, server_middleware_test.go, ai_jobs_handlers_test.go, entity_tag_handlers_test.go, import_collision_test.go, reading_handlers_test.go, user_handlers_test.go, organize_integration_test.go, server_op_registration_test.go, metadata_handlers_test.go"
+ },
+ {
+  "id": "TASK-142",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/dedup_automerge_journal.go",
+   "internal/server/handlers/dedup/interfaces.go",
+   "internal/server/wire_dedup_routes.go",
+   "internal/server/handlers/dedup/handler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-142-expose-unmergeauto-through-an-admin-undo-merge-e.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Expose UnmergeAuto through an admin undo-merge endpoint (list + invoke)"
+ },
+ {
+  "id": "TASK-143",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/abs/dto.go",
+   "internal/server/handlers/abs/handler.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-143-n-3-stop-advertising-delete-update-permissions-t.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "N-3: stop advertising Delete/Update permissions the library surface cannot honor"
+ },
+ {
+  "id": "TASK-147",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-147-align-abs-conformance-fixtures-with-the-oracle-s.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Align ABS conformance fixtures with the oracle so CompareValues stays green permanently"
+ },
+ {
+  "id": "TASK-148",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Re-capture the series ABS fixture against a populated library (it currently contains zero series)"
+ },
+ {
+  "id": "TASK-149",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/abs/mapper.go",
+   "internal/audioutil/timeline.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-149-detect-multi-file-books-whose-synthesized-chapte.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Detect multi-file books whose synthesized chapter timeline stops short of Book.Duration (per-file BookFile.Duration missing or wrong)"
+ },
+ {
+  "id": "TASK-150",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/organize.go",
+   "internal/server/handlers/ai.go",
+   "internal/server/handlers/diagnostics.go",
+   "internal/server/handlers/review/handler.go",
+   "internal/server/metadata_ops.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-150-audit-apply-shaped-endpoints-for-missing-tag-fil.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Audit apply-shaped endpoints for missing tag/file-I/O writeback"
+ },
+ {
+  "id": "TASK-154",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/abs/handler.go",
+   "internal/server/handlers/abs/play.go",
+   "internal/server/handlers/abs/progress.go",
+   "internal/server/wire_abs_routes.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-154-implement-post-api-session-local-all-batch-local.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Implement POST /api/session/local-all (batch local-session sync, accept both body shapes)"
+ },
+ {
+  "id": "TASK-157",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/dedup/handler.go",
+   "internal/server/handlers/dedup/label_capture.go",
+   "internal/plugins/acoustid/backfill.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster"
+ },
+ {
+  "id": "TASK-214",
+  "kind": "carried",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md",
+  "risk": "perf",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/metadata_cache.go",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "internal/database/iface_ops_v2.go",
+   "web/src/services/api.ts",
+   "internal/httputil/parse.go",
+   "internal/server/wire_handlers.go",
+   "internal/server/library_core_ops.go",
+   "internal/server/metadata_batch_candidates.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s"
+ },
+ {
+  "id": "TASK-158",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/hooks/useSettingsHandlers.ts",
+   "web/src/components/settings/PathsSettingsTab.tsx",
+   "web/src/services/api.ts",
+   "web/src/pages/Settings.tsx",
+   "web/src/components/settings/EmbeddingSettingsSection.tsx",
+   "web/src/components/settings/MetadataSettingsTab.tsx",
+   "web/src/components/settings/PathAliasesSection.tsx",
+   "web/src/components/settings/PathAliasesSection.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-158-add-a-settings-panel-section-to-edit-path-aliase.md",
+  "todo_lines": null,
+  "wave": 5,
+  "title": "Add a Settings panel section to edit path_aliases"
+ },
+ {
+  "id": "TASK-160",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-160-move-openai-api-key-validation-server-side-curre.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/wizard/WelcomeWizard.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-160-move-openai-api-key-validation-server-side-curre.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Move OpenAI API key validation server-side (currently sent from the browser)"
+ },
+ {
+  "id": "TASK-161",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/library/TagCloud.tsx",
+   "web/src/pages/Library.tsx",
+   "internal/dedup/engine.go",
+   "internal/dedup/collectors_metadata.go",
+   "internal/metafetch/service_apply.go",
+   "web/src/components/library/TagCloud.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-161-strip-dedup-and-metadata-source-namespaces-from-.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Strip dedup:* and metadata:source:* namespaces from Browse by Tag widget"
+ },
+ {
+  "id": "TASK-162",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/tag_helpers.go",
+   "web/src/components/library/TagCloud.tsx",
+   "web/src/components/library/TagCloud.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing"
+ },
+ {
+  "id": "TASK-165",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/utils/apiFetch.ts",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/services/api.ts",
+   "web/src/pages/BookDetail.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-165-review-the-17-apifetch-callers-catch-handlers-fo.md",
+  "todo_lines": null,
+  "wave": 6,
+  "title": "Review the 17 apiFetch-callers' catch handlers for session-expiry messaging"
+ },
+ {
+  "id": "TASK-166",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/hooks/useLibraryQuery.ts",
+   "web/src/pages/Library.tsx",
+   "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "internal/server/handlers/audiobooks/handler.go",
+   "web/src/App.tsx",
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
+   "web/src/hooks/useLibraryQuery.test.ts"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Make the book-detail page's Author field(s) link to a library view filtered by that author"
+ },
+ {
+  "id": "TASK-167",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/bookdetail/BookDetailInfoTab.tsx",
+   "internal/server/handlers/audiobooks/handler.go",
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
+   "web/src/hooks/useLibraryQuery.test.ts"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index"
+ },
+ {
+  "id": "TASK-168",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/audiobooks/service_filtering.go",
+   "web/src/hooks/useLibraryQuery.ts",
+   "web/src/hooks/useLibraryFilters.ts",
+   "web/src/pages/Library.tsx",
+   "web/src/components/bookdetail/BookDetailInfoTab.test.tsx",
+   "web/src/pages/Library.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-168-make-narrator-publisher-genre-and-release-year-f.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Make Narrator, Publisher, Genre, and Release Year fields link to filtered library views (all four have real filters behind them)"
+ },
+ {
+  "id": "TASK-169",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/bookdetail/BookDetailVersionGroup.tsx",
+   "internal/audiobooks/service_filtering.go",
+   "web/src/components/bookdetail/BookDetailHeader.tsx",
+   "web/src/components/bookdetail/BookDetailVersionGroup.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-169-link-version-group-id-to-a-filtered-library-view.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Link version_group_id to a filtered library view (now unblocked — the filter works as of commit b0ebccb0)"
+ },
+ {
+  "id": "TASK-170",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/services/api.ts"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-170-retarget-dedup-operations-spec-ts-and-dedup-spec.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Retarget dedup-operations.spec.ts and dedup.spec.ts resolve-production status mocks to v2"
+ },
+ {
+  "id": "TASK-171",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/pages/Diagnostics.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-171-retarget-diagnostics-spec-ts-ai-submit-and-expor.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Retarget diagnostics.spec.ts AI-submit and export status mocks to v2"
+ },
+ {
+  "id": "TASK-173",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/dedup/DedupAcousticTab.tsx",
+   "web/src/components/common/ConfigurableTable.tsx",
+   "web/src/components/settings/WriteBackPreviewTable.tsx",
+   "web/src/components/dedup/__tests__/DedupAcousticTab.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Add resizable/sortable columns to the acoustic dedup candidates table"
+ },
+ {
+  "id": "TASK-174",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/pages/ActivityLog.tsx",
+   "web/src/components/common/ConfigurableTable.tsx",
+   "web/src/pages/__tests__/ActivityLog.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Add resizable/sortable columns to the Activity Log table"
+ },
+ {
+  "id": "TASK-175",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/dedup/DedupSplitBookTab.tsx",
+   "web/src/components/common/ConfigurableTable.tsx",
+   "web/src/components/dedup/__tests__/DedupSplitBookTab.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-175-add-resizable-sortable-columns-to-the-split-book.md",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Add resizable/sortable columns to the split-book dedup candidates table"
+ },
+ {
+  "id": "TASK-189",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/audio_sample.go",
+   "internal/scanner/scanner.go",
+   "web/src/components/review/MetadataPanel.tsx",
+   "internal/audio/sample.go",
+   "web/src/components/AudioSampleCompare.tsx",
+   "internal/database/pebble_store_bookfiles.go",
+   "internal/server/server_ops_store.go"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint"
+ },
+ {
+  "id": "TASK-217",
+  "kind": "carried",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md",
+  "risk": "hygiene",
+  "sev": null,
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/review/evidence/adapters.ts",
+   "internal/metafetch/score_breakdown.go",
+   "internal/metafetch/service_search.go",
+   "web/src/components/review/spine/CompareSpine.tsx",
+   "web/src/components/review/lanes/useMetadataLane.ts",
+   "web/src/components/review/MetadataPanel.tsx",
+   "web/src/components/review/ReviewWorkspace.test.tsx",
+   "web/src/components/review/spine/CompareSpine.test.tsx"
+  ],
+  "source_key": "docs/agent-tasks/todo-completion/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Evidence panel: explain a missing score derivation in plain language and offer re-search inline"
+ },
+ {
+  "id": "TASK-300",
+  "kind": "new-finding",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-300-mergesplitbookcluster-performs-an-unguarded-read.md",
+  "risk": "data-loss",
+  "sev": "critical",
+  "effort": "S",
+  "prio": "P0",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/dedup/split_book_merge.go",
+   "internal/dedup/book_dedup.go",
+   "internal/merge/serialize.go",
+   "internal/plugins/dedup/split_book_bulk_merge.go",
+   "internal/server/handlers/split_book.go"
+  ],
+  "source_key": "DA-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "MergeSplitBookCluster performs an unguarded read-modify-write on book/file rows -- it never takes the shared merge.LockMergeRMW, unlike every other merge-family path"
+ },
+ {
+  "id": "TASK-301",
+  "kind": "new-finding",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-301-unattended-auto-merge-paths-exact-file-hash-matc.md",
+  "risk": "data-loss",
+  "sev": "high",
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/dedup/engine.go",
+   "internal/dedup/merge_journaled.go",
+   "internal/server/handlers/dedup/handler.go"
+  ],
+  "source_key": "DA-02",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Unattended auto-merge paths (exact file-hash match, LLM high-confidence verdict) and several bulk/manual HTTP merge endpoints bypass MergeJournaled, so they write no reversal journal -- broader than the tracked MERGE-UNDO scope"
+ },
+ {
+  "id": "TASK-302",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-302-purge-empty-authors-delete-guard-book-scan-uses.md",
+  "risk": "data-loss",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/author_bookref.go",
+   "internal/database/pebble_store_versiongroup_backfill.go"
+  ],
+  "source_key": "DB-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "purge-empty-authors delete-guard book scan uses a narrower byte-range bound than the sibling backfill already fixed for the identical bug"
+ },
+ {
+  "id": "TASK-303",
+  "kind": "new-finding",
+  "ws": "organize",
+  "path": "docs/agent-tasks/todo-completion-2026-09/organize/TASK-303-single-file-organize-no-op-paths-report-success.md",
+  "risk": "data-loss",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/organizer/organizer.go",
+   "internal/organizer/service.go"
+  ],
+  "source_key": "SF-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Single-file organize no-op paths report success without ever stat-verifying the file, unlike the directory path's explicit post-copy check"
+ },
+ {
+  "id": "TASK-304",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-304-author-merge-preview-popover-shows-an-author-s-b.md",
+  "risk": "data-loss",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/components/dedup/DedupAuthorTab.tsx"
+  ],
+  "source_key": "WEB-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Author-merge preview popover shows an author's book list as empty on fetch failure, which can bias a merge decision"
+ },
+ {
+  "id": "TASK-305",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-305-migration-effect-migration-record-write-and-sche.md",
+  "risk": "data-loss",
+  "sev": "medium",
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/migrations.go"
+  ],
+  "source_key": "DB-02",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "Migration effect, migration-record write, and schema-version write are three separate, unbatched Pebble writes -- a crash between them replays a non-idempotent migration"
+ },
+ {
+  "id": "TASK-306",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-306-post-backup-restore-caller-requested-checksum-ve.md",
+  "risk": "data-loss",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/system/handler.go"
+  ],
+  "source_key": "SV-02",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "POST /backup/restore: caller-requested checksum verification is silently skipped, no signal in the response"
+ },
+ {
+  "id": "TASK-307",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-307-frontend-ci-yml-grants-an-unjustified-broad-perm.md",
+  "risk": "security",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   ".github/workflows/frontend-ci.yml"
+  ],
+  "source_key": "CI-02",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow"
+ },
+ {
+  "id": "TASK-308",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-308-sse-handler-unconditionally-overrides-the-app-s.md",
+  "risk": "security",
+  "sev": "low",
+  "effort": "S",
+  "prio": "P3",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/realtime/events.go"
+  ],
+  "source_key": "SV-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "SSE handler unconditionally overrides the app's restrictive CORS policy with Access-Control-Allow-Origin: *"
+ },
+ {
+  "id": "TASK-309",
+  "kind": "new-finding",
+  "ws": "scanner",
+  "path": "docs/agent-tasks/todo-completion-2026-09/scanner/TASK-309-inline-ai-parse-phase-result-is-discarded-by-the.md",
+  "risk": "correctness",
+  "sev": "critical",
+  "effort": "S",
+  "prio": "P0",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/scanner/scanner.go",
+   "internal/scanner/ai_batch_phase.go",
+   "internal/server/library_ai_parse_op.go",
+   "internal/scanner/service.go",
+   "internal/server/folder_autoscan_op.go"
+  ],
+  "source_key": "SF-02",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Inline AI-parse phase result is discarded by the scan, so a fully-aborted LLM phase (revoked key, quota exhausted, 3+ batch failures) still lets library.scan report success"
+ },
+ {
+  "id": "TASK-310",
+  "kind": "new-finding",
+  "ws": "metadata",
+  "path": "docs/agent-tasks/todo-completion-2026-09/metadata/TASK-310-isbn-asin-enrichment-sweep-discards-every-provid.md",
+  "risk": "correctness",
+  "sev": "critical",
+  "effort": "S",
+  "prio": "P0",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/metafetch/isbn.go"
+  ],
+  "source_key": "SF-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "ISBN/ASIN enrichment sweep discards every provider search error, making a circuit-breaker-open or throttled provider indistinguishable from a legitimate zero-result search"
+ },
+ {
+  "id": "TASK-311",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-311-deploy-deploy-debug-guard-checks-not-behind-inst.md",
+  "risk": "correctness",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "Makefile.local.example"
+  ],
+  "source_key": "CI-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "deploy/deploy-debug guard checks 'not behind' instead of 'exactly equals' origin/main, allowing unpushed commits to ship"
+ },
+ {
+  "id": "TASK-312",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-312-node-version-drift-security-yml-pins-node-20-x-f.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   ".github/workflows/security.yml"
+  ],
+  "source_key": "CI-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses 22"
+ },
+ {
+  "id": "TASK-313",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-313-the-only-go-version-consistency-check-truncates.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   ".github/workflows/test-action-integration.yml"
+  ],
+  "source_key": "CI-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warns instead of failing"
+ },
+ {
+  "id": "TASK-314",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-314-no-concurrency-guard-between-the-two-burndown-di.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   ".github/workflows/hard-burndown.yml"
+  ],
+  "source_key": "CI-05",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "No concurrency guard between the two burndown-dispatch workflows sharing the same task hub, with a real Sunday overlap window"
+ },
+ {
+  "id": "TASK-315",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-315-the-real-pebbledb-corrupted-organize-path-repair.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/migrations.go"
+  ],
+  "source_key": "DB-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "The real PebbleDB corrupted-organize-path repair (migration014UpPebble) is written but never wired to migration014Up, so it has never run against the production backend"
+ },
+ {
+  "id": "TASK-316",
+  "kind": "new-finding",
+  "ws": "operations",
+  "path": "docs/agent-tasks/todo-completion-2026-09/operations/TASK-316-resumerestart-proceeds-to-announce-an-op-as-queu.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/operations/registry/resume.go"
+  ],
+  "source_key": "OPS-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "resumeRestart proceeds to announce an op as \"queued\" (publishOpCreated + pingDispatch) even when ResetOperationV2ForResume fails to persist that status, producing a ghost op the dispatcher will never pick up"
+ },
+ {
+  "id": "TASK-317",
+  "kind": "new-finding",
+  "ws": "metadata",
+  "path": "docs/agent-tasks/todo-completion-2026-09/metadata/TASK-317-auto-merge-primary-selection-match-4-silently-sc.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/metafetch/service_apply.go"
+  ],
+  "source_key": "SF-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Auto-merge primary-selection (MATCH-4) silently scores a book as having zero files when GetBookFiles errors, which can pick the wrong book as merge primary"
+ },
+ {
+  "id": "TASK-318",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-318-publisheddecades-filter-list-is-built-from-only.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/abs/browse.go",
+   "internal/database/memdb_reads.go"
+  ],
+  "source_key": "SQ-05",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "publishedDecades filter list is built from only the first 5,000 books in ULID/creation order, permanently omitting decades from the rest of the library"
+ },
+ {
+  "id": "TASK-319",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-319-delete-operations-history-deletes-from-the-dead.md",
+  "risk": "correctness",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/handlers/operations/handler.go",
+   "internal/database/pebble_store_operations.go"
+  ],
+  "source_key": "SV-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "DELETE /operations/history deletes from the dead v1 `operation:` keyspace; reports success while clearing nothing meaningful"
+ },
+ {
+  "id": "TASK-320",
+  "kind": "new-finding",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md",
+  "risk": "correctness",
+  "sev": "low",
+  "effort": "S",
+  "prio": "P3",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   ".github/workflows/frontend-ci.yml"
+  ],
+  "source_key": "CI-06",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "frontend job gate is a computed `if:` that can silently skip a required-looking check"
+ },
+ {
+  "id": "TASK-321",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-321-search-index-bulk-backfill-is-a-sequential-per-b.md",
+  "risk": "perf",
+  "sev": "high",
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/server_search.go",
+   "internal/search/index_builder.go",
+   "internal/database/pebble_store_authors.go",
+   "internal/audiobooks/service_query.go"
+  ],
+  "source_key": "SQ-01",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Search-index bulk backfill is a sequential per-book N+1 (author/series/tags) with no worker pool"
+ },
+ {
+  "id": "TASK-322",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-322-no-persisted-author-books-secondary-index-pre-me.md",
+  "risk": "perf",
+  "sev": "high",
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/pebble_store.go"
+  ],
+  "source_key": "SQ-02",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "No persisted author->books secondary index; pre-memdb-warmup fallback does two full-keyspace scans for a single-author lookup"
+ },
+ {
+  "id": "TASK-323",
+  "kind": "new-finding",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-323-external-id-backfill-s-done-setting-is-written-b.md",
+  "risk": "perf",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/itunes/backfill.go"
+  ],
+  "source_key": "SQ-04",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "External-ID backfill's \"done\" setting is written but never read -- the full-library backfill unconditionally reruns on every server boot"
+ },
+ {
+  "id": "TASK-324",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-324-authors-page-fetches-the-entire-authors-table-on.md",
+  "risk": "perf",
+  "sev": "high",
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/services/api.ts"
+  ],
+  "source_key": "WEB-01",
+  "todo_lines": null,
+  "wave": 3,
+  "title": "Authors page fetches the entire authors table on every mount, no server pagination"
+ },
+ {
+  "id": "TASK-325",
+  "kind": "new-finding",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-325-two-ops-scan-the-whole-embedding-book-keyspace-w.md",
+  "risk": "perf",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/plugins/dedup/cleanup_orphan_embeddings.go"
+  ],
+  "source_key": "DA-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Two ops scan the whole embedding/book keyspace with a plain sequential loop doing a per-item DB point-lookup, unlike every sibling op in the same package which uses registry.RunItems -- the exact single-threaded-hotspot shape CLAUDE.md's concurrency mandate exists to catch"
+ },
+ {
+  "id": "TASK-326",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-326-dual-write-activity-migration-the-secondary-sqli.md",
+  "risk": "perf",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/sql_activity_migrating_store.go"
+  ],
+  "source_key": "OPS-02",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Dual-write activity migration: the secondary (SQLite) backend receives every write immediately but Prune/Summarize/CompactByDay run only against the ACTIVE backend until the read flip, so the secondary accumulates unbounded rows for the entire migration window"
+ },
+ {
+  "id": "TASK-327",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md",
+  "risk": "perf",
+  "sev": "medium",
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/services/api.ts"
+  ],
+  "source_key": "WEB-02",
+  "todo_lines": null,
+  "wave": 4,
+  "title": "Series page fetches the entire series table on every mount, no server pagination"
+ },
+ {
+  "id": "TASK-328",
+  "kind": "new-finding",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-328-ipratelimiter-sweeps-the-entire-ip-map-under-one.md",
+  "risk": "perf",
+  "sev": "low",
+  "effort": "S",
+  "prio": "P3",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/server/middleware/ratelimit.go"
+  ],
+  "source_key": "SV-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "IPRateLimiter sweeps the entire IP map under one mutex on every request"
+ },
+ {
+  "id": "TASK-329",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-329-dashboard-count-widgets-silently-show-0-when-the.md",
+  "risk": "ux",
+  "sev": "high",
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/pages/Dashboard.tsx"
+  ],
+  "source_key": "WEB-03",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Dashboard count widgets silently show 0 when the count API fails -- indistinguishable from a genuinely-empty library"
+ },
+ {
+  "id": "TASK-330",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-330-operations-timeline-fetch-swallows-both-network.md",
+  "risk": "ux",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/services/api.ts"
+  ],
+  "source_key": "WEB-05",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Operations timeline fetch swallows both network errors and non-2xx into an empty array"
+ },
+ {
+  "id": "TASK-331",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-331-deletebook-never-deletes-the-book-authors-book-n.md",
+  "risk": "hygiene",
+  "sev": "medium",
+  "effort": "S",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/pebble_store.go",
+   "internal/database/pebble_store_authors.go",
+   "internal/database/memdb_sync.go"
+  ],
+  "source_key": "SQ-03",
+  "todo_lines": null,
+  "wave": 2,
+  "title": "DeleteBook never deletes the book_authors:/book_narrators: sidecar rows it created via SetBookAuthors/SetBookNarrators"
+ },
+ {
+  "id": "TASK-332",
+  "kind": "new-finding",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-332-no-vitest-or-playwright-coverage-exists-for-the.md",
+  "risk": "hygiene",
+  "sev": "medium",
+  "effort": "M",
+  "prio": "P2",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "web/src/pages/__tests__"
+  ],
+  "source_key": "WEB-06",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "No Vitest or Playwright coverage exists for the Authors or Series pages"
+ },
+ {
+  "id": "TASK-333",
+  "kind": "new-finding",
+  "ws": "activity",
+  "path": "docs/agent-tasks/todo-completion-2026-09/activity/TASK-333-isbatchable-s-tier-gate-silently-routes-only-tie.md",
+  "risk": "hygiene",
+  "sev": "low",
+  "effort": "S",
+  "prio": "P3",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/activity/writer.go"
+  ],
+  "source_key": "DA-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "isBatchable's Tier gate silently routes only tier=debug high-volume entries through the batcher; a caller that emits the same Type at tier=change (e.g. after the writer.go tier-upgrade rule for warn/error) falls back to one full ActivityEntry per line instead of being coalesced"
+ },
+ {
+  "id": "TASK-334",
+  "kind": "new-finding",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md",
+  "risk": "hygiene",
+  "sev": "low",
+  "effort": "S",
+  "prio": "P3",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "",
+  "files": [
+   "internal/database/nuts_activity_store.go"
+  ],
+  "source_key": "DB-04",
+  "todo_lines": null,
+  "wave": 1,
+  "title": "Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact)"
+ },
+ {
+  "id": "TASK-335",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-335-reauth-passkey-reverify-gate-future.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately.",
+  "files": [
+   "internal/auth/"
+  ],
+  "source_key": "TODO.md:1045",
+  "todo_lines": [
+   1045
+  ],
+  "wave": 1,
+  "title": "Reauth / passkey reverify gate (future)"
+ },
+ {
+  "id": "TASK-336",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-336-full-application-database-reset-future-gated.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately.",
+  "files": [
+   "internal/server/handlers/"
+  ],
+  "source_key": "TODO.md:1049",
+  "todo_lines": [
+   1049
+  ],
+  "wave": 1,
+  "title": "Full-application-database reset (future, GATED)"
+ },
+ {
+  "id": "TASK-337",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-337-add-a-dry-run-count-mode-to-delete-operations-hi.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Heading and cited item are about two different endpoints (timeline filters vs DELETE history dry-run) — still a legitimate small guard to add.",
+  "files": [
+   "internal/server/handlers/operations/handler.go"
+  ],
+  "source_key": "TODO.md:1192",
+  "todo_lines": [
+   1192
+  ],
+  "wave": 2,
+  "title": "Add a dry-run / count mode to `DELETE /operations/history`"
+ },
+ {
+  "id": "TASK-338",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-338-fix-or-unregister-fix-library-states.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Brief-verifier (REWRITE): the item's 'fix OR unregister' is ambiguous — DECISION FOR THE WORKER: UNREGISTER (remove the maintenance.Register call or make Run() refuse with an error), update TestFixLibraryStatesJob_Registered (fix_library_states_test.go:21) to assert the new state, commit subject 'fix(maintenance): unregister dangerous fix-library-states job'. NEVER run the job to verify anything — it is on the standing-ban list (would empty the ABS library).",
+  "files": [
+   "internal/maintenance/jobs/fix_library_states.go"
+  ],
+  "source_key": "TODO.md:1294",
+  "todo_lines": [
+   1294
+  ],
+  "wave": 1,
+  "title": "Fix or unregister `fix-library-states`"
+ },
+ {
+  "id": "TASK-339",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-339-there-is-no-delete-one-op-endpoint.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "RECLASSIFY",
+  "dispatch_why": "Validator (TASK-338 row): 1366 is a feature gap, not data-loss; 1461 was the genuine risk.",
+  "files": [
+   "internal/server/wire_operations_routes.go"
+  ],
+  "source_key": "TODO.md:1366",
+  "todo_lines": [
+   1366
+  ],
+  "wave": 1,
+  "title": "There is no delete-one-op endpoint"
+ },
+ {
+  "id": "TASK-340",
+  "kind": "new-todo",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-340-internal-itunes-service-writeback-batcher-go-sto.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Neither item is literally about completed_at/zombie ops — both are follow-ons bundled under that heading. 1366 should be reclassified down; 1461 is the genuine risk.",
+  "files": [
+   "internal/itunes/service/writeback_batcher.go"
+  ],
+  "source_key": "TODO.md:1461",
+  "todo_lines": [
+   1461
+  ],
+  "wave": 1,
+  "title": "`internal/itunes/service/writeback_batcher.go` — `Stop()` (`:814`) sets a flag and calls `flush()` o"
+ },
+ {
+  "id": "TASK-341",
+  "kind": "new-todo",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-341-the-barrier-still-does-not-fire-and-deleting-the.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Section title is unrelated (reflink/zdb) to the cited item (CodeQL barrier); the item's own text says a guess-fix is not acceptable, it needs a canary/diagnosis step first.",
+  "files": [
+   ".github/codeql/models/go-sanitizers.model.yml"
+  ],
+  "source_key": "TODO.md:1935",
+  "todo_lines": [
+   1935
+  ],
+  "wave": null,
+  "title": "🔴 The barrier still does not fire, and deleting the invalid file did not fix it"
+ },
+ {
+  "id": "TASK-342",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-342-duplicate-placeholder-book-records-priority-3-of.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section matches; scope is very large (three separate repair populations) for one brief, flag for splitting.",
+  "files": [
+   "internal/plugins/maintenance/merge_same_path_dupes.go"
+  ],
+  "source_key": "TODO.md:2088",
+  "todo_lines": [
+   2088
+  ],
+  "wave": 1,
+  "title": "Duplicate & placeholder book records — PRIORITY 3 of the 2026-09-05 audit cleanup"
+ },
+ {
+  "id": "TASK-343",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-343-author-numbering-cleanup-follow-ups-from-the-202.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "RECLASSIFY",
+  "dispatch_why": "Section matches but the class tag is wrong — reporting/completeness gaps, not a data-loss or security risk.",
+  "files": [
+   "internal/plugins/maintenance/author_strip_merge.go"
+  ],
+  "source_key": "TODO.md:2218",
+  "todo_lines": [
+   2218,
+   2221
+  ],
+  "wave": 1,
+  "title": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)"
+ },
+ {
+  "id": "TASK-344",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-344-dedup-mergebooks-hard-delete-path-has-no-audio-r.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Cited item was found while investigating the watchdog incident but is a distinct bug from the section heading; class is correctly severe.",
+  "files": [
+   "internal/reconcile/itunes_heal.go"
+  ],
+  "source_key": "TODO.md:2304",
+  "todo_lines": [
+   2304
+  ],
+  "wave": 1,
+  "title": "`dedup.MergeBooks` hard-delete path has no audio-route guard"
+ },
+ {
+  "id": "TASK-345",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-345-series-phantom-repair-repair-the-series-ids-that.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section title is thematically unrelated to the three cited series-deletion-guard items — a grab-bag section; class assessment is sound.",
+  "files": [
+   "internal/server/duplicates_helpers.go"
+  ],
+  "source_key": "TODO.md:2872",
+  "todo_lines": [
+   2872
+  ],
+  "wave": 2,
+  "title": "SERIES-PHANTOM-REPAIR — Repair the series IDs that are ALREADY phantom"
+ },
+ {
+  "id": "TASK-346",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-346-series-normalize-trashed-gap-mergeseriesgrouphel.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section title is thematically unrelated to the three cited series-deletion-guard items — a grab-bag section; class assessment is sound.",
+  "files": [
+   "internal/server/duplicates_helpers.go"
+  ],
+  "source_key": "TODO.md:2887",
+  "todo_lines": [
+   2887
+  ],
+  "wave": 1,
+  "title": "SERIES-NORMALIZE-TRASHED-GAP — `mergeSeriesGroupHelper` (`internal/server/duplicates_helpers.go`, us"
+ },
+ {
+  "id": "TASK-347",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-347-series-denumber-trashed-gap-internal-plugins-mai.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section title is thematically unrelated to the three cited series-deletion-guard items — a grab-bag section; class assessment is sound.",
+  "files": [
+   "internal/plugins/maintenance/series_denumber_op.go"
+  ],
+  "source_key": "TODO.md:2901",
+  "todo_lines": [
+   2901
+  ],
+  "wave": 1,
+  "title": "SERIES-DENUMBER-TRASHED-GAP — `internal/plugins/maintenance/series_denumber_op.go` (~L328, op `maint"
+ },
+ {
+  "id": "TASK-348",
+  "kind": "new-todo",
+  "ws": "config",
+  "path": "docs/agent-tasks/todo-completion-2026-09/config/TASK-348-mask-the-remaining-secrets-returned-by-get-api-v.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Clean match on section, class, and shape.",
+  "files": [
+   "internal/config/config.go",
+   "internal/config/update_service.go"
+  ],
+  "source_key": "TODO.md:3344",
+  "todo_lines": [
+   3344,
+   3345,
+   3346,
+   3347,
+   3348
+  ],
+  "wave": 2,
+  "title": "Mask the remaining secrets returned by `GET /api/v1/config`"
+ },
+ {
+  "id": "TASK-349",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-349-decide-whether-a-backup-that-lands-on-the-same-f.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "The item's own text is a policy decision, not a spec an agent can implement.",
+  "files": [
+   "internal/backup/"
+  ],
+  "source_key": "TODO.md:3395",
+  "todo_lines": [
+   3395
+  ],
+  "wave": null,
+  "title": "Decide whether a backup that lands on the same filesystem should warn at startup"
+ },
+ {
+  "id": "TASK-350",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-350-repair-the-12-525-existing-books-with-no-book-fi.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "A worktree PR can build a repair tool, but closing this item means running it against damaged prod rows, which collides with two standing bans.",
+  "files": [],
+  "source_key": "TODO.md:3589",
+  "todo_lines": [
+   3589
+  ],
+  "wave": null,
+  "title": "Repair the 12,525 existing books with no `book_file` rows, and the ~1,710 track-titled fragment rows"
+ },
+ {
+  "id": "TASK-351",
+  "kind": "new-todo",
+  "ws": "scanner",
+  "path": "docs/agent-tasks/todo-completion-2026-09/scanner/TASK-351-stage-3-durable-deferral-when-no-rung-answers-th.md",
+  "risk": "correctness",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "RECLASSIFY",
+  "dispatch_why": "Section matches exactly, but this is a pipeline-completeness feature, mislabelled into the data-loss/security bucket.",
+  "files": [
+   "internal/scanner/"
+  ],
+  "source_key": "TODO.md:3842",
+  "todo_lines": [
+   3842
+  ],
+  "wave": 1,
+  "title": "Stage 3 — durable deferral — When no rung answers, the candidates are currently just left unparsed"
+ },
+ {
+  "id": "TASK-352",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-352-apply-it-repointing-rather-than-deleting.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Task 1 (dry-run+apply) is independent of and must precede Task 2's route decision, so this slice is safely codeable now.",
+  "files": [],
+  "source_key": "TODO.md:3966",
+  "todo_lines": [
+   3966
+  ],
+  "wave": 1,
+  "title": "Apply it, REPOINTING rather than deleting"
+ },
+ {
+  "id": "TASK-353",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-353-decide-how-to-repair-the-duplicate-author-rows-t.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "The cited text is purely a decision request, not an implementable spec.",
+  "files": [
+   "internal/plugins/maintenance/author_strip_merge.go"
+  ],
+  "source_key": "TODO.md:4019",
+  "todo_lines": [
+   4019
+  ],
+  "wave": null,
+  "title": "Decide how to repair the duplicate author rows that already exist"
+ },
+ {
+  "id": "TASK-354",
+  "kind": "new-todo",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-354-two-rows-with-the-same-filepath-in-one-batch-now.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Split in execution: dispatch 4241/4242 as code; 4244 must stop at measurement and surface the decision.; Validator (TASK-350 row): count the existing duplicate book_file rows and surface the decision — a repair pass would hit the never-delete/repoint book_file ban.",
+  "files": [
+   "internal/database/pebble_store_bookfiles.go",
+   "internal/plugins/maintenance."
+  ],
+  "source_key": "TODO.md:4241",
+  "todo_lines": [
+   4241,
+   4242,
+   4244
+  ],
+  "wave": 1,
+  "title": "🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration › Fix"
+ },
+ {
+  "id": "TASK-355",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-355-decide-the-repair-shape-with-the-user-before-wri.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Item is a decision gate, not a spec — collapsing per-track book rows without a chosen shape is exactly the write an agent should not improvise.",
+  "files": [
+   "internal/trackseq/"
+  ],
+  "source_key": "TODO.md:4388",
+  "todo_lines": [
+   4388
+  ],
+  "wave": null,
+  "title": "Decide the repair shape with the user before writing it"
+ },
+ {
+  "id": "TASK-356",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-356-decide-how-to-merge-the-duplicate-author-rows-al.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Item text is a decision request about merge policy, not an implementable fix.",
+  "files": [
+   "internal/plugins/maintenance/author_strip_merge.go"
+  ],
+  "source_key": "TODO.md:4630",
+  "todo_lines": [
+   4630
+  ],
+  "wave": null,
+  "title": "Decide how to merge the duplicate author rows already present, and whether book `AuthorID`s pointing"
+ },
+ {
+  "id": "TASK-357",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-357-sec-backup-abspath-decide-whether-the-backup-res.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Real heading is an unrelated WAL-teardown bug; the decision gate blocks straight dispatch.",
+  "files": [
+   "internal/backup/backup.go"
+  ],
+  "source_key": "TODO.md:4726",
+  "todo_lines": [
+   4726
+  ],
+  "wave": null,
+  "title": "SEC-BACKUP-ABSPATH — Decide whether the backup restore path should *reject* absolute tar en"
+ },
+ {
+  "id": "TASK-358",
+  "kind": "new-todo",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-358-dedup-series-dedup-s-apply-path-writes-no-undo-l.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Section title is the item's own bold name (cosmetic); class and shape are sound.",
+  "files": [
+   "internal/dedup/series_dedup.go"
+  ],
+  "source_key": "TODO.md:4967",
+  "todo_lines": [
+   4967
+  ],
+  "wave": 1,
+  "title": "`dedup.series-dedup`'s apply path writes no undo-ledger rows and does not check for a running scan"
+ },
+ {
+  "id": "TASK-359",
+  "kind": "new-todo",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-359-series-merge-unguarded-denominator-was-trashed-r.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Cosmetic section-title pattern; class and fix shape are correct.",
+  "files": [
+   "internal/database/pebble_store.go"
+  ],
+  "source_key": "TODO.md:5018",
+  "todo_lines": [
+   5018
+  ],
+  "wave": 1,
+  "title": "SERIES-MERGE-UNGUARDED-DENOMINATOR — (was `…-TRASHED-ROWS-RESIDUAL`"
+ },
+ {
+  "id": "TASK-360",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-360-orphan-files-hard-delete-fail-open-internal-plug.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "One of the highest-severity items in the batch; prioritize.",
+  "files": [
+   "internal/plugins/maintenance/orphan_book_files.go"
+  ],
+  "source_key": "TODO.md:5139",
+  "todo_lines": [
+   5139
+  ],
+  "wave": 1,
+  "title": "ORPHAN-FILES-HARD-DELETE-FAIL-OPEN — `internal/plugins/maintenance/orphan_book_files.go` classifies "
+ },
+ {
+  "id": "TASK-361",
+  "kind": "new-todo",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-361-author-membership-unguarded-confirmed-fired-in-p.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "A real, already-materialized incident; treat as urgent.",
+  "files": [
+   "internal/database/pebble_store.go"
+  ],
+  "source_key": "TODO.md:5163",
+  "todo_lines": [
+   5163
+  ],
+  "wave": 5,
+  "title": "AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24 05:00 UTC, not just a filed risk"
+ },
+ {
+  "id": "TASK-362",
+  "kind": "new-todo",
+  "ws": "maintenance",
+  "path": "docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-362-memdb-lossy-readers-headline-is-stale-correct-it.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "The headline ask ('correct the STALE headline') is a TODO.md text edit the coordinator owns; only the two supporting code defects are dispatchable.",
+  "files": [
+   "internal/plugins/maintenance/author_purge_empty.go"
+  ],
+  "source_key": "TODO.md:5246",
+  "todo_lines": [
+   5246
+  ],
+  "wave": 1,
+  "title": "MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it"
+ },
+ {
+  "id": "TASK-363",
+  "kind": "new-todo",
+  "ws": "database",
+  "path": "docs/agent-tasks/todo-completion-2026-09/database/TASK-363-author-file-safety-purge-empty-authors-safety-th.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "A broken safety-net feeding a destructive purge; high priority. Same file family as DB-01 (TASK-302).",
+  "files": [
+   "internal/database/memdb_reads.go"
+  ],
+  "source_key": "TODO.md:5282",
+  "todo_lines": [
+   5282
+  ],
+  "wave": 1,
+  "title": "AUTHOR-FILE-SAFETY: `purge-empty-authors`' \"safety that matters\" is itself a filtered display counte"
+ },
+ {
+  "id": "TASK-364",
+  "kind": "new-todo",
+  "ws": "ci-tooling",
+  "path": "docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-364-ca12-wave-2-model-logging-sanitize-sanitizeerr-l.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Heading is unrelated to the cited CA12 CodeQL-model item; fine to dispatch but severity is lower than 'security' implies.",
+  "files": [
+   ".github/codeql/models/path-sanitizers.model.yml"
+  ],
+  "source_key": "TODO.md:10432",
+  "todo_lines": [
+   10432
+  ],
+  "wave": 1,
+  "title": "CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine` as CodeQL log-injection"
+ },
+ {
+  "id": "TASK-365",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-365-sec-2-bootstrap-still-writes-plaintext-credentia.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Cleanest match in the batch.",
+  "files": [
+   "internal/server/bootstrap.go"
+  ],
+  "source_key": "TODO.md:10906",
+  "todo_lines": [
+   10906
+  ],
+  "wave": 1,
+  "title": "SEC-2 — bootstrap still writes plaintext credential files (`internal/server/bo"
+ },
+ {
+  "id": "TASK-366",
+  "kind": "new-todo",
+  "ws": "server-handlers",
+  "path": "docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-366-sec-4-residue-no-csp-header-yet-middleware-comme.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Cleanest match in the batch.",
+  "files": [
+   "internal/server/server_middleware.go"
+  ],
+  "source_key": "TODO.md:10908",
+  "todo_lines": [
+   10908
+  ],
+  "wave": 1,
+  "title": "SEC-4 residue — no CSP header yet (middleware comment defers until a nonce/hash strate"
+ },
+ {
+  "id": "TASK-367",
+  "kind": "new-todo",
+  "ws": "operations",
+  "path": "docs/agent-tasks/todo-completion-2026-09/operations/TASK-367-operationdef-permissions-is-enforced-by-nothing.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch.",
+  "files": [
+   "internal/operations/registry/registry.go"
+  ],
+  "source_key": "TODO.md:11964",
+  "todo_lines": [
+   11964
+  ],
+  "wave": 1,
+  "title": "`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* d"
+ },
+ {
+  "id": "TASK-368",
+  "kind": "new-todo",
+  "ws": "web",
+  "path": "docs/agent-tasks/todo-completion-2026-09/web/TASK-368-react-router-ghsa-qwww-vcr4-c8h2-accepted-not-re.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch.",
+  "files": [
+   "web/package.json"
+  ],
+  "source_key": "TODO.md:15004",
+  "todo_lines": [
+   15004
+  ],
+  "wave": 1,
+  "title": "react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not re-litigate"
+ },
+ {
+  "id": "TASK-369",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-369-todo-sso-edge-neither-native-app-auth-mode-is-ac.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.",
+  "files": [],
+  "source_key": "TODO.md:16927",
+  "todo_lines": [
+   16927
+  ],
+  "wave": null,
+  "title": "TODO-SSO-EDGE — Neither native-app auth mode is actually configured at the Cloudflare "
+ },
+ {
+  "id": "TASK-370",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-370-todo-sec-bind-the-service-binds-every-interface.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.",
+  "files": [],
+  "source_key": "TODO.md:16949",
+  "todo_lines": [
+   16949
+  ],
+  "wave": null,
+  "title": "TODO-SEC-BIND — The service binds every interface (`ExecStart=… serve --host 0.0.0.0 -"
+ },
+ {
+  "id": "TASK-371",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-371-todo-sec-jwt-rotate-abs-jwt-secret.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "S",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.",
+  "files": [],
+  "source_key": "TODO.md:16960",
+  "todo_lines": [
+   16960
+  ],
+  "wave": null,
+  "title": "TODO-SEC-JWT — Rotate `ABS_JWT_SECRET`"
+ },
+ {
+  "id": "TASK-372",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-372-todo-sec-systemd-the-unit-has-user-audiobook-non.md",
+  "risk": "security",
+  "sev": null,
+  "effort": "M",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.",
+  "files": [],
+  "source_key": "TODO.md:16966",
+  "todo_lines": [
+   16966
+  ],
+  "wave": null,
+  "title": "TODO-SEC-SYSTEMD — The unit has `User=audiobook`, `NoNewPrivileges`, `ProtectKernelTunabl"
+ },
+ {
+  "id": "TASK-373",
+  "kind": "new-todo",
+  "ws": "dedup",
+  "path": "docs/agent-tasks/todo-completion-2026-09/dedup/TASK-373-abs-sync-task-12-p1-data-loss-class-close-the-th.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "DISPATCH",
+  "dispatch_why": "Dispatch the 17185 fix now; 17307/17329 cannot be closed by code alone and wait on the owner's design calls.",
+  "files": [
+   "internal/merge"
+  ],
+  "source_key": "TODO.md:17185",
+  "todo_lines": [
+   17185
+  ],
+  "wave": 1,
+  "title": "ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's ID-durability claim "
+ },
+ {
+  "id": "TASK-374",
+  "kind": "new-todo",
+  "ws": "misc-go",
+  "path": "docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-374-itunes-2-way-sync-continuation-p3-redefine-rever.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Validator (TASK-364 row): blocked on an unresolved owner design decision — no shipped design to implement against.",
+  "files": [],
+  "source_key": "TODO.md:17307",
+  "todo_lines": [
+   17307
+  ],
+  "wave": null,
+  "title": "iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit)"
+ },
+ {
+  "id": "TASK-375",
+  "kind": "new-todo",
+  "ws": "itunes",
+  "path": "docs/agent-tasks/todo-completion-2026-09/itunes/TASK-375-itunes-2-way-sync-writeback-edit-in-place-preser.md",
+  "risk": "data-loss",
+  "sev": null,
+  "effort": "L",
+  "prio": "P1",
+  "dispatch": "HOLD-FOR-OWNER",
+  "dispatch_why": "Validator (TASK-364 row): blocked on an unresolved owner design decision — no shipped design to implement against.",
+  "files": [
+   "internal/itunes/itl.go"
+  ],
+  "source_key": "TODO.md:17329",
+  "todo_lines": [
+   17329
+  ],
+  "wave": null,
+  "title": "iTunes 2-way sync writeback (edit-in-place, preserve play-state)"
+ }
+]

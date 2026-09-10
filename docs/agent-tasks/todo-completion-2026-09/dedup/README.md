@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 6f09e3ef-0356-4f5a-8bcc-6791e95b8e7a -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -21,8 +21,8 @@
 | [TASK-300](TASK-300-mergesplitbookcluster-performs-an-unguarded-read.md) | new-finding | data-loss | P0 | S | MergeSplitBookCluster performs an unguarded read-modify-write on book/file rows  | internal/dedup/split_book_merge.go:67 |
 | [TASK-301](TASK-301-unattended-auto-merge-paths-exact-file-hash-matc.md) | new-finding | data-loss | P1 | M | Unattended auto-merge paths (exact file-hash match, LLM high-confidence verdict) | internal/dedup/engine.go:1373 |
 | [TASK-325](TASK-325-two-ops-scan-the-whole-embedding-book-keyspace-w.md) | new-finding | perf | P2 | S | Two ops scan the whole embedding/book keyspace with a plain sequential loop doin | internal/plugins/dedup/cleanup_orphan_embeddings.go:184 |
-| [TASK-354](TASK-354-dedup-series-dedup-s-apply-path-writes-no-undo-l.md) | new-todo | data-loss | P1 | M | dedup.series-dedup's apply path writes no undo-ledger rows and does not check fo | TODO.md lines 4967 |
-| [TASK-364](TASK-364-sec-origin-is-reachable-from-the-lan-bind-loopba.md) | new-todo | data-loss | P1 | L | SEC: origin is reachable from the LAN — "bind loopback" is NOT achievable as spe | TODO.md lines 17185, 17307, 17329 |
+| [TASK-358](TASK-358-dedup-series-dedup-s-apply-path-writes-no-undo-l.md) | new-todo | data-loss | P1 | M | `dedup.series-dedup`'s apply path writes no undo-ledger rows and does not check  | TODO.md lines 4967 |
+| [TASK-373](TASK-373-abs-sync-task-12-p1-data-loss-class-close-the-th.md) | new-todo | data-loss | P1 | L | ABS-SYNC TASK-12 (P1, data-loss class): close the three identity gaps so §4.3's  | TODO.md lines 17185 |
 
 ## Ground rules
 

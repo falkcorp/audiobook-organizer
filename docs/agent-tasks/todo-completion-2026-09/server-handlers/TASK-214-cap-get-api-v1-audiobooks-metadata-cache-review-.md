@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 9d1903e4-8b0b-44e5-939b-d5390332acf0 -->
+<!-- guid: 55a0481f-5728-5711-bc5e-8743a358302c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-214 — Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log when it exceeds 5s (REV-EMPTY-2)

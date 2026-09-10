@@ -1,0 +1,104 @@
+[
+  {
+    "brief": "TASK-300",
+    "C1": "FAIL: REPO=/path/to/audiobook-organizer  # adjust to your clone is an unfilled placeholder; a cold session cannot resolve it.",
+    "C2": "PASS: Goal names the exact wrap (LockMergeRMW/UnlockMergeRMW) + doc-comment update; regression-test-fails-pre-fix is an observable acceptance criterion.",
+    "C3": "PASS: split_book_merge.go:67-176 verified at HEAD matches Background exactly; LockMergeRMW confirmed absent from that file and present only at book_dedup.go:402-403; call sites split_book_bulk_merge.go:73 and split_book.go:142 confirmed.",
+    "C4": "PASS: fix is self-contained (wrap existing function body); merge.LockMergeRMW's package path is given.",
+    "C5": "PASS: split_book_merge_test.go exists in the same package to extend; gate is scoped to ./internal/dedup/....",
+    "C6": "FAIL: Idempotency/Rollback boilerplate demands 'the op/endpoint defaults to dry-run/apply=false' and Tests demands 'a test proving the dry-run/guard path writes nothing' — MergeSplitBookCluster has no dry-run/apply surface; unsatisfiable as written; no concrete already-done grep.",
+    "C7": "PASS: no scan/apply/fix-library-states/deploy action implied.",
+    "C8": "Wrong fix: a cold executor invents a new apply=false/dry-run parameter on MergeSplitBookCluster instead of just adding the lock.",
+    "overall": "NEEDS-EDIT",
+    "required_edits": [
+      "[START HERE] Replace REPO placeholder with the real absolute path.",
+      "[Re-verify anchors] Add: grep -n 'LockMergeRMW\\|UnlockMergeRMW' internal/dedup/book_dedup.go internal/merge/serialize.go; grep -n 'MergeSplitBookCluster' internal/plugins/dedup/split_book_bulk_merge.go internal/server/handlers/split_book.go; sed -n '780,794p' internal/merge/service.go.",
+      "[Idempotency/Rollback] Pure code change: rollback = git revert. Already-done check: grep -n 'merge.LockMergeRMW' internal/dedup/split_book_merge.go returns >0. Drop the dry-run-writes-nothing test bullet."
+    ]
+  },
+  {
+    "brief": "TASK-302",
+    "C1": "FAIL: same unfilled REPO placeholder.",
+    "C2": "PASS: Goal states the exact byte-range widen and the audit-query follow-up; regression test requirement is observable.",
+    "C3": "PASS: author_bookref.go:308-327 verified at HEAD — LowerBound book:0 / UpperBound book:; and the RESIDUAL comment match; sibling pebble_store_versiongroup_backfill.go confirmed to have made the v2->v3 fix with the true prefix range.",
+    "C4": "PASS: fix fully specified; both bounds named explicitly.",
+    "C5": "PASS: author_bookref_test.go exists to extend; gate scoped to ./internal/database/....",
+    "C6": "FAIL: CountAuthorReferences is a read-only guard function with no write/apply path; the mandatory apply-path-journals + dry-run test language is unsatisfiable; no already-done grep.",
+    "C7": "PASS: the one-off audit query is read-only.",
+    "C8": "Wrong fix: widen only UpperBound and leave LowerBound at book:0 — the brief gives both values in prose but no single copy-pasteable snippet.",
+    "overall": "NEEDS-EDIT",
+    "required_edits": [
+      "[START HERE] Replace REPO placeholder.",
+      "[Re-verify anchors] Add: sed -n '36,49p;112,124p' internal/database/pebble_store_versiongroup_backfill.go so the sibling fix is pinned.",
+      "[Idempotency/Rollback] Pure code change to a read-only guard: rollback = git revert. Already-done check: grep for UpperBound book; in author_bookref.go. Drop the dry-run test bullet."
+    ]
+  },
+  {
+    "brief": "TASK-303",
+    "C1": "FAIL: same unfilled REPO placeholder.",
+    "C2": "PASS: Goal names both no-op branches and gives two acceptable fix shapes; regression test is observable.",
+    "C3": "PASS: organizer.go:141-143 and :184-190 verified at HEAD — both no-op branches return success with no os.Stat; OrganizeSingleFile (794-804) and organizeDirectoryBookRows's contrasting stat check (service.go:1477-1498) confirmed; itunes importer.go:1736 confirmed.",
+    "C4": "PASS: both edit sites named explicitly.",
+    "C5": "PASS: organizer_test.go exists; gate scoped to ./internal/organizer/....",
+    "C6": "FAIL: same unsatisfiable dry-run/apply=false boilerplate; no already-done grep.",
+    "C7": "PASS.",
+    "C8": "Wrong fix: the re-verify sed window (135-147) only reaches the FIRST no-op branch (141-143); a cold executor patches only that one and misses 184-190.",
+    "overall": "NEEDS-EDIT",
+    "required_edits": [
+      "[START HERE] Replace REPO placeholder.",
+      "[Re-verify anchors] Add: sed -n '174,191p' internal/organizer/organizer.go; sed -n '794,804p' internal/organizer/organizer.go; grep -n 'OrganizeOneBook' internal/organizer/service.go; sed -n '1477,1498p' internal/organizer/service.go; sed -n '1736,1741p' internal/itunes/service/importer.go.",
+      "[Idempotency/Rollback] Pure code change: rollback = git revert; presence-based already-done grep for the new os.Stat call."
+    ]
+  },
+  {
+    "brief": "TASK-309",
+    "C1": "FAIL: same unfilled REPO placeholder.",
+    "C2": "PASS: Goal names both call sites (1705, 1714) and the exact mechanism (.Failed()); Idempotency section here is correct and concrete.",
+    "C3": "PASS: scanner.go:1699-1729 verified at HEAD — both bare runAIBatchPhase calls at 1705/1714, unconditional return nil at 1728; ai_batch_phase.go:61-66 doc comment and library_ai_parse_op.go:143-167's .Failed()/.FailureDetails() usage confirmed as the pattern to mirror.",
+    "C4": "PASS: the exact API to call is spelled out with file:line.",
+    "C5": "PASS: ai_batch_phase_test.go / ai_phase_summary_test.go exist; gate scoped to ./internal/scanner/....",
+    "C6": "PASS: rollback = git revert; re-verify greps as already-done check — concrete and correctly polarized.",
+    "C7": "PASS.",
+    "C8": "Wrong fix: fix only line 1705 and miss 1714 — the re-verify sed window (1699-1711) stops 3 lines short of 1714.",
+    "overall": "NEEDS-EDIT",
+    "required_edits": [
+      "[START HERE] Replace REPO placeholder.",
+      "[Re-verify anchors] Widen to sed -n '1698,1729p' internal/scanner/scanner.go; add grep -n 'runAIBatchPhase(ctx, aiParser' internal/scanner/scanner.go; add sed -n '55,67p' internal/scanner/ai_batch_phase.go and sed -n '140,168p' internal/server/library_ai_parse_op.go."
+    ]
+  },
+  {
+    "brief": "TASK-310",
+    "C1": "FAIL: same unfilled REPO placeholder.",
+    "C2": "PASS: Goal states log-the-error + optionally exclude errored books from 'checked'; regression test observable; counting half is optional (logging alone satisfies the minimum).",
+    "C3": "PASS: isbn.go:394-435 verified at HEAD — all four results, _ = src.Search discards (399, 402, 423, 426) confirmed.",
+    "C4": "PASS: fix is local to the two functions shown.",
+    "C5": "PASS: package has isbn_locks_test.go, isbn_cursor_test.go, reliability_test.go; gate scoped to ./internal/metafetch/....",
+    "C6": "PASS: rollback = git revert; re-verify greps as already-done check.",
+    "C7": "PASS.",
+    "C8": "Wrong fix: patch only searchSourceForISBN (399,402) and miss searchSourceForASIN (423,426) — only the ISBN window is covered by the re-verify sed.",
+    "overall": "NEEDS-EDIT",
+    "required_edits": [
+      "[START HERE] Replace REPO placeholder.",
+      "[Re-verify anchors] Widen to sed -n '392,435p' internal/metafetch/isbn.go; add sed -n '218,251p' internal/metafetch/circuitbreaker.go to pin the ProtectedSource error behaviour."
+    ]
+  },
+  {
+    "brief": "TASK-337",
+    "C1": "FAIL: same unfilled REPO placeholder.",
+    "C2": "FAIL: Goal only says 'Fix or unregister fix-library-states' — two mutually exclusive outcomes with different blast radius and no decision rule; no acceptance distinguishes them.",
+    "C3": "PASS: fix_library_states.go still registers ID 'fix-library-states', still writes present/missing (lines 47,49); TODO.md:1294 matches.",
+    "C4": "FAIL: choosing between fix and unregister requires a judgment the brief never supplies.",
+    "C5": "FAIL: fix_library_states_test.go:21 TestFixLibraryStatesJob_Registered asserts the job IS registered; the unregister path turns it red and the brief never says to update it.",
+    "C6": "FAIL: generic dry-run boilerplate, ambiguous which fix it describes; no already-done grep for either branch.",
+    "C7": "PASS: says 'before someone clicks it' — but should state the fix-library-states ban explicitly.",
+    "C8": "Wrong fix: the H1 and commit template name the SCANNER-REVERT bug, but TODO.md:1291-1292 disclaims that this job 'does not exist for this drift'; a cold executor patches the scanner instead of gating the job the checkbox names.",
+    "overall": "REWRITE",
+    "required_edits": [
+      "[Goal] Single explicit choice: unregister fix-library-states (remove its maintenance.Register call or make Run() refuse) per TODO.md:1291's finding that the job is unrelated to the rescan-revert drift and destructive if run.",
+      "[Tests] Update TestFixLibraryStatesJob_Registered (fix_library_states_test.go:21-23) to assert NOT registered (or Run() errors).",
+      "[Commit message] Replace the H1/commit subject with 'fix(maintenance): unregister dangerous fix-library-states job (TODO.md:1294)'.",
+      "[Re-verify anchors] Add sed -n '17,32p' internal/maintenance/jobs/fix_library_states.go and sed -n '178,188p' internal/server/maintenance_dispatcher.go; fix the REPO placeholder.",
+      "[Idempotency/Rollback] Concrete already-done grep for the chosen fix."
+    ]
+  }
+]

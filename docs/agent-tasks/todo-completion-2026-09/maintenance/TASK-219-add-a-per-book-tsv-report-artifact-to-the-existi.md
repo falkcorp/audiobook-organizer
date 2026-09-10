@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 60637175-5412-4c12-8b07-1576ab8b4696 -->
+<!-- guid: 0a4469d3-ba8d-5574-a92e-a276b41f1bc1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-219 — Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run (DUPROW-2)

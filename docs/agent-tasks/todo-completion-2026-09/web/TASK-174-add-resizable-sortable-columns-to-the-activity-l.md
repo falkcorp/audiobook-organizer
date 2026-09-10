@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-174-add-resizable-sortable-columns-to-the-activity-l.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: e4116724-55c9-4f64-97fa-7577cfe021dd -->
+<!-- guid: 036204f8-ce01-5af7-8a8d-10628d77c77c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-174 — Add resizable/sortable columns to the Activity Log table (TODO.md L10660)

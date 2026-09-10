@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-098-echo-which-filters-the-server-actually-applied-i.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: a377dabf-43d4-4686-b0c1-e41f497d72ca -->
+<!-- guid: ab67df1a-b43c-5c4b-935c-9146cfa7cf4c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-098 — Echo which filters the server actually applied in the /audiobooks list response (TODO.md L7736)

@@ -1,0 +1,33 @@
+[
+ {
+  "line": 17307,
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "shape": "DECISION",
+  "why": "Validator (TASK-364 row): blocked on an unresolved owner design decision — no shipped design to implement against."
+ },
+ {
+  "line": 17329,
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "shape": "DECISION",
+  "why": "Validator (TASK-364 row): blocked on an unresolved owner design decision — no shipped design to implement against."
+ },
+ {
+  "line": 1366,
+  "dispatch_verdict": "RECLASSIFY",
+  "shape": "CODE",
+  "class_assessed": "hygiene/feature gap — no delete-one-op endpoint; nothing is lost",
+  "why": "Validator (TASK-338 row): 1366 is a feature gap, not data-loss; 1461 was the genuine risk."
+ },
+ {
+  "line": 4244,
+  "dispatch_verdict": "DISPATCH",
+  "shape": "MEASURE-ONLY",
+  "why": "Validator (TASK-350 row): count the existing duplicate book_file rows and surface the decision — a repair pass would hit the never-delete/repoint book_file ban."
+ },
+ {
+  "line": 1294,
+  "dispatch_verdict": "DISPATCH",
+  "shape": "CODE",
+  "why": "Brief-verifier (REWRITE): the item's 'fix OR unregister' is ambiguous — DECISION FOR THE WORKER: UNREGISTER (remove the maintenance.Register call or make Run() refuse with an error), update TestFixLibraryStatesJob_Registered (fix_library_states_test.go:21) to assert the new state, commit subject 'fix(maintenance): unregister dangerous fix-library-states job'. NEVER run the job to verify anything — it is on the standing-ban list (would empty the ABS library)."
+ }
+]

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-321-search-index-bulk-backfill-is-a-sequential-per-b.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 4bef8cdb-9afc-4cc8-b54e-5a25c3bc2858 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,7 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SQ-01` (audit_schema_queries.json)
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Sonnet-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `SQ-01` (audit_schema_queries.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
@@ -15,7 +15,7 @@ Source: Wave 3 audit finding `SQ-01` (audit_schema_queries.json). Verified at HE
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/server-handlers-321" -b agent/server-handlers-321-search-index-bulk-backfill-is-a-sequenti origin/main
 cd "$REPO/.worktrees/server-handlers-321"
@@ -38,8 +38,12 @@ Why it matters: This is the exact shape CLAUDE.md's concurrency rule targets (wh
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/server/server_search.go   # the file the finding is anchored to still exists
-  sed -n '57,69p' internal/server/server_search.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/server/server_search.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '38,106p' internal/server/server_search.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '711,723p' internal/audiobooks/service_query.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '71,83p' internal/database/pebble_store_authors.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '76,88p' internal/search/index_builder.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '159,171p' internal/search/index_builder.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +95,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

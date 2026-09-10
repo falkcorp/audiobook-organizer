@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-070-add-a-user-configurable-activity-log-retention-w.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 96cf2297-b655-4dd1-92db-bd66f345bc06 -->
+<!-- guid: 0694ec7b-dd4f-529f-97d3-d3f85aae4256 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-070 — Add a user-configurable activity-log retention window (default 7 days, 0=never) (TODO.md L3488)

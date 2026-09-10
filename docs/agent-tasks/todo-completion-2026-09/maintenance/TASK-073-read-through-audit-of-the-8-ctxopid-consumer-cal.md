@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-073-read-through-audit-of-the-8-ctxopid-consumer-cal.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: b4e587cc-2200-4153-b220-d6af6e080a21 -->
+<!-- guid: 796cbedf-e1c7-5ace-941c-267f40d7272b -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-073 — Read-through audit of the 8 ctxOpID consumer call sites now that op IDs actually arrive (TODO.md L4137)

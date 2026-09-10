@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 328dfae3-d3d4-454c-a330-5a32d57be05b -->
+<!-- guid: 662e52bd-a715-5272-8aa9-c6bb9cbd156b -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-148 — Re-capture the series ABS fixture against a populated library (it currently contains zero series) (TODO.md L491)

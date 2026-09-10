@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/scanner/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 16f00fc4-3c51-416e-881d-27e2153f3494 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -10,7 +10,7 @@
 | Task | Kind | Risk | Priority | Effort | Title | Evidence |
 |---|---|---|---|---|---|---|
 | [TASK-309](TASK-309-inline-ai-parse-phase-result-is-discarded-by-the.md) | new-finding | correctness | P0 | S | Inline AI-parse phase result is discarded by the scan, so a fully-aborted LLM ph | internal/scanner/scanner.go:1705 |
-| [TASK-347](TASK-347-finish-the-llm-fallback-chain-stages-2-through-4.md) | new-todo | data-loss | P1 | L | Finish the LLM fallback chain — stages 2 through 4 | TODO.md lines 3842 |
+| [TASK-351](TASK-351-stage-3-durable-deferral-when-no-rung-answers-th.md) | new-todo | correctness | P1 | L | Stage 3 — durable deferral — When no rung answers, the candidates are currently  | TODO.md lines 3842 |
 
 ## Ground rules
 

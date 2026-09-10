@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-308-sse-handler-unconditionally-overrides-the-app-s.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5d6955e4-6260-4f2c-bb7e-2c50838eb864 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,7 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-03` (audit_server_handlers.json)
 
-**Priority:** P3 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P3 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `SV-03` (audit_server_handlers.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
@@ -15,7 +15,7 @@ Source: Wave 3 audit finding `SV-03` (audit_server_handlers.json). Verified at H
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/server-handlers-308" -b agent/server-handlers-308-sse-handler-unconditionally-overrides-th origin/main
 cd "$REPO/.worktrees/server-handlers-308"
@@ -38,8 +38,9 @@ Why it matters: The app's CORS posture elsewhere is a strict, Vary-respecting al
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/realtime/events.go   # the file the finding is anchored to still exists
-  sed -n '215,227p' internal/realtime/events.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/realtime/events.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '210,228p' internal/realtime/events.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '437,449p' internal/realtime/events.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -59,7 +60,7 @@ Then, always:
 
 - A regression test that reproduces the defect described in Background and fails on the pre-fix code.
 - Existing package tests stay green (`-count=1`).
-- A test proving the dry-run / guard path writes nothing (fail-closed on error).
+- ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.
 
 ## How to test
 
@@ -92,7 +93,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — **`git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing; the PR is held for the owner.
 
 ## Coordinator notes
 

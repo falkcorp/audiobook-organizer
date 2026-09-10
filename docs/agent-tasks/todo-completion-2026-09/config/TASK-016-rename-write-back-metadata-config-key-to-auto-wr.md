@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: cf02ed90-164e-41f3-b583-cea999c3e15a -->
+<!-- guid: 670df5ea-82d4-5f9a-8dbd-0aa4d36a3fee -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-016 — Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration (TODO.md L1247)

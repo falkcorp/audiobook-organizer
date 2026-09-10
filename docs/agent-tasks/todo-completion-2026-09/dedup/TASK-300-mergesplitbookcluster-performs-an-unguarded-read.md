@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-300-mergesplitbookcluster-performs-an-unguarded-read.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: d762bd18-5f6a-4435-9b24-94c393890bb0 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-300 — MergeSplitBookCluster performs an unguarded read-modify-write on book/file rows -- it never takes the shared merge.LockMergeRMW, unlike every other merge-family path (DA-01)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-01` (audit_dedup_activity.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-01` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P0 · **Effort:** S · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P0 · **Effort:** S · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
-Source: Wave 3 audit finding `DA-01` (audit_dedup_activity.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `DA-01` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/dedup-300" -b agent/dedup-300-mergesplitbookcluster-performs-an-unguar origin/main
 cd "$REPO/.worktrees/dedup-300"
@@ -35,11 +35,21 @@ Why it matters: merge/service.go's own CombineBooks doc comment (service.go:784-
 
 - MergeSplitBookCluster (split_book_merge.go:67-176) does GetBookByID -> GetBookFiles -> MoveBookFilesToBook -> UpdateBook -> merge.SoftDeleteBook with no locking at all -- grep for LockMergeRMW/UnlockMergeRMW in internal/dedup/*.go finds it ONLY in internal/dedup/book_dedup.go:402-403 (the `dedup.MergeBooks` function). internal/merge/serialize.go:10-33 documents the invariant explicitly: 'All three unguarded paths in the codebase acquire this one lock so any two of them are mutually exclusive on a shared book row' and enumerates exactly three: merge.Service.MergeBooks, merge.Service.CombineBooks, and dedup.MergeBooks (book_dedup.go). MergeSplitBookCluster is a FOURTH unguarded read-modify-write over the same book rows (added split_book_merge.go last-edited 2026-09-02, v1.5.0 -- after serialize.go's design was finalised 2026-07-13) and was never wired into the lock. It is reachable from two call sites: internal/plugins/dedup/split_book_bulk_merge.go:73 (the `dedup.split-book-bulk-merge` op, ConcurrencyKey='dedup.split-book-merge' -- serializes against ITSELF only) and internal/server/handlers/split_book.go:142 (a synchronous HTTP handler, no concurrency key at all). Neither call site takes merge.LockMergeRMW either.
 - Anchor: `internal/dedup/split_book_merge.go:67` (audit `DA-01`, confidence high, severity critical).
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — split_book_merge.go:67-176 GetBookByID/GetBookFiles/MoveBookFilesToBook/UpdateBook/SoftDeleteBook with zero locking; LockMergeRMW only in book_dedup.go:402-403; serialize.go documents three guarded paths, this is a real fourth.
+  - Blast radius: split_book_merge_test.go; POST /dedup/split-book-candidates/:id/merge (PermLibraryEditMetadata, wire_library_routes.go:46); bulk op split_book_bulk_merge.go:73 (ConcurrencyKey serializes only against itself). Racer: merge.Service.MergeBooks/CombineBooks or dedup.MergeBooks on the same book id.
+  - Existing tests to extend: internal/dedup/split_book_merge_test.go
+  - Standing-ban contact: none
+  - Note: Route reachable and auth-gated; brief's fix is the minimal correct one.
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/dedup/split_book_merge.go   # the file the finding is anchored to still exists
+  test -e internal/dedup/split_book_merge.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
   sed -n '61,73p' internal/dedup/split_book_merge.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '170,182p' internal/dedup/split_book_merge.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '396,409p' internal/dedup/book_dedup.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '4,39p' internal/merge/serialize.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '67,79p' internal/plugins/dedup/split_book_bulk_merge.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '136,148p' internal/server/handlers/split_book.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -59,7 +69,7 @@ Then, always:
 
 - A regression test that reproduces the defect described in Background and fails on the pre-fix code.
 - Existing package tests stay green (`-count=1`).
-- A test proving the dry-run / guard path writes nothing (fail-closed on error).
+- ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.
 
 ## How to test
 
@@ -92,7 +102,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — **`git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing; the PR is held for the owner.
 
 ## Coordinator notes
 

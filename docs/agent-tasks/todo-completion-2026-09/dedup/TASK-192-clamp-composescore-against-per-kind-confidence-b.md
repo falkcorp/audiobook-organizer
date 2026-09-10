@@ -1,11 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-192-clamp-composescore-against-per-kind-confidence-b.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: d26b2ad8-7531-4d8e-9412-e95e4d6ddca8 -->
+<!-- guid: 5aa09c2e-006a-5727-8b30-4c34c97c9c21 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-192 — Clamp ComposeScore against per-kind confidence bounds; route calibrate-composite Round 2 through a new apply_confidence param (INIT-1 T05)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -rn 'apply_confidence|ApplyConfidence' internal/ = 0 hits at HEAD. scoreWithClamp exists only in internal/plugins/dedup/calibrate_composite.go:199 (the simulation), with a comment at L44 explicitly noting 'Making Round 2 truly applyable (routing...' is still future work. · risk **correctness** · effort **M**
+> ⚠️ **Anchor drift (2026-09-10, plan-auditor):** `grep 'unified.SetKindConfidenceOverrides' internal/server/registry_wire.go` → 0 hits; repo-wide only doc-comment mentions, no func def and no call site — the carried Status line's 'already wired' claim does not hold at HEAD. Re-derive the anchor before editing; the brief body below is unchanged from 08-21.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — grep -rn apply_confidence/ApplyConfidence internal/ = 0 hits; scoreWithClamp exists only in the simulation (calibrate_composite.go:198); 0 commits to any exact_file. Recommendation: keep - the owner already decided FOR it: DECISIONS-PENDING.md L43 row 10 = option (a), 'clamp primary kinds + route Round-2 via a separate apply_confidence param', briefable/Opus-tier.
 

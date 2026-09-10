@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-050-shattered-book-reassembly-match-fragment-file-se.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 24f61224-ee50-4ba4-bfa0-14ee1c6bcaa2 -->
+<!-- guid: 2428ba61-5ea9-5f6c-a87b-1698c4620883 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-050 — Shattered-book reassembly: match fragment file-sets against the reference corpus via fpidx containment (TODO.md L10750)

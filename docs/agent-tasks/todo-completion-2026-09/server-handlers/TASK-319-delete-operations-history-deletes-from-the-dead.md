@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-319-delete-operations-history-deletes-from-the-dead.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 7e26ae98-8a72-4285-b93c-ab494b7a68f1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-319 — DELETE /operations/history deletes from the dead v1 `operation:` keyspace; reports success while clearing nothing meaningful (SV-01)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-01` (audit_server_handlers.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-01` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
-Source: Wave 3 audit finding `SV-01` (audit_server_handlers.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `SV-01` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/server-handlers-319" -b agent/server-handlers-319-delete-operations-history-deletes-from-t origin/main
 cd "$REPO/.worktrees/server-handlers-319"
@@ -35,11 +35,18 @@ Why it matters: A 200 response with a plausible 'deleted' count is exactly the s
 
 - DeleteOperationHistory (handler.go:244-273) calls h.store.DeleteOperationsByStatus(statuses), which is internal/database/pebble_store_operations.go:368-399 -- it iterates the legacy `operation:` key prefix only. This file's own header comment (handler.go:1-22) and the routing comment in wire_operations_routes.go:33-46 document that the v1 operations minter was retired on 2026-08-23 and that GET /operations, /operations/:id/status and /operations/:id/logs were RETIRED for exactly this reason (183/200 rows permanently stuck at 'pending' on the v1 table, nothing else writes it). DeleteOperationHistory was never migrated alongside GetOperationResult (handler.go:477-490, which now reads h.store.GetOperationV2). The route is still wired at wire_operations_routes.go:78. `grep -rn deleteOperationHistory web/src` finds the api.ts client function (api.ts:2284) but zero call sites anywhere else in web/src -- the UI never invokes it today, so nothing is actively lying to a user right now, but any admin/API caller hitting DELETE /operations/history gets 200 {"deleted": N} implying the operation history was cleared when the actual history the app displays (GET /operations/timeline, operations_v2 keyspace) is untouched.
 - Anchor: `internal/server/handlers/operations/handler.go:244` (audit `SV-01`, confidence high, severity medium).
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — DeleteOperationHistory -> DeleteOperationsByStatus -> pebble_store_operations.go:368-399 iterates operation:..operation:~ (v1 keyspace). Route wired; web/src api.ts:2284 defines deleteOperationHistory with zero callers.
+  - Blast radius: handler_test.go has RequiresStatus/RejectsNonTerminal tests that validate input only and would not catch this.
+  - Existing tests to extend: internal/server/handlers/operations/handler_test.go
+  - Standing-ban contact: none; no live UI caller — a landmine for a future feature
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/server/handlers/operations/handler.go   # the file the finding is anchored to still exists
-  sed -n '238,250p' internal/server/handlers/operations/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/server/handlers/operations/handler.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '1,28p' internal/server/handlers/operations/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '238,279p' internal/server/handlers/operations/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '471,496p' internal/server/handlers/operations/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '362,405p' internal/database/pebble_store_operations.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +98,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

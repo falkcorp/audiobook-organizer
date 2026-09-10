@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ci-tooling/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: a805f422-4489-4f9e-8680-47904df6f300 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -18,8 +18,8 @@
 | [TASK-313](TASK-313-the-only-go-version-consistency-check-truncates.md) | new-finding | correctness | P2 | S | The only Go-version consistency check truncates to major.minor, never checks .en | .github/workflows/test-action-integration.yml:105 |
 | [TASK-314](TASK-314-no-concurrency-guard-between-the-two-burndown-di.md) | new-finding | correctness | P2 | S | No concurrency guard between the two burndown-dispatch workflows sharing the sam | .github/workflows/hard-burndown.yml:29 |
 | [TASK-320](TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md) | new-finding | correctness | P3 | S | frontend job gate is a computed `if:` that can silently skip a required-looking  | .github/workflows/frontend-ci.yml:54 |
-| [TASK-339](TASK-339-real-reflink-detection-via-zdb-dva-comparison-lo.md) | new-todo | security | P1 | M | Real reflink detection via zdb DVA comparison (LOW PRIORITY, 2026-09-07) | TODO.md lines 1935 |
-| [TASK-360](TASK-360-c716-resolved-the-3-954-book-api-vs-store-gap-de.md) | new-todo | security | P1 | M | C716 resolved: the "3,954-book API-vs-store gap" decomposes to 3,953 instrument  | TODO.md lines 10432 |
+| [TASK-341](TASK-341-the-barrier-still-does-not-fire-and-deleting-the.md) | new-todo | security | P1 | M | 🔴 The barrier still does not fire, and deleting the invalid file did not fix it | TODO.md lines 1935 |
+| [TASK-364](TASK-364-ca12-wave-2-model-logging-sanitize-sanitizeerr-l.md) | new-todo | security | P1 | M | CA12 wave 2: model `logging.Sanitize`/`SanitizeErr`/`logger.sanitizeLogLine` as  | TODO.md lines 10432 |
 
 ## Ground rules
 

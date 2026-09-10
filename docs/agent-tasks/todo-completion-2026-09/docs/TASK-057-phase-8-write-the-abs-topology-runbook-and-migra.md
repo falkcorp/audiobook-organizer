@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/docs/TASK-057-phase-8-write-the-abs-topology-runbook-and-migra.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 0f67a290-3f24-4857-902d-b361b4d39047 -->
+<!-- guid: bab606ea-cab2-5e2b-8348-5a93ac072152 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-057 — Phase 8 — write the ABS topology, runbook, and migration guide (Cloudflare Access ordering, cover/image bypass, client compat matrix) (ABS-SYNC-Phase8)

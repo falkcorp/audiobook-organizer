@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-331-deletebook-never-deletes-the-book-authors-book-n.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 6d8213c7-aff9-4742-a05a-b53945ac64b3 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,7 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SQ-03` (audit_schema_queries.json)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · database subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · database subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `SQ-03` (audit_schema_queries.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
@@ -15,7 +15,7 @@ Source: Wave 3 audit finding `SQ-03` (audit_schema_queries.json). Verified at HE
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/database-331" -b agent/database-331-deletebook-never-deletes-the-book-author origin/main
 cd "$REPO/.worktrees/database-331"
@@ -38,8 +38,11 @@ Why it matters: This is the identical dangling-row class DeleteBook's own commen
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/database/pebble_store.go   # the file the finding is anchored to still exists
+  test -e internal/database/pebble_store.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
   sed -n '3106,3118p' internal/database/pebble_store.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '3283,3297p' internal/database/pebble_store.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '249,284p' internal/database/memdb_sync.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '584,607p' internal/database/pebble_store_authors.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +94,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

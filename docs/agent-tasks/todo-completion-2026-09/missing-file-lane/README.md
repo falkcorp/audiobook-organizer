@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: cbe9bf6c-a04e-43ee-9265-e2f7560496f2 -->
 <!-- last-edited: 2026-09-10 -->
 

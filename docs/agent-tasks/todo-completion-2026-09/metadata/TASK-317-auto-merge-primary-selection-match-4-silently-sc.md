@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/metadata/TASK-317-auto-merge-primary-selection-match-4-silently-sc.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 730ccffe-ac3f-4791-a5f4-d47d66e6d769 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,7 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-04` (audit_silent_failures_pipeline.json)
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `SF-04` (audit_silent_failures_pipeline.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
@@ -15,7 +15,7 @@ Source: Wave 3 audit finding `SF-04` (audit_silent_failures_pipeline.json). Veri
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/metadata-317" -b agent/metadata-317-auto-merge-primary-selection-match-4-sil origin/main
 cd "$REPO/.worktrees/metadata-317"
@@ -38,8 +38,8 @@ Why it matters: This function automatically demotes every non-primary book to me
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/metafetch/service_apply.go   # the file the finding is anchored to still exists
-  sed -n '927,939p' internal/metafetch/service_apply.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/metafetch/service_apply.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '902,967p' internal/metafetch/service_apply.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +91,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

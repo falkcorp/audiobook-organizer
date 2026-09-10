@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 660e23b9-9815-471e-94a9-5eb8f9306231 -->
 <!-- last-edited: 2026-09-10 -->
 
 # Workstream — maintenance (todo-completion-2026-09)
 
-20 tasks: 13 carried forward from the 2026-08-21 package (ids kept), 7 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
+21 tasks: 13 carried forward from the 2026-08-21 package (ids kept), 8 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
 
 | Task | Kind | Risk | Priority | Effort | Title | Evidence |
 |---|---|---|---|---|---|---|
@@ -22,13 +22,14 @@
 | [TASK-195](TASK-195-add-a-zero-size-bucket-to-maintenance-missing-fi.md) | carried | hygiene | P2 | S | Add a zero-size bucket to maintenance.missing-file-audit | grep -n '.Size()/fileZeroSize/ZeroSize' internal/plugins/maintenance/missing_file_audit.go |
 | [TASK-219](TASK-219-add-a-per-book-tsv-report-artifact-to-the-existi.md) | carried | hygiene | P2 | M | Add a per-book TSV report artifact to the EXISTING dedupe-book-file-rows dry run | grep -n 'ReportPath/writeDupeRow/.tsv' internal/plugins/maintenance/dedupe_book_file_rows. |
 | [TASK-220](TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md) | carried | data-loss | P1 | M | Journal every duplicate-row deletion to the undo ledger and refuse to apply whil | grep -n 'CreateOperationChange/OperationQueueStore/ListActiveOperationsV2' internal/plugin |
-| [TASK-337](TASK-337-every-rescan-reverts-library-state-organized-imp.md) | new-todo | data-loss | P1 | S | Every rescan reverts `library_state` organized→imported, emptying ABS | TODO.md lines 1294 |
-| [TASK-340](TASK-340-activity-sqlite-backend-follow-ups-after-the-cut.md) | new-todo | data-loss | P1 | L | Activity SQLite backend — follow-ups after the cutover | TODO.md lines 2088 |
-| [TASK-341](TASK-341-author-numbering-cleanup-follow-ups-from-the-202.md) | new-todo | data-loss | P1 | M | Author-numbering cleanup follow-ups (from the 2026-09-05 production runs) | TODO.md lines 2218, 2221 |
-| [TASK-349](TASK-349-data-repair.md) | new-todo | data-loss | P1 | M | Data repair | TODO.md lines 4019 |
-| [TASK-352](TASK-352-createauthor-is-check-then-create-with-no-atomic.md) | new-todo | data-loss | P1 | M | `CreateAuthor` is check-then-create with no atomicity — mints duplicate author r | TODO.md lines 4630 |
-| [TASK-356](TASK-356-orphan-files-hard-delete-fail-open.md) | new-todo | data-loss | P1 | S | ORPHAN-FILES-HARD-DELETE-FAIL-OPEN | TODO.md lines 5139 |
-| [TASK-358](TASK-358-memdb-lossy-readers-headline-is-stale.md) | new-todo | data-loss | P1 | S | MEMDB-LOSSY-READERS headline is STALE | TODO.md lines 5246 |
+| [TASK-338](TASK-338-fix-or-unregister-fix-library-states.md) | new-todo | data-loss | P1 | S | Fix or unregister `fix-library-states` | TODO.md lines 1294 |
+| [TASK-342](TASK-342-duplicate-placeholder-book-records-priority-3-of.md) | new-todo | data-loss | P1 | L | Duplicate & placeholder book records — PRIORITY 3 of the 2026-09-05 audit cleanu | TODO.md lines 2088 |
+| [TASK-343](TASK-343-author-numbering-cleanup-follow-ups-from-the-202.md) | new-todo | correctness | P1 | M | Author-numbering cleanup follow-ups (from the 2026-09-05 production runs) | TODO.md lines 2218, 2221 |
+| [TASK-347](TASK-347-series-denumber-trashed-gap-internal-plugins-mai.md) | new-todo | data-loss | P1 | M | SERIES-DENUMBER-TRASHED-GAP — `internal/plugins/maintenance/series_denumber_op.g | TODO.md lines 2901 |
+| [TASK-353](TASK-353-decide-how-to-repair-the-duplicate-author-rows-t.md) | new-todo | data-loss | P1 | M | Decide how to repair the duplicate author rows that already exist | TODO.md lines 4019 |
+| [TASK-356](TASK-356-decide-how-to-merge-the-duplicate-author-rows-al.md) | new-todo | data-loss | P1 | M | Decide how to merge the duplicate author rows already present, and whether book  | TODO.md lines 4630 |
+| [TASK-360](TASK-360-orphan-files-hard-delete-fail-open-internal-plug.md) | new-todo | data-loss | P1 | S | ORPHAN-FILES-HARD-DELETE-FAIL-OPEN — `internal/plugins/maintenance/orphan_book_f | TODO.md lines 5139 |
+| [TASK-362](TASK-362-memdb-lossy-readers-headline-is-stale-correct-it.md) | new-todo | data-loss | P1 | S | MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it | TODO.md lines 5246 |
 
 ## Ground rules
 

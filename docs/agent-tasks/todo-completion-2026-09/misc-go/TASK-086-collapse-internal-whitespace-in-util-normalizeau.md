@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: cad429fe-9b4b-4dda-9315-d66e493c421b -->
+<!-- guid: 9318218e-aabb-548f-9f25-7a3aa2438059 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-086 — Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly (TODO.md L3790)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: f698242b-d514-4731-9c3c-935f52147b3a -->
+<!-- guid: a9f587ba-0e27-5f1d-8506-dfa820cebcfc -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-109 — Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)

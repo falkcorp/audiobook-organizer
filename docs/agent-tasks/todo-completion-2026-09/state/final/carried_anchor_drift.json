@@ -1,0 +1,27 @@
+[
+ {
+  "task_id": "TASK-192",
+  "anchor": "grep 'unified.SetKindConfidenceOverrides' internal/server/registry_wire.go",
+  "finding": "0 hits; repo-wide only doc-comment mentions, no func def and no call site — the carried Status line's 'already wired' claim does not hold at HEAD"
+ },
+ {
+  "task_id": "TASK-193",
+  "anchor": "grep 'SetKindConfidenceOverrides' internal/server/registry_wire.go",
+  "finding": "0 hits (same as TASK-192); re-derive the wiring state before executing"
+ },
+ {
+  "task_id": "TASK-071",
+  "anchor": "grep 'func looksLikePersonName' internal/dedup/author.go",
+  "finding": "0 hits; moved to exported personname.LooksLikePersonName in internal/authorname/ (authorname.go:25 comment)"
+ },
+ {
+  "task_id": "TASK-129",
+  "anchor": "grep 'WipeAllActivity()' internal/server/maintenance_fixups.go",
+  "finding": "0 hits; call is now svc.Store().WipeAllActivity(ctx) at line 459 — signature gained ctx"
+ },
+ {
+  "task_id": "TASK-189",
+  "anchor": "grep 'dbBook.FilePath = dirPath' internal/scanner/scanner.go",
+  "finding": "0 hits; equivalent assignment is toUpdate.FilePath = dirPath at line 2151 — variable renamed, pattern likely still present"
+ }
+]

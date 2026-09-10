@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-077-narrow-the-3-remaining-maintenance-jobs-callees-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: de83a5ec-08be-4971-a5b5-38ac5b4a578a -->
+<!-- guid: bd4eab46-6764-5a36-9282-fb3da51af700 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-077 — Narrow the 3 remaining maintenance-jobs callees off maintenance.JobStore (vgFixAuthorDirPath, migrateOne, ddMergeDuplicateBook) (TODO.md L5424)

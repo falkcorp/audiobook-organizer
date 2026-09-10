@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-114-never-delete-re-associate-combine-debris-books-i.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: ddc1fafe-6681-49f3-85e2-06183e0da806 -->
+<!-- guid: 679703fb-eb03-58bb-9e3b-59f1725a986e -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-114 — Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)
