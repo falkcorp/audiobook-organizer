@@ -1,5 +1,5 @@
 // file: internal/database/author_file_refs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d889ab5-fb0f-4d3a-af64-09f66cdaa453
 // last-edited: 2026-09-10
 
@@ -149,4 +149,33 @@ func TestAuthorFileRefCounts_FailsClosedWithoutTheCapability(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, counts)
 	require.Nil(t, AsAuthorFileRefStore(nil))
+}
+
+// TestGetAllAuthorFileRefCounts_PebbleArmAgreesWithMemdb pins the two
+// implementations together. Every other test here runs through a warm store,
+// where UseMemDB is hardcoded true, so the Pebble arm executes only when the
+// memdb is off — and an arm nothing exercises is an arm that drifts. Two
+// counters of the same quantity drifting apart is the failure this whole file
+// family exists to prevent.
+//
+// One assertion covers the snapshot, both key ranges, the one-colon secondary
+// index filter and the GetBookFilesForIDsCore join.
+func TestGetAllAuthorFileRefCounts_PebbleArmAgreesWithMemdb(t *testing.T) {
+	store, ids := seedAuthorFileRefFixture(t)
+
+	mem, err := store.GetAllAuthorFileRefCounts()
+	require.NoError(t, err)
+
+	// UseMemDB off, not a direct call to the unexported arm: that also routes
+	// GetBookFilesForIDsCore to Pebble. Calling the arm directly on a warm store
+	// would take the book set from Pebble and the FILE set from the memdb, and
+	// half the comparison would be tautological.
+	store.UseMemDB = false
+	pebble, err := store.GetAllAuthorFileRefCounts()
+	require.NoError(t, err)
+
+	require.Equal(t, mem, pebble,
+		"the memdb and Pebble arms must report the same counts; the Pebble arm runs only with UseMemDB off and would otherwise drift unobserved")
+	require.Equal(t, 3, pebble[ids["trashed"]],
+		"and the agreed answer must be the RIGHT one — a fixture both arms got wrong would still be equal")
 }
