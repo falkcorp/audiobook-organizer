@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3b6d19a7-4e52-4c08-b7f1-90a5e2c4d738
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -205,5 +205,24 @@ func TestRankKeeper_DoesNotMutateInput(t *testing.T) {
 	_ = rankKeeper(rows)
 	if rows[0].ID != "aaa" || rows[1].ID != "zzz" {
 		t.Fatalf("input slice was reordered: %s, %s", rows[0].ID, rows[1].ID)
+	}
+}
+
+// DependsOn is defence in depth for the scan guard: dispatcher Gate 4 defers
+// DISPATCH while library.scan is RUNNING. It is not the real guard — it cannot
+// see a QUEUED scan and it cannot be conditional on params.Apply — but its
+// absence would remove the only protection a dry-run-then-apply operator gets
+// before the op's own body runs.
+func TestDedupeBookFileRowsDef_DependsOnLibraryScan(t *testing.T) {
+	def := (&Plugin{}).dedupeBookFileRowsDef()
+	found := false
+	for _, d := range def.DependsOn {
+		if d == "library.scan" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("DependsOn = %v, must contain \"library.scan\"", def.DependsOn)
 	}
 }

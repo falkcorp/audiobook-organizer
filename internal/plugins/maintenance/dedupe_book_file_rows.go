@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -61,8 +63,15 @@ func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 		// matches the precedent malformed-m4b-transcode (backfill.go) set for a
 		// slow-but-healthy per-item op.
 		ProgressTimeout: 30 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runDedupeBookFileRows,
+		// DEFENCE IN DEPTH, NOT THE GUARD. Dispatcher Gate 4
+		// (internal/operations/registry/dispatcher.go) defers DISPATCH while a
+		// named def is RUNNING. It cannot see a QUEUED library.scan, and it
+		// cannot be conditional on params.Apply — so it would also hold back a
+		// harmless dry run. The real protection is the in-run refusal at the top
+		// of runDedupeBookFileRows; this only narrows the window at dispatch.
+		DependsOn:    []string{"library.scan"},
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runDedupeBookFileRows,
 	}
 }
 
@@ -168,6 +177,38 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	log := reporter.Logger()
 	log.Info("dedupe-book-file-rows: starting", "apply", params.Apply, "limit", params.Limit)
 
+	// 🔴 FAIL CLOSED. A library.scan rewrites the same book_file rows this op
+	// deletes, so a concurrent scan can resurrect a row we just collapsed or
+	// mutate the keeper mid-flight. Applies refuse; a dry run is read-only and is
+	// allowed through so an operator can still take the census during a scan.
+	//
+	// This is a POINT-IN-TIME check, not a lock: a scan enqueued one second later
+	// is not caught. DependsOn (dedupeBookFileRowsDef) narrows that window at
+	// dispatch. The op is not scan-proof; it is scan-aware.
+	if params.Apply {
+		qs := p.deps.OperationQueueStore()
+		if qs == nil {
+			return fmt.Errorf("dedupe-book-file-rows: cannot verify no library.scan is active; refusing to apply")
+		}
+		active, aerr := qs.ListActiveOperationsV2()
+		if aerr != nil {
+			// Fail CLOSED: an unreadable queue is not proof of an idle queue.
+			return fmt.Errorf("dedupe-book-file-rows: cannot list active operations; refusing to apply: %w", aerr)
+		}
+		for _, op := range active {
+			if op.DefID == "library.scan" && (op.Status == "running" || op.Status == "queued") {
+				// A ZOMBIE 'running' ROW WITH NO LIVE HANDLE ALSO LANDS HERE, and
+				// that is the safe direction — say so, or the next operator reads
+				// this as the op being broken instead of the queue being stale.
+				return fmt.Errorf(
+					"dedupe-book-file-rows: library.scan is %s (op %s); refusing to apply — a running scan "+
+						"rewrites the rows this op deletes. If that scan is a stale/zombie row with no live "+
+						"handle, clear it before re-running rather than bypassing this check",
+					op.Status, op.ID)
+			}
+		}
+	}
+
 	// PASS 1 — cheap. The Core projection is a memdb read, so it is fast enough
 	// to sweep the whole library, and file_path is all we need to FIND duplicates.
 	//
@@ -246,6 +287,16 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	log.Info("dedupe-book-file-rows: processing books in parallel",
 		"books", len(bookIDs), "workers", workers)
 
+	// Captured ONCE, outside the workers: every journal row this run writes is
+	// tagged with the same operation id so GetOperationChanges(opID) returns the
+	// whole deletion set. ReporterOpID degrades to "" for a reporter that cannot
+	// say (a fake, by design) — that is a WARN, never a refusal: the rows still
+	// carry the full BookFile in OldValue and stay reachable via GetBookChanges.
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" {
+		log.Warn("dedupe-book-file-rows: no operation id; journal rows will be uncorrelated")
+	}
+
 	runErr := registry.RunItems(ctx, reporter, bookIDs, func(ctx context.Context, bookID string) error {
 		// GetBookFiles reads Pebble directly (raw prefix iteration), NOT memdb, so
 		// AcoustIDFingerprint is present and un-stripped here. That is exactly why
@@ -288,7 +339,15 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// Accumulating across groups keeps that ordering STRONGER, not weaker: every
 		// salvage in this book commits before any donor in this book is deleted, and
 		// a group whose salvage failed simply never enters the accumulator.
+		//
+		// pendingRows holds the SAME rows as pendingDeletes, in the same order,
+		// because a delete has to be journaled with its whole content and an ID
+		// alone cannot be replayed back into a row. The two are appended together
+		// in one place below, AFTER the salvage-failure escape — appending
+		// anywhere else desynchronises them and would journal a row that was
+		// never deleted (or worse, delete one that was never journaled).
 		var pendingDeletes []string
+		var pendingRows []database.BookFile
 		for path, rows := range byPath {
 			if len(rows) < 2 {
 				continue
@@ -354,6 +413,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// Salvage for this group is committed; its donors may now be queued.
 			for ri := range redundant {
 				pendingDeletes = append(pendingDeletes, redundant[ri].ID)
+				pendingRows = append(pendingRows, redundant[ri])
 			}
 		}
 
@@ -363,7 +423,50 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// of this op re-reads them and collapses them again, so the failure costs a
 		// re-run and nothing else.
 		if len(pendingDeletes) > 0 {
-			if derr := store.DeleteBookFilesByIDs(pendingDeletes); derr != nil {
+			// 🔴 JOURNAL FIRST. The ledger row must exist BEFORE the delete
+			// commits: a journal written afterwards is lost in exactly the case it
+			// exists for — the process dying between the two. A journal write that
+			// FAILS aborts this book's delete entirely; an unreplayable deletion is
+			// worse than a duplicate row that survives to the next run, and this op
+			// is idempotent, so the cost of skipping is one more run.
+			//
+			// The full row goes into OldValue as JSON, not just its id: an id
+			// cannot be replayed back into a row, and replay is the only rollback
+			// this path has (`git revert` restores code, never data).
+			journalOK := true
+			for ri := range pendingRows {
+				blob, merr := json.Marshal(pendingRows[ri])
+				if merr != nil {
+					// A row we cannot serialize is a row we cannot replay. Same
+					// verdict as a failed write: do not delete it.
+					log.Warn("dedupe-book-file-rows: could not serialize row for the undo ledger; leaving this book's rows intact",
+						"book_id", bookID, "row", pendingRows[ri].ID, "err", merr)
+					journalOK = false
+					break
+				}
+				if jerr := store.CreateOperationChange(&database.OperationChange{
+					ID:          ulid.Make().String(),
+					OperationID: opID,
+					BookID:      bookID,
+					ChangeType:  "book_file_delete",
+					FieldName:   pendingRows[ri].ID,
+					OldValue:    string(blob), // the ENTIRE row, so the deletion can be replayed back
+					NewValue:    "",
+				}); jerr != nil {
+					log.Warn("dedupe-book-file-rows: journal write failed; leaving this book's rows intact",
+						"book_id", bookID, "row", pendingRows[ri].ID, "err", jerr)
+					journalOK = false
+					break
+				}
+			}
+
+			if !journalOK {
+				// Counted as a failure, but the sweep continues: one book's
+				// unwritable ledger must not abandon the other 175.
+				mu.Lock()
+				failed++
+				mu.Unlock()
+			} else if derr := store.DeleteBookFilesByIDs(pendingDeletes); derr != nil {
 				mu.Lock()
 				failed++
 				mu.Unlock()

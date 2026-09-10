@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -59,6 +59,16 @@ func (s *Server) PlaylistStore() database.UserPlaylistStore { return s.store }
 // metadata-cache reaper, which reads and deletes rows in the "metadata_cache:"
 // keyspace that OpsStore does not cover.
 func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.store }
+
+// OperationQueueStore implements maintenance.StoreProvider. It serves the
+// dedupe-book-file-rows scan guard, which must refuse an apply while a
+// library.scan is queued or running.
+//
+// Returned directly rather than through database.AsCapability because
+// ListActiveOperationsV2 IS part of database.Store (operationsStore ->
+// OpsV2Store), so the indexedStore decorator installed by Start() forwards it
+// like every other Store method.
+func (s *Server) OperationQueueStore() maintenanceplugin.OpQueueReader { return s.store }
 
 // FileProvenanceStore exposes the append-only file provenance chain.
 //
