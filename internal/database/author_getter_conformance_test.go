@@ -1,7 +1,7 @@
 // file: internal/database/author_getter_conformance_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b3e9f47-2a81-4c06-b9d3-7e14a8c02f65
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package database
 
@@ -357,4 +357,57 @@ func TestGetAllAuthorBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 	require.Greater(t, fromMem[fx.authorID], filtered[fx.authorID],
 		"fixture must contain references the display counter hides (trashed / non-primary / "+
 			"junction-only), or this conformance test would pass against the buggy counter too")
+}
+
+// TestGetBooksByAuthorIDWithRoleCore_CountsACallerSuppliedNonULIDBookID isolates
+// the Pebble arm's iterator BOUNDS from the memdb-agreement question above, the
+// same way TestSeriesBookRefCounts_CountsALetterLeadingBookID
+// (series_bookref_test.go) and
+// TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID
+// (author_bookref_test.go) do for their own guards.
+//
+// GetBooksByAuthorIDWithRoleCore's Pebble arm scanned ["book:0", "book:;") for
+// the legacy-AuthorID half of its answer -- a byte range admitting only
+// '0'-'9' and ':' as the first byte after the colon. CreateBook mints a ULID
+// only when book.ID == "", so a caller-supplied letter-leading ID is
+// constructible, sorts above the upper bound, and was invisible to the scan.
+// This getter is what author_strip_merge.go, author_conjunction_repair.go,
+// dedup_ops.go and entities_ops.go's merge path consult to find every book
+// still crediting an author before deleting it (see the docstring above) — a
+// missed row here is relinked to nothing and orphaned by the delete.
+func TestGetBooksByAuthorIDWithRoleCore_CountsACallerSuppliedNonULIDBookID(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	author, err := store.CreateAuthor("Bounds Author")
+	require.NoError(t, err)
+
+	b, err := store.CreateBook(&Book{
+		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
+		FilePath: "/lib/conf/letter-leading", AuthorID: &author.ID,
+		IsPrimaryVersion: func() *bool { v := true; return &v }(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ZZBOUNDS0000000000000000", b.ID,
+		"fixture check: CreateBook must not have re-minted the ID, or this tests nothing")
+
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected *PebbleStore from setupPebbleTestDB")
+	p.WaitForWarmup()
+
+	// Force the Pebble arm -- the only arm the bounds apply to. The memdb arm
+	// (UseMemDB=true) reads memTableBooks by ID and has no byte-range bug.
+	p.UseMemDB = false
+	defer func() { p.UseMemDB = true }()
+
+	books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
+	require.NoError(t, err)
+
+	ids := make(map[string]struct{}, len(books))
+	for _, bk := range books {
+		ids[bk.ID] = struct{}{}
+	}
+	require.Contains(t, ids, b.ID,
+		"a legacy AuthorID credit on a letter-leading book ID must not be invisible to the "+
+			"merge/delete path this getter serves")
 }

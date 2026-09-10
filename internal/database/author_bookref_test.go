@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package database
 
@@ -548,4 +548,76 @@ func memBookAuthorRows(t *testing.T, s *PebbleStore) []*BookAuthor {
 		out = append(out, obj.(*BookAuthor))
 	}
 	return out
+}
+
+// TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID isolates the
+// iterator BOUNDS from the agreement/mock questions above, mirroring
+// TestSeriesBookRefCounts_CountsALetterLeadingBookID (series_bookref_test.go)
+// and TestVersionGroupBackfill's v2->v3 bounds test
+// (pebble_store_versiongroup_backfill_test.go) -- the same key-range bug, fixed
+// the same way, in a third place.
+//
+// getAllAuthorBookRefCountsPebble's pass 2 scanned ["book:0", "book:;") -- a
+// byte range admitting only '0'-'9' and ':' as the first byte after the
+// colon. CreateBook mints a ULID only when book.ID == "", so a caller-supplied
+// ID starting with a letter or "_" is constructible, sorts above the upper
+// bound, and was invisible to the scan -- silently dropping that book's legacy
+// AuthorID credit while pass 1 still counted (nonexistent) junction rows for
+// it, undercounting exactly the author purge-empty-authors is about to delete.
+func TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const letterLeading = 8200 // referenced only via a letter-leading book ID
+	const underscoreLeading = 8201 // referenced only via an "_"-leading book ID
+
+	bLetter, err := store.CreateBook(&Book{
+		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
+		FilePath: "/authorref/letter-leading", AuthorID: new(letterLeading),
+		IsPrimaryVersion: new(true),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ZZBOUNDS0000000000000000", bLetter.ID,
+		"fixture check: CreateBook must not have re-minted the ID, or this tests nothing")
+
+	bUnderscore, err := store.CreateBook(&Book{
+		ID: "_UNDERSCORE0000000000000", Title: "underscore-leading",
+		FilePath: "/authorref/underscore-leading", AuthorID: new(underscoreLeading),
+		IsPrimaryVersion: new(true),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "_UNDERSCORE0000000000000", bUnderscore.ID,
+		"fixture check: CreateBook must not have re-minted the ID, or this tests nothing")
+
+	// The Pebble arm directly -- the fall-through target, and the only arm the
+	// bounds apply to. Going through GetAllAuthorBookRefCounts would be served
+	// by the memdb (memTableBooks, scanned by ID with no byte-range bug) and
+	// prove nothing about this scan.
+	got, err := store.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err)
+	require.Equal(t, 1, got[letterLeading],
+		"a legacy AuthorID credit on a letter-leading book ID must not be invisible to the delete guard")
+	require.Equal(t, 1, got[underscoreLeading],
+		"a legacy AuthorID credit on an \"_\"-leading book ID must not be invisible to the delete guard")
+}
+
+// TestGetAllAuthorBookRefCounts_WidenedBoundsSkipSecondaryIndexes proves the
+// bounds widening did not also start feeding secondary-index values (bare
+// book IDs, not book JSON) into the pass-2 unmarshal -- the pairing the
+// bounds-widening comment insists on. A regression here would be the
+// unmarshal becoming fatal on every scan, since book:path:/book:hash:/
+// book:versiongroup: keys are now inside the scanned range.
+func TestGetAllAuthorBookRefCounts_WidenedBoundsSkipSecondaryIndexes(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+
+	const healthy = 8210
+	mkAuthorRefBook(t, store, "Healthy", healthy, true, false)
+
+	// Secondary-index-shaped keys that now fall inside ["book:", "book;").
+	require.NoError(t, store.db.Set([]byte("book:path:/some/path"), []byte("not-json"), nil))
+	require.NoError(t, store.db.Set([]byte("book:hash:deadbeef"), []byte("not-json"), nil))
+	require.NoError(t, store.db.Set([]byte("book:versiongroup:abc"), []byte("not-json"), nil))
+
+	got, err := store.getAllAuthorBookRefCountsPebble()
+	require.NoError(t, err, "the one-colon structural filter must skip secondary indexes, not feed them to the unmarshal")
+	require.Equal(t, 1, got[healthy])
 }

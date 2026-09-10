@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.145.0
+// version: 1.146.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 package database
 
@@ -2381,10 +2381,26 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 
 	// Also include books matched via legacy AuthorID field. Note there is
 	// deliberately no IsPrimaryVersion filter here — see the doc comment.
+	//
+	// Bounds are the true "book:" prefix range, not the narrower ["book:0",
+	// "book:;") this used to scan: that range admitted only '0'-'9' and ':' as
+	// the first byte after the colon, invisible to a caller-supplied
+	// letter-leading or "_"-leading book ID (CreateBook mints a ULID only when
+	// book.ID == ""). This method is what merges, deletes and dedup consult to
+	// find every book still crediting an author (see the docstring above), so a
+	// missed row here is the same fail-open the delete-guard family exists to
+	// close -- same shape and same fix as author_bookref.go's pass 2 and
+	// pebble_store_versiongroup_backfill.go's v2->v3 sentinel bump.
+	//
+	// The filter widens with the bounds: strings.Contains(key, ":path:") only
+	// excluded the path index, not book:hash: or book:versiongroup:, both of
+	// which the wider range now admits and whose values are bare IDs rather
+	// than book JSON. strings.Count(key, ":") != 1 is the structural filter the
+	// sibling fixes use, and it is required in the SAME change as the bounds.
 	var books []Book
 	bookIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
 	})
 	if err != nil {
 		return nil, err
@@ -2392,7 +2408,7 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 	defer bookIter.Close()
 	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
 		key := string(bookIter.Key())
-		if strings.Contains(key, ":path:") {
+		if strings.Count(key, ":") != 1 {
 			continue
 		}
 		var book Book
