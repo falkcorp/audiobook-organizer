@@ -45,6 +45,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.dedupeBookFileRowsDef(),
 		p.repairJunkTitlesDef(),
 		p.seriesDenumberDef(),
+		p.seriesPhantomRepairDef(),
 		p.purgeMillisecondDurationsDef(),
 		p.integrityCheckDef(),
 		p.itunesPlaylistImportDef(),
