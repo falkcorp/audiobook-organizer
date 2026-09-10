@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.102.0
+// version: 1.103.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package database
 
@@ -42,6 +42,13 @@ type MockStore struct {
 	// working without a mechanical per-file migration.
 	GetAllBooksFunc            func(limit, offset int) ([]Book, error)
 	GetAllBooksCoreFunc        func(limit, offset int) ([]BookCore, error)
+	// GetAllBooksCoreCompleteFunc backs the completeness-guarded getter. It is
+	// separate from GetAllBooksCoreFunc on purpose: a test that wants the
+	// orphan-file delete path to see a SHORT book list must be able to make
+	// this one return an error (or fewer rows) without also changing what every
+	// ordinary listing sees. Left nil, it falls back to GetAllBooksCoreFunc so
+	// existing tests that only stub the plain getter keep working.
+	GetAllBooksCoreCompleteFunc func(limit, offset int) ([]BookCore, error)
 	GetAllBooksFullFromFunc    func(afterID string, limit int) ([]Book, error)
 	ListBookIDsFunc            func() ([]string, error)
 	GetAllBookSummariesFunc    func(limit, offset int) ([]BookSummary, error)
@@ -860,6 +867,13 @@ func (m *MockStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
 		return m.GetAllBooksCoreFunc(limit, offset)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error) {
+	if m.GetAllBooksCoreCompleteFunc != nil {
+		return m.GetAllBooksCoreCompleteFunc(limit, offset)
+	}
+	return m.GetAllBooksCore(limit, offset)
 }
 
 func (m *MockStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {

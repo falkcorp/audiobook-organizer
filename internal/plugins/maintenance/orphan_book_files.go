@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -203,10 +203,15 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 
 // findOrphanBookFiles returns every BookFile whose BookID does not match any
 // book that could still own it. Returns the orphan slice, the total number of
-// book_files scanned, and the number of owning book IDs considered. The scan
-// uses the memdb fastpath via Store.GetAllBookFilesCore / Store.GetAllBooks;
-// both calls return projections of the underlying tables without per-row
-// decoding cost.
+// book_files scanned, and the number of owning book IDs considered.
+//
+// The file list comes from Store.GetAllBookFilesCore, which takes the memdb
+// fastpath and returns a projection without per-row decoding cost. The two
+// getters that build the OWNER set — GetAllBooksCoreComplete and
+// ListSoftDeletedBooks — take that fastpath only while memdb can vouch for
+// being complete, and fall back to the authoritative Pebble scan otherwise.
+// That is not an optimisation detail: this scan's absences authorize a hard
+// delete, so a short answer here destroys file rows (see the call sites below).
 //
 // "Could still own it" is deliberately wider than "live": a soft-deleted book
 // is restorable and still owns its files, so ownerCount is live + soft-deleted
@@ -227,11 +232,21 @@ func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans 
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
-	// GetAllBooksCore(0, 0) is the unbounded form across the existing maintenance
-	// plugin (see pebble_store.go:9210, 9256, 9318) — limit=0 means "all".
-	books, berr := store.GetAllBooksCore(0, 0)
+	// limit=0 means "all" — the unbounded form used across this plugin.
+	//
+	// Complete, not plain GetAllBooksCore. This list is a membership set whose
+	// ABSENCES authorize a hard delete, so an undercount is not a smaller report,
+	// it is book_file rows destroyed. One book row missing from a partially warmed
+	// or lossy memdb removes that book from `valid` below, and every file row it
+	// owns is deleted while the book survives as a fileless shell.
+	//
+	// Fail CLOSED on error, exactly as the soft-deleted union below does: the
+	// PebbleStore form recovers a tainted memdb by rescanning Pebble, so an error
+	// reaching here means no source could produce a trustworthy set — and this
+	// scan's caller feeds what it returns straight to DeleteBookFilesByIDs.
+	books, berr := store.GetAllBooksCoreComplete(0, 0)
 	if berr != nil {
-		return nil, 0, 0, fmt.Errorf("GetAllBooksCore: %w", berr)
+		return nil, 0, 0, fmt.Errorf("GetAllBooksCoreComplete (decides which book_file rows are deleted): %w", berr)
 	}
 	valid := make(map[string]struct{}, len(books))
 	for _, b := range books {

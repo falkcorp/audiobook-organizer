@@ -10951,6 +10951,74 @@ func (_c *MockStore_GetAllBooksCore_Call) RunAndReturn(run func(limit int, offse
 	return _c
 }
 
+// GetAllBooksCoreComplete provides a mock function for the type MockStore
+func (_mock *MockStore) GetAllBooksCoreComplete(limit int, offset int) ([]database.BookCore, error) {
+	ret := _mock.Called(limit, offset)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllBooksCoreComplete")
+	}
+
+	var r0 []database.BookCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookCore, error)); ok {
+		return returnFunc(limit, offset)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookCore); ok {
+		r0 = returnFunc(limit, offset)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int, int) error); ok {
+		r1 = returnFunc(limit, offset)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetAllBooksCoreComplete_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBooksCoreComplete'
+type MockStore_GetAllBooksCoreComplete_Call struct {
+	*mock.Call
+}
+
+// GetAllBooksCoreComplete is a helper method to define mock.On call
+//   - limit int
+//   - offset int
+func (_e *MockStore_Expecter) GetAllBooksCoreComplete(limit any, offset any) *MockStore_GetAllBooksCoreComplete_Call {
+	return &MockStore_GetAllBooksCoreComplete_Call{Call: _e.mock.On("GetAllBooksCoreComplete", limit, offset)}
+}
+
+func (_c *MockStore_GetAllBooksCoreComplete_Call) Run(run func(limit int, offset int)) *MockStore_GetAllBooksCoreComplete_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetAllBooksCoreComplete_Call) Return(bookCores []database.BookCore, err error) *MockStore_GetAllBooksCoreComplete_Call {
+	_c.Call.Return(bookCores, err)
+	return _c
+}
+
+func (_c *MockStore_GetAllBooksCoreComplete_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookCore, error)) *MockStore_GetAllBooksCoreComplete_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllBooksFullFrom provides a mock function for the type MockStore
 func (_mock *MockStore) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
 	ret := _mock.Called(afterID, limit)

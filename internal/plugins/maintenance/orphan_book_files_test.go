@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-08-13
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -199,5 +199,112 @@ func TestFindOrphanBookFiles_NoOrphans(t *testing.T) {
 	}
 	if len(orphans) != 0 {
 		t.Errorf("expected no orphans, got %d", len(orphans))
+	}
+}
+
+// TestFindOrphanBookFiles_RefusesToDeleteOnAnUntrustworthyBookList pins the
+// caller half of the 2026-09-10 fail-open fix.
+//
+// The store-side guards (MemStore.GetAllBooksCoreComplete and
+// MemStore.ListSoftDeletedBooks) turn "memdb is known to be missing rows" into
+// ErrMemdbIncomplete, and PebbleStore repairs that from Pebble. A store
+// implementation with no such fallback surfaces the error here instead, and
+// this scan must then produce NO orphan list at all — an empty-but-successful
+// return would be read by the caller as "nothing to delete", which is fine, but
+// a PARTIAL list would be fed straight to DeleteBookFilesByIDs.
+//
+// Both getters are covered because they contribute to the same membership set
+// from opposite directions: a short book list invents orphans, and a short
+// trash list strips the protection that keeps a restorable book's files.
+func TestFindOrphanBookFiles_RefusesToDeleteOnAnUntrustworthyBookList(t *testing.T) {
+	files := []database.BookFileCore{
+		{ID: "f1", BookID: "book-live-1", FilePath: "/lib/live.m4b"},
+	}
+	live := []database.BookCore{{ID: "book-live-1", Title: "Live"}}
+	yes := true
+	trashed := []database.Book{{ID: "book-trashed-1", Title: "Trashed", MarkedForDeletion: &yes}}
+
+	cases := []struct {
+		name  string
+		store *database.MockStore
+	}{
+		{
+			name: "book list cannot be trusted",
+			store: &database.MockStore{
+				GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+				GetAllBooksCoreCompleteFunc: func(limit, offset int) ([]database.BookCore, error) {
+					return nil, database.ErrMemdbIncomplete
+				},
+				ListSoftDeletedBooksFunc: func(limit, offset int, olderThan *time.Time) ([]database.Book, error) {
+					return trashed, nil
+				},
+			},
+		},
+		{
+			name: "trash list cannot be trusted",
+			store: &database.MockStore{
+				GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+				GetAllBooksCoreCompleteFunc: func(limit, offset int) ([]database.BookCore, error) {
+					return live, nil
+				},
+				ListSoftDeletedBooksFunc: func(limit, offset int, olderThan *time.Time) ([]database.Book, error) {
+					return nil, database.ErrMemdbIncomplete
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orphans, _, _, err := findOrphanBookFiles(context.Background(), tc.store)
+			if err == nil {
+				t.Fatal("findOrphanBookFiles must fail closed when a membership getter " +
+					"cannot vouch for its answer; it returned success and its caller " +
+					"hard-deletes what it returns")
+			}
+			if !errors.Is(err, database.ErrMemdbIncomplete) {
+				t.Errorf("the refusal must reach the operator with its cause intact, got %v", err)
+			}
+			if len(orphans) != 0 {
+				t.Errorf("no orphan may be reported alongside the refusal, got %d", len(orphans))
+			}
+		})
+	}
+}
+
+// TestFindOrphanBookFiles_ReadsTheGuardedBookGetter is the non-vacuity partner
+// to the test above: it proves the scan is wired to GetAllBooksCoreComplete and
+// not to the unguarded GetAllBooksCore, which is the whole substance of the
+// fix. MockStore's Complete form falls back to the plain one when unstubbed, so
+// the two are distinguished by stubbing them to DIFFERENT answers.
+func TestFindOrphanBookFiles_ReadsTheGuardedBookGetter(t *testing.T) {
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+			return []database.BookFileCore{{ID: "f1", BookID: "book-live-1"}}, nil
+		},
+		// The unguarded getter is SHORT — this is what a lossy memdb serves.
+		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return nil, nil
+		},
+		// The guarded getter is complete, because PebbleStore falls through to
+		// the authoritative Pebble scan rather than answering short.
+		GetAllBooksCoreCompleteFunc: func(limit, offset int) ([]database.BookCore, error) {
+			return []database.BookCore{{ID: "book-live-1", Title: "Live"}}, nil
+		},
+		ListSoftDeletedBooksFunc: func(limit, offset int, olderThan *time.Time) ([]database.Book, error) {
+			return nil, nil
+		},
+	}
+
+	orphans, _, ownerCount, err := findOrphanBookFiles(context.Background(), store)
+	if err != nil {
+		t.Fatalf("findOrphanBookFiles returned error: %v", err)
+	}
+	if ownerCount != 1 {
+		t.Errorf("the scan read the short unguarded getter: owner count %d, want 1", ownerCount)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("f1's owner exists in the complete answer, so it is not an orphan; got %d orphan(s)",
+			len(orphans))
 	}
 }

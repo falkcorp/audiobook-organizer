@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-05
+// last-edited: 2026-09-10
 
 package database
 
@@ -757,6 +757,40 @@ func (m *MemStore) GetAllBooksCore(limit, offset int, filters map[string]any) ([
 	return cores, nil
 }
 
+// GetAllBooksCoreComplete is GetAllBooksCore for callers whose answer decides a
+// DELETE, and it refuses to answer from a memdb known to be missing rows.
+//
+// The asymmetry with GetAllBooksCore is the whole point, exactly as with
+// GetBooksBySeriesIDAllVersions vs GetBooksBySeriesIDCore above. The caller
+// this exists for is findOrphanBookFiles: it builds a membership set from the
+// full book list and then hard-deletes every book_file row whose BookID is
+// absent from it. One book row missing from memdb silently removes that book
+// from the set, and every file row it owns is deleted — the book survives as a
+// fileless shell and nothing reports it. A short answer here is not a
+// slightly-wrong number, it is irreversible file-row loss.
+//
+// The guard belongs on this wrapper and NOT on GetAllBooksCore itself.
+// GetAllBooksCore has ~100 call sites, several of them request-path (the ABS
+// browse filter scan, the dedup search endpoint, the metadata handlers), and a
+// recorded loss "stays short until restart" — so pushing the check down would
+// turn every library listing into a full Pebble prefix scan with per-row JSON
+// decode for the rest of the process's life. That is a permanent hot-path
+// regression on a degraded-but-serving process, which is the cost the series
+// getter above was deliberately split to avoid. The orphan scan is the only
+// caller for which a short answer is destructive rather than merely incomplete.
+//
+// Callers reaching this through PebbleStore never see the refusal: that wrapper
+// falls through to the authoritative Pebble scan, because memdb loss is
+// recoverable and a correct-but-slower answer beats both a refusal and a
+// delete. A caller that has no such fallback MUST propagate the error and
+// perform no deletes.
+func (m *MemStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error) {
+	if err := m.requireTablesComplete("all books (orphan-file delete path)", memTableBooks); err != nil {
+		return nil, err
+	}
+	return m.GetAllBooksCore(limit, offset, nil)
+}
+
 // ListBookIDs returns the IDs of all non-deleted books. Walks the memdb
 // books table via the ID index and reads only b.ID off each pointer — no
 // struct copy, no JSON unmarshal. Used by callers that only need the ID
@@ -787,7 +821,24 @@ func (m *MemStore) ListBookIDs() ([]string, error) {
 // time). Uses the marked_for_deletion index so cost is O(deleted_count), not
 // O(total_books) — the soft-deleted set is typically tiny relative to the
 // total books, so this is orders of magnitude faster than the Pebble full-scan.
+//
+// This one IS guarded in place, unlike GetAllBooksCore above, and the reason is
+// the caller census rather than a different principle. Six non-test callers, none
+// of them request-hot: the trash listing and purge selection, deluge discovery,
+// the dbtest invariant check, and findOrphanBookFiles. A fall-through to Pebble
+// on a tainted memdb costs one full scan on a page nobody loads in a loop, so
+// there is no hot path to protect and no reason to make the safe form opt-in.
+//
+// What the guard protects is the same delete: findOrphanBookFiles unions this
+// result into the set that decides orphanhood precisely because a soft-deleted
+// book still OWNS its book_files and a restore whose file rows were deleted
+// underneath it restores an empty shell. Dropping rows from THIS answer removes
+// protection rather than adding it, so an undercount here deletes the files of
+// books that are merely in the trash.
 func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error) {
+	if err := m.requireTablesComplete("soft-deleted books (protects restorable books from the orphan-file delete)", memTableBooks); err != nil {
+		return nil, err
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 

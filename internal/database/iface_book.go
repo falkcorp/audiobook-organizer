@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package database
 
@@ -259,8 +259,32 @@ type BookWriter interface {
 	BookAggregateWriter
 }
 
+// BookCompletenessReader reads the library in a shape whose ABSENCES are
+// load-bearing — a set-difference that authorizes destroying whatever falls
+// outside it.
+//
+// Deliberately NOT part of BookBulkReader. Every read-only consumer of the
+// library (the iTunes rebuild diff, the merge engine, the organizer) embeds
+// BookBulkReader and none of them deletes anything on the strength of a book
+// being absent, so widening that interface would have made ~10 unrelated
+// interfaces and their test fakes carry a method whose entire purpose is to
+// gate a delete. Kept here, on the composed store, so the guarded getter is
+// reachable by the one path that needs it and invisible to the rest.
+type BookCompletenessReader interface {
+	// GetAllBooksCoreComplete returns the same set as GetAllBooksCore but
+	// refuses to be served from a memdb known to be missing rows, recomputing
+	// from the authoritative Pebble scan instead. Use it — and only it — when
+	// the ABSENCE of a book from the result authorizes destroying something,
+	// as findOrphanBookFiles' hard delete of book_file rows does. Ordinary
+	// listings must keep using GetAllBooksCore: a recorded loss does not clear
+	// without a restart, so routing every caller through this one would pin
+	// the whole process to full Pebble scans for the rest of its life.
+	GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error)
+}
+
 // BookStore combines BookReader and BookWriter for callers that need both.
 type BookStore interface {
 	BookReader
 	BookWriter
+	BookCompletenessReader
 }
