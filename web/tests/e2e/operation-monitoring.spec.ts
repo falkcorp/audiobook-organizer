@@ -1,7 +1,7 @@
 // file: web/tests/e2e/operation-monitoring.spec.ts
-// version: 3.1.0
+// version: 3.2.0
 // guid: 9845a5f8-e3e4-472f-ae99-2723b6163aae
-// last-edited: 2026-08-08
+// last-edited: 2026-09-10
 
 // The standalone Operations page this spec was written against was deleted in
 // afe18e8f ("unified Activity page with pinned ops, compound filters, source
@@ -122,6 +122,17 @@ const activityEntry = (
   ...overrides,
 });
 
+/** expandSection opens one of the Operations panel's collapsible sections by
+ *  clicking its "<Title> (n)" heading. Every section except the running one
+ *  starts collapsed (unmounted), so a test that looks at a completed or failed
+ *  row has to open its section first. Waits for the heading, which is also
+ *  the proof that the timeline response was rendered. */
+const expandSection = async (page: Page, title: string) => {
+  const heading = page.getByText(new RegExp(`^${title} \\(\\d+\\)$`));
+  await expect(heading).toBeVisible();
+  await heading.click();
+};
+
 const openActivity = async (
   page: Page,
   seed: {
@@ -209,9 +220,11 @@ test.describe('Operation Monitoring', () => {
 
   test('views completed operation logs', async ({ page }) => {
     // Arrange — a terminal op is grouped under a "Completed" heading rather
-    // than living in a separate history list.
+    // than living in a separate history list. Since 2026-09-10 only the
+    // running section is open on first load, so the heading is a toggle that
+    // has to be clicked before its rows exist in the DOM.
     await openActivity(page, { timeline: [completedScan] });
-    await expect(page.getByText('Completed (1)')).toBeVisible();
+    await expandSection(page, 'Completed');
 
     // Act
     await page.getByText('100 / 100 (100%)').click();
@@ -265,6 +278,7 @@ test.describe('Operation Monitoring', () => {
   test('clears stale completed operations', async ({ page }) => {
     // Arrange — one running op and one terminal op.
     await openActivity(page, { timeline: [runningScan, completedScan] });
+    await expandSection(page, 'Completed');
     await expect(page.getByText('100 / 100 (100%)')).toBeVisible();
 
     // Act
@@ -278,6 +292,7 @@ test.describe('Operation Monitoring', () => {
   test('shows operation error details', async ({ page }) => {
     // Arrange
     await openActivity(page, { timeline: [failedScan] });
+    await expandSection(page, 'Failed');
 
     // Assert — a failed op carries a "failed" status chip and shows its
     // failure message inline; there is no separate error dialog.
