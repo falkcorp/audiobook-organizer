@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package database
 
@@ -307,23 +307,24 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 
 	// Pass 2: every book row, for the legacy AuthorID field.
 	//
-	// book:0 .. book:; is the package-wide book-record convention (~20 sites),
-	// NOT a hand-rolled sentinel like the book_authors:~ bound removed above --
-	// which is why the argument there does not condemn it here. It is narrower
-	// than that bound was, though: it admits only '0'-'9' and ':' as the first
-	// byte after the colon. Every minting site produces a ULID (which starts
-	// 0-7), so this holds today.
+	// The bounds are the true "book:" prefix range -- []byte("book:") ..
+	// []byte("book;") -- not the narrower ["book:0", "book:;") that used to be
+	// here. That narrower range admitted only '0'-'9' and ':' as the first byte
+	// after the colon, which is every ULID-minted id but NOT every id: CreateBook
+	// mints a ULID only when book.ID == "", so a caller-supplied letter-leading
+	// or "_"-leading id (an importer, migration, or restore path) sorted outside
+	// the old range and was invisible to this pass, silently losing its LEGACY
+	// AuthorID reference (pass 1 still counts its junction rows). Identical bug,
+	// identical fix, to pebble_store_versiongroup_backfill.go's v2->v3 sentinel
+	// bump and to series_bookref.go's getAllSeriesBookRefCountsPebble.
 	//
-	// RESIDUAL, recorded rather than guessed: a caller-supplied book ID starting
-	// outside that range would be invisible to pass 2, losing its LEGACY
-	// AuthorID reference (pass 1 still counts its junction rows). Whether any
-	// such row exists on the live library has NOT been measured -- it needs a
-	// prefix scan for book: keys whose first byte after the colon is not a
-	// digit. Widening both bounds is safe if so; the strings.Count(key, ":")
-	// filter below already excludes secondary indexes over the wider range.
+	// Widening is safe ONLY because of the strings.Count(key, ":") != 1 filter
+	// below: the wider range also admits the secondary indexes (book:path:,
+	// book:hash:, book:versiongroup:), whose values are bare IDs rather than
+	// book JSON. Bounds and filter are one change and must not be separated.
 	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
 	})
 	if err != nil {
 		return nil, err
