@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -694,18 +694,30 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
 	}
 
-	if req.Verify {
-		slog.Warn("backup restore: checksum verification requested but not yet implemented; proceeding without verification")
-	}
-
 	if err := backup.RestoreBackup(backupPath, targetPath, req.Verify); err != nil {
+		// backup.RestoreBackup fails closed on verify=true when there is no
+		// stored checksum to verify against (see backup.ErrVerificationUnsupported)
+		// rather than silently restoring unverified. Surface that as a 400: the
+		// caller's request cannot be satisfied as specified, it is not a server
+		// fault. Any other error (missing file, corrupted archive, path escape,
+		// etc.) is still a 500 via httputil.InternalError, unchanged.
+		if errors.Is(err, backup.ErrVerificationUnsupported) {
+			httputil.RespondWithBadRequest(c, err.Error())
+			return
+		}
 		httputil.InternalError(c, "failed to restore backup", err)
 		return
 	}
 
+	// verify is only reached here when req.Verify is false -- verify=true
+	// always returns before this point. The fields are included explicitly
+	// (rather than omitted) so a caller parsing the response, not just the
+	// server log, can tell whether verification actually happened.
 	httputil.RespondWithOK(c, gin.H{
-		"message": "backup restored successfully",
-		"target":  targetPath,
+		"message":          "backup restored successfully",
+		"target":           targetPath,
+		"verified":         false,
+		"verify_requested": req.Verify,
 	})
 }
 
