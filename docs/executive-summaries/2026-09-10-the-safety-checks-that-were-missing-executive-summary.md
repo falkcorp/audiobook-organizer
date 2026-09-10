@@ -1,14 +1,15 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
 # The safety checks that were missing
 
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
-guard), #3183 (backup verification), #3185 (orphan-file cleanup guard). All are open and
-**held for the owner's review** because they touch paths that move or delete library
-data; this summary will be updated with merge commits as they land. Planning package:
+guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
+merge audio guard). All are open and **held for the owner's review** because they touch
+paths that move or delete library data; this summary will be updated with merge commits
+as they land. Merged: #3184 (ISBN sweep outage reporting, `2ed12521b`). Planning package:
 #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
 
 ## Executive Summary
@@ -46,7 +47,16 @@ data; this summary will be updated with merge commits as they land. Planning pac
   that warm-up. Every file of a book missing from that copy looked orphaned and was
   deleted. The job now uses a version of the lookup that refuses to answer unless the
   in-memory copy is complete, and falls back to the on-disk database when it is not.
-- All five fixes come with a test that reproduces the original problem and fails on the
+- **Merging duplicates could delete the copy that had the audio.** The iTunes repair
+  path merges books it recognizes as the same recording and deletes the extras. It never
+  checked that the book it kept actually had an audio file. It now refuses that merge
+  and reports why, the same rule the other merge features already enforced.
+- **The nightly ISBN lookup reported "checked" during outages.** When every book
+  database was rate-limiting us or temporarily blocked, the sweep counted each book as
+  checked with no result, identical to a book that truly has no ISBN anywhere. It now
+  counts those separately, names which source failed and how often, and marks the run as
+  failed when nothing was actually searched.
+- All seven fixes come with a test that reproduces the original problem and fails on the
   old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -157,3 +167,38 @@ source can vouch for the list, the job stops without deleting anything. The ever
 listing used by the web pages was deliberately left on the fast path, because forcing it
 onto the slow on-disk scan for the life of a degraded server was the very slowdown an
 earlier fix warned against; only the delete-deciding path got the strict version.
+
+## 6. The duplicate merge that could keep the empty copy
+
+**What it was.** When the iTunes repair finds two library entries that are acoustically
+the same recording, it keeps one, moves the other's iTunes details onto it, and deletes
+the other. The keeper was chosen by other criteria and was never checked for having an
+audio file of its own. Three sibling merge features already had that check; this fourth
+one did not.
+
+**Why it mattered.** If the keeper was an empty shell, a stale record with no file, and
+the deleted copy was the one that pointed at the audio, the recording's only link to its
+file was removed.
+
+**The fix.** Before it writes anything, the merge now checks whether the keeper has an
+audio route; if it does not and any of the candidates does, it refuses with the same
+typed error the other merge features use, and the repair path logs the refusal and moves
+on. A merge where none of the copies has a file, which the repair legitimately uses to
+collapse empty shells, still proceeds.
+
+## 7. The lookup sweep that looked fine during an outage
+
+**What it was.** A nightly job walks the library looking up missing ISBN and Audible
+identifiers from several online sources. If a source returned an error, because we had
+hit its rate limit or our own circuit breaker had tripped, the job silently treated that
+as "no result" and counted the book as checked.
+
+**Why it mattered.** A night when every source was down produced the same "checked
+2,000, updated 0" line as a night when 2,000 books genuinely had no identifier. Nobody
+could tell the job had not actually searched, and books that could have been enriched
+were quietly skipped past.
+
+**The fix.** Errors are now kept and counted per source. A book where every source
+errored is reported as "errored", not "checked", the summary line names each source's
+error count, and a run where nothing was actually searched is marked failed so it shows
+red in the operations list.
