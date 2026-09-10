@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.85.0
+// version: 2.86.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-10
 
@@ -2274,6 +2274,23 @@ export async function cancelOperation(id: string): Promise<void> {
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to cancel operation');
   }
+}
+
+/**
+ * retryOperation requeues a finished (failed / canceled / interrupted) operation
+ * as a NEW run with the same definition and parameters. The server answers 202
+ * with the new operation; the original row is left as it was, so the history
+ * still shows what happened the first time.
+ */
+export async function retryOperation(id: string): Promise<{ id: string }> {
+  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}/retry`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to retry operation');
+  }
+  const body = await response.json();
+  return body.data;
 }
 
 export async function clearStaleOperations(): Promise<{ cleared: number }> {

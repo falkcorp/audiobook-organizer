@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.28.0
-// guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-08
+// version: 2.29.0
+// guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
+// last-edited: 2026-09-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -22,6 +22,7 @@ import {
   MenuItem,
   Pagination,
   Paper,
+  Snackbar,
   Stack,
   Table,
   TableContainer,
@@ -42,6 +43,8 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 import ClearIcon from '@mui/icons-material/Clear';
 import UndoIcon from '@mui/icons-material/Undo';
 import CancelIcon from '@mui/icons-material/Cancel';
+import ReplayIcon from '@mui/icons-material/Replay';
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -278,7 +281,18 @@ export default function ActivityLog() {
   // Both buttons therefore recomputed a set that no rendered row consulted,
   // and clicking either did nothing visible. They still clear/refill
   // collapsedParents so they stay correct if op lineage is ever wired up.
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  //
+  // On first load only Active is open. The panel spans 24 hours, so the
+  // finished sections hold most of what is in it, and with all of them open
+  // the running work — the one thing that changes while you watch — was
+  // pushed below a screen of history. The user's toggles are not persisted;
+  // this is the starting point, not a preference.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    () => new Set(OPS_SECTION_KEYS.filter((key) => key !== 'active'))
+  );
+  // One-line feedback for the per-row Retry / Discard actions. The page has no
+  // toast provider, so this is a plain Snackbar; null means closed.
+  const [toast, setToast] = useState<string | null>(null);
   const opLogsRef = useRef<HTMLDivElement>(null);
 
   // Sources
@@ -722,7 +736,9 @@ export default function ActivityLog() {
 
   // Per-op manual refresh: forces a server fetch for just this op's progress
   // / status without waiting for the auto-refresh tick. Useful when the user
-  // has Auto-refresh OFF but wants the truth on one op.
+  // has Auto-refresh OFF but wants the truth on one op. Offered only on rows
+  // that can still change — a finished op has nothing to refresh, and those
+  // rows get Retry instead.
   const handleRefreshOp = async (_opId: string) => {
     try {
       await loadActiveOpsFromServer();
@@ -731,6 +747,21 @@ export default function ActivityLog() {
       }
     } catch (err) {
       console.error('Failed to refresh op', err);
+    }
+  };
+
+  // Per-op retry: requeues a failed / canceled / interrupted op as a NEW run
+  // and reloads the list so the queued row appears. The toast carries the new
+  // id so the user can find it; the failure toast carries the server's reason
+  // (a def with no retry, an op still running, ...) rather than a generic one.
+  const handleRetryOp = async (opId: string) => {
+    try {
+      const requeued = await api.retryOperation(opId);
+      await loadActiveOpsFromServer();
+      setToast(`Requeued as ${requeued.id.slice(0, 8)}`);
+    } catch (err) {
+      console.error('Failed to retry operation', err);
+      setToast(describeError(err));
     }
   };
 
@@ -1504,7 +1535,11 @@ export default function ActivityLog() {
                               server, so none of them exists on a group row —
                               its id is derived from its members and names no
                               record. Expand the group and use the child's. */}
-                          {!group && (
+                          {/* Refresh only while the op can still change. A
+                              finished row is history: refreshing it answers
+                              nothing, so it gets Retry (below) or, for a
+                              completed run, no per-op action at all. */}
+                          {!group && !isTerminal(op.status) && (
                             <Tooltip title="Refresh this operation">
                               <IconButton
                                 size="small"
@@ -1518,6 +1553,42 @@ export default function ActivityLog() {
                               </IconButton>
                             </Tooltip>
                           )}
+                          {/* Failed, canceled and the interrupted_* family:
+                              everything that ended without finishing. */}
+                          {!group && isTerminal(op.status) && op.status !== 'completed' && (
+                            <Tooltip title="Retry — requeue this operation">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRetryOp(op.id);
+                                }}
+                                aria-label="Retry"
+                              >
+                                <ReplayIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {/* An interrupted op is one the server may resume
+                              on the next restart. Discard is the way to say
+                              "don't": it cancels the row for good, via the
+                              same call as the live Cancel button. */}
+                          {!group &&
+                            (op.status === 'interrupted' || op.status.startsWith('interrupted_')) && (
+                              <Tooltip title="Discard — cancel and never resume">
+                                <IconButton
+                                  size="small"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCancelOp(op.id);
+                                  }}
+                                  aria-label="Discard"
+                                  disabled={cancelling.has(op.id)}
+                                >
+                                  <DeleteSweepIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
                           {!group && (
                             <Tooltip title="Copy op summary">
                               <IconButton
@@ -2886,6 +2957,14 @@ export default function ActivityLog() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={toast !== null}
+        autoHideDuration={6000}
+        onClose={() => setToast(null)}
+        message={toast ?? ''}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </Box>
   );
 }

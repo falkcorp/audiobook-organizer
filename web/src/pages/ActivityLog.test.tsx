@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -25,6 +25,7 @@ import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { fetchActivity, fetchActivitySources } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
+import { cancelOperation, retryOperation } from '../services/api';
 // The real fold, not a stub — see the groupedOperations getter below. The store
 // module itself is mocked; this one is not.
 import { groupOperations } from '../stores/operationGrouping';
@@ -39,9 +40,13 @@ vi.mock('../services/activityApi', () => ({
 vi.mock('../services/api', () => ({
   getOperationLogs: vi.fn().mockResolvedValue([]),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
+  retryOperation: vi.fn().mockResolvedValue({ id: 'op-requeued-1234', status: 'queued' }),
   clearStaleOperations: vi.fn().mockResolvedValue(undefined),
   revertOperation: vi.fn().mockResolvedValue(undefined),
 }));
+
+const mockedCancelOperation = vi.mocked(cancelOperation);
+const mockedRetryOperation = vi.mocked(retryOperation);
 
 vi.mock('../hooks/usePendingFileOps', () => ({
   usePendingFileOps: () => ({ operations: [], count: 0, loading: false }),
@@ -93,6 +98,15 @@ const renderPage = () =>
       <ActivityLog />
     </MemoryRouter>
   );
+
+// Only the running section is open on first load; every finished section
+// starts rolled up. Tests whose fixtures live in Completed/Failed/... open
+// everything first so they can assert on the rows themselves.
+const renderPageExpanded = async (user: ReturnType<typeof userEvent.setup>) => {
+  const result = renderPage();
+  await user.click(await screen.findByRole('button', { name: 'Expand All' }));
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -256,9 +270,9 @@ describe('Active Operations expand/collapse', () => {
 
   it('Collapse All hides the operation rows, and Expand All brings them back', async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPageExpanded(user);
 
-    // Both sections render their op before anything is collapsed.
+    // Both sections render their op once everything is open.
     expect(await screen.findByText('Library Scan')).toBeInTheDocument();
     expect(screen.getByText('Author Duplicate Scan')).toBeInTheDocument();
 
@@ -282,9 +296,10 @@ describe('Active Operations expand/collapse', () => {
 
   it('a section heading toggles just its own section', async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPageExpanded(user);
 
     expect(await screen.findByText('Library Scan')).toBeInTheDocument();
+    expect(screen.getByText('Author Duplicate Scan')).toBeInTheDocument();
 
     await user.click(screen.getByText(/^Completed \(1\)$/));
 
@@ -332,7 +347,7 @@ describe('Active Operations section pagination', () => {
   });
 
   it('shows one page of rows, and the heading still reports the TOTAL', async () => {
-    renderPage();
+    await renderPageExpanded(userEvent.setup());
 
     // Page 1 only.
     expect(await screen.findByText('Finished Job 0')).toBeInTheDocument();
@@ -347,7 +362,7 @@ describe('Active Operations section pagination', () => {
 
   it('page 2 shows the remainder', async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPageExpanded(user);
     await screen.findByText('Finished Job 0');
 
     await user.click(screen.getByRole('button', { name: /go to page 2/i }));
@@ -362,7 +377,7 @@ describe('Active Operations section pagination', () => {
     operationsStoreState.activeOperations = Array.from({ length: 5 }, (_, i) =>
       op(`done-${i}`, 'completed', `Finished Job ${i}`, i)
     );
-    renderPage();
+    await renderPageExpanded(userEvent.setup());
 
     expect(await screen.findByText('Finished Job 4')).toBeInTheDocument();
     expect(screen.queryByText(/of 5$/)).not.toBeInTheDocument();
@@ -396,7 +411,11 @@ describe('Active Operations grouping', () => {
   });
 
   it('folds a run of consecutive same-kind ops into one collapsed row', async () => {
+    const user = userEvent.setup();
     renderPage();
+    // Open just the Failed section by its heading: Expand All would also open
+    // the group row, and this test is about the group staying folded.
+    await user.click(await screen.findByText('Failed (12)'));
 
     // One row, not twelve, and it says what it stands for.
     expect(await screen.findByText('AI Filename Parsing')).toBeInTheDocument();
@@ -412,8 +431,9 @@ describe('Active Operations grouping', () => {
   it('expanding the group reveals every member without changing the count', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText('12 runs');
+    await screen.findByText('Failed (12)');
 
+    // Opens the Failed section AND the group row inside it.
     await user.click(screen.getByRole('button', { name: 'Expand All' }));
 
     // Parent + 12 children = 13 ROWS, more than one page, so the section pages
@@ -437,7 +457,7 @@ describe('Active Operations grouping', () => {
       })),
     ];
 
-    renderPage();
+    await renderPageExpanded(userEvent.setup());
 
     // One group per status, each in its own section.
     await waitFor(() => expect(screen.getAllByText('6 runs')).toHaveLength(2));
@@ -448,7 +468,7 @@ describe('Active Operations grouping', () => {
   // A group row's id is derived from its members and names no server record, so
   // every control that would act on it by id must be absent.
   it('offers no per-op controls on the group row', async () => {
-    renderPage();
+    await renderPageExpanded(userEvent.setup());
     const countChip = await screen.findByText('12 runs');
 
     // Scoped to the row: the page toolbar has its own Refresh, and asserting
@@ -456,7 +476,157 @@ describe('Active Operations grouping', () => {
     const row = countChip.closest('.MuiPaper-root') as HTMLElement;
     expect(row).not.toBeNull();
     expect(within(row).queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+  });
+});
+
+// Only running work is open when the page loads. Everything that has already
+// ended — Completed, Failed, Canceled, Interrupted — starts rolled up, so the
+// section that needs watching is the one on screen.
+describe('Active Operations default expansion', () => {
+  const op = (id: string, status: string, displayName: string) => ({
+    id,
+    type: 'scan',
+    displayName,
+    status,
+    progress: 1,
+    total: 2,
+    message: '',
+    parent_id: null,
+  });
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = [
+      op('op-running', 'running', 'Library Scan'),
+      op('op-done', 'completed', 'Author Duplicate Scan'),
+      op('op-failed', 'failed', 'Metadata Fetch'),
+      op('op-canceled', 'canceled', 'Cover Refresh'),
+      op('op-interrupted', 'interrupted_restart', 'Hash Backfill'),
+    ];
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('opens only the running section on first render', async () => {
+    renderPage();
+
+    // The running row is visible; every finished row is behind a collapsed
+    // heading that still reports its count.
+    expect(await screen.findByText('Library Scan')).toBeInTheDocument();
+    expect(screen.getByText(/^Completed \(1\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Failed \(1\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Canceled \(1\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Interrupted \(1\)$/)).toBeInTheDocument();
+    expect(screen.queryByText('Author Duplicate Scan')).not.toBeInTheDocument();
+    expect(screen.queryByText('Metadata Fetch')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cover Refresh')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hash Backfill')).not.toBeInTheDocument();
+  });
+});
+
+// The per-row Refresh icon is gone from finished rows. A finished op cannot
+// change, so refreshing it answered nothing; what the user wants on a failed,
+// canceled or interrupted run is to run it again.
+describe('Active Operations retry and discard controls', () => {
+  const op = (id: string, status: string, displayName: string) => ({
+    id,
+    type: 'scan',
+    displayName,
+    status,
+    progress: 1,
+    total: 2,
+    message: '',
+    parent_id: null,
+  });
+
+  const rowOf = (name: string) => {
+    const row = screen.getByText(name).closest('.MuiPaper-root') as HTMLElement;
+    expect(row).not.toBeNull();
+    return row;
+  };
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = [
+      op('op-running', 'running', 'Library Scan'),
+      op('op-done', 'completed', 'Author Duplicate Scan'),
+      op('op-failed', 'failed', 'Metadata Fetch'),
+      op('op-interrupted', 'interrupted_restart', 'Hash Backfill'),
+    ];
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('a completed row has neither Refresh nor Retry', async () => {
+    await renderPageExpanded(userEvent.setup());
+    await screen.findByText('Author Duplicate Scan');
+
+    const row = rowOf('Author Duplicate Scan');
+    expect(within(row).queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
+  });
+
+  it('a failed row offers Retry, which requeues the op by id and reloads', async () => {
+    const user = userEvent.setup();
+    await renderPageExpanded(user);
+    await screen.findByText('Metadata Fetch');
+
+    const row = rowOf('Metadata Fetch');
+    expect(within(row).queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    loadActiveOpsFromServer.mockClear();
+
+    await user.click(within(row).getByRole('button', { name: 'Retry' }));
+
+    expect(mockedRetryOperation).toHaveBeenCalledWith('op-failed');
+    await waitFor(() => expect(loadActiveOpsFromServer).toHaveBeenCalled());
+    // The new id, so the user can find the requeued run.
+    expect(await screen.findByText(/Requeued as op-reque/)).toBeInTheDocument();
+  });
+
+  it('reports the server error when a retry is refused', async () => {
+    const user = userEvent.setup();
+    mockedRetryOperation.mockRejectedValueOnce(new Error('operation def has no retry'));
+    await renderPageExpanded(user);
+    await screen.findByText('Metadata Fetch');
+
+    await user.click(within(rowOf('Metadata Fetch')).getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText(/operation def has no retry/)).toBeInTheDocument();
+  });
+
+  it('an interrupted row offers Retry and Discard; Discard cancels the op', async () => {
+    const user = userEvent.setup();
+    await renderPageExpanded(user);
+    await screen.findByText('Hash Backfill');
+
+    const row = rowOf('Hash Backfill');
+    expect(within(row).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    loadActiveOpsFromServer.mockClear();
+
+    await user.click(within(row).getByRole('button', { name: 'Discard' }));
+
+    expect(mockedCancelOperation).toHaveBeenCalledWith('op-interrupted');
+    await waitFor(() => expect(loadActiveOpsFromServer).toHaveBeenCalled());
+  });
+
+  it('a running row keeps its Refresh and Cancel, and gets no Retry', async () => {
+    renderPage();
+    await screen.findByText('Library Scan');
+
+    const row = rowOf('Library Scan');
+    expect(within(row).getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
   });
 });
