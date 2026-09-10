@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -99,7 +99,20 @@ location; 5246 MEMDB-LOSSY-READERS sequencing dependency.
 Fixed a mislabel (TODO.md:3970 had been tagged 3968).
 
 ### Chunk 3 — lines 6642–11021 (147) — RUNNING
-### Chunk 4 — lines 11073–17789 (134) — RUNNING
+### Chunk 4 — lines 11073–17789, 6 sections (134)
+**REAL 94 · DONE 33 · STALE 4 · UNCLEAR 3.** No forks; 81k tokens / 234 tool calls.
+Top REAL: 17185 ABS-SYNC TASK-12 three identity gaps (data-loss, L); 15799 duplicate
+resolution still DELETES instead of re-associating (data-loss, L); 15693 multidisc-apply
+has no before/after snapshot canary, `review_apply_enabled` OFF (data-loss, M); 17307 /
+17329 iTunes 2-way sync P3 + writeback undelivered (data-loss, L); **16949 TODO-SEC-BIND
+service binds `0.0.0.0`** (security, M); **16966 TODO-SEC-SYSTEMD 5 hardening directives
+missing** (security, M); **16960 TODO-SEC-JWT `ABS_JWT_SECRET` not rotated after
+plaintext exposure** (security, S); **11964 `OperationDef.Permissions` enforced by
+nothing** and the enforcement code is slated for deletion (security, M); 17162 ABS
+surface not exempted from `BasicAuth()` when `basic_auth_enabled` (security, S).
+UNCLEAR: 11615 (live prod dir scan), 12263 (mutation-testing run), 13222 (Playwright,
+TASK-198 scope). Reclassified after self-review: 11821 (staticcheck still aborts
+`make ci`, 9 findings), 12251, 11611 (artifact exists, prod run/record not done).
 
 ## Wave 3 — untracked-work audit
 
