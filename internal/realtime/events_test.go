@@ -1,7 +1,7 @@
 // file: internal/realtime/events_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package realtime
 
@@ -546,8 +546,11 @@ func TestHandleSSE_BasicConnection(t *testing.T) {
 	if w.Header().Get("Connection") != "keep-alive" {
 		t.Error("Expected Connection: keep-alive")
 	}
-	if w.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("Expected Access-Control-Allow-Origin: *")
+	// HandleSSE must not set its own Access-Control-Allow-Origin: CORS is
+	// corsMiddleware's job (internal/server/server_middleware.go). Since
+	// nothing pre-set the header in this test, it must stay unset.
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Expected HandleSSE to leave Access-Control-Allow-Origin unset, got %q", got)
 	}
 
 	// Check that initial event was sent
@@ -557,6 +560,58 @@ func TestHandleSSE_BasicConnection(t *testing.T) {
 	}
 	if !strings.Contains(body, "connection.established") {
 		t.Error("Expected connection.established event")
+	}
+}
+
+// TestHandleSSE_PreservesUpstreamCORSHeader is a regression test for SV-03:
+// HandleSSE used to unconditionally set Access-Control-Allow-Origin: "*",
+// silently overwriting the allowlisted origin that corsMiddleware
+// (internal/server/server_middleware.go) already set earlier in the chain
+// for GET /api/events. Because gin.Context.Header is a Set (not Add), that
+// wiped the middleware's restrictive value while leaving
+// Access-Control-Allow-Credentials: true (also set by corsMiddleware) in
+// place -- an invalid "*"+credentials:true combination. This test simulates
+// corsMiddleware having already run and asserts HandleSSE leaves its headers
+// alone.
+func TestHandleSSE_PreservesUpstreamCORSHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	hub := NewEventHub()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/events", nil)
+
+	// Simulate corsMiddleware having already set an allowlisted origin plus
+	// credentials, as it does for GET /api/events before HandleSSE runs.
+	const allowedOrigin = "https://192.0.2.10"
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		hub.HandleSSE(c)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for SSE handler to finish")
+	}
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != allowedOrigin {
+		t.Errorf("HandleSSE overwrote the upstream allowlisted Access-Control-Allow-Origin: got %q, want %q", got, allowedOrigin)
+	}
+
+	// A response must never combine a wildcard ACAO with credentials: true --
+	// that is an invalid combination browsers reject, and the specific
+	// regression this test guards against.
+	if w.Header().Get("Access-Control-Allow-Origin") == "*" && w.Header().Get("Access-Control-Allow-Credentials") == "true" {
+		t.Error("response must never combine Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true")
 	}
 }
 
