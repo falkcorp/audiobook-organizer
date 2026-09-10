@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
 # The safety checks that were missing
 
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
-guard), #3183 (backup verification). All are open and
+guard), #3183 (backup verification), #3185 (orphan-file cleanup guard). All are open and
 **held for the owner's review** because they touch paths that move or delete library
 data; this summary will be updated with merge commits as they land. Planning package:
 #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -39,7 +39,14 @@ data; this summary will be updated with merge commits as they land. Planning pac
   backup file looked identical to restoring from a good one. The app now saves that
   fingerprint next to each backup and checks it on restore, refusing to restore a file
   that no longer matches.
-- All four fixes come with a test that reproduces the original problem and fails on the
+- **The orphan-file cleanup trusted a cache that can be missing rows.** A maintenance
+  job deletes file records that no longer belong to any book. It decided "belongs to no
+  book" by consulting the in-memory copy of the book list, which after a restart warms up
+  over a couple of minutes and can permanently lose rows if something goes wrong during
+  that warm-up. Every file of a book missing from that copy looked orphaned and was
+  deleted. The job now uses a version of the lookup that refuses to answer unless the
+  in-memory copy is complete, and falls back to the on-disk database when it is not.
+- All five fixes come with a test that reproduces the original problem and fails on the
   old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -128,3 +135,25 @@ companion file; verifying one of those returns an explanatory error that tells t
 to restore with verification off or re-create the backup, rather than pretending. The
 first version of this fix simply refused every verified restore, which would have broken
 the default UI path; it was sent back and replaced with real verification.
+
+## 5. The cleanup that deleted files based on an incomplete list
+
+**What it was.** The "orphan book files" maintenance job finds file records whose owning
+book no longer exists and, when asked to, deletes them permanently. To know which books
+exist, it read the in-memory copy of the book table. That copy is rebuilt in the
+background after every restart and, if the rebuild is interrupted or loses rows, it stays
+short until the next restart. Two other lookups (series and authors) had already been
+taught to refuse an answer in that state; this one had not.
+
+**Why it mattered.** A book absent from the in-memory copy made every one of its files
+look orphaned. With deletion enabled, the job would remove those file records, and the
+book would lose track of its audio. Unlike most mistakes in the app, this deletion has no
+undo.
+
+**The fix.** The job now asks a stricter version of the lookup that checks the in-memory
+copy is complete before answering; if it is not, the app logs an error naming how many
+rows were lost and reads the full list from the on-disk database instead. If neither
+source can vouch for the list, the job stops without deleting anything. The everyday book
+listing used by the web pages was deliberately left on the fast path, because forcing it
+onto the slow on-disk scan for the life of a degraded server was the very slowdown an
+earlier fix warned against; only the delete-deciding path got the strict version.
