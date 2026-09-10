@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -22,7 +22,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 HELD (14:55) |
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | dispatched 14:46 |
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | dispatched 14:46 |
-| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | dispatched 14:49 |
+| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 open, standard lane (15:15) |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | dispatched 14:56 (L4241/4242 code; L4244 measure-only) |
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
@@ -72,3 +72,13 @@ security) are HELD OPEN for the owner — never admin-merged.
 - PR #3182 — HELD for owner. No `TODO.md` line. Not run: the brief's live audit for non-digit `book:` keys on prod (worker ban) — owner's call before merge.
 - Observed, unfiled: `getBooksByAuthorIDFull` has no `iter.Error()` check; `GetBooksByAuthorIDWithRoleCore` `continue`s on unmarshal error.
 - CI `Repo Guards` failed on `gofmt` (comment alignment in `author_bookref_test.go`); fixed by the coordinator in `5a3c31416`. Lesson: every worker prompt now requires `gofmt -l` on changed files before commit.
+
+### TASK-310 — SF-03 ISBN sweep discards provider errors
+
+- Worker paused twice on a background gate; resumed 15:09 foreground-only. Worktree `.worktrees/metadata-310`, branch `agent/metadata-310-isbn-asin-enrichment-sweep-discards-ever`, sha `69143137a`.
+- Files: `internal/metafetch/isbn.go` 1.10.0, `service_mock_test.go` 1.11.0, new `isbn_source_errors_test.go`, `changelog.d/20260910_metadata_310.md`.
+- Search helpers return errors; `sourceSearchError` (per-source counts, allErrored) wrapped by `EnrichBookISBN`; sampled WARN (1st then every 20th per source); `EnrichMissingISBNs` counts `errored` apart from `checked`, adds per-source totals to the summary, returns `ErrAllSourcesErrored` when every attempted book errored (both op callers already propagate).
+- Pre-fix evidence is a compile failure of the new test file (new symbols), not a behavioral assertion — weaker than the other briefs; noted in the PR.
+- Gate exit 0 (gofmt, build/vet/test 43.9s, `-race`, staticcheck). Rollback: pure code change.
+- PR #3184 — standard lane; merge on green gate. No `TODO.md` line.
+
