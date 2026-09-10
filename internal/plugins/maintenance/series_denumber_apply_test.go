@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -106,5 +106,87 @@ func TestRunSeriesDenumber_ApplyRepointsNonPrimaryVersions(t *testing.T) {
 			"series %d was deleted anyway because movedAll only sees rows the "+
 			"getter returned, so this row now references a series that does not "+
 			"exist", nonPrimary, baseID, ok, got, numberedID)
+	}
+}
+
+// TestRunSeriesDenumber_RefusesToDeleteSeriesWithOnlyTrashedMembers is the
+// SERIES-DENUMBER-TRASHED-GAP regression (TODO.md:2901). It is the sibling of
+// the test above, but that fixture leaves at least one row for the getter to
+// enumerate. This one leaves ZERO: every member of "Discworld 05" is trashed,
+// so GetBooksBySeriesIDAllVersions -- which excludes soft-deleted rows by
+// design, same as the getter above -- returns an empty slice. The per-book
+// loop that would ever set movedAll=false therefore never runs, movedAll
+// stays at its vacuously-true zero value, and on the pre-fix code
+// DeleteSeries(numberedID) fires unconditionally even though
+// GetAllSeriesBookRefCountsFunc reports 2 rows still referencing it.
+//
+// Pre-fix failure (captured before the fix landed):
+//
+//	--- FAIL: TestRunSeriesDenumber_RefusesToDeleteSeriesWithOnlyTrashedMembers (0.00s)
+//	    series_denumber_apply_test.go:145: series 11 ("Discworld 05") was
+//	        deleted even though the unfiltered reference guard reports 2 rows
+//	        still pointing at it -- movedAll was vacuously true because
+//	        GetBooksBySeriesIDAllVersions enumerated zero (all trashed) rows
+func TestRunSeriesDenumber_RefusesToDeleteSeriesWithOnlyTrashedMembers(t *testing.T) {
+	const (
+		baseID     = 10
+		numberedID = 11
+	)
+	authorID := 3
+
+	store := &database.MockStore{}
+
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: baseID, Name: "Discworld", AuthorID: &authorID},
+			{ID: numberedID, Name: "Discworld 05", AuthorID: &authorID},
+		}, nil
+	}
+	// The DISPLAY counter: both series show 0 for the numbered one, because
+	// every member is trashed and this counter (like the listing getters)
+	// excludes soft-deleted rows. The planner does not filter on Books, so
+	// this alone does not stop "Discworld 05" from being a candidate.
+	store.GetAllSeriesBookCountsFunc = func() (map[int]int, error) {
+		return map[int]int{baseID: 4, numberedID: 0}, nil
+	}
+	// AllVersions ALSO excludes trashed rows (see its doc comment in
+	// pebble_store.go) -- it enumerates zero books for the numbered series,
+	// exactly the case that leaves movedAll's loop body unexecuted.
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		return nil, nil
+	}
+	// The UNFILTERED guard: 2 trashed book rows still hold the numbered
+	// series. This is what the pre-fix code never consults before deleting.
+	store.GetAllSeriesBookRefCountsFunc = func() (map[int]int, error) {
+		return map[int]int{numberedID: 2}, nil
+	}
+	store.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		t.Fatalf("GetBookByID(%s) called -- no rows should be moved when AllVersions enumerated none", id)
+		return nil, nil
+	}
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		t.Fatalf("UpdateBook(%s) called -- no rows should be moved when AllVersions enumerated none", id)
+		return b, nil
+	}
+
+	deleted := []int{}
+	store.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+
+	p := &Plugin{deps: fakeDeps{store: store}}
+	raw := json.RawMessage(`{"apply": true}`)
+	if err := p.runSeriesDenumber(context.Background(), raw, &fakeReporter{}); err != nil {
+		t.Fatalf("runSeriesDenumber: %v", err)
+	}
+
+	for _, id := range deleted {
+		if id == numberedID {
+			t.Fatalf("series %d (%q) was deleted even though the unfiltered reference guard "+
+				"reports 2 rows still pointing at it -- movedAll was vacuously true because "+
+				"GetBooksBySeriesIDAllVersions enumerated zero (all trashed) rows",
+				numberedID, "Discworld 05")
+		}
 	}
 }
