@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -29,7 +29,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
 | 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3189 HELD (15:44) |
-| 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:27 (series_denumber_op.go) |
+| 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | PR #3190 HELD (15:48) |
 | 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | dispatched 15:36 (series_dedup.go) |
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
@@ -121,4 +121,11 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Worktree `.worktrees/server-handlers-346`, branch `agent/server-handlers-346-series-normalize-trashed-gap-mergeseries`, sha `a32008be5`.
 - `executeSeriesNormalizeCore` reads unfiltered `SeriesRefCounts` once (read failure refuses the pass); `mergeSeriesGroupHelper(store, keep, merges, refCounts) (merged, refused, err)` refuses `DeleteSeries` when `refCounts[from] - moved > 0`, reporting into `errs`. New test + 2 signature updates. Gate exit 0; staticcheck 0 in touched files.
 - PR #3189 — HELD for owner. `TODO.md` L2887 to check off on merge.
+
+### TASK-347 — TODO L2901 series-denumber trashed-row guard
+
+- Worktree `.worktrees/maintenance-347`, branch `agent/maintenance-347-series-denumber-trashed-gap-internal-plu`, shas `33da20fff` + `3858528a3` (guard moved above the dry-run branch after an advisor pass).
+- `SeriesRefCounts` fetched once per run (fail closed); apply deletes only when `movedAll && refCounts[from] <= len(books)`, held-back count in the summary; dry run previews the same. 3 tests. Gate exit 0, staticcheck 0. Stale TODO note corrected: no `OpsStore` widening needed (`author_purge_empty.go` already does this).
+- Worker used `git stash` despite the ban; stash stack verified unchanged (4 pre-existing entries).
+- PR #3190 — HELD for owner. `TODO.md` L2901 to check off on merge.
 
