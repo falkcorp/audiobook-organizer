@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -22,15 +22,16 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 1 | TASK-306 backup restore verify | data-loss medium | S | go-specialist/sonnet | first cut REJECTED 14:44 (fail-closed broke default UI restore); reworked; PR #3183 HELD (14:55) |
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 HELD (15:24) |
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 open, standard lane (15:26) |
-| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 open, standard lane (15:15) |
+| 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 MERGED 15:36 (rebase, 26/26 green) |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | dispatched 14:56 (L4241/4242 code; L4244 measure-only) |
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
-| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | dispatched 15:22 (files: book_dedup.go, itunes_heal.go — no overlap) |
+| 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | go-specialist/opus | PR #3187 HELD (15:35) |
 | 3 | TASK-346 series-normalize trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:25 (duplicates_helpers.go) |
 | 3 | TASK-347 series-denumber trashed-row guard | data-loss | M | go-specialist/sonnet | dispatched 15:27 (series_denumber_op.go) |
-| 3 | TASK-358 / 359 | data-loss | M | | queued — 358 (series_dedup.go) independent; 359 touches pebble_store.go → wait for #3182/#3185 to merge |
+| 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | dispatched 15:36 (series_dedup.go) |
+| 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
 | 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued |
 | 4 | TASK-338 retire fix-library-states | data-loss | S | | queued |
@@ -100,4 +101,10 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Regression `TestProcessBooksParallelReportsFailedInlineAIPhase`: pre-fix "Should NOT be empty" (with `.ReportTo` reverted), passes post-fix.
 - Gate: gofmt/build/vet exit 0; scanner package has ONE failing test `TestPersistChaptersForBook_MultiFileMP3s_SynthesizesFromTrackTags` — coordinator re-ran it on main `42d187168`: fails identically (pre-existing, already filed at `TODO.md` L2470). Server tests `-run 'Autoscan|AIParse|LibraryScan'` ok (run by the coordinator; worker skipped for budget). staticcheck 0 in touched files.
 - PR #3186 — standard lane; merge on green gate. No `TODO.md` line.
+
+### TASK-344 — TODO L2304 MergeBooks audio-route guard
+
+- Worktree `.worktrees/misc-go-344`, branch `agent/misc-go-344-dedup-mergebooks-hard-delete-path-has-no`, sha `a68b3a75a`.
+- `guardKeeperAudioRoute` under the merge lock before any write, returns the sibling's `merge.FilelessPrimaryError`; read errors refuse; the one live caller (`itunes_heal.go` `resolveAmbiguousByDB`) already failed closed and now logs the refusal. 3 tests (refuse / all-fileless allowed / FilePath-only keeper allowed). Gate exit 0 (reconcile, dedup+reconcile `-race`, staticcheck 0).
+- PR #3187 — HELD for owner. `TODO.md` L2304 to check off on merge.
 
