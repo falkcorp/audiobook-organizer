@@ -1,97 +1,34 @@
 // file: internal/metadata/cover.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 package metadata
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
 )
 
-// ErrSSRFBlocked is returned when a cover URL resolves to a private/reserved address.
-var ErrSSRFBlocked = fmt.Errorf("cover URL resolves to a blocked (private/reserved) address")
-
-// privateCIDRs lists address ranges that must not be reachable via cover downloads.
-var privateCIDRs = func() []*net.IPNet {
-	blocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",    // loopback
-		"169.254.0.0/16", // link-local (AWS IMDSv1)
-		"::1/128",        // IPv6 loopback
-		"fc00::/7",       // IPv6 unique-local
-		"fe80::/10",      // IPv6 link-local
-	}
-	nets := make([]*net.IPNet, 0, len(blocks))
-	for _, b := range blocks {
-		_, n, _ := net.ParseCIDR(b)
-		if n != nil {
-			nets = append(nets, n)
-		}
-	}
-	return nets
-}()
-
-// isPrivateIP returns true if ip falls within any reserved/private range.
-func isPrivateIP(ip net.IP) bool {
-	for _, cidr := range privateCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// validateCoverURL enforces scheme and rejects obviously-internal hostnames.
-// A full IP-block happens in the custom DialContext used by safeCoverClient.
-func validateCoverURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid cover URL: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("cover URL scheme %q not allowed (only http/https)", u.Scheme)
-	}
-	return nil
-}
-
-// safeCoverDialContext is a DialContext hook that blocks connections to
-// private/reserved IP ranges, preventing SSRF via cover-art downloads.
-func safeCoverDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range addrs {
-		ip := net.ParseIP(a)
-		if ip == nil {
-			continue
-		}
-		if isPrivateIP(ip) {
-			return nil, ErrSSRFBlocked
-		}
-	}
-	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(host, port))
-}
+// ErrSSRFBlocked is returned when a cover URL resolves to a private/reserved
+// address. It aliases safehttp.ErrBlockedAddress so that existing callers that
+// compare against this name keep working; the guard itself lives in
+// internal/security/safehttp and is shared with internal/covers.
+//
+// The scheme allowlist, the resolved-address block and the redirect re-check
+// used to be three private helpers in this file. They were duplicated nowhere
+// and absent from internal/covers, which is why CodeQL alert #645 was a real
+// finding and #662 was not. One implementation now serves both.
+var ErrSSRFBlocked = safehttp.ErrBlockedAddress
 
 // DownloadCoverArt downloads a cover image from coverURL and saves it to
 // {destDir}/covers/{bookID}.{ext}. Returns the local file path on success.
@@ -102,9 +39,12 @@ func DownloadCoverArt(coverURL string, destDir string, bookID string) (string, e
 	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
 	// caller's transport rather than replacing it, so throttling is added without
 	// dropping the security control.
-	client := providerhttp.ClientWithTransport("cover", &http.Transport{
-		DialContext: safeCoverDialContext,
-	})
+	client := providerhttp.ClientWithTransport("cover", safehttp.NewTransport())
+	// providerhttp wraps the transport rather than replacing it, so the address
+	// guard survives the throttling wrapper. It does not set CheckRedirect,
+	// though, so the per-hop scheme check has to be attached here — without it
+	// the scheme allowlist would only ever have run on the first URL.
+	client.CheckRedirect = safehttp.CheckRedirect
 	return downloadCoverArtWithClient(client, coverURL, destDir, bookID)
 }
 
@@ -127,8 +67,8 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 		return "", fmt.Errorf("invalid book ID %q", bookID)
 	}
 
-	if err := validateCoverURL(coverURL); err != nil {
-		return "", err
+	if err := safehttp.ValidateURL(coverURL); err != nil {
+		return "", fmt.Errorf("cover URL rejected: %w", err)
 	}
 
 	coversDir := filepath.Join(destDir, "covers")
@@ -145,7 +85,11 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 		return "", fmt.Errorf("failed to create covers directory: %w", err)
 	}
 
-	resp, err := client.Get(coverURL) //nolint:noctx // URL already validated above
+	// The SSRF control is the transport, not this line: safehttp's DialContext
+	// checks the resolved address on every hop. The nolint is only about the
+	// missing context — DownloadCoverArt takes none, and the providerhttp
+	// client's own timeout bounds the request.
+	resp, err := client.Get(coverURL) //nolint:noctx // no caller-supplied context; client.Timeout bounds this
 	if err != nil {
 		return "", fmt.Errorf("failed to download cover: %w", err)
 	}
