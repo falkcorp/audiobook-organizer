@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: eead065c-3fb2-404b-ada5-a14de9928300 -->
+<!-- guid: 42f8172b-8811-548b-8f2c-47505e56a1a1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-180 — Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display (TODO.md L1350)

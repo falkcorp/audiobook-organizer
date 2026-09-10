@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-217-evidence-panel-explain-a-missing-score-derivatio.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: e634a0a5-2617-4428-80e6-6fed9bd20749 -->
+<!-- guid: 4b13e80f-e016-5ada-94b2-0a8c13cd9560 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-217 — Evidence panel: explain a missing score derivation in plain language and offer re-search inline (REV-EMPTY-3)

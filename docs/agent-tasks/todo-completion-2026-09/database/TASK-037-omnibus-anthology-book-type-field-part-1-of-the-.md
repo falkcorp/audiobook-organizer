@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-037-omnibus-anthology-book-type-field-part-1-of-the-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: b89b3487-7436-461f-8bb9-bcca03c8c4c7 -->
+<!-- guid: 1236ba2d-d4e9-5210-ab16-c10c36e008ff -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-037 — Omnibus/anthology book_type field — Part 1 of the omnibus-detection-and-dedup spec (TODO.md L10523)

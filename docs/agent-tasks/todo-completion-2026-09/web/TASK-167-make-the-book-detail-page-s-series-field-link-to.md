@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 4f1b42c4-181d-427b-b83b-01d7f66da643 -->
+<!-- guid: e6c04f4f-6ff4-5b18-a844-4cb0c02c2821 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-167 — Make the book-detail page's Series field link to a library view filtered by that series, landing at series_index (TODO.md L3161)

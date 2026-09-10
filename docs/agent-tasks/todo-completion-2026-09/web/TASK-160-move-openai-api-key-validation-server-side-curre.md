@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-160-move-openai-api-key-validation-server-side-curre.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 3dc23c5c-7314-493c-ac1c-6da2120cf676 -->
+<!-- guid: f99d3c64-1cc6-5c72-b985-57a1491ed570 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-160 — Move OpenAI API key validation server-side (currently sent from the browser) (SEC-9)

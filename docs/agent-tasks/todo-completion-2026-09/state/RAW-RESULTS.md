@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -278,3 +278,51 @@ consolidate. Remaining prompts carry a ≤60-tool-call budget.
   generator to honor the "same format" deliverable — do not hand-write 100+ briefs.
 - Nothing in this branch touches application code. `git diff --stat main -- internal cmd web`
   must stay empty.
+
+## Final analysis — 2026-09-10 (four read-only auditors, no forks, budgets held)
+
+Launched after the package was committed (17db73953) and PR #3179 opened, at the owner's
+"do the final analysis". Outputs saved verbatim under `state/final/`; conclusions and the
+generator fixes they drove are in `../FINAL-ANALYSIS-2026-09-10.md`.
+
+| Agent | Type / model | Tool calls | Tokens | Wall | Output |
+|---|---|---|---|---|---|
+| Mechanical package audit | `plan-op:plan-auditor` / sonnet | 28 | 142k | 12m | `final/plan_audit.json` |
+| Adversarial re-check, top 11 findings | `audiobook-organizer:go-specialist` / sonnet | 53 | 142k | 6m | `final/adversarial_top11.json` |
+| Cold-execute 6 top briefs | `plan-op:brief-verifier` / sonnet | 34 | 85k | 5.5m | `final/brief_verifier_top6.json` |
+| Validate 30 TODO-section briefs | `Explore` / sonnet | 31 | 112k | 9.7m | `final/todo_sections_validation.json` |
+
+Final reports, condensed:
+
+- **plan-auditor:** 219 files header-clean, 0 path mismatches, 0 intra-package guid dupes,
+  **111 guid collisions with the archive twins**; 65 new anchors: 1 missing file (TASK-339),
+  1 `test -f` on a directory (WEB-06), 1 zero-hit grep, **11 briefs grepping a different
+  paragraph than their title**; 111 carried re-verify greps run: 106 still open, 0 look done,
+  5 stale anchor strings (TASK-071/129/189/192/193); 3 same-wave file collisions; 2 matrix rows
+  pointing at the undated old path; 176/176 briefs structurally complete.
+- **go-specialist:** 10 CONFIRMED, 1 PARTLY (SF-01: second branch already stat-guarded),
+  0 REFUTED. Design notes: DA-02 needs an interface-shape decision; DB-02 option (b) is ~60
+  signatures; DB-03 writes `LibraryState` — audit-first; SF-02 must stay non-fatal for the scan.
+- **brief-verifier:** 5 NEEDS-EDIT + 1 REWRITE. Systemic: `REPO=/path/to/…` placeholder;
+  dry-run/`apply=false` boilerplate unsatisfiable for pure code changes; re-verify windows
+  covering one of several call sites. TASK-337's "fix OR unregister" needs a decision.
+- **Explore:** all 30 briefs' items still `- [ ]` at HEAD; 20 DISPATCH, 8 HOLD-FOR-OWNER,
+  2 RECLASSIFY; the `section` field is systematically unreliable (7 cosmetic, 8 substantive
+  mismatches); TASK-363 bundles four operator-only items and touches the deploy and scan bans.
+
+What changed because of them (generator only; `gen_new_package.py` 1.0.0 → 1.1.0,
+`build_matrix.py` 1.0.0 → 1.1.0; new inputs `final/todo_line_overrides.json`,
+`final/carried_anchor_drift.json`; new output `final/brief_index.json`): real repo path;
+decidable rollback rule; `anchor_windows()` over every cited line; `uuid5(path)` guids for
+carried copies; drift notes on the 5 carried briefs; TODO briefs regrouped by the REAL
+enclosing heading with bold-named items split out and anchored by their text at HEAD
+(30 → 41 briefs); dispatch verdicts stamped on briefs, BREAKDOWN and matrix (13 held,
+3 reclassified); collision-aware waves; `Brief` column and new-package paths in the matrix.
+Package: 187 briefs, 171 dispatchable. Matrix: 303 rows.
+
+Cost/process: the four agents together used 146 tool calls and ~481k tokens — under the
+cost of ONE forking wave-1 verifier (241k) per agent, and no shared-file races. The
+"working harder than they should" incident from earlier in the day was three wave-1 shell
+loops hung on zsh's `> "$OUT"` (NULLCMD `cat` on the harness stdin) for 80+ minutes with
+0 bytes written; killed, lesson recorded in memory.
+

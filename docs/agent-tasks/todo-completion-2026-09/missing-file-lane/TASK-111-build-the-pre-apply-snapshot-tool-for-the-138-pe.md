@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-111-build-the-pre-apply-snapshot-tool-for-the-138-pe.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 0bf4f681-32db-4452-926c-502241ab31af -->
+<!-- guid: e553375c-27fe-57bd-bb1f-41651fb7e5e0 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-111 — Build the pre-apply snapshot tool for the 138 pending multidisc holds (TODO.md L8837)

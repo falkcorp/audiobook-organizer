@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-220-journal-every-duplicate-row-deletion-to-the-undo.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 9ae9e63c-aec0-4d1c-a0dd-846f8c07614c -->
+<!-- guid: 241b904f-b225-5c10-9d9c-10dbc257d793 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-220 — Journal every duplicate-row deletion to the undo ledger and refuse to apply while a library.scan is active (DUPROW-3)

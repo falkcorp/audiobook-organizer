@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-306-post-backup-restore-caller-requested-checksum-ve.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: dd58d727-201e-4647-b364-871131314349 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-306 — POST /backup/restore: caller-requested checksum verification is silently skipped, no signal in the response (SV-02)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-02` (audit_server_handlers.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SV-02` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P2 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P2 · **Effort:** S · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
-Source: Wave 3 audit finding `SV-02` (audit_server_handlers.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `SV-02` (audit_server_handlers.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/server-handlers-306" -b agent/server-handlers-306-post-backup-restore-caller-requested-che origin/main
 cd "$REPO/.worktrees/server-handlers-306"
@@ -35,11 +35,15 @@ Why it matters: A caller who explicitly asked to verify a restore (presumably be
 
 - RestoreBackup (handler.go:663-710) accepts `Verify bool` in the request body. Lines 697-699: `if req.Verify { slog.Warn("backup restore: checksum verification requested but not yet implemented; proceeding without verification") }` -- then it proceeds to backup.RestoreBackup(backupPath, targetPath, req.Verify) regardless, and on success returns 200 {"message": "backup restored successfully", "target": targetPath} with no mention that verification was skipped. The warning only reaches a server-side log (PermSettingsManage-gated route, wire_system_routes.go:48), which the calling client/UI never sees.
 - Anchor: `internal/server/handlers/system/handler.go:697` (audit `SV-02`, confidence high, severity medium).
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — RestoreBackup: if req.Verify { slog.Warn } then backup.RestoreBackup(..., req.Verify) and 200 with no verify field; backup.go:499-504 `if verify { slog.Info("not yet implemented") }` — unimplemented at BOTH layers.
+  - Blast radius: handlers/system/handler_test.go, backup/backup_test.go; PermSettingsManage-gated (wire_system_routes.go:48).
+  - Existing tests to extend: internal/backup/backup_test.go, internal/server/handlers/system/handler_test.go
+  - Standing-ban contact: none; disaster-recovery path, review-critical
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/server/handlers/system/handler.go   # the file the finding is anchored to still exists
-  sed -n '691,703p' internal/server/handlers/system/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/server/handlers/system/handler.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '657,716p' internal/server/handlers/system/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -59,7 +63,7 @@ Then, always:
 
 - A regression test that reproduces the defect described in Background and fails on the pre-fix code.
 - Existing package tests stay green (`-count=1`).
-- A test proving the dry-run / guard path writes nothing (fail-closed on error).
+- ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.
 
 ## How to test
 
@@ -92,7 +96,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — **`git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing; the PR is held for the owner.
 
 ## Coordinator notes
 

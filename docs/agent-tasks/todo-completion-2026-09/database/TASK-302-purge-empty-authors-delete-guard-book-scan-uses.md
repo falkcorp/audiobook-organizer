@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-302-purge-empty-authors-delete-guard-book-scan-uses.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 3b515dcd-13e2-4fbd-a72e-ffe9e5e3f660 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-302 — purge-empty-authors delete-guard book scan uses a narrower byte-range bound than the sibling backfill already fixed for the identical bug (DB-01)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DB-01` (audit_database_operations.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DB-01` (audit_database_operations.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · database subagent · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · database subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
-Source: Wave 3 audit finding `DB-01` (audit_database_operations.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `DB-01` (audit_database_operations.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/database-302" -b agent/database-302-purge-empty-authors-delete-guard-book-sc origin/main
 cd "$REPO/.worktrees/database-302"
@@ -36,11 +36,17 @@ Why it matters: CountAuthorReferences backs the delete-author / purge-empty-auth
 - Pass 2 of CountAuthorReferences (the safety scan that decides whether an author is deletable) opens `snap.NewIter(&pebble.IterOptions{LowerBound: []byte("book:0"), UpperBound: []byte("book:;")})` (lines 324-327), justified by a comment at lines 308-323 admitting: 'a caller-supplied book ID starting outside that range would be invisible to pass 2, losing its LEGACY AuthorID reference... Whether any such row exists on the live library has NOT been measured.' The exact same bound shape (`book:0`..`book:;`) was identified as a real bug and FIXED in the sibling file internal/database/pebble_store_versiongroup_backfill.go (sentinel bumped v2->v3 on 2026-08-23, see lines 36-49 and 112-124 there): 'a letter-leading ID... would have been silently invisible to the v2 scan, with no error surfaced anywhere,' replaced with the true prefix range `book:`..`book;`. author_bookref.go was never updated to match.
 - Anchor: `internal/database/author_bookref.go:325` (audit `DB-01`, confidence high, severity high).
 - Related tracking: Not tracked as an action item anywhere seen -- the residual risk is only documented in a code comment in author_bookref.go itself ('RESIDUAL, recorded rather than guessed'), which does not cross-reference the sibling file's fix.
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — author_bookref.go:324-327 bounds book:0..book:; admit only digits after the colon; sibling pebble_store_versiongroup_backfill.go v2->v3 fixed the identical shape; CreateBook (pebble_store.go:2418-2426) accepts caller-supplied non-ULID ids unconditionally.
+  - Blast radius: CountAuthorReferences (delete-author / purge-empty-authors guard). Existing strings.Count(key, ':')!=1 filter keeps secondary indexes out, so widening is safe per the sibling precedent.
+  - Existing tests to extend: internal/database/author_bookref_test.go
+  - Standing-ban contact: none; author deletion has known open issues (CreateAuthor racy) — extra review care
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/database/author_bookref.go   # the file the finding is anchored to still exists
-  sed -n '319,331p' internal/database/author_bookref.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/database/author_bookref.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '30,55p' internal/database/author_bookref.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '106,130p' internal/database/author_bookref.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '302,333p' internal/database/author_bookref.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -60,7 +66,7 @@ Then, always:
 
 - A regression test that reproduces the defect described in Background and fails on the pre-fix code.
 - Existing package tests stay green (`-count=1`).
-- A test proving the dry-run / guard path writes nothing (fail-closed on error).
+- ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.
 
 ## How to test
 
@@ -93,7 +99,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — **`git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing; the PR is held for the owner.
 
 ## Coordinator notes
 

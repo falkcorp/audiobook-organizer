@@ -1,0 +1,116 @@
+[
+ {
+  "id": "DA-01",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "split_book_merge.go:67-176 GetBookByID/GetBookFiles/MoveBookFilesToBook/UpdateBook/SoftDeleteBook with zero locking; LockMergeRMW only in book_dedup.go:402-403; serialize.go documents three guarded paths, this is a real fourth.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "split_book_merge_test.go; POST /dedup/split-book-candidates/:id/merge (PermLibraryEditMetadata, wire_library_routes.go:46); bulk op split_book_bulk_merge.go:73 (ConcurrencyKey serializes only against itself). Racer: merge.Service.MergeBooks/CombineBooks or dedup.MergeBooks on the same book id.",
+  "existing_test_file": "internal/dedup/split_book_merge_test.go",
+  "prod_bans_touched": "none",
+  "notes": "Route reachable and auth-gated; brief's fix is the minimal correct one."
+ },
+ {
+  "id": "DA-02",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "Exactly the five unjournaled sites: engine.go:1373 (handleFileHashMatch auto), engine.go:4047 (ApplyVerdicts LLM high-confidence), handler.go:940/:1125/:1196 (bulk/manual HTTP). Only auto_resolve.go:299 and handler.go:1486 call MergeJournaled.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "FullScan Layer-1 auto-merge, ApplyVerdicts, 3 HTTP endpoints. handler.go uses h.mergeService (narrower than Engine); routing through MergeJournaled needs an interface-shape decision, not a one-line swap.",
+  "existing_test_file": "none for journal emission at these 5 sites",
+  "prod_bans_touched": "none directly; core dedup/merge — validate on the dedup sandbox",
+  "notes": "TODO.md:6523 MERGE-UNDO does not already track these gaps."
+ },
+ {
+  "id": "DB-01",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "author_bookref.go:324-327 bounds book:0..book:; admit only digits after the colon; sibling pebble_store_versiongroup_backfill.go v2->v3 fixed the identical shape; CreateBook (pebble_store.go:2418-2426) accepts caller-supplied non-ULID ids unconditionally.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "CountAuthorReferences (delete-author / purge-empty-authors guard). Existing strings.Count(key, ':')!=1 filter keeps secondary indexes out, so widening is safe per the sibling precedent.",
+  "existing_test_file": "internal/database/author_bookref_test.go",
+  "prod_bans_touched": "none; author deletion has known open issues (CreateAuthor racy) — extra review care"
+ },
+ {
+  "id": "SF-01",
+  "verdict": "PARTLY",
+  "severity_ok": true,
+  "evidence": "organizer.go:141-142 (FilePath==targetPath) returns success with no stat — the os.Stat at :124 only errors on err==nil&&IsDir, so a missing source falls through. BUT the second branch (owner.ID==book.ID, :187-188) sits inside `if targetInfo, err := os.Stat(targetPath); err == nil` at :174 — existence already proven there. Brief's 'also no stat' claim for branch 2 is wrong at HEAD.",
+  "fix_in_brief_correct": false,
+  "blast_radius": "OrganizeBook; Service.OrganizeOneBook (service.go:1424); OrganizeSingleFile (:794-804); itunes importer.go:1736-1741.",
+  "existing_test_file": "internal/organizer/organizer_test.go",
+  "prod_bans_touched": "none",
+  "notes": "Narrow the fix to :141-142 only. Directory sibling check (service.go:1490-1496) confirmed."
+ },
+ {
+  "id": "SV-02",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "RestoreBackup: if req.Verify { slog.Warn } then backup.RestoreBackup(..., req.Verify) and 200 with no verify field; backup.go:499-504 `if verify { slog.Info(\"not yet implemented\") }` — unimplemented at BOTH layers.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "handlers/system/handler_test.go, backup/backup_test.go; PermSettingsManage-gated (wire_system_routes.go:48).",
+  "existing_test_file": "internal/backup/backup_test.go, internal/server/handlers/system/handler_test.go",
+  "prod_bans_touched": "none; disaster-recovery path, review-critical"
+ },
+ {
+  "id": "DB-02",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "RunMigrations loop: m.Up(store), recordMigration (SetUserPreference), setVersion — three separate writes, no batch.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "migrations_extra_test.go; store.go:1380, testutil/integration.go:74.",
+  "existing_test_file": "internal/database/migrations_extra_test.go",
+  "prod_bans_touched": "none",
+  "notes": "Latent today (every registered Up is a Pebble no-op). Option (b) shared batch means changing ~60 Up signatures — larger than Effort M; prefer option (a) idempotency requirement + lint."
+ },
+ {
+  "id": "SF-02",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "Both runAIBatchPhase calls are bare statements; AIPhaseSummary discarded; ProcessBooksParallel returns nil regardless. AIPhaseSummary.Failed() exists (ai_batch_phase.go:415).",
+  "fix_in_brief_correct": true,
+  "blast_radius": "scanner_test.go, ai_batch_phase_test.go; callers service.go:455 (library.scan chunk loop) and folder_autoscan_op.go:90 treat nil as success — do NOT make an LLM outage fail an otherwise-good scan chunk; surface as non-fatal warning on the op record.",
+  "existing_test_file": "internal/scanner/scanner_test.go, internal/scanner/ai_batch_phase_test.go",
+  "prod_bans_touched": "scan reporting path — validate with unit mocks, never a real scan"
+ },
+ {
+  "id": "SF-03",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "All four `results, _ = src.Search…` discards confirmed; ProtectedSource.SearchByTitle/SearchByTitleAndAuthor (circuitbreaker.go:219-245) return non-nil errors when throttled or breaker-open.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "EnrichMissingISBNs (isbn.go:174-281), EnrichBookISBN (:87-134); no test targets this path.",
+  "existing_test_file": "none for this path",
+  "prod_bans_touched": "none; isbn.go touched by 3 of the last 5 commits on main — rebase carefully"
+ },
+ {
+  "id": "CI-01",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "Makefile.local.example:74 and :104 use `git merge-base --is-ancestor origin/main HEAD` — passes when HEAD is strictly ahead. TODO.md:371-372 documents the intended bidirectional `rev-list --left-right --count HEAD...origin/main` == `0 0`.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "Committed Makefile has no deploy targets; every developer's gitignored Makefile.local is copied from this example, so the bug is real in practice but unmeasurable from the repo.",
+  "existing_test_file": "none",
+  "prod_bans_touched": "IS the deploy gate; verify by running the corrected snippet against a deliberately-ahead branch, no deploy"
+ },
+ {
+  "id": "DB-03",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "migration014Up is a hardcoded no-op; migration014UpPebble fully implemented (flags FilePath containing '{' as LibraryState=needs_review), carries lint:ignore U1000 'not yet dispatched (2026-07-12)'. migration007Up shows the AsPebbleStore dispatch pattern. Untracked in TODO.md.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "migrations.go; runs once at startup; touches every book row with '{' in FilePath.",
+  "existing_test_file": "internal/database/migrations_extra_test.go",
+  "prod_bans_touched": "WRITES book.LibraryState — the field behind two live landmines (fix-library-states ban, scanner revert). Different value ('needs_review'), one-time, targeted; prefer the audit-first alternative (confirm zero live rows have '{', delete the dead code)."
+ },
+ {
+  "id": "SV-01",
+  "verdict": "CONFIRMED",
+  "severity_ok": true,
+  "evidence": "DeleteOperationHistory -> DeleteOperationsByStatus -> pebble_store_operations.go:368-399 iterates operation:..operation:~ (v1 keyspace). Route wired; web/src api.ts:2284 defines deleteOperationHistory with zero callers.",
+  "fix_in_brief_correct": true,
+  "blast_radius": "handler_test.go has RequiresStatus/RejectsNonTerminal tests that validate input only and would not catch this.",
+  "existing_test_file": "internal/server/handlers/operations/handler_test.go",
+  "prod_bans_touched": "none; no live UI caller — a landmine for a future feature"
+ }
+]

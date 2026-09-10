@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-045-build-a-dry-run-report-only-classifier-for-serie.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: aa6df42b-8bcf-47e9-ae26-fee95c833487 -->
+<!-- guid: 86f0f559-d7c3-5252-b317-9414ce1d4a43 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-045 — Build a dry-run report-only classifier for series that look like they were minted from a book title (TODO.md L4304)

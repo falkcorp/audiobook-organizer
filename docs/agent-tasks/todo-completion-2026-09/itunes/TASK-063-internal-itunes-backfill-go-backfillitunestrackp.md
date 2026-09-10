@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: fb267446-4c90-4f0b-8eb7-2ae760bc686e -->
+<!-- guid: f70f137f-76bb-5351-891e-bcc45bedb9fa -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-063 — internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug, not named in the TODO but identical pattern in the same file (PERF-5)

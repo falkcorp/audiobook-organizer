@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/operations/TASK-116-forward-iscanceled-through-reporterlogger-to-the.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: add63649-dcd6-41e6-94be-c4332d73df67 -->
+<!-- guid: d8500a41-1ecf-5368-8492-fbbd43202e7e -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-116 — Forward IsCanceled() through reporterLogger to the ops registry's cancellation signal (TODO.md L4586)

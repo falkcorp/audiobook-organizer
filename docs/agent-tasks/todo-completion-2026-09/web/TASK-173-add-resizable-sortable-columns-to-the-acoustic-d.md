@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-173-add-resizable-sortable-columns-to-the-acoustic-d.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 01f9b950-f16e-4929-b1c9-92fc3faf7184 -->
+<!-- guid: 0fe9289b-4519-58cc-ba98-c99817eb21f2 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-173 — Add resizable/sortable columns to the acoustic dedup candidates table (TODO.md L10660)

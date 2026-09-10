@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/README.md -->
-<!-- version: 3.2.0 -->
+<!-- version: 3.3.0 -->
 <!-- guid: 7a1e0c44-9d2b-4f08-bc31-2e5a6b7c8d90 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -19,9 +19,12 @@ tasks in parallel on isolated git worktrees.
 ## Current burndown — [`todo-completion-2026-09/`](todo-completion-2026-09/) (2026-09-10)
 
 **Start here.** [`BREAKDOWN-2026-09-10.md`](todo-completion-2026-09/BREAKDOWN-2026-09-10.md)
-is the live burndown: 176 briefs (111 carried forward from the 2026-08-21 package with
-their ids, 35 from a read-only codebase audit, 30 for data-loss/security `TODO.md`
-sections that had no brief). Pick a cut line in
+is the live burndown: 187 briefs (111 carried forward from the 2026-08-21 package with
+their ids, 35 from a read-only codebase audit, 41 for data-loss/security `TODO.md`
+items that had no brief — 13 of those are held for an owner decision, not worker tasks).
+Read [`FINAL-ANALYSIS-2026-09-10.md`](todo-completion-2026-09/FINAL-ANALYSIS-2026-09-10.md)
+first: it is the adversarial pass over the package, the recommended cut line
+(matrix §A rows 1–64) and the wave plan. Pick a cut line in
 [`PRIORITY-MATRIX.md`](todo-completion-2026-09/PRIORITY-MATRIX.md) (risk-ordered ×
 effort-ordered); every DONE/STALE/REAL verdict with its evidence is in
 [`RECONCILIATION-2026-09-10.md`](todo-completion-2026-09/RECONCILIATION-2026-09-10.md).

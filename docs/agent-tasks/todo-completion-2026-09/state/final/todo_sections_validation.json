@@ -1,0 +1,470 @@
+[
+ {
+  "brief": "TASK-335",
+  "section": "Activity-log reset feature + reauth gate (2026-09-07)",
+  "todo_lines": [
+   1045,
+   1049
+  ],
+  "still_open": "2 of 2",
+  "class_given": "security/data-loss",
+  "class_assessed": "security (step-up reauth) + data-loss-prevention (gated full-DB wipe) — both legit",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately."
+ },
+ {
+  "brief": "TASK-336",
+  "section": "`GET /operations/timeline` silently ignores its query filters (2026-09-07)",
+  "todo_lines": [
+   1192
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "weak data-loss — missing dry-run before an irreversible DELETE of operation-history rows (audit metadata, not book/library data)",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Heading and cited item are about two different endpoints (timeline filters vs DELETE history dry-run) — still a legitimate small guard to add."
+ },
+ {
+  "brief": "TASK-337",
+  "section": "### DO NOT RUN `fix-library-states` (under ## Every rescan reverts library_state…)",
+  "todo_lines": [
+   1294
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — confirmed real: running it would empty the ABS-visible library",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none — goal is fix-or-unregister the job, not run it (do not let the agent test-run it against prod)",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Section/line clean, class correct and severe. Coordinator must ensure no verification step actually invokes fix-library-states."
+ },
+ {
+  "brief": "TASK-338",
+  "section": "Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)",
+  "todo_lines": [
+   1366,
+   1461
+  ],
+  "still_open": "2 of 2",
+  "class_given": "data-loss",
+  "class_assessed": "mixed — 1366 (no delete-one-op endpoint) is a hygiene/feature gap; 1461 (writeback_batcher.Stop() doesn't join goroutines) is a real concurrent-write hazard to iTunes library files",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Neither item is literally about completed_at/zombie ops — both are follow-ons bundled under that heading. 1366 should be reclassified down; 1461 is the genuine risk."
+ },
+ {
+  "brief": "TASK-339",
+  "section": "### CodeQL: the repo's path-sanitizer barrier model does not credit SecureJoin… (under ## Real reflink detection via zdb DVA comparison)",
+  "todo_lines": [
+   1935
+  ],
+  "still_open": "1 of 1",
+  "class_given": "security",
+  "class_assessed": "security, but unresolved-root-cause — item lists 4 untested candidate causes and says 'next step is a canary, not another guess'",
+  "shape": "MIXED (needs a diagnostic canary before a real fix is codeable)",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "Section title is unrelated (reflink/zdb) to the cited item (CodeQL barrier); the item's own text says a guess-fix is not acceptable, it needs a canary/diagnosis step first."
+ },
+ {
+  "brief": "TASK-340",
+  "section": "Activity SQLite backend — follow-ups after the cutover",
+  "todo_lines": [
+   2088
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "correctness/data-hygiene (duplicate & placeholder book records) with real data-loss risk in any merge/fold repair if not done via repoint",
+  "shape": "CODE (large repair job, needs a folding/merge design)",
+  "goal_specific": false,
+  "bans_conflict": "none directly, but any merge of the 8,235-row dedup set must repoint not delete",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Section matches; scope is very large (three separate repair populations) for one brief, flag for splitting."
+ },
+ {
+  "brief": "TASK-341",
+  "section": "Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)",
+  "todo_lines": [
+   2218,
+   2221
+  ],
+  "still_open": "2 of 2",
+  "class_given": "data-loss",
+  "class_assessed": "correctness/data-hygiene, not data-loss — both items are explicitly 'counted, never touched'",
+  "shape": "CODE + policy decision",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "RECLASSIFY",
+  "why": "Section matches but the class tag is wrong — reporting/completeness gaps, not a data-loss or security risk."
+ },
+ {
+  "brief": "TASK-342",
+  "section": "Library scan killed by the watchdog while its own auto-backup ran (2026-09-05)",
+  "todo_lines": [
+   2304
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — dedup.MergeBooks hard-delete path has no audio-route guard before deleting merged rows",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none — fix adds a guard",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Cited item was found while investigating the watchdog incident but is a distinct bug from the section heading; class is correctly severe."
+ },
+ {
+  "brief": "TASK-343",
+  "section": "Re-calibrate the absolute title-distance gates for non-Latin scripts",
+  "todo_lines": [
+   2872,
+   2887,
+   2901
+  ],
+  "still_open": "3 of 3",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit: unguarded series deletes when all member books are trashed (SERIES-PHANTOM-REPAIR / -NORMALIZE / -DENUMBER-TRASHED-GAP)",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Section title is thematically unrelated to the three cited series-deletion-guard items — a grab-bag section; class assessment is sound."
+ },
+ {
+  "brief": "TASK-344",
+  "section": "Mask the remaining secrets returned by `GET /api/v1/config`",
+  "todo_lines": [
+   3344,
+   3345,
+   3346,
+   3347,
+   3348
+  ],
+  "still_open": "5 of 5",
+  "class_given": "security",
+  "class_assessed": "security — legit credential exposure via API response",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Clean match on section, class, and shape."
+ },
+ {
+  "brief": "TASK-345",
+  "section": "Move database backups off the database's own filesystem",
+  "todo_lines": [
+   3395
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit",
+  "shape": "DECISION (item literally says 'Decide whether… should warn')",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "The item's own text is a policy decision, not a spec an agent can implement."
+ },
+ {
+  "brief": "TASK-346",
+  "section": "Prod has `chapter_consolidation_threshold_min = 0`, which disables multi-file grouping",
+  "todo_lines": [
+   3589
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit, real corruption already written to prod rows",
+  "shape": "PROD-RUN/MIXED — building the repair op is CODE, but closing the item means repairing rows in the live database",
+  "goal_specific": false,
+  "bans_conflict": "scan ban (history notes counts fell via later scan/organize passes) and book_file ban (fragment-row repair likely repoints/removes book_file rows)",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "A worktree PR can build a repair tool, but closing this item means running it against damaged prod rows, which collides with two standing bans."
+ },
+ {
+  "brief": "TASK-347",
+  "section": "Finish the LLM fallback chain — stages 2 through 4",
+  "todo_lines": [
+   3842
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "correctness/completeness feature (persist deferred parse candidates), not data-loss or security",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "RECLASSIFY",
+  "why": "Section matches exactly, but this is a pipeline-completeness feature, mislabelled into the data-loss/security bucket."
+ },
+ {
+  "brief": "TASK-348",
+  "section": "### Task 1 apply step (under ## The \"Unknown Author\" repair is two populations, and only one is cheap)",
+  "todo_lines": [
+   3966
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit, and the item itself already mandates REPOINT not delete",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none — explicitly repoints, touches author rows not book_file",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Task 1 (dry-run+apply) is independent of and must precede Task 2's route decision, so this slice is safely codeable now."
+ },
+ {
+  "brief": "TASK-349",
+  "section": "Data repair",
+  "todo_lines": [
+   4019
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "correctness/data-integrity, decision-gated — merging duplicate author rows carries data-loss risk if mis-executed",
+  "shape": "DECISION (item says 'Decide how to repair…')",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "The cited text is purely a decision request, not an implementable spec."
+ },
+ {
+  "brief": "TASK-350",
+  "section": "### Fix (under ## Two rows with the same FilePath in one batch now corrupt Book.Duration)",
+  "todo_lines": [
+   4241,
+   4242,
+   4244
+  ],
+  "still_open": "3 of 3",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit, real Duration-field corruption from a read-committed race",
+  "shape": "MIXED — 4241/4242 are clean CODE (within-batch dedup map); 4244 is decide+measure existing duplicate book_file rows",
+  "goal_specific": false,
+  "bans_conflict": "4244's natural follow-through (a repair pass on duplicate book_file rows) hits the book_file ban; only counting them is safe",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Split in execution: dispatch 4241/4242 as code; 4244 must stop at measurement and surface the decision."
+ },
+ {
+  "brief": "TASK-351",
+  "section": "Repair the book rows that were written one-per-track",
+  "todo_lines": [
+   4388
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss-adjacent correctness issue; the cited item is explicitly 'Decide the repair shape with the user before writing it'",
+  "shape": "DECISION",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "Item is a decision gate, not a spec — collapsing per-track book rows without a chosen shape is exactly the write an agent should not improvise."
+ },
+ {
+  "brief": "TASK-352",
+  "section": "`CreateAuthor` is check-then-create with no atomicity — mints duplicate author rows",
+  "todo_lines": [
+   4630
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "correctness/data-integrity, decision-gated ('Decide how to merge… and whether')",
+  "shape": "DECISION",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "Item text is a decision request about merge policy, not an implementable fix."
+ },
+ {
+  "brief": "TASK-353",
+  "section": "### SEC-BACKUP-ABSPATH item (under ## `recoverPebbleClosed` does not cover the WAL-write leg…)",
+  "todo_lines": [
+   4726
+  ],
+  "still_open": "1 of 1",
+  "class_given": "security",
+  "class_assessed": "security — legit (zip-slip/absolute-path handling in backup restore)",
+  "shape": "DECISION (item says 'Decide whether the backup restore path should…')",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "Real heading is an unrelated WAL-teardown bug; the decision gate blocks straight dispatch."
+ },
+ {
+  "brief": "TASK-354",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   4967
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit (no undo-ledger journaling + no running-scan check on an apply path)",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none — only checks for a running scan",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Section title is the item's own bold name (cosmetic); class and shape are sound."
+ },
+ {
+  "brief": "TASK-355",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   5018
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit (unguarded ref-count denominator, series-stranding risk)",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Cosmetic section-title pattern; class and fix shape are correct."
+ },
+ {
+  "brief": "TASK-356",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   5139
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — severe: memdb-incomplete reads feed an orphan-file HARD DELETE with no completeness guard, i.e. irreversible file loss on stale data",
+  "shape": "CODE (add requireTablesComplete/ErrMemdbIncomplete guard, matching series/author getters)",
+  "goal_specific": false,
+  "bans_conflict": "none — fix adds a guard",
+  "dispatch_verdict": "DISPATCH",
+  "why": "One of the highest-severity items in the batch; prioritize."
+ },
+ {
+  "brief": "TASK-357",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   5163
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit and already CONFIRMED FIRED IN PROD 2026-08-24",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "A real, already-materialized incident; treat as urgent."
+ },
+ {
+  "brief": "TASK-358",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   5246
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — legit for the two supporting defects (error-folded-to-absent in memdb read; discarded error in GetAllAuthorBookCounts) feeding a purge gate",
+  "shape": "CODE, with a caveat",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "The headline ask ('correct the STALE headline') is a TODO.md text edit the coordinator owns; only the two supporting code defects are dispatchable."
+ },
+ {
+  "brief": "TASK-359",
+  "section": "### item under ## `recoverPebbleClosed` does not cover the WAL-write leg",
+  "todo_lines": [
+   5282
+  ],
+  "still_open": "1 of 1",
+  "class_given": "data-loss",
+  "class_assessed": "data-loss — severe: the purge-empty-authors safety counter misses three populations (junction co-authors, all-trashed, all-non-primary), so it can wrongly clear an author who still has files",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "A broken safety-net feeding a destructive purge; high priority. Same file family as DB-01 (TASK-302)."
+ },
+ {
+  "brief": "TASK-360",
+  "section": "C716 resolved: the \"3,954-book API-vs-store gap\" decomposes…",
+  "todo_lines": [
+   10432
+  ],
+  "still_open": "1 of 1",
+  "class_given": "security",
+  "class_assessed": "security/CI-tooling hygiene — modeling log sanitizers for CodeQL, not a live runtime exploit",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Heading is unrelated to the cited CA12 CodeQL-model item; fine to dispatch but severity is lower than 'security' implies."
+ },
+ {
+  "brief": "TASK-361",
+  "section": "2026-06-22 security-sweep: the items still open after the status pass",
+  "todo_lines": [
+   10906,
+   10908
+  ],
+  "still_open": "2 of 2",
+  "class_given": "security",
+  "class_assessed": "security — legit: plaintext credential file (SEC-2) and missing CSP header (SEC-4)",
+  "shape": "CODE (SEC-2 has a light decision: opt-in/local-only default)",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Cleanest match in the batch."
+ },
+ {
+  "brief": "TASK-362",
+  "section": "### Compound narrator names are not split (11964) and ### Missing-file lane follow-ups after #2614 (15004) — two unrelated subsections, neither matching the brief's \"## Update 2026-08-16\" umbrella",
+  "todo_lines": [
+   11964,
+   15004
+  ],
+  "still_open": "2 of 2",
+  "class_given": "security",
+  "class_assessed": "security — 11964 legit (OperationDef.Permissions enforced by nothing, and enforcement code is about to be deleted); 15004 is a minor accepted-risk dependency bump now unblocked",
+  "shape": "CODE",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch."
+ },
+ {
+  "brief": "TASK-363",
+  "section": "### Decision needed (under ## MISSING (op now built, run pending): no book had stored chapters…)",
+  "todo_lines": [
+   16927,
+   16949,
+   16960,
+   16966
+  ],
+  "still_open": "4 of 4",
+  "class_given": "security",
+  "class_assessed": "security — the four items are real (SSO edge config, LAN bind, JWT rotation, systemd hardening) but none is a repo code change",
+  "shape": "PROD-RUN/DECISION — SSO edge needs external Cloudflare config; BIND and SYSTEMD are 'needs_design, owner decision required'; JWT is a prod secret rotation followed by 'redeploy'",
+  "goal_specific": false,
+  "bans_conflict": "deploy ban (JWT item says 'redeploy'); scan ban (section offers 'run library.scan' for a sibling item)",
+  "dispatch_verdict": "HOLD-FOR-OWNER",
+  "why": "Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief."
+ },
+ {
+  "brief": "TASK-364",
+  "section": "SEC: origin is reachable from the LAN — \"bind loopback\" is NOT achievable as specified",
+  "todo_lines": [
+   17185,
+   17307,
+   17329
+  ],
+  "still_open": "3 of 3",
+  "class_given": "data-loss/security",
+  "class_assessed": "17185 is legit data-loss (unrepointed sync ID orphaned on a hard-delete path); 17307 and 17329 are blocked on unresolved owner design decisions",
+  "shape": "MIXED — 17185 is CODE (hook RepointSyncItem into the 3 remaining call sites); 17307/17329 are DECISION",
+  "goal_specific": false,
+  "bans_conflict": "none",
+  "dispatch_verdict": "DISPATCH",
+  "why": "Dispatch the 17185 fix now; 17307/17329 cannot be closed by code alone and wait on the owner's design calls."
+ }
+]

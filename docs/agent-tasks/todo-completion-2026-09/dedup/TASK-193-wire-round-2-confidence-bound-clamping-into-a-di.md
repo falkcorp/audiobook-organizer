@@ -1,11 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-193-wire-round-2-confidence-bound-clamping-into-a-di.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 6b1a5d03-38b0-4c53-b544-03f2621ff390 -->
+<!-- guid: 397faff8-e793-56dd-9f15-1a47ce737f96 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-193 — Wire Round-2 confidence-bound clamping into a distinct apply_confidence path; keep the live display score raw (DEC-10)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: Same absence as TASK-192: apply_confidence 0 hits repo-wide. · risk **correctness** · effort **M**
+> ⚠️ **Anchor drift (2026-09-10, plan-auditor):** `grep 'SetKindConfidenceOverrides' internal/server/registry_wire.go` → 0 hits (same as TASK-192); re-derive the wiring state before executing. Re-derive the anchor before editing; the brief body below is unchanged from 08-21.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — Same absence as TASK-192 (apply_confidence = 0 hits repo-wide). Both briefs cite DECISIONS-PENDING row 10 and overlap on compose.go / calibrate_composite.go. Recommendation: merge into TASK-192 - same owner decision, same files, near-duplicate scope; TASK-193's wider exact_files list should become TASK-192's.
 

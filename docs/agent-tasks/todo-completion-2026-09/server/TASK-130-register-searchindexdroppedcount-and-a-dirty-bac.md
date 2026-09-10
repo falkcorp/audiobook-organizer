@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server/TASK-130-register-searchindexdroppedcount-and-a-dirty-bac.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 20969099-2332-468b-92b6-2de8a87e5afc -->
+<!-- guid: e8293997-3f57-5ed8-a6bc-9d42e49b0bcc -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-130 — Register SearchIndexDroppedCount (and a dirty-backlog gauge) as Prometheus metrics (TODO.md L3384)

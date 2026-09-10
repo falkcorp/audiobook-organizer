@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-076-author-narrator-swap-repair-routed-through-the-r.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: f39b31b0-6002-4b12-bf6c-51bb7b3df9c1 -->
+<!-- guid: 3e41d668-1f68-5ab7-b1cb-1e6aecbf2fd8 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-076 — Author-narrator swap repair, routed through the review queue (cross-table population, distinct from the existing per-book fix-author-narrator-swap job) (TODO.md L5281)

@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/missing-file-lane/TASK-108-add-the-review-rating-half-of-app-to-server-read.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: c1b1703f-aec6-432a-9c27-b8f07f845bd6 -->
+<!-- guid: 3f384385-9798-5329-8875-54499a11fcb1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-108 — Add the review/rating half of app-to-server reading-state sync (reading status half already exists) (TODO.md L8675)

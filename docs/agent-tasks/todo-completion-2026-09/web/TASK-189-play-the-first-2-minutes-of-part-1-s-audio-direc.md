@@ -1,11 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-189-play-the-first-2-minutes-of-part-1-s-audio-direc.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 9a724df9-9515-4388-8e82-4def72e8f2f8 -->
+<!-- guid: e2df318b-d34f-587d-9b23-d2b20d7f1390 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-189 — Play the first ~2 minutes of part 1's audio directly from the review metadata panel, reusing the existing bounded audio-sample endpoint (REVIEW-PREVIEW)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: internal/server/audio_sample.go:47 still `context.WithTimeout(c.Request.Context(), 120)` (bare-nanoseconds bug, not 120*time.Second) and :42 still `FilePath: book.FilePath` (no GetBookFiles multi-file resolution). No '/sample' references in any MetadataPanel.tsx under web/src/components/review/. No audio_sample_test.go exists. Unchanged since 09-02. · risk **correctness** · effort **M**
+> ⚠️ **Anchor drift (2026-09-10, plan-auditor):** `grep 'dbBook.FilePath = dirPath' internal/scanner/scanner.go` → 0 hits; equivalent assignment is toUpdate.FilePath = dirPath at line 2151 — variable renamed, pattern likely still present. Re-derive the anchor before editing; the brief body below is unchanged from 08-21.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — audio_sample.go:47 still context.WithTimeout(ctx, 120) (bare-nanoseconds bug) and :42 FilePath: book.FilePath, no GetBookFiles; MetadataPanel.tsx has 0 '/sample' hits; audio_sample_test.go absent. Recommendation: keep - contains a real latent bug (120ns timeout).
 

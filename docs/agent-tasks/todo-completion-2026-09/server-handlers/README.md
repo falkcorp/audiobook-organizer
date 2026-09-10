@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 31c19e91-d1a5-43fb-b02e-6b3960064fa4 -->
 <!-- last-edited: 2026-09-10 -->
 
 # Workstream — server-handlers (todo-completion-2026-09)
 
-19 tasks: 9 carried forward from the 2026-08-21 package (ids kept), 10 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
+22 tasks: 9 carried forward from the 2026-08-21 package (ids kept), 13 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
 
 | Task | Kind | Risk | Priority | Effort | Title | Evidence |
 |---|---|---|---|---|---|---|
@@ -24,10 +24,13 @@
 | [TASK-319](TASK-319-delete-operations-history-deletes-from-the-dead.md) | new-finding | correctness | P2 | S | DELETE /operations/history deletes from the dead v1 `operation:` keyspace; repor | internal/server/handlers/operations/handler.go:244 |
 | [TASK-321](TASK-321-search-index-bulk-backfill-is-a-sequential-per-b.md) | new-finding | perf | P1 | M | Search-index bulk backfill is a sequential per-book N+1 (author/series/tags) wit | internal/server/server_search.go:63 |
 | [TASK-328](TASK-328-ipratelimiter-sweeps-the-entire-ip-map-under-one.md) | new-finding | perf | P3 | S | IPRateLimiter sweeps the entire IP map under one mutex on every request | internal/server/middleware/ratelimit.go:47 |
-| [TASK-336](TASK-336-get-operations-timeline-silently-ignores-its-que.md) | new-todo | data-loss | P1 | M | `GET /operations/timeline` silently ignores its query filters | TODO.md lines 1192 |
-| [TASK-338](TASK-338-terminal-ops-never-get-completed-at-so-they-ling.md) | new-todo | data-loss | P1 | M | Terminal ops never get `completed_at`, so they linger as zombies | TODO.md lines 1366, 1461 |
-| [TASK-343](TASK-343-re-calibrate-the-absolute-title-distance-gates-f.md) | new-todo | data-loss | P1 | M | Re-calibrate the absolute title-distance gates for non-Latin scripts | TODO.md lines 2872, 2887, 2901 |
-| [TASK-361](TASK-361-2026-06-22-security-sweep-the-items-still-open-a.md) | new-todo | security | P1 | M | 2026-06-22 security-sweep: the items still open after the status pass | TODO.md lines 10906, 10908 |
+| [TASK-336](TASK-336-full-application-database-reset-future-gated.md) | new-todo | data-loss | P1 | L | Full-application-database reset (future, GATED) | TODO.md lines 1049 |
+| [TASK-337](TASK-337-add-a-dry-run-count-mode-to-delete-operations-hi.md) | new-todo | data-loss | P1 | M | Add a dry-run / count mode to `DELETE /operations/history` | TODO.md lines 1192 |
+| [TASK-339](TASK-339-there-is-no-delete-one-op-endpoint.md) | new-todo | correctness | P1 | M | There is no delete-one-op endpoint | TODO.md lines 1366 |
+| [TASK-345](TASK-345-series-phantom-repair-repair-the-series-ids-that.md) | new-todo | data-loss | P1 | L | SERIES-PHANTOM-REPAIR — Repair the series IDs that are ALREADY phantom | TODO.md lines 2872 |
+| [TASK-346](TASK-346-series-normalize-trashed-gap-mergeseriesgrouphel.md) | new-todo | data-loss | P1 | M | SERIES-NORMALIZE-TRASHED-GAP — `mergeSeriesGroupHelper` (`internal/server/duplic | TODO.md lines 2887 |
+| [TASK-365](TASK-365-sec-2-bootstrap-still-writes-plaintext-credentia.md) | new-todo | security | P1 | M | SEC-2 — bootstrap still writes plaintext credential files (`internal/server/bo | TODO.md lines 10906 |
+| [TASK-366](TASK-366-sec-4-residue-no-csp-header-yet-middleware-comme.md) | new-todo | security | P1 | M | SEC-4 residue — no CSP header yet (middleware comment defers until a nonce/hash  | TODO.md lines 10908 |
 
 ## Ground rules
 

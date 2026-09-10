@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-329-dashboard-count-widgets-silently-show-0-when-the.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 18490850-f6c4-45d5-b7d1-60ad62e16e91 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -7,7 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `WEB-03` (audit_web.json)
 
-**Priority:** P1 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P1 · **Effort:** S · **Recommended subagent:** Haiku-class · web subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `WEB-03` (audit_web.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
@@ -15,7 +15,7 @@ Source: Wave 3 audit finding `WEB-03` (audit_web.json). Verified at HEAD `42d187
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/web-329" -b agent/web-329-dashboard-count-widgets-silently-show-0 origin/main
 cd "$REPO/.worktrees/web-329"
@@ -38,8 +38,8 @@ Why it matters: This is exactly the standing 'loading/error/empty/populated must
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f web/src/pages/Dashboard.tsx   # the file the finding is anchored to still exists
-  sed -n '218,230p' web/src/pages/Dashboard.tsx   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e web/src/pages/Dashboard.tsx   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '218,255p' web/src/pages/Dashboard.tsx   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +91,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

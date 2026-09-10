@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-162-reformat-metadata-tags-in-browse-by-tag-strip-pr.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 5aee0740-4a70-454a-84b6-297332154079 -->
+<!-- guid: e02f7052-17e9-5fe7-bfca-10cab9aef5c1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-162 — Reformat metadata:* tags in Browse by Tag: strip prefix, 'key: value' spacing (TODO.md L1350)

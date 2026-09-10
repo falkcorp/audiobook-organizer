@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-301-unattended-auto-merge-paths-exact-file-hash-matc.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: c87b0753-6bb1-45c0-a73c-e02034d8c02a -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-301 — Unattended auto-merge paths (exact file-hash match, LLM high-confidence verdict) and several bulk/manual HTTP merge endpoints bypass MergeJournaled, so they write no reversal journal -- broader than the tracked MERGE-UNDO scope (DA-02)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-02` (audit_dedup_activity.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-02` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** 1 · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
-Source: Wave 3 audit finding `DA-02` (audit_dedup_activity.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `DA-02` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/dedup-301" -b agent/dedup-301-unattended-auto-merge-paths-exact-file-h origin/main
 cd "$REPO/.worktrees/dedup-301"
@@ -36,11 +36,21 @@ Why it matters: TODO.md:6523 (MERGE-UNDO) already tracks that UnmergeAuto has no
 - internal/dedup/merge_journaled.go's doc comment (lines 17-26) states the design goal explicitly: 'This sequence used to live only inside autoMergeCertain ... Centralising it here is what makes "every merge is reversible" a property of the engine rather than a habit of one caller.' Grep for mergeService.MergeBooks vs .MergeJournaled( across the codebase shows only TWO call sites use MergeJournaled: auto_resolve.go:299 (Tier-1 CERTAIN auto-resolve) and internal/server/handlers/dedup/handler.go:1486 (the single-candidate manual-apply endpoint, whose own comment at handler.go:936-941 says 'Refuse rather than merge irreversibly ... a merge a human dispatched by keystroke is precisely the one most likely to be a mistake'). Five other live merge-shaped call sites call mergeService.MergeBooks directly with NO journal entry: engine.go:1373 (checkExactFileHash/handleFileHashMatch -- fires automatically and unattended on every FullScan Layer-1 pass whenever config.Dedup.AutoMergeEnabled is on, with no CERTAIN-band or corroboration gate beyond same-author+same-title+file-hash match), engine.go:4047 (ApplyVerdicts' LLM high-confidence auto-merge path), and internal/server/handlers/dedup/handler.go:940 (bulk cluster-merge), :1125 (bulk candidate-merge -- its own adjacent comment literally calls this 'the hardest write in the system to undo', applycap.Refuse comment ~line 1105-1111), and :1196 (the generic POST /audiobooks/merge endpoint with an explicit body.BookIDs list).
 - Anchor: `internal/dedup/engine.go:1373` (audit `DA-02`, confidence high, severity high).
 - Related tracking: TODO.md:6523 MERGE-UNDO (tracks a narrower/stale version of this gap -- pre-dates merge_journaled.go and only names the review lane, not the two automatic auto-merge triggers or the three bulk/manual HTTP endpoints)
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — Exactly the five unjournaled sites: engine.go:1373 (handleFileHashMatch auto), engine.go:4047 (ApplyVerdicts LLM high-confidence), handler.go:940/:1125/:1196 (bulk/manual HTTP). Only auto_resolve.go:299 and handler.go:1486 call MergeJournaled.
+  - Blast radius: FullScan Layer-1 auto-merge, ApplyVerdicts, 3 HTTP endpoints. handler.go uses h.mergeService (narrower than Engine); routing through MergeJournaled needs an interface-shape decision, not a one-line swap.
+  - Existing tests to extend: none for journal emission at these 5 sites
+  - Standing-ban contact: none directly; core dedup/merge — validate on the dedup sandbox
+  - Note: TODO.md:6523 MERGE-UNDO does not already track these gaps.
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/dedup/engine.go   # the file the finding is anchored to still exists
+  test -e internal/dedup/engine.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '11,32p' internal/dedup/engine.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '1099,1117p' internal/dedup/engine.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   sed -n '1367,1379p' internal/dedup/engine.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '4041,4053p' internal/dedup/engine.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '934,946p' internal/server/handlers/dedup/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '1480,1492p' internal/server/handlers/dedup/handler.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -60,7 +70,7 @@ Then, always:
 
 - A regression test that reproduces the defect described in Background and fails on the pre-fix code.
 - Existing package tests stay green (`-count=1`).
-- A test proving the dry-run / guard path writes nothing (fail-closed on error).
+- ONLY if the fix adds or changes a write/apply/repair path (see Idempotency / Rollback): a test proving the dry-run / guard path writes nothing (fail-closed on error). A pure code change (lock, bound, check, propagated error) does not need this — do not add a dry-run surface to satisfy it.
 
 ## How to test
 
@@ -93,7 +103,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-**This task touches persisted data, files on disk, or an apply path. `git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — **`git revert` does NOT restore data.** Mandatory: the op/endpoint defaults to dry-run / `apply=false` and prints what it WOULD change; the apply path journals enough to undo; a test proves the dry-run writes nothing; the PR is held for the owner.
 
 ## Coordinator notes
 

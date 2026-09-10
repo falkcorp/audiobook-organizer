@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: c3644dcb-4cc5-4d87-94fa-028699a28039 -->
+<!-- guid: 3f16c7aa-314d-58bd-a72d-7c480502100d -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-004 — Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion identically (TODO.md L3889)

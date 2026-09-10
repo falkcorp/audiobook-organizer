@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/scanner/TASK-309-inline-ai-parse-phase-result-is-discarded-by-the.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 024835ae-bcc2-4d7e-985f-282ae502b980 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-309 — Inline AI-parse phase result is discarded by the scan, so a fully-aborted LLM phase (revoked key, quota exhausted, 3+ batch failures) still lets library.scan report success (SF-02)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · scanner subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · scanner subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
-Source: Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/scanner-309" -b agent/scanner-309-inline-ai-parse-phase-result-is-discarde origin/main
 cd "$REPO/.worktrees/scanner-309"
@@ -35,11 +35,20 @@ Why it matters: This is exactly the pattern CLAUDE.md/the mission calls out: "Op
 
 - runAIBatchPhase returns an AIPhaseSummary whose own doc comment (internal/scanner/ai_batch_phase.go:61-66) says "Every failure in this phase is a log.Warn and a `return nil` ... The queued library.ai-parse operation reports this summary into its own operation record so a run that did nothing cannot show up green." scanner.go:1705 and scanner.go:1714 call `runAIBatchPhase(...)` as a bare statement — the returned AIPhaseSummary is never assigned to a variable, so `.Failed()`, `.String()`, and `.FailureDetails()` (which the queued path at internal/server/library_ai_parse_op.go:143-167 uses to turn a failed phase into `reporter.Log(WARN, ...)` plus `return fmt.Errorf(...)`) are never consulted here. ProcessBooksParallel (scanner.go:1106) always falls through to `return nil` at line 1728 regardless of what the AI phase did. ProcessBooksParallel's own callers (internal/scanner/service.go:455, the library.scan chunk loop, and internal/server/folder_autoscan_op.go:90) treat that nil as the definitive chunk/op success signal.
 - Anchor: `internal/scanner/scanner.go:1705` (audit `SF-02`, confidence high, severity critical).
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — Both runAIBatchPhase calls are bare statements; AIPhaseSummary discarded; ProcessBooksParallel returns nil regardless. AIPhaseSummary.Failed() exists (ai_batch_phase.go:415).
+  - Blast radius: scanner_test.go, ai_batch_phase_test.go; callers service.go:455 (library.scan chunk loop) and folder_autoscan_op.go:90 treat nil as success — do NOT make an LLM outage fail an otherwise-good scan chunk; surface as non-fatal warning on the op record.
+  - Existing tests to extend: internal/scanner/scanner_test.go, internal/scanner/ai_batch_phase_test.go
+  - Standing-ban contact: scan reporting path — validate with unit mocks, never a real scan
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/scanner/scanner.go   # the file the finding is anchored to still exists
-  sed -n '1699,1711p' internal/scanner/scanner.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/scanner/scanner.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '1100,1112p' internal/scanner/scanner.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '1699,1734p' internal/scanner/scanner.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '55,72p' internal/scanner/ai_batch_phase.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '449,461p' internal/scanner/service.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '84,96p' internal/server/folder_autoscan_op.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '137,173p' internal/server/library_ai_parse_op.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +100,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

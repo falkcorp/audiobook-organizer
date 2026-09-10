@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-005-wire-onlyparsedtranscription-style-filtering-int.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 28ce1958-845e-4685-a484-e02aef35c02c -->
+<!-- guid: e95108d6-ed13-5a41-aa9e-c58546e89b5c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-005 — Wire OnlyParsedTranscription-style filtering into the interactive audiobooks list endpoint (TODO.md L10728)

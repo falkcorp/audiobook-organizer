@@ -1,0 +1,93 @@
+{
+ "audited_at": "2026-09-10",
+ "head": "42d187168",
+ "package_head": "17db73953",
+ "header_lint": {
+  "files_checked": 219,
+  "fail_count": 0,
+  "path_mismatches": 0,
+  "duplicate_guids_intra_package": 0,
+  "duplicate_guids_vs_archive": 111,
+  "note": "every carried brief reused its archive twin's guid — fixed by the generator (uuid5 of the new path)"
+ },
+ "anchors_new": {
+  "total": 65,
+  "file_exists_fail": [
+   "TASK-339 .github/codeql/models/go-sanitizers.model.yml (only path-sanitizers.model.yml exists)"
+  ],
+  "broken_predicate": [
+   "TASK-332 test -f on a directory web/src/pages/__tests__"
+  ],
+  "zero_hit_grep": [
+   "TASK-359"
+  ],
+  "wrong_paragraph_grep": [
+   "TASK-336",
+   "TASK-338",
+   "TASK-339",
+   "TASK-340",
+   "TASK-342",
+   "TASK-343",
+   "TASK-346",
+   "TASK-348",
+   "TASK-360",
+   "TASK-363",
+   "TASK-364"
+  ],
+  "plausible_yes": 48,
+  "plausible_unsure": [
+   "TASK-313",
+   "TASK-314",
+   "TASK-315",
+   "TASK-310",
+   "TASK-317",
+   "TASK-341",
+   "TASK-349",
+   "TASK-351",
+   "TASK-362"
+  ]
+ },
+ "reverify_carried": {
+  "briefs_ran": 111,
+  "still_open": 106,
+  "looks_done": 0,
+  "broken_anchor": 5,
+  "broken_ids": [
+   "TASK-192",
+   "TASK-193",
+   "TASK-071",
+   "TASK-129",
+   "TASK-189"
+  ]
+ },
+ "collisions_same_wave": [
+  {
+   "file": "internal/plugins/maintenance/author_strip_merge.go",
+   "tasks": [
+    "TASK-341",
+    "TASK-349",
+    "TASK-352"
+   ]
+  },
+  {
+   "file": "internal/database/pebble_store.go",
+   "tasks": [
+    "TASK-355",
+    "TASK-357"
+   ]
+  },
+  {
+   "file": "internal/backup/",
+   "tasks": [
+    "TASK-345",
+    "TASK-353"
+   ]
+  }
+ ],
+ "matrix_stale_paths": [
+  "row 8 TASK-140",
+  "row 34 TASK-040 — anchors point at the undated docs/agent-tasks/todo-completion/ path"
+ ],
+ "structure_missing": [],
+ "tool_calls_used": 28
+}

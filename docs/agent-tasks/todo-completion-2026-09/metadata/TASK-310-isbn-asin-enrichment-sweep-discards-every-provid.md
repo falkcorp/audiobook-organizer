@@ -1,21 +1,21 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/metadata/TASK-310-isbn-asin-enrichment-sweep-discards-every-provid.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: ab005c24-90d8-49f2-84cc-46b9b784a45c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-310 — ISBN/ASIN enrichment sweep discards every provider search error, making a circuit-breaker-open or throttled provider indistinguishable from a legitimate zero-result search (SF-03)
 
-> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json)
+> **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**
 
-**Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Depends on:** none · **Wave:** 1 
+**Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
-Source: Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
+Source: Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 
 ## ⛔ START HERE (do this first, exactly)
 
 ```bash
 # ⛔ START HERE — do not touch code before this block succeeds
-REPO=/path/to/audiobook-organizer   # adjust to your clone
+REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer   # the primary checkout (same path convention as every carried brief)
 git -C "$REPO" fetch origin
 git -C "$REPO" worktree add "$REPO/.worktrees/metadata-310" -b agent/metadata-310-isbn-asin-enrichment-sweep-discards-ever origin/main
 cd "$REPO/.worktrees/metadata-310"
@@ -35,11 +35,16 @@ Why it matters: The nightly EnrichMissingISBNs sweep (isbn.go:174-281) walks the
 
 - searchSourceForISBN (isbn.go:394-414) and searchSourceForASIN (isbn.go:418-435) call `results, _ = src.SearchByTitleAndAuthor(ctx, title, author)` (lines 399, 423) and `results, _ = src.SearchByTitle(ctx, title)` (lines 402, 426), discarding the error return entirely. The metadata.MetadataSource these run against is typically internal/metadata.ProtectedSource (circuitbreaker.go:220-234, :236-250), whose SearchByTitle/SearchByTitleAndAuthor return a real error whenever `ps.allowThrottle(ctx)` rejects the call (rate limit) or `ps.breaker.AllowRequest()` rejects it (circuit open after repeated failures) — i.e. exactly the conditions this package's own sibling code (isbn.go's cousin, service_apply.go, the throttle registry) treats as first-class, loggable events elsewhere. Here the error is thrown away before the caller (EnrichBookISBN, isbn.go:87-114 and :117-134) ever sees it, so a provider outage renders as `isbn == ""` / `asin == ""`, the same value a genuine "no such book" search produces.
 - Anchor: `internal/metafetch/isbn.go:399` (audit `SF-03`, confidence high, severity critical).
+- **Adversarial re-check (2026-09-10, `state/final/adversarial_top11.json`): CONFIRMED** — All four `results, _ = src.Search…` discards confirmed; ProtectedSource.SearchByTitle/SearchByTitleAndAuthor (circuitbreaker.go:219-245) return non-nil errors when throttled or breaker-open.
+  - Blast radius: EnrichMissingISBNs (isbn.go:174-281), EnrichBookISBN (:87-134); no test targets this path.
+  - Existing tests to extend: none for this path
+  - Standing-ban contact: none; isbn.go touched by 3 of the last 5 commits on main — rebase carefully
 
 - **Re-verify these anchors before editing** — a zero-hit grep means STOP and report:
   ```bash
-  test -f internal/metafetch/isbn.go   # the file the finding is anchored to still exists
-  sed -n '393,405p' internal/metafetch/isbn.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  test -e internal/metafetch/isbn.go   # the file the finding is anchored to still exists (-e: a directory anchor is valid too)
+  sed -n '81,120p' internal/metafetch/isbn.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
+  sed -n '388,441p' internal/metafetch/isbn.go   # expect the code described under Background (drifted lines: re-find by the quoted text)
   ```
 
 ## Step-by-step
@@ -91,7 +96,10 @@ STOP — report done with exact counts (`COMPLETED: n — ...` / `REMAINING: n �
 
 ## Idempotency / Rollback
 
-Pure code change: rollback = `git revert` the commit. If the re-verify greps show the fix already present, run acceptance instead of re-implementing.
+Decide this FIRST and write the answer in your report: **does the fix add or change a path that writes, moves, or deletes persisted data or files** (an apply/repair/delete/migration path)?
+
+- **NO** — the fix is a lock, a bound, a check, an error propagated, a header, a config value: pure code change. Rollback = `git revert` the commit. Already-done check = the re-verify anchors above show the new code (add the exact `grep -n '<new symbol or string>' <file>` you used to your report). Do NOT invent a dry-run/`apply` parameter that the Goal did not ask for.
+- **YES** — stop and report before implementing: this brief was classified as a standard-lane code change, and a new write path needs the review-critical protocol (dry-run default, undo journal, owner hold).
 
 ## Coordinator notes
 

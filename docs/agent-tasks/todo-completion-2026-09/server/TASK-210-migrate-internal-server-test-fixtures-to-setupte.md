@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server/TASK-210-migrate-internal-server-test-fixtures-to-setupte.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 659efa6d-c9d8-4ffe-8b22-906c2ff8956e -->
+<!-- guid: 57920952-354e-59a9-8b6b-8587bd196d47 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-210 — Migrate internal/server test fixtures to setupTestServerWithStore — server_coverage_phase2_test.go, deluge_integration_test.go, search_reconciler_test.go, maintenance_window_handlers_test.go, user_tags_authz_test.go, playlist_handlers_test.go, handlers_integration_test.go (DEC-6)

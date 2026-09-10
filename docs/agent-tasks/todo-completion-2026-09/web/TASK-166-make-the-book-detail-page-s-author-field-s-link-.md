@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: d787f171-6303-472b-8d4b-99d237ec3846 -->
+<!-- guid: e4b83e0e-7dfd-5551-af5a-8f3f4d04ed03 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-166 — Make the book-detail page's Author field(s) link to a library view filtered by that author (TODO.md L3156)

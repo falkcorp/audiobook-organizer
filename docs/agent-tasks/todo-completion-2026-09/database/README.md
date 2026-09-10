@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: eb72dde0-73f3-422b-9dfc-562dd6405d0e -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -23,10 +23,10 @@
 | [TASK-326](TASK-326-dual-write-activity-migration-the-secondary-sqli.md) | new-finding | perf | P2 | S | Dual-write activity migration: the secondary (SQLite) backend receives every wri | internal/database/sql_activity_migrating_store.go:161 |
 | [TASK-331](TASK-331-deletebook-never-deletes-the-book-authors-book-n.md) | new-finding | hygiene | P2 | S | DeleteBook never deletes the book_authors:/book_narrators: sidecar rows it creat | internal/database/pebble_store.go:3112 |
 | [TASK-334](TASK-334-digest-compaction-swallows-the-delete-error-for.md) | new-finding | hygiene | P3 | S | Digest compaction swallows the delete error for the pre-existing digest row, ris | internal/database/nuts_activity_store.go:614 |
-| [TASK-350](TASK-350-two-rows-with-the-same-filepath-in-one-batch-now.md) | new-todo | data-loss | P1 | S | 🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration | TODO.md lines 4241, 4242, 4244 |
-| [TASK-355](TASK-355-series-merge-unguarded-denominator.md) | new-todo | data-loss | P1 | M | SERIES-MERGE-UNGUARDED-DENOMINATOR | TODO.md lines 5018 |
-| [TASK-357](TASK-357-author-membership-unguarded.md) | new-todo | data-loss | P1 | L | AUTHOR-MEMBERSHIP-UNGUARDED | TODO.md lines 5163 |
-| [TASK-359](TASK-359-author-file-safety.md) | new-todo | data-loss | P1 | M | AUTHOR-FILE-SAFETY | TODO.md lines 5282 |
+| [TASK-354](TASK-354-two-rows-with-the-same-filepath-in-one-batch-now.md) | new-todo | data-loss | P1 | S | 🟠 Two rows with the same FilePath in one batch now corrupt Book.Duration › Fix | TODO.md lines 4241, 4242, 4244 |
+| [TASK-359](TASK-359-series-merge-unguarded-denominator-was-trashed-r.md) | new-todo | data-loss | P1 | M | SERIES-MERGE-UNGUARDED-DENOMINATOR — (was `…-TRASHED-ROWS-RESIDUAL` | TODO.md lines 5018 |
+| [TASK-361](TASK-361-author-membership-unguarded-confirmed-fired-in-p.md) | new-todo | data-loss | P1 | L | AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24 05:00 UTC, not  | TODO.md lines 5163 |
+| [TASK-363](TASK-363-author-file-safety-purge-empty-authors-safety-th.md) | new-todo | data-loss | P1 | M | AUTHOR-FILE-SAFETY: `purge-empty-authors`' "safety that matters" is itself a fil | TODO.md lines 5282 |
 
 ## Ground rules
 

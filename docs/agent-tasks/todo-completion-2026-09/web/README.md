@@ -1,11 +1,11 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5465f752-e483-4383-8d1d-06bf0cd692d0 -->
 <!-- last-edited: 2026-09-10 -->
 
 # Workstream — web (todo-completion-2026-09)
 
-22 tasks: 16 carried forward from the 2026-08-21 package (ids kept), 6 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
+23 tasks: 16 carried forward from the 2026-08-21 package (ids kept), 7 new (TASK-300+). Projected from `../state/merged.json` by `../state/tools/gen_new_package.py` — regenerate, never hand-edit.
 
 | Task | Kind | Risk | Priority | Effort | Title | Evidence |
 |---|---|---|---|---|---|---|
@@ -31,6 +31,7 @@
 | [TASK-329](TASK-329-dashboard-count-widgets-silently-show-0-when-the.md) | new-finding | ux | P1 | S | Dashboard count widgets silently show 0 when the count API fails -- indistinguis | web/src/pages/Dashboard.tsx:224 |
 | [TASK-330](TASK-330-operations-timeline-fetch-swallows-both-network.md) | new-finding | ux | P2 | S | Operations timeline fetch swallows both network errors and non-2xx into an empty | web/src/services/api.ts:589 |
 | [TASK-332](TASK-332-no-vitest-or-playwright-coverage-exists-for-the.md) | new-finding | hygiene | P2 | M | No Vitest or Playwright coverage exists for the Authors or Series pages | web/src/pages/__tests__:0 |
+| [TASK-368](TASK-368-react-router-ghsa-qwww-vcr4-c8h2-accepted-not-re.md) | new-todo | security | P1 | M | react-router GHSA-qwww-vcr4-c8h2 — accepted, not reachable, do not re-litigate | TODO.md lines 15004 |
 
 ## Ground rules
 

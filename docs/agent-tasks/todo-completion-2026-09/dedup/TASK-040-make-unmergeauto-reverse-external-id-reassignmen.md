@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: c1f29101-8029-4672-acb7-c53f6cebaae5 -->
+<!-- guid: 04f13470-ab28-57be-ad15-b304efd81ecc -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-040 — Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record (MERGE-UNDO)

@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/audiobooks/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 43696005-d88c-47fe-998b-93e96f564593 -->
 <!-- last-edited: 2026-09-10 -->
 

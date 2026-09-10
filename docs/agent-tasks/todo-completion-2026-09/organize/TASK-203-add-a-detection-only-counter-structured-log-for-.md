@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 4a15fbdf-8ff5-4196-b034-b1099e35e798 -->
+<!-- guid: a3757a4b-a2ce-582e-bcb6-2d1ef52c43a3 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-203 — Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (DEC-11)

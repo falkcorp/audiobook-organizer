@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/itunes/TASK-185-report-the-itunes-listened-in-progress-status-pi.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: d0161dc1-3383-4582-b942-884801664589 -->
+<!-- guid: 0ac1413c-5deb-5a3e-80e1-57310f6e614d -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-185 — Report the iTunes listened/in-progress status pipeline's actual wiring gap: PositionSync is fully built but its maintenance op is an unimplemented stub (PLAYBACK-IMPORT)

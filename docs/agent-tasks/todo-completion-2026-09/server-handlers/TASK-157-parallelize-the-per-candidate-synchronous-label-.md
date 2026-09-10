@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 90e73564-73df-47e0-ac1e-7b5b98bcdddb -->
+<!-- guid: 875e0f88-1404-58d0-b85c-b495ba407511 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-157 — Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster (TODO.md L10521)

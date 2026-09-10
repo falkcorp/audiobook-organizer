@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/itunes/TASK-064-add-a-part-disc-chapter-track-filename-parser-so.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: 856ad3b1-f713-493c-96eb-c5122c33aade -->
+<!-- guid: 297f4aad-6af8-59f3-bcbc-65a33ca91acc -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-064 — Add a Part->disc / Chapter->track filename parser so 'P0-C0'-style folders stop falling to ambiguous (REGROUP-PARTCHAPTER-PARSER)

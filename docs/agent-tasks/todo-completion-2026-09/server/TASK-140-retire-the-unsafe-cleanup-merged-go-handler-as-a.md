@@ -1,6 +1,6 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server/TASK-140-retire-the-unsafe-cleanup-merged-go-handler-as-a.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: e15ace4d-5514-4c3a-a365-652019b1faed -->
+<!-- guid: 6aa302a6-4084-53cb-ac0d-86c357c1fca1 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-140 — Retire the unsafe cleanup_merged.go handler as a guarded no-op (owner decision: MEASURE-AND-STOP, no bulk removal) (TODO.md L10372)

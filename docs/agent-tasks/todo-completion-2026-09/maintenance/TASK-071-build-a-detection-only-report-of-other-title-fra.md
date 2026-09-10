@@ -1,11 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/maintenance/TASK-071-build-a-detection-only-report-of-other-title-fra.md -->
 <!-- version: 1.2.0 -->
-<!-- guid: f592a62b-538e-4afa-9107-94580cd9f7f0 -->
+<!-- guid: 5ceee35d-8587-5ef3-8461-d334c673472c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-071 — Build a detection-only report of other title-fragment author rows (the 57 rows beginning with '-') (TODO.md L3602)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -rn 'TitleFragmentAuthor|title-fragment-author|author.title.fragment.report' internal/plugins/maintenance/*.go -> 0 hits; no author_title_fragment_report.go exists. Reuse target confirmed relocated: internal/dedup/author.go's looksLikePersonName is entirely gone (superseded by exported internal/personname/personname.go:437 func LooksLikePersonName), matching 09-02's note that #3035 already did this export. · risk **hygiene** · effort **M**
+> ⚠️ **Anchor drift (2026-09-10, plan-auditor):** `grep 'func looksLikePersonName' internal/dedup/author.go` → 0 hits; moved to exported personname.LooksLikePersonName in internal/authorname/ (authorname.go:25 comment). Re-derive the anchor before editing; the brief body below is unchanged from 08-21.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — Goal absent: author_title_fragment_report.go ABSENT, TitleFragmentAuthor -> 0 hits. Brief's step-1 export is already done by #3035: dedup.looksLikePersonName is now personname.LooksLikePersonName (authorname/parse.go:149). Recommendation: keep — goal unbuilt; re-point the brief's anchor at personname.LooksLikePersonName, the export step is no longer needed.
 
