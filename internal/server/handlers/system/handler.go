@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-10
 
@@ -695,28 +695,44 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	}
 
 	if err := backup.RestoreBackup(backupPath, targetPath, req.Verify); err != nil {
-		// backup.RestoreBackup fails closed on verify=true when there is no
-		// stored checksum to verify against (see backup.ErrVerificationUnsupported)
-		// rather than silently restoring unverified. Surface that as a 400: the
-		// caller's request cannot be satisfied as specified, it is not a server
-		// fault. Any other error (missing file, corrupted archive, path escape,
-		// etc.) is still a 500 via httputil.InternalError, unchanged.
-		if errors.Is(err, backup.ErrVerificationUnsupported) {
+		// backup.RestoreBackup distinguishes two verify=true failure shapes,
+		// both fail-closed (no extraction performed) rather than silently
+		// restoring unverified:
+		//
+		//   - ErrChecksumMismatch: the archive's current bytes disagree with
+		//     the checksum recorded when it was created -- i.e. the request
+		//     conflicts with the actual state of the stored resource. 409 is
+		//     the closer fit than 422: nothing about the JSON body is
+		//     malformed, the archive on disk no longer matches what it's
+		//     supposed to be.
+		//   - ErrVerificationUnsupported: no checksum sidecar exists at all
+		//     (a legacy backup from before this feature), so there is nothing
+		//     to compare against. 400: the caller's request cannot be
+		//     satisfied as specified.
+		//
+		// Any other error (missing file, corrupted archive structure, path
+		// escape, etc.) is still a 500 via httputil.InternalError, unchanged.
+		switch {
+		case errors.Is(err, backup.ErrChecksumMismatch):
+			httputil.RespondWithConflict(c, err.Error())
+		case errors.Is(err, backup.ErrVerificationUnsupported):
 			httputil.RespondWithBadRequest(c, err.Error())
-			return
+		default:
+			httputil.InternalError(c, "failed to restore backup", err)
 		}
-		httputil.InternalError(c, "failed to restore backup", err)
 		return
 	}
 
-	// verify is only reached here when req.Verify is false -- verify=true
-	// always returns before this point. The fields are included explicitly
-	// (rather than omitted) so a caller parsing the response, not just the
-	// server log, can tell whether verification actually happened.
+	// Reaching here means either verify=false (verification not requested) or
+	// verify=true and the checksum matched -- backup.RestoreBackup returns an
+	// error in every other case, so "verified" always equals what was asked
+	// for. The fields are included explicitly (rather than omitted) so a
+	// caller parsing the response, not just the server log, can tell whether
+	// verification actually happened.
 	httputil.RespondWithOK(c, gin.H{
 		"message":          "backup restored successfully",
 		"target":           targetPath,
-		"verified":         false,
+		"verified":         req.Verify,
 		"verify_requested": req.Verify,
 	})
 }

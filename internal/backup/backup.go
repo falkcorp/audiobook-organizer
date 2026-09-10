@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-09-10
 
@@ -374,6 +374,19 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 		return nil, fmt.Errorf("failed to calculate checksum: %w", err)
 	}
 
+	// Persist the checksum in a sidecar file next to the archive so a later
+	// RestoreBackup(verify=true) has something durable to compare against.
+	// Without this, BackupInfo.Checksum only ever existed in memory for the
+	// duration of this call -- see TASK-306. A failed sidecar write is treated
+	// as a failed backup (not a warning): a backup nobody can verify defeats
+	// the purpose of computing a checksum at all, and half-succeeding here
+	// would leave a fresh archive silently indistinguishable from a legacy one
+	// that predates this feature.
+	if err := writeChecksumSidecar(backupPath, checksum); err != nil {
+		os.Remove(backupPath)
+		return nil, fmt.Errorf("failed to persist checksum sidecar: %w", err)
+	}
+
 	info := &BackupInfo{
 		Filename:     backupFilename,
 		Path:         backupPath,
@@ -496,28 +509,94 @@ func CreateBackupWithCheckpoint(store Checkpointable, dbSourcePath, databaseType
 }
 
 // ErrVerificationUnsupported is returned by RestoreBackup when the caller
-// requests checksum verification (verify=true) but the backup carries no
-// checksum to verify against.
-//
-// CreateBackup computes a SHA-256 of the finished archive (BackupInfo.Checksum)
-// and returns it in the create/list API response, but never persists it
-// alongside the archive file (no sidecar, no manifest). At restore time there
-// is therefore no durable reference value to compare a re-computed checksum
-// against -- hashing the same file and declaring the hash "verified" would be
-// a no-op wearing the name. TASK-306: this used to log
-// "checksum verification not yet implemented" and then silently restore
-// anyway, returning a success response indistinguishable from a verified
-// restore. Failing closed here means a caller who explicitly asked to verify
-// (most likely because they suspect corruption, or because this is a
-// disaster-recovery path they cannot easily re-check afterward) gets an
-// error instead of a false assurance.
-var ErrVerificationUnsupported = errors.New("verification requested but this backup carries no checksum")
+// requests checksum verification (verify=true) but the backup has no checksum
+// sidecar to verify against -- almost always because it was created before
+// this feature existed (see writeChecksumSidecar / checksumSidecarPath).
+// There is no durable reference value to compare a re-computed checksum
+// against in that case, and hashing the file and declaring it "verified"
+// would be a no-op wearing the name.
+var ErrVerificationUnsupported = errors.New("no stored checksum for this backup")
+
+// ErrChecksumMismatch is returned by RestoreBackup when verify=true and the
+// backup archive's current SHA-256 does not match the checksum recorded in
+// its sidecar at creation time -- i.e. the archive has been corrupted,
+// truncated, or tampered with since it was created.
+var ErrChecksumMismatch = errors.New("backup archive does not match its recorded checksum")
+
+// checksumSidecarPath returns the path of the sidecar file CreateBackup writes
+// next to backupPath, holding a sha256sum(1)-formatted line.
+func checksumSidecarPath(backupPath string) string {
+	return backupPath + ".sha256"
+}
+
+// writeChecksumSidecar atomically (temp file + rename) writes the
+// sha256sum(1)-formatted checksum line for backupPath, so a crash mid-write
+// can never leave a partial sidecar that silently fails every future
+// verification.
+func writeChecksumSidecar(backupPath, checksum string) error {
+	sidecar := checksumSidecarPath(backupPath)
+	tmp, err := os.CreateTemp(filepath.Dir(backupPath), filepath.Base(sidecar)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create checksum sidecar temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// sha256sum(1) format: "<hex>  <basename>\n" -- two spaces between the
+	// digest and the filename is the tool's own convention, not a typo.
+	line := fmt.Sprintf("%s  %s\n", checksum, filepath.Base(backupPath))
+	if _, werr := tmp.WriteString(line); werr != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write checksum sidecar: %w", werr)
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to close checksum sidecar: %w", cerr)
+	}
+	if rerr := os.Rename(tmpPath, sidecar); rerr != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to install checksum sidecar: %w", rerr)
+	}
+	return nil
+}
+
+// verifyChecksumSidecar re-hashes backupPath and compares it against the
+// digest recorded in its sidecar. Returns ErrVerificationUnsupported if no
+// sidecar exists, ErrChecksumMismatch if the digests disagree, or a plain
+// error for I/O failures reading/hashing.
+func verifyChecksumSidecar(backupPath string) error {
+	name := filepath.Base(backupPath)
+	raw, err := os.ReadFile(checksumSidecarPath(backupPath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
+				ErrVerificationUnsupported, name)
+		}
+		return fmt.Errorf("failed to read checksum sidecar for %s: %w", name, err)
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) == 0 {
+		return fmt.Errorf("checksum sidecar for %s is empty or malformed", name)
+	}
+	expected := fields[0]
+
+	actual, err := calculateFileChecksum(backupPath, nil)
+	if err != nil {
+		return fmt.Errorf("failed to compute checksum for %s: %w", name, err)
+	}
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, name, expected, actual)
+	}
+	return nil
+}
 
 // RestoreBackup restores a database from a backup file
 func RestoreBackup(backupPath, targetPath string, verify bool) error {
-	// Fail closed before touching anything on disk: see ErrVerificationUnsupported.
+	// Fail closed before touching anything on disk: see
+	// ErrVerificationUnsupported / ErrChecksumMismatch.
 	if verify {
-		return fmt.Errorf("%w: %s", ErrVerificationUnsupported, filepath.Base(backupPath))
+		if err := verifyChecksumSidecar(backupPath); err != nil {
+			return err
+		}
 	}
 
 	// Open backup file
@@ -718,10 +797,17 @@ func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 	return backups, nil
 }
 
-// DeleteBackup deletes a specific backup file
+// DeleteBackup deletes a specific backup file and its checksum sidecar.
 func DeleteBackup(backupPath string) error {
 	if err := os.Remove(backupPath); err != nil {
 		return fmt.Errorf("failed to delete backup: %w", err)
+	}
+	// Best-effort: an orphaned sidecar is inert (hasArchiveExtension never
+	// matches ".sha256", so it can never be mistaken for a backup by listing
+	// or retention), but leaving it behind is untidy and a sidecar write
+	// failure here must not turn a successful delete into a reported failure.
+	if err := os.Remove(checksumSidecarPath(backupPath)); err != nil && !os.IsNotExist(err) {
+		slog.Warn("backup failed to delete checksum sidecar", "path", backupPath, "error", err)
 	}
 	return nil
 }
@@ -956,6 +1042,12 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 			// is still occupying the directory and the budget.
 			slog.Warn("backup failed to delete old backup", "filename", backups[i].Filename, "error", err)
 			continue
+		}
+		// Best-effort, same as DeleteBackup: an orphaned sidecar cannot be
+		// mistaken for a backup (hasArchiveExtension never matches ".sha256"),
+		// so a failure here does not affect the budget accounting above.
+		if err := os.Remove(checksumSidecarPath(backups[i].Path)); err != nil && !os.IsNotExist(err) {
+			slog.Warn("backup retention failed to delete checksum sidecar", "filename", backups[i].Filename, "error", err)
 		}
 		remaining--
 		if backups[i].Size > 0 {
