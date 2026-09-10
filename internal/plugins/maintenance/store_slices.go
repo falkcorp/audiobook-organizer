@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -172,9 +172,15 @@ type itunesRegroupStore interface {
 // orphanFileScanner reads every book file and every book — including
 // soft-deleted ones, which is what makes an orphan detectable — and writes
 // nothing.
+//
+// It asks for GetAllBooksCoreComplete, not GetAllBooksCore: the book list it
+// gets back is a membership set whose absences authorize DeleteBookFilesByIDs,
+// so it must not be served from a memdb known to be missing rows. The narrower
+// getter is required here at the type level precisely so a future scanner
+// cannot quietly pick the unguarded one.
 type orphanFileScanner interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
 	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
 }
 

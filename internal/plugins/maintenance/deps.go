@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -29,7 +29,9 @@ import (
 // the common path at 53.
 //
 // The sub-interfaces are grouped by the entity each one touches, and each is
-// independently under the interfacebloat limit of 8 declared entries, so the
+// independently within the interfacebloat limit of 8 declared entries
+// (opsBookReader sits exactly at 8 since 2026-09-10; the linter fires above it,
+// not at it — .golangci.yml `interfacebloat.max: 8`), so the
 // width is gone rather than pushed one level down.
 
 // opsBookReader reads books.
@@ -37,6 +39,10 @@ type opsBookReader interface {
 	CountAllBooks() (int, error)
 	CountPrimaryBooks() (int, error)
 	GetAllBooksCore(limit int, offset int) ([]database.BookCore, error)
+	// GetAllBooksCoreComplete is the same list, but refuses to be served from a
+	// memdb known to be missing rows. Only the orphan-file scan needs it: its
+	// answer decides which book_file rows get hard-deleted.
+	GetAllBooksCoreComplete(limit int, offset int) ([]database.BookCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)

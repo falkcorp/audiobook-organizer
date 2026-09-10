@@ -600,6 +600,47 @@ func (p *PebbleStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().GetAllBooksCore(limit, offset, nil)
 	}
+	return p.getAllBooksCoreFromPebble(limit, offset)
+}
+
+// GetAllBooksCoreComplete is GetAllBooksCore for the one caller whose answer
+// authorizes a hard delete — findOrphanBookFiles, which treats every book_file
+// row whose BookID is absent from this list as garbage and removes it.
+//
+// It differs from GetAllBooksCore in exactly one way: a memdb known to be
+// missing rows is not trusted, and the answer is recomputed from the
+// authoritative Pebble scan instead. The result is the same set, only slower,
+// so the orphan sweep still runs — it just cannot be talked into deleting the
+// files of a book memdb happened to drop.
+//
+// It is a separate method rather than a check inside GetAllBooksCore because a
+// recorded loss does not clear without a restart, and GetAllBooksCore is on
+// ~100 call sites including request-path handlers; see
+// MemStore.GetAllBooksCoreComplete for the full argument.
+//
+// Any error other than ErrMemdbIncomplete is propagated unchanged — falling
+// back on an unrecognized failure would be guessing at its cause.
+func (p *PebbleStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error) {
+	if m := p.mem(); p.UseMemDB && m != nil {
+		cores, err := m.GetAllBooksCoreComplete(limit, offset)
+		if err == nil {
+			return cores, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		// Error, not Warn: this does not clear without a restart, and the only
+		// caller of this getter hard-deletes the rows its answer excludes.
+		slog.Error("all books (orphan-file delete path): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
+	}
+	return p.getAllBooksCoreFromPebble(limit, offset)
+}
+
+// getAllBooksCoreFromPebble is the authoritative full scan shared by
+// GetAllBooksCore's non-memdb arm and GetAllBooksCoreComplete's fall-through,
+// so the two can never disagree about what "all books" means.
+func (p *PebbleStore) getAllBooksCoreFromPebble(limit, offset int) ([]BookCore, error) {
 	var books []BookCore
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
@@ -2081,10 +2122,16 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 // window is not — but this is a real standing cost, not a free guard, and the
 // per-series hoist is tracked in todo.d rather than pretended away.
 //
-// This is the only membership getter with the guard, and that is deliberate:
-// see MemStore.GetBooksBySeriesIDAllVersions for why pushing it down to the
-// shared body would turn every series LISTING request into a full Pebble scan
-// for the rest of the process's life.
+// This was the only membership getter with the guard until 2026-09-10, when
+// GetAllBooksCoreComplete and ListSoftDeletedBooks joined it for the orphan
+// book_file sweep's hard delete. The guarded set is not "every getter that
+// could be short" — it is every getter whose ABSENCES authorize destroying
+// something. Its complement is deliberate for the same reason in every case:
+// see MemStore.GetBooksBySeriesIDAllVersions for why pushing the check down to
+// the shared body would turn every series LISTING request into a full Pebble
+// scan for the rest of the process's life, and
+// MemStore.GetAllBooksCoreComplete for the identical argument about the ~100
+// call sites of the plain library listing.
 //
 // Any other error is propagated unchanged — falling back on an unrecognized
 // failure would be guessing at its cause.
@@ -3632,8 +3679,27 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 	// because a soft-deleted book still owns its book_files and deleting them
 	// would make it unrestorable. A fallback that cannot be reached also
 	// cannot be tested, and this is not a method to leave untested.
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().ListSoftDeletedBooks(limit, offset, olderThan)
+	//
+	// The memdb arm refuses when its books table is known to be missing rows
+	// (see MemStore.ListSoftDeletedBooks), and that refusal falls through to the
+	// scan below rather than propagating. Refusing outright would stall the
+	// trash UI and the purge selection over a condition Pebble can answer
+	// correctly; falling through keeps the answer right and only makes it slow.
+	// Any other error is propagated unchanged — falling back on an unrecognized
+	// failure would be guessing at its cause.
+	if m := p.mem(); p.UseMemDB && m != nil {
+		trashed, err := m.ListSoftDeletedBooks(limit, offset, olderThan)
+		if err == nil {
+			return trashed, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		// Error, not Warn: this does not clear without a restart, and a short
+		// answer here removes books from the set that protects restorable
+		// books' file rows from findOrphanBookFiles' hard delete.
+		slog.Error("soft-deleted books: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
 	}
 	var books []Book
 	iter, err := p.db.NewIter(&pebble.IterOptions{
