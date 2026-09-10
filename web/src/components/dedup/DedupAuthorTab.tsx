@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-10
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -146,35 +146,46 @@ function AuthorBooksPopover({
 }) {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
+  // Count of author ids whose book fetch failed on the most recent attempt.
+  // Kept distinct from `books` so a partial or total fetch failure can never
+  // be rendered as "this author has 0 books" -- see WEB-04.
+  const [failedCount, setFailedCount] = useState(0);
+  const [retryToken, setRetryToken] = useState(0);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!anchorEl || authorIds.length === 0) return;
     let cancelled = false;
     setLoading(true);
-    Promise.all(authorIds.map((id) => api.getBooksByAuthor(id)))
-      .then((results) => {
-        if (cancelled) return;
-        // Deduplicate by book id
-        const seen = new Set<string>();
-        const all: Book[] = [];
-        for (const list of results) {
-          for (const b of list) {
+    setFailedCount(0);
+    Promise.allSettled(authorIds.map((id) => api.getBooksByAuthor(id))).then((results) => {
+      if (cancelled) return;
+      // Deduplicate by book id; count failures separately from empty results
+      // so a rejected fetch is never indistinguishable from a genuinely
+      // empty author.
+      const seen = new Set<string>();
+      const all: Book[] = [];
+      let failures = 0;
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          for (const b of result.value) {
             if (!seen.has(b.id)) {
               seen.add(b.id);
               all.push(b);
             }
           }
+        } else {
+          failures += 1;
         }
-        setBooks(all);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      }
+      setBooks(all);
+      setFailedCount(failures);
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [anchorEl, authorIds]);
+  }, [anchorEl, authorIds, retryToken]);
 
   return (
     <Popover
@@ -189,89 +200,116 @@ function AuthorBooksPopover({
         <Box sx={{ p: 2, textAlign: 'center' }}>
           <CircularProgress size={24} />
         </Box>
-      ) : books.length === 0 ? (
-        <Typography
-          variant="body2"
-          sx={{
-            color: 'text.secondary',
-            p: 2,
-          }}
-        >
-          No books found
-        </Typography>
       ) : (
-        <Stack spacing={0.5}>
-          {books.map((book) => (
-            <Box
-              key={book.id}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                p: 0.5,
-                cursor: 'pointer',
-                borderRadius: 1,
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-              onClick={() => {
-                onClose();
-                navigate(`/library/${book.id}`);
-              }}
-            >
-              {book.cover_url ? (
+        <>
+          {failedCount > 0 && (
+            <Box sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography variant="body2" color="error">
+                {`Could not load ${failedCount} of ${authorIds.length} author${
+                  authorIds.length === 1 ? '' : 's'
+                }' books — count may be incomplete.`}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                color="error"
+                onClick={() => setRetryToken((t) => t + 1)}
+              >
+                Retry
+              </Button>
+            </Box>
+          )}
+          {books.length === 0 ? (
+            // Only render the empty-state copy when the fetch genuinely
+            // succeeded with zero books -- never when failedCount > 0, or a
+            // failed fetch would read identically to "this author has no
+            // books" and bias a merge decision (WEB-04).
+            failedCount === 0 && (
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  p: 2,
+                }}
+              >
+                No books found
+              </Typography>
+            )
+          ) : (
+            <Stack spacing={0.5}>
+              {books.map((book) => (
                 <Box
-                  component="img"
-                  src={book.cover_url}
-                  alt=""
+                  key={book.id}
                   sx={{
-                    width: 40,
-                    height: 56,
-                    objectFit: 'cover',
-                    borderRadius: 0.5,
-                    flexShrink: 0,
-                  }}
-                />
-              ) : (
-                <Box
-                  sx={{
-                    width: 40,
-                    height: 56,
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    bgcolor: 'action.selected',
-                    borderRadius: 0.5,
-                    flexShrink: 0,
+                    gap: 1,
+                    p: 0.5,
+                    cursor: 'pointer',
+                    borderRadius: 1,
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                  onClick={() => {
+                    onClose();
+                    navigate(`/library/${book.id}`);
                   }}
                 >
-                  <MenuBookIcon fontSize="small" color="disabled" />
+                  {book.cover_url ? (
+                    <Box
+                      component="img"
+                      src={book.cover_url}
+                      alt=""
+                      sx={{
+                        width: 40,
+                        height: 56,
+                        objectFit: 'cover',
+                        borderRadius: 0.5,
+                        flexShrink: 0,
+                      }}
+                    />
+                  ) : (
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 56,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        bgcolor: 'action.selected',
+                        borderRadius: 0.5,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <MenuBookIcon fontSize="small" color="disabled" />
+                    </Box>
+                  )}
+                  <Box sx={{ overflow: 'hidden' }}>
+                    <Typography
+                      variant="body2"
+                      noWrap
+                      sx={{
+                        fontWeight: 'medium',
+                      }}
+                    >
+                      {cleanDisplayTitle(book.title)}
+                    </Typography>
+                    {book.author_name && (
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
+                        {book.author_name}
+                      </Typography>
+                    )}
+                  </Box>
                 </Box>
-              )}
-              <Box sx={{ overflow: 'hidden' }}>
-                <Typography
-                  variant="body2"
-                  noWrap
-                  sx={{
-                    fontWeight: 'medium',
-                  }}
-                >
-                  {cleanDisplayTitle(book.title)}
-                </Typography>
-                {book.author_name && (
-                  <Typography
-                    variant="caption"
-                    noWrap
-                    sx={{
-                      color: 'text.secondary',
-                    }}
-                  >
-                    {book.author_name}
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-          ))}
-        </Stack>
+              ))}
+            </Stack>
+          )}
+        </>
       )}
     </Popover>
   );

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.83.0
+// version: 2.84.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1628,7 +1628,13 @@ export async function mergeAuthors(keepId: number, mergeIds: number[]): Promise<
 
 export async function getBooksByAuthor(authorId: number): Promise<Book[]> {
   const response = await apiFetch(`${API_BASE}/audiobooks?author_id=${authorId}`);
-  if (!response.ok) return [];
+  if (!response.ok) {
+    // Deliberately throw rather than returning []: a caller that renders this
+    // list in a merge-decision UI (AuthorBooksPopover) must be able to tell a
+    // failed fetch apart from an author that genuinely has zero books. See
+    // WEB-04.
+    throw await buildApiError(response, 'Failed to fetch books for author');
+  }
   const data = await response.json();
   return data.items || [];
 }
