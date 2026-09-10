@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package maintenance
 
@@ -150,11 +150,17 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	// This def declares LivenessManual, and until 2026-09-10 the run never
+	// called UpdateProgress — only Log at the end, which the watchdog does not
+	// count — so any night whose compaction backlog exceeded ProgressTimeout
+	// (5m default) was cancelled as never_reported. The compaction store now
+	// emits per-chunk events; forwarding them is what keeps this op alive.
 	compacted, summarized, pruned, indexOrphans, err := p.deps.CompactActivityLog(
 		ctx,
 		p.deps.ActivityLogCompactionDays(),
 		p.deps.ActivityLogRetentionChangeDays(),
 		p.deps.ActivityLogRetentionDebugDays(),
+		compactProgressToReporter(reporter),
 	)
 	if err != nil {
 		return err

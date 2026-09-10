@@ -1,5 +1,5 @@
 // file: web/src/services/activityApi.ts
-// version: 2.6.0
+// version: 2.7.0
 // last-edited: 2026-09-10
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
@@ -137,9 +137,16 @@ export async function fetchActivitySources(
   return body.data;
 }
 
-export interface CompactResult {
-  days_compacted: number;
-  entries_deleted: number;
+/**
+ * Response of POST /activity/compact since 2026-09-10: the endpoint no longer
+ * compacts inside the request (which timed out on a production-sized log) but
+ * enqueues the `maintenance.compact-activity-log` operation and hands back its
+ * id. The counters are read from that operation's log and result.
+ */
+export interface CompactStarted {
+  operation_id: string;
+  def_id: string;
+  status: string;
 }
 
 /** Single entry in the per-operation activity stream emitted by
@@ -218,15 +225,28 @@ export async function fetchMergedOperationActivity(
   return data as MergedOperationActivityResponse;
 }
 
-export async function compactActivityLog(olderThanDays: number): Promise<CompactResult> {
+export async function compactActivityLog(olderThanDays: number): Promise<CompactStarted> {
   const response = await apiFetch(`${API_BASE}/activity/compact`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ older_than_days: olderThanDays }),
   });
   if (!response.ok) {
-    throw new Error(`Failed to compact activity log: ${response.status}`);
+    // A 409 carries the id of the compaction already running; surface the
+    // server's message so the user sees that rather than a bare status code.
+    let detail = '';
+    try {
+      const errBody = await response.json();
+      detail = errBody?.error?.message ?? errBody?.message ?? errBody?.error ?? '';
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(
+      detail
+        ? `Failed to start activity compaction: ${detail}`
+        : `Failed to start activity compaction: ${response.status}`
+    );
   }
   const body = await response.json();
-  return body.data;
+  return body.data as CompactStarted;
 }

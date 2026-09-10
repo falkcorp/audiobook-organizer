@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-10
 
@@ -23,7 +23,7 @@ import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
-import { fetchActivity, fetchActivitySources } from '../services/activityApi';
+import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 import { cancelOperation, retryOperation } from '../services/api';
 // The real fold, not a stub — see the groupedOperations getter below. The store
@@ -80,6 +80,7 @@ vi.mock('../stores/useOperationsStore', () => ({
 
 const mockedFetchActivity = vi.mocked(fetchActivity);
 const mockedFetchSources = vi.mocked(fetchActivitySources);
+const mockedCompact = vi.mocked(compactActivityLog);
 
 const entry = (overrides: Partial<ActivityEntry> = {}): ActivityEntry => ({
   id: 'entry-1',
@@ -629,5 +630,50 @@ describe('Active Operations retry and discard controls', () => {
     expect(within(row).getByRole('button', { name: /cancel/i })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Compact button', () => {
+  it('starts the compaction op, reloads the operations list, and says where to watch it', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedCompact.mockResolvedValue({
+      operation_id: 'op-42',
+      def_id: 'maintenance.compact-activity-log',
+      status: 'queued',
+    });
+    renderPage();
+    await screen.findByText('Added The Odyssey');
+    loadActiveOpsFromServer.mockClear();
+
+    await user.click(screen.getAllByRole('button', { name: 'Compact' })[0]);
+    await user.click(await screen.findByText('Everything (now)'));
+
+    // The API is called with the chosen day count, and NOT awaited for a
+    // result: the response is an op id, and the notice points at the list.
+    await waitFor(() => {
+      expect(mockedCompact).toHaveBeenCalledWith(0);
+    });
+    const notice = await screen.findByTestId('compact-notice');
+    expect(notice).toHaveTextContent('Compaction started');
+    expect(notice).toHaveTextContent('op-42');
+    expect(notice).toHaveTextContent('operations list');
+    expect(loadActiveOpsFromServer).toHaveBeenCalled();
+  });
+
+  it('shows the server refusal when a compaction is already running', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedCompact.mockRejectedValue(
+      new Error('Failed to start activity compaction: activity compaction is already running (operation op-7)')
+    );
+    renderPage();
+    await screen.findByText('Added The Odyssey');
+
+    await user.click(screen.getAllByRole('button', { name: 'Compact' })[0]);
+    await user.click(await screen.findByText('Everything (now)'));
+
+    const notice = await screen.findByTestId('compact-notice');
+    expect(notice).toHaveTextContent('already running (operation op-7)');
   });
 });

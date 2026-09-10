@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-10
 
@@ -354,9 +354,25 @@ type ActivityLogOps interface {
 	// indexOrphansRemoved is reported separately because it counts index keys,
 	// not activity rows: folding it into pruned would overstate how much
 	// history the run discarded.
+	//
+	// progress receives the compaction store's per-chunk/per-day events; the op
+	// forwards them to reporter.UpdateProgress so the registry watchdog hears a
+	// long compaction (reporter.Log alone does not count as liveness). nil is
+	// allowed and means silent.
 	CompactActivityLog(ctx context.Context,
 		compactionDays, changeDays, debugDays int,
+		progress database.CompactProgress,
 	) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error)
+	// CompactActivityEntries runs ONLY the compaction pass of CompactActivityLog
+	// — every compactable-tier row older than cutoff collapsed into daily
+	// digests on every activity backend — with no summarize, prune or index
+	// repair. It backs the user-triggered maintenance.compact-activity-log op,
+	// which replaced the synchronous POST /activity/compact handler: that
+	// handler compacted and nothing else, and the op keeps that contract.
+	// progress is as for CompactActivityLog.
+	CompactActivityEntries(ctx context.Context, cutoff time.Time,
+		progress database.CompactProgress,
+	) (database.CompactResult, error)
 	// OptimizeActivityStatistics refreshes the activity store's query-planner
 	// statistics. It is separate from CompactActivityLog on purpose — see
 	// optimizeActivityDBDef for the measurements that forced the split.

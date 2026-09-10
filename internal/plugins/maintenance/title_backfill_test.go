@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-10
 
@@ -129,8 +129,11 @@ func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int, _ operations.Prog
 func (d fakeDeps) OptimizeAIScanStore(_ context.Context) error { return nil }
 func (d fakeDeps) OptimizeOLStore(_ context.Context) error     { return nil }
 func (d fakeDeps) PruneOldLogs(_ int) error                    { return nil }
-func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int) (int, int, int, int64, error) {
+func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int, _ database.CompactProgress) (int, int, int, int64, error) {
 	return 0, 0, 0, 0, nil
+}
+func (d fakeDeps) CompactActivityEntries(_ context.Context, _ time.Time, _ database.CompactProgress) (database.CompactResult, error) {
+	return database.CompactResult{}, nil
 }
 
 func (d fakeDeps) OptimizeActivityStatistics(_ context.Context) (database.ActivityOptimizeResult, error) {
