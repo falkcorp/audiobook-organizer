@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.22.0 -->
+<!-- version: 1.23.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -42,11 +42,12 @@ security) are HELD OPEN for the owner — never admin-merged.
 | later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | PR #3196 HELD (16:14) |
 | security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
 | later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | PR #3197 HELD (16:21) |
-| security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | dispatched 16:09 (config.go / update_service.go) |
+| security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | PR #3199 HELD (16:29); owner note: nested download-client secrets clear via config file only |
 | security | TASK-080 SSRF on cover fetch (fix #645, assess #662) | security | M | go-specialist/opus | dispatched 16:16 (covers.go + cover.go shared hardened client; no dismissals) |
 | security | TASK-083 path-injection #1477/#1478 safe_operations.go | security | M | go-specialist/opus | dispatched 16:21 (structural ReadDir/lookup barrier; no dismissals) |
 | later | TASK-072 operator-confirmed author merge op | data-loss | M | go-specialist/opus | dispatched 16:24 (new op; dry-run default, ref-count guard, ledger) |
-| later | TASK-220, 352(prod run), 373, 342, 345, 114, 096; security 160, 335(reshaped), 365(needs owner policy: opt-in vs local-only), 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
+| security | TASK-160 OpenAI key validation server-side (SEC-9) | security | M | general-purpose/opus | dispatched 16:30 (new setup endpoint + WelcomeWizard.tsx) |
+| later | TASK-220, 352(prod run), 373, 342, 345, 114, 096; security 335(reshaped), 365(needs owner policy: opt-in vs local-only), 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
 
 ## Per-task record
 
@@ -191,4 +192,11 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Overlap: `mock_store.go` + generated mocks also touched by #3185 (header/gofmt) → trivial rebase for whichever merges second.
 - Worker added a store interface method despite the "STOP and report" instruction; accepted because the method is read-only, on the narrow `OperationPruner`, and the forbidden files were not touched.
 - PR #3198 — HELD for owner. `TODO.md` L1192 (wraps to L1196): dry-run half done; owner to check off or split.
+
+### TASK-348 — TODO L3344–L3348 mask remaining `GET /config` secrets
+
+- Worktree `.worktrees/config-348`, branch `agent/config-348-mask-the-remaining-secrets-returned-by-g`, sha `7c3682865`.
+- `update_service.go` 3.20.0: six more fields masked in `MaskSecrets`; masked value verified to reach the wire through `withEnvLocks`. Round-trip protection ADDED (the existing `secretFieldKeys` strip only reaches top-level keys): `snapshotRoundTripSecrets`/`restoreRoundTripSecrets` in the `Mutate` window; top-level scalars use `acceptSecretUpdate` (explicit `""` clears), nested download-client credentials use the `restoreMaskedCredentials` precedent (restore on mask and on empty). 7 tests in `mask_remaining_secrets_test.go`; pre-fix all six in cleartext and all six destroyed by an echoed mask on save; call-site mutation check done. `web/` has zero references to the six. Gate exit 0, staticcheck 0.
+- Owner note: clearing `deluge.password` / `qbittorrent.password` / `sabnzbd.api_key` now needs a config-file edit rather than a blank field.
+- PR #3199 — HELD for owner. On merge check off `TODO.md` L3344, L3345, L3346, L3347, L3348.
 
