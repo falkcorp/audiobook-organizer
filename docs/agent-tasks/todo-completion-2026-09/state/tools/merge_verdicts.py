@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: docs/agent-tasks/todo-completion-2026-09/state/tools/merge_verdicts.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: c2a7e5d1-9b3f-4e60-8d14-2f6a7c0b9e35
 # last-edited: 2026-09-10
 """Merge the Wave 1/2/3 agent outputs into one reconciliation ledger.
@@ -38,7 +38,7 @@ for part in "ABC":
     for row in load(os.path.join(W1, f"briefs_verdicts_{part}.json")):
         row["verdict"] = norm_verdict(row.get("verdict"))
         row["path"] = re.sub(r"^.*?/docs/agent-tasks/", "docs/agent-tasks/", row["path"])
-        row.setdefault("initiative", row["path"].split("/")[2])
+        row["initiative"] = row["path"].split("/")[2]  # never trust the agent's label
         row["source_part"] = part
         briefs.append(row)
 
