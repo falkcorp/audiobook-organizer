@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-09-10
 
@@ -8,6 +8,8 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -188,5 +190,111 @@ func TestRunSeriesDenumber_RefusesToDeleteSeriesWithOnlyTrashedMembers(t *testin
 				"GetBooksBySeriesIDAllVersions enumerated zero (all trashed) rows",
 				numberedID, "Discworld 05")
 		}
+	}
+}
+
+// TestRunSeriesDenumber_FailsClosedWhenGuardCannotAnswer proves the new
+// safeToDelete guard fails CLOSED rather than falling back to a permissive
+// answer: when the store cannot compute the unfiltered reference count, the
+// whole run (apply in this case) must abort with an error instead of
+// deleting anything. A silent fallback here is exactly the bug the guard
+// exists to prevent, just moved one level up.
+func TestRunSeriesDenumber_FailsClosedWhenGuardCannotAnswer(t *testing.T) {
+	const (
+		baseID     = 10
+		numberedID = 11
+	)
+	authorID := 3
+
+	store := &database.MockStore{}
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: baseID, Name: "Discworld", AuthorID: &authorID},
+			{ID: numberedID, Name: "Discworld 05", AuthorID: &authorID},
+		}, nil
+	}
+	store.GetAllSeriesBookCountsFunc = func() (map[int]int, error) {
+		return map[int]int{baseID: 4, numberedID: 1}, nil
+	}
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == numberedID {
+			return []database.BookCore{{ID: "dw05-primary"}}, nil
+		}
+		return nil, nil
+	}
+	store.GetAllSeriesBookRefCountsFunc = func() (map[int]int, error) {
+		return nil, errors.New("boom: store cannot compute unfiltered series references")
+	}
+	store.DeleteSeriesFunc = func(id int) error {
+		t.Fatalf("DeleteSeries(%d) called -- the run should have aborted before reaching the merge loop", id)
+		return nil
+	}
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		t.Fatalf("UpdateBook(%s) called -- the run should have aborted before reaching the merge loop", id)
+		return b, nil
+	}
+
+	p := &Plugin{deps: fakeDeps{store: store}}
+	raw := json.RawMessage(`{"apply": true}`)
+	err := p.runSeriesDenumber(context.Background(), raw, &fakeReporter{})
+	if err == nil {
+		t.Fatal("runSeriesDenumber: want an error when the unfiltered reference guard cannot answer, got nil")
+	}
+}
+
+// TestRunSeriesDenumber_DryRunReportsGuardHeldBack proves the dry-run preview
+// (built BEFORE the params.Apply branch, same as the apply path) surfaces the
+// same held-back set an apply run would produce, rather than reporting a plan
+// that apply would then silently deviate from.
+func TestRunSeriesDenumber_DryRunReportsGuardHeldBack(t *testing.T) {
+	const (
+		baseID     = 10
+		numberedID = 11
+	)
+	authorID := 3
+
+	store := &database.MockStore{}
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: baseID, Name: "Discworld", AuthorID: &authorID},
+			{ID: numberedID, Name: "Discworld 05", AuthorID: &authorID},
+		}, nil
+	}
+	store.GetAllSeriesBookCountsFunc = func() (map[int]int, error) {
+		return map[int]int{baseID: 4, numberedID: 0}, nil
+	}
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		return nil, nil
+	}
+	store.GetAllSeriesBookRefCountsFunc = func() (map[int]int, error) {
+		return map[int]int{numberedID: 2}, nil
+	}
+	store.DeleteSeriesFunc = func(id int) error {
+		t.Fatalf("DeleteSeries(%d) called -- this is a dry run (apply omitted)", id)
+		return nil
+	}
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		t.Fatalf("UpdateBook(%s) called -- this is a dry run (apply omitted)", id)
+		return b, nil
+	}
+
+	reporter := &fakeReporter{}
+	p := &Plugin{deps: fakeDeps{store: store}}
+	raw := json.RawMessage(`{}`)
+	if err := p.runSeriesDenumber(context.Background(), raw, reporter); err != nil {
+		t.Fatalf("runSeriesDenumber: %v", err)
+	}
+
+	found := false
+	for _, l := range reporter.logs {
+		if strings.Contains(l, "would be merged but") && strings.Contains(l, "NOT deleted") {
+			found = true
+			if !strings.Contains(l, "1 would be merged but") {
+				t.Errorf("dry-run summary held-back count wrong, got line: %q", l)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("dry-run summary did not report the guard-held-back count; logs: %v", reporter.logs)
 	}
 }
