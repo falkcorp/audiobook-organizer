@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -23,7 +23,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 2 | TASK-360 orphan-file hard delete memdb guard | data-loss | S | go-specialist/opus | PR #3185 HELD (15:24) |
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | PR #3186 open, standard lane (15:26) |
 | 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | PR #3184 MERGED 15:36 (rebase, 26/26 green) |
-| 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | dispatched 14:56 (L4241/4242 code; L4244 measure-only) |
+| 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | PR #3188 HELD (15:40); L4244 decision surfaced to owner |
 
 **Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
@@ -107,4 +107,12 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Worktree `.worktrees/misc-go-344`, branch `agent/misc-go-344-dedup-mergebooks-hard-delete-path-has-no`, sha `a68b3a75a`.
 - `guardKeeperAudioRoute` under the merge lock before any write, returns the sibling's `merge.FilelessPrimaryError`; read errors refuse; the one live caller (`itunes_heal.go` `resolveAmbiguousByDB`) already failed closed and now logs the refusal. 3 tests (refuse / all-fileless allowed / FilePath-only keeper allowed). Gate exit 0 (reconcile, dedup+reconcile `-race`, staticcheck 0).
 - PR #3187 — HELD for owner. `TODO.md` L2304 to check off on merge.
+
+### TASK-354 — TODO L4241/L4242/L4244 same-FilePath / same-PID rows in one batch
+
+- Worktree `.worktrees/database-354`, branch `agent/database-354-two-rows-with-the-same-filepath-in-one-b`, sha `498c6b515`.
+- `BatchUpsertBookFiles`: `stagedByPath` + `stagedByPID` consulted before either committed lookup; later row merges into the earlier staged row (identity from first, content from last = N sequential upserts). 3 tests incl. one pinning lookup order. Full `internal/database` suite 721s exit 0 (needs `-timeout 25m`; default 10m panics — CI already passes 25m/30m).
+- L4244 measure-only: existing `maintenance.dedupe-book-file-rows` (dry-run default) counts a FLOOR (groups BookID+FilePath; misses cross-book path dupes and all PID dupes). Owner decision: run dry / run apply / fund an ~80-line read-only PID+cross-book count op. Nothing run on prod.
+- Anchor drift: `enforceBookFilePIDUniqueness` no longer exists (`stagePIDTransfer` replaced it); the gap is real.
+- PR #3188 — HELD for owner. On merge check off L4241, L4242, L4243 (test exists verbatim); L4244 stays open.
 
