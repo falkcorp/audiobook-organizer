@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.50.0 -->
+<!-- version: 10.50.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-09 -->
+<!-- last-edited: 2026-09-10 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,452 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+### Wire `WithRequestTimeout` to config — a cold model load is 84% of the 30s budget
+
+`internal/ai/embedding_client.go`'s `defaultRequestTimeout` is a hardcoded
+`30 * time.Second`. `WithRequestTimeout` already exists and already clamps `0`
+back to that constant, so the plumbing is half-built — it is just never fed
+from config the way `ai_backend.parse_batch_timeout_seconds` now is.
+
+Measured 2026-09-09 on the Mac M1 Max that prod's `embedding.base_url` now
+points at:
+
+| bge-m3 request | wall |
+|---|---|
+| cold load, nothing in the OS page cache | **25.28 s** |
+| same call, file cached | 1.2 s |
+| warm n=1 / n=16 / n=64 | 0.09 s / 0.28 s / 1.04 s |
+
+So the steady-state headroom is large (a full 64-input `embedChunkSize` costs
+1.04 s against 30 s) and the risk is entirely in the **first** call after Ollama
+evicts the model. Default Ollama keep-alive is 5 minutes; the Mac is currently
+set to `OLLAMA_KEEP_ALIVE=30m`, which makes eviction rare but not impossible,
+and that setting does **not** survive a reboot (see below).
+
+This is deliberately filed rather than fixed — no production path is failing,
+and the 25.28 s figure was a one-time first-load from disk that did not
+reproduce on reload. Raising the constant for every backend would be the wrong
+fix. The right one is to plumb it, so a slow-disk or cold-start backend can be
+given a longer budget without changing the OpenAI path.
+
+- [ ] Add an `embedding.request_timeout_seconds` config key, resolve it the way
+      `config.ResolveAIParseBatch` resolves the parse pair (0 = default, with a
+      sane ceiling), and pass it through to `WithRequestTimeout` at the
+      construction sites.
+- [ ] While there: `OLLAMA_KEEP_ALIVE=30m` on the Mac was set with
+      `launchctl setenv`, because `brew services` **regenerates**
+      `~/Library/LaunchAgents/homebrew.mxcl.ollama.plist` on every start and
+      silently discarded a `PlistBuddy` edit to it. `launchctl setenv` does not
+      survive a reboot, so keep-alive reverts to 5 minutes on the Mac's next
+      boot. Needs a durable mechanism (login item, or a brew-services override
+      that survives regeneration) if we keep depending on warm models.
+
+- [ ] **8 ops declare `ResumeRestart` but never checkpoint — they silently
+      behave as `ResumeRequeue` without the idempotency review that policy
+      requires.** Found 2026-09-09 while answering "have we made all these scans
+      resumable?" A census of all **157** registered `OperationDef`s
+      (`ID:` + `ResumePolicy:` parsed structurally, not sampled) breaks down as:
+      `ResumeDrop` 111, `ResumeRestart` 23, `ResumeRequeue` 20, `ResumeAsk` 3.
+
+      `resume.go:26` defines `ResumeRestart` as "increment resume_count,
+      **dispatch with saved state**". An op that never calls
+      `reporter.Checkpoint` has no saved state, so it is dispatched with
+      `state_bytes=0` and unmodified params — i.e. it restarts **from zero**.
+      TODO.md already spells out this exact failure for
+      `metadata.batch-apply-cached` and calls a bare policy flip *"an unbounded
+      re-apply loop, strictly worse than today's drop"* — but that op is
+      `ResumeDrop` today and therefore **safe**. These eight already sit in the
+      state that entry warns about:
+
+      | op | file | writes? |
+      |---|---|---|
+      | `entities.author-merge` | `internal/server/entities_ops.go:56` | yes — `CapLibraryWrite` |
+      | `entities.resolve-production-author` | `internal/server/entities_ops.go:206` | yes — `CapLibraryWrite` |
+      | `library.bulk-write-back` | `internal/server/library_writeback_op.go` | yes — tag write-back |
+      | `maintenance.series-denumber` | `internal/plugins/maintenance/series_denumber_op.go` | yes |
+      | `maintenance.author-conjunction-repair` | `internal/plugins/maintenance/author_conjunction_repair.go` | yes |
+      | `maintenance.isbn-enrichment` | `internal/plugins/maintenance/metadata.go` | yes |
+      | `metadata.candidate-fetch` | `internal/server/metadata_candidate_op.go` | fetch/cache |
+      | `ai.author-scan` | `internal/server/aiscan_op.go` | nominates |
+
+      Both `entities.*` ops carry a bare `ResumePolicy: opsregistry.ResumeRestart`
+      with **no comment justifying it** and a 2h timeout. Note `entities.author-merge`
+      is precisely the "auto-merge/auto-resolve apply path that must not
+      double-merge" shape CLAUDE.md's concurrency section calls out.
+
+      **What is verified vs. not.** Verified: the policy values, the absence of
+      `reporter.Checkpoint`/`RunItems` in each op's file, and the registry
+      semantics. NOT verified: whether re-running each from zero is actually
+      destructive — a re-issued merge may no-op because the source author is
+      already gone. That per-op idempotency review is the work here; it is
+      exactly the review `ResumeRequeue` ("idempotent ops only") demands and
+      that a silent `ResumeRestart` skips.
+
+      **Per op, pick one and say why in a comment:** add a real checkpoint
+      (watch the parallel-loop trap TODO.md already documents — a done-set or
+      contiguous watermark, *not* a `LastBookID` cursor); or downgrade to
+      `ResumeRequeue` after confirming idempotency; or `ResumeDrop`. Consider a
+      registry-level guard so a def cannot declare `ResumeRestart` unless it
+      checkpoints — `RegisterOp` already rejects `ResumeUnspecified`, so the
+      enforcement point exists.
+
+      Reference for what a working checkpoint looks like: `library.scan`,
+      `maintenance.transcribe-book-intros`, and the migration checkpoint proven
+      in prod on 2026-09-08 (`resumed=true`, cursor 972k→1.72M).
+
+- [ ] **`ai parse summary` reports a fully-green line for a batch where nothing
+      was written.** Found 2026-09-09 by probing `library.ai-parse` in prod with
+      three deliberately nonexistent book IDs. Every row was discarded; the op
+      log said:
+
+      ```
+      ai parse summary: 3/3 book(s) parsed in 1/1 batches; 0 batch failure(s), 0 save failure(s)
+      operation finished  outcome=completed
+      ```
+
+      Neither counter is lying — the LLM did parse all three, and no save
+      *failed*. **Discarded is a third outcome that neither number shows.**
+      `saveAIFieldsToPrimary` returns `("", nil)` when the row cannot be
+      resolved (`ai_parse_async.go:325-333`), and the caller only counts a
+      non-nil error:
+
+      ```go
+      stampPath, saveErr := save(ctx, &books[idx])
+      if saveErr != nil {
+          savesFailed.Add(1)          // ai_batch_phase.go:257-259
+          ...
+      }
+      booksParsed.Add(1)              // increments either way
+      ```
+
+      That nil is deliberate and correct — a row can legitimately be deleted or
+      dedup-merged between nomination and the batch running, and that is not an
+      error. The gap is only in the *accounting*.
+
+      **Why this matters now, and it is not hypothetical.** The `row == nil`
+      comment already records that a previous version *"made a systematic
+      resolution failure across every book in every batch look exactly like a
+      library where nothing needed writing"* — and the fix applied then was a
+      `Warn` line, which lives in the app's stdout log, not in the operation
+      record an operator actually reads. Meanwhile prod currently has **115,086
+      of 726,742 `book_file` rows (15.8%) pointing at no file**, so
+      resolution failures at scale are the expected condition, not the edge
+      case. A batch that discards 100% of its work is presently
+      indistinguishable, in the op log, from one that wrote 100% of it.
+
+      **The existing mitigation does not reach the operator, measured.** The
+      probe's three discards were confirmed in prod's journal:
+
+      ```
+      level=WARN msg="ai_parse: AI parse: no row for /probe/... ; parse discarded"
+      [WARN] activity channel full, dropped: ai_parse: AI parse: no row for /probe/... ; parse discarded
+      ```
+
+      Every one of those three appears **twice** — once as the slog line that
+      reached stdout, and once as `activity channel full, dropped`
+      (`internal/activity/writer.go:248`). The warning survives in the journal
+      and is **dropped from the activity store**, which is what the Activity
+      page and the operation record show. So the "we fixed the silence by
+      logging it" mitigation lands only where an operator has shell access.
+
+      That overflow is already filed separately (TODO.md §"The activity channel
+      overflows during organize and DROPS records") — **do not re-file it** —
+      but the current magnitude is worth recording, measured 2026-09-09 11:28
+      EDT: **2,669 of 5,914 journal lines in 10 minutes (45%) were activity
+      drops**; 12,324 in the last hour. At that rate the activity store is not a
+      dependable record of anything low-frequency, which is exactly what a
+      per-book discard warning is.
+
+      **Fix:** add a `SavesDiscarded` counter to `AIPhaseSummary` alongside
+      `SavesFailed`, increment it on the `stampPath == "" && saveErr == nil`
+      return, and include it in `ai_batch_phase.go:429`'s summary string. Then
+      make `AIPhaseSummary.Degraded()` (`:419`) consider a batch with a high
+      discard ratio non-clean, so it surfaces rather than reading as success.
+      Cheap, and it converts a silent outcome into a counted one.
+
+- [ ] **`ParsedMetadata.Confidence` is asked for, paid for, and never read —
+      decide whether to gate saves on it or stop requesting it.** The
+      `ParseBatch` system prompt in `internal/ai/openai_parser.go` instructs the
+      model to return `"confidence": "high|medium|low"` and to "set confidence
+      based on clarity of the filename structure", and `ParsedMetadata` declares
+      the field. Nothing in `internal/ai/` or `internal/scanner/` ever reads it:
+      grepping `Confidence` across both packages returns only the struct tag
+      itself and the unrelated `dedup_review.go` type. Every parsed field is
+      written regardless of what the model said about its own certainty.
+
+      **⚠️ This is NOT a data-loss issue — do not read it as one.**
+      `saveAIFieldsToPrimary` (`internal/scanner/ai_parse_async.go`) writes each
+      field only when that field is empty — `row.Title == ""`,
+      `row.AuthorID == nil`, `row.SeriesID == nil`, `row.SeriesSequence == nil`,
+      `isBlankPtr(row.Narrator)`, `isBlankPtr(row.Publisher)` — and a user
+      field-lock check fails closed on top of that. It is gap-fill: it cannot
+      overwrite a title, author, series, sequence, narrator or publisher that
+      already exists, and anything it fills can be corrected afterwards. The
+      question here is "should we fill an empty field with a guess this weak?",
+      not "is something being destroyed?".
+
+      **It is live, though.** `enable_ai_parsing` is true in prod,
+      `llm_mode=local`, and a library scan is running. `scanner.go` prefers to
+      enqueue a `library.ai-parse` op per chunk (falling back to the inline
+      `runAIBatchPhase` only when the enqueue fails), and that op saves through
+      `saveAIFieldsToPrimary` against real book IDs. Before 2026-09-09 the phase
+      failed every time — 81 consecutive zero-parse runs — so it wrote nothing
+      and the missing filter cost nothing. The fixes landed that day made it
+      work, so the accuracy below now reaches empty fields on real rows.
+
+      **The field does predict correctness — it was worth measuring.** Same 40
+      filenames as the 7B-vs-3B comparison, series-number accuracy broken out by
+      the model's own self-reported confidence:
+
+      | confidence | qwen2.5:7b-instruct | qwen2.5:3b-instruct |
+      |---|---|---|
+      | high | 1/1 (100%) | 1/1 (100%) |
+      | medium | 10/13 (77%) | 5/7 (71%) |
+      | low | 3/8 (38%) | 4/13 (31%) |
+
+      Monotonic for both models. For the 7B, **5 of the 8 total errors sit in
+      the `low` bucket**, so dropping `low` writes would remove 5 wrong values
+      at the cost of 3 correct ones — a 2.6:1 trade in favour of filtering.
+      Weigh it as "a wrong guess in a previously empty field vs. leaving that
+      field empty", since gap-fill is all this path can do: nothing downstream
+      distinguishes "the AI was unsure" from "the AI was confident and wrong",
+      so a bad `low` write looks exactly like real metadata afterwards.
+
+      Two options:
+
+      1. **Gate the save on it.** Skip `low` fields, or route them to a review
+         queue rather than the book row. Still needs one decision: should a
+         low-confidence title mean "leave the existing title alone" or "don't
+         save the row at all"? The numbers above say the gate is worth having;
+         they do not say which of those two it should be.
+      2. **Delete it from the prompt and the struct.** Defensible only if
+         option 1 is rejected outright — on a CPU backend completion tokens are
+         the entire cost model, and an unread field is paid for on every batch.
+
+      Do NOT leave it as-is on the assumption that something downstream checks
+      it. Nothing does, and the sample says something should.
+
+### Activity compaction — three follow-ups found while fixing the double-count
+
+Found during the chunk-atomic compaction rewrite. None of these are fixed by that
+change; all three were verified against real production data or source, not inferred.
+
+- [ ] **`RepairActivityIndexes` is time-unbounded and runs nightly inside the job
+      that was just made survivable.** Memory is bounded, but it walks ~12M index
+      entries doing a point lookup each, with no cutoff and no chunking. It is the
+      remaining piece of `maintenance.cleanup-activity-log` that can still run
+      until something kills it — which now means it can undo the benefit of the
+      bounded compaction it runs alongside.
+- [ ] **`maintenance.window` has no per-task panic isolation.** A nil-deref panic
+      in task 1 of 10 (`dedup_refresh`) cancelled the other nine on seven
+      consecutive nights, 2026-08-17 → 08-23. `cleanup_activity_log` is task 7,
+      so activity compaction stopped running for a week and nothing reported it.
+      One task's panic must not cancel unrelated maintenance.
+- [ ] **Re-derive the "scheduled ops that never fire" list before acting on it.**
+      The instrument used to produce it asked "does this def have a `scheduler.*`
+      twin?" The correct predicate is "is this def a value in `taskV2DefIDs`?"
+      (26 entries). At least 4 of the 27 are false positives with live
+      `EnqueueOp` calls — `reconcile_scan`, `ai_dedup_batch`, `purge_old_logs`,
+      `cleanup_activity_log` — mapped at `internal/scheduler/maintenance.go:174-178`
+      and enqueued at `tasks.go:854/882/942/964/993`. `OperationDef.Schedule`
+      really is decorative (written to `op_definitions_v2.ScheduleCron`, read by
+      nothing, no cron library in the module), but that is a separate claim from
+      "these 27 never ran", which is false as stated.
+
+Related and worth doing regardless: a registry-level guard that rejects an
+`OperationDef` declaring a `Schedule` nothing can execute. That would have caught
+the decorative-field problem at startup instead of by archaeology.
+
+## Audit every path derived from `database_path` for overlay-order dependence
+
+The 2026-09-09 outage exposed that artifacts derived from `database_path` resolve
+at different times relative to the config-blob overlay, so they can disagree with
+each other on the same run. Measured on prod at 15:39:
+
+```
+Using database: /mnt/.../.appdata/audiobooks.pebble        <- flag value
+Search index opened   path=/var/lib/.../library.bleve      <- blob value
+Emergency access token written  token_file=/var/lib/.../.bootstrap-token
+```
+
+Pebble and the settings-encryption key directory are resolved in `cmd/root.go`
+BEFORE `LoadConfigFromDatabase`; the Bleve index and the bootstrap token are
+resolved after. PR #3168 makes the value coherent, which fixes the symptom, but
+nobody has enumerated the full set of consumers.
+
+- [ ] Grep every read of `AppConfig.DatabasePath` and `filepath.Dir(...DatabasePath)`
+      and record, for each, whether it runs before or after the blob overlay.
+- [ ] Decide which of them SHOULD follow a relocation and which should be
+      independently configurable (`library.bleve` is arguably its own setting —
+      a search index and a database have different size and IO profiles).
+- [ ] Check whether a stale `/var/lib/audiobook-organizer/library.bleve` is left
+      behind on prod after #3168 deploys, and remove it if so — it is on rpool,
+      the pool the relocation exists to protect.
+
+### Make the credential directory a real config option, not a hardcoded constant
+
+`config.DefaultSecureStateDir` is the Linux-only literal `/var/lib/audiobook-organizer`
+with a single escape hatch (`ABK_STATE_DIR`) that exists so tests and containers can
+write anywhere at all. That was deliberate and it is not the end state — it was taken
+as a stopgap to get past a broken bootstrap runbook, and it deliberately bypasses the
+config system every other setting in this codebase goes through.
+
+Do it properly: `state_dir` as an ordinary setting, resolved the same way the rest are.
+
+**1. Wire it through cobra + viper like every other path setting.**
+
+- A `--state-dir` persistent flag on `rootCmd`, registered in
+  `persistentFlagConfigKeys` so it is bound by the same loop as `--db`/`--dir` and
+  captured by the `Changed()` pass that feeds `config.MarkFlagExplicit`.
+- `StateDir string` on `config.Config` with the `state_dir` mapstructure key, plus a
+  `viper.SetDefault`.
+- Env-authoritative treatment in `applyEnvAuthoritativeConfig`, exactly as
+  `database_path` got: `if flagSupplied("state_dir") || envSupplied("STATE_DIR")`.
+  Without this the persisted config blob overwrites the operator's value on every
+  start-up, which is the bug #3168 was about — and this setting is *more* dangerous to
+  get wrong than `database_path`, because the blob lives in the database whose secrets
+  the setting governs.
+- An entry in `envLockedSettings`/`flagLockedSettings` so `SettingLocks()` reports it
+  and the UI can grey it out with a reason.
+- Keep `ABK_STATE_DIR` working as an alias, or migrate it and say so in the changelog.
+
+**2. Resolve the default per-platform** instead of one Linux literal, with an explicit
+value beating all of it:
+
+| OS | Directory | Notes |
+|---|---|---|
+| Linux | `$STATE_DIRECTORY` if systemd set it, else `$XDG_STATE_HOME/audiobook-organizer`, else `/var/lib/audiobook-organizer` | systemd exports `STATE_DIRECTORY` when the unit declares `StateDirectory=`, and it is already exactly this directory |
+| macOS | `~/Library/Application Support/audiobook-organizer` | the documented location; **not** `~/Documents`, which is user-visible and iCloud-synced |
+| Windows | `%LOCALAPPDATA%\audiobook-organizer` | `%APPDATA%` roams — a machine-local secret must not follow the user to another machine |
+
+**3. Decide whether it is UI-settable, and write down the answer.** It is currently
+kept out of Settings > Paths on purpose: a text box that relocates `.encryption_key`
+is a text box that deletes secrets, because the UI cannot move the file. If it is
+surfaced, it needs to be read-only-with-explanation, or paired with a real "move the
+key for me" action that is transactional.
+
+**Four things this must not break**, all of which have already bitten:
+
+- **Never relocate the key without moving the file.** `database.InitEncryption`
+  generates a fresh key when it cannot read one, and `config/persistence.go` then
+  re-encrypts the four secrets recoverable from the config file and `DeleteSetting`s
+  every other secret. So changing the resolved directory in a release silently destroys
+  secrets on upgrade. Keep the legacy-directory fallback read, and keep
+  `guardAgainstKeyRegeneration` in front of it.
+- **The write side and the consume side must not re-derive independently.** They did,
+  as two copies of `filepath.Dir(database_path)`, and that is a 401 with the token file
+  sitting right there. `internal/server/bootstrap_state_dir_test.go` pins it; keep that
+  test meaningful.
+- **Windows has no `0600`.** `os.WriteFile(path, key, 0600)` is not enforced on NTFS.
+  Either set a real ACL or document the Windows path as unprotected.
+- **`os.UserHomeDir` fails in a service context.** A Windows service or a launchd daemon
+  can run with no usable home; the fallback must be a real path, not `""`, or every
+  derived path collapses to a relative one next to the working directory.
+
+Groundwork already in place: one resolution function (`config.SecureStateDir`), one
+creation helper (`config.EnsureSecureStateDir`), and one call site per consumer — so
+this is a change to those two functions plus their tests, not a sweep.
+
+### Finish the credential relocation on the prod host (needs root, in this order)
+
+PR #3171 pinned the encryption key, `.bootstrap-token` and `.readonly-key` to
+`/var/lib/audiobook-organizer`. The code landed; the filesystem work did not, because
+it needs root. `scripts/finish_credential_migration.py` does all of it and refuses
+anything it cannot justify from the state of the host — but the two steps must happen
+in this order, and it will not let them happen in the other one:
+
+- [ ] **Deploy #3171** (`make deploy-debug` from the PRIMARY checkout, only at
+      `git rev-list --left-right --count HEAD...origin/main` == `0 0`). Safe with the
+      key still at the old path: `InitEncryption` probes its legacy directories, uses
+      the key it finds, and logs where to move it. Nothing is at risk in the meantime,
+      so there is no reason to try to move the key first.
+- [ ] **Then** `sudo python3 scripts/finish_credential_migration.py --apply` on the
+      server. Removes the stale `/var/lib/audiobook-organizer/.bootstrap-token` (a
+      pre-move leftover that still answers `sudo cat` with a value that expired ten
+      minutes after it was written — following the runbook against it yields a
+      well-formed token and a bare `401`), and moves the key.
+- [ ] **Later, after the next restart for any other reason:**
+      `sudo python3 scripts/finish_credential_migration.py --remove-legacy-key --apply`
+      to retire the renamed-aside `.encryption_key.migrated-*`. It refuses until the
+      service has been observed running, started *after* the rename, with the legacy
+      name gone — at which point `guardAgainstKeyRegeneration` would have refused to
+      boot had the new location not worked, so a live service is the proof.
+
+Verified read-only against prod on 2026-09-09: the deployed binary predates #3171 and
+the running process still resolves its state dir to `<root_dir>/.appdata`, so the
+script currently refuses the key move on both counts. That refusal firing is the
+expected state until the deploy happens.
+
+Do **not** restart the service to hurry any of this along — a restart resumes the
+interrupted library scan. The script never restarts it, deliberately.
+
+Note that `.appdata` is `0700 audiobook:audiobook`, so run the script as root or every
+path inside it reads as *unknown* (not absent) and the key move stays blocked.
+
+### Scan progress: give the per-book bar a fixed library-wide denominator
+
+The 2026-09-09 scan-progress fix (PR #3173) made the two discovery phases report a
+*truthful* indeterminate signal (animated bar + count, `progress_total=0`) and gave
+the per-book "Processed" phase a **book-unit** denominator (`discoveredBooks`) that
+always reaches 100%. Those discovery-phase fixes are verified live in prod and are
+correct. This task is the follow-up the per-book phase still needs.
+
+**The gap, confirmed in prod 2026-09-10 01:05 EDT.** The live scan is **15,744
+folders** (`Scanning folder 20/15744`, `21/15744`), and most hold exactly one book
+(`scan started: 1 books to process` → `Processed: 18621/18621`). Because
+`scanFolder` does `discoveredBooks.Add(len(books))` immediately before processing
+that folder, the per-book **total climbs in lockstep with `current`** on this shape
+(`18620/18620` → `18621/18621` → …): the bar sits pinned at ~100% while both numbers
+race upward. That is the user's original "total counts up" symptom, relocated from
+the discovery phases into the per-book phase. It is unit-correct (books/books,
+always tops out) but no more informative than a spinner for a many-small-folder
+library.
+
+Note the old (pre-#3173) code showed a *fixed* `29021/30548` here — but 30548 was
+`len(scanCache)`, a **file** count that only coincidentally ≈ the book count on this
+single-file-per-book library; it under-runs and tops the bar out early on multi-file
+books (the ~11% case #3173 set out to fix). So #3173 did not break correctness — it
+traded a coincidentally-fixed denominator for an always-correct climbing one. This
+task is to get *both*: fixed and correct.
+
+**The cheap fix — no pre-walk needed (this corrects the earlier premise here).**
+`len(foldersToScan)` is known at loop entry; it is already the bounded denominator
+of the `Scanning folders: 17028/17028` phase that #3173 correctly left alone. Drive
+the per-book bar off **folder** progress (`folderIdx / len(foldersToScan)`) rather
+than book progress and the denominator is fixed from the first folder, at zero extra
+cost — no second directory traversal, which is the whole reason the book/file
+pre-walk (below) was deferred. An earlier version of this note claimed a fixed
+library-wide denominator *requires* a discovery-only pre-walk; that is true only for
+a fixed *book*-unit denominator, not for the folder-unit one.
+
+**The tradeoff to design around, not ignore.** Naive folder-unit progress is coarse
+when folders hold uneven book counts, and it *regresses the single-big-folder shape*:
+one folder of 30k books would sit at 0% until the whole folder finishes. The robust
+form is a **scaled folder denominator plus a within-folder fraction** — advance the
+bar by `(folderIdx + booksProcessedInThisFolder/len(books)) / len(foldersToScan)`, so
+it moves smoothly whether folders hold 1 book or 30k. Keep the `Processed: N/M books`
+count in the **message text** (it is useful); it is only the **bar** that needs the
+fixed denominator.
+
+**Separate, still-open: the multi-folder resume scoping.** `discoveredBooks` only
+accumulates folders from `ResumeFolderIdx` onward (earlier folders are `continue`d),
+so on a resume the book-unit denominator is scoped to the resumed run's folders, not
+the whole library. The folder-unit bar above mostly sidesteps this (folder index is
+absolute), but if the book-unit count is kept anywhere, persist the previous run's
+discovered total in the checkpoint and seed `discoveredBooks` with it on resume.
+
+Notes for whoever picks this up:
+- A *book* pre-count is not an option: `groupFilesIntoBooks` reads tags to group
+  files into books, so counting books up front costs the same as the scan's slow
+  phase. The folder count does not — `foldersToScan` is already built.
+- A *file* pre-count is the whole-tree walk #3173 removed (a second traversal
+  producing a file-unit number against a book numerator).
+- The stale branch `fix/scan-progress-monotonic` (commit 34adc1b57, unmerged)
+  took the pre-walk approach AND had a latent bug: its `bookProgressUnits` used
+  `len(SegmentFiles)`, which is empty for single-album-directory books, so it
+  undercounts and never reaches 100% for those. Delete that branch; do not revive
+  it as-is. The folder-unit approach above is simpler and needs none of it.
 
 ## Operation parent/child lineage is never populated by the BACKEND
 
