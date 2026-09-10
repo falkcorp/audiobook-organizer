@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -24,6 +24,8 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 2 | TASK-309 scanner AIPhaseSummary discarded | correctness critical | S | go-specialist/sonnet | dispatched 14:46 |
 | 2 | TASK-310 ISBN sweep drops provider errors | correctness critical | S | go-specialist/sonnet | dispatched 14:49 |
 | 2 | TASK-354 duplicate FilePath in one batch | data-loss | S | go-specialist/opus | dispatched 14:56 (L4241/4242 code; L4244 measure-only) |
+
+**Cap note 15:08:** resuming TASK-309 (finish gate) and TASK-306 (CodeQL rework) while 360/310/354 run made 5 live workers, over the 4 limit. No new dispatch until ≤4.
 | 3 | TASK-363 purge-empty-authors file-safety counter | data-loss | M | opus | queued (after 302 merges — same guard family) |
 | 3 | TASK-344 MergeBooks audio-route guard | data-loss | M | | queued |
 | 3 | TASK-346 / 347 / 358 / 359 series trashed-row guards | data-loss | M | | queued — check shared files before pairing |
@@ -57,6 +59,7 @@ security) are HELD OPEN for the owner — never admin-merged.
 - Worktree `.worktrees/server-handlers-306`, branch `agent/server-handlers-306-post-backup-restore-caller-requested-che`, first sha `7ff85a3bf` (option b, fail-closed).
 - REJECTED at review: `web/src/pages/Settings.tsx:195` defaults the verify checkbox to true and `api.ts:3629` defaults `verify=true`, so option (b) turns every UI restore into a 400. Worker re-tasked 14:44 to option (a): `.sha256` sidecar written atomically at create, verified at restore, `ErrChecksumMismatch` on tamper, legacy no-sidecar stays fail-closed with an actionable message, `verified:true` on success.
 - Rework sha `44f9c9451`: sidecar write in `CreateBackup` (temp+rename; failure removes the archive), `verifyChecksumSidecar` in `RestoreBackup`, handler 409/400/500 routing, sidecar removed by `DeleteBackup` and retention, listing pinned to ignore `.sha256`. 5 backup + 4 handler tests. Gate exit 0, `-race` clean, staticcheck clean. `web/` untouched.
+- 15:07 CodeQL on #3183: 3 NEW alerts on the sidecar code (path-injection backup.go:568/:809, log-injection :810). Worker re-tasked: `RestoreBackupIn`/`DeleteBackupIn`(backupDir, filename) resolve the target from `os.ReadDir` and build every path from the directory entry (the only credited barrier shape in this repo — see memory `reference_codeql_sanitizer_barriers`); handler passes the config dir + sanitized name; sidecar warn logs use the entry name and a sanitized error. No dismissals.
 - PR #3183 — HELD for owner. Rollback note in the PR: one new metadata file per archive; owner to say if it wants the dry-run protocol. Deploy note: pre-existing backups have no sidecar, so their first verified restore returns 400 until re-created.
 
 ### TASK-302 — DB-01 purge-empty-authors guard
