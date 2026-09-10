@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
 # The safety checks that were missing
 
 **Pull requests:** #3181 (merge lock), #3180 (organize check), #3182 (author delete
-guard). All are open and
+guard), #3183 (backup verification). All are open and
 **held for the owner's review** because they touch paths that move or delete library
 data; this summary will be updated with merge commits as they land. Planning package:
 #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -33,7 +33,13 @@ data; this summary will be updated with merge commits as they land. Planning pac
   app generates itself, but not ids supplied by an importer, migration, or restore. A book
   with one of those ids could credit an author and still not be counted, so the author
   looked unused and was deleted. The scan now covers every book record.
-- All three fixes come with a test that reproduces the original problem and fails on the
+- **"Verify this backup before restoring" did nothing.** The restore screen has a
+  "verify" option, on by default. It never verified anything, because the app computed a
+  fingerprint when it made a backup and then threw it away. Restoring from a damaged
+  backup file looked identical to restoring from a good one. The app now saves that
+  fingerprint next to each backup and checks it on restore, refusing to restore a file
+  that no longer matches.
+- All four fixes come with a test that reproduces the original problem and fails on the
   old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -99,3 +105,26 @@ structural filter the other already-fixed scans use to skip the app's secondary 
 Two tests create a book with a letter-leading id and confirm it is counted and re-linked.
 The one-off check for how many such ids exist in the live library was left for the
 owner to run, since it touches production data.
+
+## 4. The backup verification that never ran
+
+**What it was.** When a backup is created, the app computes a SHA-256 fingerprint of the
+archive, a short value that changes if even one byte of the file changes. It reported
+that fingerprint in the API response and then discarded it. The restore endpoint accepts
+a "verify" flag, and the Settings page turns it on by default, but with nothing saved to
+compare against, the flag only produced a log line saying verification was "not yet
+implemented" and the restore went ahead.
+
+**Why it mattered.** A restore is the moment you most need to know a backup is intact.
+A truncated or corrupted archive, which can happen on a full disk or an interrupted copy,
+restored with the same success message as a good one. The user saw "verified" behavior
+in the UI that did not exist.
+
+**The fix.** Each new backup now gets a small companion file holding its fingerprint,
+written atomically so it is either complete or absent. A restore with "verify" on reads
+that file, recomputes the fingerprint, and refuses with a clear "does not match" error
+before touching anything if they differ. Backups made before this change have no
+companion file; verifying one of those returns an explanatory error that tells the user
+to restore with verification off or re-create the backup, rather than pretending. The
+first version of this fix simply refused every verified restore, which would have broken
+the default UI path; it was sent back and replaced with real verification.
