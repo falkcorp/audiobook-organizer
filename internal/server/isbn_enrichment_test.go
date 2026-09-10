@@ -1,7 +1,7 @@
 // file: internal/server/isbn_enrichment_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b7766bc-1f00-4f32-b8ca-8cb0e815c9a1
-// last-edited: 2026-07-07
+// last-edited: 2026-09-10
 
 package server
 
@@ -253,5 +253,60 @@ func TestEnrichMissingISBNs_RespectsLimit(t *testing.T) {
 	}
 	if len(checkedIDs) != 2 {
 		t.Fatalf("expected 2 updated IDs, got %d", len(checkedIDs))
+	}
+}
+
+// TestEnrichMissingISBNs_EnrichesASINWhenISBNPresent is the regression guard for
+// the ASIN-aware batch gate. Before the fix, needsIdentifierEnrichment returned
+// false for any book that already had an ISBN, so the batch scan skipped it and
+// its ASIN was never fetched. This asserts a book with an ISBN but no ASIN is now
+// picked up and has its ASIN written from the Audible source.
+func TestEnrichMissingISBNs_EnrichesASINWhenISBNPresent(t *testing.T) {
+	isbn13 := "9780000000009"
+	book := database.Book{ID: "book-isbn-no-asin", Title: "Known Book", ISBN13: &isbn13}
+
+	var savedASIN string
+	mock := &database.MockStore{
+		GetAllBooksCoreFunc: func(_, offset int) ([]database.BookCore, error) {
+			if offset > 0 {
+				return nil, nil
+			}
+			return []database.BookCore{book.Core()}, nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			if id == book.ID {
+				b := book
+				return &b, nil
+			}
+			return nil, nil
+		},
+		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
+			if b.ASIN != nil {
+				savedASIN = *b.ASIN
+			}
+			return b, nil
+		},
+	}
+	// The ASIN block only queries the source named "Audible".
+	audible := &stubSource{
+		name: "Audible",
+		results: []metadata.BookMetadata{
+			{Title: "Known Book", ASIN: "B0KNOWNBK1"},
+		},
+	}
+	svc := metafetch.NewISBNService(mock, []metadata.MetadataSource{audible})
+
+	checked, updated, err := svc.EnrichMissingISBNs(context.Background(), 10, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if checked != 1 {
+		t.Fatalf("expected the ISBN-present/ASIN-missing book to be checked, got checked=%d", checked)
+	}
+	if updated != 1 {
+		t.Fatalf("expected the book to be updated with an ASIN, got updated=%d", updated)
+	}
+	if savedASIN != "B0KNOWNBK1" {
+		t.Fatalf("expected ASIN B0KNOWNBK1 to be written, got %q", savedASIN)
 	}
 }
