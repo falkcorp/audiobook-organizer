@@ -6534,7 +6534,6 @@
               "fix-author-narrator-swap",
               "fix-book-file-paths",
               "fix-file-modes",
-              "fix-library-states",
               "fix-read-by-narrator",
               "fix-version-groups",
               "generate-itl-tests",

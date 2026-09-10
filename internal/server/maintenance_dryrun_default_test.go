@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dryrun_default_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 6c1d84af-97b2-4e30-8f55-2b70e9c14d63
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package server
 
@@ -86,7 +86,7 @@ func (j *dryRunProbeJob) awaitRun(t *testing.T) bool {
 }
 
 var (
-	// Advertises dry_run:true — the 18-of-34 case the fix is about.
+	// Advertises dry_run:true — the 21-of-37 case the fix is about.
 	probeAdvertisesTrue = &dryRunProbeJob{
 		id: "test-probe-advertises-dry-run-true",
 		params: struct {

@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-08-29
+// last-edited: 2026-09-10
 
 package server
 
@@ -178,9 +178,12 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// Go's zero value.
 	//
 	// listMaintenanceJobs (above) publishes each job's DefaultParams() to clients
-	// as `default_params`, and 18 of the 34 registered jobs advertise
+	// as `default_params`, and 21 of the 37 registered jobs advertise
 	// {"dry_run": true} — including cleanup-series, cleanup-organize-mess,
-	// dedup-books, repair-missing-files and fix-library-states. This handler
+	// dedup-books and repair-missing-files. (fix-library-states was in this list
+	// until 2026-09-10; it was deleted, not merely unregistered, because it wrote
+	// a present/missing library_state vocabulary nothing consumes — see
+	// internal/maintenance/jobs/fix_library_states_test.go.) This handler
 	// previously ignored that entirely and fell through to false, so a client
 	// that read the catalogue, saw dry_run:true, and POSTed without a body got
 	// the exact opposite of what the API had just told it — a real mutation,
