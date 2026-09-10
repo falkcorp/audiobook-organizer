@@ -90,6 +90,94 @@ func (_c *MockDedupEngine_CleanupCandidatesAfterMerge_Call) RunAndReturn(run fun
 	return _c
 }
 
+// MergeBooksJournaled provides a mock function for the type MockDedupEngine
+func (_mock *MockDedupEngine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepID string, tag string) (*merge.Result, []string, error) {
+	ret := _mock.Called(candidateID, bookIDs, keepID, tag)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MergeBooksJournaled")
+	}
+
+	var r0 *merge.Result
+	var r1 []string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(int64, []string, string, string) (*merge.Result, []string, error)); ok {
+		return returnFunc(candidateID, bookIDs, keepID, tag)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int64, []string, string, string) *merge.Result); ok {
+		r0 = returnFunc(candidateID, bookIDs, keepID, tag)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*merge.Result)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int64, []string, string, string) []string); ok {
+		r1 = returnFunc(candidateID, bookIDs, keepID, tag)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(2).(func(int64, []string, string, string) error); ok {
+		r2 = returnFunc(candidateID, bookIDs, keepID, tag)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockDedupEngine_MergeBooksJournaled_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MergeBooksJournaled'
+type MockDedupEngine_MergeBooksJournaled_Call struct {
+	*mock.Call
+}
+
+// MergeBooksJournaled is a helper method to define mock.On call
+//   - candidateID int64
+//   - bookIDs []string
+//   - keepID string
+//   - tag string
+func (_e *MockDedupEngine_Expecter) MergeBooksJournaled(candidateID any, bookIDs any, keepID any, tag any) *MockDedupEngine_MergeBooksJournaled_Call {
+	return &MockDedupEngine_MergeBooksJournaled_Call{Call: _e.mock.On("MergeBooksJournaled", candidateID, bookIDs, keepID, tag)}
+}
+
+func (_c *MockDedupEngine_MergeBooksJournaled_Call) Run(run func(candidateID int64, bookIDs []string, keepID string, tag string)) *MockDedupEngine_MergeBooksJournaled_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int64
+		if args[0] != nil {
+			arg0 = args[0].(int64)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockDedupEngine_MergeBooksJournaled_Call) Return(result *merge.Result, strings []string, err error) *MockDedupEngine_MergeBooksJournaled_Call {
+	_c.Call.Return(result, strings, err)
+	return _c
+}
+
+func (_c *MockDedupEngine_MergeBooksJournaled_Call) RunAndReturn(run func(candidateID int64, bookIDs []string, keepID string, tag string) (*merge.Result, []string, error)) *MockDedupEngine_MergeBooksJournaled_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MergeJournaled provides a mock function for the type MockDedupEngine
 func (_mock *MockDedupEngine) MergeJournaled(candidateID int64, aID string, bID string, keepID string, tag string) (*merge.Result, string, error) {
 	ret := _mock.Called(candidateID, aID, bID, keepID, tag)

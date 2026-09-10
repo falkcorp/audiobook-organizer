@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package dedup
 
@@ -333,15 +333,6 @@ func (de *Engine) autoMergeCertain(c database.DedupCandidate) (string, error) {
 // deletion) — e.g. as a merge loser. GetBookByID returns such rows unfiltered.
 func bookSoftDeleted(b *database.Book) bool {
 	return b.IsSoftDeleted()
-}
-
-// baselineFor picks the correct pre-merge baseline nanos for a book ID given the
-// two baselines captured for EntityAID / EntityBID.
-func baselineFor(bookID, entityAID string, baseA, baseB int64) int64 {
-	if bookID == entityAID {
-		return baseA
-	}
-	return baseB
 }
 
 // newestSnapshotNanos returns the UnixNano of the newest existing book_ver

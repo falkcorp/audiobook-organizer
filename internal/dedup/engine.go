@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.77.0
+// version: 1.79.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package dedup
 
@@ -1358,6 +1358,30 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 	sameTitle := normalizeTitle(book.Title) == normalizeTitle(other.Title)
 
 	if sameAuthor && sameTitle && de.AutoMergeEnabled && de.mergeService != nil {
+		// Refuse to auto-merge when there is nowhere to write the undo key.
+		// This fires unattended on every FullScan Layer-1 pass, so it is the
+		// LAST merge that should be irreversible — but a scan-wide abort is
+		// worse than not merging one pair, so degrade rather than return an
+		// error. Checked here rather than off MergeBooksJournaled's error
+		// because that error is indistinguishable from a genuine journal write
+		// failure, which IS worth reporting.
+		//
+		// The two stores degrade differently. The journal and the candidate
+		// table both live in embedStore, so with no embedStore there is no
+		// candidate row to fall back to either (upsertExactCandidate would
+		// dereference the nil store) — drop the pair. With no bookStore the
+		// journal cannot record pre-merge snapshot timestamps, but the
+		// candidate row still writes, so record the pair for review.
+		if de.embedStore == nil {
+			slog.Warn("dedup exact-file-hash: auto-merge skipped; undo journal unavailable",
+				"book", book.ID, "other", other.ID)
+			return false, nil
+		}
+		if de.bookStore == nil {
+			slog.Warn("dedup exact-file-hash: auto-merge skipped; undo journal unavailable, queued for review",
+				"book", book.ID, "other", other.ID)
+			return false, de.upsertExactCandidate(book, other, "exact", 1.0)
+		}
 		// MergeBooks serializes its own read-modify-write internally (a mutex
 		// on the singleton merge.Service), so two FullScan Layer-1 workers
 		// merging into the same "other" book at once are made atomic there —
@@ -1370,7 +1394,12 @@ func (de *Engine) handleFileHashMatch(book, other *database.Book, authorName str
 		// curated original and could keep a file-less row over the one with
 		// audio (F1/F3). A stale-pair refusal from MergeBooks is not a scan
 		// error: log it and move on.
-		result, err := de.mergeService.MergeBooks([]string{book.ID, other.ID}, "")
+		//
+		// Journaled (DA-02): no candidate row exists for this pair (hence the
+		// zero candidate id), and no human saw it before it merged, so the undo
+		// ledger is the only way back. The tag is journal provenance, not a
+		// book tag — this path applies none.
+		result, _, err := de.MergeBooksJournaled(0, []string{book.ID, other.ID}, "", "dedup:merge-source:file-hash-auto")
 		if err != nil {
 			var stale *merge.SoftDeletedInputError
 			if errors.As(err, &stale) {
@@ -4022,8 +4051,8 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		if !strings.EqualFold(v.Confidence, "high") {
 			continue
 		}
-		if de.mergeService == nil {
-			slog.Info("dedup LLM auto-merge skipped for candidate — mergeService unavailable", "candidate", candidate.ID)
+		if de.mergeService == nil || de.embedStore == nil || de.bookStore == nil {
+			slog.Info("dedup LLM auto-merge skipped for candidate — merge service or undo journal unavailable", "candidate", candidate.ID)
 			continue
 		}
 
@@ -4044,9 +4073,16 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			continue
 		}
 
-		result, mergeErr := de.mergeService.MergeBooks(
-			[]string{candidate.EntityAID, candidate.EntityBID},
+		// Journaled (DA-02): this merge fires straight off an LLM verdict with
+		// no human in the loop, so it needs an undo key at least as much as the
+		// merges a reviewer dispatches by hand. MergeJournaled writes the entry
+		// BEFORE merging and refuses the merge if it cannot.
+		result, _, mergeErr := de.MergeJournaled(
+			candidate.ID,
+			candidate.EntityAID,
+			candidate.EntityBID,
 			"", // auto-pick primary via bookIsBetter
+			"dedup:merge-survivor:llm-auto",
 		)
 		if mergeErr != nil {
 			slog.Error("dedup LLM auto-merge failed for candidate ( + )", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "mergeErr", mergeErr)

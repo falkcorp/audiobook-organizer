@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -856,6 +856,14 @@ func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
 		httputil.RespondWithServiceUnavailable(c, "merge service not available")
 		return
 	}
+	// Refuse rather than merge irreversibly, exactly as the single-candidate
+	// endpoint does: without the engine there is no undo journal, and this
+	// endpoint merges whole clusters at a time.
+	if h.dedupEngine == nil {
+		httputil.RespondWithServiceUnavailable(c,
+			"dedup engine not available; refusing to merge because the undo journal cannot be written")
+		return
+	}
 
 	var body struct {
 		SeriesID int `json:"series_id"`
@@ -937,7 +945,11 @@ func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
 		if len(bookIDs) < 2 {
 			continue
 		}
-		if _, err := h.mergeService.MergeBooks(bookIDs, ""); err != nil {
+		// Journaled (DA-02): a union-find cluster has no single candidate row
+		// behind it, hence the zero candidate id — MergeBooksJournaled records
+		// one undo entry per loser. The tag is journal provenance only; this
+		// endpoint applies no survivor tag.
+		if _, _, err := h.dedupEngine.MergeBooksJournaled(0, bookIDs, "", "dedup:merge-source:bulk-series-cluster"); err != nil {
 			failures = append(failures, fmt.Sprintf("cluster of %d: %v", len(bookIDs), err))
 			continue
 		}
@@ -1022,6 +1034,14 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	}
 	if h.mergeService == nil {
 		httputil.RespondWithServiceUnavailable(c, "merge service not available")
+		return
+	}
+	// Refuse rather than merge irreversibly. This endpoint can merge every
+	// pending candidate in the library in one call; without the engine there is
+	// no undo journal to write.
+	if h.dedupEngine == nil {
+		httputil.RespondWithServiceUnavailable(c,
+			"dedup engine not available; refusing to merge because the undo journal cannot be written")
 		return
 	}
 
@@ -1122,7 +1142,11 @@ func (h *Handler) BulkMergeDedupCandidates(c *gin.Context) {
 	for _, cand := range candidates {
 		// Snapshot features before the merge absorbs one side (best-effort).
 		labelExample := h.snapshotCandidateExample(&cand)
-		_, mergeErr := h.mergeService.MergeBooks([]string{cand.EntityAID, cand.EntityBID}, "")
+		// Journaled (DA-02). This lane merges one candidate PAIR at a time, so
+		// it uses the pairwise wrapper and the undo entry carries the candidate
+		// id. The tag is journal provenance only; this endpoint applies no
+		// survivor tag.
+		_, _, mergeErr := h.dedupEngine.MergeJournaled(cand.ID, cand.EntityAID, cand.EntityBID, "", "dedup:merge-source:bulk-filter")
 		if mergeErr != nil {
 			failures = append(failures, failure{CandidateID: cand.ID, Reason: mergeErr.Error()})
 			slog.Info("dedup bulk merge candidate failed", "cand", cand.ID, "mergeErr", mergeErr)
@@ -1170,6 +1194,13 @@ func (h *Handler) MergeDedupCluster(c *gin.Context) {
 		httputil.RespondWithServiceUnavailable(c, "merge service not available")
 		return
 	}
+	// Refuse rather than merge irreversibly: a cluster merge folds N books into
+	// one in a single call and there is no undo journal without the engine.
+	if h.dedupEngine == nil {
+		httputil.RespondWithServiceUnavailable(c,
+			"dedup engine not available; refusing to merge because the undo journal cannot be written")
+		return
+	}
 
 	var body struct {
 		BookIDs       []string `json:"book_ids"`
@@ -1193,7 +1224,11 @@ func (h *Handler) MergeDedupCluster(c *gin.Context) {
 		}
 	}
 
-	mergeResult, err := h.mergeService.MergeBooks(body.BookIDs, body.PrimaryBookID)
+	// Journaled (DA-02): the caller supplies a raw book-id list, so there is no
+	// candidate row behind it (hence the zero candidate id) and
+	// MergeBooksJournaled records one undo entry per loser. The tag is journal
+	// provenance only; this endpoint applies no survivor tag.
+	mergeResult, _, err := h.dedupEngine.MergeBooksJournaled(0, body.BookIDs, body.PrimaryBookID, "dedup:merge-source:cluster")
 	if err != nil {
 		httputil.InternalError(c, "failed to merge books in cluster", err)
 		return

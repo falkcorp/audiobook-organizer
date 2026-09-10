@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-09-01
+// last-edited: 2026-09-10
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, merge / dismiss / remove, bulk merge, stats,
@@ -90,6 +90,19 @@ type DedupEngine interface {
 	// how hand-dispatched merges -- the fast ones, at speed -- ended up being
 	// the only merges in the system with no undo.
 	MergeJournaled(candidateID int64, aID, bID, keepID, tag string) (*merge.Result, string, error)
+	// MergeBooksJournaled is the N-ary form of MergeJournaled, for the merge
+	// endpoints that hand over a whole cluster rather than one candidate pair
+	// (merge-cluster and merge-series). It writes one undo journal entry per
+	// loser before merging and refuses the merge if it cannot write them.
+	//
+	// These endpoints must use this rather than MergeService.MergeBooks for the
+	// same reason the single-candidate endpoint must use MergeJournaled: a
+	// merge through MergeBooks leaves UnmergeAuto nothing to revert to, and a
+	// bulk merge is the widest-blast-radius write in the system.
+	//
+	// candidateID may be 0 — a cluster assembled by union-find or supplied in
+	// the request body has no single candidate row behind it.
+	MergeBooksJournaled(candidateID int64, bookIDs []string, keepID, tag string) (*merge.Result, []string, error)
 	// ScorePairsForBook recomputes the ScoreBreakdown for a work list of pairs
 	// sharing book A, using the SAME collectors + unified.ComposeScore as the
 	// operational scan (via the shared collectPairSignals helper — no scorer
