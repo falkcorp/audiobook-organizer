@@ -1,5 +1,5 @@
 // file: internal/backup/backup_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-10
 
@@ -1387,6 +1387,104 @@ func TestDeleteBackupRemovesChecksumSidecar(t *testing.T) {
 
 	if _, err := os.Stat(sidecarPath); !os.IsNotExist(err) {
 		t.Errorf("sidecar %q still exists after DeleteBackup", sidecarPath)
+	}
+}
+
+// TestRestoreBackupIn_RejectsPathSeparatorFilename is the CodeQL-followup
+// regression test: RestoreBackupIn must resolve filename only against
+// os.ReadDir's own entries, so a filename smuggling a path separator or ".."
+// can never match a directory entry (ReadDir never returns entries containing
+// either) and must fall through to a not-found error rather than escaping
+// backupDir.
+func TestRestoreBackupIn_RejectsPathSeparatorFilename(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+	restoreDir := filepath.Join(tempDir, "restored")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+	if _, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}); err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	// A file that genuinely exists just outside backupDir, so a real escape
+	// (not merely a missing file) would be the only way this could succeed.
+	outsideTarget := filepath.Join(tempDir, "outside.txt")
+	if err := os.WriteFile(outsideTarget, []byte("must not be reachable"), 0644); err != nil {
+		t.Fatalf("failed to create outside file: %v", err)
+	}
+
+	for _, filename := range []string{
+		"../outside.txt",
+		"..%2Foutside.txt",
+		"sub/dir.tar.gz",
+	} {
+		err := RestoreBackupIn(backupDir, filename, restoreDir, false)
+		if err == nil {
+			t.Errorf("RestoreBackupIn(%q) succeeded; want a not-found error", filename)
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("RestoreBackupIn(%q) error = %v, want one wrapping os.ErrNotExist", filename, err)
+		}
+	}
+}
+
+// TestDeleteBackupIn_RejectsPathSeparatorFilename mirrors the restore test
+// above for the delete side.
+func TestDeleteBackupIn_RejectsPathSeparatorFilename(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+	if _, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}); err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	outsideTarget := filepath.Join(tempDir, "outside.txt")
+	if err := os.WriteFile(outsideTarget, []byte("must not be deletable"), 0644); err != nil {
+		t.Fatalf("failed to create outside file: %v", err)
+	}
+
+	err := DeleteBackupIn(backupDir, "../outside.txt")
+	if err == nil {
+		t.Fatal("DeleteBackupIn(\"../outside.txt\") succeeded; want a not-found error")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("DeleteBackupIn error = %v, want one wrapping os.ErrNotExist", err)
+	}
+	if _, statErr := os.Stat(outsideTarget); statErr != nil {
+		t.Fatalf("outside file was affected: %v", statErr)
+	}
+}
+
+// TestRestoreBackupIn_MatchingFilenameWorks proves the ordinary case: a
+// filename that DOES match a real directory entry still restores normally
+// through the new entry-resolution path.
+func TestRestoreBackupIn_MatchingFilenameWorks(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups")
+	dbPath := filepath.Join(tempDir, "test.db")
+	restoreDir := filepath.Join(tempDir, "restored")
+
+	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	if err := RestoreBackupIn(backupDir, info.Filename, restoreDir, true); err != nil {
+		t.Fatalf("RestoreBackupIn(%q) failed: %v", info.Filename, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(restoreDir, "test.db")); statErr != nil {
+		t.Errorf("restored file missing: %v", statErr)
 	}
 }
 

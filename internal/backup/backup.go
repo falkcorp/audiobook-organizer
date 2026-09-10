@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-09-10
 
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/diskstats"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
 
@@ -559,13 +560,26 @@ func writeChecksumSidecar(backupPath, checksum string) error {
 	return nil
 }
 
-// verifyChecksumSidecar re-hashes backupPath and compares it against the
-// digest recorded in its sidecar. Returns ErrVerificationUnsupported if no
-// sidecar exists, ErrChecksumMismatch if the digests disagree, or a plain
-// error for I/O failures reading/hashing.
-func verifyChecksumSidecar(backupPath string) error {
-	name := filepath.Base(backupPath)
-	raw, err := os.ReadFile(checksumSidecarPath(backupPath))
+// verifyChecksumSidecar re-hashes archivePath and compares it against the
+// digest recorded in sidecarPath.
+//
+// Both paths must already be resolved from a directory listing (see
+// RestoreBackupIn) rather than built by joining a caller-supplied filename
+// onto a directory: CodeQL's go/path-injection query does not credit
+// pathvalidation.SanitizeFilename, safepath.SecureJoin, filepath.Base, or a
+// prefix check as barriers in this repo (measured against PR #3183) -- the
+// only thing it credits is the dataflow never reaching a tainted string in
+// the first place, i.e. resolving the caller's string against
+// os.ReadDir(backupDir) and using the returned os.DirEntry.Name() instead.
+//
+// Returns ErrVerificationUnsupported if sidecarPath cannot be read (normally
+// unreachable here since RestoreBackupIn only calls this once it has already
+// found a matching directory entry, but kept as a defensive fallback for a
+// delete-after-list race), ErrChecksumMismatch if the digests disagree, or a
+// plain error for other I/O failures reading/hashing.
+func verifyChecksumSidecar(archivePath, sidecarPath string) error {
+	name := filepath.Base(archivePath)
+	raw, err := os.ReadFile(sidecarPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
@@ -579,7 +593,7 @@ func verifyChecksumSidecar(backupPath string) error {
 	}
 	expected := fields[0]
 
-	actual, err := calculateFileChecksum(backupPath, nil)
+	actual, err := calculateFileChecksum(archivePath, nil)
 	if err != nil {
 		return fmt.Errorf("failed to compute checksum for %s: %w", name, err)
 	}
@@ -589,18 +603,75 @@ func verifyChecksumSidecar(backupPath string) error {
 	return nil
 }
 
-// RestoreBackup restores a database from a backup file
+// RestoreBackup restores a database from a backup file. It is a thin wrapper
+// over RestoreBackupIn for existing callers/tests that already have a full
+// path; new callers handling caller-supplied filenames (e.g. the HTTP
+// handler) should call RestoreBackupIn directly with an untainted backupDir
+// and the raw filename -- see RestoreBackupIn's doc comment.
 func RestoreBackup(backupPath, targetPath string, verify bool) error {
+	return RestoreBackupIn(filepath.Dir(backupPath), filepath.Base(backupPath), targetPath, verify)
+}
+
+// RestoreBackupIn restores the backup named filename found in backupDir.
+//
+// filename is used only as a LOOKUP KEY against a directory listing, never
+// joined directly into a filesystem path: every path this function touches
+// (the archive, its checksum sidecar) is built from the *os.DirEntry the
+// os.ReadDir call itself returned, which is what breaks CodeQL's
+// go/path-injection dataflow (see verifyChecksumSidecar's doc comment for why
+// sanitizing filename instead is not sufficient in this repo). A filename
+// containing a path separator or ".." can never match a directory entry's
+// Name() (ReadDir never returns entries with those in the name), so such
+// input naturally falls through to the not-found error below rather than
+// needing separate rejection.
+func RestoreBackupIn(backupDir, filename, targetPath string, verify bool) error {
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	var archiveEntry, sidecarEntry os.DirEntry
+	sidecarName := filename + ".sha256"
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch e.Name() {
+		case filename:
+			archiveEntry = e
+		case sidecarName:
+			sidecarEntry = e
+		}
+	}
+	if archiveEntry == nil {
+		return fmt.Errorf("backup %q not found in %s: %w", filename, backupDir, os.ErrNotExist)
+	}
+	archivePath := filepath.Join(backupDir, archiveEntry.Name())
+
 	// Fail closed before touching anything on disk: see
 	// ErrVerificationUnsupported / ErrChecksumMismatch.
 	if verify {
-		if err := verifyChecksumSidecar(backupPath); err != nil {
+		if sidecarEntry == nil {
+			return fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
+				ErrVerificationUnsupported, filename)
+		}
+		sidecarPath := filepath.Join(backupDir, sidecarEntry.Name())
+		if err := verifyChecksumSidecar(archivePath, sidecarPath); err != nil {
 			return err
 		}
 	}
 
+	return extractArchive(archivePath, targetPath)
+}
+
+// extractArchive opens archivePath and extracts it into targetPath. Split out
+// of RestoreBackupIn so the directory-listing/verification logic above (which
+// must run first and can return before any file is opened) stays separate
+// from the extraction mechanics below, which are unchanged from before this
+// refactor.
+func extractArchive(archivePath, targetPath string) error {
 	// Open backup file
-	backupFile, err := os.Open(backupPath)
+	backupFile, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to open backup file: %w", err)
 	}
@@ -702,7 +773,7 @@ func RestoreBackup(backupPath, targetPath string, verify bool) error {
 	// real archive name.
 	if extracted == 0 {
 		return fmt.Errorf("backup %s contained no entries: it is empty or truncated, "+
-			"and nothing was restored", filepath.Base(backupPath))
+			"and nothing was restored", filepath.Base(archivePath))
 	}
 
 	return nil
@@ -797,17 +868,60 @@ func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 	return backups, nil
 }
 
-// DeleteBackup deletes a specific backup file and its checksum sidecar.
+// DeleteBackup deletes a specific backup file and its checksum sidecar. It is
+// a thin wrapper over DeleteBackupIn for existing callers/tests that already
+// have a full path; new callers handling caller-supplied filenames (e.g. the
+// HTTP handler) should call DeleteBackupIn directly -- see its doc comment.
 func DeleteBackup(backupPath string) error {
-	if err := os.Remove(backupPath); err != nil {
+	return DeleteBackupIn(filepath.Dir(backupPath), filepath.Base(backupPath))
+}
+
+// DeleteBackupIn deletes the backup named filename found in backupDir, plus
+// its checksum sidecar if one exists.
+//
+// filename is used only as a LOOKUP KEY against a directory listing, never
+// joined directly into a filesystem path -- see RestoreBackupIn's doc comment
+// for why (CodeQL go/path-injection: sanitizing filename is not a credited
+// barrier in this repo, only resolving it against os.ReadDir's results is).
+func DeleteBackupIn(backupDir, filename string) error {
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
 		return fmt.Errorf("failed to delete backup: %w", err)
 	}
+
+	var archiveEntry, sidecarEntry os.DirEntry
+	sidecarName := filename + ".sha256"
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch e.Name() {
+		case filename:
+			archiveEntry = e
+		case sidecarName:
+			sidecarEntry = e
+		}
+	}
+	if archiveEntry == nil {
+		return fmt.Errorf("failed to delete backup: %w", os.ErrNotExist)
+	}
+
+	if err := os.Remove(filepath.Join(backupDir, archiveEntry.Name())); err != nil {
+		return fmt.Errorf("failed to delete backup: %w", err)
+	}
+
 	// Best-effort: an orphaned sidecar is inert (hasArchiveExtension never
 	// matches ".sha256", so it can never be mistaken for a backup by listing
-	// or retention), but leaving it behind is untidy and a sidecar write
-	// failure here must not turn a successful delete into a reported failure.
-	if err := os.Remove(checksumSidecarPath(backupPath)); err != nil && !os.IsNotExist(err) {
-		slog.Warn("backup failed to delete checksum sidecar", "path", backupPath, "error", err)
+	// or retention), but leaving it behind is untidy and a sidecar delete
+	// failure here must not turn a successful archive delete into a reported
+	// failure. Nothing to do if the archive never had a sidecar (a legacy
+	// backup, or verify was never requested for it).
+	if sidecarEntry != nil {
+		sidecarPath := filepath.Join(backupDir, sidecarEntry.Name())
+		if err := os.Remove(sidecarPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("backup failed to delete checksum sidecar",
+				"filename", sidecarEntry.Name(), "error", logger.SanitizeLogValue(err.Error()))
+		}
 	}
 	return nil
 }
@@ -1047,7 +1161,8 @@ func enforceRetention(backupDir string, maxBackups int, maxTotalBytes, incomingB
 		// mistaken for a backup (hasArchiveExtension never matches ".sha256"),
 		// so a failure here does not affect the budget accounting above.
 		if err := os.Remove(checksumSidecarPath(backups[i].Path)); err != nil && !os.IsNotExist(err) {
-			slog.Warn("backup retention failed to delete checksum sidecar", "filename", backups[i].Filename, "error", err)
+			slog.Warn("backup retention failed to delete checksum sidecar",
+				"filename", backups[i].Filename, "error", logger.SanitizeLogValue(err.Error()))
 		}
 		remaining--
 		if backups[i].Size > 0 {

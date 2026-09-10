@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-09-10
 
@@ -675,7 +675,6 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	safeFilename := pathvalidation.SanitizeFilename(req.BackupFilename)
-	backupPath := filepath.Join(backupConfig.BackupDir, safeFilename)
 
 	// Use current database path as target if not specified
 	var targetPath string
@@ -694,8 +693,13 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
 	}
 
-	if err := backup.RestoreBackup(backupPath, targetPath, req.Verify); err != nil {
-		// backup.RestoreBackup distinguishes two verify=true failure shapes,
+	// RestoreBackupIn (not RestoreBackup) so req.BackupFilename is only ever
+	// used as a directory-listing lookup key, never joined directly into a
+	// filesystem path -- see backup.RestoreBackupIn's doc comment (CodeQL
+	// go/path-injection: sanitizing the filename is not a credited barrier in
+	// this repo, only resolving it against os.ReadDir's own results is).
+	if err := backup.RestoreBackupIn(backupConfig.BackupDir, safeFilename, targetPath, req.Verify); err != nil {
+		// backup.RestoreBackupIn distinguishes two verify=true failure shapes,
 		// both fail-closed (no extraction performed) rather than silently
 		// restoring unverified:
 		//
@@ -748,9 +752,10 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	filename = pathvalidation.SanitizeFilename(filename)
-	backupPath := filepath.Join(backupConfig.BackupDir, filename)
 
-	if err := backup.DeleteBackup(backupPath); err != nil {
+	// DeleteBackupIn (not DeleteBackup): same reasoning as RestoreBackupIn
+	// above -- filename is only ever used as a directory-listing lookup key.
+	if err := backup.DeleteBackupIn(backupConfig.BackupDir, filename); err != nil {
 		httputil.InternalError(c, "failed to delete backup", err)
 		return
 	}
