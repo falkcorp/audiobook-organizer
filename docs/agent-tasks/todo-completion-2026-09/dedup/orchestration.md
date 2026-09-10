@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/orchestration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 4cccb504-0df8-46b3-b655-8d061a1bf917 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -28,7 +28,6 @@ flowchart LR
     subgraph Wave3
       TASK193[TASK-193 M wire-round-2-confidence-boun]
     end
-    subgraph Wave4
-      TASK040[TASK-040 L make-unmergeauto-reverse-ext]
-    end
 ```
+
+**Held for the owner (not dispatchable as code):** TASK-040 (DEFER)

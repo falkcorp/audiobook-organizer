@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/audiobooks/orchestration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 20207939-5470-4cb5-a956-c94753398417 -->
 <!-- last-edited: 2026-09-10 -->
 

@@ -6,6 +6,7 @@
 # TASK-114 — Never delete — re-associate: combine debris books into a template match by duration, then version-group (TODO.md L8943)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -rl 'Successors|combine_by_template|CombineByTemplate' internal --include='*.go' -> 0 hits, confirmed no combine-by-template / Successors-class code exists anywhere. grep 'DoNotImport|block_hash' internal/database/*.go -> hits confirmed present (e.g. mock_store.go:462-463, 2179: GetAllBlockedHashesFunc, GetBlockedHashByHashFunc, GetAllBlockedHashes returning []DoNotImport) — the standing block_hash/DoNotImport dead-end suppression mechanism this op exists to supersede is still the only tool available in the codebase for this class of problem. · risk **data-loss** · effort **L**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — Never-delete, duration-based template matching for debris book groups mirrors missing_file_repoint.go's report-first/apply=false pattern and pickPrimary's version-grouping; no Deluge dependency; different population (duplicate/debris book rows) than the content-matcher's orphan book_file residual.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — combine_by_template.go ABSENT; 'Successors\|combine_by_template\|CombineByTemplate' internal -> 0 hits; DoNotImport/block_hash anchor hits internal/database. Recommendation: keep — 'never delete, re-associate' is exactly the later decision the lane settled on, so no contradiction.
 

@@ -6,6 +6,7 @@
 # TASK-072 — New maintenance op: merge an operator-confirmed list of duplicate real-author rows (TODO.md L3795)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: grep -rn 'author-duplicate-merge|author-merge|merge-author|MergeAuthors\b' internal/plugins/maintenance -> 0 hits; no author_duplicate_merge.go exists. mergeAuthorInto (author_conjunction_repair.go:288) is confirmed intact and reusable, but its only two callers are auto-detection heuristics (conjunction-twin repair, numbered-author repair), not an operator-supplied Names[] allowlist op. · risk **data-loss** · effort **M**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — No existing op does operator-confirmed-allowlist author merge (only conjunction-repair, strip-merge, dedup-scan/split-scan). Explicit Names param avoids the type-1/2 heuristic trap; dry-run default mirrors author_conjunction_repair.go.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — author_duplicate_merge.go ABSENT; 'author-duplicate-merge\|MergeAuthors\b' in maintenance -> 0 hits; mergeAuthorInto author_conjunction_repair.go:288; GetAllAuthors pebble_store_authors.go:21. Recommendation: keep — the reusable merge primitive it builds on is intact.
 

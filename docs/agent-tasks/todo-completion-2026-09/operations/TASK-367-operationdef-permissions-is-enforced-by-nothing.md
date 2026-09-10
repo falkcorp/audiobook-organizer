@@ -7,7 +7,9 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Compound narrator names are not split into individual narrators” (L11914), items at lines 11964
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: security — 11964 legit (OperationDef.Permissions enforced by nothing, and enforcement code is about to be deleted); 15004 is a minor accepted-risk dependency bump now unblocked · Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch.
-**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · operations subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): SUPERSEDED** — TriggerOperationV2 (handlers/operations_v2.go:578-588) already enforces def.Permissions behind h.enforcePerms; NewOperationsV2Handler takes enforcePerms as a required constructor param wired to config.AppConfig.EnableAuth (wire_handlers.go:172). The item's evidence is dated 2026-08-17 and stale.
+> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX.
+**Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · operations subagent · **Depends on:** none · **Wave:** owner-gated — not a worker task · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Compound narrator names are not split into individual narrators” (L11914), items at lines 11964. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
 

@@ -334,19 +334,19 @@
   "sev": null,
   "effort": "L",
   "prio": "P1",
-  "dispatch": "DISPATCH",
-  "dispatch_why": "",
+  "dispatch": "DEFER",
+  "dispatch_why": "UnmergeAuto (internal/dedup/auto_resolve.go:389) has no caller outside its own definition — no route or handler wires it. Building full external-ID + iTunes write-back reversal for a function nothing invokes is premature.",
   "files": [
    "internal/database/dedup_automerge_journal.go",
+   "internal/dedup/auto_resolve.go",
    "internal/merge/service.go",
    "internal/database/pebble_store_externalids.go",
    "internal/dedup/merge_journaled.go",
-   "internal/dedup/auto_resolve.go",
    "internal/database/mock_store.go"
   ],
   "source_key": "docs/agent-tasks/todo-completion/dedup/TASK-040-make-unmergeauto-reverse-external-id-reassignmen.md",
   "todo_lines": null,
-  "wave": 4,
+  "wave": null,
   "title": "Make UnmergeAuto reverse external-ID reassignment and iTunes write-back removals, not just the book record"
  },
  {
@@ -1152,8 +1152,8 @@
   "sev": null,
   "effort": "L",
   "prio": "P1",
-  "dispatch": "DISPATCH",
-  "dispatch_why": "",
+  "dispatch": "DEFER",
+  "dispatch_why": "Feeds Deluge-parsed release-name metadata into the identity matcher, but the torrent-relocation initiative is parked and the active content-matcher plan says residual repointing is matched by CONTENT, never by filename or torrent names.",
   "files": [
    "internal/deluge/discovery.go",
    "internal/deluge/client.go",
@@ -1161,7 +1161,7 @@
   ],
   "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-109-parse-deluge-torrent-release-names-into-structur.md",
   "todo_lines": null,
-  "wave": 1,
+  "wave": null,
   "title": "Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)"
  },
  {
@@ -1173,15 +1173,15 @@
   "sev": null,
   "effort": "L",
   "prio": "P1",
-  "dispatch": "DISPATCH",
-  "dispatch_why": "",
+  "dispatch": "DEFER",
+  "dispatch_why": "Read-only audit tier, but net-new Deluge development (0 hits for audit/grouping code in internal/deluge or internal/plugins/deluge); the parked initiative blocks new Deluge work.",
   "files": [
    "internal/deluge/client.go",
    "internal/deluge/grouping_audit.go"
   ],
   "source_key": "docs/agent-tasks/todo-completion/missing-file-lane/TASK-110-audit-book-file-grouping-against-deluge-torrent-.md",
   "todo_lines": null,
-  "wave": 2,
+  "wave": null,
   "title": "Audit book/file grouping against Deluge torrent file-list membership (read-only, tier 1 of the item's own 3-tier ambition) (TODO.md L8738)"
  },
  {
@@ -3113,8 +3113,8 @@
   "sev": null,
   "effort": "L",
   "prio": "P1",
-  "dispatch": "DISPATCH",
-  "dispatch_why": "Section and lines verify clean; item 1049 explicitly forbids building the wipe before 1045's gate exists, which the brief's ordering respects. Already flagged review-critical, appropriately.",
+  "dispatch": "DEFER",
+  "dispatch_why": "The item's own text makes the DB reset valid only after the reverify gate (TASK-335) exists; that gate is unbuilt and itself needs reshaping.",
   "files": [
    "internal/server/handlers/"
   ],
@@ -3122,7 +3122,7 @@
   "todo_lines": [
    1049
   ],
-  "wave": 1,
+  "wave": null,
   "title": "Full-application-database reset (future, GATED)"
  },
  {
@@ -3769,8 +3769,8 @@
   "sev": null,
   "effort": "M",
   "prio": "P1",
-  "dispatch": "DISPATCH",
-  "dispatch_why": "Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch.",
+  "dispatch": "SUPERSEDED",
+  "dispatch_why": "TriggerOperationV2 (handlers/operations_v2.go:578-588) already enforces def.Permissions behind h.enforcePerms; NewOperationsV2Handler takes enforcePerms as a required constructor param wired to config.AppConfig.EnableAuth (wire_handlers.go:172). The item's evidence is dated 2026-08-17 and stale.",
   "files": [
    "internal/operations/registry/registry.go"
   ],
@@ -3778,7 +3778,7 @@
   "todo_lines": [
    11964
   ],
-  "wave": 1,
+  "wave": null,
   "title": "`OperationDef.Permissions` is enforced by nothing — and PR-3 is about to delete the code that *is* d"
  },
  {

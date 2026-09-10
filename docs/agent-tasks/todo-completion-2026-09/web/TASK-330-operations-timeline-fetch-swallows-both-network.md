@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-330-operations-timeline-fetch-swallows-both-network.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 8a276b78-34d3-41ca-8e8d-44bbbd70e1f9 -->
 <!-- last-edited: 2026-09-10 -->
 

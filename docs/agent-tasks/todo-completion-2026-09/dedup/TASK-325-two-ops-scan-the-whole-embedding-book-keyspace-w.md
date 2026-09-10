@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-325-two-ops-scan-the-whole-embedding-book-keyspace-w.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d336ec1f-6a62-4705-adc5-f1acb4d73379 -->
 <!-- last-edited: 2026-09-10 -->
 

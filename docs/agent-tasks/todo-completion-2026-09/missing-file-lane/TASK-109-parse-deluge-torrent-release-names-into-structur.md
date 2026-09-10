@@ -6,6 +6,9 @@
 # TASK-109 — Parse Deluge torrent release names into structured candidate metadata (author/series/volume/narrator/edition/year) as a scored candidate for the existing matcher (TODO.md L8707)
 
 > **Status 2026-09-10:** 🟡 REAL — re-verified at HEAD 42d187168: internal/deluge/discovery.go:334 func ParseTorrentNameCandidates still returns only normalized title strings ([]string), not structured metadata. internal/deluge/client.go:201 core.get_torrent_status call confirmed present and reusable. find internal/deluge -iname '*metadata*' returns no results — no metadata_candidate.go file, and no ParseTorrentNameMetadata symbol exists anywhere in the tree. · risk **data-loss** · effort **L**
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): DEFER** — Feeds Deluge-parsed release-name metadata into the identity matcher, but the torrent-relocation initiative is parked and the active content-matcher plan says residual repointing is matched by CONTENT, never by filename or torrent names.
+> **Needs first:** Owner decision on the parked Deluge initiative; reconcile with the content-only matching stance first.
+> **Do NOT dispatch this brief to a worker** until the condition above changes; it is gated in PRIORITY-MATRIX.
 
 > **Status 2026-09-02:** 🟡 OPEN — still worth doing — internal/deluge/metadata_candidate.go ABSENT; ParseTorrentNameMetadata -> 0 hits; title-only ParseTorrentNameCandidates still discovery.go:334; core.get_torrent_status client.go:200. Recommendation: keep — scored-candidate-only framing is right; do not let it write authoritatively.
 

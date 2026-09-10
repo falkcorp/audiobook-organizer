@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/itunes/TASK-323-external-id-backfill-s-done-setting-is-written-b.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 7c0c3872-a44d-44f1-acb1-0c7d122ff9ef -->
 <!-- last-edited: 2026-09-10 -->
 

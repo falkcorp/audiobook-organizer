@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-318-publisheddecades-filter-list-is-built-from-only.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: f392263f-f421-4f97-ae8c-23e0db862601 -->
 <!-- last-edited: 2026-09-10 -->
 

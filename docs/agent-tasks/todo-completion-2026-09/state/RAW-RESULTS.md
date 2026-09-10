@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/RAW-RESULTS.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 9b4e6d21-7f3a-4c58-a1d2-5e8f0b9c3d74 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -325,4 +325,17 @@ cost of ONE forking wave-1 verifier (241k) per agent, and no shared-file races. 
 "working harder than they should" incident from earlier in the day was three wave-1 shell
 loops hung on zsh's `> "$OUT"` (NULLCMD `cat` on the harness stdin) for 80+ minutes with
 0 bytes written; killed, lesson recorded in memory.
+
+## Design-fit review — 2026-09-10 14:03–14:10 (two `audiobook-organizer:expert` agents)
+
+Owner asked whether the TODOs still make sense for the current design and dropped CI/CD
+from scope. Inputs: `final/cut_rows_1_64.json` (the 49 dispatchable rows of matrix §A
+1–64, minus 3 ci-tooling rows = 46). Rows 1–29 → 22 tool calls, 124k tokens, 5.5m; rows
+31–64 → 23 tool calls, 134k tokens, 5.8m. Outputs `final/design_fit_rows_1_29.json`,
+`final/design_fit_rows_31_64.json`. Verdicts: 37 FITS, 3 RESHAPE (TASK-301, 338, 335),
+5 DEFER (TASK-040, 109, 110, 336, dedup-pipeline-hardening/TASK-06), 1 SUPERSEDED
+(TASK-367 — coordinator re-verified `enforcePerms` in `operations_v2.go:558-588` and
+`wire_handlers.go:170-173`). Wired into `gen_new_package.py` 1.2.0 / `build_matrix.py`
+1.2.0 (design-fit line on every affected brief, RESHAPE rewrites the Goal, DEFER/SUPERSEDED
+gate the row). Package: 18 held, 166 dispatchable.
 

@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5139
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE (add requireTablesComplete/ErrMemdbIncomplete guard, matching series/author getters) · class: data-loss — severe: memdb-incomplete reads feed an orphan-file HARD DELETE with no completeness guard, i.e. irreversible file loss on stale data · ⛔ standing-ban contact: none — fix adds a guard · One of the highest-severity items in the batch; prioritize.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — orphan_book_files.go:232,256 builds its valid set from GetAllBooksCore + ListSoftDeletedBooks; neither memdb implementation (memdb_reads.go:660,790) calls requireTablesComplete, unlike memdb_reads.go:506; this path genuinely hard-deletes (DeleteBookFilesByIDs).
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · maintenance subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5139. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-302-purge-empty-authors-delete-guard-book-scan-uses.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 3b515dcd-13e2-4fbd-a72e-ffe9e5e3f660 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-302 — purge-empty-authors delete-guard book scan uses a narrower byte-range bound than the sibling backfill already fixed for the identical bug (DB-01)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DB-01` (audit_database_operations.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — author_bookref.go:317-327 still scans book:0..book:; the sibling fix shipped in pebble_store_versiongroup_backfill.go for the identical bound shape.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · database subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `DB-01` (audit_database_operations.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

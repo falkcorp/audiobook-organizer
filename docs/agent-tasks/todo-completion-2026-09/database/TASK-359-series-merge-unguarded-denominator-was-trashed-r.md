@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5018
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — legit (unguarded ref-count denominator, series-stranding risk) · Cosmetic section-title pattern; class and fix shape are correct.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — pebble_store.go:2053-2055 states soft-deleted books are excluded on both paths and the unfiltered SeriesRefCounts counter is what covers trashed rows — the getter's authors already specify this guard.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · database subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5018. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

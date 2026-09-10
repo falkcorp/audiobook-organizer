@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c7ec28a2-1be7-4eec-b202-d0e3553d2a2c -->
 <!-- last-edited: 2026-09-10 -->
 

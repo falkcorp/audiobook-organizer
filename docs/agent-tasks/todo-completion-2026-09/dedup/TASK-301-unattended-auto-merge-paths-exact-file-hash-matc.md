@@ -1,12 +1,13 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/TASK-301-unattended-auto-merge-paths-exact-file-hash-matc.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c87b0753-6bb1-45c0-a73c-e02034d8c02a -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-301 — Unattended auto-merge paths (exact file-hash match, LLM high-confidence verdict) and several bulk/manual HTTP merge endpoints bypass MergeJournaled, so they write no reversal journal -- broader than the tracked MERGE-UNDO scope (DA-02)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `DA-02` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): RESHAPE** — 5 direct mergeService.MergeBooks sites (engine.go:1373,4047; handler.go:940,1125,1196) bypass journaling; MergeJournaled(candidateID, aID, bID, keepID, tag) is strictly pairwise and candidate-keyed. handler.go:940 and :1196 merge N-ary clusters with no candidate row and cannot route through it as written.
+> **Reshape to:** Generalize undo-ledger journaling into an N-ary, candidate-optional helper (bulk MergeJournaled variant) that the two cluster-merge handlers and engine.go can all call.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · dedup subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `DA-02` (audit_dedup_activity.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
@@ -26,6 +27,8 @@ git rebase origin/main
 (Protocol in `../ORCHESTRATION.md` and `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)
 
 ## Goal
+
+**Reshaped by the design-fit review (2026-09-10) — build THIS, not the original suggestion:** Generalize undo-ledger journaling into an N-ary, candidate-optional helper (bulk MergeJournaled variant) that the two cluster-merge handlers and engine.go can all call.
 
 Route handleFileHashMatch, ApplyVerdicts' auto-merge, and the three HTTP bulk/manual merge handlers through Engine.MergeJournaled (or extend MergeJournaled/expose an equivalent on merge.Service) instead of calling mergeService.MergeBooks directly; update TODO.md's MERGE-UNDO item to reflect the current (larger) scope.
 

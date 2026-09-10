@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/operations/TASK-316-resumerestart-proceeds-to-announce-an-op-as-queu.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 819b2d7c-59e6-4abd-a3ee-5346a5a0185b -->
 <!-- last-edited: 2026-09-10 -->
 

@@ -7,6 +7,8 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “2026-06-22 security-sweep: the items still open after the status pass” (L10899), items at lines 10906
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE (SEC-2 has a light decision: opt-in/local-only default) · class: security — legit: plaintext credential file (SEC-2) and missing CSP header (SEC-4) · Cleanest match in the batch.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — bootstrap.go:108-112 still writes a plaintext 0600 credential file; #3171 changed WHERE it lives, not WHETHER it is plaintext.
+> **Needs first:** Opt-in vs local-only policy for plaintext credential files.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “2026-06-22 security-sweep: the items still open after the status pass” (L10899), items at lines 10906. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

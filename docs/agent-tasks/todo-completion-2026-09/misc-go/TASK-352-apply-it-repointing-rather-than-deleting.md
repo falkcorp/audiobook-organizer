@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Task 2 — decide the route for the 2,307 (needs a decision, not code yet)” (L3950), items at lines 3966
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — legit, and the item itself already mandates REPOINT not delete · ⛔ standing-ban contact: none — explicitly repoints, touches author rows not book_file · Task 1 (dry-run+apply) is independent of and must precede Task 2's route decision, so this slice is safely codeable now.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — TODO.md:3965-3969 Task 1 (repair 1,291 AuthorID/join-slice mismatches) unblocked, no apply path built; distinct table/mechanism from the missing-file content-matcher effort. Repoint-not-delete matches the standing rule.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · misc-go subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Task 2 — decide the route for the 2,307 (needs a decision, not code yet)” (L3950), items at lines 3966. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

@@ -1,0 +1,218 @@
+[
+ {
+  "row": 1,
+  "brief": "TASK-300",
+  "verdict": "FITS",
+  "why": "merge.LockMergeRMW absent from split_book_merge.go; serialize.go and book_dedup.go:402-403 already use this lock for the same race class — drop-in mirror of an established pattern.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A split-merge racing MergeBooks/CombineBooks on the same row interleaves Get→Move→Delete→Update and corrupts it."
+ },
+ {
+  "row": 2,
+  "brief": "TASK-302",
+  "verdict": "FITS",
+  "why": "author_bookref.go:317-327 still scans book:0..book:; the sibling fix shipped in pebble_store_versiongroup_backfill.go for the identical bound shape.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A book id outside the 0-9 first-byte range keeps a dangling AuthorID invisible to the guard; purge-empty-authors deletes a referenced author."
+ },
+ {
+  "row": 3,
+  "brief": "TASK-303",
+  "verdict": "FITS",
+  "why": "organizer.go:141-142 returns success on FilePath==targetPath with no os.Stat; brief already narrowed to this range.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A book pointing at a deleted/moved file reports organize success."
+ },
+ {
+  "row": 4,
+  "brief": "TASK-304",
+  "verdict": "FITS",
+  "why": "DedupAuthorTab.tsx:151-186 AuthorBooksPopover has only a loading flag; Promise.all with no catch. Pure frontend fix.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A reviewer merges an author whose real book list was hidden by a failed fetch."
+ },
+ {
+  "row": 5,
+  "brief": "TASK-301",
+  "verdict": "RESHAPE",
+  "why": "5 direct mergeService.MergeBooks sites (engine.go:1373,4047; handler.go:940,1125,1196) bypass journaling; MergeJournaled(candidateID, aID, bID, keepID, tag) is strictly pairwise and candidate-keyed. handler.go:940 and :1196 merge N-ary clusters with no candidate row and cannot route through it as written.",
+  "reshape_to": "Generalize undo-ledger journaling into an N-ary, candidate-optional helper (bulk MergeJournaled variant) that the two cluster-merge handlers and engine.go can all call.",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A literal reroute either fails to compile or force-fits a fake candidateID, mis-attributing journal rows to the wrong dedup candidate."
+ },
+ {
+  "row": 6,
+  "brief": "TASK-306",
+  "verdict": "FITS",
+  "why": "handler.go:697-699 warns to slog only, proceeds with req.Verify regardless; response has no verify field.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A DR operator trusts verify:true semantics that do not exist."
+ },
+ {
+  "row": 7,
+  "brief": "TASK-305",
+  "verdict": "FITS",
+  "why": "migrations.go:453-464: three unbatched writes; Pebble batch-write is the codebase's standard durability pattern (e.g. BatchUpsertBookFiles).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A crash between Up and setVersion re-runs a non-idempotent Up on next boot."
+ },
+ {
+  "row": 8,
+  "brief": "TASK-140",
+  "verdict": "FITS",
+  "why": "itl_cleanup.go:40-41 dry_run preview exists; :53 apply path calls SafeWriteITL unconditionally with no guard reflecting the owner's census (removable=0).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A default call deletes real chapter files on the IsPrimaryVersion==false heuristic documented as unsafe (TODO L10435)."
+ },
+ {
+  "row": 9,
+  "brief": "TASK-338",
+  "verdict": "RESHAPE",
+  "why": "fix_library_states.go still registered and still computes present/missing (:17,41-47); maintenance_dispatcher.go:183 lists it reachable. That vocabulary is consumed by nothing; #3097 governs the live organized/imported vocabulary ABS reads.",
+  "reshape_to": "Unregister/retire the job outright — 'fix' is not a viable branch of the fix-or-unregister choice.",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A 'fixed' writer still writes a vocabulary nothing reads and stays clickable — the exact hazard the standing ban exists to prevent."
+ },
+ {
+  "row": 11,
+  "brief": "TASK-352",
+  "verdict": "FITS",
+  "why": "TODO.md:3965-3969 Task 1 (repair 1,291 AuthorID/join-slice mismatches) unblocked, no apply path built; distinct table/mechanism from the missing-file content-matcher effort. Repoint-not-delete matches the standing rule.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Deleting instead of repointing creates more of the ~212 dangling-AuthorID class."
+ },
+ {
+  "row": 12,
+  "brief": "TASK-354",
+  "verdict": "FITS",
+  "why": "BatchUpsertBookFiles (pebble_store_bookfiles.go:1399+) has no FilePath-dedup map; seenBooks (:1413) tracks affected books only; GetBookFileByPath is read-committed so two same-batch rows both miss it.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Two rows sharing a FilePath in one batch both get written, corrupting Book.Duration/PID aggregates."
+ },
+ {
+  "row": 13,
+  "brief": "TASK-360",
+  "verdict": "FITS",
+  "why": "orphan_book_files.go:232,256 builds its valid set from GetAllBooksCore + ListSoftDeletedBooks; neither memdb implementation (memdb_reads.go:660,790) calls requireTablesComplete, unlike memdb_reads.go:506; this path genuinely hard-deletes (DeleteBookFilesByIDs).",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A run inside the ~130s memdb warmup undercounts valid books and hard-deletes real book_file rows with no repoint safety net."
+ },
+ {
+  "row": 14,
+  "brief": "TASK-362",
+  "verdict": "FITS",
+  "why": "author_purge_empty.go:180-184 still gates deletion on the unfiltered database.AuthorRefCounts — the headline-correction claim is accurate at HEAD. Doc-only correction plus the two supporting code defects.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A future reader acts on the wrong description or distrusts a sound guard."
+ },
+ {
+  "row": 15,
+  "brief": "dedup-pipeline-hardening/TASK-06",
+  "verdict": "DEFER",
+  "why": "drainStaleDoneFlag present (drain_stale.go:47) so the prerequisite (TASK-03) is merged and the mechanism matches design; but the task's gate is a real AskUserQuestion apply decision — an owner action.",
+  "reshape_to": "",
+  "depends_on_decision": "Owner approval to run the ~387k-row prod apply (a text-reply approval does not count per feedback_prod_apply_review_gate).",
+  "blast_if_wrong": "Prod mutation without a review gate; recovery is roll-forward only."
+ },
+ {
+  "row": 16,
+  "brief": "TASK-072",
+  "verdict": "FITS",
+  "why": "No existing op does operator-confirmed-allowlist author merge (only conjunction-repair, strip-merge, dedup-scan/split-scan). Explicit Names param avoids the type-1/2 heuristic trap; dry-run default mirrors author_conjunction_repair.go.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A heuristic op would merge book-title/disc-label rows masquerading as authors."
+ },
+ {
+  "row": 17,
+  "brief": "TASK-220",
+  "verdict": "FITS",
+  "why": "dedupe_book_file_rows.go never calls CreateOperationChange despite deps.go:165 declaring the capability; ListActiveOperationsV2 exists, so the proposed accessor wraps an existing method.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "An apply=true run deletes rows with no undo trail and no check against a concurrent library.scan."
+ },
+ {
+  "row": 18,
+  "brief": "TASK-337",
+  "verdict": "FITS",
+  "why": "DeleteOperationHistory (handler.go:242+) deletes immediately via DeleteOperationsByStatus with no dry_run/count param; dry-run-first is the convention for every other destructive op.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "An over-scoped status list deletes more history than intended with no preview."
+ },
+ {
+  "row": 19,
+  "brief": "TASK-340",
+  "verdict": "FITS",
+  "why": "writeback_batcher.go Stop() (:814-825) sets b.stopped, stops the timer, flushes once, no WaitGroup join for the three goroutines, stopCh never closed. Independent of the iTunes 2-way-sync design work.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Shutdown races the unjoined goroutines and silently loses queued iTunes writeback work."
+ },
+ {
+  "row": 20,
+  "brief": "TASK-344",
+  "verdict": "FITS",
+  "why": "book_dedup.go MergeBooks (:395) has zero HasAudioRoute references; itunes_heal.go:314 still calls it directly.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A hard-delete merge from the iTunes-heal path discards the row holding the only audio route."
+ },
+ {
+  "row": 21,
+  "brief": "TASK-346",
+  "verdict": "FITS",
+  "why": "mergeSeriesGroupHelper (duplicates_helpers.go:726) never calls SeriesRefCounts; GetBooksBySeriesIDAllVersions's own doc comment (pebble_store.go:2053-2055) names SeriesRefCounts as what covers trashed rows.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "A trashed book still referencing the merged-away series is orphaned — the phantom-series hazard measured in prod (6,893 phantom IDs / 13,322 books)."
+ },
+ {
+  "row": 22,
+  "brief": "TASK-347",
+  "verdict": "FITS",
+  "why": "series_denumber_op.go:300-327 movedAll starts true and is set false only inside the per-book loop, so an undercounted slice lets DeleteSeries fire unconditionally.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Same phantom-series orphaning via the fourth of four series-delete paths sharing the hole."
+ },
+ {
+  "row": 27,
+  "brief": "TASK-358",
+  "verdict": "FITS",
+  "why": "DedupSeries (series_dedup.go:311) has no opID and never calls CreateOperationChange while the same file has the working opID+CreateOperationChange pattern at :581-877 — extend with an in-file proven pattern.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "An apply=true series-dedup run deletes series rows with no undo trail and no running-scan check."
+ },
+ {
+  "row": 28,
+  "brief": "TASK-359",
+  "verdict": "FITS",
+  "why": "pebble_store.go:2053-2055 states soft-deleted books are excluded on both paths and the unfiltered SeriesRefCounts counter is what covers trashed rows — the getter's authors already specify this guard.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "Every series path trusting the getter's count undercounts trashed referrers and deletes a series still referenced by a restorable book."
+ },
+ {
+  "row": 29,
+  "brief": "TASK-363",
+  "verdict": "FITS",
+  "why": "GetAllAuthorFileCounts (memdb_reads.go:299-317) scans IsPrimaryVersion-only and skips soft-deleted; author_purge_empty.go:205 gates its 'safety that matters' on that filtered source while the real deletion gate (AuthorRefCounts) is separate and correct.",
+  "reshape_to": "",
+  "depends_on_decision": "",
+  "blast_if_wrong": "An author whose only files sit on non-primary or soft-deleted rows reads as fileCounts==0; the labeled safety does nothing for the case it claims to protect."
+ }
+]

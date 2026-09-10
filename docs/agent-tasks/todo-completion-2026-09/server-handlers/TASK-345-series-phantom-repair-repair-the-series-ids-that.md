@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Re-calibrate the absolute title-distance gates for non-Latin scripts” (L2824), items at lines 2872
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — legit: unguarded series deletes when all member books are trashed (SERIES-PHANTOM-REPAIR / -NORMALIZE / -DENUMBER-TRASHED-GAP) · Section title is thematically unrelated to the three cited series-deletion-guard items — a grab-bag section; class assessment is sound.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — Repairs series IDs already phantom, complementing #2908's SeriesRefCounts guard which only prevents new phantoms (duplicates_helpers.go:235,446 reference the 6,893-phantom incident only in prevention comments; no repair op exists).
 **Priority:** P1 · **Effort:** L · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Re-calibrate the absolute title-distance gates for non-Latin scripts” (L2824), items at lines 2872. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

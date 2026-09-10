@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-312-node-version-drift-security-yml-pins-node-20-x-f.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: fccbf266-68ab-4605-88f6-efc26755161f -->
 <!-- last-edited: 2026-09-10 -->
 

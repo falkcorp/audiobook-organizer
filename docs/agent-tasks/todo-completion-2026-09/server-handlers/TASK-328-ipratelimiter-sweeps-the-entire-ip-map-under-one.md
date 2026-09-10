@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-328-ipratelimiter-sweeps-the-entire-ip-map-under-one.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: fa042a3a-41e1-406c-8cfa-3ec19a245590 -->
 <!-- last-edited: 2026-09-10 -->
 

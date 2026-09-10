@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/dedup/README.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 6f09e3ef-0356-4f5a-8bcc-6791e95b8e7a -->
 <!-- last-edited: 2026-09-10 -->
 

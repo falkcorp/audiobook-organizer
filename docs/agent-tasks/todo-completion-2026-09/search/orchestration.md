@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/search/orchestration.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: fd0e34c8-9277-482a-8f5f-a2b8ab577fe7 -->
 <!-- last-edited: 2026-09-10 -->
 

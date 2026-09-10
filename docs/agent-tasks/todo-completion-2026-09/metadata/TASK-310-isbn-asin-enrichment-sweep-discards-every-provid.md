@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/metadata/TASK-310-isbn-asin-enrichment-sweep-discards-every-provid.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: ab005c24-90d8-49f2-84cc-46b9b784a45c -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-310 — ISBN/ASIN enrichment sweep discards every provider search error, making a circuit-breaker-open or throttled provider indistinguishable from a legitimate zero-result search (SF-03)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — isbn.go:399/402/423/426 still discard search errors; this week's ISBN/ASIN commits touched enrichment logic but not the discards; fix matches the ProtectedSource circuit-breaker pattern.
 **Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · metadata subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `SF-03` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

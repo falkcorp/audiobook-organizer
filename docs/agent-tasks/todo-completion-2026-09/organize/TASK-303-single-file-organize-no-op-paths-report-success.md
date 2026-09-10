@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/organize/TASK-303-single-file-organize-no-op-paths-report-success.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 410607bb-e6e3-4819-8eb2-01a2769667a0 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-303 — Single-file organize no-op paths report success without ever stat-verifying the file, unlike the directory path's explicit post-copy check (SF-01)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-01` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **PARTLY**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — organizer.go:141-142 returns success on FilePath==targetPath with no os.Stat; brief already narrowed to this range.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · organize subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `SF-01` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **PARTLY**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

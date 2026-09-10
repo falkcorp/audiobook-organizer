@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Mask the remaining secrets returned by `GET /api/v1/config`” (L3339), items at lines 3344, 3345, 3346, 3347, 3348
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: security — legit credential exposure via API response · Clean match on section, class, and shape.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — MaskSecrets (config/update_service.go:82-101) masks 5 named fields and has no reference to OAuthGithub/GoogleClientSecret, DelugeWebPassword, or the three DownloadClient credentials.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · config subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Mask the remaining secrets returned by `GET /api/v1/config`” (L3339), items at lines 3344, 3345, 3346, 3347, 3348. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

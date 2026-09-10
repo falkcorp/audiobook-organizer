@@ -7,6 +7,8 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “🔴 DO NOT RUN `fix-library-states`” (L1282), items at lines 1294
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: data-loss — confirmed real: running it would empty the ABS-visible library · ⛔ standing-ban contact: none — goal is fix-or-unregister the job, not run it (do not let the agent test-run it against prod) · Brief-verifier (REWRITE): the item's 'fix OR unregister' is ambiguous — DECISION FOR THE WORKER: UNREGISTER (remove the maintenance.Register call or make Run() refuse with an error), update TestFixLibraryStatesJob_Registered (fix_library_states_test.go:21) to assert the new state, commit subject 'fix(maintenance): unregister dangerous fix-library-states job'. NEVER run the job to verify anything — it is on the standing-ban list (would empty the ABS library).
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): RESHAPE** — fix_library_states.go still registered and still computes present/missing (:17,41-47); maintenance_dispatcher.go:183 lists it reachable. That vocabulary is consumed by nothing; #3097 governs the live organized/imported vocabulary ABS reads.
+> **Reshape to:** Unregister/retire the job outright — 'fix' is not a viable branch of the fix-or-unregister choice.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · maintenance subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “🔴 DO NOT RUN `fix-library-states`” (L1282), items at lines 1294. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.
@@ -26,6 +28,8 @@ git rebase origin/main
 (Protocol in `../ORCHESTRATION.md` and `docs/agent-tasks/ORCHESTRATION.md` — the inline block above is authoritative for this task.)
 
 ## Goal
+
+**Reshaped by the design-fit review (2026-09-10) — build THIS, not the item's literal wording:** Unregister/retire the job outright — 'fix' is not a viable branch of the fix-or-unregister choice.
 
 Close the 1 still-open `TODO.md` item(s) under the heading “🔴 DO NOT RUN `fix-library-states`” (TODO.md line 1282; items at lines 1294 as of HEAD 42d187168):
   - L1294: **Fix or unregister `fix-library-states`** before someone clicks it.

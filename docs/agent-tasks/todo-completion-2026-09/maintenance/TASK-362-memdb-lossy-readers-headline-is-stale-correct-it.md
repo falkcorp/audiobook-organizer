@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5246
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE, with a caveat · class: data-loss — legit for the two supporting defects (error-folded-to-absent in memdb read; discarded error in GetAllAuthorBookCounts) feeding a purge gate · The headline ask ('correct the STALE headline') is a TODO.md text edit the coordinator owns; only the two supporting code defects are dispatchable.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — author_purge_empty.go:180-184 still gates deletion on the unfiltered database.AuthorRefCounts — the headline-correction claim is accurate at HEAD. Doc-only correction plus the two supporting code defects.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · maintenance subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “`recoverPebbleClosed` does not cover the WAL-write leg, so teardown still panics” (L4679), items at lines 5246. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

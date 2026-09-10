@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-313-the-only-go-version-consistency-check-truncates.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 43c3105b-5a67-4bc9-a3ff-6e93cfda5b45 -->
 <!-- last-edited: 2026-09-10 -->
 

@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “`GET /operations/timeline` silently ignores its query filters (2026-09-07)” (L1134), items at lines 1192
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: weak data-loss — missing dry-run before an irreversible DELETE of operation-history rows (audit metadata, not book/library data) · Heading and cited item are about two different endpoints (timeline filters vs DELETE history dry-run) — still a legitimate small guard to add.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — DeleteOperationHistory (handler.go:242+) deletes immediately via DeleteOperationsByStatus with no dry_run/count param; dry-run-first is the convention for every other destructive op.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · server-handlers subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “`GET /operations/timeline` silently ignores its query filters (2026-09-07)” (L1134), items at lines 1192. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

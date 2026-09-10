@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/scanner/TASK-309-inline-ai-parse-phase-result-is-discarded-by-the.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 024835ae-bcc2-4d7e-985f-282ae502b980 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-309 — Inline AI-parse phase result is discarded by the scan, so a fully-aborted LLM phase (revoked key, quota exhausted, 3+ batch failures) still lets library.scan report success (SF-02)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — scanner.go still discards AIPhaseSummary at both call sites; ProcessBooksParallel returns nil unconditionally; fix shape proven in library_ai_parse_op.go.
 **Priority:** P0 · **Effort:** S · **Recommended subagent:** Haiku-class · scanner subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) 
 
 Source: Wave 3 audit finding `SF-02` (audit_silent_failures_pipeline.json) · adversarial re-check 2026-09-10: **CONFIRMED**. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

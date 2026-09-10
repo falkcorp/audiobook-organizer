@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-331-deletebook-never-deletes-the-book-authors-book-n.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 6d8213c7-aff9-4742-a05a-b53945ac64b3 -->
 <!-- last-edited: 2026-09-10 -->
 

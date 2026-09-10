@@ -1,12 +1,12 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/web/TASK-304-author-merge-preview-popover-shows-an-author-s-b.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 37a8380a-8a25-4024-9556-100ed72a7768 -->
 <!-- last-edited: 2026-09-10 -->
 
 # TASK-304 — Author-merge preview popover shows an author's book list as empty on fetch failure, which can bias a merge decision (WEB-04)
 
 > **Status 2026-09-10:** 🆕 NEW — Wave 3 audit finding `WEB-04` (audit_web.json)
-
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — DedupAuthorTab.tsx:151-186 AuthorBooksPopover has only a loading flag; Promise.all with no catch. Pure frontend fix.
 **Priority:** P1 · **Effort:** S · **Recommended subagent:** Opus-class · web subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: Wave 3 audit finding `WEB-04` (audit_web.json). Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

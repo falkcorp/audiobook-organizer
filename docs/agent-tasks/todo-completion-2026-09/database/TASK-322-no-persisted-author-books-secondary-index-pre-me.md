@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/database/TASK-322-no-persisted-author-books-secondary-index-pre-me.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: b4d27625-ba16-4728-8193-03277e49df68 -->
 <!-- last-edited: 2026-09-10 -->
 

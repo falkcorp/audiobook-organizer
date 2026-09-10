@@ -7,6 +7,7 @@
 
 > **Status 2026-09-10:** 🆕 NEW — `TODO.md` heading “Missing-file lane — follow-ups after the report-only change (#2614)” (L12249), items at lines 15004
 > **Dispatch 2026-09-10 (`state/final/todo_sections_validation.json`): DISPATCH** — shape: CODE · class: security — 11964 legit (OperationDef.Permissions enforced by nothing, and enforcement code is about to be deleted); 15004 is a minor accepted-risk dependency bump now unblocked · Both items are real security findings but the brief's section title matches neither item's actual location — substantive mismatch.
+> **Design fit 2026-09-10 (`audiobook-organizer:expert`, `state/final/design_fit_rows_*.json`): FITS** — web/package.json: react ^19.2.8, react-router-dom ^7.18.3 — the item's own trigger ('revisit when the app moves to React 19') has fired; re-evaluating the v8 upgrade is what the item asks.
 **Priority:** P1 · **Effort:** M · **Recommended subagent:** Opus-class · web subagent · **Depends on:** none · **Wave:** per ../orchestration.md (collision-aware) · **REVIEW-CRITICAL (prod-data path): PR stays open for the owner; never weak-tier**
 
 Source: `TODO.md` heading “Missing-file lane — follow-ups after the report-only change (#2614)” (L12249), items at lines 15004. Verified at HEAD `42d187168` on 2026-09-10; line numbers drift — re-verify with the greps below before editing.

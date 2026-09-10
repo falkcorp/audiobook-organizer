@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/scanner/README.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 16f00fc4-3c51-416e-881d-27e2153f3494 -->
 <!-- last-edited: 2026-09-10 -->
 
