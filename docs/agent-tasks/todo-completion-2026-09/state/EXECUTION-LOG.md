@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.15.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -33,10 +33,10 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 3 | TASK-358 series-dedup journaling + scan check | data-loss | M | go-specialist/opus | dispatched 15:36 (series_dedup.go) |
 | 3 | TASK-359 series-merge unguarded denominator | data-loss | M | | queued — touches pebble_store.go → wait for #3182/#3185 to merge |
 | 4 | TASK-301 bulk journaling helper (reshaped) | data-loss | M | opus | queued — after 300 merges (dedup files) |
-| 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued |
+| 4 | TASK-361 author-book memdb guard | data-loss | L | opus | queued — pebble_store.go; wait for #3182/#3185 |
 | 4 | TASK-338 retire fix-library-states | data-loss | S | go-specialist/opus | dispatched 15:43 (delete the job + absence test; never run it) |
-| 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued |
-| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist | queued |
+| 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
+| 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | dispatched 15:46 (DedupAuthorTab.tsx) |
 | later | TASK-140, 072, 220, 337, 340, 352, 305, 373, 342, 345, 114, 096; security 308, 080, 083, 160, 335(reshaped), 365, 366, 368, 348 | | | | queued in matrix order |
 
 ## Per-task record
