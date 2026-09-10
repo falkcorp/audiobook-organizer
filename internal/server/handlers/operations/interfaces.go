@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
@@ -61,6 +61,10 @@ type operationsRecordStore interface {
 	GetRecentOperations(limit int) ([]database.Operation, error)
 	UpdateOperationStatus(id, status string, progress, total int, message string) error
 	DeleteOperationsByStatus(statuses []string) (int, error)
+	// CountOperationsByStatus backs DeleteOperationHistory's ?dry_run=true mode
+	// and the per-status breakdown the real delete now returns. It is the only
+	// way to see what a bulk history delete would remove before it removes it.
+	CountOperationsByStatus(statuses []string) (map[string]int, error)
 }
 
 // OperationsStore is kept as a composition so the declaration stays narrow.

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.102.0
+// version: 1.103.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package database
 
@@ -206,6 +206,7 @@ type MockStore struct {
 	GetOperationParamsFunc       func(opID string) ([]byte, error)
 	DeleteOperationStateFunc     func(opID string) error
 	DeleteOperationsByStatusFunc func(statuses []string) (int, error)
+	CountOperationsByStatusFunc  func(statuses []string) (map[string]int, error)
 	DeleteOperationWithLogsFunc  func(id string) error
 	GetInterruptedOperationsFunc func() ([]Operation, error)
 
@@ -1416,6 +1417,17 @@ func (m *MockStore) DeleteOperationsByStatus(statuses []string) (int, error) {
 		return m.DeleteOperationsByStatusFunc(statuses)
 	}
 	return 0, nil
+}
+
+func (m *MockStore) CountOperationsByStatus(statuses []string) (map[string]int, error) {
+	if m.CountOperationsByStatusFunc != nil {
+		return m.CountOperationsByStatusFunc(statuses)
+	}
+	counts := make(map[string]int, len(statuses))
+	for _, s := range statuses {
+		counts[s] = 0
+	}
+	return counts, nil
 }
 
 func (m *MockStore) DeleteOperationWithLogs(id string) error {

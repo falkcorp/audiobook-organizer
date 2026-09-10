@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -239,8 +239,35 @@ func (h *Handler) ClearStaleOperations(c *gin.Context) {
 }
 
 // DeleteOperationHistory deletes operations matching the given status(es).
-// Query param: ?status=completed or ?status=failed or ?status=completed,failed
+// Query params:
+//
+//	?status=completed | ?status=failed | ?status=completed,failed  (required)
+//	?dry_run=true                                                  (optional)
+//
 // Implements DELETE /operations/history.
+//
+// Dry run. `?dry_run=true` returns the per-status census of rows that WOULD be
+// deleted and deletes nothing. It is opt-in, NOT the default: this endpoint has
+// shipped as an immediate delete, and silently turning existing DELETE calls
+// into no-ops would leave the UI's "clear history" button reporting success
+// while the rows it was asked to remove stayed. Callers that want the guard ask
+// for it. Only the literal values "true" and "1" arm it — anything else, including
+// a typo'd "?dry_run=yes", falls through to the real delete rather than being
+// read as a dry run that then does not happen.
+//
+// The real delete now returns the same `counts` map, taken immediately before
+// the delete. That census is fail-closed: if counting errors we return 500
+// having deleted nothing, rather than deleting blind because an informational
+// field could not be produced. Counting before rather than after is what makes
+// the two modes report the same shape; the two passes over the `operation:`
+// range are not free, but the range is retention-bounded audit metadata and
+// only DeleteOperationsByStatus can say how many rows it removed, which is one
+// number and not a breakdown.
+//
+// `deleted` keeps its name and meaning (web/src/services/api.ts declares the
+// response as {deleted: number}); a dry run reports `deleted: 0` alongside
+// `would_delete`, so a client that reads only the old field sees "nothing was
+// deleted", which is exactly what happened.
 func (h *Handler) DeleteOperationHistory(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -263,13 +290,40 @@ func (h *Handler) DeleteOperationHistory(c *gin.Context) {
 		}
 	}
 
+	dryRun := c.Query("dry_run") == "true" || c.Query("dry_run") == "1"
+
+	counts, err := h.store.CountOperationsByStatus(statuses)
+	if err != nil {
+		httputil.InternalError(c, "failed to count operations", err)
+		return
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+
+	if dryRun {
+		httputil.RespondWithOK(c, gin.H{
+			"dry_run":      true,
+			"would_delete": total,
+			"counts":       counts,
+			"deleted":      0,
+		})
+		return
+	}
+
 	deleted, err := h.store.DeleteOperationsByStatus(statuses)
 	if err != nil {
 		httputil.InternalError(c, "failed to delete operations", err)
 		return
 	}
 
-	httputil.RespondWithOK(c, gin.H{"deleted": deleted})
+	httputil.RespondWithOK(c, gin.H{
+		"dry_run":      false,
+		"deleted":      deleted,
+		"counts":       counts,
+		"would_delete": total,
+	})
 }
 
 // --- Maintenance chores ---
