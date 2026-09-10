@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/policy_declaration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2f8b41-9e73-4c05-a8d6-1b47e903fa25
-// last-edited: 2026-08-23
+// last-edited: 2026-09-10
 
 package jobs_test
 
@@ -23,7 +23,14 @@ import (
 // of the same population returned 35 and was wrong. The compiler is the instrument
 // that cannot miss one, because a job that fails to implement the interface cannot
 // build.
-const wantJobCount = 38
+//
+// 2026-09-10: 38 → 37. `fix-library-states` was deleted (not merely unregistered)
+// because it wrote a present/missing `library_state` vocabulary nothing consumes
+// and would have emptied the ABS-visible library — see
+// fix_library_states_test.go, which pins its absence. Re-counted after the
+// removal: `maintenance.All()` returns 37 and there are 37 `maintenance.Register`
+// calls across 37 non-test files under internal/maintenance/jobs.
+const wantJobCount = 37
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.
