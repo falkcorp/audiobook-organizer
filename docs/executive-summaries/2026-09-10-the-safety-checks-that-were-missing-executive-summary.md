@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-10-the-safety-checks-that-were-missing-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 5b9d2e47-8c1a-4f63-b2d7-1e6a4c9f0d38 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -9,7 +9,9 @@
 guard), #3183 (backup verification), #3185 (orphan-file cleanup guard), #3187 (duplicate
 merge audio guard), #3188 (duplicate rows in one batch), #3189 and #3190 (two more
 series-delete guards), #3191 (series-dedup undo record and scan check), #3192 (the
-deleted "fix library states" job), #3193 (author-merge preview error state). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
+deleted "fix library states" job), #3193 (author-merge preview error state), #3194 (iTunes
+cleanup apply path retired), #3196 (iTunes write-back shutdown and single writer), #3197
+(database upgrade bookkeeping), #3198 (preview for the operation-history delete). All are open and **held for the owner's review** because they touch paths that move or delete library data; this summary
 will be updated with merge commits as they land. Merged: #3184 (ISBN sweep outage
 reporting, `2ed12521b`), #3186 (scan reports a failed AI phase, `03286fa87`). Planning
 package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
@@ -85,7 +87,23 @@ package: #3179 (`docs/agent-tasks/todo-completion-2026-09/`).
   When the lookup behind that preview failed, the screen said "No books found," which is
   what a reviewer would read as "safe to merge." It now shows a load error with a retry
   button and only says "no books" when the lookup actually succeeded with none.
-- All fourteen fixes come with a test that reproduces the original problem and fails on
+- **An iTunes cleanup that could delete real chapter files was still one API call away.**
+  Its removal rule had been judged unsafe in July and the decision was "measure, don't
+  remove," but the apply path still worked. It now refuses before it touches the iTunes
+  library file; the preview still works.
+- **Shutting down while iTunes changes were being written could corrupt the library
+  file.** The background writer that pushes changes into the iTunes library did not wait
+  for its own workers on shutdown, and two of its flushes could write the same file at
+  the same time. It now waits, and only one flush can write at a time.
+- **A crash during a database upgrade could re-run the upgrade step.** The app recorded
+  "upgrade N applied" and "database is now at version N" as two separate writes. A crash
+  between them made the next start re-run step N. Both are now written together, a
+  recorded step is never re-run, and a test checks that every upgrade step is safe to
+  repeat.
+- **Clearing operation history had no preview.** The one bulk delete in the operations
+  screen's API ran immediately. It now has a dry-run mode that reports what it would
+  remove, and the real delete reports the same counts.
+- All eighteen fixes come with a test that reproduces the original problem and fails on
   the old code, so the gap cannot silently reopen.
 - Each fix also turned up a sibling of the same shape (a second unguarded merge path in
   a maintenance job, and the in-place re-organize step). Those were deliberately left out
@@ -347,3 +365,67 @@ if someone notices.
 lookup shows "Could not load" with a retry button that actually re-fetches, and "No books
 found" appears only when the lookup succeeded and returned nothing. The count shown next
 to the merge button comes from the server independently and was never affected.
+
+## 14. The iTunes cleanup that was decided against but still worked
+
+**What it was.** An API call could remove "superseded" tracks from the iTunes library
+file. In July a census of every track found nothing that was safe to remove, and the
+rule the call used to pick tracks could select real chapter files rather than true
+duplicates. The decision then was to keep the measurement and never build removal. The
+apply path was left in place anyway.
+
+**Why it mattered.** One direct API call, with no confirmation, could delete entries from
+the live iTunes library based on a rule already known to be wrong.
+
+**The fix.** The apply path now refuses with a clear "retired" response before it even
+locates the library file, so a missing file cannot turn the refusal into a crash. The
+preview mode that counts what would be affected still works. Nothing in the web app
+called this endpoint.
+
+## 15. The iTunes writer that did not wait for itself
+
+**What it was.** Changes to the iTunes library are batched and written by a background
+worker. On shutdown that worker set a flag and wrote once, but did not wait for the
+helpers it had started, and nothing stopped two of its write cycles from running at the
+same time.
+
+**Why it mattered.** Two writers on the same file at once is how a library file gets
+truncated or half-written. The test that reproduces this shows the exact shape: two
+cycles fighting over the same temporary file, one of them failing to rename it into
+place. A shutdown mid-write could also drop the last batch of changes.
+
+**The fix.** Shutdown now waits for every helper to finish, refuses new work after that
+point, and then performs one final write. Only one write cycle can be inside the file at
+a time. The change adds no new writes; it only narrows when they happen. One open
+question is left for the owner: the shutdown wait has no time limit, because a limit
+would mean dropping the final batch on a slow disk.
+
+## 16. The database upgrade that could run twice
+
+**What it was.** When the app starts and finds its database behind the current version,
+it runs each upgrade step and then records two things: that the step was applied, and
+that the database is now at that version. Those were two separate writes.
+
+**Why it mattered.** A crash between them left the version number behind, so the next
+start re-ran the step. Every step registered today is safe to repeat, so this has not
+bitten anyone, but the next real database change would have inherited the hazard and
+nothing checked for it.
+
+**The fix.** Both records are now written together in one durable batch. On start, a
+step that is already recorded is never re-run; only the version is caught up. And a test
+now runs every registered step twice against a fresh database and fails if the second
+run changes anything, so a non-repeatable step cannot be added by accident.
+
+## 17. The bulk delete with no preview
+
+**What it was.** The operations screen's API has one bulk delete, for old operation
+history records in finished states. Every other destructive action in the app previews
+first; this one deleted immediately and reported only a count afterwards.
+
+**Why it mattered.** These are audit records with no undo. An operator had no way to see
+how many rows a call would remove before removing them.
+
+**The fix.** A dry-run flag now returns the count by status and removes nothing, and the
+real delete reports the same counts alongside what it removed. The default behaviour of
+the call is unchanged for existing callers. A per-record delete was considered and not
+built; the recommended shape is written up in the pull request for the owner.

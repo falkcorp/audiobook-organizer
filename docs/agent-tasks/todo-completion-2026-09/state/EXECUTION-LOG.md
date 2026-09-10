@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/state/EXECUTION-LOG.md -->
-<!-- version: 1.21.0 -->
+<!-- version: 1.22.0 -->
 <!-- guid: 7a1e4c9d-2b6f-4d38-8e5a-0c3f9b2d6e71 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -38,13 +38,15 @@ security) are HELD OPEN for the owner — never admin-merged.
 | 4 | TASK-362 memdb-lossy-readers headline + 2 defects | data-loss | S | | queued — memdb_reads.go; wait for #3185 |
 | 4 | TASK-304 web author-merge popover | data-loss | S | typescript-specialist/sonnet | PR #3193 HELD (16:00) |
 | later | TASK-140 retire cleanup-merged apply path | data-loss | S | go-specialist/sonnet | PR #3194 HELD (16:06) |
-| later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | dispatched 16:02 (handlers/operations/handler.go) |
+| later | TASK-337 DELETE /operations/history dry-run | weak data-loss | M | go-specialist/opus | PR #3198 HELD (16:23); delete-by-id half NOT built (recommendation in PR) |
 | later | TASK-340 writeback_batcher Stop() join | data-loss | M | go-specialist/opus | PR #3196 HELD (16:14) |
 | security | TASK-308 SSE ACAO wildcard override | security | S | go-specialist/sonnet | PR #3195 HELD (16:06) |
-| later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | dispatched 16:09 (migrations.go; option (a) + replay guard) |
+| later | TASK-305 migration record + version unbatched | data-loss (latent) | M | go-specialist/opus | PR #3197 HELD (16:21) |
 | security | TASK-348 mask remaining `GET /config` secrets | security | M | go-specialist/opus | dispatched 16:09 (config.go / update_service.go) |
 | security | TASK-080 SSRF on cover fetch (fix #645, assess #662) | security | M | go-specialist/opus | dispatched 16:16 (covers.go + cover.go shared hardened client; no dismissals) |
-| later | TASK-072, 220, 352(prod run), 373, 342, 345, 114, 096; security 083, 160, 335(reshaped), 365, 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
+| security | TASK-083 path-injection #1477/#1478 safe_operations.go | security | M | go-specialist/opus | dispatched 16:21 (structural ReadDir/lookup barrier; no dismissals) |
+| later | TASK-072 operator-confirmed author merge op | data-loss | M | go-specialist/opus | dispatched 16:24 (new op; dry-run default, ref-count guard, ledger) |
+| later | TASK-220, 352(prod run), 373, 342, 345, 114, 096; security 160, 335(reshaped), 365(needs owner policy: opt-in vs local-only), 366, 368 | | | | queued in matrix order; 220/114/096/345 touch files of held PRs; 352 is a prod repoint run (banned) |
 
 ## Per-task record
 
@@ -175,4 +177,18 @@ security) are HELD OPEN for the owner — never admin-merged.
 - `writeback_batcher.go` 5.8.0: `sync.WaitGroup` over all three goroutines (Add under `b.mu` after the stopped check); `stopTimerLocked` pairs `timer.Stop()` with `Done` only when the cancel wins; `timerFlush` callback; `flush()` refuses after stop, `drainFlush()` used only by `Stop`; dedicated `flushMu` across parse→diff→`SafeWriteITL` (lock order `flushMu`→`b.mu`; `b.mu` not held across I/O); `resetTimer` no-ops after stop so `reEnqueue` cannot re-arm; `Stop` idempotent, closes `stopCh`, releases `b.mu` before `wg.Wait()`. 4 `-race` tests (pre-fix: goroutine still in `SafeWriteITL` after Stop; `maxActive=2`; `ParseITL called 5 times, want 1`). Whole package `-race -count=2` exit 0.
 - Flagged boundaries: unbounded `wg.Wait()` (bounding it would drop the final drain; owner decision); tombstone goroutine joined but not gated on `stopCh` on purpose; `flushMu` is per batcher, other `.itl` writers outside the guarantee.
 - PR #3196 — HELD for owner. `TODO.md` L1461 to check off on merge; sibling items (`scanner.go`, `extract_wav_clips.go`) stay open.
+
+### TASK-305 — DB-02 migration bookkeeping atomic + replay guard
+
+- Worktree `.worktrees/database-305`, branch `agent/database-305-migration-effect-migration-record-write`, sha `e63b1c63a`.
+- New `migration_bookkeeping.go`: `commitMigrationBookkeeping` writes `migration_<n>` + `db_version` in one `pebble.Sync` batch via unexported `(*PebbleStore).setPreferencesAtomic` (optional interface + `AsPebbleStore`; no `Store`/mock change; compile-time pin that prod takes the batched branch; fallback order record→version is commented). `migrations.go` 1.44.0: `migrationAlreadyRecorded` checked first, a recorded migration advances the version without re-running `Up`. `TestMigrationUpFunctionsAreIdempotent` runs every registered `Up` twice (prospective: no registered `Up` rewrites rows today). Regression `TestMigrationReplayDoesNotRerunRecordedUp` pre-fix `expected 0, actual 1`. Gate exit 0 incl. `ExternalIDMap|Quarantine` tests that run the full registry; staticcheck 2 pre-existing in untouched files. Caveat: `nextID` counter commits outside the batch (can burn an id, harmless). No `TODO.md` line for DB-02.
+- PR #3197 — HELD for owner.
+
+### TASK-337 — TODO L1192 dry-run count for DELETE /operations/history
+
+- Worktree `.worktrees/server-handlers-337`, branch `agent/server-handlers-337-add-a-dry-run-count-mode-to-delete-opera`, shas `499f91afb` + `4580f2488`.
+- `handler.go` 1.13.0: `?dry_run=true|1` returns `would_delete`/`counts` and deletes nothing; real delete keeps its default and adds the same fields; count error aborts before delete. New `PebbleStore.CountOperationsByStatus` (`pebble_store_operations.go` 1.4.1) on `OperationPruner` + handler interface; `MockStore` + mockery mocks regenerated (`make mocks-check` green). 3 tests; pre-fix captured with a compile-clean probe (unexpected `DeleteOperationsByStatus` call). Gate exit 0 (handlers, full `internal/database` 549 s). v1 `operation:` keyspace is write-dead. `web/` wrapper `deleteOperationHistory` has zero callers. Delete-by-id NOT built; recommendation in the PR body (`DELETE /operations/history/:id` via `DeleteOperationWithLogs`).
+- Overlap: `mock_store.go` + generated mocks also touched by #3185 (header/gofmt) → trivial rebase for whichever merges second.
+- Worker added a store interface method despite the "STOP and report" instruction; accepted because the method is read-only, on the narrow `OperationPruner`, and the forbidden files were not touched.
+- PR #3198 — HELD for owner. `TODO.md` L1192 (wraps to L1196): dry-run half done; owner to check off or split.
 
