@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -399,7 +399,8 @@ func TestMergeDedupCandidateSeries(t *testing.T) {
 	insertCandidate(t, d.es, "book-a", "book-b")
 	sid := 7
 	d.store.EXPECT().GetBookByID(mock.Anything).Return(&database.Book{ID: "x", SeriesID: &sid}, nil).Maybe()
-	d.merge.EXPECT().MergeBooks(mock.Anything, mock.Anything).Return(&merge.Result{PrimaryID: "book-a"}, nil).Maybe()
+	d.engine.EXPECT().MergeBooksJournaled(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(&merge.Result{PrimaryID: "book-a"}, []string{"dedup:automerge:k"}, nil).Maybe()
 	w := doReq(t, h.MergeDedupCandidateSeries, http.MethodPost, "/api/v1/dedup/candidates/merge-series", map[string]int{"series_id": sid}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -428,7 +429,8 @@ func TestBulkMergeDedupCandidates(t *testing.T) {
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "book-a", "book-b")
-	d.merge.EXPECT().MergeBooks(mock.Anything, mock.Anything).Return(&merge.Result{PrimaryID: "book-a"}, nil).Once()
+	d.engine.EXPECT().MergeJournaled(mock.Anything, mock.Anything, mock.Anything, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: "book-a"}, "dedup:automerge:k", nil).Once()
 	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-merge", map[string]any{}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
@@ -443,16 +445,16 @@ func TestBulkMergeDedupCandidates_ScopedByBand(t *testing.T) {
 	// this system to undo.
 	h, d := newHandler(t)
 	allowLabelCaptureReads(d)
-	insertCandidateWithBand(t, d.es, "rev-a", "rev-b", "REVIEW")
+	revID, _, _ := insertCandidateWithBand(t, d.es, "rev-a", "rev-b", "REVIEW")
 	insertCandidateWithBand(t, d.es, "cert-a", "cert-b", "CERTAIN")
 	insertCandidateWithBand(t, d.es, "high-a", "high-b", "HIGH")
 
 	// .Once() is the assertion that matters: if band were dropped, the handler
-	// would call MergeBooks three times and the mock would fail on the
-	// unexpected second call.
-	d.merge.EXPECT().
-		MergeBooks([]string{"rev-a", "rev-b"}, "").
-		Return(&merge.Result{PrimaryID: "rev-a"}, nil).
+	// would dispatch three merges and the mock would fail on the unexpected
+	// second call.
+	d.engine.EXPECT().
+		MergeJournaled(revID, "rev-a", "rev-b", "", mock.Anything).
+		Return(&merge.Result{PrimaryID: "rev-a"}, "dedup:automerge:k", nil).
 		Once()
 
 	w := doReq(t, h.BulkMergeDedupCandidates, http.MethodPost,
@@ -496,7 +498,8 @@ func TestBulkMergeDedupCandidates_NoMergeSvc(t *testing.T) {
 
 func TestMergeDedupCluster(t *testing.T) {
 	h, d := newHandler(t)
-	d.merge.EXPECT().MergeBooks(mock.Anything, mock.Anything).Return(&merge.Result{PrimaryID: "id1"}, nil).Once()
+	d.engine.EXPECT().MergeBooksJournaled(int64(0), []string{"id1", "id2"}, "", mock.Anything).
+		Return(&merge.Result{PrimaryID: "id1"}, []string{"dedup:automerge:k"}, nil).Once()
 	w := doReq(t, h.MergeDedupCluster, http.MethodPost, "/api/v1/dedup/candidates/merge-cluster",
 		map[string][]string{"book_ids": {"id1", "id2"}}, nil)
 	if w.Code != http.StatusOK {
