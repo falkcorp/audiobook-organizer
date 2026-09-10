@@ -1,7 +1,7 @@
 // file: internal/metadata/audible.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-08-30
+// last-edited: 2026-09-10
 
 package metadata
 
@@ -307,6 +307,21 @@ func (c *AudibleClient) productToMetadata(p *audibleProduct) BookMetadata {
 	if len(p.Series) > 0 {
 		meta.Series = p.Series[0].Title
 		meta.SeriesPosition = p.Series[0].Sequence
+	}
+
+	// Format: abridged vs unabridged is a strong edition-identity signal (they are
+	// different runtimes and chapter sets). Tri-state: only the two known values
+	// set Abridged; anything else leaves it nil (unknown).
+	switch strings.ToLower(strings.TrimSpace(p.FormatType)) {
+	case "abridged":
+		abridged := true
+		meta.Abridged = &abridged
+	case "unabridged":
+		unabridged := false
+		meta.Abridged = &unabridged
+	}
+	if p.Subtitle != "" {
+		meta.Subtitle = p.Subtitle
 	}
 
 	// Runtime: Audible returns minutes; BookMetadata stores seconds.

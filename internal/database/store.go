@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.93.0
+// version: 2.94.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 package database
 
@@ -204,6 +204,17 @@ type Book struct {
 	ISBN10               *string `json:"isbn10,omitempty"`
 	ISBN13               *string `json:"isbn13,omitempty"`
 	ASIN                 *string `json:"asin,omitempty"`
+	// Content-matcher SIGNAL fields (captured from provider data previously
+	// decoded-then-dropped). These are identify/match signals, NOT authoritative
+	// served fields: e.g. SeriesPositionRaw preserves the decimal ("1.5") that the
+	// served *int SeriesSequence cannot hold, and Abridged/SeriesSecondary have no
+	// served counterpart. Never treat these as the canonical served value.
+	Abridged                *bool   `json:"abridged,omitempty"`                  // Audible format_type; nil = unknown
+	Subtitle                *string `json:"subtitle,omitempty"`                  // provider subtitle (Audible/Audnexus)
+	PageCount               *int    `json:"page_count,omitempty"`                // print page count (Hardcover)
+	SeriesPositionRaw       *string `json:"series_position_raw,omitempty"`       // raw series position incl. decimals
+	SeriesSecondary         *string `json:"series_secondary,omitempty"`          // secondary series name (Audnexus)
+	SeriesSecondaryPosition *string `json:"series_secondary_position,omitempty"` // secondary series position
 	// External provider IDs
 	OpenLibraryID *string `json:"open_library_id,omitempty"`
 	HardcoverID   *string `json:"hardcover_id,omitempty"`

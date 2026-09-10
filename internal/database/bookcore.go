@@ -1,7 +1,7 @@
 // file: internal/database/bookcore.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3c1e28-9a4d-4b61-8c2f-bookcore000001
-// last-edited: 2026-07-05
+// last-edited: 2026-09-10
 
 package database
 
@@ -46,6 +46,14 @@ type BookCore struct {
 	ISBN10               *string `json:"isbn10,omitempty"`
 	ISBN13               *string `json:"isbn13,omitempty"`
 	ASIN                 *string `json:"asin,omitempty"`
+	// Content-matcher SIGNAL fields — mirrored verbatim from Book (light fields,
+	// so part of the core partition). See the Book declaration for semantics.
+	Abridged                *bool   `json:"abridged,omitempty"`
+	Subtitle                *string `json:"subtitle,omitempty"`
+	PageCount               *int    `json:"page_count,omitempty"`
+	SeriesPositionRaw       *string `json:"series_position_raw,omitempty"`
+	SeriesSecondary         *string `json:"series_secondary,omitempty"`
+	SeriesSecondaryPosition *string `json:"series_secondary_position,omitempty"`
 	// External provider IDs
 	OpenLibraryID *string `json:"open_library_id,omitempty"`
 	HardcoverID   *string `json:"hardcover_id,omitempty"`
@@ -194,6 +202,12 @@ func (b *Book) Core() BookCore {
 		ISBN10:                   b.ISBN10,
 		ISBN13:                   b.ISBN13,
 		ASIN:                     b.ASIN,
+		Abridged:                 b.Abridged,
+		Subtitle:                 b.Subtitle,
+		PageCount:                b.PageCount,
+		SeriesPositionRaw:        b.SeriesPositionRaw,
+		SeriesSecondary:          b.SeriesSecondary,
+		SeriesSecondaryPosition:  b.SeriesSecondaryPosition,
 		OpenLibraryID:            b.OpenLibraryID,
 		HardcoverID:              b.HardcoverID,
 		GoogleBooksID:            b.GoogleBooksID,
@@ -308,6 +322,12 @@ func (c *BookCore) ToBook() Book {
 		ISBN10:                   c.ISBN10,
 		ISBN13:                   c.ISBN13,
 		ASIN:                     c.ASIN,
+		Abridged:                 c.Abridged,
+		Subtitle:                 c.Subtitle,
+		PageCount:                c.PageCount,
+		SeriesPositionRaw:        c.SeriesPositionRaw,
+		SeriesSecondary:          c.SeriesSecondary,
+		SeriesSecondaryPosition:  c.SeriesSecondaryPosition,
 		OpenLibraryID:            c.OpenLibraryID,
 		HardcoverID:              c.HardcoverID,
 		GoogleBooksID:            c.GoogleBooksID,

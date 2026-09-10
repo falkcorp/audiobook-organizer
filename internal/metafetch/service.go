@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.14.0
+// version: 5.15.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package metafetch
 
@@ -220,20 +220,31 @@ type FetchMetadataResponse struct {
 
 // MetadataCandidate represents a single search result for manual metadata matching.
 type MetadataCandidate struct {
-	Title          string  `json:"title"`
-	Author         string  `json:"author"`
-	Narrator       string  `json:"narrator,omitempty"`
-	Series         string  `json:"series,omitempty"`
-	SeriesPosition string  `json:"series_position,omitempty"`
-	Year           int     `json:"year,omitempty"`
-	Publisher      string  `json:"publisher,omitempty"`
-	ISBN           string  `json:"isbn,omitempty"`
-	ASIN           string  `json:"asin,omitempty"`
-	CoverURL       string  `json:"cover_url,omitempty"`
-	Description    string  `json:"description,omitempty"`
-	Language       string  `json:"language,omitempty"`
-	Source         string  `json:"source"`
-	Score          float64 `json:"score"`
+	Title          string `json:"title"`
+	Author         string `json:"author"`
+	Narrator       string `json:"narrator,omitempty"`
+	Series         string `json:"series,omitempty"`
+	SeriesPosition string `json:"series_position,omitempty"`
+	Year           int    `json:"year,omitempty"`
+	Publisher      string `json:"publisher,omitempty"`
+	ISBN           string `json:"isbn,omitempty"`
+	ISBN10         string `json:"isbn10,omitempty"`
+	ISBN13         string `json:"isbn13,omitempty"`
+	ASIN           string `json:"asin,omitempty"`
+	CoverURL       string `json:"cover_url,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Language       string `json:"language,omitempty"`
+	Source         string `json:"source"`
+
+	// Content-matcher SIGNAL fields carried through the candidate so the review
+	// UI and the metadata_cache sidecar (which the Phase 4 matcher reads) retain
+	// them. Not user-served fields.
+	Abridged                *bool   `json:"abridged,omitempty"`
+	Subtitle                string  `json:"subtitle,omitempty"`
+	PageCount               int     `json:"page_count,omitempty"`
+	SeriesSecondary         string  `json:"series_secondary,omitempty"`
+	SeriesSecondaryPosition string  `json:"series_secondary_position,omitempty"`
+	Score                   float64 `json:"score"`
 	// ScoreBreakdown is the ordered derivation of Score, for the review UI's
 	// evidence panel. Replaying its steps reproduces Score -- asserted as a
 	// property in service_scoring_breakdown_test.go, not merely hoped for.

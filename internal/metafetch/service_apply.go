@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 package metafetch
 
@@ -137,13 +137,14 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 		}
 	}
 
-	// Apply ISBN/ASIN
-	if meta.ISBN != "" {
-		if len(meta.ISBN) == 10 {
-			book.ISBN10 = new(meta.ISBN)
-		} else {
-			book.ISBN13 = new(meta.ISBN)
-		}
+	// Apply ISBN/ASIN. Providers now populate ISBN10/ISBN13 separately; fall back
+	// to the single ISBN (length-split) for any provider/path that set only that,
+	// so both identifier columns can be filled instead of just one.
+	if isbn13 := firstNonEmpty(meta.ISBN13, isbnOfLen(meta.ISBN, 13)); isbn13 != "" {
+		book.ISBN13 = &isbn13
+	}
+	if isbn10 := firstNonEmpty(meta.ISBN10, isbnOfLen(meta.ISBN, 10)); isbn10 != "" {
+		book.ISBN10 = &isbn10
 	}
 	if meta.ASIN != "" {
 		book.ASIN = new(meta.ASIN)
@@ -153,6 +154,30 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 	}
 	if meta.Genre != "" {
 		book.Genre = new(meta.Genre)
+	}
+
+	// Content-matcher SIGNAL fields (see the Book struct): captured from provider
+	// data previously dropped, used to identify/match — not authoritative served
+	// values. Set when the provider reported them.
+	if meta.Abridged != nil {
+		abridged := *meta.Abridged
+		book.Abridged = &abridged
+	}
+	if meta.Subtitle != "" {
+		subtitle := meta.Subtitle
+		book.Subtitle = &subtitle
+	}
+	if meta.PageCount > 0 {
+		pageCount := meta.PageCount
+		book.PageCount = &pageCount
+	}
+	if meta.SeriesSecondary != "" && !IsGarbageValue(meta.SeriesSecondary) {
+		secondary := meta.SeriesSecondary
+		book.SeriesSecondary = &secondary
+		if meta.SeriesSecondaryPosition != "" {
+			secondaryPos := meta.SeriesSecondaryPosition
+			book.SeriesSecondaryPosition = &secondaryPos
+		}
 	}
 
 	// Persist Audible runtime so the scan-duration-mismatch endpoint can
@@ -172,11 +197,36 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			book.SeriesID = &series.ID
 		}
 		if meta.SeriesPosition != "" {
+			// Preserve the raw position (incl. decimals like "1.5") as a SIGNAL —
+			// the served *int SeriesSequence below cannot hold it. Set
+			// unconditionally so a fractional position is captured even though the
+			// Atoi best-effort below drops it.
+			raw := meta.SeriesPosition
+			book.SeriesPositionRaw = &raw
 			if pos, err := strconv.Atoi(meta.SeriesPosition); err == nil {
 				book.SeriesSequence = &pos
 			}
 		}
 	}
+}
+
+// isbnOfLen returns s only when it is exactly n characters long, else "". Used to
+// length-classify a single ISBN into its ISBN-10 / ISBN-13 column.
+func isbnOfLen(s string, n int) string {
+	if len(s) == n {
+		return s
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty argument, or "".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // displayOrNone renders a value for a human-readable activity summary. An empty
@@ -595,10 +645,19 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		PublishYear:    candidate.Year,
 		Publisher:      candidate.Publisher,
 		ISBN:           candidate.ISBN,
+		ISBN10:         candidate.ISBN10,
+		ISBN13:         candidate.ISBN13,
 		CoverURL:       candidate.CoverURL,
 		Description:    candidate.Description,
 		Language:       candidate.Language,
 		DurationSec:    candidate.DurationSec,
+		// Content-matcher SIGNAL fields — carried so a manual apply persists them
+		// too, matching the auto-fetch path.
+		Abridged:                candidate.Abridged,
+		Subtitle:                candidate.Subtitle,
+		PageCount:               candidate.PageCount,
+		SeriesSecondary:         candidate.SeriesSecondary,
+		SeriesSecondaryPosition: candidate.SeriesSecondaryPosition,
 		// candidate.Year is a bare int with no kind attached; derive whether it
 		// is an audiobook release year (Audible/Audnexus) from the source name so
 		// ApplyMetadataToBook routes it to the same field as the auto-fetch path.

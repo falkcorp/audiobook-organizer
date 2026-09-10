@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
-// last-edited: 2026-08-20
+// last-edited: 2026-09-10
 
 package metadata
 
@@ -67,21 +67,22 @@ type audnexusSeries struct {
 }
 
 type audnexusBook struct {
-	ASIN            string           `json:"asin"`
-	Title           string           `json:"title"`
-	Subtitle        string           `json:"subtitle"`
-	Authors         []audnexusPerson `json:"authors"`
-	Narrators       []audnexusPerson `json:"narrators"`
-	PublisherName   string           `json:"publisherName"`
-	ReleaseDate     string           `json:"releaseDate"`
-	Language        string           `json:"language"`
-	Image           string           `json:"image"`
-	Description     string           `json:"description"`
-	Summary         string           `json:"summary"`
-	ISBN            string           `json:"isbn"`
-	Copyright       int              `json:"copyright"`
-	SeriesPrimary   *audnexusSeries  `json:"seriesPrimary"`
-	SeriesSecondary *audnexusSeries  `json:"seriesSecondary"`
+	ASIN             string           `json:"asin"`
+	Title            string           `json:"title"`
+	Subtitle         string           `json:"subtitle"`
+	Authors          []audnexusPerson `json:"authors"`
+	Narrators        []audnexusPerson `json:"narrators"`
+	PublisherName    string           `json:"publisherName"`
+	ReleaseDate      string           `json:"releaseDate"`
+	Language         string           `json:"language"`
+	Image            string           `json:"image"`
+	Description      string           `json:"description"`
+	Summary          string           `json:"summary"`
+	ISBN             string           `json:"isbn"`
+	Copyright        int              `json:"copyright"`
+	RuntimeLengthMin *int             `json:"runtimeLengthMin"` // nullable; audio runtime in minutes
+	SeriesPrimary    *audnexusSeries  `json:"seriesPrimary"`
+	SeriesSecondary  *audnexusSeries  `json:"seriesSecondary"`
 }
 
 type audnexusAuthor struct {
@@ -289,6 +290,20 @@ func (c *AudnexusClient) bookToMetadata(book *audnexusBook) *BookMetadata {
 	if book.SeriesPrimary != nil {
 		meta.Series = book.SeriesPrimary.Name
 		meta.SeriesPosition = book.SeriesPrimary.Position
+	}
+	if book.SeriesSecondary != nil {
+		meta.SeriesSecondary = book.SeriesSecondary.Name
+		meta.SeriesSecondaryPosition = book.SeriesSecondary.Position
+	}
+
+	// Runtime: Audnexus returns minutes; BookMetadata stores seconds. Audnexus
+	// previously contributed no duration even though the DurationSec sink exists.
+	if book.RuntimeLengthMin != nil && *book.RuntimeLengthMin > 0 {
+		meta.DurationSec = *book.RuntimeLengthMin * 60
+	}
+
+	if book.Subtitle != "" {
+		meta.Subtitle = book.Subtitle
 	}
 
 	return meta
