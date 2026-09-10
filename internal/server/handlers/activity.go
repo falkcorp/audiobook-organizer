@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-09-10
 
@@ -58,7 +58,6 @@ type ActivityService interface {
 	Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error)
 	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
 	RecompactDigests(ctx context.Context) (database.RecompactResult, error)
-	CompactByDay(ctx context.Context, cutoff time.Time) (database.CompactResult, error)
 	ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error)
 }
 
