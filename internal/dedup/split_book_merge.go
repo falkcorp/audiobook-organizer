@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-10
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -71,6 +71,18 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 	if len(srcIDs) == 0 {
 		return nil, fmt.Errorf("MergeSplitBookCluster: no srcIDs")
 	}
+
+	// This is a fourth unguarded read-modify-write over shared book rows
+	// (GetBookByID -> MoveBookFilesToBook -> UpdateBook -> SoftDeleteBook), the
+	// same failure class #1930 fixed for merge.Service.MergeBooks and that
+	// dedup.MergeBooks (book_dedup.go) already guards with this same lock. A
+	// user merging/combining a book via the dedup review UI while a split-book
+	// bulk-merge op or the single-candidate handler touches the same book id
+	// (as keepID or a srcID) could otherwise interleave writes and corrupt the
+	// row the same way. See internal/merge/serialize.go.
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+
 	keep, err := store.GetBookByID(keepID)
 	if err != nil || keep == nil {
 		return nil, fmt.Errorf("keep book %s not found: %w", keepID, err)
