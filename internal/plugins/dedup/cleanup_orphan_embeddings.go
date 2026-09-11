@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_embeddings.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9be49561-c03e-484c-ae53-723bbe299ebe
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 // Package dedup — op dedup.cleanup-orphan-embeddings.
 //
@@ -36,9 +36,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -145,6 +147,13 @@ func (p *Plugin) runCleanupOrphanEmbeddings(ctx context.Context, rawParams json.
 	}
 
 	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Applying — deleting %d orphaned embeddings…", len(report.OrphanIDs)))
+	// The delete loop stays sequential on purpose. Each iteration is one Pebble
+	// point-delete on a row this op already proved orphaned — no lookup, no
+	// network — so it is bounded by write throughput, not by CPU or read
+	// latency, and fanning it out would only interleave writes into the same
+	// keyspace for no wall-clock gain. Keeping the writes ordered also keeps
+	// the deleted/deleteErrs tallies and the per-row error log trivially
+	// consistent with the order OrphanIDs was reported in.
 	var deleted, deleteErrs int
 	for _, id := range report.OrphanIDs {
 		if reporter.IsCanceled() {
@@ -171,6 +180,15 @@ func (p *Plugin) runCleanupOrphanEmbeddings(ctx context.Context, rawParams json.
 	return nil
 }
 
+// orphanVerdict is the per-embedding outcome of one GetBookByID lookup.
+type orphanVerdict uint8
+
+const (
+	verdictLive      orphanVerdict = iota // GetBookByID resolved a book
+	verdictOrphaned                       // GetBookByID returned nil, nil — the book is gone
+	verdictLookupErr                      // GetBookByID errored; row skipped, never touched
+)
+
 // scanOrphanEmbeddings is the pure(ish) core of the op: for every given
 // embedding it checks whether GetBookByID still resolves the entity ID to a
 // live book, and returns the full report — counts, a bounded sample, and the
@@ -178,43 +196,73 @@ func (p *Plugin) runCleanupOrphanEmbeddings(ctx context.Context, rawParams json.
 // from runCleanupOrphanEmbeddings so the scan itself (the deliverable of
 // dry-run) is directly unit-testable. The only side effect is reads
 // (GetBookByID) — no writes happen here.
+//
+// The lookups fan out over a runtime.NumCPU()-wide worker pool (DA-03): this
+// is one synchronous point-lookup per emb:v:book:* row over the whole
+// library, exactly the single-core shape CLAUDE.md's concurrency mandate
+// exists to catch. Workers never share mutable state: each writes only its
+// own slot in verdicts (a disjoint partition by index), and the report —
+// counters, OrphanIDs, Sample — is assembled from those slots afterwards in
+// input order, so the result is identical to what the sequential loop
+// produced regardless of which worker finished first. The Label closure
+// reads nothing shared either; RunItems invokes it inside the workers.
 func (p *Plugin) scanOrphanEmbeddings(ctx context.Context, reporter sdk.Reporter, embeddings []database.Embedding) (cleanupOrphanReport, error) {
-	var report cleanupOrphanReport
+	verdicts := make([]orphanVerdict, len(embeddings))
+	indexes := make([]int, len(embeddings))
+	for i := range indexes {
+		indexes[i] = i
+	}
 
-	for i := range embeddings {
+	if err := registry.RunItems(ctx, reporter, indexes, func(_ context.Context, i int) error {
+		if reporter.IsCanceled() {
+			return context.Canceled
+		}
+		e := &embeddings[i]
+		book, err := p.store.GetBookByID(e.EntityID)
+		switch {
+		case err != nil:
+			verdicts[i] = verdictLookupErr
+			reporter.Logger().Warn("cleanup-orphan-embeddings: GetBookByID error; skipping (leaving row untouched)",
+				"entity_id", e.EntityID, "error", err)
+		case book != nil:
+			verdicts[i] = verdictLive
+		default:
+			verdicts[i] = verdictOrphaned
+		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Checking embedding %d/%d…", i+1, total)
+		},
+	}); err != nil {
+		// The callback only fails for cancellation (lookup errors are counted,
+		// never returned), and RunItems wraps callback errors in errors.Join —
+		// hand back the same bare sentinel the sequential loop returned.
+		if ctx.Err() != nil {
+			return cleanupOrphanReport{}, ctx.Err()
+		}
 		if reporter.IsCanceled() {
 			return cleanupOrphanReport{}, context.Canceled
 		}
-		select {
-		case <-ctx.Done():
-			return cleanupOrphanReport{}, ctx.Err()
-		default:
-		}
-
-		e := embeddings[i]
-		report.Total++
-		if (i+1)%1000 == 0 {
-			_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Checked %d/%d…", i+1, len(embeddings)))
-		}
-
-		book, err := p.store.GetBookByID(e.EntityID)
-		if err != nil {
-			report.LookupErr++
-			reporter.Logger().Warn("cleanup-orphan-embeddings: GetBookByID error; skipping (leaving row untouched)",
-				"entity_id", e.EntityID, "error", err)
-			continue
-		}
-		if book != nil {
-			report.Live++
-			continue
-		}
-
-		report.Orphaned++
-		report.OrphanIDs = append(report.OrphanIDs, e.EntityID)
-		if len(report.Sample) < cleanupOrphanSampleLimit {
-			report.Sample = append(report.Sample, cleanupOrphanSample{EntityID: e.EntityID, Model: e.Model})
-		}
+		return cleanupOrphanReport{}, err
 	}
 
+	report := cleanupOrphanReport{Total: len(embeddings)}
+	for i, v := range verdicts {
+		switch v {
+		case verdictLookupErr:
+			report.LookupErr++
+		case verdictLive:
+			report.Live++
+		default:
+			e := &embeddings[i]
+			report.Orphaned++
+			report.OrphanIDs = append(report.OrphanIDs, e.EntityID)
+			if len(report.Sample) < cleanupOrphanSampleLimit {
+				report.Sample = append(report.Sample, cleanupOrphanSample{EntityID: e.EntityID, Model: e.Model})
+			}
+		}
+	}
 	return report, nil
 }

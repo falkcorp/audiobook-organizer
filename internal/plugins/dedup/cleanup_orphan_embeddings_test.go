@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_embeddings_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a53bc26a-3ecb-4aab-bef8-d6e76c174cd7
-// last-edited: 2026-07-04
+// last-edited: 2026-09-11
 
 // Tests for the dedup.cleanup-orphan-embeddings op (retroactive counterpart to
 // PR #1802's DeleteBook fix).
@@ -18,13 +18,67 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errBarrierTimeout is what a concurrencyBarrier hands back when the required
+// number of callers never arrived together — i.e. the code under test ran its
+// per-item lookups one at a time.
+var errBarrierTimeout = errors.New("barrier timeout: lookups never ran concurrently")
+
+// concurrencyBarrier proves a per-item lookup is fanned out rather than run
+// on one core: enter blocks every caller until `want` of them are inside at
+// once, then releases them all. A sequential caller can never satisfy that,
+// so it trips the timeout instead of hanging — the pre-DA-03 loop FAILS the
+// test rather than stalling it — and every later caller fails fast too.
+type concurrencyBarrier struct {
+	want     int32
+	timeout  time.Duration
+	inFlight atomic.Int32
+	timedOut atomic.Bool
+	release  chan struct{}
+	once     sync.Once
+}
+
+func newConcurrencyBarrier(want int, timeout time.Duration) *concurrencyBarrier {
+	return &concurrencyBarrier{want: int32(want), timeout: timeout, release: make(chan struct{})}
+}
+
+func (b *concurrencyBarrier) enter() error {
+	if b.timedOut.Load() {
+		return errBarrierTimeout
+	}
+	if b.inFlight.Add(1) >= b.want {
+		b.once.Do(func() { close(b.release) })
+	}
+	select {
+	case <-b.release:
+		return nil
+	case <-time.After(b.timeout):
+		b.timedOut.Store(true)
+		return errBarrierTimeout
+	}
+}
+
+// requireMultiCore skips a concurrency-shape test on a host where a
+// NumCPU-sized pool degenerates to one worker.
+func requireMultiCore(t *testing.T) {
+	t.Helper()
+	if runtime.NumCPU() < 2 {
+		t.Skip("needs >= 2 CPUs for a NumCPU-sized worker pool to run concurrently")
+	}
+}
 
 // cleanupOrphanMockStore returns a MockStore whose GetBookByID resolves only
 // the given live book IDs; any other ID returns (nil, nil) — the "book gone"
@@ -111,6 +165,71 @@ func TestCleanupOrphanEmbeddingsOp_ScanClassifiesCorrectly(t *testing.T) {
 	assert.Equal(t, 2, report.Live)
 	assert.Equal(t, 0, report.LookupErr)
 	assert.ElementsMatch(t, []string{"book-gone-1", "book-gone-2"}, report.OrphanIDs)
+}
+
+// TestCleanupOrphanEmbeddingsOp_ScanRunsConcurrently is the DA-03 regression
+// test: GetBookByID blocks until two lookups are in flight at once, so the
+// pre-fix sequential loop times out on its first call (every row then counts
+// as a lookup error) while the worker-pool scan releases the barrier. It also
+// pins the report shape under concurrency: exact counters, OrphanIDs in
+// listing order, and Sample = the first cleanupOrphanSampleLimit orphans.
+func TestCleanupOrphanEmbeddingsOp_ScanRunsConcurrently(t *testing.T) {
+	requireMultiCore(t)
+
+	const n = 32
+	barrier := newConcurrencyBarrier(2, 2*time.Second)
+	var calls atomic.Int32
+	ms := &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			calls.Add(1)
+			if err := barrier.enter(); err != nil {
+				return nil, err
+			}
+			if id == "book-live-0" {
+				return &database.Book{ID: id, Title: "Live"}, nil
+			}
+			return nil, nil // orphaned
+		},
+	}
+	p := buildPlugin(t, newTestEmbeddingStorePurge(t), ms)
+
+	embeddings := make([]database.Embedding, 0, n)
+	embeddings = append(embeddings, database.Embedding{EntityType: "book", EntityID: "book-live-0", Model: "bge-m3"})
+	wantOrphans := make([]string, 0, n-1)
+	for i := 1; i < n; i++ {
+		id := fmt.Sprintf("book-gone-%02d", i)
+		embeddings = append(embeddings, database.Embedding{EntityType: "book", EntityID: id, Model: "text-embedding-3-large"})
+		wantOrphans = append(wantOrphans, id)
+	}
+
+	report, err := p.scanOrphanEmbeddings(context.Background(), &mockReporter{}, embeddings)
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(n), calls.Load(), "every embedding must be looked up exactly once")
+	assert.Equal(t, 0, report.LookupErr, "a lookup error here means GetBookByID ran sequentially and tripped the barrier")
+	assert.Equal(t, n, report.Total)
+	assert.Equal(t, 1, report.Live)
+	assert.Equal(t, n-1, report.Orphaned)
+	assert.Equal(t, wantOrphans, report.OrphanIDs, "OrphanIDs must keep listing order regardless of worker completion order")
+
+	require.Len(t, report.Sample, cleanupOrphanSampleLimit)
+	for i, s := range report.Sample {
+		assert.Equal(t, wantOrphans[i], s.EntityID, "Sample must be the first orphans in listing order")
+		assert.Equal(t, "text-embedding-3-large", s.Model)
+	}
+}
+
+// TestCleanupOrphanEmbeddingsOp_ScanHonorsCancellation asserts the parallel
+// scan still surfaces the bare context sentinel the sequential loop returned.
+func TestCleanupOrphanEmbeddingsOp_ScanHonorsCancellation(t *testing.T) {
+	ms := cleanupOrphanMockStore()
+	p := buildPlugin(t, newTestEmbeddingStorePurge(t), ms)
+	embeddings := []database.Embedding{{EntityType: "book", EntityID: "book-gone-1"}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.scanOrphanEmbeddings(ctx, &mockReporter{}, embeddings)
+	assert.Equal(t, context.Canceled, err)
 }
 
 // TestCleanupOrphanEmbeddingsOp_ApplyDeletesOnlyOrphans asserts apply=true
