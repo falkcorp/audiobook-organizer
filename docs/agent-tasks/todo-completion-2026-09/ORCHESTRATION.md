@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/ORCHESTRATION.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 8a962a05-3ef5-415b-9d74-9533c72d51f6 -->
-<!-- last-edited: 2026-09-10 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Orchestration — todo-completion-2026-09
 
@@ -13,7 +13,7 @@ The package-level protocol is the parent [`../ORCHESTRATION.md`](../ORCHESTRATIO
 2. Within the cut, dispatch by workstream `orchestration.md` waves (S → M → L), applying the same-file collision rule from the BREAKDOWN.
 3. Hard cap: **4 concurrent worker agents**. Workers must not spawn sub-agents (three agents did so during the 2026-09-10 reconciliation and raced on shared output files).
 4. Review-critical briefs (data-loss / security, marked in the brief) are held for the owner — never admin-merged.
-5. After each merge: rebase every open sibling worktree; re-run the matrix generator if a brief's status changed (`state/tools/merge_verdicts.py` → `build_matrix.py`).
+5. After each merge: rebase every open sibling worktree; record the merged finding or brief id in `state/final/done_since_0910.json` (TODO.md items need nothing — the generators read the live checkbox state), then re-run both generators (`state/tools/build_matrix.py` and `state/tools/build_quadrant.py`, same `<state-dir> <out-md>` arguments) so [`PRIORITY-MATRIX.md`](PRIORITY-MATRIX.md) and the impact-vs-effort chart in [`QUADRANT.md`](QUADRANT.md) drop the row.
 
 ## State
 

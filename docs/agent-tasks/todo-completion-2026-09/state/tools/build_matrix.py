@@ -1,139 +1,24 @@
 #!/usr/bin/env python3
 # file: docs/agent-tasks/todo-completion-2026-09/state/tools/build_matrix.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 5d1f8b2c-3e7a-4a95-b6c0-7f2e9d4a1c83
-# last-edited: 2026-09-10
+# last-edited: 2026-09-11
 """Build PRIORITY-MATRIX.md (risk-ordered + effort-ordered) from merged.json.
 
 Usage: build_matrix.py <state-dir> <out-md>
 Rows: surviving REAL briefs, Wave 3 audit findings, and uncovered REAL TODO items
-rolled up per TODO.md section. Re-runnable.
+rolled up per TODO.md section, minus everything that merged since the 2026-09-10
+freeze (see matrix_rows.build_rows). Re-runnable.
 """
 import collections
-import json
 import os
-import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from matrix_rows import EFF_RANK, RISK_RANK, build_rows, effort_key, risk_key  # noqa: E402
+
 STATE, OUT = sys.argv[1], sys.argv[2]
-d = json.load(open(os.path.join(STATE, "merged.json"), encoding="utf-8"))
-REPO = os.path.abspath(os.path.join(STATE, "..", "..", "..", ".."))
-PKG = "docs/agent-tasks/todo-completion-2026-09"
-TODO_LINES = open(os.path.join(REPO, "TODO.md"), encoding="utf-8").read().split("\n")
-
-# state/final/brief_index.json is written by gen_new_package.py: every brief in the package with
-# its dispatch verdict (2026-09-10 validation) and source key. Optional — the matrix still builds
-# without it, just without the Brief column and the dispatch gates.
-_idx_path = os.path.join(STATE, "final", "brief_index.json")
-BRIEFS = json.load(open(_idx_path, encoding="utf-8")) if os.path.exists(_idx_path) else []
-BRIEF_BY_ID = {b["id"]: b for b in BRIEFS}
-BRIEF_BY_SOURCE = {b["source_key"]: b for b in BRIEFS if b.get("source_key")}
-BRIEF_BY_TODO_LINE = {ln: b for b in BRIEFS for ln in (b.get("todo_lines") or [])}
-DESIGN = {}  # design-fit verdicts keyed by matrix id (sibling-package briefs are not in brief_index)
-for _n in ("design_fit_rows_1_29.json", "design_fit_rows_31_64.json"):
-    _p = os.path.join(STATE, "final", _n)
-    if os.path.exists(_p):
-        DESIGN.update({r["brief"]: r for r in json.load(open(_p, encoding="utf-8"))})
-
-
-def real_heading(line):
-    """Nearest heading above `line` in TODO.md (same rule as gen_new_package.py) — the inventory's
-    `section` field tracked only `## ` headings and mis-filed ~50 items."""
-    found = []
-    for i in range(int(line) - 2, -1, -1):
-        m = re.match(r"^(#{1,6})\s+(.*\S)\s*$", TODO_LINES[i])
-        if m:
-            found.append((i + 1, len(m.group(1)), m.group(2)))
-            if len(m.group(2)) >= 25 or len(found) == 2:
-                break
-    if not found:
-        return 0, "(no heading)"
-    if len(found) == 2 and found[1][1] < found[0][1]:
-        return found[0][0], f"{found[1][2]} › {found[0][2]}"
-    return found[0][0], found[0][2]
-
-RISK_RANK = {"data-loss": 0, "security": 1, "correctness": 2, "perf": 3, "ux": 4, "hygiene": 5, "null": 6, None: 6}
-SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, None: 4}
-EFF_RANK = {"S": 0, "M": 1, "L": 2, None: 3, "null": 3}
-GATED = {
-    "docs/agent-tasks/torrent-relocation/": "parked (DECISIONS-PENDING row 2)",
-    "docs/agent-tasks/ai-responses-migration/": "on hold (useResponsesAPI design)",
-}
-
-rows = []
-
-# 1. surviving briefs
-for b in d["briefs"]:
-    if b["verdict"] != "REAL":
-        continue
-    gate = next((v for k, v in GATED.items() if b["path"].startswith(k)), None)
-    carried = BRIEF_BY_ID.get(b["task_id"]) if b["initiative"] == "todo-completion" else None
-    rows.append({
-        "kind": "brief",
-        "id": b["task_id"] if b["initiative"] == "todo-completion" else f"{b['initiative']}/{b['task_id']}",
-        "title": b["title"][:110],
-        "risk": b.get("risk") or "hygiene",
-        "severity": None,
-        "effort": b.get("effort") or "M",
-        "count": 1,
-        "anchor": carried["path"] if carried else b["path"],  # carried briefs live in the 2026-09 package now
-        "gate": gate or (f"{carried['dispatch']} — {carried['dispatch_why'][:120]}" if carried and carried["dispatch"] != "DISPATCH" else None)
-                or (lambda dfit: f"{dfit['verdict']} — {dfit['why'][:120]}" if dfit and dfit["verdict"] in ("DEFER", "SUPERSEDED") else None)(DESIGN.get(f"{b['initiative']}/{b['task_id']}")),
-        "brief": carried["id"] if carried else "",
-    })
-
-# 2. audit findings
-for f in d["findings"]:
-    rows.append({
-        "kind": "finding",
-        "id": f["id"],
-        "title": f["title"][:110],
-        "risk": f.get("risk") or "correctness",
-        "severity": f.get("severity"),
-        "effort": f.get("effort") or "M",
-        "count": 1,
-        "anchor": f"{f.get('file')}:{f.get('line')}",
-        "gate": (lambda fb: f"{fb['dispatch']} — {fb['dispatch_why'][:120]}" if fb and fb["dispatch"] != "DISPATCH" else None)(BRIEF_BY_SOURCE.get(f["id"])),
-        "brief": (BRIEF_BY_SOURCE.get(f["id"]) or {}).get("id", ""),
-    })
-
-# 3. uncovered REAL TODO items, rolled up per section
-sections = collections.defaultdict(list)
-for t in d["todo"]:
-    if t["verdict"] == "REAL" and not t.get("dup_of"):
-        # group by the brief that covers the item (one row per brief), else by the REAL heading
-        b = BRIEF_BY_TODO_LINE.get(t["line"])
-        sections[("brief", b["id"], b["title"]) if b else ("heading",) + real_heading(t["line"])].append(t)
-for key, items in sections.items():
-    worst = min(items, key=lambda t: RISK_RANK.get(t.get("risk"), 6))
-    cheapest = min(items, key=lambda t: EFF_RANK.get(t.get("effort"), 3))
-    b = BRIEF_BY_ID.get(key[1]) if key[0] == "brief" else None
-    risk = worst.get("risk") or "hygiene"
-    gate = None
-    if b:
-        risk = b["risk"]  # RECLASSIFY verdicts lower the class
-        if b["dispatch"] != "DISPATCH":
-            gate = f"{b['dispatch']} — {b['dispatch_why'][:120]}"
-    rows.append({
-        "kind": "todo-section",
-        "id": f"TODO.md:{min(t['line'] for t in items)}",
-        "title": (b["title"] if b else key[2])[:110],
-        "risk": risk,
-        "severity": None,
-        "effort": cheapest.get("effort") or "M",
-        "count": len(items),
-        "anchor": "lines " + ",".join(str(t["line"]) for t in sorted(items, key=lambda t: t["line"])[:6]) + (" …" if len(items) > 6 else ""),
-        "gate": gate,
-        "brief": b["id"] if b else "",
-    })
-
-
-def risk_key(r):
-    return (RISK_RANK.get(r["risk"], 6), SEV_RANK.get(r["severity"], 4), EFF_RANK.get(r["effort"], 3), r["id"])
-
-
-def effort_key(r):
-    return (EFF_RANK.get(r["effort"], 3), RISK_RANK.get(r["risk"], 6), SEV_RANK.get(r["severity"], 4), r["id"])
+rows, done = build_rows(STATE)
 
 
 def table(sorted_rows, limit=None):
@@ -145,31 +30,44 @@ def table(sorted_rows, limit=None):
     return "\n".join(out)
 
 
+def done_table(done_rows):
+    out = ["| Kind | Id | Brief | Risk | Title | Closed by |", "|---|---|---|---|---|---|"]
+    for r in sorted(done_rows, key=risk_key):
+        brief = f"`{r['brief']}`" if r.get("brief") else "—"
+        out.append(f"| {r['kind']} | `{r['id']}` | {brief} | {r['risk']} | {r['title']} | {r['pr']} |")
+    return "\n".join(out)
+
+
 by_kind = collections.Counter(r["kind"] for r in rows)
 by_risk = collections.Counter(r["risk"] for r in rows)
 by_effort = collections.Counter(r["effort"] for r in rows)
 
 md = f"""<!-- file: docs/agent-tasks/todo-completion-2026-09/PRIORITY-MATRIX.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 8e2c4f7a-1d5b-4b39-9a6e-3c8f0d2b7e41 -->
-<!-- last-edited: 2026-09-10 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Priority matrix — burndown 2026-09-10
 
 Generated by `state/tools/build_matrix.py` from `state/merged.json`; regenerate, never
 hand-edit. One row per unit of work: a surviving brief (`brief`), a Wave 3 audit
 finding (`finding`), or a TODO.md section holding REAL items that no brief covers
-(`todo-section`, `n` = item count). `Brief` is the TASK id in this package that covers
+(`todo-section`, `n` = open item count). `Brief` is the TASK id in this package that covers
 the row (findings → TASK-300+, data-loss/security TODO sections → TASK-335+; carried briefs
 are their own id); `—` means no brief yet — brief it on demand when the cut line reaches it.
 Pick a cut line in either table; the two orderings are the same rows.
+
+Rows that merged after the 2026-09-10 freeze are dropped: finding and brief ids come from
+`state/final/done_since_0910.json` (append there when a PR merges), TODO items from the live
+checkbox state of `TODO.md` (items are re-located by text because assembly shifts every line).
+The same rows drawn as an impact-vs-effort chart: [QUADRANT.md](QUADRANT.md).
 
 `GATED` rows: owner-gated sibling initiatives; `HOLD-FOR-OWNER` TODO sections whose
 items are decisions or prod runs (`state/final/todo_sections_validation.json`); and `DEFER` /
 `SUPERSEDED` rows from the design-fit review (`state/final/design_fit_rows_*.json`) — they stay
 in the ranking so the cut line is complete, but they are not worker tasks.
 
-**Rows: {len(rows)}** — {dict(by_kind)}.
+**Rows: {len(rows)}** — {dict(by_kind)}. **Done since 2026-09-10: {len(done)}** (section C).
 By risk: {dict(sorted(by_risk.items(), key=lambda kv: RISK_RANK.get(kv[0], 6)))}.
 By effort: {dict(sorted(by_effort.items(), key=lambda kv: EFF_RANK.get(kv[0], 3)))}.
 
@@ -184,7 +82,11 @@ risk then severity. `GATED` rows are REAL but need an owner decision before disp
 ## B. Effort-ordered (quickest wins first)
 
 {table(sorted(rows, key=effort_key))}
+
+## C. Done since the 2026-09-10 freeze
+
+{done_table(done)}
 """
 with open(OUT, "w", encoding="utf-8") as fh:
     fh.write(md)
-print(f"rows={len(rows)} kinds={dict(by_kind)} risk={dict(by_risk)} effort={dict(by_effort)}")
+print(f"rows={len(rows)} done={len(done)} kinds={dict(by_kind)} risk={dict(by_risk)} effort={dict(by_effort)}")
