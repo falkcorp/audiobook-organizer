@@ -1,7 +1,7 @@
 // file: internal/server/leaf_stores.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package server
 
@@ -24,7 +24,8 @@ type seriesPruneReader interface {
 // externalIDBackfillStore: the backfiller's own field.
 type externalIDBackfillStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetSetting(key string) (*database.Setting, error)
 	SetSetting(key, value, typ string, isSecret bool) error
 }
 

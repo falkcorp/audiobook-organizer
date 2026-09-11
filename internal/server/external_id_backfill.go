@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package server
 
@@ -41,16 +41,23 @@ func asExternalIDStore(s any) ExternalIDStore {
 	return nil
 }
 
-// backfillExternalIDs delegates to itunes.BackfillExternalIDs.
-// The domain package handles idempotency checks and coordinates book-level,
-// file-level, and track-level PID registration.
+// backfillExternalIDs delegates to the itunes domain package, which
+// coordinates book-level, file-level, and track-level PID registration.
+//
+// force selects the entry point. false (the boot path in startBackfills)
+// goes through itunes.BackfillExternalIDsOnce, which skips the whole
+// full-library scan when a previous run recorded completion under
+// itunes.ExternalIDBackfillDoneKey — before that gate existed the scan ran
+// at every server start (SQ-04). true (the manual maintenance op) calls
+// itunes.BackfillExternalIDs directly so an operator's explicit request is
+// never silently skipped; the writes are idempotent either way.
 //
 // progress is forwarded straight to itunes.BackfillExternalIDs so the
 // whole-library pagination reports live progress (H7). The domain error is
 // now returned to the caller instead of being demoted to a Warn log — a
 // failure here (e.g. a write error mid-backfill) used to leave the op
 // reporting success unconditionally.
-func (s *Server) backfillExternalIDs(progress func(processed, total int, msg string)) error {
+func (s *Server) backfillExternalIDs(progress func(processed, total int, msg string), force bool) error {
 	store := s.Ops()
 	if store == nil {
 		return nil
@@ -65,7 +72,12 @@ func (s *Server) backfillExternalIDs(progress func(processed, total int, msg str
 	// Delegate to the itunes domain package. s.bgCtx aborts the backfill
 	// on shutdown so it can't outlive the store and crash on
 	// "pebble: closed" in CreateExternalIDMapping.
-	if err := itunes.BackfillExternalIDs(s.bgCtx, &externalIDStoreAdapter{eidStore: eidStore, store: store}, progress); err != nil {
+	adapter := &externalIDStoreAdapter{eidStore: eidStore, store: store}
+	run := itunes.BackfillExternalIDsOnce
+	if force {
+		run = itunes.BackfillExternalIDs
+	}
+	if err := run(s.bgCtx, adapter, progress); err != nil {
 		slog.Warn("backfillExternalIDs", "err", err)
 		return err
 	}
@@ -83,8 +95,12 @@ func (a *externalIDStoreAdapter) GetAllBooksCore(limit, offset int) ([]database.
 	return a.store.GetAllBooksCore(limit, offset)
 }
 
-func (a *externalIDStoreAdapter) GetBookFiles(bookID string) ([]database.BookFile, error) {
-	return a.store.GetBookFiles(bookID)
+func (a *externalIDStoreAdapter) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	return a.store.GetAllBookFilesCore()
+}
+
+func (a *externalIDStoreAdapter) GetSetting(key string) (*database.Setting, error) {
+	return a.store.GetSetting(key)
 }
 
 func (a *externalIDStoreAdapter) CreateExternalIDMapping(mapping *database.ExternalIDMapping) error {
