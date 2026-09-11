@@ -1,12 +1,15 @@
 {
   "_comment": "Rows of PRIORITY-MATRIX / QUADRANT that merged AFTER merged.json was frozen on 2026-09-10. Keyed by the matrix row id (finding id or brief TASK id) -> merged PR. TODO.md items are NOT listed here: the builders read the live checkbox state of TODO.md instead (an item whose text_head is found on a `- [x]` line is done). Append here when a finding/brief PR merges; the two builders drop the row and count it under 'done since 2026-09-10'.",
   "findings": {
+    "CI-01": "#3236",
     "DA-01": "#3181",
     "DA-02": "#3208",
     "DA-03": "#3225",
+    "DA-04": "#3243",
     "DB-01": "#3182",
     "DB-02": "#3197",
     "DB-03": "#3221",
+    "DB-04": "#3243",
     "OPS-01": "#3220",
     "OPS-02": "#3218",
     "SF-01": "#3180",
@@ -23,13 +26,17 @@
     "SV-04": "#3235",
     "WEB-03": "#3229",
     "WEB-04": "#3193",
-    "WEB-05": "#3229",
-    "CI-01": "#3236"
+    "WEB-05": "#3229"
   },
   "briefs": {
+    "TASK-014": "#3243",
     "TASK-072": "#3202",
     "TASK-080": "#3201",
+    "TASK-117": "#3243",
+    "TASK-118": "#3243",
+    "TASK-131": "#3243",
     "TASK-140": "#3194",
+    "TASK-143": "#3243",
     "TASK-160": "#3203",
     "TASK-220": "#3207",
     "TASK-301": "#3208",
