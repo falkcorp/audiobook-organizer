@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.3.0
+# version: 1.4.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-09-01
+# last-edited: 2026-09-11
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -69,9 +69,7 @@ DEPLOY_URL := https://$(DEPLOY_HOST):8484
 # from macOS requires: brew install filosottile/musl-cross/musl-cross
 .PHONY: deploy
 deploy: web-build
-	@echo "→ Pre-flight: checking local branch is not behind origin/main..."
-	@git fetch origin main
-	@git merge-base --is-ancestor origin/main HEAD || (echo "❌ local main behind origin — pull first"; exit 1)
+	@bash scripts/deploy-preflight.sh origin/main
 	@echo "→ Cross-compiling linux/amd64 binary..."
 	@mkdir -p dist
 	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
@@ -99,9 +97,7 @@ deploy: web-build
 ## deploy-debug: Same as deploy, but ships a debug (non-stripped) build
 .PHONY: deploy-debug
 deploy-debug: web-build
-	@echo "→ Pre-flight: checking local branch is not behind origin/main..."
-	@git fetch origin main
-	@git merge-base --is-ancestor origin/main HEAD || (echo "❌ local main behind origin — pull first"; exit 1)
+	@bash scripts/deploy-preflight.sh origin/main
 	@echo "→ Cross-compiling linux/amd64 debug binary..."
 	@mkdir -p dist
 	CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build \
