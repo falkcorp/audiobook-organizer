@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 package server
 
@@ -149,6 +149,7 @@ type serverAuthorStore interface {
 	DeleteAuthor(id int) error
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
 	UpdateAuthorName(id int, name string) error
 }
@@ -167,6 +168,7 @@ type serverEntityReader interface {
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
 	GetNarratorByID(id int) (*database.Narrator, error)
 	GetSeriesByID(id int) (*database.Series, error)
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
 }
 
 // serverTagWriter: Adds, sets and removes tags on books, authors and series.
@@ -184,6 +186,7 @@ type serverTagWriter interface {
 type serverTagReader interface {
 	GetAuthorTagsDetailed(authorID int) ([]database.BookTag, error)
 	GetBookTags(bookID string) ([]string, error)
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 	GetSeriesTagsDetailed(seriesID int) ([]database.BookTag, error)
 }
 

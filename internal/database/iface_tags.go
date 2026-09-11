@@ -1,12 +1,19 @@
 // file: internal/database/iface_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9129bad9-0aa9-4eda-82fb-b945f0393674
+// last-edited: 2026-09-11
 
 package database
 
 // BookTagReader reads tags on books.
 type BookTagReader interface {
 	GetBookTags(bookID string) ([]string, error)
+	// GetBookTagsByBookIDs returns bookID → sorted tag strings for every
+	// book in bookIDs, in ONE store call. Books with no tags are absent
+	// from the map. This is the batch twin of GetBookTags for callers
+	// that walk the whole library (the search-index backfill), so the
+	// per-book N+1 read never appears in a page loop.
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 	GetBookTagsDetailed(bookID string) ([]BookTag, error)
 	ListAllTags() ([]TagWithCount, error)
 	GetBooksByTag(tag string) ([]string, error)

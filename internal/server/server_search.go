@@ -1,14 +1,21 @@
 // file: internal/server/server_search.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-08-30
+// last-edited: 2026-09-11
 
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -37,10 +44,35 @@ func (s *Server) safeWriteDeps() tagger.SafeWriteDeps {
 	}
 }
 
+// searchBackfillStore is the store slice the bulk backfill reads. It is
+// paging plus the three BATCH relation reads — deliberately not the
+// per-book GetAuthorByID / GetSeriesByID / GetBookTags trio, so the
+// compiler forbids the N+1 from coming back.
+type searchBackfillStore interface {
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
+}
+
+const (
+	// searchBackfillPageSize is rows per GetAllBooksFullFrom call. Paging
+	// is keyset (afterID), so pages are fetched serially by one producer;
+	// the parallelism is across chunks, below.
+	searchBackfillPageSize = 500
+	// searchBackfillChunkSize is books per worker unit: three batch store
+	// reads and one Bleve batch commit per chunk. 100 is inside Bleve's
+	// recommended 100–1000 docs per batch and gives 5 chunks per page so
+	// a page fans out across cores.
+	searchBackfillChunkSize = 100
+	// searchBackfillProgressEvery bounds how often a running backfill
+	// logs its count, so a 100k-book build is visible without spamming.
+	searchBackfillProgressEvery = 30 * time.Second
+)
+
 // buildSearchIndexIfEmpty runs a full reindex of the library when
 // the search index has zero documents. Honors s.bgCtx so shutdown
-// stops the backfill cleanly. Page size matches the existing
-// backfill code to keep memory bounded.
+// stops the backfill cleanly.
 func (s *Server) buildSearchIndexIfEmpty() {
 	if s.searchIndex == nil {
 		return
@@ -57,46 +89,174 @@ func (s *Server) buildSearchIndexIfEmpty() {
 	if store == nil {
 		return
 	}
-	slog.Info("Search index empty — starting full backfill")
+	slog.Info("Search index empty — starting full backfill", "workers", runtime.NumCPU())
 	start := time.Now()
-	indexed := 0
-	const pageSize = 500
+	indexed, err := s.runSearchBackfill(s.bgCtx, store, runtime.NumCPU(),
+		searchBackfillPageSize, searchBackfillChunkSize)
+	switch {
+	case err == nil:
+		slog.Info("Search backfill complete", "indexed", indexed, "time", time.Since(start))
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		slog.Info("Search backfill canceled (bgCtx)", "indexed", indexed, "time", time.Since(start))
+	default:
+		slog.Warn("Search backfill stopped", "indexed", indexed, "time", time.Since(start), "err", err)
+	}
+}
+
+// runSearchBackfill walks the whole library and indexes every book,
+// returning how many documents were written.
+//
+// Shape (CLAUDE.md "Concurrency — Prefer Multi-Core Design"): one
+// producer pages GetAllBooksFullFrom serially (keyset cursor), splits
+// each page into chunks of chunkSize, and hands each chunk to an
+// errgroup bounded at `workers`. g.Go blocks once every worker is busy,
+// so the producer fetches page N+1 while page N is being indexed and
+// at most a couple of pages are resident. Each worker does three BATCH
+// store reads for its chunk (search.LoadBookRelations), builds the
+// documents with zero store calls (search.BookToDocWithRelations), and
+// commits them with one Bleve batch. Store traffic is therefore
+// O(pages + chunks), never O(books).
+//
+// This is not a registry op (it runs inside server startup, before the
+// registry has anything to resume), so registry.RunItems is not the
+// vehicle; errgroup + SetLimit is the CLAUDE.md default for that case.
+//
+// Concurrent index writes are safe: bleve.Index (scorch) is documented
+// goroutine-safe for Index/Batch/Delete — text analysis runs in the
+// calling goroutine (that is the CPU we are spreading across cores) and
+// segment introduction is serialized by scorch's own introducer. On our
+// side BleveIndex.IndexBookBatch holds only the RLock of the open/close
+// mutex, so N workers commit in parallel and only Close excludes them.
+// Chunks are disjoint slices of one page and every book ID appears in
+// exactly one chunk, so two workers never write the same doc ID.
+func (s *Server) runSearchBackfill(ctx context.Context, store searchBackfillStore, workers, pageSize, chunkSize int) (int64, error) {
+	if workers < 1 {
+		workers = 1
+	}
+	if pageSize < 1 {
+		pageSize = searchBackfillPageSize
+	}
+	if chunkSize < 1 || chunkSize > pageSize {
+		chunkSize = pageSize
+	}
+
+	var indexed atomic.Int64
+	start := time.Now()
+
+	// Progress heartbeat so a long build is visible in the log.
+	progressDone := make(chan struct{})
+	var progressWG sync.WaitGroup
+	progressWG.Add(1)
+	go func() {
+		defer progressWG.Done()
+		t := time.NewTicker(searchBackfillProgressEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-progressDone:
+				return
+			case <-t.C:
+				n := indexed.Load()
+				elapsed := time.Since(start)
+				rate := float64(n) / elapsed.Seconds()
+				slog.Info("Search backfill progress", "indexed", n,
+					"elapsed", elapsed.Round(time.Second), "books_per_sec", int(rate))
+			}
+		}
+	}()
+	defer func() {
+		close(progressDone)
+		progressWG.Wait()
+	}()
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+
+	var pageErr error
 	afterID := ""
+producer:
 	for {
-		select {
-		case <-s.bgCtx.Done():
-			slog.Info("Search backfill canceled at books (bgCtx)", "indexed", indexed)
-			return
-		default:
+		if err := gctx.Err(); err != nil {
+			pageErr = err
+			break
 		}
 		books, err := store.GetAllBooksFullFrom(afterID, pageSize)
 		if err != nil {
-			slog.Warn("search backfill GetAllBooksFullFrom", "err", err)
-			return
+			pageErr = fmt.Errorf("search backfill GetAllBooksFullFrom after %q: %w", afterID, err)
+			break
 		}
 		if len(books) == 0 {
 			break
 		}
-		for i := range books {
-			select {
-			case <-s.bgCtx.Done():
-				slog.Info("Search backfill canceled at books", "indexed", indexed)
-				return
-			default:
+		for lo := 0; lo < len(books); lo += chunkSize {
+			hi := min(lo+chunkSize, len(books))
+			chunk := books[lo:hi:hi]
+			// Blocks while all workers are busy — that is the back-pressure
+			// that keeps paging from running ahead of indexing.
+			g.Go(func() error {
+				if err := gctx.Err(); err != nil {
+					return err
+				}
+				indexed.Add(s.indexBookChunk(store, chunk))
+				return gctx.Err()
+			})
+			if gctx.Err() != nil {
+				break producer
 			}
-			doc := search.BookToDoc(store, &books[i])
-			if err := s.searchIndex.IndexBook(doc); err != nil {
-				slog.Warn("search backfill index", "bookID", books[i].ID, "err", err)
-				continue
-			}
-			indexed++
 		}
 		afterID = books[len(books)-1].ID
 		if len(books) < pageSize {
 			break
 		}
 	}
-	slog.Info("Search backfill complete books in", "indexed", indexed, "time", time.Since(start))
+	err := g.Wait()
+	if pageErr != nil && !errors.Is(pageErr, context.Canceled) {
+		err = pageErr
+	} else if err == nil {
+		err = pageErr
+	}
+	return indexed.Load(), err
+}
+
+// indexBookChunk resolves one chunk's relations with three batch reads,
+// builds its documents and commits them as one Bleve batch. Returns the
+// number of documents that made it into the index.
+//
+// A failed relation read is logged and the chunk is still indexed with
+// whatever resolved (the pre-batch code silently indexed a book with no
+// author name when GetAuthorByID failed; this keeps that outcome and
+// makes the failure visible). A failed batch commit falls back to
+// indexing the chunk's documents one by one so a single bad document
+// costs one row, not chunkSize rows — the same per-book granularity
+// the sequential loop had.
+func (s *Server) indexBookChunk(store searchBackfillStore, books []database.Book) int64 {
+	if len(books) == 0 {
+		return 0
+	}
+	rel, err := search.LoadBookRelations(store, books)
+	if err != nil {
+		slog.Warn("search backfill relations (indexing chunk with partial relations)",
+			"first", books[0].ID, "last", books[len(books)-1].ID, "n", len(books), "err", err)
+	}
+	docs := make([]search.BookDocument, 0, len(books))
+	for i := range books {
+		docs = append(docs, search.BookToDocWithRelations(&books[i], rel))
+	}
+	err = s.searchIndex.IndexBookBatch(docs)
+	if err == nil {
+		return int64(len(docs))
+	}
+	slog.Warn("search backfill batch index failed; retrying chunk per book",
+		"first", books[0].ID, "last", books[len(books)-1].ID, "n", len(books), "err", err)
+	var ok int64
+	for i := range docs {
+		if err := s.searchIndex.IndexBook(docs[i]); err != nil {
+			slog.Warn("search backfill index", "bookID", docs[i].BookID, "err", err)
+			continue
+		}
+		ok++
+	}
+	return ok
 }
 
 // IndexBookByID reads a book (plus its related rows) and upserts
