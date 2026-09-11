@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-11
 
@@ -1157,6 +1157,10 @@ func identityAllowances() map[string]allowance {
 		"*type":                      {Reason: roleReason},
 		"*permissions.upload":        {Reason: roleReason},
 		"*permissions.createEreader": {Reason: roleReason},
+		// N-3 (TASK-143): the ABS surface has no item-edit/delete route, so we
+		// stop advertising the two permissions the oracle's root account carried.
+		"*permissions.delete": {Reason: roleReason},
+		"*permissions.update": {Reason: roleReason},
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-06
+// last-edited: 2026-09-11
 
 package registry
 
@@ -57,6 +57,16 @@ type opRegistryStore interface {
 // (not AllFiles), so this is correct, not a stub to remove later.
 type prodSchedulerStore struct {
 	opRegistryStore
+	// full is the same registry value without the opRegistryStore narrowing, so
+	// capability lookups (database.AsCapability) can walk past this wrapper.
+	full database.Store
+}
+
+// Unwrap implements database.StoreUnwrapper: without it a capability lookup
+// against the scheduler store would see only the narrow embed and report the
+// backing Pebble store as unsupported (TODO.md L4703 / TASK-117).
+func (p *prodSchedulerStore) Unwrap() database.Store {
+	return p.full
 }
 
 // BookFiles satisfies DepStore.BookFiles. Returns nil so AllFiles requirements
@@ -99,7 +109,10 @@ func init() {
 
 			// Wire the book store for dep evaluation (ReqFieldSet).
 			// prodSchedulerStore adds BookFiles (nil shim).
-			schedStore := &prodSchedulerStore{opRegistryStore: store}
+			schedStore := &prodSchedulerStore{
+				opRegistryStore: store,
+				full:            serviceregistry.Get[database.Store](c, serviceregistry.KeyStore),
+			}
 			reg.SetDepBookStore(schedStore)
 
 			// Wire the DepsScheduler so waiting_deps ops are re-evaluated after

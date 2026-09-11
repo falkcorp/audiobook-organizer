@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package activity
 
@@ -172,7 +172,10 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 // isBatchable returns true if e should be routed through the ActivityBatcher
 // rather than written directly to the channel. Entries are batchable only when
 // they come from a structured LogBatch call (operationID non-empty) AND their
-// type is registered as a high-volume batch type.
+// type is registered as a high-volume batch type. The tier=debug gate is
+// deliberate: warn/error lines of a batchable type are rare and must stay
+// individually visible in the Activity Log, so they take the direct path and
+// are never coalesced into a batch entry (DA-04).
 func isBatchable(e database.ActivityEntry) bool {
 	if e.OperationID == "" || e.Tier != "debug" {
 		return false
