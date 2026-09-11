@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-09-11
 
@@ -141,16 +141,30 @@ type serverStatsReader interface {
 	GetDistinctLanguages() ([]string, error)
 }
 
-// serverAuthorStore: Author rows: create, rename, delete, tombstone.
+// serverAuthorStore: Author rows: create, rename, delete, tombstone, and the
+// reads. Split into reader + writer on 2026-09-11 when GetAuthorsByIDs (the
+// search-backfill batch read) took it past the 8-method ratchet; this name is
+// kept as their composition so the method set is byte-identical and no
+// consumer moves.
 type serverAuthorStore interface {
-	CreateAuthor(name string) (*database.Author, error)
-	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
-	CreateAuthorTombstone(oldID int, canonicalID int) error
-	DeleteAuthor(id int) error
+	serverAuthorReader
+	serverAuthorWriter
+}
+
+// serverAuthorReader: Author rows by ID, by name, all, and in batch.
+type serverAuthorReader interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorsByIDs(ids []int) (map[int]*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+}
+
+// serverAuthorWriter: Author rows: create, alias, tombstone, rename, delete.
+type serverAuthorWriter interface {
+	CreateAuthor(name string) (*database.Author, error)
+	CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*database.AuthorAlias, error)
+	CreateAuthorTombstone(oldID int, canonicalID int) error
+	DeleteAuthor(id int) error
 	UpdateAuthorName(id int, name string) error
 }
 
