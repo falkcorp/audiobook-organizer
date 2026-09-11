@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -885,6 +885,7 @@ func (s *Server) runBulkWriteBack(
 	doRename bool,
 	startIdx int,
 	progress operations.ProgressReporter,
+	onDone func(bookID string),
 ) error {
 	workers := writeBackWorkers()
 
@@ -1005,6 +1006,16 @@ func (s *Server) runBulkWriteBack(
 					continue // drain, don't return — returning would deadlock the feeder
 				}
 				processOne(bookID)
+				// onDone fires for EVERY outcome — written, failed and skipped
+				// alike — so the caller's resume set is "books this run has
+				// examined", not "books it wrote". A book that failed on a
+				// transient fault therefore leaves the set and is not retried by
+				// a resume; that is the batch-apply precedent
+				// (batch_apply_op.go, CHECKPOINTING) and the alternative is a
+				// permanently unwritable book being retried on every restart.
+				if onDone != nil {
+					onDone(bookID)
+				}
 
 				done := written.Load() + failed.Load() + skipped.Load()
 				// UpdateProgress on EVERY item, unconditionally: this is what resets

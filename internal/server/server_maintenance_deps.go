@@ -119,7 +119,7 @@ func (s *Server) RunMetadataRefreshScan(ctx context.Context, progress operations
 }
 
 func (s *Server) RunBulkWriteBack(ctx context.Context, opID string, bookIDs []string, doRename bool, startIdx int, progress operations.ProgressReporter) error {
-	return s.runBulkWriteBack(ctx, opID, bookIDs, doRename, startIdx, progress)
+	return s.runBulkWriteBack(ctx, opID, bookIDs, doRename, startIdx, progress, nil)
 }
 
 func (s *Server) RunAutoPurgeSoftDeleted(opID string) {

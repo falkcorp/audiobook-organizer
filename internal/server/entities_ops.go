@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-08-22
+// last-edited: 2026-09-11
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -53,10 +53,19 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeRestart,
-		ConcurrencyKey:  "entities.author-merge",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
+		// checkpoint, which meant a restart re-ran every merge id from zero. A
+		// re-issued merge for an id already deleted is not proven to no-op:
+		// GetBooksByAuthorIDWithRoleCore on a gone author and a second
+		// DeleteAuthor/CreateAuthorTombstone are unverified paths, and the op
+		// change ledger would get a second set of rows under the same op id.
+		// This is the "auto-merge must not double-merge" shape CLAUDE.md warns
+		// about, and the loop is seconds long, so an interrupted merge is
+		// surfaced as interrupted_dropped for the user to re-issue deliberately.
+		ResumePolicy:   opsregistry.ResumeDrop,
+		ConcurrencyKey: "entities.author-merge",
+		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p authorMergeOpParams
 			if len(rawParams) > 0 {
@@ -203,10 +212,18 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         2 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeRestart,
-		ConcurrencyKey:  "entities.resolve-production-author",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
+		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
+		// checkpoint. The work list is derived at run time (every book still
+		// attributed to the production company), so a restart naturally skips
+		// the books an earlier attempt resolved — but it re-issues a metadata
+		// lookup and a paid AI cover call for every book that failed last time,
+		// against daily provider quotas, with nobody having asked for the
+		// second pass. There is no stable item list to checkpoint. Drop, and
+		// let the user re-run against whatever is left.
+		ResumePolicy:   opsregistry.ResumeDrop,
+		ConcurrencyKey: "entities.resolve-production-author",
+		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p resolveProductionAuthorOpParams
 			if len(rawParams) > 0 {
