@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.54.0 -->
+<!-- version: 10.55.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -1190,8 +1190,8 @@ and nothing in the API surfaced that.
   `..._ExactlyLimitRowsIsNotTruncated`. Read `scan_capped` before treating any
   count here as a census; with a status filter it is what separates a census
   from a floor.
-- [ ] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider
-  a delete-by-id endpoint. Today it deletes **by status only**
+- [x] **Add a dry-run / count mode to `DELETE /operations/history`**, and consider
+  a delete-by-id endpoint. — ✅ MOOT 2026-09-11: the endpoint was REMOVED in #3234 (it deleted from the dead v1 keyspace and reported success); the by-id delete exists as `DELETE /operations/v2/:id/record` (#3216). Today it deletes **by status only**
   (`DeleteOperationsByStatus`,
   `internal/server/handlers/operations/handler.go:215`) and `DELETE
   /operations/v2/:id` only cancels (a no-op on an already-terminal op), so there
@@ -1364,7 +1364,7 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
   above; see there for the full record. Note the second half of this entry stands
   unchanged: the endpoint is still bounded, and `scan_capped` is what says so —
   honoring the filter makes `matched` a census only while that is false.
-- [ ] **There is no delete-one-op endpoint.** `DELETE /operations/history` deletes
+- [x] **There is no delete-one-op endpoint.** — ✅ DONE 2026-09-11: `DELETE /operations/v2/:id/record` (#3216) is the per-row delete; `DELETE /operations/history` was REMOVED in #3234. Original text: `DELETE /operations/history` deletes
   **by status only** (`DeleteOperationsByStatus`,
   `internal/server/handlers/operations/handler.go:215`); `DELETE
   /operations/v2/:id` cancels and is a no-op on an already-terminal op. Sizing a
