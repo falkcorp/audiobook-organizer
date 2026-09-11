@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package registry
 
@@ -216,7 +216,11 @@ func (r *Registry) defDeclaresMergeQueuedParams(defID string) bool {
 // the op's Run function receives it via json.Unmarshal(params, &state) on
 // the resumed run. Schema_version=1 (gob) blobs are ignored — the op
 // restarts from scratch once, which is safe for all idempotent ops.
-func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Row, def OperationDef) {
+//
+// Returns false when the row could not be flipped back to "queued". In that
+// case nothing is announced (no op.created, no dispatcher nudge) and the row is
+// left in the resumable status it already had; see the reset block for why.
+func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Row, def OperationDef) bool {
 	_ = ctx // context used only for cancel guard; dispatcher started after us
 
 	if err := r.store.IncrementResumeCountV2(row.ID); err != nil {
@@ -262,9 +266,28 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 	// un-set CompletedAt (nil = leave unchanged), so a plain status flip left the
 	// stale stamp in place and the resumed op stayed out of the Active-Operations
 	// timeline — a genuinely running resumed scan was invisible in the UI.
+	//
+	// If that write FAILS, stop here (OPS-01). The dispatcher only ever runs
+	// what ListQueuedOperationsV2 returns from the store, so a row whose status
+	// never became "queued" can never dispatch; publishing op.created for it
+	// would tell every connected client about an op that is structurally unable
+	// to start, and nothing would ever correct that. The row is deliberately
+	// left in the status it already has (queued/running/interrupted_quiesced —
+	// all of which ListResumableOperationsV2 returns), so the NEXT boot's sweep
+	// retries it from the same position: the checkpoint has already been merged
+	// into params above, and that write succeeded, so no position is lost. It
+	// is NOT flipped to interrupted_ask/dropped: that is a second write to a
+	// store that just refused one, and if it did land it would remove the row
+	// from the automatic retry set and hand the user a decision the system can
+	// make on its own once the store is healthy again. The failure is surfaced
+	// twice — the process log at Error, and an op_errors_v2 row (best effort,
+	// same store) so it shows in the op's own error list rather than only in
+	// journalctl.
 	if err := r.store.ResetOperationV2ForResume(row.ID); err != nil {
-		r.logger.Warn("registry: resumeAfterStartup: failed to reset op for resume",
-			"op_id", row.ID, "error", err)
+		r.logger.Error("registry: resume: failed to reset op for resume; leaving row un-announced for the next sweep",
+			"op_id", row.ID, "def_id", def.ID, "status", row.Status, "error", err)
+		r.recordResumeResetFailure(row, err)
+		return false
 	}
 
 	// The row is queued again, and its params have just been rewritten to the
@@ -296,6 +319,32 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 	r.publishOpCreated(row, true)
 
 	r.pingDispatch()
+	return true
+}
+
+// recordResumeResetFailure writes an op_errors_v2 row for a resume whose
+// status reset was refused by the store, the same table dbReporter feeds for
+// Error-level log lines during a run. Best effort: the store has just failed a
+// write, so this one may fail too, and that is only warned about — the process
+// log already carries the Error line.
+func (r *Registry) recordResumeResetFailure(row database.OperationV2Row, resetErr error) {
+	attrs, _ := json.Marshal(map[string]string{
+		"error":      resetErr.Error(),
+		"row_status": row.Status,
+		"hint":       "row left in its resumable status; the next startup resume sweep retries it",
+	})
+	errRow := database.OpErrorV2Row{
+		OperationID: row.ID,
+		Plugin:      row.Plugin,
+		DefID:       row.DefID,
+		Message:     "resume: failed to reset op for resume; op not announced as queued",
+		Attrs:       string(attrs),
+		OccurredAt:  time.Now().UTC(),
+	}
+	if err := r.store.InsertOpErrorV2(errRow); err != nil {
+		r.logger.Warn("registry: resume: failed to record reset failure in op_errors_v2",
+			"op_id", row.ID, "error", err)
+	}
 }
 
 // resumeQuiescedOp re-queues a single interrupted_quiesced op from its
@@ -324,7 +373,13 @@ func (r *Registry) resumeQuiescedOp(opID string) {
 			"op_id", opID, "def_id", row.DefID)
 		return
 	}
-	r.resumeRestart(context.Background(), *row, def)
+	if !r.resumeRestart(context.Background(), *row, def) {
+		// resumeRestart has already logged and recorded the failure. Name the
+		// runtime consequence here: nothing retries at runtime, so this scan
+		// stays parked until the next startup sweep (or a fresh enqueue).
+		r.logger.Error("registry: resumeQuiescedOp: scan could not be re-queued; it stays interrupted_quiesced until the next startup resume sweep",
+			"op_id", opID, "def_id", row.DefID)
+	}
 }
 
 // mergeJSONParams overlays checkpoint keys onto base params. Keys present in

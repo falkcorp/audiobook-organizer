@@ -1,13 +1,14 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package registry_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -152,6 +153,108 @@ func TestResume_RestartReDispatchesWithIncrementedResumeCount(t *testing.T) {
 	}
 	if row.ResumeCount != 1 {
 		t.Errorf("expected resume_count=1, got %d", row.ResumeCount)
+	}
+}
+
+// TestResume_RestartResetFailureDoesNotAnnounceQueued is the OPS-01 regression:
+// when the store refuses ResetOperationV2ForResume, the boot sweep must NOT
+// publish op.created for the row or nudge the dispatcher, because the row was
+// never flipped to "queued" and ListQueuedOperationsV2 will never return it —
+// every connected client would be told about an op that cannot dispatch. The
+// row must be left in its resumable status (so the next boot retries it), and
+// the failure must land in op_errors_v2 so it is visible outside the log.
+func TestResume_RestartResetFailureDoesNotAnnounceQueued(t *testing.T) {
+	for _, status := range []string{"running", "interrupted_quiesced"} {
+		t.Run(status, func(t *testing.T) {
+			store := newFakeStore()
+			store.failResetForResume(errors.New("pebble: write stall"))
+			bus := &recordingBus{}
+			r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+				WatchdogInterval: 30 * time.Second,
+				Bus:              bus,
+			})
+
+			var runCount atomic.Int32
+			def := makeValidDef("test.resume-reset-fails")
+			def.ResumePolicy = registry.ResumeRestart
+			def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
+				runCount.Add(1)
+				return nil
+			}
+			_ = r.RegisterOp(def)
+
+			opID := insertOpV2(store, def.ID, def.Plugin, 1, status, "{}")
+
+			r.Start(t.Context())
+			// resumeAfterStartup runs synchronously in Start; the window is for
+			// the dispatcher to prove it has nothing to pick up.
+			time.Sleep(100 * time.Millisecond)
+
+			if bus.opCreatedFor(opID) {
+				t.Errorf("op.created was published for %s although the reset write failed", opID)
+			}
+			if got := runCount.Load(); got != 0 {
+				t.Errorf("Run was called %d times; a row that never became queued must not dispatch", got)
+			}
+			if got := store.statusOf(opID); got != status {
+				t.Errorf("row status: got %q, want it left as %q for the next boot's sweep", got, status)
+			}
+			errs := store.errorsFor(opID)
+			if len(errs) != 1 {
+				t.Fatalf("op_errors_v2 rows for %s: got %d, want 1", opID, len(errs))
+			}
+			if errs[0].DefID != def.ID || errs[0].Plugin != def.Plugin {
+				t.Errorf("op error row def/plugin: got %q/%q, want %q/%q",
+					errs[0].DefID, errs[0].Plugin, def.ID, def.Plugin)
+			}
+		})
+	}
+}
+
+// TestResume_RestartResetFailureAtRuntimeLeavesScanQuiesced covers the same
+// defect on the runtime path: releasing the last scan stand-down holder resumes
+// the quiesced scan through resumeQuiescedOp → resumeRestart. If the reset
+// write fails there, the scan must stay interrupted_quiesced (the next boot
+// sweep retries it) rather than being announced as queued.
+func TestResume_RestartResetFailureAtRuntimeLeavesScanQuiesced(t *testing.T) {
+	ctx := t.Context()
+	store := newFakeStore()
+	bus := &recordingBus{}
+	r := registry.New(store, slog.Default(), 4, bus)
+
+	started := make(chan struct{})
+	if err := r.RegisterOp(scanDef(started, nil)); err != nil {
+		t.Fatalf("RegisterOp: %v", err)
+	}
+	r.Start(ctx)
+
+	scanID, err := r.EnqueueOp(ctx, testScanDefID, nil)
+	if err != nil {
+		t.Fatalf("EnqueueOp: %v", err)
+	}
+	<-started
+
+	release, err := r.AcquireScanStandDown(ctx, "holder-1", "apply")
+	if err != nil {
+		t.Fatalf("AcquireScanStandDown: %v", err)
+	}
+	awaitStatus(t, store, scanID, "interrupted_quiesced", 3*time.Second)
+
+	// The store starts refusing the resume flip while the scan is parked.
+	store.failResetForResume(errors.New("pebble: write stall"))
+	release()
+	time.Sleep(100 * time.Millisecond)
+
+	if got := store.statusOf(scanID); got != "interrupted_quiesced" {
+		t.Errorf("scan status after failed resume: got %q, want interrupted_quiesced", got)
+	}
+	// The enqueue published op.created once; a resume announcement would be a
+	// second one with resumed=true.
+	if n := bus.opCreatedCount(scanID); n != 1 {
+		t.Errorf("op.created events for %s: got %d, want exactly the enqueue's 1", scanID, n)
+	}
+	if got := len(store.errorsFor(scanID)); got != 1 {
+		t.Errorf("op_errors_v2 rows for %s: got %d, want 1", scanID, got)
 	}
 }
 

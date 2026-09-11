@@ -1,0 +1,5 @@
+### Fixed
+
+#### Resumed operations are no longer announced as queued when the status reset fails (OPS-01)
+
+`resumeRestart` in `internal/operations/registry/resume.go` — the path both the startup resume sweep and the runtime scan stand-down release (`resumeQuiescedOp`) take — used to only warn when `ResetOperationV2ForResume` failed, then still publish `op.created` with status `queued` and nudge the dispatcher. The dispatcher only runs rows that `ListQueuedOperationsV2` returns from the store, so a row whose reset write was refused (disk pressure, compaction stall) became a ghost: every connected client was told it was queued, and it could never start. The reset failure now stops the resume there: nothing is announced, the row is left in the resumable status it already had (queued/running/interrupted_quiesced, all of which the next startup sweep retries from the already-persisted checkpoint), the failure is logged at Error, and an `op_errors_v2` row is written for the op so the failure is visible in its error list, not only in the process log. Regression tests cover both the boot sweep and the runtime stand-down release.
