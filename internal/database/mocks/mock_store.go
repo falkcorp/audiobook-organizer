@@ -15962,6 +15962,61 @@ func (_c *MockStore_GetDistinctLanguages_Call) RunAndReturn(run func() ([]string
 	return _c
 }
 
+// GetDistinctPublishedYears provides a mock function for the type MockStore
+func (_mock *MockStore) GetDistinctPublishedYears() ([]int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDistinctPublishedYears")
+	}
+
+	var r0 []int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []int); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]int)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetDistinctPublishedYears_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDistinctPublishedYears'
+type MockStore_GetDistinctPublishedYears_Call struct {
+	*mock.Call
+}
+
+// GetDistinctPublishedYears is a helper method to define mock.On call
+func (_e *MockStore_Expecter) GetDistinctPublishedYears() *MockStore_GetDistinctPublishedYears_Call {
+	return &MockStore_GetDistinctPublishedYears_Call{Call: _e.mock.On("GetDistinctPublishedYears")}
+}
+
+func (_c *MockStore_GetDistinctPublishedYears_Call) Run(run func()) *MockStore_GetDistinctPublishedYears_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_GetDistinctPublishedYears_Call) Return(ints []int, err error) *MockStore_GetDistinctPublishedYears_Call {
+	_c.Call.Return(ints, err)
+	return _c
+}
+
+func (_c *MockStore_GetDistinctPublishedYears_Call) RunAndReturn(run func() ([]int, error)) *MockStore_GetDistinctPublishedYears_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetDuplicateBooks provides a mock function for the type MockStore
 func (_mock *MockStore) GetDuplicateBooks() ([][]database.Book, error) {
 	ret := _mock.Called()

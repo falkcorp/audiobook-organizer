@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 package abs_test
 
@@ -615,6 +615,32 @@ func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
 }
 
 func (f *fakeLibrary) GetDistinctLanguages() ([]string, error) { return []string{}, nil }
+
+// GetDistinctPublishedYears mirrors the store contract: every seeded book,
+// AudiobookReleaseYear over PrintYear, zero/absent contributes nothing,
+// distinct and sorted. It deliberately does NOT honor any row limit — that is
+// the property the decade facet depends on, and TestFilterData_PublishedDecades
+// _ComeFromTheWholeLibrary proves the handler reaches it rather than a bounded
+// GetAllBooksCore page.
+func (f *fakeLibrary) GetDistinctPublishedYears() ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[int]bool{}
+	out := []int{}
+	for _, b := range f.books {
+		year := b.AudiobookReleaseYear
+		if year == nil {
+			year = b.PrintYear
+		}
+		if year == nil || *year == 0 || seen[*year] {
+			continue
+		}
+		seen[*year] = true
+		out = append(out, *year)
+	}
+	sort.Ints(out)
+	return out, nil
+}
 
 // ── IdentityStore ───────────────────────────────────────────────────────────
 
