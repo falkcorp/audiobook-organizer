@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package registry_test
 
@@ -252,8 +252,10 @@ func TestActiveDefs_ReturnsAllRegistered(t *testing.T) {
 // --- op.created event tests ---
 
 // recordingBus captures every Publish call so the test can assert on event
-// names. Implements registry.Bus.
+// names. Implements registry.Bus. Publish is mutex-guarded so a test may read
+// back through opCreatedFor while the dispatcher goroutine is still publishing.
 type recordingBus struct {
+	mu     sync.Mutex
 	events []recordedEvent
 }
 
@@ -263,8 +265,31 @@ type recordedEvent struct {
 }
 
 func (b *recordingBus) Publish(_ context.Context, name string, payload any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.events = append(b.events, recordedEvent{name: name, payload: payload})
 	return nil
+}
+
+// opCreatedCount returns how many op.created events were published for opID.
+func (b *recordingBus) opCreatedCount(opID string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, ev := range b.events {
+		if ev.name != "op.created" {
+			continue
+		}
+		if p, ok := ev.payload.(map[string]any); ok && p["op_id"] == opID {
+			n++
+		}
+	}
+	return n
+}
+
+// opCreatedFor reports whether any op.created event was published for opID.
+func (b *recordingBus) opCreatedFor(opID string) bool {
+	return b.opCreatedCount(opID) > 0
 }
 
 func TestEnqueueOp_PublishesOpCreated(t *testing.T) {

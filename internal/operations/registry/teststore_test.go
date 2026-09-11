@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package registry_test
 
@@ -47,6 +47,20 @@ type fakeStore struct {
 	// TestBatch_ShutdownWaitsForInFlightFire to block the fire goroutine at a
 	// deterministic point so Shutdown's fireWG.Wait() can be observed.
 	insertHook func()
+
+	// resetForResumeErr, if non-nil, is returned by ResetOperationV2ForResume
+	// without touching the row. Simulates the store refusing the status flip
+	// (disk pressure, compaction stall) so the resume paths can be checked for
+	// announcing an op as queued that never became queued (OPS-01).
+	resetForResumeErr error
+}
+
+// failResetForResume makes every subsequent ResetOperationV2ForResume call
+// return err (nil restores normal behaviour).
+func (f *fakeStore) failResetForResume(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resetForResumeErr = err
 }
 
 func newFakeStore() *fakeStore {
@@ -173,6 +187,9 @@ func (f *fakeStore) UpdateOperationV2Status(id, status string, startedAt, comple
 func (f *fakeStore) ResetOperationV2ForResume(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.resetForResumeErr != nil {
+		return f.resetForResumeErr
+	}
 	op, ok := f.ops[id]
 	if !ok {
 		return nil // best-effort
