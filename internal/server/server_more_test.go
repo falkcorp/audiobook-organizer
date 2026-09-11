@@ -1,5 +1,5 @@
 // file: internal/server/server_more_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
 // last-edited: 2026-09-11
 
@@ -372,7 +372,17 @@ func TestServerStartGracefulShutdown(t *testing.T) {
 		done <- server.Start(cfg)
 	}()
 
-	time.Sleep(6 * time.Second)
+	// Wait for Start to reach its signal wait instead of sleeping a fixed 6s
+	// (TASK-205): the channel closes only after every subsystem is up, so the
+	// SIGTERM below always exercises a fully-started server, and a Start that
+	// fails early is reported instead of being raced.
+	select {
+	case <-server.shutdownArmed:
+	case err := <-done:
+		t.Fatalf("server Start returned before arming shutdown: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("timeout waiting for the server to arm its signal handler")
+	}
 	// WARNING: This sends SIGTERM to the ENTIRE test binary process, not a subprocess.
 	// If ANY test in package server (this file or any sibling _test.go) is ever marked
 	// with t.Parallel(), it will receive this process-wide SIGTERM mid-run as an
