@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-11-the-cleanup-that-was-never-switched-on-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d30afc65-4d03-431b-881b-c3c068c03422 -->
 <!-- last-edited: 2026-09-11 -->
 
 # The cleanup that was never switched on
 
-**Pull request:** PR-LINK-PLACEHOLDER
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3221
 
 ## Executive Summary
 
