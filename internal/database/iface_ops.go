@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b93b0da0-8afb-46fb-983e-c43f238ea67c
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -65,21 +65,13 @@ type OperationResultStore interface {
 	GetOperationResultsPage(operationID string, limit, offset int) ([]OperationResult, int, error)
 }
 
-// OperationPruner covers retention: pruning and bulk deletion.
+// OperationPruner covers retention: pruning and per-run deletion. The
+// by-status bulk delete that used to live here backed only the retired
+// DELETE /operations/history (SV-01, 2026-09-11) and went with it.
 type OperationPruner interface {
 	// Retention
 	PruneOperationLogs(olderThan time.Time) (int, error)
 	PruneOperationChanges(olderThan time.Time) (int, error)
-	DeleteOperationsByStatus(statuses []string) (int, error)
-	// CountOperationsByStatus is the read-only twin of DeleteOperationsByStatus:
-	// it reports how many operation rows currently carry each of the given
-	// statuses and writes nothing. It exists so a caller can show the blast
-	// radius of a bulk history delete BEFORE committing to it — the delete is
-	// irreversible and, until this existed, returned its count only after the
-	// rows were already gone. The returned map has an entry for every requested
-	// status, zero-filled, so the response shape does not depend on which
-	// statuses happen to be populated.
-	CountOperationsByStatus(statuses []string) (map[string]int, error)
 	// DeleteOperationWithLogs removes the operation record (operation:<id>) and all
 	// associated log lines (operationlog:<id>:*) in a single atomic batch.
 	// This is the correct deletion primitive for the retention sweep — deleting the
