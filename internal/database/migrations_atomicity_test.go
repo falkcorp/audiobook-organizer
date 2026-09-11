@@ -1,7 +1,7 @@
 // file: internal/database/migrations_atomicity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f60be44c-31da-4f41-84d4-11c26dcbe1c2
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -152,7 +152,7 @@ func TestMigrationBookkeepingUsesTheAtomicPath(t *testing.T) {
 // change a single byte of the keyspace.
 //
 // The store is seeded with real rows first: several registered Up functions
-// (migration014UpPebble, migration007Up) iterate books, so an empty store would
+// (migration061Up, migration007Up) iterate books, so an empty store would
 // never enter their bodies and the test would prove nothing about them.
 //
 // The comparison is byte-exact. A future migration that rewrites a row with a
