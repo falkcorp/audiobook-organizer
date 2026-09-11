@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.1.0
+// version: 4.2.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package server
 
@@ -1153,7 +1153,12 @@ func (s *Server) setupRoutes() {
 	if config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
 		rpm := config.AppConfig.APIRateLimitPerMinute
 		burst := max(rpm/5, 10)
-		apiRateLimiter = servermiddleware.NewIPRateLimiter(rpm, burst).Middleware()
+		limiter := servermiddleware.NewIPRateLimiter(rpm, burst)
+		// SV-04: idle-entry eviction runs on a background ticker instead of
+		// the request path. bgCtx is cancelled by Stop(), which ends the
+		// sweeper goroutine at shutdown.
+		limiter.Start(s.bgCtx)
+		apiRateLimiter = limiter.Middleware()
 	}
 	bodyLimitMiddleware := servermiddleware.MaxRequestBodySize(jsonLimitBytes, uploadLimitBytes)
 	authMiddleware := gin.HandlerFunc(func(c *gin.Context) {
