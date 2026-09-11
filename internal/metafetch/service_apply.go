@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package metafetch
 
@@ -781,8 +781,14 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 
 	// Check whether any other book already carries the same hash — if so,
 	// emit a dedup candidate so the user can review the potential duplicate.
+	// The apply itself has already succeeded, so a failed duplicate check is
+	// logged at Error level and does not fail the apply: the next apply of any
+	// book in the cluster re-runs the election, and nothing was demoted here.
 	if book.MetadataSourceHash != nil {
-		mfs.checkMetadataSourceHashDuplicates(id, *book.MetadataSourceHash)
+		if err := mfs.checkMetadataSourceHashDuplicates(id, *book.MetadataSourceHash); err != nil {
+			slog.Error("MATCH-4 auto-merge skipped: primary election aborted on a read error; no book was demoted",
+				"id", id, "hash", *book.MetadataSourceHash, "error", err)
+		}
 	}
 
 	// Persist fetched values for provenance tracking. This is the full candidate,
@@ -905,11 +911,18 @@ func appendMetadataVersionNote(book *database.Book, marker string) {
 // that shares the same metadata_source_hash as bookID (MATCH-4). The book
 // with the most book_files is kept as primary; all others get
 // merged_into_book_id set to point at it.
-func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) {
+//
+// Every read the election depends on is completed BEFORE any book is
+// demoted, and a failure on any of them aborts the whole cluster with an
+// error and no write. Until 2026-09-11 a GetBookFiles error was scored as
+// zero files — the same score a book with no files gets — so a transient
+// read error on the book that actually had the most files made it lose the
+// election, and every other book in the cluster (itself included) was then
+// demoted to a primary chosen on bad data, with no log line saying why.
+func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) error {
 	matches, err := mfs.db.GetBooksByMetadataSourceHash(hash)
 	if err != nil {
-		slog.Warn("MATCH-4 metadata-source-hash dedup query failed for book", "id", bookID, "error", err)
-		return
+		return fmt.Errorf("MATCH-4 metadata-source-hash lookup for book %s: %w", bookID, err)
 	}
 
 	// Build the full set of non-merged books sharing this hash; ensure bookID is included.
@@ -918,24 +931,36 @@ func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) {
 		allMap[b.ID] = b
 	}
 	if _, ok := allMap[bookID]; !ok {
-		if self, err := mfs.db.GetBookByID(bookID); err == nil && self != nil {
+		self, err := mfs.db.GetBookByID(bookID)
+		if err != nil {
+			return fmt.Errorf("MATCH-4 load book %s for the primary election: %w", bookID, err)
+		}
+		if self != nil {
 			allMap[bookID] = *self
 		}
 	}
 
 	if len(allMap) < 2 {
-		return // no duplicates
+		return nil // no duplicates
+	}
+
+	// Score first, decide second: a read error on ANY candidate aborts the
+	// election before a primary is chosen, so it can never be mistaken for a
+	// book that legitimately has zero files.
+	fileCounts := make(map[string]int, len(allMap))
+	for id := range allMap {
+		files, err := mfs.db.GetBookFiles(id)
+		if err != nil {
+			return fmt.Errorf("MATCH-4 count files for book %s in hash cluster %s: %w", id, hash, err)
+		}
+		fileCounts[id] = len(files)
 	}
 
 	// Pick primary: book with the most book_files. On tie, prefer earlier created_at.
 	primaryID := bookID
 	maxFiles := -1
 	for id, b := range allMap {
-		files, err := mfs.db.GetBookFiles(id)
-		n := 0
-		if err == nil {
-			n = len(files)
-		}
+		n := fileCounts[id]
 		isBetter := n > maxFiles
 		if n == maxFiles && b.CreatedAt != nil {
 			if cur, ok := allMap[primaryID]; ok && cur.CreatedAt != nil && b.CreatedAt.Before(*cur.CreatedAt) {
@@ -958,6 +983,7 @@ func (mfs *Service) checkMetadataSourceHashDuplicates(bookID, hash string) {
 			slog.Info("MATCH-4 auto-flagged book as merged into primary (hash )", "dupID", id, "primaryID", primaryID, "hash", hash)
 		}
 	}
+	return nil
 }
 
 // ApplyMetadataSystemTags writes the metadata:source:* and
