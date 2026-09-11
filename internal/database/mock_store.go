@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.104.0
+// version: 1.105.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-10
 
@@ -280,6 +280,7 @@ type MockStore struct {
 	InsertOpStrikeV2Func              func(row OpStrikeV2Row) error
 	GetOpStateV2Func                  func(opID string) (*OpStateV2Row, error)
 	DeleteOpStateV2Func               func(opID string) error
+	DeleteOperationV2Func             func(id string, allowedStatuses []string) (string, bool, error)
 	UpdateOperationV2ParamsFunc       func(id string, params []byte) error
 	UpdateOpProgressV2Func            func(id string, current, total int, message string) error
 	SetOpQueuedProgressV2Func         func(id string, current, total int, message string) (bool, error)
@@ -3342,6 +3343,12 @@ func (m *MockStore) DeleteOpStateV2(opID string) error {
 		return m.DeleteOpStateV2Func(opID)
 	}
 	return nil
+}
+func (m *MockStore) DeleteOperationV2(id string, allowedStatuses []string) (string, bool, error) {
+	if m.DeleteOperationV2Func != nil {
+		return m.DeleteOperationV2Func(id, allowedStatuses)
+	}
+	return "", false, nil
 }
 func (m *MockStore) UpdateOperationV2Params(id string, params []byte) error {
 	if m.UpdateOperationV2ParamsFunc != nil {

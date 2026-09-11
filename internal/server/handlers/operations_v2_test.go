@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-10
 
@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -552,4 +553,50 @@ func TestOperationsV2Handler_RetryOperationV2_InterruptedRows_Return202(t *testi
 			assert.Contains(t, w.Body.String(), `"op-new"`)
 		})
 	}
+}
+
+// ── DiscardOperationV2 ────────────────────────────────────────────────────
+
+func TestOperationsV2Handler_DiscardOperationV2_NilRegistry(t *testing.T) {
+	h := handlers.NewOperationsV2Handler(nil, nil, nil, false)
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op1/record", "", gin.Params{{Key: "id", Value: "op1"}})
+	h.DiscardOperationV2(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestOperationsV2Handler_DiscardOperationV2_Returns204WhenDeleted(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Discard("op-dropped").Return(nil).Once()
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-dropped/record", "", gin.Params{{Key: "id", Value: "op-dropped"}})
+	h.DiscardOperationV2(c)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+}
+
+func TestOperationsV2Handler_DiscardOperationV2_UnknownID_Returns404(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Discard("bad-id").Return(opsregistry.ErrOpNotFound).Once()
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/bad-id/record", "", gin.Params{{Key: "id", Value: "bad-id"}})
+	h.DiscardOperationV2(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// A row the scheduler still owns answers 409, and the body says to cancel
+// first — the page shows the message verbatim.
+func TestOperationsV2Handler_DiscardOperationV2_ActiveRow_Returns409(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Discard("op-live").Return(fmt.Errorf("%w: op op-live is running; cancel it before discarding", opsregistry.ErrOpActive)).Once()
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodDelete, "/operations/v2/op-live/record", "", gin.Params{{Key: "id", Value: "op-live"}})
+	h.DiscardOperationV2(c)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "cancel it before discarding")
 }

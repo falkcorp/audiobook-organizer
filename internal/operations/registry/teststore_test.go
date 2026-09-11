@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package registry_test
 
@@ -297,6 +297,35 @@ func (f *fakeStore) DeleteOpStateV2(opID string) error {
 	defer f.mu.Unlock()
 	delete(f.states, opID)
 	return nil
+}
+
+func (f *fakeStore) DeleteOperationV2(id string, allowedStatuses []string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	op, ok := f.ops[id]
+	if !ok {
+		return "", false, nil
+	}
+	allowed := false
+	for _, s := range allowedStatuses {
+		if s == op.Status {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return op.Status, false, nil
+	}
+	delete(f.ops, id)
+	delete(f.states, id)
+	kept := f.logs[:0]
+	for _, l := range f.logs {
+		if l.OperationID != id {
+			kept = append(kept, l)
+		}
+	}
+	f.logs = kept
+	return op.Status, true, nil
 }
 
 // strikesOfKind returns strikes of a given kind for an op.

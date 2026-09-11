@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package database
 
@@ -187,6 +187,28 @@ type OpV2RunStore interface {
 	// Returns an error when the row does not exist. Callers must not discard it —
 	// a swallowed "operation not found" is how a result goes missing with no signal.
 	SetOperationV2Result(id string, resultData string) error
+	// DeleteOperationV2 removes a run and everything hanging off it — the row,
+	// its queue/active index entries, its checkpoint state, and its persisted
+	// logs and errors — but only if the row's status, read under the same lock
+	// as every other status write, is one of allowedStatuses. It is the storage
+	// half of "discard this operation": the Activity page's way of getting a
+	// finished or restart-orphaned row out of the list for good.
+	//
+	// Compare-and-delete rather than a plain delete because the status check
+	// cannot live in the caller: a stand-down release re-queues an
+	// interrupted_quiesced scan at runtime (resumeQuiescedOp), and a caller
+	// that read "interrupted_quiesced", was pre-empted by that flip, and then
+	// deleted would remove the queue-index entry of a run the UI had just
+	// announced as queued. Held under the store's ops mutex the read and the
+	// delete are one step, so the row is either still discardable or the
+	// delete does not happen.
+	//
+	// Returns the status the row had when it was inspected ("" when the row
+	// does not exist) and whether it was deleted. A row whose JSON no longer
+	// decodes is deleted regardless of allowedStatuses — except for its queue
+	// key, which cannot be derived — and reported with status "undecodable",
+	// because this is the one action meant to get rid of exactly that row.
+	DeleteOperationV2(id string, allowedStatuses []string) (status string, deleted bool, err error)
 }
 
 // OpV2StatusStore holds every writer of an operation's status and its

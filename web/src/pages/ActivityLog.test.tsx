@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-10
 
@@ -25,7 +25,7 @@ import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
-import { cancelOperation, retryOperation } from '../services/api';
+import { cancelOperation, discardOperation, retryOperation } from '../services/api';
 // The real fold, not a stub — see the groupedOperations getter below. The store
 // module itself is mocked; this one is not.
 import { groupOperations } from '../stores/operationGrouping';
@@ -40,12 +40,14 @@ vi.mock('../services/activityApi', () => ({
 vi.mock('../services/api', () => ({
   getOperationLogs: vi.fn().mockResolvedValue([]),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
+  discardOperation: vi.fn().mockResolvedValue(undefined),
   retryOperation: vi.fn().mockResolvedValue({ id: 'op-requeued-1234', status: 'queued' }),
   clearStaleOperations: vi.fn().mockResolvedValue(undefined),
   revertOperation: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockedCancelOperation = vi.mocked(cancelOperation);
+const mockedDiscardOperation = vi.mocked(discardOperation);
 const mockedRetryOperation = vi.mocked(retryOperation);
 
 vi.mock('../hooks/usePendingFileOps', () => ({
@@ -605,7 +607,10 @@ describe('Active Operations retry and discard controls', () => {
     expect(await screen.findByText(/operation def has no retry/)).toBeInTheDocument();
   });
 
-  it('an interrupted row offers Retry and Discard; Discard cancels the op', async () => {
+  // Discard DELETES the record; it does not cancel. The fixture row is
+  // interrupted_restart, a status the server treats as already finished —
+  // exactly the shape that answered 404 to the old cancel-based Discard.
+  it('an interrupted row offers Retry and Discard; Discard deletes the record', async () => {
     const user = userEvent.setup();
     await renderPageExpanded(user);
     await screen.findByText('Hash Backfill');
@@ -617,8 +622,25 @@ describe('Active Operations retry and discard controls', () => {
 
     await user.click(within(row).getByRole('button', { name: 'Discard' }));
 
-    expect(mockedCancelOperation).toHaveBeenCalledWith('op-interrupted');
+    expect(mockedDiscardOperation).toHaveBeenCalledWith('op-interrupted');
+    expect(mockedCancelOperation).not.toHaveBeenCalled();
     await waitFor(() => expect(loadActiveOpsFromServer).toHaveBeenCalled());
+    expect(await screen.findByText('Operation discarded')).toBeInTheDocument();
+  });
+
+  // The failure is shown, not swallowed: before, a refused Discard went to
+  // console.error only and the button looked dead.
+  it('reports the server error when a discard is refused', async () => {
+    const user = userEvent.setup();
+    mockedDiscardOperation.mockRejectedValueOnce(
+      new Error('operation op-interrupted is still active; cancel it before discarding')
+    );
+    await renderPageExpanded(user);
+    await screen.findByText('Hash Backfill');
+
+    await user.click(within(rowOf('Hash Backfill')).getByRole('button', { name: 'Discard' }));
+
+    expect(await screen.findByText(/cancel it before discarding/)).toBeInTheDocument();
   });
 
   it('a running row keeps its Refresh and Cancel, and gets no Retry', async () => {
@@ -665,7 +687,9 @@ describe('Compact button', () => {
     const user = userEvent.setup();
     mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
     mockedCompact.mockRejectedValue(
-      new Error('Failed to start activity compaction: activity compaction is already running (operation op-7)')
+      new Error(
+        'Failed to start activity compaction: activity compaction is already running (operation op-7)'
+      )
     );
     renderPage();
     await screen.findByText('Added The Odyssey');

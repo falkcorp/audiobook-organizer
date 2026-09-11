@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-06-29 -->
+<!-- last-edited: 2026-09-10 -->
 
 # HTTP API
 
@@ -95,6 +95,8 @@ To obtain an API key:
 | `GET` | `/api/v1/operations/v2` | List all operations (recent) |
 | `GET` | `/api/v1/operations/v2/:id` | Poll operation status |
 | `DELETE` | `/api/v1/operations/v2/:id` | Cancel operation |
+| `POST` | `/api/v1/operations/v2/:id/retry` | Re-run a finished operation as a new run (202) |
+| `DELETE` | `/api/v1/operations/v2/:id/record` | Discard: delete the persisted record of a finished or interrupted run (204; 409 while queued/running) |
 
 ### Maintenance / Admin
 

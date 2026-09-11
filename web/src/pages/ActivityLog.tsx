@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.30.0
+// version: 2.31.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -252,6 +252,10 @@ export default function ActivityLog() {
     () => localStorage.getItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED) !== 'false'
   );
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
+  // Ids with a Discard request in flight. Separate from `cancelling`: the
+  // running-row Cancel button reads that set to label itself "Cancelling...",
+  // and a discard is not a cancel.
+  const [discarding, setDiscarding] = useState<Set<string>>(new Set());
   const [expandedOpId, setExpandedOpId] = useState<string | null>(searchParams.get('op'));
   // pausedByExpand: true when auto-refresh was auto-paused because a row is
   // expanded. Cleared when the row collapses or the user clicks "Follow log".
@@ -716,6 +720,10 @@ export default function ActivityLog() {
     loadSources();
   };
 
+  // Cancel and Discard both report a server refusal in the toast. They used to
+  // log it to the console only, so a 404 on a row the server had already
+  // finished looked like a button that did nothing — fifteen presses on
+  // 2026-09-10 before anyone opened the console.
   const handleCancelOp = async (opId: string) => {
     setCancelling((prev) => new Set(prev).add(opId));
     try {
@@ -723,8 +731,36 @@ export default function ActivityLog() {
       await loadActiveOpsFromServer();
     } catch (err) {
       console.error('Failed to cancel operation', err);
+      setToast(describeError(err));
     }
     setCancelling((prev) => {
+      const next = new Set(prev);
+      next.delete(opId);
+      return next;
+    });
+  };
+
+  // Discard deletes the run's record outright (DELETE /operations/v2/:id/record)
+  // — not a cancel. An interrupted row is either one the server may still
+  // resume on the next restart or one it has already dropped; both are
+  // finished from the user's point of view, and removing the record is the
+  // one action that works for both and gets the row out of the list.
+  const handleDiscardOp = async (opId: string) => {
+    setDiscarding((prev) => new Set(prev).add(opId));
+    try {
+      await api.discardOperation(opId);
+      // The record is gone: an expanded log panel or a ?op= deep link for it
+      // would otherwise keep fetching logs for an id the server now 404s.
+      if (expandedOpId === opId) {
+        setExpandedOpId(null);
+      }
+      await loadActiveOpsFromServer();
+      setToast('Operation discarded');
+    } catch (err) {
+      console.error('Failed to discard operation', err);
+      setToast(describeError(err));
+    }
+    setDiscarding((prev) => {
       const next = new Set(prev);
       next.delete(opId);
       return next;
@@ -1599,21 +1635,25 @@ export default function ActivityLog() {
                               </IconButton>
                             </Tooltip>
                           )}
-                          {/* An interrupted op is one the server may resume
-                              on the next restart. Discard is the way to say
-                              "don't": it cancels the row for good, via the
-                              same call as the live Cancel button. */}
+                          {/* An interrupted op is one the server either may
+                              resume on the next restart or has already
+                              dropped. Discard deletes its record, which
+                              covers both: it leaves the list and the resume
+                              sweep for good. (It used to call cancel, which
+                              the server refuses with 404 on an already-
+                              dropped row — see handleDiscardOp.) */}
                           {!group &&
-                            (op.status === 'interrupted' || op.status.startsWith('interrupted_')) && (
-                              <Tooltip title="Discard — cancel and never resume">
+                            (op.status === 'interrupted' ||
+                              op.status.startsWith('interrupted_')) && (
+                              <Tooltip title="Discard — remove this run; it will never resume">
                                 <IconButton
                                   size="small"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleCancelOp(op.id);
+                                    handleDiscardOp(op.id);
                                   }}
                                   aria-label="Discard"
-                                  disabled={cancelling.has(op.id)}
+                                  disabled={discarding.has(op.id)}
                                 >
                                   <DeleteSweepIcon fontSize="small" />
                                 </IconButton>
