@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.test.ts
-// version: 2.6.0
+// version: 2.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useOperationsStore } from './useOperationsStore';
@@ -23,6 +23,7 @@ describe('useOperationsStore', () => {
     useOperationsStore.setState({
       operations: {},
       activeOperations: [],
+      loadError: null,
       polling: false,
     });
   });
@@ -141,8 +142,50 @@ describe('useOperationsStore', () => {
     // Should not throw, just log error
     await expect(useOperationsStore.getState().loadFromServer()).resolves.toBeUndefined();
 
-    // Operations remain empty on failure
+    // Operations remain empty on failure — and the failure is RECORDED, so a
+    // consumer can tell this empty list from a confirmed-empty one (WEB-05).
     expect(useOperationsStore.getState().activeOperations).toHaveLength(0);
+    expect(useOperationsStore.getState().loadError).toBe('Network error');
+  });
+
+  // The fetch now throws on a 500 and on a network error (it returned [] for
+  // both until 2026-09-11). A failed REFRESH must not blank the list the UI
+  // already has: that list is the last thing the server confirmed, and
+  // replacing it with nothing would render a down server as an idle one.
+  it('a failed refresh keeps the previous operations and sets loadError', async () => {
+    const previous = {
+      id: 'op-prev',
+      type: 'scan',
+      status: 'running',
+      progress: 1,
+      total: 2,
+      message: 'still going',
+    };
+    useOperationsStore.setState({
+      operations: { [previous.id]: previous },
+      activeOperations: [previous],
+      liveOperations: [previous],
+      groupedOperations: [previous],
+    });
+    vi.mocked(api.getOperationTimeline).mockRejectedValue(new Error('HTTP 503'));
+
+    await useOperationsStore.getState().loadFromServer();
+
+    const state = useOperationsStore.getState();
+    expect(state.activeOperations).toEqual([previous]);
+    expect(state.liveOperations).toEqual([previous]);
+    expect(state.groupedOperations).toEqual([previous]);
+    expect(state.operations['op-prev']).toEqual(previous);
+    expect(state.loadError).toBe('HTTP 503');
+  });
+
+  it('a successful load clears loadError', async () => {
+    useOperationsStore.setState({ loadError: 'HTTP 503' });
+    vi.mocked(api.getOperationTimeline).mockResolvedValue([]);
+
+    await useOperationsStore.getState().loadFromServer();
+
+    expect(useOperationsStore.getState().loadError).toBeNull();
   });
 
   it('startPolling inserts optimistic entry immediately', () => {

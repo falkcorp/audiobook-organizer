@@ -1,6 +1,6 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.31.0
-// guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
+// version: 2.32.0
+// guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-10
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -247,6 +247,9 @@ export default function ActivityLog() {
   const rawOps = useOperationsStore((state) => state.activeOperations);
   const liveOps = useOperationsStore((state) => state.liveOperations);
   const loadActiveOpsFromServer = useOperationsStore((state) => state.loadFromServer);
+  // Set when the last timeline refresh failed. opRows is then the last list the
+  // server confirmed, and an EMPTY opRows means "unknown", not "idle" (WEB-05).
+  const opsLoadError = useOperationsStore((state) => state.loadError);
   const latestLogEvent = useOperationsStore((state) => state.latestLogEvent);
   const [pinned, setPinned] = useState(
     () => localStorage.getItem(STORAGE_KEYS.ACTIVITY_OPS_PINNED) !== 'false'
@@ -920,7 +923,9 @@ export default function ActivityLog() {
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const showOpsSection = pinned || opRows.length > 0;
+  // A failed refresh keeps the section visible even when unpinned and empty:
+  // hiding it would hide the only place the failure is reported.
+  const showOpsSection = pinned || opRows.length > 0 || opsLoadError !== null;
 
   // Shared filter controls (used in both mobile collapsed and desktop layouts)
   const tierChips = (
@@ -1270,15 +1275,38 @@ export default function ActivityLog() {
             </Stack>
           </Stack>
 
-          {opRows.length === 0 ? (
-            <Typography
-              variant="body2"
-              sx={{
-                color: 'text.secondary',
-              }}
+          {/* error + no rows: the request failed and nothing is known — say so.
+              error + rows:    stale — warn ABOVE the last confirmed list.
+              no error + none: the server really has nothing.
+              Before 2026-09-11 the first case rendered as the third. */}
+          {opsLoadError && (
+            <Alert
+              severity={opRows.length === 0 ? 'error' : 'warning'}
+              data-testid="activity-ops-load-error"
+              sx={{ mb: opRows.length === 0 ? 0 : 1.5 }}
+              action={
+                <Button color="inherit" size="small" onClick={() => void loadActiveOpsFromServer()}>
+                  Retry
+                </Button>
+              }
             >
-              No active operations.
-            </Typography>
+              {opRows.length === 0
+                ? `Could not load operations: ${opsLoadError}`
+                : `Could not refresh operations — this list may be out of date: ${opsLoadError}`}
+            </Alert>
+          )}
+          {opRows.length === 0 ? (
+            !opsLoadError && (
+              <Typography
+                variant="body2"
+                data-testid="activity-ops-empty"
+                sx={{
+                  color: 'text.secondary',
+                }}
+              >
+                No active operations.
+              </Typography>
+            )
           ) : (
             <Stack spacing={1.5}>
               {/* Build hierarchical view: indent children by parent_id */}

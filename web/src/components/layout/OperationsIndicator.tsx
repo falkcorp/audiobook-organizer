@@ -1,11 +1,12 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.10.0
+// version: 4.11.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Alert,
   Badge,
   Box,
   Button,
@@ -169,6 +170,11 @@ export function OperationsIndicator() {
   // rendered list comes from groupedOperations.
   const rawOperations = useOperationsStore((state) => state.activeOperations);
   const alertOperations = useOperationsStore((state) => state.alertOperations);
+  // Set when the last timeline refresh failed. The list is then the last one
+  // the server confirmed, not the current state — the popover says so rather
+  // than showing "No operations" over a server that is down (WEB-05).
+  const loadError = useOperationsStore((state) => state.loadError);
+  const loadFromServer = useOperationsStore((state) => state.loadFromServer);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null);
@@ -233,22 +239,38 @@ export function OperationsIndicator() {
 
   const empty = running.length === 0 && queued.length === 0 && terminal.length === 0;
 
+  const tooltip =
+    badgeCount > 0
+      ? `${badgeCount} active operation${badgeCount !== 1 ? 's' : ''}`
+      : 'No active operations';
+
   return (
     <>
-      <Tooltip
-        title={
-          badgeCount > 0
-            ? `${badgeCount} active operation${badgeCount !== 1 ? 's' : ''}`
-            : 'No active operations'
-        }
-      >
-        <IconButton color="inherit" onClick={(e) => setAnchorEl(e.currentTarget)} sx={{ mr: 1 }}>
-          <Badge badgeContent={badgeCount > 0 ? badgeCount : undefined} color="warning">
-            {badgeCount > 0 ? (
-              <CircularProgress size={24} color="inherit" thickness={4} />
-            ) : (
-              <NotificationsIcon />
-            )}
+      <Tooltip title={loadError ? `${tooltip} — last refresh failed` : tooltip}>
+        <IconButton
+          color="inherit"
+          onClick={(e) => setAnchorEl(e.currentTarget)}
+          sx={{ mr: 1 }}
+          data-testid="operations-bell"
+        >
+          {/* The count badge is what it always was. The error DOT is separate
+              so a failed refresh is visible on the closed bell without
+              pretending to be an operation count. */}
+          <Badge
+            variant="dot"
+            color="error"
+            invisible={!loadError}
+            overlap="circular"
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            data-testid="operations-bell-error-dot"
+          >
+            <Badge badgeContent={badgeCount > 0 ? badgeCount : undefined} color="warning">
+              {badgeCount > 0 ? (
+                <CircularProgress size={24} color="inherit" thickness={4} />
+              ) : (
+                <NotificationsIcon />
+              )}
+            </Badge>
           </Badge>
         </IconButton>
       </Tooltip>
@@ -287,9 +309,35 @@ export function OperationsIndicator() {
 
           <Divider />
 
-          {empty && (
+          {/* Three DISTINGUISHABLE states for a list that used to have one:
+                error + nothing to show — the request failed and we have no
+                                          confirmed list; say so, offer Retry
+                error + a list          — stale: show the warning ABOVE the
+                                          last confirmed list, do not blank it
+                no error + empty        — the server really has nothing
+              Until 2026-09-11 the fetch returned [] on failure, so the first
+              case rendered as the third. */}
+          {loadError && (
+            <Alert
+              severity={empty ? 'error' : 'warning'}
+              data-testid="operations-load-error"
+              sx={{ m: 1 }}
+              action={
+                <Button color="inherit" size="small" onClick={() => void loadFromServer()}>
+                  Retry
+                </Button>
+              }
+            >
+              {empty
+                ? `Could not load operations: ${loadError}`
+                : `Could not refresh operations — this list may be out of date: ${loadError}`}
+            </Alert>
+          )}
+
+          {empty && !loadError && (
             <Typography
               variant="body2"
+              data-testid="operations-empty"
               sx={{
                 color: 'text.secondary',
                 px: 2,

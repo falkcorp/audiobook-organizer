@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.88.0
-// guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-10
+// version: 2.89.0
+// guid:a0b1c2d3-e4f5-6789-abcd-ef0123456789
+// last-edited: 2026-09-11
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -585,26 +585,32 @@ export const OPERATION_TIMELINE_LIMIT = 1000;
  * `truncated` is logged rather than swallowed. A silently short list is the
  * failure this endpoint has produced twice now, and it always looks like data
  * loss rather than a cap.
+ *
+ * A failed request THROWS — an ApiError for a non-2xx status, the fetch's own
+ * error (ApiTimeoutError, TypeError) for a network failure. Until 2026-09-11
+ * both were caught here and returned as `[]`, so a server that was down
+ * rendered in the bell and on the Activity page as "no operations", the same
+ * thing a genuinely idle server shows. Callers that want to keep showing the
+ * last list they had must catch and decide that themselves; this layer no
+ * longer decides it for them (WEB-05).
  */
 export async function getOperationTimeline(
   sinceMinutes = OPERATION_TIMELINE_WINDOW_MINUTES
 ): Promise<OperationV2[]> {
-  try {
-    const response = await apiFetch(
-      `${API_BASE}/operations/timeline?since=${sinceMinutes}m&limit=${OPERATION_TIMELINE_LIMIT}`
-    );
-    if (!response.ok) return [];
-    const body = await response.json();
-    if (body?.data?.truncated) {
-      console.warn(
-        `Operation timeline truncated: showing ${body.data.limit} of ${body.data.matched} ` +
-          `operations in the last ${sinceMinutes}m.`
-      );
-    }
-    return body?.data?.operations ?? [];
-  } catch {
-    return [];
+  const response = await apiFetch(
+    `${API_BASE}/operations/timeline?since=${sinceMinutes}m&limit=${OPERATION_TIMELINE_LIMIT}`
+  );
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch operation timeline');
   }
+  const body = await response.json();
+  if (body?.data?.truncated) {
+    console.warn(
+      `Operation timeline truncated: showing ${body.data.limit} of ${body.data.matched} ` +
+        `operations in the last ${sinceMinutes}m.`
+    );
+  }
+  return body?.data?.operations ?? [];
 }
 
 export async function getOperationV2(id: string): Promise<OperationV2> {

@@ -1,10 +1,11 @@
 // file: src/services/api.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
+  getOperationTimeline,
   isOperationTerminal,
   getImportPaths,
   addImportPath,
@@ -409,5 +410,50 @@ describe('getMaintenanceWindowStatus envelope', () => {
     expect(status.enabled).toBe(false);
     expect(status.window_start).toBe(1);
     expect(status.window_end).toBe(4);
+  });
+});
+
+// getOperationTimeline used to catch everything and return [] — a 500 and a
+// dead network both resolved to the same value as "no operations in the
+// window", so every consumer rendered a down server as an idle one (WEB-05).
+// These pin the fetch to the buildApiError convention the rest of api.ts uses.
+describe('getOperationTimeline failure handling', () => {
+  beforeEach(() => {
+    global.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('rejects on a non-2xx response instead of resolving to an empty list', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'timeline store unavailable' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(getOperationTimeline()).rejects.toMatchObject({
+      message: 'timeline store unavailable',
+      status: 500,
+    });
+  });
+
+  it('rejects on a network failure instead of resolving to an empty list', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    await expect(getOperationTimeline()).rejects.toThrow('Failed to fetch');
+  });
+
+  it('still resolves the operations list on a 2xx', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { operations: [{ id: 'op-1' }], matched: 1 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(getOperationTimeline()).resolves.toEqual([{ id: 'op-1' }]);
   });
 });
