@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -25,7 +25,7 @@ func (p *Plugin) externalIDBackfillDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "External ID backfill",
-		Description:     "One-shot backfill of external IDs (iTunes PIDs, etc.) from the existing database.",
+		Description:     "Backfill of external IDs (iTunes PIDs, etc.) from the existing database. Runs in full whenever triggered, even after the boot-time pass has recorded completion.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.external-id-backfill",

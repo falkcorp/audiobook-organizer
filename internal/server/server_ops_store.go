@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-09-11
 
@@ -126,6 +126,9 @@ type serverBookVersionStore interface {
 type serverBookFileReader interface {
 	GetBookFileByID(bookID string, fileID string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetAllBookFilesCore: the external-ID backfill's one batch read of
+	// book_file rows (PERF-5) — see internal/itunes/backfill.go.
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
 	GetFilesWithFingerprintFailures(reason string, limit int, offset int) ([]database.BookFile, int64, error)
 }

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -736,4 +736,54 @@ func writeXMLWithAudiobook(t *testing.T, dir, albumTitle, artist, pid, trackFile
 	xmlPath := filepath.Join(dir, "iTunes Library.xml")
 	require.NoError(t, os.WriteFile(xmlPath, []byte(xml), 0o644))
 	return xmlPath
+}
+
+// ---------------------------------------------------------------------------
+// 9. New-book import writes the external-ID mapping itself (SQ-04). The
+//    boot-time backfill (itunes.BackfillExternalIDsOnce) is skipped once a
+//    prior run has recorded completion under itunes.ExternalIDBackfillDoneKey,
+//    so a book imported AFTER that point depends on THIS path registering its
+//    track PID at creation. If Execute ever stops doing so, new imports would
+//    silently lose PID linkage and no boot-time rerun would restore it.
+// ---------------------------------------------------------------------------
+
+func TestExecute_NewBook_WritesExternalIDMappingAtImport(t *testing.T) {
+	dir := t.TempDir()
+	trackPath := filepath.Join(dir, "new-chapter.m4b")
+	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("e"), 512), 0o644))
+
+	pid := "NEW_BOOK_PID_009"
+	xmlPath := writeXMLWithAudiobook(t, dir, "Audiobook E", "Author E", pid, trackPath)
+
+	authorRecord := &database.Author{ID: 5, Name: "Author E"}
+	created := &database.Book{ID: "new-book-id-9", Title: "Audiobook E"}
+
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().SaveOperationParams("op-new-book", mock.Anything).Return(nil).Once()
+	m.EXPECT().GetOperationState("op-new-book").Return(nil, nil).Once()
+	m.EXPECT().GetAuthorByName(mock.Anything).Return(authorRecord, nil).Maybe()
+	m.EXPECT().GetSeriesByName(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 5, Name: "Audiobook E"}, nil).Maybe()
+	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
+	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
+	m.EXPECT().CreateBook(mock.Anything).Return(created, nil).Once()
+	// The assertion under test: the importer writes the mapping for the
+	// freshly created book, keyed by the track PID, at import time.
+	m.EXPECT().CreateExternalIDMapping(mock.MatchedBy(func(mp *database.ExternalIDMapping) bool {
+		return mp != nil && mp.Source == "itunes" && mp.ExternalID == pid && mp.BookID == created.ID
+	})).Return(nil).Once()
+	m.EXPECT().SetBookAuthors(mock.Anything, mock.Anything).Return(nil).Maybe()
+	m.EXPECT().DeleteOperationState("op-new-book").Return(nil).Once()
+	m.EXPECT().SaveLibraryFingerprint(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	imp := newImporter(Deps{Store: m, Config: Config{}})
+	log := logger.New("test")
+	err := imp.Execute(context.Background(), "op-new-book", ImportRequest{
+		LibraryPath: xmlPath,
+		ImportMode:  "import",
+	}, log)
+	require.NoError(t, err)
+
+	snap := imp.GetStatus("op-new-book")
+	assert.Equal(t, 1, snap.Imported, "one new book should have been imported")
 }

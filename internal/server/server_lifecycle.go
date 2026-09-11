@@ -858,7 +858,9 @@ func (s *Server) seedRolesAndTokens() {
 // enrolled in s.bgWG so shutdown drains them before the store closes (SYS-1).
 func (s *Server) startBackfills() {
 	// Backfill external ID mappings from existing iTunes PIDs (one-time,
-	// idempotent). Tracked via bgWG for the same reason as the embedding
+	// idempotent — force=false routes through BackfillExternalIDsOnce, which
+	// skips the full-library scan once a prior run has recorded completion;
+	// SQ-04). Tracked via bgWG for the same reason as the embedding
 	// backfill: we can't let it hold Pebble iterators while CloseStore runs.
 	s.bgWG.Go("external-id-backfill", func() {
 		// This startup-goroutine path has no op reporter (only the UOS plugin
@@ -868,7 +870,7 @@ func (s *Server) startBackfills() {
 		// needs the "more than one log line" fix (H7), not just the UOS
 		// plugin op (unclear whether that path is ever enqueued). The error
 		// is no longer silently swallowed either.
-		if err := s.backfillExternalIDs(startupProgressLogger("external-id-backfill")); err != nil {
+		if err := s.backfillExternalIDs(startupProgressLogger("external-id-backfill"), false); err != nil {
 			slog.Warn("startup external-id-backfill failed", "err", err)
 		}
 	})

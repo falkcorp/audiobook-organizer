@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-11
 
@@ -147,8 +147,11 @@ func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, enqueueWB func(
 
 // ---- one-shot startup ops ----
 
+// BackfillExternalIDs backs the manual maintenance.external-id-backfill op.
+// force=true: an operator asked for it, so it runs in full even when the
+// boot-time pass has already recorded completion (the boot path passes false).
 func (s *Server) BackfillExternalIDs(progress func(processed, total int, msg string)) error {
-	return s.backfillExternalIDs(progress)
+	return s.backfillExternalIDs(progress, true)
 }
 
 func (s *Server) StripMovementAtoms(ctx context.Context) {

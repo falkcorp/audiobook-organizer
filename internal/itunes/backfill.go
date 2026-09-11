@@ -1,12 +1,13 @@
 // file: internal/itunes/backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-07-18
+// last-edited: 2026-09-11
 
 package itunes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -20,15 +21,108 @@ type ExternalIDBackfillStore interface {
 	// GetAllBooksCore returns the memdb-slim projection — the backfill loops
 	// only read Core-safe fields (ITunesPersistentID, ID) off each book.
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetAllBookFilesCore is the one batch read of book_file rows the
+	// backfill makes (PERF-5). It replaces a GetBookFiles(bookID) point read
+	// per book — under Pebble-direct that was one prefix iterator per book,
+	// i.e. ~100k random reads on a production-sized library at every boot.
+	// The Core projection carries the only three fields needed here
+	// (BookID, FilePath, ITunesPersistentID).
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
 	BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error
+	GetSetting(key string) (*database.Setting, error)
 	SetSetting(key, value, dataType string, internal bool) error
 }
 
+// ExternalIDBackfillDoneKey is the settings key that records a completed
+// external-ID backfill. BackfillExternalIDsOnce reads it; BackfillExternalIDs
+// writes it, and ONLY after every pass has finished without an error or a
+// cancellation — a partial, cancelled, or errored run never sets it, so a set
+// flag guarantees that at least one full v4 pass (book-level PIDs, file-level
+// PIDs, and — when an iTunes XML path is configured — track-level PIDs from
+// the XML) ran to completion against the library as it stood at that time.
+//
+// The flag says nothing about books created AFTER that pass. Those do not
+// need it: the live import path (internal/itunes/service/importer.go,
+// Execute) writes a mapping for every track PID at the moment it creates a
+// book, and generated file PIDs go through TrackProvisioner, which writes
+// its mapping alongside the PID. The backfill exists to catch up rows that
+// pre-date those paths, which is exactly the one-time job the flag records.
+// Merges and dedups move mappings via ReassignExternalIDs, not via a rerun.
+//
+// Note that a rerun would not repair drift either: BulkCreateExternalIDMappings
+// has ignore-existing semantics, so before this flag was read the every-boot
+// rerun cost a full library scan and wrote nothing new.
+const ExternalIDBackfillDoneKey = "external_id_backfill_v4_done"
+
+const (
+	// externalIDBackfillDoneFull: every pass ran, including the iTunes XML
+	// track-PID pass.
+	externalIDBackfillDoneFull = "true"
+	// externalIDBackfillDoneBooksOnly: the book + file passes ran, but the
+	// track-PID pass was skipped because no iTunes XML path was configured.
+	// BackfillExternalIDsOnce treats this as done only while that is still
+	// the case — configuring an XML path later makes the next boot run the
+	// whole backfill (idempotent) so the XML pass finally happens.
+	externalIDBackfillDoneBooksOnly = "books_only"
+)
+
+// itunesXMLConfigured reports whether the iTunes XML track-PID pass can run.
+func itunesXMLConfigured() bool {
+	return config.AppConfig.ITunes.LibraryReadPath != ""
+}
+
+// externalIDBackfillDone reports whether a previous BackfillExternalIDs run
+// left the done flag in a state that makes another run redundant. A missing
+// flag, an unreadable flag, or an unrecognised value all answer false: the
+// safe direction is to run (the writes are idempotent), never to skip.
+func externalIDBackfillDone(store ExternalIDBackfillStore) (bool, string) {
+	setting, err := store.GetSetting(ExternalIDBackfillDoneKey)
+	if err != nil {
+		if !errors.Is(err, database.ErrSettingNotFound) {
+			slog.Warn("external ID backfill: could not read done flag; running the backfill", "key", ExternalIDBackfillDoneKey, "err", err)
+		}
+		return false, ""
+	}
+	if setting == nil {
+		return false, ""
+	}
+	switch setting.Value {
+	case externalIDBackfillDoneFull:
+		return true, setting.Value
+	case externalIDBackfillDoneBooksOnly:
+		return !itunesXMLConfigured(), setting.Value
+	}
+	return false, setting.Value
+}
+
+// BackfillExternalIDsOnce is the boot-time entry point: it runs
+// BackfillExternalIDs only if no earlier run has recorded completion under
+// ExternalIDBackfillDoneKey (see that constant for what "completion" means).
+// Before this gate existed the full-library scan ran unconditionally at every
+// server start (SQ-04). Operator-triggered reruns should call
+// BackfillExternalIDs directly, which ignores the flag.
+func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) error {
+	if store == nil {
+		return nil
+	}
+	if done, value := externalIDBackfillDone(store); done {
+		slog.Info("External ID backfill v4 already complete; skipping", "key", ExternalIDBackfillDoneKey, "value", value)
+		if progress != nil {
+			progress(0, 0, "External ID backfill already complete; skipped")
+		}
+		return nil
+	}
+	return BackfillExternalIDs(ctx, store, progress)
+}
+
 // BackfillExternalIDs scans all books and creates external ID mappings for any
-// book that has an iTunes PersistentID set. This is idempotent — it checks the
-// setting "external_id_backfill_done" and only runs once.
+// book that has an iTunes PersistentID set. It ALWAYS runs — the done flag
+// under ExternalIDBackfillDoneKey is written here after a fully successful
+// pass but is only consulted by BackfillExternalIDsOnce (the boot path). The
+// manual maintenance op calls this function directly so an operator's
+// explicit request is never silently skipped. The writes are idempotent
+// (BulkCreateExternalIDMappings ignores existing keys), so a rerun is safe.
 //
 // ctx is honored at every batch boundary AND between book entries so a
 // shutdown signal aborts the backfill quickly. Without ctx-awareness this
@@ -53,9 +147,31 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		ctx = context.Background()
 	}
 
-	// Check if backfill has already been performed (v4 = includes BookFile-level PIDs)
-	// Note: in actual usage, would need to check via store.GetSetting
 	slog.Info("Starting external ID backfill v4...")
+
+	// PERF-5: one batch read of every book_file row, reduced to the
+	// PID-bearing subset keyed by book ID, replaces the per-book
+	// GetBookFiles point read the page loop below used to make. The Core
+	// projection is memdb-slim, and only files that actually carry a PID are
+	// retained, so the resident set is bounded by the iTunes-linked file
+	// count rather than the whole table. The book pagination (pages of
+	// 10,000) is unchanged.
+	if err := ctx.Err(); err != nil {
+		slog.Info("external ID backfill canceled before file read", "err", err)
+		return nil
+	}
+	allFiles, err := store.GetAllBookFilesCore()
+	if err != nil {
+		return fmt.Errorf("external ID backfill: read book files: %w", err)
+	}
+	// allFiles is dead after this loop; only the PID subset stays resident.
+	filesByBook := make(map[string][]database.BookFileCore)
+	for _, f := range allFiles {
+		if f.ITunesPersistentID == "" {
+			continue
+		}
+		filesByBook[f.BookID] = append(filesByBook[f.BookID], f)
+	}
 
 	offset := 0
 	backfilled := 0
@@ -94,22 +210,16 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 			}
 
 			// BookFile-level PIDs (catches split books, multi-file books, etc.)
-			// TODO(PERF-5): replace with a batch GetBookFilesByBookIDs call to
-			// eliminate the N+1 file read. Requires a new Store interface method.
-			files, fErr := store.GetBookFiles(book.ID)
-			if fErr != nil {
-				continue
-			}
-			for _, f := range files {
-				if f.ITunesPersistentID != "" {
-					batch = append(batch, database.ExternalIDMapping{
-						Source:     "itunes",
-						ExternalID: f.ITunesPersistentID,
-						BookID:     book.ID,
-						FilePath:   f.FilePath,
-						Provenance: "backfill_v4",
-					})
-				}
+			// — served from the single batch read above (PERF-5); only
+			// PID-bearing files were retained, so no per-file filter is needed.
+			for _, f := range filesByBook[book.ID] {
+				batch = append(batch, database.ExternalIDMapping{
+					Source:     "itunes",
+					ExternalID: f.ITunesPersistentID,
+					BookID:     book.ID,
+					FilePath:   f.FilePath,
+					Provenance: "backfill_v4",
+				})
 			}
 		}
 		if len(batch) > 0 {
@@ -140,11 +250,28 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		slog.Info("Backfilled track-level PIDs from iTunes XML", "itunesBackfilled", itunesBackfilled)
 	}
 
-	// Only mark as done AFTER everything completes successfully (and not canceled)
-	if err := ctx.Err(); err == nil {
-		_ = store.SetSetting("external_id_backfill_v4_done", "true", "bool", false)
-		slog.Info("External ID backfill v4 complete")
+	// Only mark as done AFTER everything completes successfully (and not
+	// canceled). Every error path above has already returned, and every
+	// cancellation path returned nil without reaching here, so this write is
+	// the one thing that can make BackfillExternalIDsOnce skip on the next
+	// boot — see ExternalIDBackfillDoneKey for what it guarantees. The value
+	// records whether the XML track-PID pass actually ran, so a later
+	// configuration of the XML path re-arms the boot-time run.
+	if err := ctx.Err(); err != nil {
+		slog.Info("external ID backfill canceled after track-PID pass; not marking done", "err", err)
+		return nil
 	}
+	doneValue := externalIDBackfillDoneFull
+	if !itunesXMLConfigured() {
+		doneValue = externalIDBackfillDoneBooksOnly
+	}
+	if err := store.SetSetting(ExternalIDBackfillDoneKey, doneValue, "string", false); err != nil {
+		// The data is complete; only the marker failed. The next boot will
+		// rerun (safe, idempotent) — say so instead of dropping the error.
+		slog.Warn("external ID backfill complete but could not record done flag; next boot will rerun", "key", ExternalIDBackfillDoneKey, "err", err)
+		return nil
+	}
+	slog.Info("External ID backfill v4 complete", "done_value", doneValue)
 	return nil
 }
 
