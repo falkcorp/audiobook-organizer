@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-08-22
+// last-edited: 2026-09-11
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -27,6 +27,8 @@ package server
 
 import (
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -143,6 +145,7 @@ func (s *Server) enqueueIndex(bookID string, del bool) {
 	default:
 		atomic.AddInt32(&s.indexWorkerBusy, -1)
 		searchIndexDropped.Add(1)
+		metrics.IncSearchIndexDropped()
 		// Record it durably before logging, so a crash between the two still
 		// leaves the book reconcilable.
 		s.markIndexDirty(bookID)
