@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -104,6 +104,15 @@ func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 			"are book-title fragments and are deliberately left alone. Defaults to dry_run=true; " +
 			"pass dry_run=false to write. skip_author_ids excludes specific rows, reported as " +
 			"skip_explicitly_excluded rather than dropped from the totals.",
+		// RESUME AUDIT 2026-09-11 (c): kept, with no checkpoint, because a
+		// from-zero restart is idempotent and cheap by construction. The work
+		// list is selected from CURRENT author names (authorConjunctionRe on
+		// GetAllAuthors), and every write removes its row from that selection:
+		// a rename changes the name so it no longer matches, and a merge deletes
+		// the row. A resumed run therefore recomputes the set, finds only what
+		// the first attempt did not reach, and re-does nothing. The whole set is
+		// tens of rows and runs in seconds, and dry_run and skip_author_ids
+		// travel in params untouched.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.author-conjunction-repair",

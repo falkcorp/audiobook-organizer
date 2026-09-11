@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -88,7 +88,17 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 			"{\"applyMedium\": true}, and a bare number is only ever reported, because \"86—EIGHTY-SIX\" is a real " +
 			"series name with the same shape. Dry-run by default; pass {\"apply\": true} to merge and " +
 			"{\"reportPath\": \"...\"} to write the rollback report.",
-		ResumePolicy:    sdk.ResumeRestart,
+		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
+		// checkpoint. A from-zero restart recomputes the plan from the current
+		// series table, and the already-merged series are gone from it, so the
+		// merges themselves would not repeat — but two things the operator
+		// relies on would silently break: Limit caps the APPLY set per run, so a
+		// canary of 10 would apply the NEXT 10 on resume; and the rollback report
+		// at ReportPath would be overwritten with a plan that no longer lists
+		// the series the first attempt merged, destroying the only way back for
+		// them. Apply is a reviewed, deliberate step; an interrupted one is
+		// surfaced as interrupted_dropped for the operator to re-run.
+		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.series-denumber",
 		Cancellable:     true,

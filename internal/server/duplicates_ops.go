@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -941,7 +941,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			if len(affectedBookIDs) > 0 {
 				logging.Info(ctx, "writing tags for affected books", "count", len(affectedBookIDs))
 				_ = progress.Log("info", fmt.Sprintf("Writing tags for %d affected books...", len(affectedBookIDs)), nil)
-				if wbErr := s.runBulkWriteBack(ctx, opID, affectedBookIDs, false, 0, progress); wbErr != nil {
+				if wbErr := s.runBulkWriteBack(ctx, opID, affectedBookIDs, false, 0, progress, nil); wbErr != nil {
 					logging.Warn(ctx, "tag write-back incomplete", "err", wbErr)
 					_ = progress.Log("warn", fmt.Sprintf("tag write-back incomplete: %v", wbErr), nil)
 				}

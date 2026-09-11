@@ -1,7 +1,7 @@
 // file: internal/server/aiscan_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f7a2c91-8d63-4e05-b1a7-9c3e5d80f624
-// last-edited: 2026-08-22
+// last-edited: 2026-09-11
 
 // aiscan_op registers the ai.author-scan OperationDef. Before 2026-08-22 the
 // multi-pass AI author dedup pipeline was the last subsystem with no
@@ -55,6 +55,16 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 		// the scan completing with no operation tracking it — the v1 pathology
 		// this migration exists to remove. RunScan decides from PERSISTED phase
 		// state whether to re-launch or re-attach.
+		//
+		// RESUME AUDIT 2026-09-11 (c): kept, with no reporter.Checkpoint, and
+		// that is correct here. The checkpoint this op needs already lives in
+		// the ai_scans store: decideResume reads the persisted phase rows — no
+		// phase started means nothing was spent, so launching from zero IS the
+		// resume; a started batch scan re-attaches to the job OpenAI is still
+		// holding and spends nothing again; a started realtime scan is marked
+		// failed and returns ErrRealtimeNotResumable rather than re-billing a
+		// whole-library pass. From-zero re-entry is therefore idempotent on
+		// cost by construction, and the only param, scan_id, never changes.
 		ResumePolicy: opsregistry.ResumeRestart,
 
 		// Serializes scans. Two could previously run at once; a second now

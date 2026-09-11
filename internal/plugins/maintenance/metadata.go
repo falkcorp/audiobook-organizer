@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -88,16 +88,28 @@ func (p *Plugin) runMetadataUpgrade(ctx context.Context, _ json.RawMessage, repo
 }
 
 // --- isbn-enrichment ---
-// Hard rule: ResumeRestart (checkpoint every 100 books).
+// Hard rule: ResumeRestart. The resume position is NOT a reporter checkpoint;
+// see the ResumePolicy comment below for where it actually lives.
 
 func (p *Plugin) isbnEnrichmentDef() sdk.OperationDef {
 	sched := "0 7 * * *" // 07:00 daily
 	return sdk.OperationDef{
-		ID:              "maintenance.isbn-enrichment",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "ISBN enrichment",
-		Description:     "Searches external metadata sources for missing ISBN identifiers. Checkpoints every 100 books.",
+		ID:          "maintenance.isbn-enrichment",
+		Liveness:    sdk.LivenessManual,
+		Plugin:      "maintenance",
+		DisplayName: "ISBN enrichment",
+		Description: "Searches external metadata sources for missing ISBN identifiers. " +
+			"Each run is a bounded batch (isbn_enrichment_batch_limit, default 100) that resumes " +
+			"from a persistent sweep cursor, so successive runs walk the whole library.",
+		// RESUME AUDIT 2026-09-11 (c): kept, with no reporter.Checkpoint, and
+		// that is correct here. The Description used to claim "checkpoints every
+		// 100 books", which was false — nothing on this path ever called
+		// Checkpoint. What makes a from-zero restart safe is inside
+		// metafetch.EnrichMissingISBNs: it loads a PERSISTED sweep cursor
+		// (isbnEnrichCursorKey) before its loop, skips every book that already
+		// has an ISBN, and stops after `limit` attempted books, so a restart is
+		// at most one more bounded batch from where the sweep left off — the
+		// same cost as the next scheduled run, never a whole-library re-walk.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.isbn-enrichment",
