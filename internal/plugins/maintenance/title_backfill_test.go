@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-10
 
@@ -138,6 +138,10 @@ func (d fakeDeps) CompactActivityEntries(_ context.Context, _ time.Time, _ datab
 
 func (d fakeDeps) OptimizeActivityStatistics(_ context.Context) (database.ActivityOptimizeResult, error) {
 	return database.ActivityOptimizeResult{}, nil
+}
+
+func (d fakeDeps) RecompactActivityDigests(_ context.Context) (database.RecompactResult, error) {
+	return database.RecompactResult{}, nil
 }
 
 // ReclaimMigratedActivity defaults to the refusal a Pebble-only deployment

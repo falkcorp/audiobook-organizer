@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
 // last-edited: 2026-09-10
 
@@ -19,27 +19,42 @@
 //     from the first boot, so the backfill only has to copy history and the two
 //     stores stay in sync — which also keeps the primary a valid rollback mirror
 //     after the read flip.
+//
 //   - Reads (Query, GetDistinctSources): the ACTIVE backend (primary until the
 //     flip, secondary after).
-//   - Maintenance that rewrites/reclaims storage (Summarize, Prune,
-//     RecompactDigests, RepairActivityIndexes, MigrateSystemActivityLogs):
-//     the ACTIVE backend ONLY.
-//   - CompactByDay: BOTH, since 2026-09-10. It was active-only until then, on
-//     the reasoning that after the flip the "Compact after N days" button
-//     should run SQLite's bounded CompactByDay and never Pebble's unbounded,
-//     timeout-prone path. That reasoning held only while compaction ran inside
-//     an HTTP request; it now runs as a background op
-//     (maintenance.compact-activity-log), so Pebble's duration is a progress
-//     line, not a browser timeout. And the inactive backend is still taking
-//     every write (Record goes to both, always), so compacting only the active
-//     one left the rollback mirror growing unbounded — the same asymmetry
-//     OptimizeStatistics below was fixed for on 2026-09-09.
+//
+//   - Maintenance that rewrites/reclaims storage (CompactByDay, Summarize,
+//     Prune, RecompactDigests, RepairActivityIndexes): BOTH, always. Every one
+//     of these was active-only until 2026-09-10, on the reasoning that after
+//     the flip maintenance should run SQLite's bounded paths and never
+//     Pebble's unbounded, timeout-prone ones. That reasoning held only while
+//     the work ran inside an HTTP request; it now runs as background ops, so
+//     Pebble's duration is a progress line, not a browser timeout. And the
+//     inactive backend is still taking every write (Record goes to both,
+//     always), so maintaining only the active one left the rollback mirror
+//     growing unbounded: every debug row past 30 days, every change row past
+//     90 days, every legacy digest item, and — once reads flip to SQLite,
+//     whose RepairActivityIndexes is a documented no-op — every orphaned Pebble
+//     index entry, forever. CompactByDay was corrected first (PR #3214); the
+//     other four followed the same day with the same shape (see
+//     runOnBothBackends). MigrateSystemActivityLogs is the one exception: a
+//     one-time migration, a documented no-op on Pebble, active only.
+//
+//     Each backend does its own work independently, so a summary or digest
+//     row is written by each store with its own timestamp/ULID. If the
+//     activity backfill op is re-run later it copies Pebble's rows into SQLite
+//     by content key, so SQLite may then hold its own summary plus Pebble's
+//     for the same group — one extra pruned_at-marked line per group per
+//     backfill, not lost data, and the same shape digests have had since
+//     #3214.
+//
 //   - OptimizeStatistics: BOTH. It refreshes query-planner statistics, which is
 //     read-only bookkeeping rather than a storage rewrite, and the INACTIVE
 //     backend is still taking every write — so leaving its planner un-analyzed
 //     would make a rollback land on a backend that has never been analyzed.
 //     That is exactly the state production's SQLite database was found in on
 //     2026-09-09 (no sqlite_stat1 at all across 13.2M rows).
+//
 //   - WipeAllActivity: BOTH. It is an explicit destructive user action; leaving a
 //     full mirror behind would be surprising, so it clears both and returns the
 //     active backend's count.
@@ -164,14 +179,99 @@ func (m *MigratingActivityStore) GetDistinctSources(ctx context.Context, f Activ
 	return m.active().GetDistinctSources(ctx, f)
 }
 
-// ── maintenance: active only ────────────────────────────────────────────────
+// ── maintenance: both backends ──────────────────────────────────────────────
 
-func (m *MigratingActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
-	return m.active().Summarize(ctx, olderThan, tier)
+// runOnBothBackends is the one shape every storage-rewriting maintenance
+// method on this wrapper takes. It runs op against the primary, then the
+// secondary, and folds the two outcomes with fold.
+//
+// Both backends are always attempted: a primary failure does not skip the
+// secondary, because the two are independent stores and skipping one silently
+// is how a "maintenance ran" log line ends up describing half the data. A
+// canceled context is the ONE reason not to try the secondary — the work was
+// asked to stop, not merely to fail over — and ctx.Err() is returned in that
+// case even if the primary itself failed for another reason, because the
+// caller asked to stop and that is the fact it is waiting on. A method whose
+// interface has no context (Prune) passes context.Background(), so both
+// backends always run.
+//
+// The returned error is the first one encountered (primary before secondary)
+// and wraps the other when both fail, so neither is lost. Every backend's
+// result is handed to fold whether or not it failed, so counters reflect
+// what each backend actually did before failing.
+//
+// onDone, when non-nil, receives each backend's name, result and error as it
+// finishes — CompactByDay uses it to feed the WithCompactProgress hook.
+//
+// It is a function taking m rather than a method on *MigratingActivityStore
+// because Go does not allow type parameters on methods.
+func runOnBothBackends[R any](
+	m *MigratingActivityStore,
+	ctx context.Context,
+	what string,
+	op func(s ActivityStorer) (R, error),
+	fold func(total *R, part R),
+	onDone func(backend string, res R, err error),
+) (R, error) {
+	var total R
+
+	primaryRes, primaryErr := op(m.primary)
+	fold(&total, primaryRes)
+	if primaryErr != nil {
+		slog.Warn("[activity-migrate] primary "+what+" failed", "err", primaryErr, "result", primaryRes)
+	}
+	if onDone != nil {
+		onDone(activityBackendName(m.primary), primaryRes, primaryErr)
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return total, ctxErr
+	}
+
+	secondaryRes, secondaryErr := op(m.secondary)
+	fold(&total, secondaryRes)
+	if secondaryErr != nil {
+		slog.Warn("[activity-migrate] secondary "+what+" failed", "err", secondaryErr, "result", secondaryRes)
+	}
+	if onDone != nil {
+		onDone(activityBackendName(m.secondary), secondaryRes, secondaryErr)
+	}
+
+	switch {
+	case primaryErr != nil && secondaryErr != nil:
+		return total, fmt.Errorf("activity-migrate %s: primary: %w (secondary also failed: %v)", what, primaryErr, secondaryErr)
+	case primaryErr != nil:
+		return total, fmt.Errorf("activity-migrate %s: primary: %w", what, primaryErr)
+	case secondaryErr != nil:
+		return total, fmt.Errorf("activity-migrate %s: secondary: %w", what, secondaryErr)
+	}
+	return total, nil
 }
 
+// sumRowCounts is the fold for the methods that return a plain row count.
+func sumRowCounts(total *int, part int) { *total += part }
+
+// Summarize folds old rows into summary rows on BOTH backends and returns the
+// summed count of originals deleted. See the routing table in the package
+// comment for why this was active-only until 2026-09-10. Per-backend
+// completion goes to any WithMaintenanceProgress hook on ctx.
+func (m *MigratingActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	return runOnBothBackends(m, ctx, "summarize",
+		func(s ActivityStorer) (int, error) { return s.Summarize(ctx, olderThan, tier) },
+		sumRowCounts,
+		func(backend string, n int, err error) {
+			reportMaintenanceDone(ctx, MaintenancePhaseSummarize, backend, int64(n), err)
+		})
+}
+
+// Prune hard-deletes old rows of tier on BOTH backends and returns the summed
+// count. The interface gives Prune no context, so both backends always run
+// and nothing can be reported mid-run; callers bracket it with their own
+// liveness stamps.
 func (m *MigratingActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	return m.active().Prune(olderThan, tier)
+	return runOnBothBackends(m, context.Background(), "prune",
+		func(s ActivityStorer) (int, error) { return s.Prune(olderThan, tier) },
+		sumRowCounts, nil)
 }
 
 // CompactByDay compacts BOTH backends and returns the summed counters.
@@ -181,52 +281,17 @@ func (m *MigratingActivityStore) Prune(olderThan time.Time, tier string) (int, e
 // mirror growing unbounded. See the routing table in the package comment for
 // why this was active-only until 2026-09-10.
 //
-// Both backends are always attempted: a primary failure does not skip the
-// secondary, because the two are independent stores and skipping one silently
-// is how a "compaction ran" log line ends up describing half the data. The
-// returned error is the first one encountered (primary before secondary) and
-// wraps the other when both fail, so neither is lost. The counters are the sum
-// of what each backend actually did, including a backend that then failed.
-//
 // Per-backend completion events go to any WithCompactProgress hook on ctx
 // (Done=true, with that backend's own counters and error), so a caller that
 // wants per-store numbers reads them from the hook rather than from the sum.
 func (m *MigratingActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
-	var total CompactResult
-
-	primaryRes, primaryErr := m.primary.CompactByDay(ctx, olderThan)
-	total.DaysCompacted += primaryRes.DaysCompacted
-	total.EntriesDeleted += primaryRes.EntriesDeleted
-	if primaryErr != nil {
-		slog.Warn("[activity-migrate] primary CompactByDay failed", "err", primaryErr,
-			"days_compacted", primaryRes.DaysCompacted, "entries_deleted", primaryRes.EntriesDeleted)
-	}
-	reportCompactDone(ctx, activityBackendName(m.primary), primaryRes, primaryErr)
-
-	// A canceled context is the ONE reason not to try the secondary: the work
-	// was asked to stop, not merely to fail over.
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return total, ctxErr
-	}
-
-	secondaryRes, secondaryErr := m.secondary.CompactByDay(ctx, olderThan)
-	total.DaysCompacted += secondaryRes.DaysCompacted
-	total.EntriesDeleted += secondaryRes.EntriesDeleted
-	if secondaryErr != nil {
-		slog.Warn("[activity-migrate] secondary CompactByDay failed", "err", secondaryErr,
-			"days_compacted", secondaryRes.DaysCompacted, "entries_deleted", secondaryRes.EntriesDeleted)
-	}
-	reportCompactDone(ctx, activityBackendName(m.secondary), secondaryRes, secondaryErr)
-
-	switch {
-	case primaryErr != nil && secondaryErr != nil:
-		return total, fmt.Errorf("activity-migrate compact: primary: %w (secondary also failed: %v)", primaryErr, secondaryErr)
-	case primaryErr != nil:
-		return total, fmt.Errorf("activity-migrate compact: primary: %w", primaryErr)
-	case secondaryErr != nil:
-		return total, fmt.Errorf("activity-migrate compact: secondary: %w", secondaryErr)
-	}
-	return total, nil
+	return runOnBothBackends(m, ctx, "compact",
+		func(s ActivityStorer) (CompactResult, error) { return s.CompactByDay(ctx, olderThan) },
+		func(total *CompactResult, part CompactResult) {
+			total.DaysCompacted += part.DaysCompacted
+			total.EntriesDeleted += part.EntriesDeleted
+		},
+		func(backend string, res CompactResult, err error) { reportCompactDone(ctx, backend, res, err) })
 }
 
 // activityBackendName labels a backend for CompactProgressEvent.Backend using
@@ -248,25 +313,49 @@ func activityBackendName(s ActivityStorer) string {
 	}
 }
 
+// RecompactDigests re-derives legacy digest items on BOTH backends and returns
+// the summed counters. Both backends build their own digests (CompactByDay
+// above fans out), so both carry the legacy items this repairs.
 func (m *MigratingActivityStore) RecompactDigests(ctx context.Context) (RecompactResult, error) {
-	return m.active().RecompactDigests(ctx)
+	return runOnBothBackends(m, ctx, "recompact",
+		func(s ActivityStorer) (RecompactResult, error) { return s.RecompactDigests(ctx) },
+		func(total *RecompactResult, part RecompactResult) {
+			total.Touched += part.Touched
+			total.Skipped += part.Skipped
+		}, nil)
 }
 
+// RepairActivityIndexes repairs orphaned secondary-index entries on BOTH
+// backends and returns the summed counters. Only Pebble keeps such indexes
+// (the SQLite implementation is a documented no-op), so routing this to the
+// active backend meant that after the flip to SQLite the Pebble mirror's index
+// leak was never repaired again.
 func (m *MigratingActivityStore) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
-	return m.active().RepairActivityIndexes(ctx)
+	return runOnBothBackends(m, ctx, "repair-indexes",
+		func(s ActivityStorer) (ActivityIndexRepairResult, error) { return s.RepairActivityIndexes(ctx) },
+		func(total *ActivityIndexRepairResult, part ActivityIndexRepairResult) {
+			total.Scanned += part.Scanned
+			total.Orphaned += part.Orphaned
+			total.Malformed += part.Malformed
+			total.Deleted += part.Deleted
+		},
+		func(backend string, res ActivityIndexRepairResult, err error) {
+			reportMaintenanceDone(ctx, MaintenancePhaseRepairIndexes, backend, res.Deleted, err)
+		})
 }
 
 // OptimizeStatistics refreshes planner statistics on BOTH backends, not just the
 // active one, and returns the active one's result.
 //
-// This is deliberately unlike the other maintenance methods above. Those rewrite
-// or reclaim storage, and routing them to the active backend only was the point
-// of the migration. Statistics are different: they are read-only bookkeeping that
-// makes a backend's own query plans correct, and the inactive backend is still
-// receiving every write (Record goes to both, always). Refreshing only the active
-// one would leave the rollback mirror's planner blind, so a rollback would land
-// on a backend that has never been analyzed — which is exactly the state
-// production's SQLite database was found in on 2026-09-09.
+// It was the first maintenance method to run on both (2026-09-09), when the
+// storage-rewriting ones above were still active-only: statistics are read-only
+// bookkeeping that makes a backend's own query plans correct, and the inactive
+// backend is still receiving every write (Record goes to both, always).
+// Refreshing only the active one would leave the rollback mirror's planner
+// blind, so a rollback would land on a backend that has never been analyzed —
+// which is exactly the state production's SQLite database was found in on
+// 2026-09-09. It returns the ACTIVE backend's result rather than a sum because
+// Supported/Bootstrapped are not additive.
 //
 // The Pebble implementation is a cheap Supported=false no-op, so "both" costs
 // nothing while Pebble is one of the two.
@@ -285,6 +374,9 @@ func (m *MigratingActivityStore) OptimizeStatistics(ctx context.Context) (Activi
 	return primaryRes, primaryErr
 }
 
+// MigrateSystemActivityLogs is the one storage-touching method that stays
+// active-only: it is a one-time legacy migration and a documented no-op on the
+// Pebble backend.
 func (m *MigratingActivityStore) MigrateSystemActivityLogs() (int, error) {
 	return m.active().MigrateSystemActivityLogs()
 }

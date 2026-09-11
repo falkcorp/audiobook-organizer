@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-09-10
 
@@ -57,7 +57,6 @@ func abortIfClientGone(c *gin.Context, err error, op string) bool {
 type ActivityService interface {
 	Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error)
 	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
-	RecompactDigests(ctx context.Context) (database.RecompactResult, error)
 	ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error)
 }
 
@@ -476,28 +475,9 @@ func (h *ActivityHandler) operationActivityFromOpLogs(opID string, limit int) ([
 	return out, nil
 }
 
-// RecompactDigests handles POST /api/v1/admin/recompact-digests.
-//
-// Re-derives type, tier, and tags on every stored daily-digest entry.
-// Returns { touched, skipped }. Safe to call multiple times (idempotent).
-func (h *ActivityHandler) RecompactDigests(c *gin.Context) {
-	if h.svc == nil {
-		httputil.RespondWithInternalError(c, "activity log not available")
-		return
-	}
-
-	result, err := h.svc.RecompactDigests(c.Request.Context())
-	if err != nil {
-		httputil.InternalError(c, "recompact digests failed", err)
-		return
-	}
-
-	httputil.RespondWithOK(c, result)
-}
-
-// POST /api/v1/activity/compact moved to ActivityCompactHandler
-// (activity_compact.go) on 2026-09-10: it enqueues
-// maintenance.compact-activity-log instead of compacting inside the request.
+// POST /api/v1/activity/compact and POST /api/v1/admin/recompact-digests moved
+// to ActivityCompactHandler (activity_compact.go) on 2026-09-10: each enqueues
+// its maintenance op instead of doing the work inside the request.
 
 // activityEntryToOperationEntry converts an ActivityEntry to the operation
 // transcript response shape.

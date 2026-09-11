@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-09-10
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -132,11 +133,19 @@ func (p *Plugin) runTempFileCleanup(ctx context.Context, _ json.RawMessage, repo
 func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 	sched := "0 0 * * *" // midnight daily
 	return sdk.OperationDef{
-		ID:              "maintenance.cleanup-activity-log",
-		Liveness:        sdk.LivenessManual,
+		ID:       "maintenance.cleanup-activity-log",
+		Liveness: sdk.LivenessManual,
+		// Raised from the 5m default on 2026-09-10, when every pass started
+		// running on both activity backends. Compaction and Summarize stamp
+		// per chunk/group, and the wrapper stamps as each backend finishes
+		// each pass, but Prune has no context on the interface and cannot
+		// report mid-run: a first-night SQLite prune over a never-pruned
+		// history is the longest silence this op can have. Same value as
+		// compact-activity-log, for the same reason.
+		ProgressTimeout: 20 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Clean activity log",
-		Description:     "Compacts old change entries into daily digests, prunes old debug entries, and removes orphaned activity index entries.",
+		Description:     "Compacts old change entries into daily digests, prunes old debug entries, and removes orphaned activity index entries, on every activity database.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -153,8 +162,13 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	// This def declares LivenessManual, and until 2026-09-10 the run never
 	// called UpdateProgress — only Log at the end, which the watchdog does not
 	// count — so any night whose compaction backlog exceeded ProgressTimeout
-	// (5m default) was cancelled as never_reported. The compaction store now
-	// emits per-chunk events; forwarding them is what keeps this op alive.
+	// was cancelled as never_reported. The compaction store emits per-chunk
+	// events, and since the other passes started running on both backends the
+	// summarize pass emits per-group events and the migrating wrapper emits a
+	// completion per backend per pass; forwarding all of them is what keeps
+	// this op alive.
+	_ = reporter.UpdateProgress(0, 0, "starting activity log cleanup")
+	ctx = database.WithMaintenanceProgress(ctx, maintenanceProgressToReporter(reporter))
 	compacted, summarized, pruned, indexOrphans, err := p.deps.CompactActivityLog(
 		ctx,
 		p.deps.ActivityLogCompactionDays(),

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-10
 
@@ -377,6 +377,12 @@ type ActivityLogOps interface {
 	// statistics. It is separate from CompactActivityLog on purpose — see
 	// optimizeActivityDBDef for the measurements that forced the split.
 	OptimizeActivityStatistics(ctx context.Context) (database.ActivityOptimizeResult, error)
+	// RecompactActivityDigests re-derives type, tier and tags on every stored
+	// daily-digest item that was compacted before enrichment existed, on every
+	// activity backend. Idempotent: a digest with no legacy items is skipped.
+	// It backs the maintenance.recompact-activity-digests op, which replaced
+	// the synchronous POST /admin/recompact-digests handler.
+	RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error)
 	// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
 	// cutover has made redundant, freeing space in the main database.
 	//
