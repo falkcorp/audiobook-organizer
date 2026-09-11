@@ -1,7 +1,7 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,6 +20,7 @@ import {
   DialogContent,
   DialogActions,
   Alert,
+  AlertTitle,
   Card,
   CardContent,
   List,
@@ -30,6 +31,7 @@ import {
   Checkbox,
   FormControlLabel,
   Skeleton,
+  Tooltip,
 } from '@mui/material';
 import {
   LibraryBooks as LibraryBooksIcon,
@@ -92,14 +94,27 @@ interface RecentOperation {
   timestamp: string;
 }
 
+/** Human-readable one-liner for an error surfaced in the UI. */
+const describeError = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
+
 export function Dashboard() {
   const navigate = useNavigate();
+  // Each loader owns a value AND an error. A value is null until its request
+  // has succeeded once, and a FAILED request leaves the value alone: the tile
+  // keeps the last count the server confirmed and says it could not refresh.
+  // Until 2026-09-11 every catch below wrote 0 into the value instead, so a
+  // backend blip rendered "0 authors, 0 series, 0 imported" — which reads as
+  // "the library is empty", not "the request failed" (WEB-03).
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [authorCount, setAuthorCount] = useState<number | null>(null);
+  const [authorsError, setAuthorsError] = useState<string | null>(null);
   const [seriesCount, setSeriesCount] = useState<number | null>(null);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
   const [importedCount, setImportedCount] = useState<number | null>(null);
+  const [importedError, setImportedError] = useState<string | null>(null);
   const [operations, setOperations] = useState<RecentOperation[] | null>(null);
-  const [storageLoaded, setStorageLoaded] = useState(false);
   const [brokenFileCount, setBrokenFileCount] = useState<number | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [organizeDialogOpen, setOrganizeDialogOpen] = useState(false);
@@ -151,7 +166,7 @@ export function Dashboard() {
         disk_total_gb: diskTotalBytes / (1024 * 1024 * 1024),
         disk_usage_percent: diskUsagePercent,
       });
-      setStorageLoaded(true);
+      setStatsError(null);
 
       // Broken files count (may be undefined)
       setBrokenFileCount((systemStatus as any).broken_file_count ?? null);
@@ -200,24 +215,11 @@ export function Dashboard() {
       setOperations(recentOps);
     } catch (error) {
       console.error('Failed to load system status:', error);
-      // Set empty defaults so spinners stop
-      setStats({
-        library_books: 0,
-        import_books: 0,
-        total_books: 0,
-        total_files: 0,
-        total_authors: 0,
-        total_series: 0,
-        import_paths: 0,
-        library_size_gb: 0,
-        import_size_gb: 0,
-        total_size_gb: 0,
-        disk_used_gb: 0,
-        disk_total_gb: 0,
-        disk_usage_percent: 0,
-      });
-      setStorageLoaded(true);
-      setOperations([]);
+      // Keep whatever stats and operations we last had. This used to write a
+      // fully zeroed SystemStats and an empty operations list "so spinners
+      // stop" — the spinners stop on the error state instead now, and a dead
+      // backend no longer renders as an empty library with no history.
+      setStatsError(describeError(error));
     }
   }, []);
 
@@ -225,8 +227,10 @@ export function Dashboard() {
     try {
       const count = await api.countAuthors();
       setAuthorCount(count);
-    } catch {
-      setAuthorCount(0);
+      setAuthorsError(null);
+    } catch (error) {
+      console.error('Failed to count authors:', error);
+      setAuthorsError(describeError(error));
     }
   }, []);
 
@@ -234,8 +238,10 @@ export function Dashboard() {
     try {
       const count = await api.countSeries();
       setSeriesCount(count);
-    } catch {
-      setSeriesCount(0);
+      setSeriesError(null);
+    } catch (error) {
+      console.error('Failed to count series:', error);
+      setSeriesError(describeError(error));
     }
   }, []);
 
@@ -243,10 +249,22 @@ export function Dashboard() {
     try {
       const count = await api.countBooksFiltered({ libraryState: 'imported' });
       setImportedCount(count);
-    } catch {
-      setImportedCount(0);
+      setImportedError(null);
+    } catch (error) {
+      console.error('Failed to count imported books:', error);
+      setImportedError(describeError(error));
     }
   }, []);
+
+  // The loads that failed most recently, with the loader that retries each.
+  // Only these re-fire on Retry — a count that loaded fine is not re-requested
+  // because a sibling did not.
+  const failedLoads = [
+    { label: 'System status', message: statsError, retry: loadStats },
+    { label: 'Author count', message: authorsError, retry: loadAuthors },
+    { label: 'Series count', message: seriesError, retry: loadSeries },
+    { label: 'Books awaiting organization', message: importedError, retry: loadImportedCount },
+  ].filter((f): f is typeof f & { message: string } => f.message !== null);
 
   // Fire all requests in parallel — each section updates independently
   useEffect(() => {
@@ -323,10 +341,22 @@ export function Dashboard() {
     }
   };
 
+  /**
+   * One stat tile, in one of four DISTINGUISHABLE states:
+   *   loading      — skeleton; the request is outstanding and nothing is known
+   *   error, null  — "—" in error colour with "Count unavailable"; the request
+   *                  failed and there is no last-known value to show
+   *   error, value — the last-known value, with a warning that it may be stale
+   *   value        — the number
+   * `value` is null only until its request has succeeded once; a tile never
+   * receives a fabricated 0 (WEB-03). The tile is a single button, so Retry
+   * lives in the page-level banner rather than nested inside it.
+   */
   const StatCard = ({
     title,
     value,
     loading,
+    error,
     icon,
     suffix = '',
     subtitle,
@@ -335,61 +365,96 @@ export function Dashboard() {
     valueColor,
   }: {
     title: string;
-    value: number;
+    value: number | null;
     loading: boolean;
+    error?: string | null;
     icon: React.ReactNode;
     suffix?: string;
     subtitle?: string;
     onClick?: () => void;
     iconColor?: string;
     valueColor?: string;
-  }) => (
-    <Card>
-      <CardActionArea onClick={onClick} disabled={!onClick}>
-        <CardContent>
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <Box>
-              <Typography
-                gutterBottom
+  }) => {
+    const unavailable = !loading && value === null;
+    const stale = !loading && value !== null && Boolean(error);
+    return (
+      <Tooltip title={error ? `Could not load ${title.toLowerCase()}: ${error}` : ''}>
+        <Card>
+          <CardActionArea onClick={onClick} disabled={!onClick}>
+            <CardContent>
+              <Box
                 sx={{
-                  color: 'text.secondary',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
                 }}
               >
-                {title}
-              </Typography>
-              {loading ? (
-                <Skeleton variant="text" width={80} height={42} />
-              ) : (
-                <>
-                  <Typography variant="h4" color={valueColor}>
-                    {value.toLocaleString()}
-                    {suffix}
+                <Box>
+                  <Typography
+                    gutterBottom
+                    sx={{
+                      color: 'text.secondary',
+                    }}
+                  >
+                    {title}
                   </Typography>
-                  {subtitle && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        color: 'text.secondary',
-                      }}
-                    >
-                      {subtitle}
-                    </Typography>
+                  {loading ? (
+                    <Skeleton variant="text" width={80} height={42} />
+                  ) : value === null ? (
+                    <>
+                      <Typography
+                        variant="h4"
+                        color="error.main"
+                        data-testid={`stat-unavailable-${title}`}
+                      >
+                        —
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: 'error.main' }}>
+                        Count unavailable
+                      </Typography>
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="h4" color={valueColor}>
+                        {value.toLocaleString()}
+                        {suffix}
+                      </Typography>
+                      {subtitle && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
+                          {subtitle}
+                        </Typography>
+                      )}
+                      {stale && (
+                        <Typography
+                          variant="caption"
+                          data-testid={`stat-stale-${title}`}
+                          sx={{ color: 'warning.main', display: 'block' }}
+                        >
+                          Could not refresh — may be out of date
+                        </Typography>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-            </Box>
-            <Box sx={{ color: iconColor }}>{icon}</Box>
-          </Box>
-        </CardContent>
-      </CardActionArea>
-    </Card>
-  );
+                </Box>
+                <Box
+                  sx={{
+                    color: unavailable && error ? 'error.main' : stale ? 'warning.main' : iconColor,
+                  }}
+                >
+                  {icon}
+                </Box>
+              </Box>
+            </CardContent>
+          </CardActionArea>
+        </Card>
+      </Tooltip>
+    );
+  };
 
   // Both helpers take RecentOperationStatus, not string, so adding a state to
   // the union makes tsc point at every switch that has not handled it. They
@@ -422,11 +487,21 @@ export function Dashboard() {
     }
   };
 
-  // Derive loading states per component
-  const bookStatsLoading = stats === null;
-  const authorsLoading = authorCount === null && (stats === null || !stats.total_authors);
-  const seriesLoading = seriesCount === null && (stats === null || !stats.total_series);
-  const importedLoading = importedCount === null;
+  // Derive loading states per component. "Loading" means the request is still
+  // outstanding — a request that FAILED is not loading, it is in error, and the
+  // tile renders that instead of a skeleton that never resolves.
+  const bookStatsLoading = stats === null && !statsError;
+  // The author/series tiles fall back to the system-status totals while their
+  // own count request is outstanding or has failed. loadStats stores a missing
+  // author_count/series_count as 0, so a 0 there is "not delivered", not a
+  // count — `||` treats it as no fallback, exactly as the old
+  // `!stats.total_authors` loading check did. The fallback is null (not 0)
+  // when there is nothing to fall back to.
+  const authorsValue = authorCount ?? (stats?.total_authors || null);
+  const seriesValue = seriesCount ?? (stats?.total_series || null);
+  const authorsLoading = authorsValue === null && !authorsError && !statsError;
+  const seriesLoading = seriesValue === null && !seriesError && !statsError;
+  const importedLoading = importedCount === null && !importedError;
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto' }}>
@@ -442,6 +517,32 @@ export function Dashboard() {
         </Alert>
       )}
 
+      {/* Page-level report of every load that failed, with one Retry that
+          re-fires only those. The tiles carry the per-widget marker; this is
+          where the message and the retry affordance live (a tile is itself a
+          button, so it cannot host one). */}
+      {failedLoads.length > 0 && (
+        <Alert
+          severity="error"
+          data-testid="dashboard-load-error"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                for (const f of failedLoads) void f.retry();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          <AlertTitle>Some dashboard data could not be loaded</AlertTitle>
+          {failedLoads.map((f) => `${f.label}: ${f.message}`).join(' · ')}
+        </Alert>
+      )}
+
       <Grid container spacing={3}>
         <Grid
           size={{
@@ -452,8 +553,9 @@ export function Dashboard() {
         >
           <StatCard
             title="Library Books"
-            value={stats?.library_books ?? 0}
+            value={stats?.library_books ?? null}
             loading={bookStatsLoading}
+            error={statsError}
             icon={<LibraryBooksIcon sx={{ fontSize: 40 }} />}
             subtitle={
               stats && stats.total_files > stats.total_books
@@ -473,8 +575,9 @@ export function Dashboard() {
         >
           <StatCard
             title="Import Path Books"
-            value={stats?.import_books ?? 0}
+            value={stats?.import_books ?? null}
             loading={bookStatsLoading}
+            error={statsError}
             icon={<FolderIcon sx={{ fontSize: 40 }} />}
             onClick={() => navigate('/library?state=imported')}
           />
@@ -489,8 +592,9 @@ export function Dashboard() {
         >
           <StatCard
             title="Authors"
-            value={authorCount ?? stats?.total_authors ?? 0}
+            value={authorsValue}
             loading={authorsLoading}
+            error={authorsError}
             icon={<PersonIcon sx={{ fontSize: 40 }} />}
             onClick={() => navigate('/authors')}
           />
@@ -505,8 +609,9 @@ export function Dashboard() {
         >
           <StatCard
             title="Series"
-            value={seriesCount ?? stats?.total_series ?? 0}
+            value={seriesValue}
             loading={seriesLoading}
+            error={seriesError}
             icon={<MenuBookIcon sx={{ fontSize: 40 }} />}
             onClick={() => navigate('/series')}
           />
@@ -545,8 +650,9 @@ export function Dashboard() {
             return (
               <StatCard
                 title={allOrganized ? 'All Books Organized' : 'Needs Organizing'}
-                value={importedCount ?? 0}
+                value={importedCount}
                 loading={importedLoading}
+                error={importedError}
                 icon={
                   allOrganized ? (
                     <CheckCircleIcon sx={{ fontSize: 40 }} />
@@ -583,7 +689,15 @@ export function Dashboard() {
             <Typography variant="h6" gutterBottom>
               Storage Usage
             </Typography>
-            {!storageLoaded ? (
+            {/* stats is null until system status has loaded once. With an
+                error and no stats there is nothing to draw — say so rather
+                than draw "0.0 GB / 0.0 GB" (which is what the zeroed fallback
+                used to render). */}
+            {stats === null && statsError ? (
+              <Alert severity="error" data-testid="storage-error">
+                Storage usage unavailable: {statsError}
+              </Alert>
+            ) : stats === null ? (
               <Box sx={{ py: 2 }}>
                 <Skeleton variant="text" width="60%" height={24} />
                 <Skeleton variant="rectangular" height={8} sx={{ my: 1, borderRadius: 1 }} />
@@ -665,7 +779,15 @@ export function Dashboard() {
             <Typography variant="h6" gutterBottom>
               Recent Operations
             </Typography>
-            {operations === null ? (
+            {/* Same four states as the tiles. operations is null until system
+                status has loaded once; a failed load keeps the previous list,
+                and with none to keep it renders the error, not "No recent
+                operations". */}
+            {operations === null && statsError ? (
+              <Alert severity="error" data-testid="recent-operations-error">
+                Recent operations unavailable: {statsError}
+              </Alert>
+            ) : operations === null ? (
               <Box sx={{ py: 1 }}>
                 <Skeleton variant="text" width="80%" />
                 <Skeleton variant="text" width="60%" />

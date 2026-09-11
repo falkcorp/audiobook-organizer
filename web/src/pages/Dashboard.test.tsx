@@ -1,8 +1,9 @@
 // file: web/src/pages/Dashboard.test.tsx
-// version: 1.0.1
+// version: 1.1.0
+// last-edited: 2026-09-11
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { Dashboard } from './Dashboard';
 
@@ -233,19 +234,79 @@ describe('Dashboard', () => {
     });
   });
 
+  // A failed request must render as a FAILURE, not as an empty library. Until
+  // 2026-09-11 every catch wrote 0 into its tile, so a backend blip showed
+  // "0 authors, 0 series, 0 imported" with no indication anything was wrong
+  // (WEB-03). These pin the four states apart: no fabricated zeros, a visible
+  // error, and a Retry that re-fires only what failed.
   describe('error state', () => {
-    it('renders zero-state when API fails', async () => {
-      mockGetSystemStatus.mockRejectedValue(new Error('Network error'));
-      mockCountAuthors.mockRejectedValue(new Error('fail'));
-      mockCountSeries.mockRejectedValue(new Error('fail'));
-      mockCountBooksFiltered.mockRejectedValue(new Error('fail'));
+    it('renders the error state and no zeros when every request fails', async () => {
+      mockGetSystemStatus.mockRejectedValue(new Error('status down'));
+      mockGetSystemStorage.mockRejectedValue(new Error('storage down'));
+      mockCountAuthors.mockRejectedValue(new Error('authors down'));
+      mockCountSeries.mockRejectedValue(new Error('series down'));
+      mockCountBooksFiltered.mockRejectedValue(new Error('imported down'));
 
       renderWithProviders(<Dashboard />);
+
+      const banner = await screen.findByTestId('dashboard-load-error');
+      expect(banner).toHaveTextContent('System status: status down');
+      expect(banner).toHaveTextContent('Author count: authors down');
+      expect(banner).toHaveTextContent('Series count: series down');
+      expect(banner).toHaveTextContent('Books awaiting organization: imported down');
+
+      // Library Books, Import Path Books, Authors, Series, Needs Organizing.
+      expect(screen.getAllByTestId(/^stat-unavailable-/)).toHaveLength(5);
+      expect(screen.getAllByText('Count unavailable')).toHaveLength(5);
+      // The whole point: nothing on the page claims a count of zero.
+      expect(screen.queryByText('0')).not.toBeInTheDocument();
+      expect(screen.queryByText('All Books Organized')).not.toBeInTheDocument();
+
+      // The two panels fed by system status say so too, rather than drawing
+      // "0.0 GB / 0.0 GB" and "No recent operations".
+      expect(screen.getByTestId('storage-error')).toHaveTextContent('status down');
+      expect(screen.getByTestId('recent-operations-error')).toHaveTextContent('status down');
+      expect(screen.queryByText('No recent operations')).not.toBeInTheDocument();
+      expect(screen.queryByText(/GB \//)).not.toBeInTheDocument();
+    });
+
+    it('Retry re-fires only the loads that failed', async () => {
+      mockSuccessfulAPIs();
+      mockCountAuthors.mockRejectedValueOnce(new Error('authors down')).mockResolvedValue(120);
+
+      renderWithProviders(<Dashboard />);
+
+      const banner = await screen.findByTestId('dashboard-load-error');
+      expect(banner).toHaveTextContent('Author count: authors down');
+      expect(mockCountAuthors).toHaveBeenCalledTimes(1);
+      expect(mockCountSeries).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
       await waitFor(() => {
-        // Dashboard falls back to zeros, doesn't crash
-        expect(screen.getByText('Dashboard')).toBeInTheDocument();
-        expect(screen.getByText('Storage Usage')).toBeInTheDocument();
+        expect(screen.queryByTestId('dashboard-load-error')).not.toBeInTheDocument();
       });
+      expect(screen.getByText('120')).toBeInTheDocument();
+      expect(mockCountAuthors).toHaveBeenCalledTimes(2);
+      // The series count loaded fine the first time and is not re-requested.
+      expect(mockCountSeries).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a known value and marks it stale when only its refresh fails', async () => {
+      // countAuthors fails, but system status delivered author_count = 120.
+      // The tile shows 120 with a stale marker, not "—" and not 0.
+      mockSuccessfulAPIs();
+      mockCountAuthors.mockRejectedValue(new Error('authors down'));
+
+      renderWithProviders(<Dashboard />);
+
+      await screen.findByTestId('dashboard-load-error');
+      expect(screen.getByText('120')).toBeInTheDocument();
+      expect(screen.getByTestId('stat-stale-Authors')).toBeInTheDocument();
+      expect(screen.queryByTestId('stat-unavailable-Authors')).not.toBeInTheDocument();
+      // The sibling that succeeded is untouched.
+      expect(screen.getByText('80')).toBeInTheDocument();
+      expect(screen.queryByTestId('stat-stale-Series')).not.toBeInTheDocument();
     });
   });
 

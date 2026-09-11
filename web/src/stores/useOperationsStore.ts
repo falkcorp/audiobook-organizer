@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.10.0
+// version: 3.11.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -82,6 +82,13 @@ interface OperationsState {
    *  has no business in their results. Read this from anything that RENDERS a
    *  list of operations; read activeOperations from anything that resolves one. */
   groupedOperations: ActiveOperation[];
+  /** loadError is the message of the most recent FAILED loadFromServer, or null
+   *  once a load has succeeded since. It is set alongside the previous list,
+   *  never instead of it: a refresh that fails keeps whatever operations the
+   *  UI already had and flags them as possibly stale, so the bell and the
+   *  Activity page can say "couldn't refresh" rather than "no operations" — the
+   *  two looked identical until 2026-09-11 (WEB-05). */
+  loadError: string | null;
   latestLogEvent: OperationLogEvent | null;
   polling: boolean;
   // SSE EventSource instance — kept here so it can be closed on unmount.
@@ -221,6 +228,7 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
   liveOperations: [],
   alertOperations: [],
   groupedOperations: [],
+  loadError: null,
   latestLogEvent: null,
   polling: false,
   _sseSource: null,
@@ -251,10 +259,18 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
         return {
           operations: merged,
           ...deriveOperationArrays(merged),
+          loadError: null,
         };
       });
     } catch (err) {
+      // getOperationTimeline throws on a non-2xx and on a network failure
+      // (it returned [] for both until 2026-09-11, which made a dead server
+      // look like an idle one). Keep the list we have — it is the last thing
+      // the server confirmed — and record the failure so the consumers can
+      // show it. Replacing the list with nothing here would recreate the
+      // exact conflation the throw was added to remove.
       console.error('Failed to load operations from server', err);
+      set({ loadError: err instanceof Error ? err.message : String(err) });
     }
   },
 
