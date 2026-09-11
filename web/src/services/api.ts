@@ -1,6 +1,6 @@
 // file: web/src/services/api.ts
-// version: 2.89.0
-// guid:a0b1c2d3-e4f5-6789-abcd-ef0123456789
+// version: 2.90.0
+// guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-11
 
 // API service layer for audiobook-organizer backend
@@ -2325,18 +2325,6 @@ export async function clearStaleOperations(): Promise<{ cleared: number }> {
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to clear stale operations');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function deleteOperationHistory(status: string): Promise<{ deleted: number }> {
-  const response = await apiFetch(
-    `${API_BASE}/operations/history?status=${encodeURIComponent(status)}`,
-    { method: 'DELETE' }
-  );
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to delete operation history');
   }
   const body = await response.json();
   return body.data;

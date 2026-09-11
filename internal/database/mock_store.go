@@ -220,8 +220,6 @@ type MockStore struct {
 	SaveOperationParamsFunc      func(opID string, params []byte) error
 	GetOperationParamsFunc       func(opID string) ([]byte, error)
 	DeleteOperationStateFunc     func(opID string) error
-	DeleteOperationsByStatusFunc func(statuses []string) (int, error)
-	CountOperationsByStatusFunc  func(statuses []string) (map[string]int, error)
 	DeleteOperationWithLogsFunc  func(id string) error
 	GetInterruptedOperationsFunc func() ([]Operation, error)
 
@@ -1448,24 +1446,6 @@ func (m *MockStore) DeleteOperationState(opID string) error {
 		return m.DeleteOperationStateFunc(opID)
 	}
 	return nil
-}
-
-func (m *MockStore) DeleteOperationsByStatus(statuses []string) (int, error) {
-	if m.DeleteOperationsByStatusFunc != nil {
-		return m.DeleteOperationsByStatusFunc(statuses)
-	}
-	return 0, nil
-}
-
-func (m *MockStore) CountOperationsByStatus(statuses []string) (map[string]int, error) {
-	if m.CountOperationsByStatusFunc != nil {
-		return m.CountOperationsByStatusFunc(statuses)
-	}
-	counts := make(map[string]int, len(statuses))
-	for _, s := range statuses {
-		counts[s] = 0
-	}
-	return counts, nil
 }
 
 func (m *MockStore) DeleteOperationWithLogs(id string) error {

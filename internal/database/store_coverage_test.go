@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -497,30 +497,6 @@ func TestCoverage_ListOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, total)
 	assert.Len(t, ops, 1)
-}
-
-// --- DeleteOperationsByStatus ---
-
-func TestCoverage_DeleteOperationsByStatus(t *testing.T) {
-	store := setupCoverageDB(t)
-
-	_, err := store.CreateOperation("del-op-1", "scan", nil)
-	require.NoError(t, err)
-	err = store.UpdateOperationStatus("del-op-1", "completed", 1, 1, "done")
-	require.NoError(t, err)
-
-	_, err = store.CreateOperation("del-op-2", "scan", nil)
-	require.NoError(t, err)
-
-	// Delete completed
-	n, err := store.DeleteOperationsByStatus([]string{"completed"})
-	require.NoError(t, err)
-	assert.Equal(t, 1, n)
-
-	// Empty statuses
-	n, err = store.DeleteOperationsByStatus([]string{})
-	require.NoError(t, err)
-	assert.Equal(t, 0, n)
 }
 
 // --- UpdateOperationResultData ---

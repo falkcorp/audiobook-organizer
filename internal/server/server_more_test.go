@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-08-30
+// last-edited: 2026-09-11
 
 //go:build !windows
 
@@ -457,6 +457,9 @@ func TestRetiredLegacyOperationRoutesAreGone(t *testing.T) {
 		{http.MethodGet, "/api/v1/operations/op-1/status", "GET /operations/v2/:id"},
 		{http.MethodGet, "/api/v1/operations/op-1/logs?tail=1", "GET /operations/v2/:id?limit="},
 		{http.MethodDelete, "/api/v1/operations/op-1", "DELETE /operations/v2/:id"},
+		// Deleted from the dead v1 keyspace by status and answered 200 with the
+		// count (SV-01); the v2 delete is per-row.
+		{http.MethodDelete, "/api/v1/operations/history?status=completed", "DELETE /operations/v2/:id/record"},
 	}
 
 	for _, rt := range retired {

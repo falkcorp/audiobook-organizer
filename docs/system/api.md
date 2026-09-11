@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -97,6 +97,11 @@ To obtain an API key:
 | `DELETE` | `/api/v1/operations/v2/:id` | Cancel operation |
 | `POST` | `/api/v1/operations/v2/:id/retry` | Re-run a finished operation as a new run (202) |
 | `DELETE` | `/api/v1/operations/v2/:id/record` | Discard: delete the persisted record of a finished or interrupted run (204; 409 while queued/running) |
+
+Retired 2026-09-11: `DELETE /api/v1/operations/history?status=…` now answers 404.
+It deleted from the legacy v1 `operation:` keyspace by status and reported the
+count as success, while the rows the Activity page shows (v2) were untouched.
+Remove finished runs one at a time with `DELETE /api/v1/operations/v2/:id/record`.
 
 ### Maintenance / Admin
 

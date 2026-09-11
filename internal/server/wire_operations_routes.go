@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package server
 
@@ -76,12 +76,21 @@ func (s *Server) wireOperationsRoutes(
 	// Its other behaviour is deliberately not carried over: on a registry miss it
 	// force-marked the LEGACY row canceled, which the scheduler no longer writes
 	// and nothing reads.
+	// RETIRED 2026-09-11: DELETE /operations/history (SV-01).
+	//
+	// It deleted from the legacy `operation:` keyspace by status and answered
+	// 200 {"deleted": N}. The v1 minter has been retired since 2026-08-23, so the
+	// rows it counted were the stuck-pending v1 leftovers, never the v2 rows the
+	// Activity page shows: the endpoint reported a successful "clear history"
+	// while clearing nothing a user could see. No caller in web/src (the api.ts
+	// client function had zero call sites). Not repointed at v2 — a bulk
+	// finished-history delete is a new write path nobody asked for; the per-row
+	// DELETE /operations/v2/:id/record above is the v2 delete.
 
 	// ── still on the legacy handler; each needs a v2 home before it can go ──
 	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
 	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)
 	protected.POST("/operations/clear-stale", s.perm(auth.PermSettingsManage), operationsH.ClearStaleOperations)
-	protected.DELETE("/operations/history", s.perm(auth.PermSettingsManage), operationsH.DeleteOperationHistory)
 	protected.POST("/operations/optimize-database", s.perm(auth.PermSettingsManage), operationsH.OptimizeDatabase)
 	protected.POST("/operations/sweep-tombstones", s.perm(auth.PermSettingsManage), operationsH.SweepTombstones)
 	protected.POST("/operations/set-internal-flag", s.perm(auth.PermSettingsManage), operationsH.SetInternalFlag)
