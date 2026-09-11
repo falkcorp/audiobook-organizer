@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.57.0 -->
+<!-- version: 10.58.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -6689,7 +6689,7 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
          lacks; **YAML has 25 the JSON lacks** (`/auth/login|logout|me|sessions*`,
          `/ai/scans*`). Picking a winner loses real surface.
       3. **Decide the 11 UNCERTAIN docs** (list in the inventory §4).
-      4. **Classify `docs/system/**` (9) and `docs/architecture/**` (9)** — needed to settle
+      4. **Classify `docs/system/**` (9) and `docs/architecture/**` (9)** — needed to settle ✅ RESOLVED 2026-09-11 (#3246, TASK-182): not duplicates — see docs/audits/2026-08-11-docs-inventory.md follow-ups.
          whether the top-level architecture docs duplicate them.
       5. **Make `run-sweep.sh` fail loudly on a package it cannot parse.** It discovers work
          via `find -name 'TASK-*.md'` and 4 of 10 live packages have none, so it emits
@@ -10074,7 +10074,7 @@ Measured by a full 63,870-book census against production, correcting the figures
       `n.Quoted` branch (`bleve_translator.go:317`) works; it simply never fires.
       It *appears* to work only because the English analyzer discards the quote as
       punctuation. Phrase search is not doing what the UI help text implies.
-- [ ] **`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The
+- [x] **`SearchIndexDroppedCount` is not actually exposed on `/metrics`.** The — ✅ DONE 2026-09-11: exported as audiobook_organizer_search_index_dropped_total (#3245, TASK-130)
       comment in `internal/server/search_reconciler.go` says it is "Exposed for
       the metrics endpoint and for tests", but a live scrape of prod `/metrics`
       on 2026-08-13 returned 100 metric families and none matching
@@ -10123,7 +10123,7 @@ Follow-ups this surfaced:
       the index worker and the reconciler, so this is currently latent, not active.
       Consider comparing sets rather than counts, or logging both numbers on every
       boot (the `indexed=`/`books=` pair already does this — keep it).
-- [ ] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing — TASK-130)
+- [x] **The search index has ZERO metrics.** A live `/metrics` scrape returns 50 metric (PARTIAL 2026-09-02: `search_index_docs_total` shipped in #2758, TASK-085; the dirty-backlog gauge and `SearchIndexDroppedCount` export are still missing — TASK-130) — ✅ DONE 2026-09-11: search_index_dropped_total + search_index_dirty_backlog shipped in #3245 (TASK-130); with search_index_docs_total from #2758 the three named metrics are all on /metrics
       families and **not one** mentions search, bleve, index, or dirty. This is the
       direct reason a quarter of the library was unfindable for an unknown period with
       nobody noticing — there was no signal to notice. `audiobook_organizer_books_total`
