@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.46.1
+// version: 2.47.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 package server
 
@@ -284,7 +284,14 @@ type Server struct {
 	// tracking so the 30s-grace-period timeout log names the laggards.
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
-	bgWG     namedWaitGroup
+
+	// shutdownArmed is closed by Start once every subsystem is up and the
+	// signal handler is the only thing left to wait on. Tests use it as the
+	// readiness signal before sending SIGTERM (TASK-205) instead of a fixed
+	// sleep; production code never reads it.
+	shutdownArmed chan struct{}
+	armShutdown   sync.Once
+	bgWG          namedWaitGroup
 
 	// container is the SERVER-PLUGIN-REG service registry built during
 	// NewServer. Stashed so handlers/tests can pull services dynamically
@@ -505,6 +512,7 @@ func NewServer(store database.Store) *Server {
 		store:                  store,
 		bgCtx:                  bgCtx,
 		bgCancel:               bgCancel,
+		shutdownArmed:          make(chan struct{}),
 		router:                 router,
 		audiobookUpdateService: NewAudiobookUpdateService(resolvedStore),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(resolvedStore),

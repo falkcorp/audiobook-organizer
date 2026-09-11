@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-11
 
@@ -364,6 +364,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 			}
 		})
 	}
+
+	// Everything is started; the only thing left is the signal. Announce that
+	// so a test can send SIGTERM the moment it is safe (TASK-205).
+	s.armShutdown.Do(func() { close(s.shutdownArmed) })
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	<-quit
