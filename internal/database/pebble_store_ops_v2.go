@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.19.0
+// version: 3.20.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -479,13 +479,79 @@ func (p *PebbleStore) CountRunningByPluginV2(plugin string) (int, error) {
 	return n, nil
 }
 
+// getExistingOpV2 loads the row for id and refuses a miss.
+//
+// pebbleGetJSON answers an absent key with a nil error and an untouched (zero)
+// row, so a get-then-set writer that does not check row.ID turns "not found"
+// into "write an empty row under this key". That is not hypothetical: on
+// 2026-09-11 the owner discarded a library.scan whose goroutine the watchdog
+// had abandoned at 04:19 and which was still running at 05:18; its next
+// progress/phase write re-created opv2:op:<id> as a shell with no id, def_id
+// or status, and the Activity page rendered a blank card with a progress bar.
+// Every writer that starts from a read now goes through here. r.mu must be
+// held by the caller.
+func (p *PebbleStore) getExistingOpV2(id string) (OperationV2Row, error) {
+	var row OperationV2Row
+	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+		return row, err
+	}
+	if row.ID == "" {
+		return row, fmt.Errorf("opv2: operation not found: %s", id)
+	}
+	return row, nil
+}
+
+// SweepHollowOperationsV2 deletes every opv2:op: row whose stored value does
+// not decode to an operation with an id — the shells described on
+// getExistingOpV2 — together with the act/state keys that hang off the key's
+// id. It returns how many it removed and is safe to run repeatedly: a second
+// pass finds nothing. Migration 62 runs it once at boot; the writers above no
+// longer create such rows, so nothing should be found after that.
+func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
+	defer recoverPebbleClosed("SweepHollowOperationsV2", &err)
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+	prefix := []byte("opv2:op:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return 0, err
+	}
+	var hollow []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		var row OperationV2Row
+		if err := json.Unmarshal(iter.Value(), &row); err == nil && row.ID != "" {
+			continue
+		}
+		hollow = append(hollow, strings.TrimPrefix(string(iter.Key()), string(prefix)))
+	}
+	if cerr := iter.Close(); cerr != nil {
+		return 0, cerr
+	}
+	if len(hollow) == 0 {
+		return 0, nil
+	}
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	for _, id := range hollow {
+		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id)} {
+			if err := batch.Delete(key, nil); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return 0, err
+	}
+	return len(hollow), nil
+}
+
 // IncrementResumeCountV2 atomically increments resume_count for the given op.
 func (p *PebbleStore) IncrementResumeCountV2(id string) error {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+	row, err := p.getExistingOpV2(id)
+	if err != nil {
 		return err
 	}
 	row.ResumeCount++
@@ -497,8 +563,8 @@ func (p *PebbleStore) UpdateOpProgressV2(id string, current, total int, message 
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+	row, err := p.getExistingOpV2(id)
+	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
@@ -568,8 +634,8 @@ func (p *PebbleStore) UpdateOpPhaseV2(id string, phase *string) error {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+	row, err := p.getExistingOpV2(id)
+	if err != nil {
 		return err
 	}
 	row.CurrentPhase = phase
@@ -581,8 +647,8 @@ func (p *PebbleStore) UpdateOpCheckpointV2(id string, newHWM int) error {
 	p.opsMu.Lock()
 	defer p.opsMu.Unlock()
 
-	var row OperationV2Row
-	if err := p.pebbleGetJSON(opv2OpKey(id), &row); err != nil {
+	row, err := p.getExistingOpV2(id)
+	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()

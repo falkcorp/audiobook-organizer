@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.0.11
-// last-edited: 2026-08-23
+// version: 1.1.0
+// last-edited: 2026-09-11
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -169,6 +169,12 @@ func (m *mockRebuildStore) GetDistinctGenres() ([]string, error) {
 }
 
 func (m *mockRebuildStore) GetDistinctLanguages() ([]string, error) {
+	return nil, nil
+}
+
+// GetDistinctPublishedYears joined database.BookReader in #3237 (SQ-05); the
+// mock has to carry it or nothing in this package compiles.
+func (m *mockRebuildStore) GetDistinctPublishedYears() ([]int, error) {
 	return nil, nil
 }
 
