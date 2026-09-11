@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -37,6 +37,8 @@ package server
 
 import (
 	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"sync/atomic"
 	"time"
 
@@ -158,6 +160,7 @@ func (s *Server) reconcileOnce() {
 		slog.Warn("search reconcile: count dirty set", "err", err)
 		return
 	}
+	metrics.SetSearchIndexDirtyBacklog(backlog)
 	if backlog == 0 {
 		return
 	}

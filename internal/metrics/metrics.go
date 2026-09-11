@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-09-11
 
@@ -59,6 +59,21 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "search_index_docs_total",
 		Help:      "Current document count in the Bleve search index (DocCount) — counts index documents, not live books; may diverge from books_total when stale or soft-deleted documents remain indexed",
+	})
+	// searchIndexDroppedTotal exports the process-lifetime drop counter that
+	// search_reconciler.go kept only in an atomic (TASK-130): the 56,537 drops
+	// seen on prod were findable only by grepping journald.
+	searchIndexDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "search_index_dropped_total",
+		Help:      "Index events dropped because the search index queue was full (process lifetime); each one is parked in the durable dirty set for the reconciler",
+	})
+	// searchIndexDirtyBacklogGauge is the size of that dirty set, sampled at
+	// each reconcile tick, so a backlog that is not draining is visible.
+	searchIndexDirtyBacklogGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "search_index_dirty_backlog",
+		Help:      "Books in the durable search-index dirty set still waiting for the reconciler, sampled at each reconcile tick",
 	})
 	foldersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "audiobook_organizer",
@@ -180,7 +195,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
+			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
@@ -222,9 +237,15 @@ func SetBooks(n int) { booksGauge.Set(float64(n)) }
 // count (TODO L3433). Takes uint64 to match BleveIndex.DocCount()'s return
 // type directly, with no lossy int conversion at the call site.
 func SetSearchIndexDocs(n uint64) { searchIndexDocsGauge.Set(float64(n)) }
-func SetFolders(n int)            { foldersGauge.Set(float64(n)) }
-func SetMemoryAlloc(b uint64)     { memoryAllocGauge.Set(float64(b)) }
-func SetGoroutines(n int)         { goroutinesGauge.Set(float64(n)) }
+
+// IncSearchIndexDropped counts one index event dropped on a full queue (TASK-130).
+func IncSearchIndexDropped() { searchIndexDroppedTotal.Inc() }
+
+// SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
+func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }
+func SetFolders(n int)                 { foldersGauge.Set(float64(n)) }
+func SetMemoryAlloc(b uint64)          { memoryAllocGauge.Set(float64(b)) }
+func SetGoroutines(n int)              { goroutinesGauge.Set(float64(n)) }
 
 // SetOpProgress records the current/total items-processed progress for an
 // in-flight operation (OPS-5 op-stall detection). Call on every

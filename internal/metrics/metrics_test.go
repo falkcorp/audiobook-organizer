@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-22
+// last-edited: 2026-09-11
 
 package metrics
 
@@ -345,5 +345,25 @@ func TestClearOpProgress_DeletesGaugeSeries(t *testing.T) {
 	defer ClearOpProgress(opID, opType)
 	if got := testutil.ToFloat64(opItemsProcessed.WithLabelValues(opID, opType)); got != 1 {
 		t.Errorf("opItemsProcessed after re-observe = %v, want 1", got)
+	}
+}
+
+// TestSearchIndexDroppedAndBacklog pins the two TASK-130 metrics the same way
+// TestSetSearchIndexDocs does: against the prometheus values, not "did not panic".
+func TestSearchIndexDroppedAndBacklog(t *testing.T) {
+	Register()
+
+	before := testutil.ToFloat64(searchIndexDroppedTotal)
+	IncSearchIndexDropped()
+	IncSearchIndexDropped()
+	if got := testutil.ToFloat64(searchIndexDroppedTotal); got != before+2 {
+		t.Errorf("IncSearchIndexDropped x2: counter reads %v, want %v", got, before+2)
+	}
+
+	for _, val := range []int{0, 1, 56537} {
+		SetSearchIndexDirtyBacklog(val)
+		if got := testutil.ToFloat64(searchIndexDirtyBacklogGauge); got != float64(val) {
+			t.Errorf("SetSearchIndexDirtyBacklog(%d): gauge reads %v, want %v", val, got, val)
+		}
 	}
 }
