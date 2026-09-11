@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-11-the-rows-a-deleted-book-left-behind-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5d2778ad-2a2a-48b1-a8a1-232c12d38ae8 -->
 <!-- last-edited: 2026-09-11 -->
 
 # The rows a deleted book left behind
 
-**Pull request:** (pending)
+**Pull request:** https://github.com/falkcorp/audiobook-organizer/pull/3228
 
 ## Executive Summary
 
