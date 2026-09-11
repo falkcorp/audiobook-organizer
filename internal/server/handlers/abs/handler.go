@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -145,6 +145,10 @@ type LibrarySearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
 	GetDistinctGenres() ([]string, error)
 	GetDistinctLanguages() ([]string, error)
+	// GetDistinctPublishedYears feeds the /filterdata decade facet from the
+	// WHOLE library. It replaced a GetAllBooksCore(5000, 0) scan whose first
+	// 5,000 ULID-ordered rows were the only ones a decade could ever come from.
+	GetDistinctPublishedYears() ([]int, error)
 }
 
 // LibraryCreditReader reads contributors for books.
@@ -380,8 +384,10 @@ type Handler struct {
 	// second no faster than the first, which is what "no cache at all" looks
 	// like from outside. GetDistinctGenres and GetDistinctLanguages each walk
 	// the entire book:* keyspace and json.Unmarshal every row to read ONE
-	// field, and publishedDecades scans another 5000, so the endpoint pays
-	// three library scans per request on the page-load path.
+	// field, and publishedDecades (then a 5000-row GetAllBooksCore projection,
+	// since 2026-09-11 a whole-library GetDistinctPublishedYears walk) is a
+	// third pass, so the endpoint pays three library scans per request on the
+	// page-load path.
 	//
 	// Cached as ONE document for the same reason authorsCache is one pointer:
 	// the eight lists are published together or not at all. Readers only ever

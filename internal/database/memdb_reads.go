@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -835,6 +835,36 @@ func (m *MemStore) ListBookIDs() ([]string, error) {
 		ids = append(ids, b.ID)
 	}
 	return ids, nil
+}
+
+// GetDistinctPublishedYears returns the sorted distinct non-zero published
+// years across all non-deleted books, coalescing AudiobookReleaseYear then
+// PrintYear per row (see BookSearchReader).
+//
+// Same shape as ListBookIDs: one read txn over the ID index, two pointer reads
+// per row, no struct copy and no JSON. At 100K books that is one pass over
+// 100K pointers plus a map of at most a few hundred distinct years — well under
+// 10ms — versus GetAllBooksCore(0,0)'s 100K BookCore copies for the same answer.
+func (m *MemStore) GetDistinctPublishedYears() ([]int, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb distinct published years: %w", err)
+	}
+
+	seen := map[int]struct{}{}
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if bookIsSoftDeleted(b) {
+			continue
+		}
+		if y, ok := bookPublishedYear(b); ok {
+			seen[y] = struct{}{}
+		}
+	}
+	return sortedYears(seen), nil
 }
 
 // ListSoftDeletedBooks returns books with MarkedForDeletion=true, with optional

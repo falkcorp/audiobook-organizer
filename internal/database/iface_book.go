@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -126,6 +126,18 @@ type BookSearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]Book, error)
 	GetDistinctGenres() ([]string, error)
 	GetDistinctLanguages() ([]string, error)
+	// GetDistinctPublishedYears returns the sorted distinct non-zero published
+	// years across all live (non-soft-deleted) books. A book's published year
+	// is AudiobookReleaseYear, falling back to PrintYear when that is unset —
+	// the same coalesce the ABS /filterdata decade facet has always applied.
+	//
+	// It exists so a facet can be built from the WHOLE library without
+	// materializing a BookCore per row: the memdb path reads two *int off each
+	// row pointer, and the Pebble fallback is the same keyspace scan as
+	// GetDistinctLanguages. Before it existed, /filterdata derived decades from
+	// GetAllBooksCore(5000, 0) — the first 5,000 rows in ULID order, every
+	// call — so a decade first appearing in book #5,001+ was never listed.
+	GetDistinctPublishedYears() ([]int, error)
 }
 
 // BookCountReader reports library counts.

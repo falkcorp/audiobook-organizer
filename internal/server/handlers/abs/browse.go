@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 package abs
 
@@ -1950,41 +1950,48 @@ func (h *Handler) buildFilterData(ctx context.Context) (resp *filterDataResponse
 	return resp, builtAt, complete
 }
 
-// filterDataScanLimit bounds the projection scan behind publishedDecades.
-//
-// It is a single Core-typed store call (a projection, no per-item I/O), so it is not
-// the whole-library-loop shape CLAUDE.md's concurrency rule targets — but it is still
-// bounded, because filterdata is a decoration endpoint and no client needs a decade
-// list that cost a full scan of a 68K-row library.
-const filterDataScanLimit = 5000
-
 // publishedDecades derives the decade buckets from the years we actually know.
+//
+// 🔴 IT READS THE WHOLE LIBRARY, ON PURPOSE. Until 2026-09-11 (SQ-05) this was
+// GetAllBooksCore(5000, 0): the first 5,000 rows in ULID (creation) order, the
+// SAME 5,000 on every call, never a sample of the rest. On a 68K-row library any
+// decade whose books were all added after the first 5,000 was permanently absent
+// from the client's filter dropdown, and nothing in the response or the logs
+// said so — the bound was justified as "no client needs a decade list that cost
+// a full scan", which confused the cost of the scan with the correctness of the
+// answer. The sibling genre and language lists on this same document have
+// always scanned everything.
+//
+// Cost: GetDistinctPublishedYears is a projection, not a row copy — on memdb it
+// is one pointer walk reading two *int per book (well under 10ms at 100K rows);
+// only the pre-warmup Pebble fallback pays a per-row JSON decode, the same one
+// GetDistinctLanguages pays. Either way it runs once per /filterdata BUILD, not
+// per request: the document is cached for absFilterDataCacheTTL and
+// single-flighted (filterDataCached), so a cold build costs three library
+// passes and every request inside the TTL costs none.
 //
 // The captured oracle returned ["NaN"] here, because real ABS ran a numeric
 // conversion over the unparseable published year "800BC". We deliberately do NOT
 // reproduce that: "NaN" is an ABS bug, the field is decorative, and emitting a real
-// decade is both honest and what a client can filter on. Books with no usable year
-// contribute nothing rather than a junk bucket.
+// decade is both accurate and what a client can filter on. Books with no usable
+// year contribute nothing rather than a junk bucket.
 func (h *Handler) publishedDecades() ([]string, error) {
 	out := []string{}
 	// 🔴 THIS ONE USED TO SWALLOW SILENTLY, inside the very function whose
 	// comment claimed every swallow logs. It returned an empty decade list with
 	// no log at any level, and once /filterdata gained a cache that empty list
 	// would have been served for the whole TTL with nothing in the logs at all.
-	books, err := h.library.GetAllBooksCore(filterDataScanLimit, 0)
+	years, err := h.library.GetDistinctPublishedYears()
 	if err != nil {
 		return out, err
 	}
+	// The store already coalesced AudiobookReleaseYear over PrintYear and dropped
+	// zero/absent years; this only buckets. Years arrive sorted and distinct, but
+	// several map to one decade, so dedupe again and re-sort as strings — the
+	// string order ("1880" < "800") is the wire order the response has always used.
 	seen := map[string]bool{}
-	for i := range books {
-		year := books[i].AudiobookReleaseYear
-		if year == nil {
-			year = books[i].PrintYear
-		}
-		if year == nil || *year == 0 {
-			continue
-		}
-		decade := strconv.Itoa(*year / 10 * 10)
+	for _, year := range years {
+		decade := strconv.Itoa(year / 10 * 10)
 		if !seen[decade] {
 			seen[decade] = true
 			out = append(out, decade)
