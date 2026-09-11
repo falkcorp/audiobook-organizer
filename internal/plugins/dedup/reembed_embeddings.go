@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -50,12 +50,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -155,12 +157,12 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 	// --- Phase 1: scan, partition books by stored model ---
 	_ = reporter.UpdateProgress(0, 2, "Scanning books for stale-model embeddings…")
 
+	// Page the library in with bounded GetAllBooksCore reads, then classify
+	// every book against the embedding store in one parallel pass. Paging and
+	// classifying were previously fused into a single sequential loop doing one
+	// synchronous embeddingStore.Get per book on one core (DA-03).
 	const scanBatch = 500
-	var (
-		totalBooks int
-		current    int // already at target model
-		toReembed  []string
-	)
+	var books []database.BookCore
 	offset := 0
 	for {
 		if reporter.IsCanceled() {
@@ -179,39 +181,18 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 		if len(batch) == 0 {
 			break
 		}
-		for i := range batch {
-			b := &batch[i]
-			totalBooks++
-			existing, getErr := p.embeddingStore.Get("book", b.ID)
-			if getErr != nil {
-				reporter.Logger().Warn("reembed-embeddings: get embedding during scan",
-					"book_id", b.ID, "err", getErr)
-				existing = nil
-			}
-			switch {
-			case existing != nil && existing.Model == targetModel:
-				// Already at the target model — nothing to do.
-				current++
-			case existing != nil:
-				// Stale-model vector present: must be deleted (and re-embedded if
-				// the book is embeddable). Always include so the wrong-dimension
-				// vector can't survive into chromem on the next hydrate.
-				toReembed = append(toReembed, b.ID)
-			case embeddableForReembed(b):
-				// No embedding yet and the book is embeddable — a model switch
-				// must populate it.
-				toReembed = append(toReembed, b.ID)
-			default:
-				// No embedding and not embeddable (non-primary or near-empty
-				// title): nothing to do. Excluding these lets the candidate count
-				// converge to 0 across re-runs instead of re-selecting them forever.
-			}
-		}
+		books = append(books, batch...)
 		if len(batch) < scanBatch {
 			break
 		}
 		offset += scanBatch
 	}
+
+	scan, err := scanReembedCandidates(ctx, reporter, books, targetModel, p.embeddingStore)
+	if err != nil {
+		return err
+	}
+	totalBooks, current, toReembed := scan.Total, scan.Current, scan.ToReembed
 
 	needCount := len(toReembed)
 	summary := fmt.Sprintf("%d books total, %d already at %q, %d need re-embedding",
@@ -302,6 +283,114 @@ func (p *Plugin) runReembedEmbeddings(ctx context.Context, rawParams json.RawMes
 // instead of re-selecting un-embeddable books on every run. Books that already
 // carry a stale-model vector are handled separately (they must be deleted
 // regardless of embeddability) and do not go through this check.
+// bookEmbeddingGetter is the one embedding-store read the Phase-1 scan needs.
+// *database.EmbeddingStore satisfies it; tests substitute a fake so the scan
+// can be driven without a Pebble-backed store.
+type bookEmbeddingGetter interface {
+	Get(entityType, entityID string) (*database.Embedding, error)
+}
+
+// reembedVerdict is the per-book outcome of one embedding-store lookup.
+type reembedVerdict uint8
+
+const (
+	reembedVerdictSkip    reembedVerdict = iota // no embedding and not embeddable — nothing to do
+	reembedVerdictCurrent                       // stored vector already at the target model
+	reembedVerdictNeeded                        // stale-model vector, or embeddable with no vector yet
+)
+
+// reembedScanResult is what Phase 1 hands to Phase 2: the book count, how
+// many are already at the target model, and the IDs to re-embed in the
+// order GetAllBooksCore returned them.
+type reembedScanResult struct {
+	Total     int
+	Current   int
+	ToReembed []string
+}
+
+// scanReembedCandidates classifies every book by the model of its stored
+// embedding: already at targetModel (Current), stale or missing-but-embeddable
+// (ToReembed), or nothing to do. Split out of runReembedEmbeddings so the
+// scan is directly unit-testable without a wired Engine.
+//
+// The lookups fan out over a runtime.NumCPU()-wide worker pool (DA-03): one
+// synchronous embedding-store point-get per book over the whole library is
+// exactly the single-core shape CLAUDE.md's concurrency mandate exists to
+// catch. Workers never share mutable state: each writes only its own slot in
+// verdicts (a disjoint partition by index), and the result is assembled from
+// those slots afterwards in input order, so ToReembed keeps the listing
+// order the sequential loop produced regardless of which worker finished
+// first. The Label closure reads nothing shared either; RunItems invokes it
+// inside the workers.
+func scanReembedCandidates(ctx context.Context, reporter sdk.Reporter, books []database.BookCore, targetModel string, embeddings bookEmbeddingGetter) (reembedScanResult, error) {
+	verdicts := make([]reembedVerdict, len(books))
+	indexes := make([]int, len(books))
+	for i := range indexes {
+		indexes[i] = i
+	}
+
+	if err := registry.RunItems(ctx, reporter, indexes, func(_ context.Context, i int) error {
+		if reporter.IsCanceled() {
+			return context.Canceled
+		}
+		b := &books[i]
+		existing, getErr := embeddings.Get("book", b.ID)
+		if getErr != nil {
+			reporter.Logger().Warn("reembed-embeddings: get embedding during scan",
+				"book_id", b.ID, "err", getErr)
+			existing = nil
+		}
+		switch {
+		case existing != nil && existing.Model == targetModel:
+			// Already at the target model — nothing to do.
+			verdicts[i] = reembedVerdictCurrent
+		case existing != nil:
+			// Stale-model vector present: must be deleted (and re-embedded if
+			// the book is embeddable). Always include so the wrong-dimension
+			// vector can't survive into chromem on the next hydrate.
+			verdicts[i] = reembedVerdictNeeded
+		case embeddableForReembed(b):
+			// No embedding yet and the book is embeddable — a model switch
+			// must populate it.
+			verdicts[i] = reembedVerdictNeeded
+		default:
+			// No embedding and not embeddable (non-primary or near-empty
+			// title): nothing to do. Excluding these lets the candidate count
+			// converge to 0 across re-runs instead of re-selecting them forever.
+			verdicts[i] = reembedVerdictSkip
+		}
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Scanning book %d/%d for stale-model embeddings…", i+1, total)
+		},
+	}); err != nil {
+		// The callback only fails for cancellation (lookup errors are logged
+		// and treated as "no embedding", never returned), and RunItems wraps
+		// callback errors in errors.Join — hand back the same bare sentinel
+		// the sequential loop returned.
+		if ctx.Err() != nil {
+			return reembedScanResult{}, ctx.Err()
+		}
+		if reporter.IsCanceled() {
+			return reembedScanResult{}, context.Canceled
+		}
+		return reembedScanResult{}, err
+	}
+
+	result := reembedScanResult{Total: len(books)}
+	for i, v := range verdicts {
+		switch v {
+		case reembedVerdictCurrent:
+			result.Current++
+		case reembedVerdictNeeded:
+			result.ToReembed = append(result.ToReembed, books[i].ID)
+		}
+	}
+	return result, nil
+}
+
 func embeddableForReembed(b *database.BookCore) bool {
 	if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
 		return false
