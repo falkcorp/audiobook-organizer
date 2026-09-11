@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -24,7 +24,7 @@ import (
 // interface, and is why the assertion still compiles here.
 //
 // The six methods below are the runner's own bookkeeping (version tracking in
-// user preferences) plus what migration014UpPebble rewrites.
+// user preferences) plus what migration061Up rewrites.
 type migrationStore interface {
 	GetUserPreference(key string) (*UserPreference, error)
 	SetUserPreference(key, value string) error
@@ -436,6 +436,12 @@ var migrations = []Migration{
 		Up:          migration060Up,
 		Down:        nil,
 	},
+	{
+		Version:     61,
+		Description: "Flag books whose organize path still holds an unresolved placeholder (the repair migration 14 never dispatched)",
+		Up:          migration061Up,
+		Down:        nil,
+	},
 }
 
 // RunMigrations applies all pending migrations
@@ -648,47 +654,21 @@ func migration013Up(store migrationStore) error {
 	return nil
 }
 
-// migration014Up flags books with corrupted organize paths (unresolved
-// placeholders like {series} or {author}) by setting library_state to
-// 'needs_review'. This is a one-time cleanup for paths written before the
-// leftover-placeholder guard was added to expandPattern.
+// migration014Up was meant to flag books with corrupted organize paths
+// (unresolved placeholders like {series} or {author}) by setting library_state
+// to 'needs_review'. Only the SQLite branch ever existed; the Pebble body was
+// written as a separate helper that nothing dispatched, so on the production
+// (Pebble) database this migration ran as the no-op below, was recorded as
+// applied, and the schema version moved past 14.
+//
+// It MUST stay a no-op. RunMigrations only runs migrations whose version is
+// above the stored schema version, so wiring the repair in here would execute
+// on fresh databases only and never on the one that needs it. The repair now
+// lives in migration061Up, which is a new version number and therefore pending
+// on every existing database (DB-03, 2026-09-11).
 func migration014Up(store migrationStore) error {
 	slog.Info("Running migration 14 Flag books with corrupted organize paths")
-	// SQLite-only migration; no-op for PebbleStore.
-	return nil
-}
-
-// migration014UpPebble handles the corrupted-path check for PebbleDB stores.
-//
-//lint:ignore U1000 kept: real Pebble corrupted-path migration logic not yet dispatched from the migration014Up no-op stub (follow-up wire-up, 2026-07-12)
-func migration014UpPebble(store migrationStore) error {
-	books, err := store.GetAllBooksCore(0, 0)
-	if err != nil {
-		return fmt.Errorf("migration 14: failed to list books: %w", err)
-	}
-
-	flagged := 0
-	for _, core := range books {
-		if !strings.Contains(core.FilePath, "{") {
-			continue
-		}
-		// FilePath contains a literal brace — flag for review. Hydrate before
-		// writeback: core is Core (slim); writing it straight through
-		// UpdateBook would wipe the denormalized Author/Series on Pebble.
-		book, hydrateErr := store.GetBookByID(core.ID)
-		if hydrateErr != nil || book == nil {
-			slog.Info("- Warning could not hydrate book", "value", core.ID, "path", core.FilePath, "error", hydrateErr)
-			continue
-		}
-		state := "needs_review"
-		book.LibraryState = &state
-		if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
-			slog.Info("- Warning could not flag book", "value", book.ID, "path", book.FilePath, "error", updateErr)
-			continue
-		}
-		flagged++
-	}
-	slog.Info("- Flagged", "count", flagged)
+	// Historical no-op; see migration061Up.
 	return nil
 }
 
@@ -1146,5 +1126,75 @@ func migration059Down(store migrationStore) error {
 func migration060Up(store migrationStore) error {
 	slog.Info("+ Added partial sig mask/coverage to books, diagnosis columns to book_files")
 	// SQLite-only migration; no-op for PebbleStore.
+	return nil
+}
+
+// corruptedOrganizePathState is the library_state migration061Up assigns to a
+// book whose organize path still contains an unresolved pattern placeholder.
+const corruptedOrganizePathState = "needs_review"
+
+// migration061Up flags books whose FilePath still contains a literal '{' — an
+// unresolved {series}/{author} placeholder left by organize runs that predate
+// the leftover-placeholder guard in internal/organizer (expandPattern refuses
+// such a path today, so this is a one-time cleanup, not a recurring one). It
+// is the body migration 14 was supposed to dispatch on Pebble and never did;
+// it carries a new version number because 14 is already recorded as applied
+// on every existing database (see migration014Up).
+//
+// The repair needs nothing Pebble-specific: it goes through the migrationStore
+// interface, and Pebble is the only backend the store factory can build, so
+// there is no per-backend dispatch and no silent skip branch.
+//
+// Cost and shape: GetAllBooksCore(0, 0) is one full scan of the book keyspace
+// (memdb is still warming up at migration time, so this reads Pebble directly).
+// At production scale that is ~100k+ rows and takes seconds, which is
+// acceptable exactly once at boot. The per-row check is a strings.Contains and
+// is not worth a worker pool. Each flagged book costs one GetBookByID plus one
+// UpdateBook; those stay sequential on purpose — flagged books are expected to
+// be rare (the guard has been in place for months), and the hydrate-then-write
+// pair must not race with itself on the same row. The start and summary log
+// lines exist so a long scan is visible in the journal rather than a silent
+// stall.
+//
+// Idempotency: a book already at needs_review is counted and skipped without
+// a write, so a replay changes nothing (see the MigrationFunc contract).
+func migration061Up(store migrationStore) error {
+	books, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return fmt.Errorf("migration 61: failed to list books: %w", err)
+	}
+	slog.Info("migration 61: scanning books for unresolved organize-path placeholders", "books", len(books))
+
+	flagged, alreadyFlagged, errored := 0, 0, 0
+	for _, core := range books {
+		if !strings.Contains(core.FilePath, "{") {
+			continue
+		}
+		// Hydrate before writeback: BookCore is the slim projection; writing
+		// it straight through UpdateBook would wipe the denormalized
+		// Author/Series and every field the projection drops.
+		book, hydrateErr := store.GetBookByID(core.ID)
+		if hydrateErr != nil || book == nil {
+			errored++
+			slog.Warn("migration 61: could not hydrate book with a placeholder in its path",
+				"book_id", core.ID, "path", core.FilePath, "error", hydrateErr)
+			continue
+		}
+		if book.LibraryState != nil && *book.LibraryState == corruptedOrganizePathState {
+			alreadyFlagged++
+			continue
+		}
+		state := corruptedOrganizePathState
+		book.LibraryState = &state
+		if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
+			errored++
+			slog.Warn("migration 61: could not flag book for review",
+				"book_id", book.ID, "path", book.FilePath, "error", updateErr)
+			continue
+		}
+		flagged++
+	}
+	slog.Info("migration 61: unresolved organize-path scan finished",
+		"books", len(books), "flagged", flagged, "already_flagged", alreadyFlagged, "errors", errored)
 	return nil
 }
