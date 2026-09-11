@@ -1,7 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -13,6 +13,7 @@ import {
   bulkFetchMetadata,
   batchWriteBackMetadata,
   batchFetchCandidates,
+  getMaintenanceWindowStatus,
 } from './api';
 
 const mockFetch = vi.fn();
@@ -342,5 +343,71 @@ describe('batchFetchCandidates envelope unwrapping', () => {
     const resp = await batchFetchCandidates({ book_ids: ['a'] });
 
     expect(resp.operation_id).toBe('op-flat');
+  });
+});
+
+// GET /maintenance-window/status answers the standard {"data": {...}} envelope,
+// but the client returned response.json() raw -- so callers got the envelope
+// and every field read as undefined. The Maintenance tab rendered blanks and
+// "Invalid Date" without ever throwing, which is why it went unnoticed.
+describe('getMaintenanceWindowStatus envelope', () => {
+  beforeEach(() => {
+    global.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('unwraps the data envelope so the fields land at the top level', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: {
+            enabled: true,
+            window_start: 2,
+            window_end: 5,
+            last_run_date: '2026-09-09',
+            next_run_estimate: '2026-09-11T02:00:00Z',
+            currently_running: false,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const status = await getMaintenanceWindowStatus();
+
+    expect(status.enabled).toBe(true);
+    expect(status.window_start).toBe(2);
+    expect(status.window_end).toBe(5);
+    expect(status.next_run_estimate).toBe('2026-09-11T02:00:00Z');
+    expect(status.currently_running).toBe(false);
+    // The envelope must not survive into the returned object.
+    expect((status as unknown as { data?: unknown }).data).toBeUndefined();
+  });
+
+  // `body.data ?? body`, matching getBookFileHashStats: an unwrapped response
+  // still yields usable fields rather than a page full of undefined.
+  it('falls back to the body when a response arrives unwrapped', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          enabled: false,
+          window_start: 1,
+          window_end: 4,
+          last_run_date: '',
+          next_run_estimate: '',
+          currently_running: false,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const status = await getMaintenanceWindowStatus();
+
+    expect(status.enabled).toBe(false);
+    expect(status.window_start).toBe(1);
+    expect(status.window_end).toBe(4);
   });
 });

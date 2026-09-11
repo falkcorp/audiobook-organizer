@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-24
+// last-edited: 2026-09-10
 
 package server
 
@@ -730,9 +730,12 @@ func (s *Server) handleGetBookFileHashStats(c *gin.Context) {
 		httputil.InternalError(c, "failed to get book file hash stats", err)
 		return
 	}
-	httputil.RespondWithOK(c, struct {
-		Data any `json:"data"`
-	}{Data: stats})
+	// RespondWithOK supplies the {"data": ...} envelope itself. Wrapping stats
+	// in a second `struct{ Data any }` here answered {"data":{"data":{...}}},
+	// and the web client unwraps exactly one level -- so every field read as
+	// undefined and the Maintenance tab crashed on total_book_files. Hand the
+	// payload over bare, the way handleGetBookMetadataHashStats below does.
+	httputil.RespondWithOK(c, stats)
 }
 
 func (s *Server) handleGetBookMetadataHashStats(c *gin.Context) {

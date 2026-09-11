@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.86.0
+// version: 2.87.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-10
 
@@ -4619,7 +4619,13 @@ export async function getMaintenanceWindowStatus(): Promise<MaintenanceWindowSta
   const response = await apiFetch(`${API_BASE}/maintenance-window/status`);
   if (!response.ok)
     throw await buildApiError(response, 'Failed to fetch maintenance window status');
-  return response.json();
+  // The route answers the standard {"data": {...}} envelope. Returning
+  // response.json() raw handed the envelope itself to callers, so every
+  // MaintenanceWindowStatus field (enabled, window_start, window_end,
+  // next_run_estimate) read as undefined -- blanks and "Invalid Date" on the
+  // Maintenance tab. Unwrap one level, as getBookFileHashStats does.
+  const body = await response.json();
+  return body.data ?? body;
 }
 
 export async function updateMaintenanceWindowConfig(cfg: MaintenanceWindowConfig): Promise<void> {
