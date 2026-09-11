@@ -1,7 +1,7 @@
 // file: internal/database/activity_storer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package database
 
@@ -40,7 +40,18 @@ type ActivityCounter interface {
 
 // ActivityRetention covers pruning, compaction and migration.
 type ActivityRetention interface {
-	Prune(olderThan time.Time, tier string) (int, error)
+	// Prune hard-deletes every entry of tier older than olderThan and returns
+	// the count actually deleted. It takes a context for the same reason
+	// WipeAllActivity does: since 2026-09-10 the migrating wrapper runs it on
+	// BOTH backends, so a cancelled nightly cleanup (or one past its op
+	// budget) must stop at its next batch rather than prune both stores to
+	// completion. On cancellation it returns the rows deleted so far — a
+	// lower bound, never a projection — alongside ctx.Err(); rows not yet
+	// reached are left untouched and a plain retry finishes them.
+	// Implementations report each committed batch through
+	// ReportMaintenanceProgress (MaintenancePhasePrune) when a
+	// WithMaintenanceProgress hook rides ctx.
+	Prune(ctx context.Context, olderThan time.Time, tier string) (int, error)
 	// WipeAllActivity deletes every activity entry. It takes a context because
 	// it is reachable from a live request (handleWipe): an abandoned wipe
 	// request must stop scanning promptly instead of running every tier to

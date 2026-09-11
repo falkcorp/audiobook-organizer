@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_batch_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b41d0c7-3e59-4a16-b2d7-6f9c1a840e35
-// last-edited: 2026-08-30
+// last-edited: 2026-09-11
 
 // Package database — regression suite for the batched activity write path.
 //
@@ -158,7 +158,7 @@ func TestRecordBatch_RowsAreDeletableByPrune(t *testing.T) {
 	require.Equal(t, n, opKeys, "fixture must create op index keys or the test is vacuous")
 	require.Equal(t, n, bookKeys, "fixture must create book index keys or the test is vacuous")
 
-	pruned, err := s.Prune(time.Now().UTC().Add(-time.Hour), "change")
+	pruned, err := s.Prune(context.Background(), time.Now().UTC().Add(-time.Hour), "change")
 	require.NoError(t, err)
 	assert.Equal(t, n, pruned)
 

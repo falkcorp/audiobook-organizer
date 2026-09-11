@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package metafetch
 
@@ -67,7 +67,9 @@ func (c *capturingActivityStore) GetDistinctSources(context.Context, database.Ac
 	return nil, nil
 }
 
-func (c *capturingActivityStore) Prune(time.Time, string) (int, error) { return 0, nil }
+func (c *capturingActivityStore) Prune(context.Context, time.Time, string) (int, error) {
+	return 0, nil
+}
 
 func (c *capturingActivityStore) WipeAllActivity(context.Context) (int64, error) { return 0, nil }
 

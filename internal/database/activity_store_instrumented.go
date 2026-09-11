@@ -1,7 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package database
 
@@ -94,15 +94,15 @@ func (i *InstrumentedActivityStorer) Summarize(ctx context.Context, olderThan ti
 }
 
 // Prune traces the Prune operation.
-func (i *InstrumentedActivityStorer) Prune(olderThan time.Time, tier string) (int, error) {
-	_, span := tracer.Start(context.Background(), "activity_store.prune",
+func (i *InstrumentedActivityStorer) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.prune",
 		trace.WithAttributes(
 			attribute.String("tier", tier),
 			attribute.String("older_than", olderThan.Format(time.RFC3339)),
 		))
 	defer span.End()
 
-	count, err := i.store.Prune(olderThan, tier)
+	count, err := i.store.Prune(ctx, olderThan, tier)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.Bool("error", true))

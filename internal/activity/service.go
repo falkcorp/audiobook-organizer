@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 package activity
 
@@ -50,9 +50,11 @@ func (s *Service) Summarize(ctx context.Context, olderThan time.Time, tier strin
 }
 
 // Prune hard-deletes all entries of the given tier older than olderThan.
-// Returns the number of rows deleted.
-func (s *Service) Prune(olderThan time.Time, tier string) (int, error) {
-	return s.store.Prune(olderThan, tier)
+// Returns the number of rows deleted. ctx is forwarded to the store, so a
+// cancelled cleanup stops at the store's next batch (see
+// database.ActivityRetention.Prune).
+func (s *Service) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	return s.store.Prune(ctx, olderThan, tier)
 }
 
 // CompactByDay groups old change/debug entries by UTC day into digest rows.

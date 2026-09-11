@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -211,7 +211,7 @@ func TestPebbleActivityStore_Prune(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	deleted, err := s.Prune(cutoff, "debug")
+	deleted, err := s.Prune(context.Background(), cutoff, "debug")
 	require.NoError(t, err)
 	assert.Equal(t, 3, deleted)
 

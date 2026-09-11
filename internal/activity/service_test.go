@@ -1,7 +1,7 @@
 // file: internal/activity/service_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-11
+// last-edited: 2026-09-11
 
 // NOTE(fable5 T022): Ported from SQLite ActivityStore to NutsActivityStore.
 // Tier names updated to match NutsActivityStore's supported tiers
@@ -69,7 +69,7 @@ func TestService_RecordAndQuery(t *testing.T) {
 	assert.Equal(t, 1, deleted)
 
 	// Prune debug entries.
-	deleted, err = svc.Prune(future, "debug")
+	deleted, err = svc.Prune(context.Background(), future, "debug")
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
 }

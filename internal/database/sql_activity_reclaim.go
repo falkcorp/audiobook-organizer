@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_reclaim.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c1a56-90d4-4e27-b6a1-7c05e2d84b93
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 package database
 
@@ -226,7 +226,7 @@ func ReclaimMigratedActivity(
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		deleted, err := primary.Prune(res.Cutoff, tier)
+		deleted, err := primary.Prune(ctx, res.Cutoff, tier)
 		// Prune reports what it actually deleted even on error, so record the
 		// count before deciding what to do with the error.
 		t := res.PerTier[tier]

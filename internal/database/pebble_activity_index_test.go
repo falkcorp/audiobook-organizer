@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f2a91c4-6b3d-4a52-9c18-2d0e5b7a4e31
-// last-edited: 2026-08-29
+// last-edited: 2026-09-11
 
 // Package database — regression suite for activity secondary-index deletion.
 //
@@ -92,7 +92,7 @@ func TestPebbleActivityStore_PruneDeletesSecondaryIndexes(t *testing.T) {
 	seedIndexedEntries(t, s, "debug", old, 5)
 	requireSeeded(t, s, 5)
 
-	deleted, err := s.Prune(time.Now().UTC().Add(-1*time.Hour), "debug")
+	deleted, err := s.Prune(context.Background(), time.Now().UTC().Add(-1*time.Hour), "debug")
 	require.NoError(t, err)
 	assert.Equal(t, 5, deleted)
 
@@ -318,7 +318,7 @@ func TestPebbleActivityStore_PruneLeavesNothingForRepair(t *testing.T) {
 	seedIndexedEntries(t, s, "debug", time.Now().UTC().Add(-72*time.Hour), 5)
 	requireSeeded(t, s, 5)
 
-	_, err := s.Prune(time.Now().UTC().Add(-1*time.Hour), "debug")
+	_, err := s.Prune(context.Background(), time.Now().UTC().Add(-1*time.Hour), "debug")
 	require.NoError(t, err)
 
 	res, err := s.RepairActivityIndexes(context.Background())

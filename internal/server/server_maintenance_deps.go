@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -298,10 +298,9 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	}
 
 	// Each phase boundary is a liveness stamp for the nightly op (through the
-	// WithMaintenanceProgress hook on ctx, if any). Summarize and the index
-	// repair also report from inside; Prune has no context on the interface,
-	// so the stamp before it is the last one the watchdog sees until it
-	// returns — which is why cleanup-activity-log's ProgressTimeout is 20m.
+	// WithMaintenanceProgress hook on ctx, if any). Summarize, Prune and the
+	// index repair also report from inside, per batch, and each stops at its
+	// next batch once ctx is cancelled.
 	if changeDays <= 0 {
 		changeDays = 90
 	}
@@ -317,7 +316,7 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	}
 	debugCutoff := time.Now().AddDate(0, 0, -debugDays)
 	database.ReportMaintenanceProgress(ctx, database.MaintenancePhasePrune, "", 0)
-	pruneCount, err := s.activityService.Prune(debugCutoff, "debug")
+	pruneCount, err := s.activityService.Prune(ctx, debugCutoff, "debug")
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("prune activity: %w", err)
 	}

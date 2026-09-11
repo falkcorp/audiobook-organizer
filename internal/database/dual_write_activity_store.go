@@ -1,7 +1,7 @@
 // file: internal/database/dual_write_activity_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-0006-f012-000000000006
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 // Package database — dual-write wrapper for the activity migration window.
 //
@@ -100,10 +100,12 @@ func (d *DualWriteActivityStore) Summarize(ctx context.Context, olderThan time.T
 	return nutsCnt, nutsErr
 }
 
-// Prune runs on both; returns primary backend's result.
-func (d *DualWriteActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	nutsCnt, nutsErr := d.nuts.Prune(olderThan, tier)
-	pebbleCnt, pebbleErr := d.pebble.Prune(olderThan, tier)
+// Prune runs on both; returns primary backend's result. ctx is forwarded to
+// both backends unchanged, exactly as WipeAllActivity does, so cancelling the
+// caller's ctx stops both prunes at their next batch.
+func (d *DualWriteActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	nutsCnt, nutsErr := d.nuts.Prune(ctx, olderThan, tier)
+	pebbleCnt, pebbleErr := d.pebble.Prune(ctx, olderThan, tier)
 
 	if pebbleErr != nil {
 		slog.Warn("[dual-write] pebble Prune failed", "err", pebbleErr)
