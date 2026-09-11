@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.53.0 -->
+<!-- version: 10.53.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-10 -->
 
@@ -2872,7 +2872,7 @@ before picking a constant.
       (c) rows never touched by any of the three — correct, leave alone.
       Size the population first with a read-only counting pass before writing anything.
 
-- [ ] **SERIES-PHANTOM-REPAIR** Repair the series IDs that are ALREADY phantom.
+- [x] **SERIES-PHANTOM-REPAIR** — DONE 2026-09-10 (#3206). Repair the series IDs that are ALREADY phantom.
       #2908 closed the two paths it was filed against (`dedup.MergeSeries` and
       phase 1 of `executeSeriesPrune` now consult the unfiltered
       `database.SeriesRefCounts` before deleting). It did NOT close all of them —
@@ -5178,8 +5178,8 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       `ListSoftDeletedBooks`' twin is already hardened against undecodable rows.
       Found by the silent-failure sweep on PR #2839; hand-verified.
 
-- [ ] 🔴🔥 **AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24
-      05:00 UTC, not just a filed risk.** `GetBooksByAuthorIDWithRoleCore`
+- [x] 🔴🔥 **AUTHOR-MEMBERSHIP-UNGUARDED — CONFIRMED FIRED IN PROD 2026-08-24
+      05:00 UTC, not just a filed risk.** — DONE 2026-09-10 (#3204). `GetBooksByAuthorIDWithRoleCore`
       (`internal/database/pebble_store.go:2086`) is the author-side structural
       twin of the series getter PR #2839 guarded.
       - `maintenance.author_split_scan` ran unattended in the nightly window,
@@ -5297,9 +5297,9 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       instead of repeating the inherited claim. Hoist the map per operation, the
       way the ref-count callers already do.
 
-- [ ] **AUTHOR-FILE-SAFETY: `purge-empty-authors`' "safety that matters" is itself a
+- [x] **AUTHOR-FILE-SAFETY: `purge-empty-authors`' "safety that matters" is itself a
       filtered display counter, so it cannot hold back a single case the ref guard
-      exists for.** `author_purge_empty.go` labels `require_zero_files` "🔴 THIS IS THE
+      exists for.** — DONE 2026-09-10 (#3205). `author_purge_empty.go` labels `require_zero_files` "🔴 THIS IS THE
       SAFETY THAT MATTERS" and defaults it ON, to protect the 822 authors whose
       zero-book count looks more like a broken link than an empty author. It reads
       `GetAllAuthorFileCounts`, and BOTH implementations
@@ -6544,10 +6544,10 @@ speculatively. Keep the notes: they apply if a general merge is ever wanted, and
       pre-merge `book_ver` snapshots and has **no production caller at all** —
       it is reachable only from tests. Three gaps stand between that and a
       working undo, and none of them is the hard part of the other two:
-      - Only the auto-resolve path journals. `PutAutoMergeJournalEntry` is
-        called from `auto_resolve.go` alone, so a merge dispatched from the
-        review lane records no pre-merge snapshot timestamps and there is
-        nothing for `UnmergeAuto` to revert *to*.
+      - Journaling: as of #3208 (merged 2026-09-10) all five merge sites go through
+        the N-ary `MergeBooksJournaled`, so the review lane now journals too. Three
+        further unjournaled callers were reported in the #3208 description:
+        `duplicates_ops.go:270`, `handlers/diagnostics.go:545`, `reconcile/itunes_heal.go:315`.
       - `UnmergeAuto` declares its own scope limit: it restores the BOOK RECORD
         only. It does not reverse the external-ID reassignment (loser→winner)
         that `MergeBooks` performed, nor the enqueued iTunes write-back
@@ -6906,7 +6906,7 @@ argument for treating this gate's flakiness as a work item rather than a nuisanc
 
 ## Security
 
-- [ ] **SEC-9: the OpenAI API key is sent from the browser.**
+- [x] **SEC-9: the OpenAI API key is sent from the browser.** — DONE 2026-09-10 (#3203)
       `web/src/components/wizard/WelcomeWizard.tsx:147-160` calls
       `fetch('https://api.openai.com/v1/models', { Authorization: \`Bearer ${openaiKey}\` })`
       directly from the client during setup, to validate the key the user just typed.
