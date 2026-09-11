@@ -1,7 +1,7 @@
 // file: internal/database/activity_compact_progress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -130,11 +130,9 @@ type MaintenanceProgress func(MaintenanceProgressEvent)
 
 type maintenanceProgressKey struct{}
 
-// WithMaintenanceProgress attaches a progress hook to ctx for Summarize and
-// RepairActivityIndexes. It rides the context for the same reason
-// WithCompactProgress does; see that function. Prune takes no context on the
-// ActivityStorer interface and so cannot report — its callers bracket it with
-// their own stamps.
+// WithMaintenanceProgress attaches a progress hook to ctx for Summarize, Prune
+// and RepairActivityIndexes. It rides the context for the same reason
+// WithCompactProgress does; see that function.
 func WithMaintenanceProgress(ctx context.Context, fn MaintenanceProgress) context.Context {
 	if fn == nil {
 		return ctx

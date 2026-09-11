@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -320,8 +320,7 @@ const backfillGateSlowWait = 5 * time.Second
 // acquireBackfillGate takes the READ side of backfillGate, honouring ctx.
 //
 // sync.RWMutex.RLock is not interruptible, and the write side is held for a
-// whole maintenance run — Prune has no context at all on ActivityStorer, so its
-// run cannot be cut short. A plain RLock here would therefore park the backfill
+// whole maintenance run. A plain RLock here would therefore park the backfill
 // goroutine for the length of a prune, and sqlMigrationStarter.Stop waits on
 // that goroutine without a bound: shutdown would block for the whole pass.
 //
@@ -333,9 +332,30 @@ const backfillGateSlowWait = 5 * time.Second
 // The returned release is always non-nil — a no-op on the error path — so a
 // caller that defers it before checking err cannot panic.
 func (s *SQLActivityStore) acquireBackfillGate(ctx context.Context) (release func(), err error) {
+	return acquireGateSide(ctx, s.backfillGate.RLock, s.backfillGate.RUnlock,
+		"[activity-sql-backfill] batch", "a deleting pass is holding it")
+}
+
+// acquireBackfillGateWrite takes the WRITE side of backfillGate, honouring ctx,
+// for a deleting pass that can be cancelled mid-run (Prune). It is the mirror
+// image of acquireBackfillGate: a backfill batch holds the read side for the
+// ~2s it takes to copy and re-present, and a cancelled prune must not sit
+// behind it uninterruptibly. Same orphan hand-off on the ctx path — a writer
+// that gave up is released by the orphan the moment it is granted, so it holds
+// off new readers for no longer than the hand-off itself.
+func (s *SQLActivityStore) acquireBackfillGateWrite(ctx context.Context, what string) (release func(), err error) {
+	return acquireGateSide(ctx, s.backfillGate.Lock, s.backfillGate.Unlock,
+		"[activity-sql] "+what, "a backfill batch or another pass is holding it")
+}
+
+// acquireGateSide is the shared body of the two gate helpers: lock is taken in
+// a goroutine and raced against ctx; unlock is what the returned release (or
+// the orphan, on the ctx path) calls. who prefixes every log line and holder
+// names what the caller is presumed to be waiting on.
+func acquireGateSide(ctx context.Context, lock, unlock func(), who, holder string) (release func(), err error) {
 	got := make(chan struct{}, 1) // buffered: the orphan must never block
 	go func() {
-		s.backfillGate.RLock()
+		lock()
 		got <- struct{}{}
 	}()
 
@@ -346,21 +366,21 @@ func (s *SQLActivityStore) acquireBackfillGate(ctx context.Context) (release fun
 		select {
 		case <-got:
 			if waited := time.Since(start); waited >= backfillGateSlowWait {
-				slog.Warn("[activity-sql-backfill] batch acquired the maintenance gate after a long wait",
+				slog.Warn(who+" acquired the maintenance gate after a long wait",
 					"waited", waited.Round(time.Millisecond).String())
 			}
-			return func() { s.backfillGate.RUnlock() }, nil
+			return unlock, nil
 		case <-ticker.C:
-			slog.Warn("[activity-sql-backfill] batch still waiting for the maintenance gate — a deleting pass is holding it",
+			slog.Warn(who+" still waiting for the maintenance gate — "+holder,
 				"waited", time.Since(start).Round(time.Second).String())
 		case <-ctx.Done():
-			slog.Warn("[activity-sql-backfill] gave up waiting for the maintenance gate",
+			slog.Warn(who+" gave up waiting for the maintenance gate",
 				"waited", time.Since(start).Round(time.Millisecond).String(), "err", ctx.Err())
-			// Hand the lock off to a releaser: whenever the maintenance pass
+			// Hand the lock off to a releaser: whenever the current holder
 			// finishes, the orphan above acquires and this drops it again.
 			go func() {
 				<-got
-				s.backfillGate.RUnlock()
+				unlock()
 			}()
 			// Returned unwrapped so the backfill's caller can still classify
 			// this as a shutdown (errors.Is / s.ctx.Err()) rather than as a
@@ -698,16 +718,25 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 
 // ── ActivityRetention ───────────────────────────────────────────────────────
 
-// Prune hard-deletes every entry of tier older than olderThan. Context-free per
-// the interface (scheduled maintenance only). Chunked so one prune cannot build
-// an unbounded WAL frame.
-func (s *SQLActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	s.backfillGate.Lock()
-	defer s.backfillGate.Unlock()
+// Prune hard-deletes every entry of tier older than olderThan. Chunked so one
+// prune cannot build an unbounded WAL frame, and cancellable per the interface
+// contract: the backfill gate is taken in a ctx-aware way and ctx is checked
+// before every chunk, so a cancelled nightly cleanup stops at the next chunk
+// boundary with the rows already committed reported alongside ctx.Err(). Each
+// committed chunk is reported through any WithMaintenanceProgress hook on ctx.
+func (s *SQLActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	release, err := s.acquireBackfillGateWrite(ctx, "prune")
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	cutoff := olderThan.UnixNano()
 	deleted := 0
 	for {
-		res, err := s.writer.Exec(s.dialect.rebind(
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		res, err := s.writer.ExecContext(ctx, s.dialect.rebind(
 			`DELETE FROM activity WHERE id IN (SELECT id FROM activity WHERE tier = ? AND ts < ? LIMIT ?)`),
 			tier, cutoff, sqlActDeleteChunk)
 		if err != nil {
@@ -715,6 +744,7 @@ func (s *SQLActivityStore) Prune(olderThan time.Time, tier string) (int, error) 
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
+		ReportMaintenanceProgress(ctx, MaintenancePhasePrune, "sqlite", deleted)
 		if n < sqlActDeleteChunk {
 			break
 		}

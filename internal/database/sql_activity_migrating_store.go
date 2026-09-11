@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // Package database — backend-migration wrapper for the activity log.
 //
@@ -265,13 +265,17 @@ func (m *MigratingActivityStore) Summarize(ctx context.Context, olderThan time.T
 }
 
 // Prune hard-deletes old rows of tier on BOTH backends and returns the summed
-// count. The interface gives Prune no context, so both backends always run
-// and nothing can be reported mid-run; callers bracket it with their own
-// liveness stamps.
-func (m *MigratingActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	return runOnBothBackends(m, context.Background(), "prune",
-		func(s ActivityStorer) (int, error) { return s.Prune(olderThan, tier) },
-		sumRowCounts, nil)
+// count. Per-backend completion goes to any WithMaintenanceProgress hook on
+// ctx (each backend reports its own batches from inside), and
+// runOnBothBackends stops before the secondary once ctx is cancelled, so a
+// cancelled cleanup does not prune the second store to completion.
+func (m *MigratingActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	return runOnBothBackends(m, ctx, "prune",
+		func(s ActivityStorer) (int, error) { return s.Prune(ctx, olderThan, tier) },
+		sumRowCounts,
+		func(backend string, n int, err error) {
+			reportMaintenanceDone(ctx, MaintenancePhasePrune, backend, int64(n), err)
+		})
 }
 
 // CompactByDay compacts BOTH backends and returns the summed counters.

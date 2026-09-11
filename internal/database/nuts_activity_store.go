@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -344,7 +344,11 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 }
 
 // Prune hard-deletes all entries of the given tier older than olderThan.
-func (s *NutsActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
+//
+// Retired, unwired store (see Query), but it still honours the interface
+// contract: ctx is checked before every batch and each committed batch is
+// reported through any WithMaintenanceProgress hook on ctx.
+func (s *NutsActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
 	kvs, err := s.scanTierKeysAndValues(tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
@@ -357,6 +361,9 @@ func (s *NutsActivityStore) Prune(olderThan time.Time, tier string) (int, error)
 	deleted := 0
 	// Delete in batches of 500 to keep transaction size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
 		end := min(i+500, len(kvs))
 		batch := kvs[i:end]
 		if err := s.db.Update(func(tx *nutsdb.Tx) error {
@@ -370,6 +377,7 @@ func (s *NutsActivityStore) Prune(olderThan time.Time, tier string) (int, error)
 			return deleted, fmt.Errorf("prune batch: %w", err)
 		}
 		deleted += len(batch)
+		ReportMaintenanceProgress(ctx, MaintenancePhasePrune, "nuts", deleted)
 	}
 	return deleted, nil
 }

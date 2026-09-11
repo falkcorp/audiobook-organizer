@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 package database
 
@@ -116,7 +116,7 @@ func TestSQLActivity_Prune(t *testing.T) {
 	mustRecord(t, s, ActivityEntry{Timestamp: old, Tier: "debug", Type: "t", Level: "info", Source: "s", Summary: "old"})
 	mustRecord(t, s, ActivityEntry{Timestamp: recent, Tier: "debug", Type: "t", Level: "info", Source: "s", Summary: "recent"})
 
-	n, err := s.Prune(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), "debug")
+	n, err := s.Prune(context.Background(), time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), "debug")
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}

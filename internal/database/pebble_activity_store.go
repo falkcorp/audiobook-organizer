@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -987,9 +987,14 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 }
 
 // Prune hard-deletes all entries of the given tier older than olderThan.
-func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
-	// Prune has no caller context; it is a scheduled maintenance op.
-	kvs, err := s.scanTierKVs(context.Background(), tier, nil, &olderThan)
+//
+// Cancellable per the interface contract: ctx is checked before every batch,
+// and on cancellation the count of rows already committed is returned with
+// ctx.Err(). Each committed batch is reported through any
+// WithMaintenanceProgress hook on ctx, so the nightly op has liveness during
+// what used to be its longest silent stretch.
+func (s *PebbleActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
 	}
@@ -1000,6 +1005,9 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 	deleted := 0
 	// Delete in batches of 500 to keep batch size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
 		end := min(i+500, len(kvs))
 		batch := s.db.NewBatch()
 		for _, kv := range kvs[i:end] {
@@ -1014,6 +1022,7 @@ func (s *PebbleActivityStore) Prune(olderThan time.Time, tier string) (int, erro
 		}
 		batch.Close()
 		deleted += end - i
+		ReportMaintenanceProgress(ctx, MaintenancePhasePrune, "pebble", deleted)
 	}
 	return deleted, nil
 }

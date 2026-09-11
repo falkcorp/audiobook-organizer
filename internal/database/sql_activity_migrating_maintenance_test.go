@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_maintenance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8b6d41-9c3e-4a75-b1d8-7e0a5c2f9b64
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -108,7 +108,7 @@ func TestMigratingActivityStore_PrunePrunesBothBackends(t *testing.T) {
 	const rows = 3
 	mig, pebbleStore, sqlStore := migratingTierFixture(t, "debug", "scan_progress", rows)
 
-	n, err := mig.Prune(migratingMaintenanceCutoff, "debug")
+	n, err := mig.Prune(context.Background(), migratingMaintenanceCutoff, "debug")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
