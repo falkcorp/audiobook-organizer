@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.57.0
+// version: 1.58.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -391,6 +391,7 @@ export function Settings() {
     dimensions: 3072,
     base_url: '',
     vector_backend: 'hnsw',
+    request_timeout_seconds: 0,
   });
   const [aiBackendConfig, setAIBackendConfig] = useState<api.AIBackendConfig>({
     embedding_mode: 'disabled',

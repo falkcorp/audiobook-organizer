@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.90.0
+// version: 2.91.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-11
 
@@ -760,6 +760,9 @@ export interface EmbeddingConfig {
   dimensions: number;
   base_url: string;
   vector_backend: string;
+  // Per-attempt budget for one embeddings request. 0 = the 30 s default; the
+  // backend clamps anything above 90 s. Exists for a cold local model load.
+  request_timeout_seconds: number;
 }
 
 // AI backend-mode toggle (TASK-10). embedding_mode/llm_mode select,

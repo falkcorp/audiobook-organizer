@@ -1,12 +1,14 @@
 // file: internal/ai/register_test.go
-// version: 2.1.0
-// last-edited: 2026-08-23
+// version: 2.2.0
+// guid: 7e1a4c9b-2d3f-4b8e-a6c5-0f9d8e7b6a51
+// last-edited: 2026-09-11
 
 package ai
 
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -85,6 +87,57 @@ func TestEmbedClientBuild_ModeGated(t *testing.T) {
 			t.Fatalf("openai client model = %q, want text-embedding-3-large", got.Model())
 		}
 	})
+}
+
+// TestEmbedClientBuild_RequestTimeoutFromConfig verifies that BOTH embedclient
+// construction branches feed embedding.request_timeout_seconds through
+// WithRequestTimeout, after config has applied the default and the ceiling.
+// The local branch is the one the knob exists for (cold Ollama model load); the
+// openai branch is covered so a future refactor cannot quietly drop the call
+// from one arm of the switch.
+func TestEmbedClientBuild_RequestTimeoutFromConfig(t *testing.T) {
+	localCfg := func(secs int) *config.Config {
+		cfg := &config.Config{}
+		cfg.AIBackend.EmbeddingMode = config.AIBackendModeLocal
+		cfg.AIBackend.LocalBaseURL = "http://192.0.2.20:11434/v1"
+		cfg.AIBackend.LocalEmbeddingModel = "bge-m3"
+		cfg.Embedding.RequestTimeoutSeconds = secs
+		return cfg
+	}
+	openaiCfg := func(secs int) *config.Config {
+		cfg := &config.Config{}
+		cfg.Embedding.Enabled = true
+		cfg.Embedding.Model = "text-embedding-3-large"
+		cfg.OpenAIAPIKey = "sk-real"
+		cfg.Embedding.RequestTimeoutSeconds = secs
+		return cfg
+	}
+
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want time.Duration
+	}{
+		{"local, unset -> historical 30 s default", localCfg(0), config.DefaultEmbeddingRequestTimeout},
+		{"local, 60 s passes through", localCfg(60), 60 * time.Second},
+		{"local, 600 s is clamped to the ceiling", localCfg(600), config.EmbeddingRequestTimeoutCeiling},
+		{"openai, unset -> historical 30 s default", openaiCfg(0), config.DefaultEmbeddingRequestTimeout},
+		{"openai, 45 s passes through", openaiCfg(45), 45 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildEmbedClient(t, tt.cfg)
+			if got == nil {
+				t.Fatal("expected non-nil client")
+			}
+			if got.requestTimeout != tt.want {
+				t.Fatalf("requestTimeout = %s, want %s (configured %d s)", got.requestTimeout, tt.want, tt.cfg.Embedding.RequestTimeoutSeconds)
+			}
+			if got.requestTimeout != tt.cfg.ResolveEmbeddingRequestTimeout() {
+				t.Fatalf("client timeout %s diverges from config.ResolveEmbeddingRequestTimeout() %s", got.requestTimeout, tt.cfg.ResolveEmbeddingRequestTimeout())
+			}
+		})
+	}
 }
 
 // TestLLMParserBuild_ModeGated verifies llmparser construction keys off

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.55.1 -->
+<!-- version: 10.56.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -90,7 +90,7 @@ reproduce on reload. Raising the constant for every backend would be the wrong
 fix. The right one is to plumb it, so a slow-disk or cold-start backend can be
 given a longer budget without changing the OpenAI path.
 
-- [ ] Add an `embedding.request_timeout_seconds` config key, resolve it the way
+- [x] Add an `embedding.request_timeout_seconds` config key, resolve it the way — ✅ DONE 2026-09-11: `config.ResolveEmbeddingRequestTimeout` (0 = 30 s default, ceiling 90 s), wired through `WithRequestTimeout` at both construction sites in `internal/ai/register.go`, exposed in Settings → Embeddings.
       `config.ResolveAIParseBatch` resolves the parse pair (0 = default, with a
       sane ceiling), and pass it through to `WithRequestTimeout` at the
       construction sites.

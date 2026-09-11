@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Config API Shape Reference
 
@@ -144,8 +144,19 @@ interface EmbeddingConfig {
   dimensions: number;      // Vector dimensions (default: 3072; use 1024 for bge-m3)
   base_url: string;        // OpenAI-compatible base URL ("" = use OpenAI; set to http://localhost:11434/v1 for Ollama)
   vector_backend: string;  // "hnsw" (default) or "chromem"
+  request_timeout_seconds: number; // Per-attempt budget for one embeddings request (0 = 30 s default; clamped to 90 s)
 }
 ```
+
+`request_timeout_seconds` exists for a **cold model load**, not steady-state
+cost: a warm 64-input bge-m3 batch is ~1 s, but the first request after Ollama
+evicts the model has to read the weights from disk (25 s measured on an M1 Max,
+84% of the 30 s default). Raise it for a slow-disk local backend. The ceiling is
+90 s rather than the parse path's 4 min because the embedding client retries
+each batch up to 3 times with no progress report in between, and
+3 × 90 s + 5 s backoff must stay under the operations watchdog's 5 min
+inactivity kill. Values above the ceiling are clamped (and logged at startup),
+not rejected.
 
 **Flat aliases accepted by PUT /config:**
 | Legacy flat key | Maps to |
@@ -164,6 +175,7 @@ interface EmbeddingConfig {
 | `EMBEDDING_DIMENSIONS` | `embedding.dimensions` |
 | `EMBEDDING_BASE_URL` | `embedding.base_url` |
 | `VECTOR_INDEX_BACKEND` | `embedding.vector_backend` |
+| `EMBEDDING_REQUEST_TIMEOUT_SECONDS` | `embedding.request_timeout_seconds` |
 
 ---
 
