@@ -1,5 +1,5 @@
 // file: internal/database/migration061_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13221161-da29-4cdf-b781-6e6506da9552
 // last-edited: 2026-09-11
 
@@ -104,7 +104,7 @@ func TestMigration061RunsThroughRunnerFromProductionVersion(t *testing.T) {
 
 	got, err := getCurrentVersion(store)
 	require.NoError(t, err)
-	require.Equal(t, 61, got, "the runner must advance to the repair migration")
+	require.Equal(t, migrations[len(migrations)-1].Version, got, "the runner must advance through the repair migration to the latest")
 
 	rec, err := store.GetUserPreference(migrationRecordKey(61))
 	require.NoError(t, err)

@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-09-11
 
@@ -33,6 +33,16 @@ type migrationStore interface {
 	GetAllBooksCore(limit, offset int) ([]BookCore, error)
 	GetBookByID(id string) (*Book, error)
 	UpdateBook(id string, book *Book) (*Book, error)
+}
+
+// hollowOpsSweeper is the one capability migration062Up needs. It is asserted
+// at run time rather than added to migrationStore because migrationStore is a
+// subset of Store, and widening Store for a single migration means the hand
+// mock, the mockery mock and the coverage test all grow a method that no
+// caller but this migration ever uses. Every production store is a
+// *PebbleStore and has it.
+type hollowOpsSweeper interface {
+	SweepHollowOperationsV2() (int, error)
 }
 
 // MigrationFunc represents a migration operation.
@@ -440,6 +450,12 @@ var migrations = []Migration{
 		Version:     61,
 		Description: "Flag books whose organize path still holds an unresolved placeholder (the repair migration 14 never dispatched)",
 		Up:          migration061Up,
+		Down:        nil,
+	},
+	{
+		Version:     62,
+		Description: "Delete hollow operations-v2 rows written by an unguarded progress write after a discard",
+		Up:          migration062Up,
 		Down:        nil,
 	},
 }
@@ -1196,5 +1212,27 @@ func migration061Up(store migrationStore) error {
 	}
 	slog.Info("migration 61: unresolved organize-path scan finished",
 		"books", len(books), "flagged", flagged, "already_flagged", alreadyFlagged, "errors", errored)
+	return nil
+}
+
+// migration062Up deletes operations-v2 rows that carry no id. Until
+// 2026-09-11 the progress, phase, checkpoint and resume-count writers in
+// pebble_store_ops_v2.go re-created a deleted row as an empty shell when they
+// ran after DELETE /operations/v2/:id/record (a discarded library.scan whose
+// abandoned goroutine was still reporting did exactly that in production, and
+// the Activity page showed a nameless card). The writers now refuse a miss;
+// this removes what they already left behind. Idempotent: a second run finds
+// nothing and writes nothing.
+func migration062Up(store migrationStore) error {
+	sweeper, ok := store.(hollowOpsSweeper)
+	if !ok {
+		slog.Warn("migration 62: store cannot sweep operations-v2 rows; nothing to do", "store", fmt.Sprintf("%T", store))
+		return nil
+	}
+	n, err := sweeper.SweepHollowOperationsV2()
+	if err != nil {
+		return fmt.Errorf("migration 62: sweep hollow operations: %w", err)
+	}
+	slog.Info("migration 62: hollow operations-v2 rows removed", "removed", n)
 	return nil
 }
