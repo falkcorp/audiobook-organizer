@@ -22,10 +22,10 @@ rows sit in bands by class, worst at the top, and are spread out only so the lab
 readable — horizontal position inside a band carries no meaning. Gated rows (owner decision,
 prod run, or a parked sibling initiative) are on the chart but marked 🔒 in the legend.
 
-**246 open rows** — {'Large impact · easy': 57, 'Large impact · hard': 80, 'Small impact · easy': 56, 'Small impact · hard': 53}. Done since the 2026-09-10 freeze: 57
+**245 open rows** — {'Large impact · easy': 57, 'Large impact · hard': 80, 'Small impact · easy': 55, 'Small impact · hard': 53}. Done since the 2026-09-10 freeze: 58
 (listed in PRIORITY-MATRIX.md section C).
-By class: {'data-loss': 20, 'security': 13, 'correctness': 104, 'perf': 23, 'ux': 8, 'hygiene': 78}.
-By effort: {'S': 113, 'M': 99, 'L': 34}.
+By class: {'data-loss': 20, 'security': 13, 'correctness': 104, 'perf': 22, 'ux': 8, 'hygiene': 78}.
+By effort: {'S': 112, 'M': 99, 'L': 34}.
 
 ```mermaid
 %%{init: {"quadrantChart": {"chartWidth": 1100, "chartHeight": 900, "pointRadius": 3, "pointLabelFontSize": 8, "quadrantPadding": 6, "xAxisLabelFontSize": 14, "yAxisLabelFontSize": 14, "quadrantLabelFontSize": 14}}}%%
@@ -179,13 +179,12 @@ quadrantChart
     WEB-02: [0.669, 0.448]
     T063: [0.065, 0.438]
     T203: [0.135, 0.438]
-    T205: [0.205, 0.438]
-    T214: [0.275, 0.438]
-    L1735: [0.345, 0.438]
-    L1826: [0.415, 0.438]
-    L2213: [0.065, 0.372]
-    L2569: [0.135, 0.372]
-    L6744: [0.205, 0.372]
+    T214: [0.205, 0.438]
+    L1735: [0.275, 0.438]
+    L1826: [0.345, 0.438]
+    L2213: [0.415, 0.438]
+    L2569: [0.065, 0.372]
+    L6744: [0.135, 0.372]
     T001: [0.716, 0.448]
     T062: [0.574, 0.405]
     T157: [0.621, 0.405]
@@ -449,11 +448,10 @@ TODO.md line on `main`.
 - **`L3842`** [Stage 3 — durable deferral — When no rung answers, the candidates are currently just left unparsed](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L3894) — correctness, effort L · `TODO.md:3842` · brief `TASK-351` 🔒 **GATED:** RECLASSIFY — Section matches exactly, but this is a pipeline-completeness feature, mislabelled into the data-loss/security bucket.
 - **`L4601`** [resume-sweep — never started, needs the user's go-ahead](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4653) — correctness, effort L · `TODO.md:4601`
 
-### Small impact · easy — 56 rows (2 gated)
+### Small impact · easy — 55 rows (2 gated)
 
 - **`T063`** [internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md) — perf, effort S · `TASK-063`
 - **`T203`** [Add a detection-only counter + structured log for generateTargetPath path collisions within one organize run (](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/organize/TASK-203-add-a-detection-only-counter-structured-log-for-.md) — perf, effort S · `TASK-203`
-- **`T205`** [Replace TestServerStartGracefulShutdown's fixed 6s sleep with a bounded readiness poll](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server/TASK-205-replace-testserverstartgracefulshutdown-s-fixed-.md) — perf, effort S · `TASK-205`
 - **`T214`** [Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log wh](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md) — perf, effort S · `TASK-214`
 - **`L1735`** [N+1 / batch-endpoint audit follow-ups (2026-09-08)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1784) — perf, effort S, 10 items · `TODO.md:1735`
 - **`L1826`** [New hotspots INSIDE search, ranked (these are the real follow-ups)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1875) — perf, effort S, 5 items · `TODO.md:1826`
