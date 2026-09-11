@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.147.0
+// version: 1.148.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -3386,6 +3386,64 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 
+	// Delete the per-book sidecar rows that are keyed by THIS book's ID and
+	// that nothing but this function could ever remove (SQ-03). Same dangling-
+	// row class as the work/hash indexes above: each of these is written by a
+	// Set*/Add* method on the book and torn down by nothing on delete, so every
+	// hard delete (purge, merge cleanup, archive sweep, dedup) leaked them
+	// permanently. Unconditional single-key Deletes: an absent key is a no-op
+	// in Pebble, and gating on a read would reintroduce the hydration
+	// dependency the book_sig comment above warns about.
+	//
+	//   book_authors:<id>      SetBookAuthors     — the author junction row.
+	//                          bookIDsInAuthorJunction / GetAllAuthorBookCounts
+	//                          / author_bookref.go scan this whole prefix, so a
+	//                          leaked row surfaced the deleted book as a phantom
+	//                          credit on every one of its authors.
+	//   book_narrators:<id>    SetBookNarrators   — the narrator junction row.
+	//   user_tag:book:<id>     SetBookUserTags
+	//   alt_titles:book:<id>   SetBookAlternativeTitles
+	//   metadata_cache:<id>    PutMetadataCache   — UpdateBook already drops it
+	//                          on an identity change; a delete is the ultimate
+	//                          identity change.
+	//
+	// The memdb projection of the two junction rows is cleared by
+	// DeleteBookFromMemDB below; none of the others has a memdb table.
+	for _, sidecar := range [][]byte{
+		[]byte("book_authors:" + id),
+		[]byte("book_narrators:" + id),
+		[]byte("user_tag:book:" + id),
+		[]byte("alt_titles:book:" + id),
+		metadataCacheKey(id),
+	} {
+		if err := batch.Delete(sidecar, nil); err != nil {
+			batch.Close()
+			return err
+		}
+	}
+
+	// book_tag:<id>:<tag> rows (AddBookTagWithSource) and their reverse index
+	// tag_idx:<tag>:<id>. The tag is everything after the prefix — tags may
+	// themselves contain colons (see ListAllTags) — so it is taken from the key
+	// suffix, not by splitting on ':'. Leaked tag_idx rows made ListAllTags
+	// over-count and GetBooksByTag return hard-deleted IDs.
+	tagPrefix := []byte("book_tag:" + id + ":")
+	if err := deleteKeysWithPrefix(p.db, batch, tagPrefix, func(key []byte) error {
+		tag := string(key[len(tagPrefix):])
+		return batch.Delete([]byte("tag_idx:"+tag+":"+id), nil)
+	}); err != nil {
+		batch.Close()
+		return err
+	}
+
+	// metadata_rejection:<id>:<ulid> rows (AddMetadataRejection). Same shape as
+	// the metadata_state:<id>: teardown above; DeleteMetadataRejections exists
+	// but no DeleteBook caller invoked it.
+	if err := deleteKeysWithPrefix(p.db, batch, []byte("metadata_rejection:"+id+":"), nil); err != nil {
+		batch.Close()
+		return err
+	}
+
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
 	}
@@ -3397,6 +3455,34 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	p.DeleteBookFromMemDB(context.Background(), id)
 
 	return nil
+}
+
+// deleteKeysWithPrefix stages a Delete into batch for every committed key
+// under prefix. When onKey is non-nil it is called with each key BEFORE that
+// key's Delete is staged, so a caller can stage the teardown of a reverse
+// index derived from the key (tag_idx for book_tag, for example). The
+// iterator reads committed state, which is fine: the batch is not indexed and
+// nothing under these prefixes is written by the same batch.
+func deleteKeysWithPrefix(db *pebble.DB, batch *pebble.Batch, prefix []byte, onKey func(key []byte) error) error {
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		if onKey != nil {
+			if err := onKey(iter.Key()); err != nil {
+				return err
+			}
+		}
+		if err := batch.Delete(iter.Key(), nil); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
 }
 
 // SearchBooks returns books whose title, author name or narrator contains the
