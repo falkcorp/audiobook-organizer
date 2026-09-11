@@ -14436,6 +14436,68 @@ func (_c *MockStore_GetBookTags_Call) RunAndReturn(run func(bookID string) ([]st
 	return _c
 }
 
+// GetBookTagsByBookIDs provides a mock function for the type MockStore
+func (_mock *MockStore) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	ret := _mock.Called(bookIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookTagsByBookIDs")
+	}
+
+	var r0 map[string][]string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]string, error)); ok {
+		return returnFunc(bookIDs)
+	}
+	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]string); ok {
+		r0 = returnFunc(bookIDs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string][]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
+		r1 = returnFunc(bookIDs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetBookTagsByBookIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookTagsByBookIDs'
+type MockStore_GetBookTagsByBookIDs_Call struct {
+	*mock.Call
+}
+
+// GetBookTagsByBookIDs is a helper method to define mock.On call
+//   - bookIDs []string
+func (_e *MockStore_Expecter) GetBookTagsByBookIDs(bookIDs any) *MockStore_GetBookTagsByBookIDs_Call {
+	return &MockStore_GetBookTagsByBookIDs_Call{Call: _e.mock.On("GetBookTagsByBookIDs", bookIDs)}
+}
+
+func (_c *MockStore_GetBookTagsByBookIDs_Call) Run(run func(bookIDs []string)) *MockStore_GetBookTagsByBookIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []string
+		if args[0] != nil {
+			arg0 = args[0].([]string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetBookTagsByBookIDs_Call) Return(stringToStrings map[string][]string, err error) *MockStore_GetBookTagsByBookIDs_Call {
+	_c.Call.Return(stringToStrings, err)
+	return _c
+}
+
+func (_c *MockStore_GetBookTagsByBookIDs_Call) RunAndReturn(run func(bookIDs []string) (map[string][]string, error)) *MockStore_GetBookTagsByBookIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBookTagsDetailed provides a mock function for the type MockStore
 func (_mock *MockStore) GetBookTagsDetailed(bookID string) ([]database.BookTag, error) {
 	ret := _mock.Called(bookID)

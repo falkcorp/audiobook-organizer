@@ -1,0 +1,5 @@
+### Changed
+
+#### Search-index bulk backfill uses batch reads and a bounded worker pool (SQ-01)
+
+The full search-index build that runs when the index is empty (first boot, or after a Bleve mapping-version bump) was a sequential per-book loop doing three point reads per book — author, series and tags — with no worker pool, the same single-core N+1 shape as the 2026-07-05 dedup incident. It now pages the library serially, resolves each chunk's authors, series and tags with one batch store call each (`GetAuthorsByIDs`, `GetSeriesByIDs`, and a new `GetBookTagsByBookIDs` that walks the tag keyspace with a single Pebble iterator), builds the documents with zero store calls (`search.LoadBookRelations` + `search.BookToDocWithRelations`), and commits each chunk as one Bleve batch from an `errgroup` bounded at `runtime.NumCPU()`; the producer blocks when every worker is busy so paging never runs ahead of indexing. Store traffic is O(pages + chunks) instead of O(books), a 30-second progress heartbeat makes a long build visible in the log, and a failed batch commit falls back to per-book indexing for that chunk so what gets indexed is unchanged.

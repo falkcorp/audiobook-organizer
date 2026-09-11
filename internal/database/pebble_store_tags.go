@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-07-11
+// last-edited: 2026-09-11
 
 package database
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -134,6 +135,51 @@ func (p *PebbleStore) GetBookTags(bookID string) ([]string, error) {
 	}
 	sort.Strings(tags)
 	return tags, nil
+}
+
+// GetBookTagsByBookIDs returns bookID → sorted tag strings for every book
+// in bookIDs using a single Pebble iterator: one SeekGE per book inside
+// one iterator spanning the whole `book_tag:` keyspace, instead of one
+// iterator (and one store call) per book as GetBookTags does. Duplicate
+// IDs are resolved once; books with no tags are absent from the map.
+func (p *PebbleStore) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(bookIDs))
+	if len(bookIDs) == 0 {
+		return result, nil
+	}
+	space := []byte("book_tag:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: space,
+		UpperBound: prefixEnd(space),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for _, bookID := range bookIDs {
+		if bookID == "" {
+			continue
+		}
+		if _, already := result[bookID]; already {
+			continue
+		}
+		prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+		var tags []string
+		for valid := iter.SeekGE(prefix); valid && bytes.HasPrefix(iter.Key(), prefix); valid = iter.Next() {
+			var bt BookTag
+			if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+				continue
+			}
+			tags = append(tags, bt.Tag)
+		}
+		if len(tags) == 0 {
+			continue
+		}
+		sort.Strings(tags)
+		result[bookID] = tags
+	}
+	return result, iter.Error()
 }
 
 // GetBookTagsDetailed returns tags with their source attribution.

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.105.0
+// version: 1.106.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -558,6 +558,7 @@ type MockStore struct {
 	RemoveBookTagFunc          func(bookID, tag string) error
 	RemoveBookTagsByPrefixFunc func(bookID, prefix, source string) error
 	GetBookTagsFunc            func(bookID string) ([]string, error)
+	GetBookTagsByBookIDsFunc   func(bookIDs []string) (map[string][]string, error)
 	GetBookTagsDetailedFunc    func(bookID string) ([]BookTag, error)
 	SetBookTagsFunc            func(bookID string, tags []string) error
 	ListAllTagsFunc            func() ([]TagWithCount, error)
@@ -2745,6 +2746,13 @@ func (m *MockStore) GetBookTags(bookID string) ([]string, error) {
 		return m.GetBookTagsFunc(bookID)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	if m.GetBookTagsByBookIDsFunc != nil {
+		return m.GetBookTagsByBookIDsFunc(bookIDs)
+	}
+	return map[string][]string{}, nil
 }
 
 func (m *MockStore) SetBookTags(bookID string, tags []string) error {
