@@ -195,6 +195,57 @@ func (_c *MockOperationsRegistry_Def_Call) RunAndReturn(run func(id string) (reg
 	return _c
 }
 
+// Discard provides a mock function for the type MockOperationsRegistry
+func (_mock *MockOperationsRegistry) Discard(opID string) error {
+	ret := _mock.Called(opID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Discard")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(opID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationsRegistry_Discard_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Discard'
+type MockOperationsRegistry_Discard_Call struct {
+	*mock.Call
+}
+
+// Discard is a helper method to define mock.On call
+//   - opID string
+func (_e *MockOperationsRegistry_Expecter) Discard(opID any) *MockOperationsRegistry_Discard_Call {
+	return &MockOperationsRegistry_Discard_Call{Call: _e.mock.On("Discard", opID)}
+}
+
+func (_c *MockOperationsRegistry_Discard_Call) Run(run func(opID string)) *MockOperationsRegistry_Discard_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsRegistry_Discard_Call) Return(err error) *MockOperationsRegistry_Discard_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationsRegistry_Discard_Call) RunAndReturn(run func(opID string) error) *MockOperationsRegistry_Discard_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // EnqueueOp provides a mock function for the type MockOperationsRegistry
 func (_mock *MockOperationsRegistry) EnqueueOp(ctx context.Context, defID string, params any, opts ...registry.EnqueueOption) (string, error) {
 	var tmpRet mock.Arguments

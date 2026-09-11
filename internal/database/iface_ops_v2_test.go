@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b41c7de-25a8-4f6c-b0e3-71d84af52c19
-// last-edited: 2026-09-07
+// last-edited: 2026-09-10
 
 package database
 
@@ -23,6 +23,9 @@ func TestOpV2LifecycleStore_MethodSetUnchanged(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
+		// DeleteOperationV2 added 2026-09-10 for the Activity page's Discard
+		// button (Registry.Discard); the fakes were widened deliberately.
+		"DeleteOperationV2",
 		"GetOperationV2",
 		"IncrementResumeCountV2",
 		"InsertOperationV2",

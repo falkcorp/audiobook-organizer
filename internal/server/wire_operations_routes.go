@@ -1,5 +1,5 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
 // last-edited: 2026-09-10
 
@@ -29,6 +29,9 @@ func (s *Server) wireOperationsRoutes(
 	// Same guard as cancel: re-running a finished op is an operator action on
 	// an existing run, not a fresh scan trigger.
 	protected.POST("/operations/v2/:id/retry", s.perm(auth.PermSettingsManage), opsV2H.RetryOperationV2)
+	// Discard = delete the persisted record of a run nothing is executing.
+	// DELETE /operations/v2/:id stays "cancel"; this removes the row itself.
+	protected.DELETE("/operations/v2/:id/record", s.perm(auth.PermSettingsManage), opsV2H.DiscardOperationV2)
 	protected.POST("/operations/v2", s.perm(auth.PermScanTrigger), opsV2H.TriggerOperationV2)
 	protected.GET("/op-defs", s.perm(auth.PermLibraryView), opsV2H.ListOpDefs)
 	protected.GET("/op-defs/:id", s.perm(auth.PermLibraryView), opsV2H.GetOpDef)

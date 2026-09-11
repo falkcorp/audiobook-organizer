@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 package database
 
@@ -658,4 +658,124 @@ func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
 		require.NotNil(t, got)
 		require.NotNil(t, got.CompletedAt)
 	})
+}
+
+// TestDeleteOperationV2_RemovesRowIndexesStateAndLogs pins the storage half
+// of the Activity page's Discard button. The victim is deleted while still
+// QUEUED — with the allow-list widened to permit it — so both index entries
+// are present at delete time and the assertions on the queue and active
+// listings are real: UpdateOperationV2Status would already have removed both
+// on a terminal transition and made those checks vacuous. Nothing keyed by the
+// op id survives (row, queue and active index, checkpoint state, log lines)
+// while a neighbouring op is untouched; a second delete is a no-op.
+func TestDeleteOperationV2_RemovesRowIndexesStateAndLogs(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	victim := buildTestOpRow("op-discard", "queued")
+	keeper := buildTestOpRow("op-keeper", "queued")
+	require.NoError(t, s.InsertOperationV2(victim))
+	require.NoError(t, s.InsertOperationV2(keeper))
+	now := time.Now().UTC()
+	require.NoError(t, s.UpsertOpStateV2(OpStateV2Row{OperationID: victim.ID, StateBlob: []byte(`{"i":3}`), WrittenAt: now}))
+	require.NoError(t, s.AppendOpLogsV2([]OpLogV2Row{
+		{OperationID: victim.ID, Level: "info", Message: "one", Attrs: "{}", CreatedAt: now},
+		{OperationID: victim.ID, Level: "info", Message: "two", Attrs: "{}", CreatedAt: now.Add(time.Millisecond)},
+		{OperationID: keeper.ID, Level: "info", Message: "keep", Attrs: "{}", CreatedAt: now},
+	}))
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 2, "fixture: both rows must be in the queue index before the delete")
+
+	status, deleted, err := s.DeleteOperationV2(victim.ID, []string{"queued"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, "queued", status)
+
+	row, err := s.GetOperationV2(victim.ID)
+	require.NoError(t, err)
+	require.Nil(t, row, "row survived DeleteOperationV2")
+	state, err := s.GetOpStateV2(victim.ID)
+	require.NoError(t, err)
+	require.Nil(t, state, "checkpoint state survived DeleteOperationV2")
+	logs, err := s.GetOpLogsV2(victim.ID, 10)
+	require.NoError(t, err)
+	require.Empty(t, logs, "log lines survived DeleteOperationV2")
+
+	queued, err = s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 1, "queue index still lists the deleted op (queue key derivation is wrong)")
+	require.Equal(t, keeper.ID, queued[0].ID)
+	active, err := s.ListActiveOperationsV2()
+	require.NoError(t, err)
+	for _, a := range active {
+		require.NotEqual(t, victim.ID, a.ID, "active index still lists the deleted op")
+	}
+	kept, err := s.GetOperationV2(keeper.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "neighbouring op was deleted")
+	keptLogs, err := s.GetOpLogsV2(keeper.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, keptLogs, 1, "neighbouring op's logs were deleted")
+
+	status, deleted, err = s.DeleteOperationV2(victim.ID, []string{"queued"})
+	require.NoError(t, err, "second delete must be a no-op")
+	require.False(t, deleted)
+	require.Equal(t, "", status)
+	status, deleted, err = s.DeleteOperationV2("never-existed", []string{"queued"})
+	require.NoError(t, err)
+	require.False(t, deleted)
+	require.Equal(t, "", status)
+}
+
+// A status outside the allow-list is reported back and nothing is deleted —
+// the compare half of compare-and-delete.
+func TestDeleteOperationV2_RefusesStatusOutsideAllowList(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	row := buildTestOpRow("op-live", "queued")
+	require.NoError(t, s.InsertOperationV2(row))
+
+	status, deleted, err := s.DeleteOperationV2(row.ID, []string{"completed", "interrupted_dropped"})
+	require.NoError(t, err)
+	require.False(t, deleted)
+	require.Equal(t, "queued", status)
+
+	still, err := s.GetOperationV2(row.ID)
+	require.NoError(t, err)
+	require.NotNil(t, still, "refused delete removed the row")
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 1, "refused delete removed the queue index entry")
+}
+
+// A row whose JSON no longer decodes is exactly what Discard exists to remove:
+// it is deleted regardless of the allow-list and reported as "undecodable".
+func TestDeleteOperationV2_RemovesUndecodableRow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	p := store.(*PebbleStore)
+	s := store.(OpsV2Store)
+
+	require.NoError(t, p.db.Set(opv2OpKey("op-corrupt"), []byte("{not json"), nil))
+	require.NoError(t, s.AppendOpLogsV2([]OpLogV2Row{
+		{OperationID: "op-corrupt", Level: "info", Message: "x", Attrs: "{}", CreatedAt: time.Now().UTC()},
+	}))
+
+	status, deleted, err := s.DeleteOperationV2("op-corrupt", []string{"completed"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, "undecodable", status)
+
+	_, closer, gerr := p.db.Get(opv2OpKey("op-corrupt"))
+	if gerr == nil {
+		_ = closer.Close()
+		t.Fatal("corrupt row key survived DeleteOperationV2")
+	}
+	logs, err := s.GetOpLogsV2("op-corrupt", 10)
+	require.NoError(t, err)
+	require.Empty(t, logs)
 }

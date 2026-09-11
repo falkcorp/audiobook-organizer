@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.18.0
+// version: 3.19.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-09
+// last-edited: 2026-09-10
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -614,6 +614,92 @@ func (p *PebbleStore) GetOpStateV2(opID string) (*OpStateV2Row, error) {
 func (p *PebbleStore) DeleteOpStateV2(opID string) (err error) {
 	defer recoverPebbleClosed("DeleteOpStateV2", &err)
 	return p.db.Delete(opv2StateKey(opID), pebble.Sync)
+}
+
+// DeleteOperationV2 removes the run row and every key derived from its id in
+// one batch — the queue and active index entries (deleted unconditionally:
+// Delete of a missing key is a no-op), the checkpoint state, and the whole
+// opv2:log:{id}: and opv2:err:{id}: ranges — if and only if the row's status
+// is in allowedStatuses. Strike rows are keyed by def, not op, and are left
+// alone: they are a per-def history of failures, not part of this run.
+//
+// Read-modify-write under opsMu, mirroring UpdateOperationV2Status and
+// SetOperationV2Result: the status read and the delete are one step, so a
+// concurrent status write (ResetOperationV2ForResume from a stand-down
+// release, a worker marking running) either lands before — and the status
+// check refuses — or after, when there is no row to rewrite. Without the
+// lock a status RMW that read the row before this batch could re-Set the
+// row afterwards and leave a zombie whose logs, state and indexes are gone.
+// One batch so a concurrent ListOperationsV2Since never sees the row gone
+// while an index entry for it survives.
+//
+// The queue key is rebuilt from the row's own Priority and QueuedAt; nothing
+// rewrites either after InsertOperationV2 (ResetOperationV2ForResume keeps
+// QueuedAt on purpose, see its comment), so the derived key is the one that
+// was written. A row whose JSON no longer decodes has no derivable queue key
+// and no checkable status; it is deleted anyway, minus the queue key, and
+// reported as "undecodable" — see the interface comment.
+func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (status string, deleted bool, err error) {
+	defer recoverPebbleClosed("DeleteOperationV2", &err)
+	if id == "" {
+		return "", false, nil
+	}
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	var row OperationV2Row
+	var queueKey []byte
+	switch err := p.pebbleGetJSON(opv2OpKey(id), &row); {
+	case err != nil:
+		// Present but undecodable: the raw key exists (Get succeeded, Unmarshal
+		// failed). Confirm the key is really there before treating a transient
+		// Get error as a corrupt row.
+		if _, closer, gerr := p.db.Get(opv2OpKey(id)); gerr != nil {
+			return "", false, err
+		} else {
+			_ = closer.Close()
+		}
+		status = "undecodable"
+	case row.ID == "":
+		return "", false, nil
+	default:
+		status = row.Status
+		queueKey = opv2QueueKey(row.Priority, row.QueuedAt, id)
+		allowed := false
+		for _, s := range allowedStatuses {
+			if s == status {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return status, false, nil
+		}
+	}
+
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	keys := [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id)}
+	if queueKey != nil {
+		keys = append(keys, queueKey)
+	}
+	for _, key := range keys {
+		if err := batch.Delete(key, nil); err != nil {
+			return status, false, err
+		}
+	}
+	for _, prefix := range [][]byte{
+		[]byte("opv2:log:" + id + ":"),
+		[]byte("opv2:err:" + id + ":"),
+	} {
+		if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
+			return status, false, err
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return status, false, err
+	}
+	return status, true, nil
 }
 
 // UpdateOperationV2Params replaces the params blob on an operation row.

@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.9.0
+// version: 3.10.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -235,8 +235,10 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
       // EMPTY after every server restart: a restart drops the SSE stream, the
       // onError path re-invokes this function, and a quarter-hour window on a
       // just-booted server matches nothing. The records were never lost —
-      // nothing deletes `opv2:op:` rows at all — but the view discarded them,
-      // which looks identical to losing them.
+      // at the time nothing deleted `opv2:op:` rows at all; since 2026-09-10
+      // only the Activity page's Discard button does, one row at a time and
+      // on the user's say-so — but the view discarded them, which looks
+      // identical to losing them.
       const v2Ops = await api.getOperationTimeline(api.OPERATION_TIMELINE_WINDOW_MINUTES);
 
       set(() => {

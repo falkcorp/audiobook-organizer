@@ -1,0 +1,1 @@
+- [ ] **Operations bell: cap the completed list** — the header bell renders every completed operation in its window, which is hundreds of rows after a busy day. Show a bounded number (e.g. the newest 10–20) with a "more…" link that goes to the Activity page, or a plain cap with the existing top button. Low priority (owner, 2026-09-10: "SUPER low priority, just kinda annoying").

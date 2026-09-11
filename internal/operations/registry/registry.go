@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.21.0
+// version: 3.22.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-10
 
@@ -27,6 +27,13 @@ import (
 // same as a successful cancel: distinguish "nothing to cancel" from
 // "cancelled" with errors.Is(err, ErrOpNotFound).
 var ErrOpNotFound = errors.New("registry: operation not found")
+
+// ErrOpActive is returned by Discard when the row is still owned by the
+// scheduler — queued, running, waiting on dependencies, or held by a live
+// in-process run handle. Such a row must be cancelled first; deleting it out
+// from under a worker would lose the run or leave the worker writing to a key
+// nothing reads. errors.Is(err, ErrOpActive) → HTTP 409.
+var ErrOpActive = errors.New("registry: operation is still active; cancel it first")
 
 // Registry is the central in-memory and DB-backed object that owns every
 // OperationDef, dispatches runs, enforces policies, and routes events.
@@ -1079,6 +1086,65 @@ func isTerminalStatus(status string) bool {
 		return true
 	}
 	return false
+}
+
+// Discard deletes a persisted operation row that nothing is still executing:
+// the row, its indexes, checkpoint state, logs and errors, through
+// OpsV2Store.DeleteOperationV2. It is the "get this out of my list for good"
+// action behind DELETE /operations/v2/:id/record — the Activity page's
+// Discard button.
+//
+// Why this exists next to Cancel: Cancel moves a live row to "canceled" and
+// answers ErrOpNotFound for a row that is already finished, which is correct
+// for a cancel but left the user with no way to remove the finished rows.
+// On 2026-09-10 the resume sweep had marked twelve orphaned runs
+// interrupted_dropped after a restart; the Discard button called Cancel,
+// the server answered 404 fifteen times, and the rows stayed.
+//
+// Only a row in discardableStatuses is deleted: every terminal status plus
+// the interrupted_* family the resume sweep might otherwise re-queue on the
+// next boot (deleting it removes it from ListResumableOperationsV2's
+// candidate set as a side effect). An explicit allow-list, not a deny-list
+// of queued/running/waiting_deps: a status added later is refused until
+// someone decides it is safe to delete, which is the direction whose cost is
+// a 409, not a lost run. Anything else — and a row with a live in-process
+// handle — is refused with ErrOpActive. Deleting a queued row's queue-index
+// entry would silently drop a run the dispatcher was about to pick up, and a
+// worker that still holds the id would go on writing progress and logs to
+// keys nothing reads. Unknown id → ErrOpNotFound.
+//
+// The status check is made by the store, under the same mutex as every
+// status write (compare-and-delete), not here: a stand-down release
+// re-queues an interrupted_quiesced scan at runtime (resumeQuiescedOp →
+// ResetOperationV2ForResume), and a read-then-delete in this function could
+// read "interrupted_quiesced", lose the race to that flip, and then delete
+// the queue key of a run the UI had just announced as queued.
+func (r *Registry) Discard(opID string) error {
+	if r.hasLiveHandle(opID) {
+		return fmt.Errorf("%w: op %s has a live run handle; cancel it before discarding", ErrOpActive, opID)
+	}
+	status, deleted, err := r.store.DeleteOperationV2(opID, discardableStatuses)
+	if err != nil {
+		return fmt.Errorf("registry: discard op %s: %w", opID, err)
+	}
+	if status == "" {
+		return ErrOpNotFound
+	}
+	if !deleted {
+		return fmt.Errorf("%w: op %s is %s; cancel it before discarding", ErrOpActive, opID, status)
+	}
+	r.logger.Info("registry: discarded persisted op", "op_id", opID, "previous_status", status)
+	return nil
+}
+
+// discardableStatuses is the allow-list Discard hands the store: the terminal
+// statuses (isTerminalStatus) plus the interrupted_* family, which is finished
+// from the user's point of view whether or not the resume sweep would have
+// picked it up. "interrupted" and "interrupted_restart" are legacy spellings
+// the UI still groups with the family.
+var discardableStatuses = []string{
+	"completed", "failed", "canceled", "interrupted_dropped",
+	"interrupted", "interrupted_quiesced", "interrupted_ask", "interrupted_restart",
 }
 
 // hasLiveHandle reports whether opID currently has an in-memory run handle

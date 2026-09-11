@@ -2293,6 +2293,78 @@ func (_c *MockOpsV2Store_DeleteOpStateV2_Call) RunAndReturn(run func(opID string
 	return _c
 }
 
+// DeleteOperationV2 provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) DeleteOperationV2(id string, allowedStatuses []string) (string, bool, error) {
+	ret := _mock.Called(id, allowedStatuses)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteOperationV2")
+	}
+
+	var r0 string
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) (string, bool, error)); ok {
+		return returnFunc(id, allowedStatuses)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, []string) string); ok {
+		r0 = returnFunc(id, allowedStatuses)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, []string) bool); ok {
+		r1 = returnFunc(id, allowedStatuses)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, []string) error); ok {
+		r2 = returnFunc(id, allowedStatuses)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockOpsV2Store_DeleteOperationV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteOperationV2'
+type MockOpsV2Store_DeleteOperationV2_Call struct {
+	*mock.Call
+}
+
+// DeleteOperationV2 is a helper method to define mock.On call
+//   - id string
+//   - allowedStatuses []string
+func (_e *MockOpsV2Store_Expecter) DeleteOperationV2(id any, allowedStatuses any) *MockOpsV2Store_DeleteOperationV2_Call {
+	return &MockOpsV2Store_DeleteOperationV2_Call{Call: _e.mock.On("DeleteOperationV2", id, allowedStatuses)}
+}
+
+func (_c *MockOpsV2Store_DeleteOperationV2_Call) Run(run func(id string, allowedStatuses []string)) *MockOpsV2Store_DeleteOperationV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_DeleteOperationV2_Call) Return(status string, deleted bool, err error) *MockOpsV2Store_DeleteOperationV2_Call {
+	_c.Call.Return(status, deleted, err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_DeleteOperationV2_Call) RunAndReturn(run func(id string, allowedStatuses []string) (string, bool, error)) *MockOpsV2Store_DeleteOperationV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteOrphanOpDefsV2 provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) DeleteOrphanOpDefsV2(keepIDs []string) error {
 	ret := _mock.Called(keepIDs)
@@ -9493,6 +9565,78 @@ func (_c *MockStore_DeleteOperationState_Call) Return(err error) *MockStore_Dele
 }
 
 func (_c *MockStore_DeleteOperationState_Call) RunAndReturn(run func(opID string) error) *MockStore_DeleteOperationState_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteOperationV2 provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteOperationV2(id string, allowedStatuses []string) (string, bool, error) {
+	ret := _mock.Called(id, allowedStatuses)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteOperationV2")
+	}
+
+	var r0 string
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) (string, bool, error)); ok {
+		return returnFunc(id, allowedStatuses)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, []string) string); ok {
+		r0 = returnFunc(id, allowedStatuses)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, []string) bool); ok {
+		r1 = returnFunc(id, allowedStatuses)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, []string) error); ok {
+		r2 = returnFunc(id, allowedStatuses)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_DeleteOperationV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteOperationV2'
+type MockStore_DeleteOperationV2_Call struct {
+	*mock.Call
+}
+
+// DeleteOperationV2 is a helper method to define mock.On call
+//   - id string
+//   - allowedStatuses []string
+func (_e *MockStore_Expecter) DeleteOperationV2(id any, allowedStatuses any) *MockStore_DeleteOperationV2_Call {
+	return &MockStore_DeleteOperationV2_Call{Call: _e.mock.On("DeleteOperationV2", id, allowedStatuses)}
+}
+
+func (_c *MockStore_DeleteOperationV2_Call) Run(run func(id string, allowedStatuses []string)) *MockStore_DeleteOperationV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteOperationV2_Call) Return(status string, deleted bool, err error) *MockStore_DeleteOperationV2_Call {
+	_c.Call.Return(status, deleted, err)
+	return _c
+}
+
+func (_c *MockStore_DeleteOperationV2_Call) RunAndReturn(run func(id string, allowedStatuses []string) (string, bool, error)) *MockStore_DeleteOperationV2_Call {
 	_c.Call.Return(run)
 	return _c
 }

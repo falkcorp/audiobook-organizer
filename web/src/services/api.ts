@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.87.0
+// version: 2.88.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-10
 
@@ -2273,6 +2273,26 @@ export async function cancelOperation(id: string): Promise<void> {
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to cancel operation');
+  }
+}
+
+/**
+ * discardOperation deletes the persisted record of a run nothing is executing
+ * any more — row, logs, checkpoint — so it leaves the Activity page and the
+ * startup resume sweep for good. This is what the Discard button calls.
+ *
+ * It used to call cancelOperation. For a row that had already finished
+ * (interrupted_dropped after a restart) the server has nothing to cancel and
+ * answers 404, which the page swallowed, so the button did nothing visible.
+ * The server answers 409 for a row that is still queued or running: cancel
+ * it first, then discard.
+ */
+export async function discardOperation(id: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}/record`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to discard operation');
   }
 }
 

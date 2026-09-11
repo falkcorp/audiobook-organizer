@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-10
 
@@ -33,6 +33,9 @@ import (
 type OperationsRegistry interface {
 	GetCurrentItem(opID string) string
 	Cancel(opID string) error
+	// Discard deletes a persisted, no-longer-executing run. Errors:
+	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive (409).
+	Discard(opID string) error
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 	ActiveDefs() []opsregistry.OperationDef
 	// Def looks up a single registered def. Used by TriggerOperationV2 to read
@@ -533,6 +536,41 @@ func (h *OperationsV2Handler) CancelOperationV2(c *gin.Context) {
 			return
 		}
 		httputil.InternalError(c, "cancel failed", err)
+		return
+	}
+	httputil.RespondWithNoContent(c)
+}
+
+// DiscardOperationV2 implements DELETE /api/v1/operations/v2/:id/record.
+//
+// Deletes the run's persisted record — row, indexes, checkpoint, logs,
+// errors — so it leaves the Activity page and the startup resume sweep for
+// good. This is what the page's Discard button calls. It used to call cancel,
+// which is the wrong verb for a row that has already finished: the registry
+// answers 404 for a terminal row (nothing to cancel), the page swallowed the
+// 404, and the twelve interrupted_dropped rows a restart had left behind on
+// 2026-09-10 could not be removed by any button.
+//
+// 204 on success; 404 unknown id; 409 while the row is still queued, running,
+// waiting on dependencies or held by a live worker (cancel it first, then
+// discard). Same permission as cancel.
+func (h *OperationsV2Handler) DiscardOperationV2(c *gin.Context) {
+	id := c.Param("id")
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
+		return
+	}
+	if err := h.registry.Discard(id); err != nil {
+		switch {
+		case errors.Is(err, opsregistry.ErrOpNotFound):
+			httputil.RespondWithNotFound(c, "operation", id)
+		case errors.Is(err, opsregistry.ErrOpActive):
+			// The registry's message names the status ("op X is queued; cancel
+			// it before discarding"); the page shows it verbatim.
+			httputil.RespondWithConflict(c, strings.TrimPrefix(err.Error(), "registry: "))
+		default:
+			httputil.InternalError(c, "discard failed", err)
+		}
 		return
 	}
 	httputil.RespondWithNoContent(c)
