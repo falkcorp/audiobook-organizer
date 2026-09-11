@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.53.1 -->
+<!-- version: 10.54.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-10 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Project TODO — live items only
 
@@ -54,7 +54,8 @@ given a longer budget without changing the OpenAI path.
       boot. Needs a durable mechanism (login item, or a brew-services override
       that survives regeneration) if we keep depending on warm models.
 
-- [ ] **8 ops declare `ResumeRestart` but never checkpoint — they silently
+- [x] **8 ops declare `ResumeRestart` but never checkpoint — they silently
+      ✅ Done 2026-09-11 in #3223: `metadata.candidate-fetch` and `library.bulk-write-back` got done-set checkpoints; `entities.author-merge`, `entities.resolve-production-author`, `maintenance.series-denumber` downgraded to `ResumeDrop`; the other three kept with an idempotency proof in a comment. The registry-level guard is filed separately in `todo.d/`.
       behave as `ResumeRequeue` without the idempotency review that policy
       requires.** Found 2026-09-09 while answering "have we made all these scans
       resumable?" A census of all **157** registered `OperationDef`s
