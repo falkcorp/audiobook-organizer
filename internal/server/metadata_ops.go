@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-11
 //
@@ -1046,6 +1046,17 @@ func (s *Server) runBulkWriteBack(
 	}
 	close(jobCh)
 	wg.Wait()
+
+	// Restate the final tally AFTER the pool has drained. Each worker computes
+	// its `done` count and then calls UpdateProgress with no lock spanning the
+	// two, so a worker holding an older count can report after a newer one and
+	// the LAST progress row the registry (and the UI) sees can read 12/28 for a
+	// run that examined all 28. The sibling pools in this file end the same way
+	// (see the finalCount reports in runBookFetchPool's callers). On cancel the
+	// tally is whatever the workers reached, which is the truthful number.
+	finalDone := written.Load() + failed.Load() + skipped.Load()
+	_ = progress.UpdateProgress(int(finalDone), total,
+		fmt.Sprintf("processed %d/%d (%d written, %d failed, %d skipped)", finalDone, total, written.Load(), failed.Load(), skipped.Load()))
 
 	if canceled.Load() {
 		_ = progress.Log("info", "bulk write-back canceled before completing all books", nil)
