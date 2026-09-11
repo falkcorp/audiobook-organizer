@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-08-11-docs-inventory.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4d1c8a72-3e6b-4f5a-9c28-7b0d1e4f6a93 -->
-<!-- last-edited: 2026-08-12 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Docs inventory and consolidation — 2026-08-11
 
@@ -221,7 +221,7 @@ and the `run-sweep.sh` limitation documented inline.
 | **11 UNCERTAIN files** left in place | archiving on a guess is worse than leaving them | owner |
 | **`openapi.yaml` / `openapi.json` union merge** | §1.6 — a content merge that would lose 25 paths if done as a pick-a-winner | needs a session of its own |
 | ~~**The two bookkeeping contradictions**~~ | ✅ **RESOLVED 2026-08-12** against the prod journal (§1.3): the run happened, `TODO.md` was stale, and the 7,878/7,891 "drift" was sandbox-vs-prod, not a conflict | — |
-| **`docs/system/**` (9) and `docs/architecture/**` (9)** | out of the classification scope, but **required** to settle the top-level-vs-`docs/system/` duplicate cluster | follow-up pass |
+| ~~**`docs/system/**` (9) and `docs/architecture/**` (9)**~~ | ✅ **RESOLVED 2026-09-11** (TASK-182): NOT duplicates. `docs/architecture.md` L6-8 is a deliberate overview that defers subsystem detail to `docs/system/` (its README declares the DOCS-1 workstream complete), and `docs/architecture/**` is now 4 dated design docs (2026-05-11 to 2026-06-01), not a parallel architecture set — 5 of the audit-time 9 were consolidated outside this item. No consolidation owed. | closed |
 | **78 remaining missing headers** | 76 of them were the fleet files (now archived, still header-less); the rest are CURRENT files that need headers written, not fixed | follow-up |
 | **`run-sweep.sh` silent no-op** | §1.5 — needs a behaviour decision, not just a doc note | owner |
 
