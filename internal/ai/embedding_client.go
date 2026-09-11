@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package ai
 
@@ -119,10 +119,12 @@ type EmbeddingClient struct {
 // against this same 30 s budget — 84% of it, for a request doing almost no
 // work. Reloading with the file cached cost 1.2 s, so this is a disk-read
 // effect, not a compute one, and it is bounded in practice by Ollama's
-// keep-alive (the Mac is set to 30m). The real guard is that WithRequestTimeout
-// already exists and clamps 0 to this constant; it is simply not wired to
-// config yet. If a backend ever shows cold loads near this budget, plumb it
-// rather than raising the constant for everyone.
+// keep-alive (the Mac is set to 30m). Since 2026-09-11 the budget is
+// configurable per install: `embedding.request_timeout_seconds` is resolved by
+// config.ResolveEmbeddingRequestTimeout (0 = this default, clamped to
+// config.EmbeddingRequestTimeoutCeiling) and fed through WithRequestTimeout at
+// both construction sites in register.go. Raise it there for a backend that
+// shows cold loads near this budget; do not raise this constant for everyone.
 //
 // Do NOT generalise that headroom to the chat/parse path. There, cost is
 // LINEAR in batch size (~68 completion tokens generated per filename,
@@ -130,7 +132,10 @@ type EmbeddingClient struct {
 // shape was a live production bug: a hardcoded 20-filename batch under a 30 s
 // deadline took 201 s on the CPU 7B and parsed 0 books for 81 consecutive
 // runs. That path is now configurable — see config.ResolveAIParseBatch.
-const defaultRequestTimeout = 30 * time.Second
+//
+// Aliased to the config package's constant so the client-side fallback and the
+// config-side resolution cannot drift apart.
+const defaultRequestTimeout = config.DefaultEmbeddingRequestTimeout
 
 // defaultEmbeddingModel is the model used when none is configured.
 const defaultEmbeddingModel = "text-embedding-3-large"
@@ -229,6 +234,11 @@ func (c *EmbeddingClient) SetOllamaAvailable(ok bool) {
 // Embeddings.New call. A value ≤ 0 is silently replaced with the
 // defaultRequestTimeout (30 s) so the client never blocks forever.
 // Safe to call at any time; subsequent EmbedBatch calls use the new value.
+//
+// Production feeds this from config.ResolveEmbeddingRequestTimeout, which has
+// already applied the default and the ceiling; this method deliberately does
+// NOT re-clamp to the ceiling so a test (or a caller with its own reasons) can
+// still set an arbitrary bound.
 func (c *EmbeddingClient) WithRequestTimeout(d time.Duration) *EmbeddingClient {
 	if d <= 0 {
 		d = defaultRequestTimeout

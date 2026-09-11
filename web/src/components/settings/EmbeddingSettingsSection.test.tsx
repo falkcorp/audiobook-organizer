@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.test.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: a9b8c7d6-e5f4-3210-abcd-ef9876543210
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -14,6 +14,7 @@ const defaultConfig: EmbeddingConfig = {
   dimensions: 1024,
   base_url: '',
   vector_backend: 'hnsw',
+  request_timeout_seconds: 0,
 };
 
 describe('EmbeddingSettingsSection', () => {
@@ -62,6 +63,16 @@ describe('EmbeddingSettingsSection', () => {
     // Ensure it's a number, not a string
     const callArg = onChange.mock.calls[0][0] as { dimensions: unknown };
     expect(typeof callArg.dimensions).toBe('number');
+  });
+
+  it('calls onChange with numeric request_timeout_seconds when the timeout field changes', () => {
+    const onChange = vi.fn();
+    render(<EmbeddingSettingsSection config={defaultConfig} onChange={onChange} />);
+    const field = screen.getByLabelText('Request timeout (seconds)');
+    fireEvent.change(field, { target: { value: '60' } });
+    expect(onChange).toHaveBeenCalledWith({ request_timeout_seconds: 60 });
+    const callArg = onChange.mock.calls[0][0] as { request_timeout_seconds: unknown };
+    expect(typeof callArg.request_timeout_seconds).toBe('number');
   });
 
   it('calls onChange with updated model string when model field changes', () => {

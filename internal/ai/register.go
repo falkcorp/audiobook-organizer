@@ -1,6 +1,7 @@
 // file: internal/ai/register.go
-// version: 1.6.0
-// last-edited: 2026-08-23
+// version: 1.7.0
+// guid: 3f6c1e2a-8b4d-4c7e-9a1f-2d5b6e7c8f90
+// last-edited: 2026-09-11
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -69,6 +70,18 @@ func init() {
 				}
 				client = NewEmbeddingClientWithOptions(cfg.OpenAIAPIKey, cfg.Embedding.Model, baseURL)
 			}
+
+			// Per-attempt request budget from embedding.request_timeout_seconds.
+			// Applied to BOTH branches: the knob exists for a cold local model
+			// load, but a slow hosted endpoint is the same shape of problem, and
+			// Resolve already returns the historical 30 s when the key is unset.
+			// Logged because a clamped value is otherwise invisible: an operator
+			// who set 600 and sees requests fail at 90 s has no other signal.
+			timeout := cfg.ResolveEmbeddingRequestTimeout()
+			if cfg.Embedding.RequestTimeoutSeconds > 0 {
+				slog.Info("embedclient: request timeout", "configured_seconds", cfg.Embedding.RequestTimeoutSeconds, "effective", timeout)
+			}
+			client = client.WithRequestTimeout(timeout)
 
 			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
 			if embStore != nil {

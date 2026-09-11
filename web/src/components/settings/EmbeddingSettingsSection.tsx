@@ -1,7 +1,7 @@
 // file: web/src/components/settings/EmbeddingSettingsSection.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 import {
   Box,
@@ -119,6 +119,26 @@ export function EmbeddingSettingsSection({ config, onChange }: EmbeddingSettings
             <MenuItem value="hnsw">HNSW</MenuItem>
             <MenuItem value="chromem">Chromem</MenuItem>
           </TextField>
+        </Grid>
+
+        <Grid
+          size={{
+            xs: 12,
+            sm: 6,
+          }}
+        >
+          <TextField
+            fullWidth
+            type="number"
+            label="Request timeout (seconds)"
+            value={config.request_timeout_seconds ?? 0}
+            onChange={(e) => onChange({ request_timeout_seconds: Number(e.target.value) })}
+            helperText="Per request attempt. 0 = 30 s default; max 90. Raise for a local model that loads slowly from disk."
+            size="small"
+            slotProps={{
+              htmlInput: { min: 0, max: 90 },
+            }}
+          />
         </Grid>
       </Grid>
     </Box>

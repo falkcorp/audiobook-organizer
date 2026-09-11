@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.110.0
+// version: 1.111.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package config
 
@@ -270,6 +270,24 @@ type EmbeddingConfig struct {
 	Dimensions    int    `json:"dimensions"     mapstructure:"dimensions"`
 	BaseURL       string `json:"base_url"       mapstructure:"base_url"`
 	VectorBackend string `json:"vector_backend" mapstructure:"vector_backend"`
+
+	// RequestTimeoutSeconds bounds ONE attempt of ONE embeddings request
+	// (ai.EmbeddingClient retries up to three times per batch). 0 means
+	// DefaultEmbeddingRequestTimeout, which is what the client hardcoded before
+	// this became configurable; values above EmbeddingRequestTimeoutCeiling are
+	// clamped. See ResolveEmbeddingRequestTimeout for the bounds and why.
+	//
+	// The reason this exists is a cold model load, not steady-state cost. A warm
+	// 64-input bge-m3 batch costs ~1 s on the Mac and ~5.6 s on a CPU-only host,
+	// so the 30 s default is never the limit once the model is resident. The
+	// FIRST request after Ollama evicts the model (keep-alive default 5m) has to
+	// read the weights from disk, measured at 25.28 s cold on the Mac on
+	// 2026-09-09 -- 84% of the default budget for a request doing almost no
+	// work. A slower disk or a larger model tips that over, and every retry
+	// then re-triggers the same load. Raise this for such a backend instead of
+	// raising the default for the hosted-API path, which does not have the
+	// problem.
+	RequestTimeoutSeconds int `json:"request_timeout_seconds" mapstructure:"request_timeout_seconds"`
 }
 
 // DedupSignalConfig holds the band-threshold values for the unified scoring
@@ -783,6 +801,51 @@ func (c *Config) ResolveAIParseBatch() AIParseBatchSettings {
 	}
 
 	return AIParseBatchSettings{Size: size, Timeout: timeout, Workers: workers}
+}
+
+// Embedding request-timeout default and bound. Exported so the client's own
+// fallback (ai.EmbeddingClient.WithRequestTimeout clamps <= 0 to the default)
+// and the config-side resolution cannot drift apart -- the same one-constant
+// rule the AI parse batch pair follows.
+const (
+	// DefaultEmbeddingRequestTimeout is the historical hardcoded per-attempt
+	// budget, preserved so an install that never sets the key sees no change.
+	DefaultEmbeddingRequestTimeout = 30 * time.Second
+
+	// EmbeddingRequestTimeoutCeiling bounds a configured per-attempt timeout.
+	//
+	// This is 90 s and not the parse path's 4m because the two loops have a
+	// different shape under the stuck-op watchdog (registry defaultProgressTimeout
+	// 5m). ai.EmbeddingClient.embedBatchRaw makes up to THREE attempts per batch,
+	// sleeping 1 s then 4 s between them, and nothing reports progress inside
+	// that loop -- so the watchdog sees the whole loop, not one attempt. The
+	// worst case for a dead backend is 3 x timeout + 5 s; at 90 s that is 275 s,
+	// under the 5m watchdog with margin. At the parse path's 4m it would be 12m,
+	// and a backend that merely stalled would get the OPERATION killed for
+	// inactivity instead of the batch failing and the scan moving on -- a
+	// strictly worse outcome that is much harder to diagnose (see the same
+	// argument on AIParseBatchTimeoutCeiling). 90 s is also 3.6x the measured
+	// 25.28 s cold load, so the case this knob exists for fits comfortably.
+	// TestEmbeddingRequestTimeoutCeilingStaysUnderWatchdog asserts the arithmetic.
+	EmbeddingRequestTimeoutCeiling = 90 * time.Second
+)
+
+// ResolveEmbeddingRequestTimeout returns the effective per-attempt timeout for
+// embeddings requests, applying the default and the ceiling. 0 or negative
+// means "unset" and yields DefaultEmbeddingRequestTimeout; anything above
+// EmbeddingRequestTimeoutCeiling is clamped to it rather than rejected, for the
+// same reason ResolveAIParseBatch clamps: an out-of-range value in a persisted
+// config blob must not stop the server from starting, and the clamped value is
+// the largest one that is actually safe under the watchdog.
+func (c *Config) ResolveEmbeddingRequestTimeout() time.Duration {
+	timeout := time.Duration(c.Embedding.RequestTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = DefaultEmbeddingRequestTimeout
+	}
+	if timeout > EmbeddingRequestTimeoutCeiling {
+		timeout = EmbeddingRequestTimeoutCeiling
+	}
+	return timeout
 }
 
 // EffectiveEmbeddingMode resolves the embedding backend mode. When
@@ -2329,11 +2392,15 @@ func InitConfig() {
 	// difference between ~32s and ~1.9 CPU-hours. chromem stays selectable as
 	// the simple fallback; it is no longer the silent default.
 	viper.SetDefault("embedding.vector_backend", "hnsw")
-	viper.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")           //nolint:errcheck
-	viper.BindEnv("embedding.model", "EMBEDDING_MODEL")               //nolint:errcheck
-	viper.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")     //nolint:errcheck
-	viper.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")         //nolint:errcheck
-	viper.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND") //nolint:errcheck
+	// 0, not 30: ResolveEmbeddingRequestTimeout owns the fallback, so an unset
+	// key stays distinguishable from an explicit 30 in the persisted blob.
+	viper.SetDefault("embedding.request_timeout_seconds", 0)
+	viper.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")                                 //nolint:errcheck
+	viper.BindEnv("embedding.model", "EMBEDDING_MODEL")                                     //nolint:errcheck
+	viper.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")                           //nolint:errcheck
+	viper.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")                               //nolint:errcheck
+	viper.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND")                       //nolint:errcheck
+	viper.BindEnv("embedding.request_timeout_seconds", "EMBEDDING_REQUEST_TIMEOUT_SECONDS") //nolint:errcheck
 
 	// Dedup threshold + behaviour defaults (nested under "dedup.*").
 	viper.SetDefault("dedup.book_high_threshold", 0.95)
@@ -2725,11 +2792,12 @@ func InitConfig() {
 
 			// Embedding pipeline (nested sub-struct)
 			Embedding: EmbeddingConfig{
-				Enabled:       viper.GetBool("embedding.enabled"),
-				Model:         viper.GetString("embedding.model"),
-				Dimensions:    viper.GetInt("embedding.dimensions"),
-				BaseURL:       viper.GetString("embedding.base_url"),
-				VectorBackend: viper.GetString("embedding.vector_backend"),
+				Enabled:               viper.GetBool("embedding.enabled"),
+				Model:                 viper.GetString("embedding.model"),
+				Dimensions:            viper.GetInt("embedding.dimensions"),
+				BaseURL:               viper.GetString("embedding.base_url"),
+				VectorBackend:         viper.GetString("embedding.vector_backend"),
+				RequestTimeoutSeconds: viper.GetInt("embedding.request_timeout_seconds"),
 			},
 
 			// Dedup thresholds + behaviour (nested sub-struct)
@@ -3309,11 +3377,12 @@ func ResetToDefaults() {
 
 			// Embedding pipeline
 			Embedding: EmbeddingConfig{
-				Enabled:       true,
-				Model:         "text-embedding-3-large",
-				Dimensions:    3072,
-				BaseURL:       "",
-				VectorBackend: "hnsw",
+				Enabled:               true,
+				Model:                 "text-embedding-3-large",
+				Dimensions:            3072,
+				BaseURL:               "",
+				VectorBackend:         "hnsw",
+				RequestTimeoutSeconds: 0, // 0 = DefaultEmbeddingRequestTimeout (30 s); see ResolveEmbeddingRequestTimeout
 			},
 
 			// Dedup thresholds + behaviour (nested sub-struct)
