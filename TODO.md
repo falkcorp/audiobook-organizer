@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.56.0 -->
+<!-- version: 10.57.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -26,7 +26,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **CI-06** frontend job gate is a computed `if:` that can silently skip a required-looking check — `.github/workflows/frontend-ci.yml:54`. A skipped job reports as passing to required-status checks; a misbehaving config-detection step would let a PR merge with zero frontend build/test coverage while showing green. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md`.
 
-- [ ] **DA-04** isBatchable's Tier gate silently routes only tier=debug high-volume entries through the batcher; a caller that emits the same Type at tier=change (e.g. after the writer.go tier-upgrade rule for warn/error) falls back to one full ActivityEntry per line instead of being coalesced — `internal/activity/writer.go:176`. This is a narrow, low-blast-radius gap (it only matters for warn/error-level lines from these five Types during a large op), and only degrades to the pre-batching behavior (still durable, just less coalesced and noisier in the channel-full warning path) rather than losing data -- worth a look during Brief: `docs/agent-tasks/todo-completion-2026-09/activity/TASK-333-isbatchable-s-tier-gate-silently-routes-only-tie.md`.
+- [x] **DA-04** isBatchable's Tier gate silently routes only tier=debug high-volume entries through the batcher; a caller that emits the same Type at tier=change (e.g. after the writer.go tier-upgrade rule for warn/error) falls back to one full ActivityEntry per line instead of being coalesced — `internal/activity/writer.go:176`. This is a narrow, low-blast-radius gap (it only matters for warn/error-level lines from these five Types during a large op), and only degrades to the pre-batching behavior (still durable, just less coalesced and noisier in the channel-full warning path) rather than losing data -- worth a look during Brief: `docs/agent-tasks/todo-completion-2026-09/activity/TASK-333-isbatchable-s-tier-gate-silently-routes-only-tie.md`. — ✅ DONE 2026-09-11: DA-04: gate kept, rationale now documented at isBatchable (warn/error stay individually visible)
 
 - [ ] **CI-05** No concurrency guard between the two burndown-dispatch workflows sharing the same task hub, with a real Sunday overlap window — `.github/workflows/hard-burndown.yml:29`. Two concurrent dispatch batches against the same hub can claim overlapping tasks and double model spend for the Sunday window. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-314-no-concurrency-guard-between-the-two-burndown-di.md`.
 
@@ -6213,7 +6213,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
 
 ### 🧹 DEAD-1 residue — `linkAsVersion` is dead production code
 
-- [ ] **Remove `Importer.linkAsVersion`** (`internal/itunes/service/importer.go:1780`) and the
+- [x] **Remove `Importer.linkAsVersion`** (`internal/itunes/service/importer.go:1780`) and the — ✅ DONE 2026-09-11: linkAsVersion + its two tests removed
       two tests that are its only callers. Spun out of the 2026-05-01 re-audit close-out
       (item 42), where it is the one DEAD-1 symbol that was never actually removed.
 
@@ -10133,7 +10133,7 @@ Follow-ups this surfaced:
       re-confirms the earlier finding that `SearchIndexDroppedCount` is not on
       `/metrics` despite a comment saying it is, and extends it: nothing about the index
       is exported at all.
-- [ ] **`audiobook_organizer_books_total` reports the PRIMARY count, not the total.**
+- [x] **`audiobook_organizer_books_total` reports the PRIMARY count, not the total.** — ✅ DONE 2026-09-11: Help text now says PRIMARY books; metric name kept for existing dashboards
       It is fed by `CountPrimaryBooks()` (`server_lifecycle.go:393`) while its help text
       reads *"Current total number of books in library"*. Live value **40,841** against
       **67,824** live books in the store — under-reporting the library by ~40%. Either
@@ -11530,7 +11530,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
       `:236` and `:377`. Latent today (registry-built `merge.Service` holds the bare store),
       but one wiring change turns it into silent skipping of iTunes-PID/ASIN reassignment on
       merge. Same shape at `internal/plugins/acoustid/reset_all.go:69` and `lsh_backfill.go:86`.
-- [ ] `internal/operations/registry/register.go:40-42` — `prodSchedulerStore` embeds
+- [x] `internal/operations/registry/register.go:40-42` — `prodSchedulerStore` embeds — ✅ DONE 2026-09-11: prodSchedulerStore now carries the full store and implements Unwrap()
       `database.Store` and adds `BookFiles`, but does not implement `StoreUnwrapper`.
       Defect-*shaped*, not live: no capability lookup currently runs through it.
 
@@ -11574,7 +11574,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
       `internal/scanner`'s own tests hand-roll `fullMockScanner`
       (`scanner_coverage_test.go:655`) because importing the mocks package would cycle.
       Delete the `Scanner:` entry from `.mockery.yaml`; keep the hand-written double.
-- [ ] `internal/operations/mocks` — 206 generated lines, effectively unreferenced.
+- [x] `internal/operations/mocks` — 206 generated lines, effectively unreferenced. — ✅ DONE 2026-09-11: internal/operations/mocks + .mockery.yaml entry + dead mocks-tagged test removed
 - [x] `Makefile` `check-mock-fresh` — **DELETED 2026-08-17.** Ran `go generate` where the
       repo has **zero** `//go:generate` directives, so its regeneration step was a no-op and
       the following `git diff` only detected a dirty worktree. Measured: mutate the `Store`

@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.1
+# version: 1.0.2
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-08-22
+# last-edited: 2026-09-11
 
 # Local overrides
 Makefile.local
@@ -357,3 +357,8 @@ testdata/abs-oracle/library/
 # Written by `make coverage-check-short` as local running state; the committed
 # floor is .ci/coverage-floor.txt, which stays tracked.
 .ci/coverage-last.txt
+
+# Compiled mtls-bridge binaries (`make build-mtls-bridge*`); the arm64 binary was
+# tracked until 2026-09-11 (forward-only hygiene, docs/plans/2026-07-10-repo-size-history-rewrite-plan.md).
+/mtls-bridge
+/mtls-bridge.exe

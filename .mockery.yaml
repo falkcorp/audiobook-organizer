@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.25.1
+# version: 1.25.2
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-08-22
+# last-edited: 2026-09-11
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -22,13 +22,6 @@ packages:
       ImportPathStore:
       OperationStore:
       OpsV2Store:
-  github.com/falkcorp/audiobook-organizer/internal/operations:
-    config:
-      dir: internal/operations/mocks
-    interfaces:
-      ProgressReporter:
-        config:
-          filename: mock_progress_reporter.go
   github.com/falkcorp/audiobook-organizer/internal/metadata:
     interfaces:
       MetadataExtractor:

@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
 // last-edited: 2026-09-11
 
@@ -496,72 +496,6 @@ func TestLinkITunesMetadata_NothingChanged_NoUpdate(t *testing.T) {
 	imp := newMockImporter(m)
 	log := logger.New("test")
 	imp.linkITunesMetadata(existing, importBook, &itunes.Track{}, log)
-}
-
-// ---------------------------------------------------------------------------
-// linkAsVersion — creates a version link for an existing primary book.
-// ---------------------------------------------------------------------------
-
-func TestLinkAsVersion_CreatesVersionBook(t *testing.T) {
-	existingVGID := "vg-primary-001"
-	isPrimary := true
-	existing := &database.Book{
-		ID:               "book-primary",
-		Title:            "Primary Book",
-		VersionGroupID:   &existingVGID,
-		IsPrimaryVersion: &isPrimary,
-	}
-	importBook := &database.Book{
-		Title: "Version Book",
-	}
-	createdVersion := &database.Book{ID: "book-version", Title: "Version Book"}
-
-	m := dbmocks.NewMockStore(t)
-	// linkAsVersion: existing already has a VG → no initial UpdateBook.
-	// CreateBook for the new version.
-	m.EXPECT().CreateBook(mock.Anything).Return(createdVersion, nil).Once()
-	// linkITunesMetadata: existing.VersionGroupID already set + IsPrimaryVersion=true
-	// + all other iTunes fields nil on both books → changed=false → no UpdateBook.
-	// (No EXPECT for UpdateBook — testify would fail if it were called.)
-
-	imp := newMockImporter(m)
-	log := logger.New("test")
-	imp.linkAsVersion(existing, importBook, &itunes.Track{}, log)
-
-	// The import book must have been given the existing book's version group.
-	assert.Equal(t, existingVGID, *importBook.VersionGroupID)
-	assert.NotNil(t, importBook.IsPrimaryVersion)
-	assert.False(t, *importBook.IsPrimaryVersion)
-}
-
-// ---------------------------------------------------------------------------
-// linkAsVersion — existing book has no VersionGroupID → one is created.
-// ---------------------------------------------------------------------------
-
-func TestLinkAsVersion_ExistingHasNoVGID_CreatesVGID(t *testing.T) {
-	existing := &database.Book{
-		ID:    "book-no-vg",
-		Title: "No VG Book",
-		// VersionGroupID is nil
-	}
-	importBook := &database.Book{Title: "New Version"}
-	createdVersion := &database.Book{ID: "book-new-v", Title: "New Version"}
-
-	m := dbmocks.NewMockStore(t)
-	// First UpdateBook call: linkAsVersion sets VG + isPrimary on existing.
-	m.EXPECT().UpdateBook("book-no-vg", mock.Anything).Return(existing, nil).Once()
-	// CreateBook for the version.
-	m.EXPECT().CreateBook(mock.Anything).Return(createdVersion, nil).Once()
-	// linkITunesMetadata: after the VG is set on existing, changed=false →
-	// no second UpdateBook call.
-
-	imp := newMockImporter(m)
-	log := logger.New("test")
-	imp.linkAsVersion(existing, importBook, &itunes.Track{}, log)
-
-	// existing must now have a VersionGroupID.
-	require.NotNil(t, existing.VersionGroupID)
-	assert.NotEmpty(t, *existing.VersionGroupID)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
 // last-edited: 2026-09-11
 
@@ -622,7 +622,9 @@ func (s *NutsActivityStore) CompactByDay(ctx context.Context, olderThan time.Tim
 			}
 			// Delete old digest if present.
 			if existingKey != nil {
-				_ = tx.Delete(actBucket("digest"), existingKey)
+				if err := tx.Delete(actBucket("digest"), existingKey); err != nil && !nutsdb.IsKeyNotFound(err) {
+					return fmt.Errorf("compact delete old digest: %w", err)
+				}
 			}
 			// Write new digest.
 			if err := tx.Put(actBucket("digest"), digestKey, digestBytes, 0); err != nil {

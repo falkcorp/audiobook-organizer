@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-08-23
+// last-edited: 2026-09-11
 
 package metrics
 
@@ -45,7 +45,7 @@ var (
 	booksGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "books_total",
-		Help:      "Current total number of books in library",
+		Help:      "Number of PRIMARY books in the library (one per version group); not the total book-row count",
 	})
 	// searchIndexDocsGauge is the counterpart to booksGauge that TODO L3433
 	// asked for: books_total was already exported, but nothing exported the

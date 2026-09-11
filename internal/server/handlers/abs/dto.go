@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
-// last-edited: 2026-08-22
+// last-edited: 2026-09-11
 
 package abs
 
@@ -295,14 +295,17 @@ func (h *Handler) buildUser(user *database.User, accessToken, refreshToken strin
 // stays on /api/v1 behind its own permission checks (spec §3.6 router split).
 func defaultPermissions() userPermissions {
 	return userPermissions{
-		AccessAllLibraries:        true,
-		AccessAllTags:             true,
-		AccessExplicitContent:     true,
-		CreateEreader:             false,
-		Delete:                    true,
+		AccessAllLibraries:    true,
+		AccessAllTags:         true,
+		AccessExplicitContent: true,
+		CreateEreader:         false,
+		// Delete/Update are false on purpose (N-3): the ABS surface has no
+		// item-edit or item-delete route, so advertising them makes Absorb/
+		// AudioBooth render affordances this server cannot service.
+		Delete:                    false,
 		Download:                  true,
 		SelectedTagsNotAccessible: false,
-		Update:                    true,
+		Update:                    false,
 		Upload:                    false,
 	}
 }

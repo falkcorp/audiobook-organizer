@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-03
+// last-edited: 2026-09-11
 
 package itunesservice
 
@@ -1928,32 +1928,6 @@ func (imp *Importer) linkITunesMetadata(existing *database.Book, importBook *dat
 			log.Warn("Failed to link iTunes metadata to %s: %v", existing.ID, err)
 		}
 	}
-}
-
-func (imp *Importer) linkAsVersion(existing *database.Book, importBook *database.Book, track *itunes.Track, log logger.Logger) {
-	if existing.VersionGroupID == nil || *existing.VersionGroupID == "" {
-		vgID := fmt.Sprintf("vg-%s", ulid.Make().String())
-		existing.VersionGroupID = &vgID
-		isPrimary := true
-		existing.IsPrimaryVersion = &isPrimary
-		if _, err := imp.store.UpdateBook(existing.ID, existing); err != nil {
-			log.Warn("Failed to set VG on existing book %s: %v", existing.ID, err)
-			return
-		}
-	}
-
-	importBook.VersionGroupID = existing.VersionGroupID
-	isPrimary := false
-	importBook.IsPrimaryVersion = &isPrimary
-	importBook.LibraryState = new("imported")
-
-	created, err := imp.store.CreateBook(importBook)
-	if err != nil {
-		log.Warn("Failed to create version link for %s: %v", importBook.Title, err)
-		return
-	}
-	imp.linkITunesMetadata(existing, importBook, track, log)
-	log.Info("Created version link: %s (iTunes) → %s (primary) in %s", created.ID, existing.ID, *existing.VersionGroupID)
 }
 
 func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath string, opts itunes.ImportOptions) (*database.Book, error) {
