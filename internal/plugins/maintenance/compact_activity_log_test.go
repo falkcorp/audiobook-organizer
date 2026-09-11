@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
 // last-edited: 2026-09-10
 
@@ -150,7 +150,16 @@ func TestCleanupActivityLog_ForwardsProgressToReporter(t *testing.T) {
 	if len(rep.progress) == 0 {
 		t.Fatal("the scheduled cleanup forwarded no compaction progress to UpdateProgress; the watchdog would strike it never_reported")
 	}
-	if !strings.Contains(rep.progress[0], "sqlite: 1 days compacted, 40 entries removed") {
-		t.Errorf("progress message = %q", rep.progress[0])
+	joined := strings.Join(rep.progress, "\n")
+	for _, want := range []string{
+		"sqlite: 1 days compacted, 40 entries removed",
+		// The summarize/prune/repair passes report through the second hook;
+		// the nightly op must attach it, or the first night over an
+		// unsummarized history is a silent stretch the watchdog strikes.
+		"summarize: pebble 3 rows so far",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("progress missing %q; got:\n%s", want, joined)
+		}
 	}
 }

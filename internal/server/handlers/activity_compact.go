@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_compact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b5d2e8a4-7c19-4f6b-a3e0-1d8f4c7b9e26
 // last-edited: 2026-09-10
 
@@ -30,15 +30,16 @@ type ActiveOperationsLister interface {
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
-// ActivityCompactHandler serves POST /api/v1/activity/compact.
+// ActivityCompactHandler serves the activity-maintenance enqueue endpoints:
+// POST /api/v1/activity/compact and POST /api/v1/admin/recompact-digests.
 //
-// Until 2026-09-10 this endpoint (then ActivityHandler.CompactActivity) ran the
-// whole compaction inside the request and returned its counters. On a
+// Until 2026-09-10 both ran their whole pass inside the request and returned
+// its counters (ActivityHandler.CompactActivity and .RecompactDigests). On a
 // production-sized activity store that took longer than any browser waits, so
 // the user saw a timeout and could not tell whether the work was still going.
-// It now enqueues maintenance.compact-activity-log and answers 202 with the op
-// id; the op appears in the operations list with a live log, which is where
-// the counters are read.
+// Each now enqueues its maintenance op and answers 202 with the op id; the op
+// appears in the operations list with a live log, which is where the counters
+// are read.
 type ActivityCompactHandler struct {
 	enqueuer CompactionEnqueuer     // nil when the registry is not initialised
 	active   ActiveOperationsLister // nil when the store does not expose ops v2
@@ -85,30 +86,53 @@ func (h *ActivityCompactHandler) CompactActivity(c *gin.Context) {
 		return
 	}
 
-	before := h.activeCompactionIDs()
+	h.enqueue(c, maintenance.CompactActivityLogDefID, "activity compaction", req)
+}
 
-	opID, err := h.enqueuer.EnqueueOp(c.Request.Context(), maintenance.CompactActivityLogDefID, req)
+// RecompactDigests handles POST /api/v1/admin/recompact-digests.
+//
+// Re-derives type, tier and tags on every stored daily-digest entry, on every
+// activity backend. No body. Until 2026-09-10 it ran inside the request and
+// returned {touched, skipped}; it now enqueues
+// maintenance.recompact-activity-digests and responds exactly as
+// CompactActivity does (202 with the op id, 409 if a run is already live, 500
+// without a registry). The counters are the op's persisted result.
+func (h *ActivityCompactHandler) RecompactDigests(c *gin.Context) {
+	if h.enqueuer == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
+		return
+	}
+	h.enqueue(c, maintenance.RecompactActivityDigestsDefID, "digest recompaction", nil)
+}
+
+// enqueue is the shared tail of both endpoints: enqueue defID with params,
+// answer 409 if the registry deduped the request onto a run that was already
+// active, else 202 with the new op id.
+func (h *ActivityCompactHandler) enqueue(c *gin.Context, defID, what string, params any) {
+	before := h.activeOpIDs(defID)
+
+	opID, err := h.enqueuer.EnqueueOp(c.Request.Context(), defID, params)
 	if err != nil {
-		httputil.InternalError(c, "enqueue activity compaction failed", err)
+		httputil.InternalError(c, "enqueue "+what+" failed", err)
 		return
 	}
 	if status, seen := before[opID]; seen {
-		httputil.RespondWithConflict(c, fmt.Sprintf("activity compaction is already %s (operation %s)", status, opID))
+		httputil.RespondWithConflict(c, fmt.Sprintf("%s is already %s (operation %s)", what, status, opID))
 		return
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"data": CompactStartedResponse{
 		OperationID: opID,
-		DefID:       maintenance.CompactActivityLogDefID,
+		DefID:       defID,
 		Status:      "queued",
 	}})
 }
 
-// activeCompactionIDs returns id → status for every queued/running row of the
-// compaction def. Empty when there is no lister or the listing fails: a
-// listing failure must not block the enqueue, and the worst outcome of an
-// empty map is a 202 for a deduped id — the op is still running either way.
-func (h *ActivityCompactHandler) activeCompactionIDs() map[string]string {
+// activeOpIDs returns id → status for every queued/running row of defID.
+// Empty when there is no lister or the listing fails: a listing failure must
+// not block the enqueue, and the worst outcome of an empty map is a 202 for a
+// deduped id — the op is still running either way.
+func (h *ActivityCompactHandler) activeOpIDs(defID string) map[string]string {
 	out := map[string]string{}
 	if h.active == nil {
 		return out
@@ -118,7 +142,7 @@ func (h *ActivityCompactHandler) activeCompactionIDs() map[string]string {
 		return out
 	}
 	for _, row := range rows {
-		if row.DefID == maintenance.CompactActivityLogDefID {
+		if row.DefID == defID {
 			out[row.ID] = row.Status
 		}
 	}

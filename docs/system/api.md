@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-09-10 -->
+<!-- last-edited: 2026-09-11 -->
 
 # HTTP API
 
@@ -103,7 +103,7 @@ To obtain an API key:
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/admin/scan` | Trigger library scan |
-| `POST` | `/api/v1/admin/recompact-digests` | Recompact NutsDB activity digests |
+| `POST` | `/api/v1/admin/recompact-digests` | Enqueue `maintenance.recompact-activity-digests` (re-derives legacy digest items on every activity backend); 202 with the op id |
 | `GET` | `/api/v1/admin/diagnostics` | Diagnostic ZIP export |
 | `POST` | `/api/v1/backup/create` | Create PebbleDB backup (checkpoint) |
 

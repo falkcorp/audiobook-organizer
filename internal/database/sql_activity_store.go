@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-10
 
@@ -43,6 +43,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver (no cgo)
@@ -54,6 +55,24 @@ type SQLActivityStore struct {
 	reader  *sql.DB // small pool: WAL readers run concurrently with the writer.
 	dialect sqlDialect
 	path    string
+
+	// backfillGate keeps every row-deleting maintenance pass (CompactByDay,
+	// Summarize, Prune, WipeAllActivity — write side) out of the window between
+	// the Pebble→SQLite backfill copying a batch and re-presenting it for
+	// parity (read side, copyAndVerifyBatch). The parity check counts any row
+	// the re-present has to insert as "a copied row did not land" and fails
+	// the tier — which blocks the read flip and forces a full rescan on the
+	// next boot. A maintenance delete landing inside that window is
+	// indistinguishable from a lost write, so it must not be able to land
+	// there. Since 2026-09-10 the migrating wrapper runs all of these passes on
+	// this store while the backfill may be in flight (they were active-backend-
+	// only before), which is what made the window reachable.
+	//
+	// RWMutex semantics do the scheduling: a batch holds the read lock for the
+	// ~2s it takes to copy and re-present, a maintenance pass holds the write
+	// lock for its whole run, and a waiting writer blocks new readers, so the
+	// backfill pauses for the pass rather than starving it.
+	backfillGate sync.RWMutex
 }
 
 // sqlActReaderConns bounds the reader pool. WAL lets these run concurrently with
@@ -292,6 +311,92 @@ func (s *SQLActivityStore) RecordBatch(entries []ActivityEntry) (int, error) {
 	return s.recordBatch(context.Background(), entries)
 }
 
+// backfillGateSlowWait is how long copyAndVerifyBatch may wait for the gate
+// before saying so. A batch normally acquires it instantly; anything past this
+// means a maintenance pass is holding the write side, and the backfill is
+// stalled behind it with nothing else to show for the time.
+const backfillGateSlowWait = 5 * time.Second
+
+// acquireBackfillGate takes the READ side of backfillGate, honouring ctx.
+//
+// sync.RWMutex.RLock is not interruptible, and the write side is held for a
+// whole maintenance run — Prune has no context at all on ActivityStorer, so its
+// run cannot be cut short. A plain RLock here would therefore park the backfill
+// goroutine for the length of a prune, and sqlMigrationStarter.Stop waits on
+// that goroutine without a bound: shutdown would block for the whole pass.
+//
+// So the lock is taken in a helper goroutine and the caller races the
+// acquisition against ctx. If ctx wins, the orphan is left to acquire the lock
+// and release it itself, which is safe because it holds nothing else and the
+// caller has already given up on the batch; nothing stays locked.
+//
+// The returned release is always non-nil — a no-op on the error path — so a
+// caller that defers it before checking err cannot panic.
+func (s *SQLActivityStore) acquireBackfillGate(ctx context.Context) (release func(), err error) {
+	got := make(chan struct{}, 1) // buffered: the orphan must never block
+	go func() {
+		s.backfillGate.RLock()
+		got <- struct{}{}
+	}()
+
+	start := time.Now()
+	ticker := time.NewTicker(backfillGateSlowWait)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-got:
+			if waited := time.Since(start); waited >= backfillGateSlowWait {
+				slog.Warn("[activity-sql-backfill] batch acquired the maintenance gate after a long wait",
+					"waited", waited.Round(time.Millisecond).String())
+			}
+			return func() { s.backfillGate.RUnlock() }, nil
+		case <-ticker.C:
+			slog.Warn("[activity-sql-backfill] batch still waiting for the maintenance gate — a deleting pass is holding it",
+				"waited", time.Since(start).Round(time.Second).String())
+		case <-ctx.Done():
+			slog.Warn("[activity-sql-backfill] gave up waiting for the maintenance gate",
+				"waited", time.Since(start).Round(time.Millisecond).String(), "err", ctx.Err())
+			// Hand the lock off to a releaser: whenever the maintenance pass
+			// finishes, the orphan above acquires and this drops it again.
+			go func() {
+				<-got
+				s.backfillGate.RUnlock()
+			}()
+			// Returned unwrapped so the backfill's caller can still classify
+			// this as a shutdown (errors.Is / s.ctx.Err()) rather than as a
+			// parity failure that would strand the tier without a verdict.
+			return func() {}, ctx.Err()
+		}
+	}
+}
+
+// copyAndVerifyBatch is the backfill's per-batch step: insert the batch, then
+// re-present it and count what the second pass had to insert. A correct copy
+// re-inserts ZERO rows (every row conflicts on src_key); any reinsert means a
+// copied row did not land, and the caller fails the tier's parity on it.
+//
+// Both passes run under the read side of backfillGate so no row-deleting
+// maintenance pass can land between them and turn its own legitimate delete
+// into a false parity failure. See the field comment. The gate is taken in a
+// ctx-aware way (acquireBackfillGate), so a shutdown during a long maintenance
+// pass does not have to wait that pass out.
+func (s *SQLActivityStore) copyAndVerifyBatch(ctx context.Context, entries []ActivityEntry) (copied, reinserted int, err error) {
+	release, err := s.acquireBackfillGate(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer release()
+	copied, err = s.recordBatch(ctx, entries)
+	if err != nil {
+		return copied, 0, fmt.Errorf("copy: %w", err)
+	}
+	reinserted, err = s.recordBatch(ctx, entries)
+	if err != nil {
+		return copied, reinserted, fmt.Errorf("parity re-present: %w", err)
+	}
+	return copied, reinserted, nil
+}
+
 // recordBatch inserts entries idempotently in one transaction, each keyed by its
 // content hash (activitySrcKey) via INSERT … ON CONFLICT(src_key) DO NOTHING.
 // Returns rows actually inserted; a re-presented event conflicts and is skipped,
@@ -490,6 +595,8 @@ func (s *SQLActivityStore) GetDistinctSources(ctx context.Context, f ActivityFil
 // group's originals — mirroring PebbleActivityStore.Summarize. Returns rows
 // deleted.
 func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+	s.backfillGate.Lock()
+	defer s.backfillGate.Unlock()
 	cutoff := olderThan.UnixNano()
 	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(
 		`SELECT date(ts/1000000000,'unixepoch') AS d, operation_id, type, COUNT(*), MIN(ts), MAX(ts)
@@ -520,11 +627,16 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 
 	now := time.Now().UTC()
 	total := 0
-	for _, g := range groups {
+	for i, g := range groups {
 		select {
 		case <-ctx.Done():
 			return total, ctx.Err()
 		default:
+		}
+		// Liveness for the nightly op: one group is one transaction, and on a
+		// first run over an unsummarized history there are tens of thousands.
+		if i%activityMaintenanceProgressEvery == 0 {
+			ReportMaintenanceProgress(ctx, MaintenancePhaseSummarize, "sqlite", total)
 		}
 		dayStart, perr := time.Parse("2006-01-02", g.day)
 		if perr != nil {
@@ -590,6 +702,8 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 // the interface (scheduled maintenance only). Chunked so one prune cannot build
 // an unbounded WAL frame.
 func (s *SQLActivityStore) Prune(olderThan time.Time, tier string) (int, error) {
+	s.backfillGate.Lock()
+	defer s.backfillGate.Unlock()
 	cutoff := olderThan.UnixNano()
 	deleted := 0
 	for {
@@ -613,6 +727,8 @@ func (s *SQLActivityStore) Prune(olderThan time.Time, tier string) (int, error) 
 // alongside ctx.Err(), and a plain retry finishes the rest — satisfying the
 // interface contract.
 func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
+	s.backfillGate.Lock()
+	defer s.backfillGate.Unlock()
 	var deleted int64
 	for {
 		select {
@@ -671,6 +787,8 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 // On error or cancellation the returned CompactResult reports what was actually
 // committed — never a projection — so a caller can log real progress.
 func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
+	s.backfillGate.Lock()
+	defer s.backfillGate.Unlock()
 	var result CompactResult
 	cutoff := olderThan.UnixNano()
 

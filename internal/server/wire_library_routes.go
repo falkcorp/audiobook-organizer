@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-09-10
 
@@ -144,6 +144,6 @@ func (s *Server) wireLibraryRoutes(
 		// only way to clear a stale cache was a process restart, which costs
 		// roughly ten minutes of unusable library while memdb warms back up.
 		adminOnly.POST("/cache/invalidate", cacheH.HandleCacheInvalidate)
-		adminOnly.POST("/admin/recompact-digests", activityH.RecompactDigests)
+		adminOnly.POST("/admin/recompact-digests", activityCompactH.RecompactDigests)
 	}
 }

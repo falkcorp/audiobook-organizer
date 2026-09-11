@@ -1,7 +1,7 @@
 // file: internal/activity/sql_migration.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8e3b1f47-2a90-4c6d-b5e1-9f0c7d2a6b58
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 // Package activity — background driver for the Pebble → SQLite activity cutover.
 //
@@ -136,9 +136,13 @@ func (s *sqlMigrationStarter) Start(_ context.Context) error {
 // store cannot be closed while the scan is still reading it.
 //
 // The wait is unbounded on purpose. The backfill checks ctx between tiers and
-// inside streamTierEntries, so it returns promptly; and the alternative — giving
-// up after a timeout — reintroduces exactly the use-after-close panic this
-// exists to prevent, on the shutdown path where no recover is in scope.
+// inside streamTierEntries, and its per-batch acquisition of the SQLite
+// maintenance gate is ctx-aware too (SQLActivityStore.acquireBackfillGate), so
+// it returns promptly even while a long Summarize/Prune holds that gate — which
+// a plain RLock would have made us wait out, since Prune has no context of its
+// own. The alternative — giving up after a timeout — reintroduces exactly the
+// use-after-close panic this exists to prevent, on the shutdown path where no
+// recover is in scope.
 func (s *sqlMigrationStarter) Stop(_ context.Context) error {
 	if s.cancel != nil {
 		s.cancel()

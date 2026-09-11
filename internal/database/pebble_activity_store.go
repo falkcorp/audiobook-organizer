@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-10
 
@@ -920,12 +920,18 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 	totalDeleted := 0
 	now := time.Now().UTC()
 
+	i := 0
 	for gk, g := range groups {
 		select {
 		case <-ctx.Done():
 			return totalDeleted, ctx.Err()
 		default:
 		}
+		// Liveness for the nightly op: one group is one synced batch commit.
+		if i%activityMaintenanceProgressEvery == 0 {
+			ReportMaintenanceProgress(ctx, MaintenancePhaseSummarize, "pebble", totalDeleted)
+		}
+		i++
 
 		entries := make([]ActivityEntry, len(g.kvs))
 		for i, kv := range g.kvs {

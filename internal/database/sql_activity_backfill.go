@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_backfill.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 5b2e9d73-1c46-4f8a-b0d1-7e3a2c6f9048
-// last-edited: 2026-09-08
+// last-edited: 2026-09-10
 
 // Package database — Pebble → SQLite activity backfill for the backend cutover.
 //
@@ -298,19 +298,19 @@ func BackfillPebbleActivityToSQLWithProgress(
 		_, serr := pebbleStore.streamTierEntries(ctx, tier, sqlBackfillBatch, resumeFrom, func(batch []ActivityEntry, lastKey []byte) error {
 			tierScanned += len(batch)
 			if !dryRun {
-				// Copy pass for this batch.
-				copied, cerr := sqlStore.recordBatch(ctx, batch)
+				// Copy pass, then parity pass: re-present the same batch. A
+				// correct copy inserts ZERO on the re-present (every row
+				// conflicts on src_key). Any insert means a copied row did not
+				// land — record it so the tier fails parity below. Both passes
+				// run under the store's backfill gate so a concurrent
+				// maintenance delete (compaction/summarize/prune run on this
+				// store too since 2026-09-10) cannot land between them and read
+				// as a lost write.
+				copied, n, cerr := sqlStore.copyAndVerifyBatch(ctx, batch)
 				if cerr != nil {
-					return fmt.Errorf("copy: %w", cerr)
+					return cerr
 				}
 				tierCopied += copied
-				// Parity pass: re-present the same batch. A correct copy inserts ZERO
-				// here (every row conflicts on src_key). Any insert means a copied row
-				// did not land — record it so the tier fails parity below.
-				n, verr := sqlStore.recordBatch(ctx, batch)
-				if verr != nil {
-					return fmt.Errorf("parity re-present: %w", verr)
-				}
 				tierReinserted += n
 
 				// Checkpoint AFTER the batch is durably in SQLite, so the cursor

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 1.0.0
+// version: 1.3.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-09-10
 
@@ -193,5 +193,53 @@ func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
 		_ = reporter.UpdateProgress(ev.Result.EntriesDeleted, 0,
 			fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
 				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted))
+	}
+}
+
+// maintenanceProgressToReporter adapts the summarize/prune/repair passes'
+// progress events to reporter.UpdateProgress, for the nightly cleanup. Unlike
+// compactProgressToReporter it forwards Done events too: the nightly op logs
+// only the four final totals, so a per-backend completion is the only place a
+// backend's own number (and failure) is ever seen, and it is a liveness stamp
+// at the moment the next backend's silent stretch begins.
+// The progress COUNTER is cumulative across the whole op, which ev.Rows is not:
+// each backend restarts its count at zero for each phase, so forwarding ev.Rows
+// raw made the op's progress bar jump backwards three times a run. Both
+// non-terminal emitters (SQLActivityStore.Summarize, PebbleActivityStore
+// .Summarize) report a running total within their own phase+backend, and the
+// Done event carries that same backend's final number, so keeping the latest
+// value per phase+backend and summing those is the row count actually deleted
+// so far. The map is guarded because the hook rides a context and nothing
+// promises the fan-out stays single-goroutine.
+func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenanceProgress {
+	type phaseBackend struct{ phase, backend string }
+	var (
+		mu     sync.Mutex
+		latest = map[phaseBackend]int64{}
+	)
+	return func(ev database.MaintenanceProgressEvent) {
+		mu.Lock()
+		latest[phaseBackend{ev.Phase, ev.Backend}] = ev.Rows
+		var total int64
+		for _, n := range latest {
+			total += n
+		}
+		mu.Unlock()
+
+		var msg string
+		switch {
+		case ev.Done && ev.Err != nil:
+			msg = fmt.Sprintf("%s: %s FAILED after %d rows: %v", ev.Phase, ev.Backend, ev.Rows, ev.Err)
+			_ = reporter.Log(slog.LevelError, msg)
+		case ev.Done:
+			msg = fmt.Sprintf("%s: %s done, %d rows", ev.Phase, ev.Backend, ev.Rows)
+		case ev.Backend == "":
+			// A phase boundary stamped by the caller (see Server.CompactActivityLog):
+			// the only liveness a context-free pass like Prune can have.
+			msg = fmt.Sprintf("%s: starting", ev.Phase)
+		default:
+			msg = fmt.Sprintf("%s: %s %d rows so far", ev.Phase, ev.Backend, ev.Rows)
+		}
+		_ = reporter.UpdateProgress(int(total), 0, msg)
 	}
 }

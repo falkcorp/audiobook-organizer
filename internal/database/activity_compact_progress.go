@@ -1,5 +1,5 @@
 // file: internal/database/activity_compact_progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
 // last-edited: 2026-09-10
 
@@ -79,5 +79,89 @@ func reportCompactProgress(ctx context.Context, backend string, result CompactRe
 func reportCompactDone(ctx context.Context, backend string, result CompactResult, err error) {
 	if fn := compactProgressFrom(ctx); fn != nil {
 		fn(CompactProgressEvent{Backend: backend, Result: result, Done: true, Err: err})
+	}
+}
+
+// ── the other maintenance passes ────────────────────────────────────────────
+//
+// The nightly cleanup runs compaction, then Summarize, then Prune, then
+// RepairActivityIndexes, and since 2026-09-10 each of those runs on every
+// activity backend rather than the active one alone. Compaction reports
+// through the hook above; the other passes were silent, which on the first
+// night over an unsummarized SQLite history — tens of thousands of one-
+// transaction groups — is long enough for the registry watchdog to strike the
+// op as never_reported. This second hook carries their liveness the same way.
+
+// Maintenance phase names, as reported in MaintenanceProgressEvent.Phase.
+const (
+	MaintenancePhaseSummarize     = "summarize"
+	MaintenancePhasePrune         = "prune"
+	MaintenancePhaseRepairIndexes = "repair-indexes"
+)
+
+// activityMaintenanceProgressEvery is how many groups a Summarize pass works
+// through between progress events. One group is one transaction, so this is a
+// few hundred milliseconds at most between stamps.
+const activityMaintenanceProgressEvery = 100
+
+// MaintenanceProgressEvent is one liveness/progress notification from a
+// non-compaction maintenance pass. Stores emit them mid-run (Done=false, Rows
+// = that backend's running count so far); the migrating wrapper emits one per
+// backend when that backend returns (Done=true, Rows = its final count, Err =
+// its error, if any).
+type MaintenanceProgressEvent struct {
+	// Phase is one of the MaintenancePhase* constants.
+	Phase string
+	// Backend names the store the event is about: "sqlite", "pebble" or "nuts".
+	Backend string
+	// Rows is the running or final count for Backend alone — rows deleted for
+	// summarize/prune, index entries deleted for repair-indexes.
+	Rows int64
+	// Done is true for the single completion event a wrapper emits per backend.
+	Done bool
+	// Err is set on a Done event when that backend's pass failed.
+	Err error
+}
+
+// MaintenanceProgress receives MaintenanceProgressEvents. Called synchronously
+// from the maintenance loop; it must be cheap and must not call back into the
+// store.
+type MaintenanceProgress func(MaintenanceProgressEvent)
+
+type maintenanceProgressKey struct{}
+
+// WithMaintenanceProgress attaches a progress hook to ctx for Summarize and
+// RepairActivityIndexes. It rides the context for the same reason
+// WithCompactProgress does; see that function. Prune takes no context on the
+// ActivityStorer interface and so cannot report — its callers bracket it with
+// their own stamps.
+func WithMaintenanceProgress(ctx context.Context, fn MaintenanceProgress) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, maintenanceProgressKey{}, fn)
+}
+
+func maintenanceProgressFrom(ctx context.Context) MaintenanceProgress {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(maintenanceProgressKey{}).(MaintenanceProgress)
+	return fn
+}
+
+// ReportMaintenanceProgress emits a non-terminal event for phase/backend if a
+// hook is attached.
+func ReportMaintenanceProgress(ctx context.Context, phase, backend string, rows int) {
+	if fn := maintenanceProgressFrom(ctx); fn != nil {
+		fn(MaintenanceProgressEvent{Phase: phase, Backend: backend, Rows: int64(rows)})
+	}
+}
+
+// reportMaintenanceDone emits the per-backend completion event for phase.
+// Only wrappers that fan out across backends call it.
+func reportMaintenanceDone(ctx context.Context, phase, backend string, rows int64, err error) {
+	if fn := maintenanceProgressFrom(ctx); fn != nil {
+		fn(MaintenanceProgressEvent{Phase: phase, Backend: backend, Rows: rows, Done: true, Err: err})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_compact_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2c7a9f3-4b61-4d0e-8f5a-6c3b9d1e7a48
 // last-edited: 2026-09-10
 
@@ -113,6 +113,79 @@ func TestCompactActivity_500WithoutRegistry(t *testing.T) {
 	h := handlers.NewActivityCompactHandler(nil, nil)
 	w := postCompact(t, h, `{"older_than_days": 0}`)
 	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d; want 500", w.Code)
+	}
+}
+
+func postRecompact(t *testing.T, h *handlers.ActivityCompactHandler) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/admin/recompact-digests", h.RecompactDigests)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/recompact-digests", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestRecompactDigests_EnqueuesAndReturns202 pins the shape change: the
+// endpoint no longer re-derives digests inside the request, it enqueues
+// maintenance.recompact-activity-digests and hands back the op id.
+func TestRecompactDigests_EnqueuesAndReturns202(t *testing.T) {
+	enq := &fakeCompactEnqueuer{returnID: "op-456"}
+	h := handlers.NewActivityCompactHandler(enq, fakeActiveLister{})
+
+	w := postRecompact(t, h)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body %s; want 202", w.Code, w.Body.String())
+	}
+	if enq.gotDef != maintenance.RecompactActivityDigestsDefID {
+		t.Errorf("enqueued def = %q, want %q", enq.gotDef, maintenance.RecompactActivityDigestsDefID)
+	}
+	var body struct {
+		Data handlers.CompactStartedResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Data.OperationID != "op-456" || body.Data.DefID != maintenance.RecompactActivityDigestsDefID || body.Data.Status != "queued" {
+		t.Errorf("data = %+v", body.Data)
+	}
+}
+
+func TestRecompactDigests_409WhenDedupedOntoRunningOp(t *testing.T) {
+	enq := &fakeCompactEnqueuer{returnID: "op-running"}
+	lister := fakeActiveLister{rows: []database.OperationV2Row{
+		{ID: "op-running", DefID: maintenance.RecompactActivityDigestsDefID, Status: "running"},
+	}}
+	h := handlers.NewActivityCompactHandler(enq, lister)
+
+	w := postRecompact(t, h)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body %s; want 409", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "op-running") {
+		t.Errorf("409 body should name the running op: %s", w.Body.String())
+	}
+}
+
+// A live COMPACTION must not make a recompact request read as a duplicate:
+// the dedupe is per def id, not per handler.
+func TestRecompactDigests_NotDedupedAgainstCompaction(t *testing.T) {
+	enq := &fakeCompactEnqueuer{returnID: "op-new"}
+	lister := fakeActiveLister{rows: []database.OperationV2Row{
+		{ID: "op-new", DefID: maintenance.CompactActivityLogDefID, Status: "running"},
+	}}
+	h := handlers.NewActivityCompactHandler(enq, lister)
+
+	if w := postRecompact(t, h); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body %s; want 202", w.Code, w.Body.String())
+	}
+}
+
+func TestRecompactDigests_500WithoutRegistry(t *testing.T) {
+	h := handlers.NewActivityCompactHandler(nil, nil)
+	if w := postRecompact(t, h); w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d; want 500", w.Code)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
 // last-edited: 2026-09-10
 
@@ -21,12 +21,15 @@ type activityCleanupDeps struct {
 	indexOrphans int64
 }
 
-func (d activityCleanupDeps) CompactActivityLog(_ context.Context, _, _, _ int, progress database.CompactProgress) (int, int, int, int64, error) {
+func (d activityCleanupDeps) CompactActivityLog(ctx context.Context, _, _, _ int, progress database.CompactProgress) (int, int, int, int64, error) {
 	// Emit one event the way a real backend would, so the test below can pin
 	// that the scheduled op forwards it to UpdateProgress.
 	if progress != nil {
 		progress(database.CompactProgressEvent{Backend: "sqlite", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 40}})
 	}
+	// And one summarize progress event the way a store would, via the
+	// maintenance hook the op is expected to have attached to ctx.
+	database.ReportMaintenanceProgress(ctx, database.MaintenancePhaseSummarize, "pebble", 3)
 	return 2, 3, 4, d.indexOrphans, nil
 }
 

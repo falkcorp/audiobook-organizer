@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-10
 
@@ -297,10 +297,16 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 		return 0, 0, 0, 0, fmt.Errorf("compact activity: %w", err)
 	}
 
+	// Each phase boundary is a liveness stamp for the nightly op (through the
+	// WithMaintenanceProgress hook on ctx, if any). Summarize and the index
+	// repair also report from inside; Prune has no context on the interface,
+	// so the stamp before it is the last one the watchdog sees until it
+	// returns — which is why cleanup-activity-log's ProgressTimeout is 20m.
 	if changeDays <= 0 {
 		changeDays = 90
 	}
 	changeCutoff := time.Now().AddDate(0, 0, -changeDays)
+	database.ReportMaintenanceProgress(ctx, database.MaintenancePhaseSummarize, "", 0)
 	sumCount, err := s.activityService.Summarize(ctx, changeCutoff, "change")
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("summarize activity: %w", err)
@@ -310,11 +316,13 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 		debugDays = 30
 	}
 	debugCutoff := time.Now().AddDate(0, 0, -debugDays)
+	database.ReportMaintenanceProgress(ctx, database.MaintenancePhasePrune, "", 0)
 	pruneCount, err := s.activityService.Prune(debugCutoff, "debug")
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("prune activity: %w", err)
 	}
 
+	database.ReportMaintenanceProgress(ctx, database.MaintenancePhaseRepairIndexes, "", 0)
 	repair, err := s.activityService.Store().RepairActivityIndexes(ctx)
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("repair activity indexes: %w", err)
@@ -346,6 +354,16 @@ func (s *Server) OptimizeActivityStatistics(ctx context.Context) (database.Activ
 		return database.ActivityOptimizeResult{}, nil
 	}
 	return s.activityService.Store().OptimizeStatistics(ctx)
+}
+
+// RecompactActivityDigests re-derives legacy digest items on every activity
+// backend (MigratingActivityStore.RecompactDigests fans out to both). It backs
+// the maintenance.recompact-activity-digests op.
+func (s *Server) RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error) {
+	if s.activityService == nil {
+		return database.RecompactResult{}, nil
+	}
+	return s.activityService.RecompactDigests(ctx)
 }
 
 // ---- feature flags ----
