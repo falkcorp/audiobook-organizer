@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-08-17
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -217,6 +217,15 @@ type missingFileReport struct {
 	Missing   int
 	Present   int
 
+	// ZeroSize counts rows whose stat succeeded but whose file holds zero bytes --
+	// present on disk but empty, which is neither a healthy Present row nor a
+	// Missing/Unreadable one. Kept as its own bucket per DEC-13 so a truncated
+	// file is never silently folded into "present" (healthy).
+	ZeroSize int
+	// ZeroSizeSample holds a bounded sample of zero-size paths, kept separate from
+	// Sample (which is missing-path only) so the two findings are never mixed.
+	ZeroSizeSample []string
+
 	// SignalsMissing / SignalsPresent are the identity-signal census, split so the
 	// present rows act as a control for the missing ones.
 	SignalsMissing missingFileSignals
@@ -247,8 +256,8 @@ type missingFileReport struct {
 
 func (r missingFileReport) summary() string {
 	base := fmt.Sprintf(
-		"rows=%d missing=%d present=%d unreadable=%d | books=%d fully-broken=%d partially-broken=%d intact=%d",
-		r.TotalRows, r.Missing, r.Present, r.Unreadable,
+		"rows=%d missing=%d present=%d unreadable=%d zero_size=%d | books=%d fully-broken=%d partially-broken=%d intact=%d",
+		r.TotalRows, r.Missing, r.Present, r.Unreadable, r.ZeroSize,
 		r.BooksTotal, r.BooksAllGone, r.BooksPartial, r.BooksIntact)
 	if r.Classified {
 		base += " || " + r.Classification.summary()
@@ -287,6 +296,11 @@ type fileExistence uint8
 const (
 	fileUnknown fileExistence = iota
 	filePresent
+	// fileZeroSize is present but holds zero bytes -- a truncated/corrupt file that
+	// must never be silently counted as healthy (report.Present) or folded into
+	// report.Missing/report.Unreadable, which are structurally distinct findings
+	// (path absent vs. I/O error vs. present-but-empty).
+	fileZeroSize
 	fileMissing
 	fileUnreadable
 )
@@ -352,11 +366,17 @@ func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMess
 			"intro_transcribed", fmt.Sprintf("%d (%s)", s.IntroTranscribed, s.pct(s.IntroTranscribed)))
 	}
 
-	log.Info("missing-file-audit complete",
+	fields := []any{
 		"rows", report.TotalRows, "missing", report.Missing, "unreadable", report.Unreadable,
+		"zero_size", report.ZeroSize,
 		"books_fully_broken", report.BooksAllGone, "books_partially_broken", report.BooksPartial,
 		"missing_rows_with_a_decisive_signal", report.SignalsMissing.AnyDecisive,
-		"sample", report.Sample)
+		"sample", report.Sample,
+	}
+	if len(report.ZeroSizeSample) > 0 {
+		fields = append(fields, "zero_size_sample", report.ZeroSizeSample)
+	}
+	log.Info("missing-file-audit complete", fields...)
 	return nil
 }
 
@@ -395,13 +415,20 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 	}
 
 	results := make([]fileExistence, len(items))
-	var missing, present, unreadable atomic.Int64
+	var missing, present, unreadable, zeroSize atomic.Int64
 
 	prog := sdk.NewProgress(reporter, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
 
 	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it missingFileItem) error {
-		switch _, serr := os.Stat(it.file.FilePath); {
+		switch info, serr := os.Stat(it.file.FilePath); {
+		case serr == nil && info.Size() == 0:
+			// Present on disk but holds no bytes -- a truncated/corrupt file, not a
+			// healthy present one. Counted in its own bucket per DEC-13 rather than
+			// folded into filePresent, so a repair decision never mistakes it for
+			// healthy.
+			results[it.idx] = fileZeroSize
+			zeroSize.Add(1)
 		case serr == nil:
 			results[it.idx] = filePresent
 			present.Add(1)
@@ -434,6 +461,7 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 		Missing:       int(missing.Load()),
 		Present:       int(present.Load()),
 		Unreadable:    int(unreadable.Load()),
+		ZeroSize:      int(zeroSize.Load()),
 		MissingByRoot: map[string]int{},
 	}
 
@@ -461,6 +489,10 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 			// The control arm. Only present rows, so an unreadable row does not
 			// quietly land in the baseline it is supposed to be compared against.
 			report.SignalsPresent.tally(items[i].file)
+		case fileZeroSize:
+			if len(report.ZeroSizeSample) < sampleLimit {
+				report.ZeroSizeSample = append(report.ZeroSizeSample, items[i].file.FilePath)
+			}
 		}
 	}
 	report.BooksTotal = len(byBook)
