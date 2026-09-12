@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.58.0 -->
+<!-- version: 10.59.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -11762,6 +11762,10 @@ Found while measuring signal coverage for the missing-file repoint work; see
       but any client that preflights with `HEAD` would see "file not found".
 
 ### 🔴 `dedup.llm-review` holds a library write with no `ConcurrencyKey` — it can run concurrently with itself
+
+- [x] **✅ FIXED 2026-09-11:** `llmReviewDef` now sets `ConcurrencyKey: "dedup.llm-review"`, matching
+      its 16 siblings. `runLLMReview` has no internal partitioning, so parallel self-runs were not
+      deliberate. Pinned by `TestLLMReviewDef_SerializesAgainstItself`.
 
 `internal/plugins/dedup/llm_review.go:19` registers `ID: "dedup.llm-review"` declaring both
 `sdk.CapLibraryRead` and `sdk.CapLibraryWrite` (`:28`, `:29`) but sets **no `ConcurrencyKey`**.

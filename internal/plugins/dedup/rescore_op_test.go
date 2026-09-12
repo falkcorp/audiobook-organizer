@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b3d90e7-4c21-4a58-8f07-1d92e5cb37a0
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package dedup
 
@@ -113,6 +113,26 @@ func TestRescoreDef_SharesFullScanConcurrencyKey(t *testing.T) {
 	}
 	if got, want := def.ConcurrencyKey, p.fullScanDef().ConcurrencyKey; got != want {
 		t.Errorf("dedup.rescore ConcurrencyKey = %q, want dedup.full-scan's %q so a re-band and a scan cannot write the same candidate rows at once", got, want)
+	}
+}
+
+// TestLLMReviewDef_SerializesAgainstItself: dedup.llm-review declares
+// CapLibraryWrite, so the dispatcher must never run two of it at once. It was
+// the only write-declaring dedup op with no ConcurrencyKey, which let the
+// scheduler start a second review while the first was mid-flight.
+//
+// Mutation check: delete the ConcurrencyKey line from llmReviewDef and this fails.
+func TestLLMReviewDef_SerializesAgainstItself(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	es := database.NewEmbeddingStore(pebble.DB())
+	p := newCalibratePlugin(t, pebble, es)
+
+	def := p.llmReviewDef()
+	if def.ID != "dedup.llm-review" {
+		t.Fatalf("op id = %q", def.ID)
+	}
+	if def.ConcurrencyKey != def.ID {
+		t.Errorf("dedup.llm-review ConcurrencyKey = %q, want %q so two reviews cannot write the same candidates at once", def.ConcurrencyKey, def.ID)
 	}
 }
 
