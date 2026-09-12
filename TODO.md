@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.0 -->
+<!-- version: 10.73.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -5099,7 +5099,8 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       Full analysis in
       `docs/agent-tasks/todo-completion/handoff/2026-08-23-open-findings.md` §9;
       user-facing write-up in
-      `docs/executive-summaries/2026-08-23-the-copies-the-merge-left-behind-executive-summary.md` §7.
+      `docs/executive-summaries/2026-08-executive-summary.md` (section 5, "The copies the
+      merge left behind").
       Raised while reviewing PR #2821 (TASK-029).
 
 - [x] **SERIES-MERGE-UNGUARDED-DENOMINATOR** (was `…-TRASHED-ROWS-RESIDUAL`; renamed
@@ -11325,7 +11326,7 @@ book and is most likely to go looking for another by the same author.
       and the `WithAIScanCancellation` wiring is still unasserted — which is the
       original point of this item.
 
-- [x] **August executive-summary roundup is stale.** `2026-08-31-august-monthly-roundup-executive-summary.md` — ✅ DONE 2026-09-10: TASK-056 (DONE): PR #2749 confirmed merged, ancestor of HEAD, consolidating the August executive-summary roundup.
+- [x] **August executive-summary roundup is stale.** `2026-08-executive-summary.md` (the roundup and the per-day files are now folded into it) — ✅ DONE 2026-09-10: TASK-056 (DONE): PR #2749 confirmed merged, ancestor of HEAD, consolidating the August executive-summary roundup.
       says it consolidates "the seven dated summaries ... from 2026-08-04 to 2026-08-09"
       and was last edited 2026-08-14, but the directory now holds individual summaries
       through 2026-08-16. It describes itself as "month in progress — updated as work
@@ -13860,8 +13861,8 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       unknown. See `todo.d/20260809-book-detail-purge-suite-only-flake.md`.
 
       **This contradicts what was believed on 2026-08-08 morning.** The
-      executive summary
-      `docs/executive-summaries/2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md`
+      2026-08-08 executive summary (since folded into
+      `docs/executive-summaries/2026-08-executive-summary.md`, section 3)
       states the suite "can be trusted as a gate again" and that "it is now safe
       to require these". That conclusion rested on a local run reporting **130
       passed / 0 failed**, and that run was wrong in two independent ways:
@@ -13957,10 +13958,10 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
          be dealt with first or the gate goes red on day one.
       4. **Correct the executive summary** rather than leaving a claim on the
          record that the safety net is restored when half of it is on the floor.
-         ✅ **DONE 2026-08-09.** A correction banner was added to
-         `2026-08-08-the-safety-net-that-had-stopped-catching-executive-summary.md`
-         and the outcome written up in
-         `2026-08-09-the-half-red-safety-net-executive-summary.md`.
+         ✅ **DONE 2026-08-09.** A correction banner was added to the
+         2026-08-08 safety-net summary and the outcome written up in a
+         2026-08-09 follow-up; both are now folded into
+         `2026-08-executive-summary.md` (section 3, which keeps the retraction).
 
       **Do not "fix" this by deleting or skipping the failing specs.** Six files
       were disabled-by-accident for four months and that is the incident this
