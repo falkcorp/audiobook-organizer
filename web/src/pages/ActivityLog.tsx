@@ -839,8 +839,9 @@ export default function ActivityLog() {
       setToast(describeRevertResult(result));
       loadFeed(page);
     } catch (err) {
-      // A 409 (every row record-only) or 500 carries the server's reason;
-      // show it rather than closing the dialog as if the revert worked.
+      // A 409 (nothing restorable) or 500 carries the server's reason. The
+      // dialog still closes in `finally`, so this toast is where the user
+      // learns the revert did not happen, or only partly did.
       console.error('Failed to revert operation', err);
       setToast(describeError(err));
     } finally {

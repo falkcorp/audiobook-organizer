@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // revertServiceStore is the slice of the store this service uses, measured
@@ -63,12 +64,17 @@ type RevertResult struct {
 	// Failed rows have a change type the engine can reverse, but the reversal
 	// returned an error. They are not marked reverted.
 	Failed int `json:"failed"`
-	// NotRestorable rows have a change type the engine has no reversal for
-	// (the record-only author_delete / narrator_delete rows, or a type it does
-	// not recognise). They are not marked reverted.
+	// NotRestorable rows are ones the engine has no reversal for, as decided by
+	// undo.NotRestorableLabel: record-only author_delete / narrator_delete
+	// rows, a metadata_update on a field it cannot restore, or a change type it
+	// does not recognise. They are not marked reverted.
 	NotRestorable int `json:"not_restorable"`
-	// NotRestorableTypes counts NotRestorable rows by change type.
+	// NotRestorableTypes counts NotRestorable rows by their label (a change
+	// type, or "metadata_update:<field>").
 	NotRestorableTypes map[string]int `json:"not_restorable_types,omitempty"`
+	// AlreadyReverted rows are restorable rows an earlier revert already
+	// restored and marked; this call skipped them.
+	AlreadyReverted int `json:"already_reverted"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -79,11 +85,15 @@ func (r *RevertResult) Partial() bool {
 // Summary is a one-line human-readable account of the result, used both in the
 // log and as the HTTP response message.
 func (r *RevertResult) Summary() string {
-	if !r.Partial() {
-		return fmt.Sprintf("operation reverted: %d of %d changes restored", r.Restored, r.Total)
-	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "operation partially reverted: %d of %d changes restored", r.Restored, r.Total)
+	if r.Partial() {
+		fmt.Fprintf(&b, "operation partially reverted: %d of %d changes restored", r.Restored, r.Total)
+	} else {
+		fmt.Fprintf(&b, "operation reverted: %d of %d changes restored", r.Restored, r.Total)
+	}
+	if r.AlreadyReverted > 0 {
+		fmt.Fprintf(&b, "; %d already reverted earlier", r.AlreadyReverted)
+	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
 	}
@@ -108,36 +118,6 @@ func (e *NotRestorableError) Error() string {
 		formatTypeCounts(e.Types))
 }
 
-// recordOnlyChangeTypes are ledger rows written as a durable record of a
-// destructive step that has no automatic reversal. Restoring a deleted author
-// or narrator would mean recreating the entity (and deciding whether to reuse
-// its ID), which the engine deliberately does not do.
-//
-//   - author_delete: maintenance.purge-empty-authors, author-duplicate-merge
-//     (journalAuthorMerge) and the API author merge (server/entities_ops.go).
-//   - narrator_delete: maintenance.purge-empty-narrators.
-//
-// Listing them is documentation: any type revertChange has no case for is
-// treated the same way.
-var recordOnlyChangeTypes = map[string]bool{
-	"author_delete":   true,
-	"narrator_delete": true,
-}
-
-// isRestorable reports whether revertChange has a reversal for changeType. It
-// must agree with revertChange's switch.
-func isRestorable(changeType string) bool {
-	if recordOnlyChangeTypes[changeType] {
-		return false
-	}
-	switch changeType {
-	case "file_move", "organize_rename", "metadata_update", "tag_write",
-		"organize_failed", "organize_skipped", "organize_summary":
-		return true
-	}
-	return false
-}
-
 // RevertOperation undoes the restorable changes of an operation in reverse
 // order and marks exactly those rows reverted.
 //
@@ -146,6 +126,13 @@ func isRestorable(changeType string) bool {
 //     the rest are left unmarked and counted in the result.
 //   - A restorable row whose reversal fails is left unmarked, counted in
 //     Failed, and RevertOperation returns the result with a non-nil error.
+//   - A restorable row an earlier revert already marked is skipped on its
+//     own, so rows a partial or failed revert left unmarked can be retried.
+//     Only when every restorable row is marked does it report "already been
+//     reverted".
+//
+// Rows are classified by undo.NotRestorableLabel, the same classifier
+// undo.PreflightUndoConflicts uses for the confirmation the UI shows first.
 func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, error) {
 	changes, err := rs.db.GetOperationChanges(operationID)
 	if err != nil {
@@ -156,32 +143,35 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		return nil, fmt.Errorf("no changes found for operation %s", operationID)
 	}
 
-	// Check if already reverted
-	for _, c := range changes {
-		if c.RevertedAt != nil {
-			return nil, fmt.Errorf("operation %s has already been reverted", operationID)
-		}
-	}
-
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	var restorable []*database.OperationChange
+	restorableTotal := 0
 	for _, c := range changes {
-		if isRestorable(c.ChangeType) {
-			restorable = append(restorable, c)
+		if label := undo.NotRestorableLabel(c); label != "" {
+			result.NotRestorable++
+			if result.NotRestorableTypes == nil {
+				result.NotRestorableTypes = map[string]int{}
+			}
+			result.NotRestorableTypes[label]++
 			continue
 		}
-		result.NotRestorable++
-		if result.NotRestorableTypes == nil {
-			result.NotRestorableTypes = map[string]int{}
+		restorableTotal++
+		if c.RevertedAt != nil {
+			result.AlreadyReverted++
+			continue
 		}
-		result.NotRestorableTypes[c.ChangeType]++
+		restorable = append(restorable, c)
 	}
 
-	if len(restorable) == 0 {
+	if restorableTotal == 0 {
 		slog.Warn("revert refused: no restorable changes",
 			"operation", logger.SanitizeLogValue(operationID), "not_restorable", result.NotRestorable,
 			"types", formatTypeCounts(result.NotRestorableTypes))
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
+	}
+	if len(restorable) == 0 {
+		return nil, fmt.Errorf("operation %s has already been reverted: all %d restorable changes are marked reverted",
+			operationID, restorableTotal)
 	}
 
 	// Process in reverse order
@@ -250,7 +240,7 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
 	default:
-		// Unreachable from RevertOperation, which filters on isRestorable.
+		// Unreachable from RevertOperation, which filters on undo.NotRestorableLabel.
 		return fmt.Errorf("unknown change type: %s", c.ChangeType)
 	}
 }
@@ -280,31 +270,13 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 	return nil
 }
 
-// bookFieldMap maps field names to Book struct field names for reflection-based revert.
-var bookFieldMap = map[string]string{
-	"title":                  "Title",
-	"narrator":               "Narrator",
-	"edition":                "Edition",
-	"language":               "Language",
-	"publisher":              "Publisher",
-	"isbn10":                 "ISBN10",
-	"isbn13":                 "ISBN13",
-	"asin":                   "ASIN",
-	"cover_url":              "CoverURL",
-	"library_state":          "LibraryState",
-	"open_library_id":        "OpenLibraryID",
-	"hardcover_id":           "HardcoverID",
-	"google_books_id":        "GoogleBooksID",
-	"metadata_review_status": "MetadataReviewStatus",
-}
-
 func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
 	book, err := rs.db.GetBookByID(c.BookID)
 	if err != nil {
 		return fmt.Errorf("failed to get book %s: %w", c.BookID, err)
 	}
 
-	structField, ok := bookFieldMap[c.FieldName]
+	structField, ok := undo.RevertableBookField(c.FieldName)
 	if !ok {
 		return fmt.Errorf("unknown metadata field: %s", c.FieldName)
 	}

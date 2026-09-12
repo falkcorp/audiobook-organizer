@@ -29,6 +29,10 @@ export interface UndoConflictReport {
   book_deleted: Array<{ change_id: string; book_id: string; reason: string }>;
   re_organized: Array<{ change_id: string; book_id: string; reason: string }>;
   safe: number;
+  /** Rows the revert endpoint cannot reverse; in no other bucket. */
+  not_restorable?: number;
+  /** not_restorable by label: a change type, or "metadata_update:<field>". */
+  not_restorable_types?: Record<string, number>;
 }
 
 async function jsonFetch(url: string, opts?: RequestInit) {

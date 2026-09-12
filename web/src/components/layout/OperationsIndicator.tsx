@@ -37,7 +37,7 @@ import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
-import { describeRevertResult } from '../../utils/revertResult';
+import { describeRevertResult, describeUndoPreflight } from '../../utils/revertResult';
 
 function formatETA(op: ActiveOperation): string | null {
   if (!op.startedAt || op.progress <= 0 || op.total <= 0) return null;
@@ -716,15 +716,13 @@ export function OperationsIndicator() {
                               e.preventDefault();
                               try {
                                 const preflight = await getUndoPreflight(op.id);
-                                const conflicts =
-                                  (preflight.content_changed?.length || 0) +
-                                  (preflight.book_deleted?.length || 0) +
-                                  (preflight.re_organized?.length || 0);
-                                const msg =
-                                  conflicts > 0
-                                    ? `${preflight.safe} changes can be undone. ${conflicts} conflict(s) detected. Proceed?`
-                                    : `Undo ${preflight.safe} change(s) from this operation?`;
-                                if (confirm(msg)) {
+                                const plan = describeUndoPreflight(preflight);
+                                if (!plan.canUndo) {
+                                  // Nothing restorable: say so rather than offer an Undo the server refuses.
+                                  alert(plan.message);
+                                  return;
+                                }
+                                if (confirm(plan.message)) {
                                   const result = await revertOp(op.id);
                                   alert(describeRevertResult(result));
                                 }

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.110.0
+// version: 1.111.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-12
 
@@ -2485,7 +2485,9 @@ func (m *MockStore) MarkOperationChangesReverted(operationID string, changeIDs [
 	if m.MarkOperationChangesRevertedFunc != nil {
 		return m.MarkOperationChangesRevertedFunc(operationID, changeIDs)
 	}
-	return nil
+	// Fail loudly: a silent nil here would let a test "pass" a revert whose
+	// rows were never marked.
+	return fmt.Errorf("MockStore.MarkOperationChangesReverted called without MarkOperationChangesRevertedFunc set")
 }
 
 func (m *MockStore) CreateAuthorTombstone(oldID, canonicalID int) error {

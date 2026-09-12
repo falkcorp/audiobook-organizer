@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-12-the-undo-that-said-done-and-did-nothing-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d2e9a41-3c6b-4f85-9e10-b4a7c3d8f256 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -34,10 +34,20 @@ wrote 1,742 of these entries, so anyone could have hit this today.
   were restored and how many could not be, by type.
 - The Undo button and the Activity Log now show that report. They no longer
   display "Operation reverted successfully" for a partial result.
+- Before you confirm, the Undo prompt now counts only the entries that can
+  actually be put back and names the ones that cannot. When none can, it says
+  so and does not offer Undo. It used to ask "Undo 1742 change(s)?" for the
+  author clean-up and then refuse.
+- Merging duplicate authors also records which author each book pointed to.
+  Undo cannot put that back yet, so those entries now count as records too, and
+  Undo refuses with an explanation instead of reporting an internal error.
+- If an earlier Undo only got partway, pressing Undo again now retries the
+  entries that were left, instead of claiming the operation was already undone.
 
 New tests cover a clean-up with only deletion records, a mix of reversible and
 record-only entries, and the narrator version of both. The same tests fail on
-the code before this fix.
+the code before this fix. Further tests cover the Undo prompt's count, the
+author-merge entries, and retrying a partial Undo.
 
 ### What this does not do
 
