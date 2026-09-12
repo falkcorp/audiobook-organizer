@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-08-25
+// last-edited: 2026-09-12
 
 package audiobooks
 
@@ -20,6 +20,8 @@ import (
 
 // GetAudiobooks retrieves audiobooks with optional filtering.
 // Supports search, author_id, series_id, is_primary_version, and library_state filters.
+// search, author_id and series_id are ANDed: any of them that accompanies
+// another narrows the result rather than being ignored.
 func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, error) {
 	books, _, err := svc.GetAudiobooksWithTotal(ctx, limit, offset, search, authorID, seriesID, filters...)
 	return books, err
@@ -134,6 +136,42 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	// page length exactly as it always did.
 	resultTotal := -1
 
+	// author_id / series_id that did NOT become the base set below are applied
+	// as a post-filter. The branch chain further down picks exactly one base
+	// set — search, else author, else series — and until 2026-09-12 nothing
+	// re-applied the ids it passed over: ?series_id=N&search=foo answered from
+	// the whole library, and author_id silently won over series_id when both
+	// were sent.
+	//
+	// Membership is resolved through the SAME store getters the author/series
+	// base branches use, so "is this book by author N / in series N" means
+	// exactly what the plain ?author_id=N listing means: the book_authors
+	// junction (co-authors included, not only the denormalized Book.AuthorID),
+	// primary versions only, soft-deleted rows excluded.
+	//
+	// Setting hasPostFilters here, BEFORE the search branch runs, is what makes
+	// that branch over-fetch the whole candidate set instead of one page — see
+	// the comment above fetchLimit for why post-filtering one already-cut page
+	// breaks paging. Only the getter the request actually needs is called; a
+	// single id with no search is still served by its own base branch.
+	var idMembership map[string]struct{}
+	var memberAuthorID, memberSeriesID *int
+	if search != "" {
+		memberAuthorID, memberSeriesID = authorID, seriesID
+	} else if authorID != nil {
+		memberSeriesID = seriesID
+	}
+	if memberAuthorID != nil || memberSeriesID != nil {
+		// FAIL CLOSED: nil means "no id restriction", so falling through with a
+		// nil set on a getter error would serve the unrestricted result for a
+		// request that asked to narrow it.
+		idMembership, err = svc.resolveIDMembership(memberAuthorID, memberSeriesID)
+		if err != nil {
+			return nil, 0, err
+		}
+		hasPostFilters = true
+	}
+
 	// Apply filters in order of precedence
 	if search != "" {
 		if svc.searchIndex != nil {
@@ -179,7 +217,18 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			// behaviour change from the Bleve path, so say it happened.
 			slog.Warn("search: search index is nil; falling back to substring SearchBooks",
 				"query", search, "fallback", "store.SearchBooks")
-			books, err = svc.store.SearchBooks(search, limit, offset)
+			// Same over-fetch as the Bleve branch, for the same reason: the
+			// post-filter block below paginates, so it must be handed the
+			// candidate set rather than one page of it.
+			fbLimit, fbOffset := limit, offset
+			if hasPostFilters {
+				fbLimit, fbOffset = searchPostFilterWindow, 0
+			}
+			books, err = svc.store.SearchBooks(search, fbLimit, fbOffset)
+			if hasPostFilters && len(books) >= searchPostFilterWindow {
+				slog.Warn("search: post-filter over-fetch window exhausted; count is a lower bound",
+					"window", searchPostFilterWindow, "query", search, "fallback", "store.SearchBooks")
+			}
 		}
 	} else if authorID != nil {
 		// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2); GetAudiobooks'
@@ -443,6 +492,14 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					continue
 				}
 			}
+			// author_id / series_id membership (see idMembership above). Kept
+			// separate from RestrictToIDs so a caller-supplied restriction and
+			// the id filters AND together. Same nil/empty contract.
+			if idMembership != nil {
+				if _, ok := idMembership[b.ID]; !ok {
+					continue
+				}
+			}
 			if f.IsPrimaryVersion != nil {
 				// nil counts as primary. Routed through the shared helper so
 				// this post-filter, the pushdown, and the serialized DTO all
@@ -546,9 +603,12 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 		// length is the real total — but only if `filtered` was built from the
 		// full candidate set rather than from one page. That holds for the
 		// search path because the branch above over-fetches when
-		// hasPostFilters, and for the author/series paths because those fetch
-		// every row up front. Capture it BEFORE paginating; taking it after is
-		// the bug.
+		// hasPostFilters (which an accompanying author_id/series_id now sets),
+		// and for the author/series paths because those fetch every row up
+		// front. Capture it BEFORE paginating; taking it after is the bug. The
+		// handler reports this figure as "count" for every request carrying a
+		// search, author_id or series_id, so this is what keeps the count and
+		// the listing in agreement for those requests.
 		resultTotal = len(filtered)
 
 		// Apply pagination after filtering
@@ -576,6 +636,55 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	normalizeEffectivePrimaryVersion(books)
 
 	return books, resultTotal, nil
+}
+
+// resolveIDMembership returns the IDs of the books that belong to BOTH the
+// given author (when authorID is non-nil) and the given series (when seriesID
+// is non-nil), resolved through GetBooksByAuthorIDCore / GetBooksBySeriesIDCore
+// so the semantics are exactly those of the plain ?author_id= / ?series_id=
+// listings: junction-backed author membership (a co-author counts, not only
+// the denormalized Book.AuthorID), primary versions only, soft-deleted rows
+// excluded.
+//
+// The result is never nil — a nil set means "no restriction" to the caller's
+// post-filter, and every call here IS a restriction — so a request whose ids
+// share no books gets an empty, non-nil set that excludes everything. A getter
+// error is returned rather than degraded to "no restriction".
+func (svc *AudiobookService) resolveIDMembership(authorID, seriesID *int) (map[string]struct{}, error) {
+	var set map[string]struct{}
+	intersect := func(cores []database.BookCore) {
+		cur := make(map[string]struct{}, len(cores))
+		for i := range cores {
+			cur[cores[i].ID] = struct{}{}
+		}
+		if set == nil {
+			set = cur
+			return
+		}
+		for id := range set {
+			if _, ok := cur[id]; !ok {
+				delete(set, id)
+			}
+		}
+	}
+	if authorID != nil {
+		cores, err := svc.store.GetBooksByAuthorIDCore(*authorID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve author_id %d membership: %w", *authorID, err)
+		}
+		intersect(cores)
+	}
+	if seriesID != nil {
+		cores, err := svc.store.GetBooksBySeriesIDCore(*seriesID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve series_id %d membership: %w", *seriesID, err)
+		}
+		intersect(cores)
+	}
+	if set == nil {
+		set = map[string]struct{}{}
+	}
+	return set, nil
 }
 
 // CountAudiobooksFiltered returns the count of audiobooks matching the
