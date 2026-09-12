@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.71.0 -->
+<!-- version: 10.71.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -13,6 +13,40 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Discarding an `interrupted_quiesced` op whose goroutine is still alive leaves that goroutine reporting into the void.** On 2026-09-11 the watchdog canceled a stuck `library.scan` (op `01M27QMFPFBH4JPZW0CXQ3C7J2`) at 04:19, logged "op goroutine abandoned; spawning replacement worker", and the abandoned goroutine kept running for another hour (its auto-organize summary landed at 05:18, ninety seconds after the owner discarded the row). The row-level fix (writers refuse a missing row; migration 62 sweeps shells) stops the blank card, but the abandoned goroutine still burns CPU and I/O and its writes now fail one by one. Decide whether `DiscardOperationV2` should refuse `interrupted_quiesced` rows while `registry` still tracks a live goroutine for that id, or whether the registry should hard-stop the reporter for an abandoned goroutine so nothing it says reaches the store. `internal/server/handlers/operations_v2.go` (Discard allow-list), `internal/operations/registry/worker.go` (abandon path).
+
+- [ ] **ABS-SYNC: let ABS clients through BasicAuth on the 9 routes that have no
+      token check.** #3296 exempts only the ABS routes whose handler chain contains
+      `ABSRequireAuth`. The nine below still sit behind the global
+      `servermiddleware.BasicAuth()`, so with `basic_auth_enabled` on (off in prod
+      today) ABS clients still break: a client can't send Basic credentials and its
+      ABS token together, because both use the `Authorization` header.
+      - `POST /login`: new or logged-out clients can't get a token.
+      - `POST /auth/refresh`: sessions can't renew, so every client is eventually
+        logged out.
+      - `GET /public/session/:id/track/:index`: playback through this path fails.
+      - `GET`/`HEAD /api/items/:id/cover`: widget covers fail (the widget sends no
+        headers).
+      - `GET /ping`, `GET /status`: clients can't probe the server.
+      - `GET /auth/openid`, `/auth/openid/callback`: SSO login is blocked.
+      Each route already checks its own credential (password, refresh token,
+      session id, OIDC code) or reveals next to nothing, so exempt them by exact
+      method and route. Don't use a path prefix: `/api/items/:id` is token-gated
+      but `/api/items/:id/cover` is not. Extend the route-walk test in
+      `internal/server/handlers/abs/basicauth_exempt_test.go` to cover them. Only
+      matters once someone turns BasicAuth on. The owner approved doing this
+      eventually on 2026-09-12.
+
+- [ ] **The Frontend CI Gate cannot see a skip inside the reusable workflow.** #3274's gate fails if config detection fails, `has-frontend` is not `'true'`, or the outer `frontend` job does not succeed. On a PR with no `web/**` changes, the called `falkcorp/github-common` workflow skipped its own `Frontend CI` job and still reported `success`, so the gate passed. Closing this needs the reusable workflow to expose an output (for example `frontend-ran`) that the gate can require. That is an upstream change in `falkcorp/github-common`.
+
+- [ ] **ITL-sourced tracks hard-code `Bookmarkable: true`.** `internal/itunes/itl_convert.go` sets `Bookmarkable: true // ITL tracks don't expose this flag; assume true` on every converted track, so an ITL sync reports every track (music included) as bookmarkable. #3269 made the importer skip fields a source does not carry (`itunes.SourceFields`) for Bookmark, PlayCount and PlayDate, but `Bookmarkable` was not part of that change. Decide whether `Bookmarkable` should join `SourceFields` (ITL: not carried, so leave it unset) or whether the ITL `mith` block has a real bookmarkable bit worth decoding. First step: grep every reader of `Track.Bookmarkable` and state what each does with a false-positive `true`.
+
+- [ ] **The Settings naming-pattern token list disagrees with the backend.** The frontend list (`web/src/components/SettingsGeneral.tsx`, moved to `web/src/utils/namingPatternPreview.ts` by #3275) advertises `{audiobook_release_year}` and `{track_number}`, which `internal/organizer/pathbuild.go` never resolves, so a pattern using them keeps the literal braces in the path. It also leaves out `{series_prefix}`, which the backend does resolve. Found by TASK-122. Fix: make one side the source of truth (serve the token list from the backend, or add a test that compares the two lists), then either implement or remove the two phantom tokens.
+
+- [ ] **No sort key for position within a series.** The library list's `series` sort orders by series *name*, which ties for every book in one series, so the book-detail series link (`/library?series_id=N`, TASK-167 / #3280) lands on that series in arbitrary order. TASK-167 asked for the link to pair with `series_index`. Add a server sort key (e.g. `series_position`, numeric on `series_index` with nil last and title as tie-break), expose it in the frontend sort list, and have the series link pass it.
+
+- [ ] **Four more workflows grant broad write permissions without a stated reason.** `nightly.yml` (actions, packages, id-token, attestations: write), `release-prod.yml` and `prerelease.yml` (packages, id-token, attestations: write; prerelease also actions: write) and `auto-revert.yml` (actions: write). #3274 cut `frontend-ci.yml` to `contents: read` after reading what the called reusable workflows actually request. Do the same review per workflow: keep a grant only where a job step needs it, and add a comment naming that step.
 
 - [ ] **WEB-01** Authors page fetches the entire authors table on every mount, no server pagination — `web/src/services/api.ts:1893`. Every visit to /authors (and every `loadAuthors()` re-run after merge/delete/undo) pulls ~17k+ author rows including nested alias arrays over the wire and holds them all in React state, just to show a paginated table. This is the same whole-library-fetch shape the standing lesson set (`feedback_meas Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-324-authors-page-fetches-the-entire-authors-table-on.md`.
 
