@@ -908,6 +908,15 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 								"pick it up.", bookID), nil)
 						continue
 					}
+					// An occupied destination organize declined (same audio it could not
+					// verify, fragments collapsing onto one path, a pair declined on an
+					// earlier run) is a recorded refusal, not a failure: the files and
+					// rows are unchanged and a durable skip names the pair.
+					if errors.Is(oErr, organizer.ErrDestinationConflictUnresolved) {
+						organizeRefused++
+						_ = progress.Log("info", fmt.Sprintf("book %s not organized: %v", bookID, oErr), nil)
+						continue
+					}
 					organizeFailed++
 					_ = progress.Log("warn", fmt.Sprintf("organize failed for book %s: %v", bookID, oErr), nil)
 				}

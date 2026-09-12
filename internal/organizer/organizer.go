@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package organizer
 
@@ -1074,9 +1074,7 @@ func leftoverSuffix(leftover []string) string {
 func adoptExistingDestination(book *database.Book, srcPath, dstPath string, dstInfo os.FileInfo) bool {
 	srcInfo, srcErr := os.Stat(srcPath)
 	switch {
-	case srcErr == nil && os.SameFile(srcInfo, dstInfo):
-		return true
-	case srcErr == nil && destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()):
+	case srcErr == nil && classifyDestination(srcPath, dstPath, srcInfo, dstInfo) == destinationSame:
 		// Interrupted copy/reflink from an earlier run, or the other worker
 		// in a race copied the same bytes: same content, different inode.
 		// Adopt it rather than re-copying.
@@ -1095,6 +1093,51 @@ func adoptExistingDestination(book *database.Book, srcPath, dstPath string, dstI
 			"source_stat_error", srcErr)
 		return false
 	}
+}
+
+// destinationVerdict is classifyDestination's answer.
+type destinationVerdict int
+
+const (
+	// destinationDifferent: not the same file and not close enough in size to
+	// be the same audio with rewritten tags.
+	destinationDifferent destinationVerdict = iota
+	// destinationSame: same inode, or byte-identical by whole-file SHA-256.
+	destinationSame
+	// destinationNearSize: different bytes, but the sizes are equal or within
+	// 1% — the shape of one recording whose tags were rewritten. Only the
+	// in-place path acts on this (it checks fingerprint + duration); the folder
+	// landing treats it as "not this book's file", exactly as before.
+	destinationNearSize
+)
+
+// classifyDestination is THE "is the occupant this file?" test for every
+// organize path that can meet an occupied destination: the folder landing
+// (through adoptExistingDestination) and the in-place move
+// (resolveOccupiedInPlace). One helper, so the paths cannot drift apart on
+// what counts as the same file. It fails closed exactly as
+// destinationIsSameContent does: an unreadable pair is never destinationSame.
+func classifyDestination(srcPath, dstPath string, srcInfo, dstInfo os.FileInfo) destinationVerdict {
+	if os.SameFile(srcInfo, dstInfo) {
+		return destinationSame
+	}
+	if destinationIsSameContent(srcPath, dstPath, srcInfo.Size(), dstInfo.Size()) {
+		return destinationSame
+	}
+	if sizesWithinOnePercent(srcInfo.Size(), dstInfo.Size()) {
+		return destinationNearSize
+	}
+	return destinationDifferent
+}
+
+// sizesWithinOnePercent reports whether a and b differ by at most 1% of the
+// larger.
+func sizesWithinOnePercent(a, b int64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d*100 <= max(a, b)
 }
 
 // destinationIsSameContent reports whether srcPath and dstPath hold

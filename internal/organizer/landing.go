@@ -1,7 +1,7 @@
 // file: internal/organizer/landing.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c1e9a3b-7d42-4f6e-9b8a-2e0c4d7f1a35
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package organizer
 
@@ -43,6 +43,12 @@ type Landing struct {
 	// runtime root_dir change the two disagreed: the file was moved in place
 	// and then a second book row was created at the same path.
 	InPlace bool
+
+	// Resolution is set when an in-place landing met an occupied destination
+	// and resolved it: adopted as a version of the occupant's book (Path is
+	// then the unchanged source) or moved to a _copyN name. nil when the
+	// target was free.
+	Resolution *InPlaceResolution
 }
 
 // IsDir reports whether the landing describes a multi-file (directory) book.

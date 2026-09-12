@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package organizer
 
@@ -458,8 +458,8 @@ func TestStrandedRenameTemps_TargetWithGlobMetacharacters(t *testing.T) {
 }
 
 // Two books already under RootDir, same author and title, different audio,
-// re-organized concurrently into the same target. One must be refused with the
-// collision error; both files' bytes must still exist afterwards.
+// re-organized concurrently into the same target. One must be refused with a
+// destination-conflict error; both files' bytes must still exist afterwards.
 func TestReOrganizeInPlace_TwoBooksSameTarget_NeitherIsDestroyed(t *testing.T) {
 	for iter := range 20 {
 		rootDir := t.TempDir()
@@ -512,7 +512,10 @@ func TestReOrganizeInPlace_TwoBooksSameTarget_NeitherIsDestroyed(t *testing.T) {
 				wins++
 				continue
 			}
-			require.Contains(t, err.Error(), "destination already exists", "iter %d book %d: the loser must be refused, not silently merged: %v", iter, i, err)
+			// Same size, different bytes, no fingerprints: organize cannot prove
+			// the same recording, so the loser is declined (a recorded
+			// DestinationConflictError), never merged and never overwritten.
+			require.ErrorIs(t, err, ErrDestinationConflictUnresolved, "iter %d book %d: the loser must be refused, not silently merged: %v", iter, i, err)
 		}
 		require.Equal(t, 1, wins, "iter %d: exactly one book may take the target (errs=%v)", iter, errs)
 

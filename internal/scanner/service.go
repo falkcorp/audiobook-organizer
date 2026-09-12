@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 package scanner
@@ -119,6 +119,11 @@ type ScanRequest struct {
 	// failed library.scan is subject to the registry's retry/resume paths,
 	// which would re-enter a scan over the same bad file.
 	OnFileFailures func(total int, sample []FileFailure)
+
+	// OnOrganizeTally, when non-nil, is called once at the end of the run
+	// with the post-scan auto-organize outcome counts (see OrganizeTally), if
+	// there were any.
+	OnOrganizeTally func(counts map[string]int)
 }
 
 // scanChunkSize bounds how many books are processed between checkpoints. It
@@ -180,6 +185,17 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 			failures.ReportSummary(log)
 			if req.OnFileFailures != nil && failures.Total() > 0 {
 				req.OnFileFailures(failures.Total(), failures.Samples())
+			}
+		}()
+	}
+	if organizeTallyFrom(ctx) == nil {
+		tally := &OrganizeTally{}
+		ctx = withOrganizeTally(ctx, tally)
+		defer func() {
+			if req.OnOrganizeTally != nil {
+				if counts := tally.Snapshot(); len(counts) > 0 {
+					req.OnOrganizeTally(counts)
+				}
 			}
 		}()
 	}

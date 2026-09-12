@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.47.1
+// version: 2.48.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 
@@ -1236,7 +1236,13 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 		return
 	}
 
-	if err := server.organizeService.PerformOrganize(ctx, &organizer.Request{BookIDs: ids}, l); err != nil {
+	stats, err := server.organizeService.PerformOrganizeStats(ctx, &organizer.Request{BookIDs: ids}, l)
+	if stats != nil {
+		// Organize runs as a hook inside library.scan, so its adopt / suffix /
+		// skip counts reach the operator only through the scan op's result.
+		scanner.AddOrganizeTally(ctx, stats.Collisions)
+	}
+	if err != nil {
 		l.Error("Auto-organize failed for %d book(s): %v", len(ids), err)
 		return
 	}

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.35.2
+// version: 1.36.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -118,6 +118,8 @@ type Store interface {
 	OrganizerBookFileStore
 	OrganizerContributorStore
 	OrganizerAuditWriter
+	// Durable skip records for declined destination conflicts.
+	DurableSkipStore
 }
 
 // Compile-time proof that PebbleStore satisfies organizer.Store.
@@ -223,6 +225,11 @@ type Stats struct {
 	Skipped        int // soft-deleted / non-primary / missing file skips
 	Failed         int
 	Total          int
+	// Collisions counts outcomes by category (the Outcome* constants in
+	// inplace_collision.go): occupied destinations adopted or suffixed, pairs
+	// declined with a durable skip, and books held back before trying. The
+	// post-scan hook forwards it to the scan op result.
+	Collisions map[string]int
 	// Canceled records that the run stopped early because ctx was cancelled or
 	// the operation was cancelled from the UI. Without it the summary said
 	// "Organize complete" for a run that had been deliberately stopped, which
@@ -241,6 +248,15 @@ func (orgSvc *Service) PerformOrganizeWithID(ctx context.Context, opID string, r
 
 // PerformOrganize executes the library organization operation
 func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log logger.Logger) error {
+	_, err := orgSvc.PerformOrganizeStats(ctx, req, log)
+	return err
+}
+
+// PerformOrganizeStats is PerformOrganize returning the run's Stats too, so a
+// caller that reports outcomes (the post-scan hook, onto the scan op result)
+// does not re-derive them from log lines. Stats is nil only when the run
+// failed before organizing anything.
+func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, log logger.Logger) (*Stats, error) {
 	log.Info("Starting file organization")
 
 	// Optional: sync iTunes library first to ensure all books are up to date
@@ -279,7 +295,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
 			if fetchErr != nil {
 				log.Error("Failed to fetch books: %s", fetchErr.Error())
-				return fmt.Errorf("failed to fetch books: %w", fetchErr)
+				return nil, fmt.Errorf("failed to fetch books: %w", fetchErr)
 			}
 			for i := range page {
 				allBooks = append(allBooks, page[i].ToBook())
@@ -325,7 +341,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 		for offset := 0; ; offset += fetchPageSize {
 			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
 			if fetchErr != nil {
-				return fmt.Errorf("failed to re-fetch books after metadata: %w", fetchErr)
+				return nil, fmt.Errorf("failed to re-fetch books after metadata: %w", fetchErr)
 			}
 			for i := range page {
 				allBooks = append(allBooks, page[i].ToBook())
@@ -338,7 +354,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 	}
 
 	// Filter books that need organizing
-	booksToOrganize, alreadyCorrect := orgSvc.FilterBooksNeedingOrganization(allBooks, log)
+	booksToOrganize, alreadyCorrect, placeholderSkipped := orgSvc.filterBooksNeedingOrganization(allBooks, log)
 
 	logMsg = fmt.Sprintf("Found %d books that need organizing, %d already correct (out of %d total)",
 		len(booksToOrganize), len(alreadyCorrect), len(allBooks))
@@ -347,13 +363,16 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 
 	// Perform organization
 	stats := orgSvc.organizeBooks(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID)
+	if placeholderSkipped > 0 {
+		stats.addCollision(OutcomePlaceholderSkipped, placeholderSkipped)
+	}
 
 	// Post-organize auto write-back now rides the batcher.
 	if stats.Organized > 0 || stats.ReOrganized > 0 {
 		// Note: auto-rescan disabled — organize already updates all paths and book_files.
 	}
 
-	return organizeOutcomeError(stats)
+	return stats, organizeOutcomeError(stats)
 }
 
 // organizeOutcomeError converts a finished run's Stats into the error
@@ -655,11 +674,20 @@ func (orgSvc *Service) syncITunesBeforeOrganize(ctx context.Context, log logger.
 }
 
 func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, log logger.Logger) ([]database.Book, []database.Book) {
+	toOrganize, alreadyCorrect, _ := orgSvc.filterBooksNeedingOrganization(allBooks, log)
+	return toOrganize, alreadyCorrect
+}
+
+// filterBooksNeedingOrganization is FilterBooksNeedingOrganization plus the
+// number of books held back for a placeholder title, which PerformOrganizeStats
+// reports as OutcomePlaceholderSkipped.
+func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, log logger.Logger) ([]database.Book, []database.Book, int) {
 	booksToOrganize := make([]database.Book, 0)
 	alreadyCorrect := make([]database.Book, 0)
 	skippedMissingFiles := 0
 	skippedDeleted := 0
 	skippedUnresolvedAuthor := 0
+	skippedPlaceholderTitle := 0
 	for i, book := range allBooks {
 		// Update progress during filtering so the UI doesn't show 0/0
 		if i%500 == 0 || i == len(allBooks)-1 {
@@ -746,10 +774,21 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 			skippedUnresolvedAuthor++
 			continue
 		}
+		// Title gate, for the same reason: an empty or placeholder title
+		// ("Unknown Title", "Unknown Author", a narrator placeholder) computes
+		// the same degenerate path as every other such book, so all but the
+		// first collide. Defer until metadata gives it a real title.
+		if IsPlaceholderTitle(book.Title) {
+			skippedPlaceholderTitle++
+			continue
+		}
 		booksToOrganize = append(booksToOrganize, book)
 	}
 	if skippedUnresolvedAuthor > 0 {
 		log.Info("Organize: Deferred %d book(s) with unresolved author — run metadata fetch, then organize renames them properly", skippedUnresolvedAuthor)
+	}
+	if skippedPlaceholderTitle > 0 {
+		log.Info("Organize: Deferred %d book(s) with an empty or placeholder title — run metadata fetch, then organize files them properly", skippedPlaceholderTitle)
 	}
 	if skippedDeleted > 0 {
 		log.Info("Organize: Skipped %d soft-deleted book(s)", skippedDeleted)
@@ -757,7 +796,7 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 	if skippedMissingFiles > 0 {
 		log.Info("Organize: Skipped %d book(s) with missing book files", skippedMissingFiles)
 	}
-	return booksToOrganize, alreadyCorrect
+	return booksToOrganize, alreadyCorrect, skippedPlaceholderTitle
 }
 
 // bookNeedsReOrganize checks whether a book already in RootDir needs to be
@@ -791,21 +830,30 @@ func (orgSvc *Service) bookNeedsReOrganize(book *database.Book, log logger.Logge
 // ReOrganizeInPlace renames/moves a book that is already in RootDir to its
 // correct location based on current metadata. Returns the new path.
 func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger) (string, error) {
+	path, _, err := orgSvc.reOrganizeInPlace(book, log)
+	return path, err
+}
+
+// reOrganizeInPlace is ReOrganizeInPlace plus the destination-conflict
+// resolution it applied (nil when the target was free), which OrganizeOneBook
+// carries out on the Landing.
+func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger) (string, *InPlaceResolution, error) {
 	org := orgSvc.newOrganizer()
 	if !org.HasResolvedAuthor(book) {
-		return "", ErrAuthorUnresolved
+		return "", nil, ErrAuthorUnresolved
 	}
 	oldPath := book.FilePath
+	var res *InPlaceResolution
 
 	info, err := os.Stat(oldPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("source path no longer exists: %s — re-scan the library to update tracking", oldPath)
+			return "", nil, fmt.Errorf("source path no longer exists: %s — re-scan the library to update tracking", oldPath)
 		}
 		if os.IsPermission(err) {
-			return "", fmt.Errorf("permission denied reading source: %s — check filesystem permissions and ACLs", oldPath)
+			return "", nil, fmt.Errorf("permission denied reading source: %s — check filesystem permissions and ACLs", oldPath)
 		}
-		return "", fmt.Errorf("cannot access source %s: %w", oldPath, err)
+		return "", nil, fmt.Errorf("cannot access source %s: %w", oldPath, err)
 	}
 
 	var targetPath string
@@ -815,7 +863,7 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 		targetPath, err = org.GenerateTargetPath(book)
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	if oldPath == targetPath {
@@ -832,13 +880,41 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 		}); err != nil {
 			log.Debug("Organize: failed to stamp already-in-place book %s: %s", book.ID, err.Error())
 		}
-		return targetPath, nil
+		return targetPath, res, nil
 	}
 
 	// Create parent directory for target
 	parentDir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(parentDir, 0775); err != nil {
-		return "", fmt.Errorf("cannot create target directory %s: %w (check parent permissions and disk space)", parentDir, err)
+		return "", nil, fmt.Errorf("cannot create target directory %s: %w (check parent permissions and disk space)", parentDir, err)
+	}
+
+	// An occupied destination is resolved, not refused: adopt the book as a
+	// version of the occupant's book when it holds the same audio, move to a
+	// _copyN name when it is a different file, or decline with a durable skip.
+	// See inplace_collision.go. The decision and everything after it run under
+	// a per-destination-directory lock (lockInPlaceDestination) so two workers
+	// cannot both pick one _copyN name or both adopt against a stale group.
+	unlock := lockInPlaceDestination(targetPath)
+	defer unlock()
+	if dstLink, lerr := os.Lstat(targetPath); lerr == nil && !(info.IsDir() && dstLink.IsDir() && dirIsEmpty(targetPath)) {
+		// A pair declined on an earlier run stays declined until the source or
+		// the occupant changes size or mtime, or the book targets elsewhere.
+		if OrganizeCollisionBlocked(orgSvc.db, book.ID, targetPath, oldPath) {
+			return "", nil, &DestinationConflictError{Category: OutcomeSkippedDurable, Source: oldPath, Target: targetPath,
+				Reason: "declined on an earlier run; retried once the source or the occupant changes"}
+		}
+		r, rerr := orgSvc.resolveOccupiedInPlace(book, oldPath, targetPath, info, dstLink, log)
+		if rerr != nil {
+			return "", nil, rerr
+		}
+		res = r
+		if r.adopted() {
+			log.Debug("Organize: %s kept in place as a version of book %s (%s at %s)", oldPath, r.OccupantBookID, r.Outcome, targetPath)
+			return oldPath, res, nil
+		}
+		log.Debug("Organize: %s is occupied by a different file; moving to %s", targetPath, r.FinalTarget)
+		targetPath = r.FinalTarget
 	}
 
 	// Move the file or directory. moveExclusive cannot overwrite an existing
@@ -850,9 +926,9 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 	// silently REPLACED, destroying whichever book got there first.
 	if err := moveExclusive(oldPath, targetPath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return "", fmt.Errorf("cannot move %s -> %s: destination already exists — refusing to overwrite; resolve the collision first", oldPath, targetPath)
+			return "", nil, fmt.Errorf("cannot move %s -> %s: destination already exists — refusing to overwrite; resolve the collision first", oldPath, targetPath)
 		}
-		return "", fmt.Errorf("cannot move %s -> %s: %w (verify both paths exist, target not in use, same filesystem, write permission)", oldPath, targetPath, err)
+		return "", nil, fmt.Errorf("cannot move %s -> %s: %w (verify both paths exist, target not in use, same filesystem, write permission)", oldPath, targetPath, err)
 	}
 
 	// Update the book record — set path and mark as organized. Written via
@@ -943,7 +1019,7 @@ func (orgSvc *Service) ReOrganizeInPlace(book *database.Book, log logger.Logger)
 	orgSvc.cleanupEmptyParents(filepath.Dir(oldPath), config.AppConfig.RootDir, log)
 
 	log.Info("Re-organized: %s → %s", oldPath, targetPath)
-	return targetPath, nil
+	return targetPath, res, nil
 }
 
 // cleanupEmptyParents removes empty directories from dir up to (but not
@@ -1111,6 +1187,10 @@ const (
 	// the version row and its book_file rows at the landed paths and demoted
 	// the original.
 	LandingVersioned
+	// LandingAdopted: the destination held the same audio, so the book was
+	// linked as a non-primary version of the occupant's book and left where it
+	// was. CommitLanding recorded the change rows; nothing was stamped.
+	LandingAdopted
 )
 
 // CommitLanding persists what OrganizeOneBook did for book: it takes the
@@ -1143,6 +1223,11 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 	oldPath := book.FilePath
 	newPath := landing.Path
 	now := time.Now()
+
+	if landing.Resolution.adopted() {
+		orgSvc.recordAdoptChanges(book, landing.Resolution, operationID)
+		return LandingAdopted, nil, nil
+	}
 
 	if oldPath == newPath {
 		if updateErr := orgSvc.stampOrganizeMetadata(book.ID, operationID, now); updateErr != nil {
@@ -1243,6 +1328,11 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	var pathMu sync.Mutex
 	claimedPaths := make(map[string]string, len(booksToOrganize))
 
+	// Fragment collapse is decided for the whole batch BEFORE any worker moves
+	// a file, so the outcome does not depend on which worker reaches a shared
+	// target first. See detectFragmentCollapse.
+	fragmentCollapsed := orgSvc.detectFragmentCollapse(ctx, booksToOrganize)
+
 	const numWorkers = 8
 	jobs := make(chan int, numWorkers*2)
 
@@ -1282,6 +1372,17 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 				}
 
 				oldPath := book.FilePath
+
+				if target, collapsed := fragmentCollapsed[book.ID]; collapsed {
+					orgSvc.recordFragmentCollapse(&book, target)
+					log.Debug("Organize: %s not moved — %s: another book from %s targets %s", book.Title, OutcomeFragmentCollapse, filepath.Dir(oldPath), target)
+					statsMu.Lock()
+					stats.Skipped++
+					stats.addCollision(OutcomeFragmentCollapse, 1)
+					statsMu.Unlock()
+					progressCounter.Add(1)
+					continue
+				}
 
 				// --- Step 1: File operations ---
 				var newPath string
@@ -1323,7 +1424,28 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 
 				// --- Step 2: DB operations ---
 				var commitErr error
-				if err != nil {
+				var conflict *DestinationConflictError
+				if errors.As(err, &conflict) {
+					// A declined destination conflict is a counted outcome, not a
+					// failure: one debug line per pair here, one tally line per
+					// batch below.
+					log.Debug("Organize: %s not moved — %s", book.Title, conflict.Error())
+					statsMu.Lock()
+					stats.Skipped++
+					stats.addCollision(conflict.Category, 1)
+					statsMu.Unlock()
+					if operationID != "" {
+						_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+							ID:          ulid.Make().String(),
+							OperationID: operationID,
+							BookID:      book.ID,
+							ChangeType:  "organize_skipped",
+							FieldName:   "file_path",
+							OldValue:    oldPath,
+							NewValue:    conflict.Category + ": " + conflict.Reason,
+						})
+					}
+				} else if err != nil {
 					log.Warn("Failed to organize %s: %s", book.Title, err.Error())
 					statsMu.Lock()
 					stats.Failed++
@@ -1357,8 +1479,13 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 						stats.AlreadyCorrect++
 					case outcome == LandingRenamed:
 						stats.ReOrganized++
+					case outcome == LandingAdopted:
+						stats.Skipped++
 					default:
 						stats.Organized++
+					}
+					if commitErr == nil && landing != nil && landing.Resolution != nil {
+						stats.addCollision(landing.Resolution.Outcome, 1)
 					}
 					statsMu.Unlock()
 				}
@@ -1396,6 +1523,11 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	wg.Wait()
 
 	stats.AlreadyCorrect += orgSvc.stampAlreadyCorrect(ctx, alreadyCorrect, operationID, log)
+
+	// One tally line per batch instead of one error line per pair.
+	if tally := formatCollisionTally(stats.Collisions); tally != "" {
+		log.Info("Organize destination conflicts: %s", tally)
+	}
 
 	summary := formatOrganizeSummary(stats)
 	log.Info("%s", summary)
@@ -1455,11 +1587,11 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 	}
 	oldPath := book.FilePath
 	if config.AppConfig.RootDir != "" && strings.HasPrefix(oldPath, config.AppConfig.RootDir) {
-		newPath, err := orgSvc.ReOrganizeInPlace(book, log)
+		newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
 		if err != nil {
 			return nil, err
 		}
-		return &Landing{Path: newPath, InPlace: true}, nil
+		return &Landing{Path: newPath, InPlace: true, Resolution: res}, nil
 	}
 	bookFiles, err := orgSvc.db.GetBookFiles(book.ID)
 	if err != nil {
