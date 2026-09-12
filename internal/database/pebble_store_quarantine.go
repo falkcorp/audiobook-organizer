@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_quarantine.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ace123a3-f577-4065-b41c-ae9de32c9b45
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 package database
 
@@ -27,10 +27,7 @@ func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 	// Scan book:* index and only deserialize books that are quarantined
 	var result []Book
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +75,7 @@ func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 func (p *PebbleStore) CountQuarantinedBooks() (int, error) {
 	n := 0
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return 0, err
 	}

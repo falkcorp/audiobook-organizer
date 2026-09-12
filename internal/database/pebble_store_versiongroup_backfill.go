@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 // PERF-VERSIONS: one-time backfill that writes the
 // book:versiongroup:<gid>:<id> secondary index for every existing book
 // that has a VersionGroupID. Without this, /audiobooks/:id/versions
@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -118,10 +117,7 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 	// (book:versiongroup:..., book:organizedhash:..., etc.), which is safe
 	// because the one-colon structural filter below already discriminates
 	// primary rows from secondary indexes independent of byte range.
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		slog.Error("versiongroup-backfill: cannot open iterator", "err", err)
 		return err
@@ -161,30 +157,6 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 	}
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		// Only the primary `book:<id>` rows carry full JSON payloads. This
-		// filter REQUIRES exactly one colon: every book ID minted by
-		// CreateBook is a ULID and contains no colon, so a primary row is
-		// exactly "book:<id>" — one colon — while every secondary index has
-		// more. Counting is exact where the previous substring blacklist was
-		// not: it had to enumerate every index prefix, listed
-		// ":organizedhash:" twice, and would have silently started
-		// unmarshalling rows for any index prefix added later and forgotten
-		// here.
-		//
-		// Pre-existing limitation, unchanged by the bound widening above:
-		// CreateBook only mints a ULID `if book.ID == ""`, so a
-		// caller-supplied ID is accepted verbatim and could in principle
-		// contain a colon (e.g. "book:my:id" — two colons). Such a row would
-		// be silently skipped here, same as it is today. The wider iterator
-		// bounds fix the byte-range exclusion for non-digit-leading IDs;
-		// they do not close this separate colon-count gap, which predates
-		// this change and is not addressed by it. See TODO.md /
-		// todo.d for the tracked follow-up (enforce no-colon IDs at
-		// CreateBook rather than assuming it at every scan site).
-		if strings.Count(key, ":") != 1 {
-			continue
-		}
 
 		var book Book
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {

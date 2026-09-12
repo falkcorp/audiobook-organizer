@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-08-24
+// last-edited: 2026-09-12
 
 package database
 
@@ -180,10 +180,7 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 	}
 	fiter.Close()
 
-	biter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	biter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -193,11 +190,6 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 	var missingRow []Book
 
 	for biter.First(); biter.Valid(); biter.Next() {
-		key := string(biter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var book Book
 		if err := json.Unmarshal(biter.Value(), &book); err != nil {
 			continue
@@ -448,10 +440,7 @@ func (p *PebbleStore) MarkNeedsRescan(bookID string) error {
 // GetDirtyBookFolders returns a deduplicated list of parent directories for all
 // books that have NeedsRescan = true.
 func (p *PebbleStore) GetDirtyBookFolders() ([]string, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -460,11 +449,6 @@ func (p *PebbleStore) GetDirtyBookFolders() ([]string, error) {
 	seen := make(map[string]struct{})
 	var dirs []string
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var book Book
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			continue

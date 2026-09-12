@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -781,10 +781,7 @@ func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
 // keys and MarkedForDeletion rows). Used by callers — like GetAcoustIDStats — that
 // must not depend on the async memdb warmup having published.
 func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -792,10 +789,6 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 
 	var books []Book
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Skip path index keys (book:path:...).
-		if strings.Contains(string(iter.Key()), ":path:") {
-			continue
-		}
 		var book Book
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return nil, err

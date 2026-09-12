@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c6e57d72-7048-499d-85aa-1714156d9481
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -271,23 +271,12 @@ func (p *PebbleStore) getAllAuthorFileRefCountsPebble() (map[int]int, error) {
 		return nil, fmt.Errorf("author file ref scan: closing book_authors iterator: %w", cErr)
 	}
 
-	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
+	iter, err := newBookRowIter(snap)
 	if err != nil {
 		return nil, err
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") {
-			continue
-		}
-		// Exactly one colon: skip the secondary indexes (book:path:, book:hash:,
-		// book:versiongroup:) that share the widened prefix range.
-		if strings.Count(key, ":") != 1 {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			_ = iter.Close()

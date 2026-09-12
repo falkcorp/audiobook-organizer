@@ -1,7 +1,7 @@
 // file: internal/database/pebble_quick_queries.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -178,10 +178,7 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 		importPaths, _ = p.GetAllImportPaths()
 	}
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return 0, err
 	}
@@ -189,11 +186,6 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
@@ -306,10 +298,7 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 		importPaths, _ = p.GetAllImportPaths()
 	}
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -317,11 +306,6 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 
 	var ids []string
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue

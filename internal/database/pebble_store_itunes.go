@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_itunes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f359d1ff-32ad-45c2-b58c-bd254479a552
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 package database
 
@@ -49,10 +49,7 @@ func (p *PebbleStore) GetITunesPurgePendingBooks() ([]Book, error) {
 	// Scan book:* index and filter by iTunes sync status without loading all books
 	var pending []Book
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -75,10 +72,7 @@ func (p *PebbleStore) GetITunesDirtyBooks() ([]Book, error) {
 	// Scan book:* index and filter by iTunes sync status without loading all books
 	var dirty []Book
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}

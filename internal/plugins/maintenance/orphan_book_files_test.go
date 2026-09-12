@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -306,5 +306,67 @@ func TestFindOrphanBookFiles_ReadsTheGuardedBookGetter(t *testing.T) {
 	if len(orphans) != 0 {
 		t.Errorf("f1's owner exists in the complete answer, so it is not an orphan; got %d orphan(s)",
 			len(orphans))
+	}
+}
+
+// TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath runs the sweep's
+// core against a REAL PebbleStore on its Pebble branch, which is what
+// GetAllBooksCoreComplete and ListSoftDeletedBooks fall through to when memdb
+// is incomplete. Those scans used the key range ["book:0", "book:;") until
+// 2026-09-12, so any book whose ID starts with a letter, '_' or '~' was absent
+// from the owner set and every file row it owned was reported as an orphan,
+// then hard-deleted by the caller. The mock-store tests above cannot see this:
+// the bug lived in the key range, below the interface they fake.
+func TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath(t *testing.T) {
+	store, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.WaitForWarmup()
+	store.UseMemDB = false
+
+	yes := true
+	owners := []struct {
+		id      string
+		trashed bool
+	}{
+		{"01digit", false}, {"Lettered", false}, {"lettered", false},
+		{"_under", false}, {"~tilde", false}, {"zTrashed", true},
+	}
+	for _, o := range owners {
+		b := &database.Book{ID: o.id, Title: "Owner " + o.id, FilePath: "/lib/orphan-range/" + o.id + ".m4b"}
+		if o.trashed {
+			b.MarkedForDeletion = &yes
+		}
+		if _, err := store.CreateBook(b); err != nil {
+			t.Fatalf("CreateBook(%q): %v", o.id, err)
+		}
+		if err := store.CreateBookFile(&database.BookFile{
+			ID: "f-" + o.id, BookID: o.id, FilePath: "/lib/orphan-range/" + o.id + ".mp3",
+		}); err != nil {
+			t.Fatalf("CreateBookFile(%q): %v", o.id, err)
+		}
+	}
+	// Non-vacuity: a file whose owner does not exist must still be an orphan.
+	if err := store.CreateBookFile(&database.BookFile{
+		ID: "f-ghost", BookID: "Ghost", FilePath: "/lib/orphan-range/ghost.mp3",
+	}); err != nil {
+		t.Fatalf("CreateBookFile(ghost): %v", err)
+	}
+
+	orphans, totalFiles, _, err := findOrphanBookFiles(context.Background(), store)
+	if err != nil {
+		t.Fatalf("findOrphanBookFiles: %v", err)
+	}
+	if totalFiles != len(owners)+1 {
+		t.Fatalf("fixture check: %d files scanned, want %d", totalFiles, len(owners)+1)
+	}
+	got := make([]string, 0, len(orphans))
+	for _, o := range orphans {
+		got = append(got, o.ID)
+	}
+	if len(got) != 1 || got[0] != "f-ghost" {
+		t.Errorf("orphans = %v, want only [f-ghost]: every other file belongs to a book that exists", got)
 	}
 }

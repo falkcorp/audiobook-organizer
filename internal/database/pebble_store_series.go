@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
 // last-edited: 2026-09-12
 
@@ -321,24 +321,13 @@ func (p *PebbleStore) GetAllSeriesBookCounts() (map[int]int, error) {
 // GetAllSeriesBookCounts_Pebble returns the number of books per series using Pebble iteration
 func (p *PebbleStore) GetAllSeriesBookCounts_Pebble() (map[int]int, error) {
 	counts := make(map[int]int)
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") {
-			continue
-		}
-		parts := strings.Split(key, ":")
-		if len(parts) < 2 || len(parts) > 2 {
-			continue
-		}
 
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
@@ -364,22 +353,11 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		return p.mem().GetAllSeriesFileCounts()
 	}
 	bookIDToSeriesID := make(map[string]int)
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") {
-			continue
-		}
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
@@ -396,8 +374,8 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 	// Count actual BookFile records per book.
 	bookFileCounts := make(map[string]int) // bookID → actual file count
 	fileIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:0"),
-		UpperBound: []byte("book_file:;"),
+		LowerBound: []byte("book_file:"),
+		UpperBound: []byte("book_file;"),
 	})
 	if err != nil {
 		return nil, err

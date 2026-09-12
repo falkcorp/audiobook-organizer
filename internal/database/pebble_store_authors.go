@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -702,24 +702,13 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 	jIter.Close()
 
 	// Pass 2: scan books for the legacy AuthorID field (for books without junction entries).
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") {
-			continue
-		}
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
@@ -764,23 +753,12 @@ func (p *PebbleStore) GetAllAuthorFileCounts_Pebble() (map[int]int, error) {
 	}
 	var authorBooks []AuthorBook
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") {
-			continue
-		}
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			continue
-		}
 
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {

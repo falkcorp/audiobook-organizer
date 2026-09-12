@@ -1,17 +1,14 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 package database
 
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // SoftDeletedCountStore is the optional capability of counting the soft-deleted
@@ -67,10 +64,7 @@ func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().CountSoftDeletedBooks(olderThan)
 	}
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return 0, err
 	}
@@ -78,11 +72,6 @@ func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 
 	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") || strings.Contains(key, ":version:") {
-			continue
-		}
 		var book Book
 		if err := json.Unmarshal(iter.Value(), &book); err != nil {
 			return 0, err
