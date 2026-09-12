@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -817,6 +817,11 @@ type copyHarness struct {
 	protectedRow bool
 	// coverAtCopy is the cover_url of the book handed to the copy maker.
 	coverAtCopy string
+	// unlinked puts copy S in another version group, as when
+	// CreateOrganizedVersion fails to write the group link onto the original.
+	unlinked bool
+	// failReads makes the next N GetBookByID calls fail.
+	failReads int
 }
 
 func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
@@ -837,18 +842,25 @@ func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 	}
 	svc := NewService(&database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			h.mu.Lock()
+			if h.failReads > 0 {
+				h.failReads--
+				h.mu.Unlock()
+				return nil, errors.New("transient read error")
+			}
+			h.mu.Unlock()
 			b, ok := get(id)
 			if !ok {
 				return nil, nil
 			}
 			return &b, nil
 		},
-		GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) {
+		GetBooksByVersionGroupFunc: func(group string) ([]database.Book, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			var out []database.Book
 			for _, id := range []string{"a", "c", "s"} {
-				if b, ok := h.books[id]; ok {
+				if b, ok := h.books[id]; ok && b.VersionGroupID != nil && *b.VersionGroupID == group {
 					out = append(out, b)
 				}
 			}
@@ -882,6 +894,10 @@ func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 			return nil
 		}
 		s := database.Book{ID: "s", Title: b.Title, FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+		if h.unlinked {
+			other := "vg-other"
+			s.VersionGroupID = &other
+		}
 		h.books["s"] = s
 		return &s
 	}
@@ -1001,7 +1017,38 @@ func TestFinishApplyFileWork_UnusableNewCopyIsAnError(t *testing.T) {
 	err := svc.FinishApplyFileWork("a", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not usable")
+	assert.Contains(t, err.Error(), "protected tree")
 	assert.Empty(t, tags, "no tags may be written for a copy the steps cannot find")
+}
+
+// A copy the original is not linked to is not usable either, and the error
+// says so rather than blaming a protected file row.
+func TestFinishApplyFileWork_UnlinkedNewCopyNamesTheCause(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	h.unlinked = true
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	svc.tagWriter = func(string) (int, error) { return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not linked to the copy's version group")
+	assert.NotContains(t, err.Error(), "protected tree")
+}
+
+// A failed read when the job resolves its library copy stops the job. It used
+// to carry on, and the file steps -- whose own read could succeed -- resolved
+// and wrote the copy without its lock.
+func TestFinishApplyFileWork_ReadErrorAtTheCopyLockStopsTheJob(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	h.failReads = 1
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transient read error")
+	assert.Empty(t, tags, "no file step may run after the copy could not be resolved")
 }
 
 // The file steps never make a library copy; lockLibraryCopy is the only place
