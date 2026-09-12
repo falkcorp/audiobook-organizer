@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookmarks_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c95887b8-c5f3-4469-b0e8-d053d02bf1ea
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -228,7 +228,7 @@ func TestConcurrentCreateBookmark_DifferentTimesNoRace(t *testing.T) {
 			})
 		}(i)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent bookmark writers")
 
 	for i, err := range errs {
 		if err != nil {
@@ -269,7 +269,7 @@ func TestConcurrentCreateBookmark_SameTimeUpsertNoRace(t *testing.T) {
 			})
 		}(i)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent bookmark writers")
 
 	for i, err := range errs {
 		if err != nil {

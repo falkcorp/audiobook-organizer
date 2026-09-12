@@ -1,7 +1,7 @@
 // file: internal/database/dataloss_concurrency_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a6b7c8d9-0e1f-2a3b-4c5d-concurrency001
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -100,7 +100,7 @@ func TestConcurrency_StoreInvariantsHold(t *testing.T) {
 		}(w)
 	}
 	close(start)
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "partitioned store-mutation workers")
 
 	for w := range errs {
 		for _, e := range errs[w] {

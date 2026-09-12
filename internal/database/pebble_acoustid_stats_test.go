@@ -1,7 +1,7 @@
 // file: internal/database/pebble_acoustid_stats_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e5f6a7b8-c9d0-1234-efab-234567890123
-// last-edited: 2026-07-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -98,7 +98,7 @@ func TestGetAcoustIDStats_StaleMemDBDoesNotBreakLibraryGrouping(t *testing.T) {
 	// Wait for the async warmup to finish so it cannot overwrite the empty memdb we
 	// are about to inject, then publish a fresh empty memdb to simulate the warmup
 	// race window (memdb published with a pre-write snapshot).
-	<-ps.warmupDone
+	recvOrFatal(t, ps.warmupDone, "the async memdb warmup (ps.warmupDone)")
 	emptyMem, err := NewMemStore()
 	require.NoError(t, err)
 	ps.memPtr.Store(emptyMem)

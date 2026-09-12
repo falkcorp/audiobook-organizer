@@ -1,7 +1,7 @@
 // file: internal/database/review_store_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1e9a27-7d43-4b8f-a6e2-3f9d0b7c8e15
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -115,7 +115,7 @@ func TestSetReviewItemDecision_ConcurrentDecisionsKeepStatusIndexExact(t *testin
 			}(w, status)
 		}
 		start.Done()
-		done.Wait()
+		waitGroupOrFatal(t, &done, "concurrent SetReviewItemDecision workers")
 		assertStatusIndexConsistent(t, s)
 		if t.Failed() {
 			t.FailNow()

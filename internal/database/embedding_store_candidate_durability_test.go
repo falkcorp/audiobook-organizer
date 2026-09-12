@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_candidate_durability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f1e8a20-9c3b-4d7e-8a51-2b6f0c9d7e34
-// last-edited: 2026-07-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -123,7 +123,7 @@ func TestCandidateWritePath_ConcurrentNoRace(t *testing.T) {
 			}
 		}(w)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent embedding candidate writers")
 
 	// Every distinct pair persisted exactly once.
 	for w := range workers {

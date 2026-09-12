@@ -1,7 +1,7 @@
 // file: internal/database/apikey_touch_concurrent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d4a9e02-5b81-4c37-a6f0-2e9c8b31d570
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -51,7 +51,7 @@ func TestTouchAPIKeyLastUsed_ConcurrentTouchesDoNotLoseIncrements(t *testing.T) 
 			}
 		})
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent API-key touch workers")
 
 	got, err := store.GetAPIKey(key.ID)
 	if err != nil {

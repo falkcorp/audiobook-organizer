@@ -1,7 +1,7 @@
 // file: internal/database/author_create_race_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a1c0f2e-9b64-4d3a-8c51-2f8e6d4b7a09
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -62,7 +62,7 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 		})
 	}
 	close(startCh)
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent CreateAuthor workers")
 
 	for _, e := range errs {
 		t.Errorf("CreateAuthor returned an error: %v", e)

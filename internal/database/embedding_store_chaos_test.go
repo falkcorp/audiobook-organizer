@@ -1,7 +1,7 @@
 // file: internal/database/embedding_store_chaos_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 //
 // Chaos tests for the EmbeddingStore under shutdown conditions.
 // Validates graceful behavior when the store is closed during or
@@ -43,21 +43,15 @@ func newOwnedEmbeddingStore(t *testing.T, dir string) *EmbeddingStore {
 // recover() cannot help here: a deadlock is not a panic. A bounded wait is what
 // turns a silent 30-minute hang into a 30-second named failure, so a regression
 // is reported instead of merely being expensive.
-func waitForWorkers(t *testing.T, wg *sync.WaitGroup, within time.Duration) {
+//
+// The bound and failure path are the package-wide per-test wait deadline in
+// test_deadline_test.go (30s, shortened to fit the test's own -timeout).
+func waitForWorkers(t *testing.T, wg *sync.WaitGroup) {
 	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(within):
-		t.Fatalf("workers still running %v after Close returned: operations "+
-			"raced Close and deadlocked. EmbeddingStore.closeMu is supposed to "+
-			"make this impossible — Close must not start until every in-flight "+
-			"operation has released its read lock.", within)
-	}
+	waitGroupOrFatal(t, wg, "workers that raced Close to finish: operations "+
+		"raced Close and deadlocked. EmbeddingStore.closeMu is supposed to "+
+		"make this impossible — Close must not start until every in-flight "+
+		"operation has released its read lock")
 }
 
 // makeVector creates a random float32 vector of the given dimension.
@@ -176,7 +170,7 @@ func TestChaos_ConcurrentWritesDuringClose(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	_ = store.Close()
 
-	waitForWorkers(t, &wg, 30*time.Second)
+	waitForWorkers(t, &wg)
 }
 
 // TestChaos_ConcurrentReadsDuringClose simulates readers active when
@@ -207,7 +201,7 @@ func TestChaos_ConcurrentReadsDuringClose(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	_ = store.Close()
 
-	waitForWorkers(t, &wg, 30*time.Second)
+	waitForWorkers(t, &wg)
 }
 
 // TestChaos_MixedReadWriteDuringClose simulates a realistic shutdown
@@ -267,7 +261,7 @@ func TestChaos_MixedReadWriteDuringClose(t *testing.T) {
 	time.Sleep(3 * time.Millisecond)
 	_ = store.Close()
 
-	waitForWorkers(t, &wg, 30*time.Second)
+	waitForWorkers(t, &wg)
 }
 
 // TestChaos_DataDurabilityAfterGracefulClose verifies that data written

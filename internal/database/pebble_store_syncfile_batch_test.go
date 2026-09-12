@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncfile_batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8c17ad-45b2-4e60-9d31-7ca0e6b85219
-// last-edited: 2026-09-08
+// last-edited: 2026-09-12
 
 package database
 
@@ -54,7 +54,7 @@ func TestSyncFileBatch_ConcurrentMixedPathsSinglePair(t *testing.T) {
 			ids[idx] = got["mixed-file"]
 		}(i)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent MintOrGetSyncFileIDs callers")
 
 	for i, err := range errs {
 		if err != nil {
@@ -111,7 +111,7 @@ func TestSyncFileBatch_ConcurrentDistinctPairs(t *testing.T) {
 			results[bi], errs[bi] = store.MintOrGetSyncFileIDs(fmt.Sprintf("book-%d", bi), fileIDs)
 		}(b)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent per-book MintOrGetSyncFileIDs batches")
 
 	seen := make(map[string]string, books*filesPerBook)
 	for b := range books {

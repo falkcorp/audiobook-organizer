@@ -1,7 +1,7 @@
 // file: internal/database/candidate_score_batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0a5e83c1-64bf-4d72-b9e3-8c17f0a2d946
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -114,7 +114,7 @@ func TestUpdateCandidateScores_SerializesWithUpsert(t *testing.T) {
 			}
 		}
 	}()
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent candidate-score batch workers")
 
 	if err := s.SyncCandidateWrites(); err != nil {
 		t.Fatalf("SyncCandidateWrites: %v", err)
