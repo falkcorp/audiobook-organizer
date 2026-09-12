@@ -2,6 +2,7 @@
   "_comment": "Rows of PRIORITY-MATRIX / QUADRANT that merged AFTER merged.json was frozen on 2026-09-10. Keyed by the matrix row id (finding id or brief TASK id) -> merged PR. TODO.md items are NOT listed here: the builders read the live checkbox state of TODO.md instead (an item whose text_head is found on a `- [x]` line is done). Append here when a finding/brief PR merges; the two builders drop the row and count it under 'done since 2026-09-10'.",
   "findings": {
     "CI-01": "#3236",
+    "CI-05": "false positive (#3273)",
     "DA-01": "#3181",
     "DA-02": "#3208",
     "DA-03": "#3225",
