@@ -1,251 +1,483 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package maintenance
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 
-// resultLog returns the final "APPLIED — …" summary the apply path logs.
-func resultLog(t *testing.T, logs []string) string {
+// itoa is shared with regroup_shattered_ai_test.go.
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// resultLog returns the last log line with the given prefix.
+func resultLog(t *testing.T, logs []string, prefix string) string {
 	t.Helper()
 	for _, log := range slices.Backward(logs) {
-		if strings.HasPrefix(log, "APPLIED —") {
+		if strings.HasPrefix(log, prefix) {
 			return log
 		}
 	}
-	t.Fatalf("no APPLIED summary in logs: %v", logs)
+	t.Fatalf("no %q line in logs: %v", prefix, logs)
 	return ""
 }
 
-// Happy path: shattered members that own NO BookFile rows (the virtual-segment model,
-// the 595 healed on prod). Survivor gains a BookFile per member; shells are deleted.
-func TestApplyFSRegroup_HappyPath_ZeroFileShells(t *testing.T) {
+// fsQueue is an OpQueueReader returning fixed active operations.
+type fsQueue struct {
+	rows []database.OperationV2Row
+	err  error
+}
+
+func (q fsQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) { return q.rows, q.err }
+
+// fsGuardStore counts hard deletes and can fail path lookups. The op must
+// never hard-delete a book; the store slice it uses has no book_file delete.
+type fsGuardStore struct {
+	*database.PebbleStore
+	hardDeletes atomic.Int64
+	lookupErr   error
+}
+
+func (s *fsGuardStore) DeleteBook(id string) error {
+	s.hardDeletes.Add(1)
+	return s.PebbleStore.DeleteBook(id)
+}
+
+func (s *fsGuardStore) GetBookFileByPath(p string) (*database.BookFile, error) {
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
+	return s.PebbleStore.GetBookFileByPath(p)
+}
+
+func fsSeedBook(t *testing.T, s *database.PebbleStore, title, path string) string {
+	t.Helper()
+	b, err := s.CreateBook(&database.Book{Title: title, FilePath: path})
+	if err != nil || b == nil {
+		t.Fatalf("CreateBook(%q): %v", path, err)
+	}
+	return b.ID
+}
+
+func fsSeedRow(t *testing.T, s *database.PebbleStore, bookID, path string) {
+	t.Helper()
+	if err := s.CreateBookFile(&database.BookFile{BookID: bookID, FilePath: path}); err != nil {
+		t.Fatalf("CreateBookFile(%s, %q): %v", bookID, path, err)
+	}
+}
+
+func fsRowCount(t *testing.T, s *database.PebbleStore) int {
+	t.Helper()
+	cores, err := s.GetAllBookFilesCore()
+	if err != nil {
+		t.Fatalf("GetAllBookFilesCore: %v", err)
+	}
+	return len(cores)
+}
+
+func fsPlan(t *testing.T, s regroupSnapshotReader) *fsRepairPlan {
+	t.Helper()
+	plan, err := planFSRepair(context.Background(), s, &fakeReporter{})
+	if err != nil {
+		t.Fatalf("planFSRepair: %v", err)
+	}
+	return plan
+}
+
+func fsGroupsOf(plan *fsRepairPlan, cat string) []fsRepairGroup {
+	var out []fsRepairGroup
+	for _, g := range plan.Groups {
+		if g.Category == cat {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func fsLedgerTypes(t *testing.T, s *database.PebbleStore, opID string) map[string]int {
+	t.Helper()
+	changes, err := s.GetOperationChanges(opID)
+	if err != nil {
+		t.Fatalf("GetOperationChanges: %v", err)
+	}
+	out := map[string]int{}
+	for _, c := range changes {
+		out[c.ChangeType]++
+	}
+	return out
+}
+
+func fsSoftDeleted(t *testing.T, s *database.PebbleStore, id string) bool {
+	t.Helper()
+	b, err := s.GetBookByID(id)
+	if err != nil || b == nil {
+		t.Fatalf("book %s is gone (err=%v) — the op must never hard-delete", id, err)
+	}
+	return b.IsSoftDeleted()
+}
+
+// seedFragments seeds n chapter-fragment books under base; the first one owns
+// a book_file row at its path, the rest own none (both shapes are in prod).
+func seedFragments(t *testing.T, s *database.PebbleStore, base, prefix string, n int) []string {
+	t.Helper()
+	var ids []string
+	for i := 1; i <= n; i++ {
+		p := fmt.Sprintf("%s/%s - %d/%d.mp3", base, prefix, i, n)
+		id := fsSeedBook(t, s, "", p)
+		if i == 1 {
+			fsSeedRow(t, s, id, p)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+const fsFragBase = "/lib/Adrian Tchaikovsky/Cage of Souls - Cage of Souls"
+
+// Category 1, dry run: the default run reports the group and its plan line
+// and writes nothing.
+func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 	s := regroupStore(t)
-	survivor := seedBook(t, s, "") // title empty — prefix becomes the title
-	shellA := seedBook(t, s, "")
-	shellB := seedBook(t, s, "")
+	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	before := fsRowCount(t, s)
 
-	base := "/lib/Adrian Tchaikovsky/Cage of Souls - Cage of Souls"
-	target := itunesservice.FSRegroupTarget{
-		BookFolder: base,
-		Title:      "Cage of Souls",
-		SurvivorID: survivor,
-		Members: []itunesservice.FSBook{
-			{ID: survivor, FilePath: base + "/Cage of Souls - 1/01.mp3", DurationSec: 1200},
-			{ID: shellA, FilePath: base + "/Cage of Souls - 2/01.mp3", DurationSec: 1300},
-			{ID: shellB, FilePath: base + "/Cage of Souls - 3/01.mp3", DurationSec: 1400},
-		},
+	p := &Plugin{deps: &fakeDeps{store: s}}
+	rep := &opIDReporter{id: "op-dry"}
+	if err := p.runFSRegroupXML(context.Background(), nil, rep); err != nil {
+		t.Fatalf("dry run: %v", err)
 	}
-
-	p := &Plugin{}
-	rep := &fakeReporter{}
-	if err := p.applyFSRegroup(context.Background(), s, []itunesservice.FSRegroupTarget{target}, 0, rep); err != nil {
-		t.Fatalf("applyFSRegroup: %v", err)
+	sum := resultLog(t, rep.logs, "DRY RUN PLAN:")
+	if !strings.Contains(sum, "fragments: groups=1 rows=3") {
+		t.Errorf("summary = %q, want fragments groups=1 rows=3", sum)
 	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "PLAN fragments folder=\""+fsFragBase+"\"") {
+		t.Errorf("no per-group plan line in %v", rep.logs)
+	}
+	for _, id := range ids {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("dry run soft-deleted %s", id)
+		}
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("dry run changed book_file rows %d → %d", before, got)
+	}
+	if n := len(fsLedgerTypes(t, s, "op-dry")); n != 0 {
+		t.Errorf("dry run wrote %d ledger types", n)
+	}
+}
 
+// Category 1, apply: rows move onto the survivor, a row is created for each
+// chapter path with none, shells are soft-deleted (never hard), and every
+// change is journaled under the op id.
+func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "PID-X", BookID: ids[2]}); err != nil {
+		t.Fatalf("seed ext-id: %v", err)
+	}
+	before := fsRowCount(t, s)
+	g := &fsGuardStore{PebbleStore: s}
+	plan := fsPlan(t, g)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d, want 1 (plan %s)", len(frag), plan.summary())
+	}
+	survivor := frag[0].SurvivorID
+
+	rep := &opIDReporter{id: "op-frag"}
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, rep)
+	if err != nil {
+		t.Fatalf("apply: %v (%s)", err, res)
+	}
 	files, _ := s.GetBookFiles(survivor)
 	if len(files) != 3 {
-		t.Fatalf("survivor has %d files, want 3", len(files))
+		t.Fatalf("survivor has %d rows, want 3", len(files))
 	}
-	if b, _ := s.GetBookByID(shellA); b != nil {
-		t.Errorf("shellA not deleted")
+	for _, f := range files {
+		if _, n, _, ok := chapterPartsForTest(f.FilePath); !ok || f.TrackNumber != n {
+			t.Errorf("row %q track = %d, want its folder number", f.FilePath, f.TrackNumber)
+		}
 	}
-	if b, _ := s.GetBookByID(shellB); b != nil {
-		t.Errorf("shellB not deleted")
+	shells := 0
+	for _, id := range ids {
+		if id == survivor {
+			if fsSoftDeleted(t, s, id) {
+				t.Errorf("survivor soft-deleted")
+			}
+			continue
+		}
+		shells++
+		if !fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s not soft-deleted", id)
+		}
 	}
-	if sb, _ := s.GetBookByID(survivor); sb == nil || sb.Title != "Cage of Souls" || sb.FilePath != base {
-		t.Errorf("survivor title/path = %v, want 'Cage of Souls' @ %q", sb, base)
+	if g.hardDeletes.Load() != 0 {
+		t.Errorf("hard DeleteBook called %d times", g.hardDeletes.Load())
 	}
-	if r := resultLog(t, rep.logs); !strings.Contains(r, "delete-skipped=0") || !strings.Contains(r, "healed=1") {
-		t.Errorf("result = %q, want healed=1 delete-skipped=0", r)
+	if after := fsRowCount(t, s); after < before {
+		t.Errorf("book_file rows decreased %d → %d", before, after)
+	}
+	sb, _ := s.GetBookByID(survivor)
+	if sb.Title != "Cage of Souls" || sb.FilePath != fsFragBase {
+		t.Errorf("survivor = %q @ %q", sb.Title, sb.FilePath)
+	}
+	if id, _ := s.GetBookByExternalID("itunes", "PID-X"); id != survivor {
+		t.Errorf("PID-X → %q, want survivor", id)
+	}
+	led := fsLedgerTypes(t, s, "op-frag")
+	if led[fsChangeSoftDelete] != shells {
+		t.Errorf("book_soft_delete rows = %d, want %d", led[fsChangeSoftDelete], shells)
+	}
+	if led[fsChangeFileReassign]+led[fsChangeFileCreate] != 2 || res.RowsMoved+res.RowsCreated != 2 {
+		t.Errorf("reassign+create rows = %d+%d (res %s), want 2 total", led[fsChangeFileReassign], led[fsChangeFileCreate], res)
+	}
+	if led["metadata_update"] != 2 {
+		t.Errorf("metadata_update rows = %d, want 2 (title, file_path)", led["metadata_update"])
 	}
 }
 
-// REGRESSION (the #1548 delete-skipped bug): a non-survivor member that ALREADY owns a
-// materialized BookFile row at its path (FileCount==1). The old code called UpsertBookFile,
-// which path-matches and preserves the shell's BookID — leaving the file on the shell, so
-// the delete-guard skipped it AND the survivor silently lost that chapter's audio. The fix
-// reattaches the existing row to the survivor, so the shell empties and is deleted.
-func TestApplyFSRegroup_ReattachesOneFileShell(t *testing.T) {
+// chapterPartsForTest reads the folder number back out of a chapter path.
+func chapterPartsForTest(p string) (string, int, string, bool) {
+	dir := filepath.Base(filepath.Dir(p))
+	i := strings.LastIndex(dir, " - ")
+	if i < 0 {
+		return "", 0, "", false
+	}
+	n, err := strconv.Atoi(dir[i+3:])
+	return dir[:i], n, "", err == nil
+}
+
+// seedDuplicates seeds a multi-file owner at base (each file in its own chapter
+// folder, i.e. also a layout book) plus one single-file shell per file.
+func seedDuplicates(t *testing.T, s *database.PebbleStore, base string) (owner string, shells []string) {
+	t.Helper()
+	owner = fsSeedBook(t, s, "Metal Swarm", base+"/Metal Swarm - 1")
+	for i := 1; i <= 3; i++ {
+		p := fmt.Sprintf("%s/Metal Swarm - %d/103.mp3", base, i)
+		fsSeedRow(t, s, owner, p)
+		shells = append(shells, fsSeedBook(t, s, "", p))
+	}
+	return owner, shells
+}
+
+// Category 2: dry run classifies the shells as duplicates of the owner; apply
+// soft-deletes them and leaves the owner and every row untouched.
+func TestFsRegroupDuplicates_DryRunAndApplyRetireShellsOnly(t *testing.T) {
 	s := regroupStore(t)
-	survivor := seedBook(t, s, "")
-	shell := seedBook(t, s, "")
-
-	base := "/lib/Brandon Sanderson/Elantris - Elantris"
-	shellPath := base + "/Elantris - 2/01.mp3"
-	// Pre-seed a BookFile row OWNED BY THE SHELL at the shell's chapter path.
-	if err := s.CreateBookFile(&database.BookFile{BookID: shell, FilePath: shellPath, Duration: 999}); err != nil {
-		t.Fatalf("seed shell file: %v", err)
+	owner, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	dup := fsGroupsOf(plan, fsCatDuplicates)
+	if len(dup) != 1 || dup[0].OwnerID != owner || dup[0].Rows != 3 {
+		t.Fatalf("duplicates = %+v, want one group of 3 owned by %s (plan %s)", dup, owner, plan.summary())
 	}
-
-	target := itunesservice.FSRegroupTarget{
-		BookFolder: base,
-		Title:      "Elantris",
-		SurvivorID: survivor,
-		Members: []itunesservice.FSBook{
-			{ID: survivor, FilePath: base + "/Elantris - 1/01.mp3", DurationSec: 1200},
-			{ID: shell, FilePath: shellPath, DurationSec: 1300},
-		},
-	}
-
-	p := &Plugin{}
 	rep := &fakeReporter{}
-	if err := p.applyFSRegroup(context.Background(), s, []itunesservice.FSRegroupTarget{target}, 0, rep); err != nil {
-		t.Fatalf("applyFSRegroup: %v", err)
+	reportFSRepairPlan(plan, true, rep)
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "PLAN duplicates") {
+		t.Errorf("no duplicates plan line in %v", rep.logs)
 	}
 
-	// The pre-existing file must have MOVED to the survivor (not stayed on the shell).
-	sfiles, _ := s.GetBookFiles(survivor)
-	if len(sfiles) != 2 {
-		t.Fatalf("survivor has %d files, want 2 (own + reattached)", len(sfiles))
+	g := &fsGuardStore{PebbleStore: s}
+	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-dup"}); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
-	if sh, _ := s.GetBookFiles(shell); len(sh) != 0 {
-		t.Errorf("shell still owns %d files, want 0 (reattach failed → would orphan audio)", len(sh))
+	for _, id := range shells {
+		if !fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s not soft-deleted", id)
+		}
 	}
-	if b, _ := s.GetBookByID(shell); b != nil {
-		t.Errorf("shell not deleted (delete-skipped bug regressed)")
+	if fsSoftDeleted(t, s, owner) {
+		t.Errorf("owner soft-deleted")
 	}
-	// The reattached row must preserve its identity (the move keeps the existing row).
-	moved, _ := s.GetBookFileByPath(shellPath)
-	if moved == nil || moved.BookID != survivor {
-		t.Errorf("reattached row = %v, want BookID=%s", moved, survivor)
+	if rows, _ := s.GetBookFiles(owner); len(rows) != 3 {
+		t.Errorf("owner rows = %d, want 3", len(rows))
 	}
-	if r := resultLog(t, rep.logs); !strings.Contains(r, "delete-skipped=0") {
-		t.Errorf("result = %q, want delete-skipped=0", r)
+	if after := fsRowCount(t, s); after != before {
+		t.Errorf("book_file rows %d → %d, want unchanged", before, after)
+	}
+	if g.hardDeletes.Load() != 0 {
+		t.Errorf("hard DeleteBook called")
+	}
+	if led := fsLedgerTypes(t, s, "op-dup"); led[fsChangeSoftDelete] != 3 {
+		t.Errorf("ledger = %v, want 3 book_soft_delete", led)
 	}
 }
 
-// Integration: a real shattered folder layout (Cage of Souls / N) routed through the
-// PURE planner guard (GroupShatteredBooks, prefix⊆parent) and then the apply path,
-// collapsing N chapter shells into ONE survivor book.
-func TestFSRegroup_ShatteredFolder_HealsToOneBook(t *testing.T) {
+// Category 3: a book whose files each sit in their own chapter folder is
+// detected and planned; the apply refuses and nothing on disk or in the DB
+// moves.
+func TestFsRegroupLayout_DetectedAndApplyRefuses(t *testing.T) {
 	s := regroupStore(t)
-	base := "/lib/Adrian Tchaikovsky/Cage of Souls - Cage of Souls"
-	var fsbooks []itunesservice.FSBook
-	var ids []string
-	for i := 1; i <= 4; i++ {
-		id := seedBook(t, s, "")
-		ids = append(ids, id)
-		fsbooks = append(fsbooks, itunesservice.FSBook{
-			ID:        id,
-			FilePath:  base + "/Cage of Souls - " + itoa(i) + "/01.mp3",
-			IsPrimary: true,
+	base := filepath.Join(t.TempDir(), "Stephen King", "The Shining")
+	book := fsSeedBook(t, s, "The Shining", base+"/The Shining - 1")
+	var paths []string
+	for i := 1; i <= 10; i++ {
+		dir := fmt.Sprintf("%s/The Shining - %d", base, i)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := dir + "/58.MP3"
+		if err := os.WriteFile(p, []byte("audio"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fsSeedRow(t, s, book, p)
+		paths = append(paths, p)
+	}
+	plan := fsPlan(t, s)
+	lay := fsGroupsOf(plan, fsCatLayout)
+	if len(lay) != 1 || lay[0].SurvivorID != book || len(lay[0].Moves) != 10 {
+		t.Fatalf("layout = %+v, want one book with 10 moves (plan %s)", lay, plan.summary())
+	}
+	if got, want := lay[0].Moves[0].To, base+"/The Shining - 01.MP3"; got != want {
+		t.Errorf("first target = %q, want %q", got, want)
+	}
+	if !strings.Contains(plan.summary(), "chapter_folder_layout (detection only): books=1 files=10") {
+		t.Errorf("summary = %q", plan.summary())
+	}
+
+	rep := &opIDReporter{id: "op-lay"}
+	_, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{Categories: []string{fsCatLayout}}, rep)
+	if err == nil || !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("layout apply err = %v, want the not-implemented refusal", err)
+	}
+	for _, p := range paths {
+		if _, serr := os.Stat(p); serr != nil {
+			t.Errorf("file %q moved: %v", p, serr)
+		}
+	}
+	rows, _ := s.GetBookFiles(book)
+	for _, r := range rows {
+		if !slices.Contains(paths, r.FilePath) {
+			t.Errorf("row repointed to %q", r.FilePath)
+		}
+	}
+	if led := fsLedgerTypes(t, s, "op-lay"); len(led) != 0 {
+		t.Errorf("refused apply wrote ledger rows %v", led)
+	}
+}
+
+// Books under the iTunes tree or a configured protected path are refused in
+// every category, before any read of their files.
+func TestFsRegroupProtectedPath_Refused(t *testing.T) {
+	old := config.AppConfig.ProtectedPaths
+	config.AppConfig.ProtectedPaths = []string{"/lib/protected"}
+	t.Cleanup(func() { config.AppConfig.ProtectedPaths = old })
+
+	s := regroupStore(t)
+	itunes := seedFragments(t, s, "/lib/books/itunes/Neil Gaiman/American Gods - American Gods", "American Gods", 3)
+	prot := seedFragments(t, s, "/lib/protected/Neil Gaiman/Mythos", "Mythos", 2)
+	layBook := fsSeedBook(t, s, "Kenobi", "/lib/books/itunes/John Jackson Miller/Kenobi/Kenobi - 1")
+	for i := 1; i <= 2; i++ {
+		fsSeedRow(t, s, layBook, fmt.Sprintf("/lib/books/itunes/John Jackson Miller/Kenobi/Kenobi - %d/102.mp3", i))
+	}
+	before := fsRowCount(t, s)
+
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatProtected)); n != 3 {
+		t.Fatalf("protected groups = %d, want 3 (plan %s)", n, plan.summary())
+	}
+	if n := len(fsGroupsOf(plan, fsCatFragments)) + len(fsGroupsOf(plan, fsCatLayout)); n != 0 {
+		t.Fatalf("protected books leaked into appliable categories: %s", plan.summary())
+	}
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, id := range append(itunes, prot...) {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("protected book %s soft-deleted", id)
+		}
+	}
+	if after := fsRowCount(t, s); after != before {
+		t.Errorf("rows %d → %d", before, after)
+	}
+	if led := fsLedgerTypes(t, s, "op-prot"); len(led) != 0 {
+		t.Errorf("ledger %v, want none", led)
+	}
+}
+
+// The apply refuses, before writing, when the stand-down cannot be acquired
+// and when a library.scan is queued or running.
+func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
+	cases := []struct {
+		name  string
+		scan  *recordingScanController
+		queue fsQueue
+	}{
+		{"stand-down not acquired", &recordingScanController{acquireErr: errors.New("scan would not park")}, fsQueue{}},
+		{"library.scan running", &recordingScanController{renewOK: true},
+			fsQueue{rows: []database.OperationV2Row{{ID: "scan-1", DefID: "library.scan", Status: "running"}}}},
+		{"queue unreadable", &recordingScanController{renewOK: true}, fsQueue{err: errors.New("boom")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+			before := fsRowCount(t, s)
+			plan := fsPlan(t, s)
+			if _, err := applyFSRepairPlan(context.Background(), s, tc.scan, tc.queue, plan, fsRegroupParams{}, &opIDReporter{id: "op-scan"}); err == nil {
+				t.Fatalf("apply succeeded, want a refusal")
+			}
+			for _, id := range ids {
+				if fsSoftDeleted(t, s, id) {
+					t.Errorf("book %s soft-deleted during a refused apply", id)
+				}
+			}
+			if after := fsRowCount(t, s); after != before {
+				t.Errorf("rows %d → %d", before, after)
+			}
 		})
 	}
 
-	targets, st := itunesservice.GroupShatteredBooks(fsbooks)
-	if len(targets) != 1 {
-		t.Fatalf("planner produced %d targets, want 1 (stats: %+v)", len(targets), st)
+	// And with a live lease the stand-down is held for the write phase.
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase, "Cage of Souls", 2)
+	c := &recordingScanController{renewOK: true}
+	if _, err := applyFSRepairPlan(context.Background(), s, c, fsQueue{}, fsPlan(t, s), fsRegroupParams{}, &opIDReporter{id: "op-held"}); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
-	if targets[0].Title != "Cage of Souls" {
-		t.Errorf("title = %q, want 'Cage of Souls'", targets[0].Title)
+	if acq, rel, ren := c.counts(); acq != 1 || rel != 1 || ren < 1 {
+		t.Errorf("stand-down acquires=%d releases=%d renews=%d, want 1/1/>=1", acq, rel, ren)
 	}
+}
 
-	p := &Plugin{}
-	rep := &fakeReporter{}
-	if err := p.applyFSRegroup(context.Background(), s, targets, 0, rep); err != nil {
-		t.Fatalf("applyFSRegroup: %v", err)
-	}
+// A path lookup error skips the group instead of being read as "no row"
+// (which would create a second row for the same path), and an apply with no
+// op id refuses because it could not journal.
+func TestFsRegroupApply_LookupErrorSkipsGroupAndOpIDRequired(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	before := fsRowCount(t, s)
+	g := &fsGuardStore{PebbleStore: s, lookupErr: errors.New("transient")}
+	plan := fsPlan(t, g)
 
-	survivors := 0
+	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &fakeReporter{}); err == nil ||
+		!strings.Contains(err.Error(), "operation id") {
+		t.Fatalf("apply without op id: err = %v, want refusal", err)
+	}
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-lookup"})
+	if err == nil || res.Groups != 0 {
+		t.Fatalf("apply with lookup errors: err=%v res=%s, want error and 0 groups", err, res)
+	}
 	for _, id := range ids {
-		if b, _ := s.GetBookByID(id); b != nil {
-			survivors++
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("book %s soft-deleted after a lookup error", id)
 		}
 	}
-	if survivors != 1 {
-		t.Fatalf("%d books remain, want 1 (shattered → 1)", survivors)
-	}
-	files, _ := s.GetBookFiles(targets[0].SurvivorID)
-	if len(files) != 4 {
-		t.Errorf("survivor has %d files, want 4", len(files))
-	}
-}
-
-// itoa avoids importing strconv for a single tiny use.
-func itoa(n int) string { return string(rune('0' + n)) }
-
-// External-id mappings on a shell must be reassigned to the survivor before the shell
-// is deleted (so iTunes PID linkage survives the heal).
-func TestApplyFSRegroup_ReassignsExternalIDs(t *testing.T) {
-	s := regroupStore(t)
-	survivor := seedBook(t, s, "")
-	shell := seedBook(t, s, "")
-	if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "PID-X", BookID: shell}); err != nil {
-		t.Fatalf("seed ext-id: %v", err)
-	}
-
-	base := "/lib/Author/Book - Book"
-	target := itunesservice.FSRegroupTarget{
-		BookFolder: base,
-		Title:      "Book",
-		SurvivorID: survivor,
-		Members: []itunesservice.FSBook{
-			{ID: survivor, FilePath: base + "/Book - 1/01.mp3", DurationSec: 100},
-			{ID: shell, FilePath: base + "/Book - 2/01.mp3", DurationSec: 200},
-		},
-	}
-
-	p := &Plugin{}
-	rep := &fakeReporter{}
-	if err := p.applyFSRegroup(context.Background(), s, []itunesservice.FSRegroupTarget{target}, 0, rep); err != nil {
-		t.Fatalf("applyFSRegroup: %v", err)
-	}
-	if id, _ := s.GetBookByExternalID("itunes", "PID-X"); id != survivor {
-		t.Errorf("PID-X -> %q, want survivor %q", id, survivor)
-	}
-	if b, _ := s.GetBookByID(shell); b != nil {
-		t.Errorf("shell not deleted after ext-id reassign")
-	}
-}
-
-// When ext-id reassignment FAILS, the shell must be skip-counted and NOT deleted
-// (so its mappings aren't orphaned). Forced via a mock that errors on reassign.
-func TestApplyFSRegroup_ExtIDErrorSkipsDelete(t *testing.T) {
-	survivor := &database.Book{ID: "surv"}
-	deleted := map[string]bool{}
-	mock := &database.MockStore{
-		GetBookByIDFunc:       func(id string) (*database.Book, error) { return survivor, nil },
-		GetBookFileByPathFunc: func(string) (*database.BookFile, error) { return nil, nil },
-		CreateBookFileFunc:    func(*database.BookFile) error { return nil },
-		UpdateBookFunc:        func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
-		GetExternalIDsForBookFunc: func(string) ([]database.ExternalIDMapping, error) {
-			return []database.ExternalIDMapping{{ExternalID: "p", BookID: "shell"}}, nil
-		},
-		ReassignExternalIDsFunc: func(_, _ string) error { return context.DeadlineExceeded },
-		GetBookFilesFunc:        func(string) ([]database.BookFile, error) { return nil, nil },
-		DeleteBookFunc:          func(id string) error { deleted[id] = true; return nil },
-	}
-
-	base := "/lib/A/B - B"
-	target := itunesservice.FSRegroupTarget{
-		BookFolder: base, Title: "B", SurvivorID: "surv",
-		Members: []itunesservice.FSBook{
-			{ID: "surv", FilePath: base + "/B - 1/01.mp3"},
-			{ID: "shell", FilePath: base + "/B - 2/01.mp3"},
-		},
-	}
-
-	p := &Plugin{}
-	rep := &fakeReporter{}
-	// A reassign failure is skip-counted (delete-skipped), not an errCount → apply returns nil.
-	if err := p.applyFSRegroup(context.Background(), mock, []itunesservice.FSRegroupTarget{target}, 0, rep); err != nil {
-		t.Fatalf("applyFSRegroup: %v", err)
-	}
-	if deleted["shell"] {
-		t.Errorf("shell deleted despite ext-id reassign failure (orphans mappings)")
-	}
-	if r := resultLog(t, rep.logs); !strings.Contains(r, "delete-skipped=1") {
-		t.Errorf("result = %q, want delete-skipped=1", r)
+	if after := fsRowCount(t, s); after != before {
+		t.Errorf("rows %d → %d", before, after)
 	}
 }
