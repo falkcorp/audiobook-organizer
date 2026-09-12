@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-12
 
@@ -652,10 +652,9 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		if !pool.Submit(bookID, func() {
 			defer jobDone()
 			// The response is already written. A lost hold means a scan may be
-			// running again, so the job does not start its file work. The shared
-			// sequel runs as one call, so this is the only stand-down check: it
-			// no longer re-checks between the cover download, the file I/O and
-			// the tag write.
+			// running again, so the job does not start its file work, and
+			// FinishApplyFileWork re-checks the hold (hold.Checkpoint) before the
+			// cover download, the file I/O and the tag write.
 			if err := hold.Checkpoint(); err != nil {
 				slog.Warn("background apply skipped: scan stand-down lost", "bookID", bookID, "err", err)
 				return
@@ -676,7 +675,7 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			//
 			// The HTTP response has already been written by the time this runs,
 			// so a failure can only be logged.
-			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, shouldWriteBack); err != nil {
+			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, shouldWriteBack, hold.Checkpoint); err != nil {
 				slog.Warn("background apply file work failed", "bookID", bookID, "err", err)
 			}
 		}) {

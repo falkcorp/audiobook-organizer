@@ -1,11 +1,12 @@
 // file: internal/metafetch/service_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
 package metafetch
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -196,9 +197,34 @@ func (mfs *Service) lockWriteTarget(id string, policy copyPolicy) func() {
 // not reentrant, so a caller must NOT hold it around this call. The cover
 // download writes the per-book covers file, not the audio files, and takes
 // no lock.
-func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error {
+//
+// STAND-DOWN. checkpoint is the caller's scan stand-down check
+// (ScanStandDownHold.Checkpoint for the single-book and batch-candidates
+// handlers; nil for callers that hold none). It runs before each
+// file-writing step: the cover download, the file I/O and the standalone tag
+// write. A failed check stops the sequel there and is returned, wrapped with
+// the step it stopped before. Metadata is never written to files during a
+// library scan, and the handlers checked the hold between these steps before
+// they shared this sequel; a single check before the call would let a scan
+// that resumes mid-sequel run alongside the rename and the tag write.
+func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+	if err := standDown(checkpoint, id, "the cover download"); err != nil {
+		return err
+	}
 	mfs.DownloadPendingCover(id, pendingCoverURL)
-	return mfs.finishFileWork(id, fileIO, writeTags, createLibraryCopy)
+	return mfs.finishFileWork(id, fileIO, writeTags, createLibraryCopy, checkpoint)
+}
+
+// standDown runs a stand-down checkpoint before a file-writing step. A nil
+// checkpoint always passes.
+func standDown(checkpoint func() error, id, step string) error {
+	if checkpoint == nil {
+		return nil
+	}
+	if err := checkpoint(); err != nil {
+		return fmt.Errorf("apply file work for book %s: stopped before %s: %w", id, step, err)
+	}
+	return nil
 }
 
 // FinishAutoFetchFileWork is FinishApplyFileWork for auto-fetch (the organize
@@ -224,17 +250,26 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 			"book_id", id, "path", book.FilePath)
 		return nil
 	}
-	return mfs.finishFileWork(id, true, writeTags, existingCopyOnly)
+	// Auto-fetch holds no scan stand-down of its own: nil checkpoint.
+	return mfs.finishFileWork(id, true, writeTags, existingCopyOnly, nil)
 }
 
-// finishFileWork is steps 2 and 3 of FinishApplyFileWork under a copy policy.
-func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, policy copyPolicy) error {
+// finishFileWork is steps 2 and 3 of FinishApplyFileWork under a copy policy,
+// with the stand-down checkpoint run before each (nil passes).
+func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, policy copyPolicy, checkpoint func() error) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
+		if err := standDown(checkpoint, id, "the file I/O"); err != nil {
+			return err
+		}
 		tags, fileErr = mfs.applyMetadataFileIO(id, policy)
 	}
 	if writeTags && !tags.handled {
+		if err := standDown(checkpoint, id, "the tag write"); err != nil {
+			// errors.Join keeps a rename failure from the step above visible.
+			return errors.Join(fileErr, err)
+		}
 		// Resolved and locked after the pipeline returned (and released its
 		// own locks), so the key is the post-rename path of the files written.
 		release := mfs.lockWriteTarget(id, policy)

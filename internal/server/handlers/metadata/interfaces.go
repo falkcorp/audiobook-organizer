@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-12
 
@@ -154,7 +154,9 @@ type MetadataApplier interface {
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
+	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
+	// before each file-writing step; nil means the caller holds none.
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 	RunApplyPipelineRenameOnly(id string, book *database.Book) error
 	ApplyMetadataSystemTags(bookID, sourceName, language string)
 }

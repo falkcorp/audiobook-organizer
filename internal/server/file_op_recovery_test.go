@@ -1,5 +1,5 @@
 // file: internal/server/file_op_recovery_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8e5d17-4c6a-49f3-a0e1-7d93c5b28f46
 // last-edited: 2026-09-12
 
@@ -21,7 +21,7 @@ type fakeApplyRecoverer struct {
 	tagWrites int
 }
 
-func (f *fakeApplyRecoverer) FinishApplyFileWork(id, cover string, fileIO, writeTags bool) error {
+func (f *fakeApplyRecoverer) FinishApplyFileWork(id, cover string, fileIO, writeTags bool, _ func() error) error {
 	f.calls = append(f.calls, fmt.Sprintf("%s|%s|%v|%v", id, cover, fileIO, writeTags))
 	if writeTags {
 		f.tagWrites++
