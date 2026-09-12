@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package itunes
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,6 +40,16 @@ type MockBackfillStore struct {
 	// once the done flag is set, and that the file read happens once per run.
 	getAllBooksCalls     int
 	getAllBookFilesCalls int
+	// swapAfterFirstPage simulates the production hazard offset pagination
+	// is exposed to (PERF-5): the memdb reconciler swaps the whole snapshot
+	// asynchronously, so an offset page read after the swap indexes into a
+	// shifted list. When set, a paged read (limit > 0) serves page 1 from the
+	// full ID-sorted list and every later page from that list minus its first
+	// entry — so the row at index `limit` is silently skipped. A single-call
+	// read (limit <= 0) is one snapshot and sees every row. paged records
+	// whether any offset-paged read happened at all.
+	swapAfterFirstPage bool
+	paged              bool
 }
 
 func NewMockBackfillStore() *MockBackfillStore {
@@ -65,6 +76,19 @@ func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 	for _, id := range ids {
 		b := m.books[id]
 		all = append(all, b.Core())
+	}
+	// limit <= 0 is unbounded on both real store paths (memdb and the Pebble
+	// scan); the mock used to slice [offset:offset+0] and return nothing,
+	// which would let a single-call caller pass a test for the wrong reason.
+	if limit <= 0 {
+		if offset >= len(all) {
+			return []database.BookCore{}, nil
+		}
+		return all[offset:], nil
+	}
+	m.paged = true
+	if m.swapAfterFirstPage && m.getAllBooksCalls > 1 && len(all) > 0 {
+		all = all[1:] // the snapshot swap: every later position shifts by one
 	}
 	// Simulate pagination via limit/offset to allow backfill loop to terminate.
 	if offset >= len(all) {
@@ -380,10 +404,10 @@ func TestBackfillExternalIDsUsesBatchFileRead(t *testing.T) {
 	if mockStore.getAllBookFilesCalls != 1 {
 		t.Errorf("GetAllBookFilesCore calls = %d, want exactly 1", mockStore.getAllBookFilesCalls)
 	}
-	// The backfill advances offset by its own page size (10,000), so three
-	// books are one page plus the terminating empty page.
-	if mockStore.getAllBooksCalls != 2 {
-		t.Errorf("GetAllBooksCore calls = %d, want 2 (one page + terminating empty page)", mockStore.getAllBooksCalls)
+	// The book list is one single-snapshot read per run (PERF-5), not offset
+	// pages — see TestBackfillExternalIDsSnapshotSwapCannotSkipBooks.
+	if mockStore.getAllBooksCalls != 1 {
+		t.Errorf("GetAllBooksCore calls = %d, want exactly 1 (one snapshot read)", mockStore.getAllBooksCalls)
 	}
 
 	got := map[string]database.ExternalIDMapping{}
@@ -408,5 +432,102 @@ func TestBackfillExternalIDsUsesBatchFileRead(t *testing.T) {
 	}
 	if _, ok := got["file-pid-orphan"]; ok {
 		t.Error("a file whose book is not in the library must not yield a mapping")
+	}
+}
+
+// snapshotSwapBookCount is one more book than the backfill's old 10,000-row
+// offset page, so the pre-fix loops needed two pages and the swap between
+// them skipped exactly one book.
+const snapshotSwapBookCount = 10001
+
+// TestBackfillExternalIDsSnapshotSwapCannotSkipBooks pins the PERF-5 fix for
+// BackfillExternalIDs's book pass: with more books than one old offset page
+// and the snapshot shifting between pages, the offset loop silently skipped a
+// book's mapping and still reported success (and would then set the done
+// flag). The single-snapshot read writes a mapping for every book.
+func TestBackfillExternalIDsSnapshotSwapCannotSkipBooks(t *testing.T) {
+	setITunesXMLPath(t, "")
+	mockStore := NewMockBackfillStore()
+	mockStore.swapAfterFirstPage = true
+	for i := range snapshotSwapBookCount {
+		id := fmt.Sprintf("b%05d", i)
+		pid := fmt.Sprintf("pid-%05d", i)
+		mockStore.books[id] = database.Book{ID: id, Title: id, ITunesPersistentID: &pid}
+	}
+
+	if err := BackfillExternalIDs(context.Background(), mockStore, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockStore.paged {
+		t.Error("book pass used offset pages — the snapshot-swap skip window is back")
+	}
+	got := map[string]bool{}
+	for _, m := range mockStore.externalIDMaps {
+		got[m.ExternalID] = true
+	}
+	if len(got) != snapshotSwapBookCount {
+		t.Fatalf("mappings written for %d books, want %d: a book was never enumerated (silent skip, success reported)", len(got), snapshotSwapBookCount)
+	}
+}
+
+// TestBackfillITunesTrackPIDsSnapshotSwapCannotSkipBooks pins the same fix
+// for BackfillITunesTrackPIDs's PID/title index build (TASK-063). The one
+// book whose PID matches the synthetic XML track sits at the position the old
+// offset loop skipped after a snapshot swap, so the pre-fix code built an
+// index without it and registered zero track PIDs, returning no error.
+func TestBackfillITunesTrackPIDsSnapshotSwapCannotSkipBooks(t *testing.T) {
+	const targetPID = "0123456789ABCDEF"
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Major Version</key><integer>1</integer>
+	<key>Tracks</key>
+	<dict>
+		<key>1</key>
+		<dict>
+			<key>Track ID</key><integer>1</integer>
+			<key>Persistent ID</key><string>` + targetPID + `</string>
+			<key>Name</key><string>Chapter 1</string>
+			<key>Album</key><string>Synthetic Album With No Title Match</string>
+			<key>Track Number</key><integer>1</integer>
+		</dict>
+	</dict>
+</dict>
+</plist>
+`
+	xmlPath := filepath.Join(t.TempDir(), "synthetic-library.xml")
+	if err := os.WriteFile(xmlPath, []byte(xml), 0o600); err != nil {
+		t.Fatalf("write synthetic XML: %v", err)
+	}
+	setITunesXMLPath(t, xmlPath)
+
+	mockStore := NewMockBackfillStore()
+	mockStore.swapAfterFirstPage = true
+	for i := range snapshotSwapBookCount {
+		id := fmt.Sprintf("b%05d", i)
+		book := database.Book{ID: id, Title: id}
+		if i == snapshotSwapBookCount-1 {
+			// The last ID-sorted book: the row the post-swap offset page
+			// never reaches.
+			pid := targetPID
+			book.ITunesPersistentID = &pid
+		}
+		mockStore.books[id] = book
+	}
+	targetID := fmt.Sprintf("b%05d", snapshotSwapBookCount-1)
+
+	registered, err := BackfillITunesTrackPIDs(context.Background(), mockStore, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mockStore.paged {
+		t.Error("index build used offset pages — the snapshot-swap skip window is back")
+	}
+	if registered != 1 {
+		t.Fatalf("registered = %d, want 1: the PID-bearing book was missing from the index (silent skip, no error)", registered)
+	}
+	if len(mockStore.externalIDMaps) != 1 || mockStore.externalIDMaps[0].BookID != targetID || mockStore.externalIDMaps[0].ExternalID != targetPID {
+		t.Fatalf("mappings = %+v, want one %s -> %s", mockStore.externalIDMaps, targetPID, targetID)
 	}
 }
