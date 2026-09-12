@@ -377,9 +377,6 @@
           "file_naming_pattern": {
             "type": "string"
           },
-          "auto_fetch_metadata": {
-            "type": "boolean"
-          },
           "log_level": {
             "type": "string",
             "enum": [

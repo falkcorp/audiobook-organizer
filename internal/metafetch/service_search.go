@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -756,6 +756,7 @@ func (mfs *Service) searchMetadataForBook(
 				ISBN10:                  r.ISBN10,
 				ISBN13:                  r.ISBN13,
 				ASIN:                    r.ASIN,
+				Genre:                   r.Genre,
 				Abridged:                r.Abridged,
 				Subtitle:                r.Subtitle,
 				PageCount:               r.PageCount,
@@ -872,6 +873,7 @@ func (mfs *Service) searchMetadataForBook(
 					ISBN10:                  result.ISBN10,
 					ISBN13:                  result.ISBN13,
 					ASIN:                    result.ASIN,
+					Genre:                   result.Genre,
 					Abridged:                result.Abridged,
 					Subtitle:                result.Subtitle,
 					PageCount:               result.PageCount,

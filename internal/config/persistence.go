@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-09-12
 
@@ -120,7 +120,6 @@ func SaveConfigToFile() error {
 		"auto_organize":         c.AutoOrganize,
 		"folder_naming_pattern": c.FolderNamingPattern,
 		"file_naming_pattern":   c.FileNamingPattern,
-		"auto_fetch_metadata":   c.AutoFetchMetadata,
 		"language":              c.Language,
 		"enable_ai_parsing":     c.EnableAIParsing,
 		"concurrent_scans":      c.ConcurrentScans,
@@ -1033,10 +1032,6 @@ func applySetting(key, value, typ string) error {
 			}
 
 		// Metadata
-		case "auto_fetch_metadata":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.AutoFetchMetadata = b
-			}
 		case "language":
 			c.Language = value
 		case "metadata_review_default_view":

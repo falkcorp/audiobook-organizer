@@ -1,5 +1,5 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-09-12
 
@@ -471,7 +471,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         disk_quota_percent: settings.diskQuotaPercent,
         enable_user_quotas: settings.enableUserQuotas,
         default_user_quota_gb: settings.defaultUserQuotaGB,
-        auto_fetch_metadata: settings.autoFetchMetadata,
         enable_ai_parsing: settings.enableAIParsing,
         ...(settings.openaiApiKey ? { openai_api_key: settings.openaiApiKey } : {}),
         metadata_sources: settings.metadataSources.map((source) => ({

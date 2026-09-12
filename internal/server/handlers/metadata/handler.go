@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-12
 
@@ -631,8 +631,9 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
 	}
 
-	// Kick off slow file I/O (cover embed, tags, rename) in background.
-	// Cover download is already done inline so the response has the URL.
+	// Kick off the slow file work (cover download, cover embed, rename, tags)
+	// in the background. The response keeps the previous cover until the
+	// download lands (renderableCoverURL).
 	shouldWriteBack := body.WriteBack == nil || *body.WriteBack
 
 	// Enqueue in the write-back batcher immediately (before pool submission)
@@ -651,33 +652,26 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		if !pool.Submit(bookID, func() {
 			defer jobDone()
 			// The response is already written. A lost hold means a scan may be
-			// running again, so the job stops before each file-writing step.
+			// running again, so the job does not start its file work. The shared
+			// sequel runs as one call, so this is the only stand-down check: it
+			// no longer re-checks between the cover download, the file I/O and
+			// the tag write.
 			if err := hold.Checkpoint(); err != nil {
 				slog.Warn("background apply skipped: scan stand-down lost", "bookID", bookID, "err", err)
 				return
 			}
-			// Cover download runs FIRST and in the background. It used to run
-			// inline in ApplyMetadataCandidate, where it was ~4s of a measured
-			// 6.44s request. It has to precede the file I/O below because
-			// ApplyMetadataFileIO embeds the cover into the audio files, and an
-			// embed that runs before the download would embed the previous image.
-			if pendingCover != "" {
-				mfs.DownloadPendingCover(bookID, pendingCover)
-			}
-			if err := hold.Checkpoint(); err != nil {
-				slog.Warn("background apply file I/O skipped: scan stand-down lost", "bookID", bookID, "err", err)
-				return
-			}
-			// Same constraint as the batch sibling: the HTTP response has
-			// already been written by the time this runs, so a failure can only
-			// be logged.
-			if err := mfs.ApplyMetadataFileIO(bookID); err != nil {
-				slog.Warn("background apply file I/O failed", "bookID", bookID, "err", err)
-			}
-			if shouldWriteBack && hold.Checkpoint() == nil {
-				if _, wbErr := mfs.WriteBackMetadataForBook(bookID); wbErr != nil {
-					slog.Warn("background write-back for", "bookID", bookID, "wbErr", wbErr)
-				}
+			// The shared sequel the batch sibling also runs: cover download
+			// FIRST (it used to run inline in ApplyMetadataCandidate, ~4s of a
+			// measured 6.44s request, and it must precede the embed or the
+			// previous image is embedded), then the file I/O, then the tags
+			// exactly once. This used to follow ApplyMetadataFileIO with its own
+			// WriteBackMetadataForBook, which tagged every file twice whenever
+			// auto_write_tags_on_apply was on.
+			//
+			// The HTTP response has already been written by the time this runs,
+			// so a failure can only be logged.
+			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, shouldWriteBack); err != nil {
+				slog.Warn("background apply file work failed", "bookID", bookID, "err", err)
 			}
 		}) {
 			// Dropped (pool stopped): fn will never run, so release its share of the hold here.

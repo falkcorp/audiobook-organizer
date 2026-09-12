@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package server
 
@@ -26,8 +26,9 @@ type cachedApplyService interface {
 	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
 	InvalidateCachedCandidates(bookID string) error
-	ApplyMetadataFileIO(id string) error
-	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
+	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
+	// download, file I/O, and a tag write that happens exactly once.
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
 }
 
 // applyBookReader is the single store read the per-book path needs.
@@ -112,11 +113,20 @@ func applyCachedCandidateForBook(
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
 	out := applyOutcome{Applied: true}
+	pendingCover := ""
 	if resp != nil {
 		out.SkippedLocked = resp.SkippedLockedFields
+		pendingCover = resp.PendingCoverURL
 	}
 
 	if !writeBack {
+		// No file I/O and no tags were asked for, but the new cover is still
+		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
+		// the image is on disk, and until 2026-09-12 nothing on this path ever
+		// fetched it, so a batch-applied book kept its old cover forever.
+		if err := svc.FinishApplyFileWork(id, pendingCover, false, false); err != nil {
+			out.WriteBackFailed, out.Err = true, err
+		}
 		return out
 	}
 
@@ -138,27 +148,18 @@ func applyCachedCandidateForBook(
 		release := lockPath(book.FilePath)
 		defer release()
 	}
-	// The rename lives in here, and its failure used to be unreachable: this
-	// call returned nothing, so the outcome below said Applied:true whether or
-	// not a single file had moved. Applied stays true — the database change is
-	// real and durable — but the file side is now flagged, which is exactly why
-	// WriteBackFailed is separate from !Applied.
+	// Cover download, then the file I/O (the rename lives in there), then the
+	// tags -- once. This used to call ApplyMetadataFileIO and then
+	// WriteBackMetadataForBook, and with auto_write_tags_on_apply on the first
+	// already wrote the tags, so every file was tagged twice.
 	//
-	// The write-back below still runs on a file-I/O failure. Skipping it would
-	// be a behaviour change beyond reporting: tag writing is independent of the
-	// rename (correct tags in a file that did not move are still correct), and
-	// it ran unconditionally before this call could report anything. Only the
-	// error we surface changes — fileErr wins because "rename failed" localises
-	// the fault better than the write-back error it would otherwise cause.
-	fileErr := svc.ApplyMetadataFileIO(id)
-	_, wberr := svc.WriteBackMetadataForBook(id)
-	if fileErr != nil {
-		out.WriteBackFailed, out.Err = true, fileErr
-		return out
-	}
-	if wberr != nil {
-		out.WriteBackFailed, out.Err = true, wberr
-		return out
+	// Applied stays true on a failure -- the database change is real and
+	// durable -- but the file side is flagged, which is exactly why
+	// WriteBackFailed is separate from !Applied. The core still writes tags
+	// after a rename failure and reports the rename error first, because
+	// "rename failed" localises the fault better than what it causes.
+	if err := svc.FinishApplyFileWork(id, pendingCover, true, true); err != nil {
+		out.WriteBackFailed, out.Err = true, err
 	}
 	return out
 }

@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.13.0
-// last-edited: 2026-09-11
+// version: 1.14.0
+// last-edited: 2026-09-12
 
 package config
 
@@ -378,7 +378,6 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("metadata defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.AutoFetchMetadata)
 		assert.False(t, AppConfig.WriteBackMetadata)
 		assert.False(t, AppConfig.EmbedCoverArt)
 		assert.Equal(t, "en", AppConfig.Language)
@@ -650,7 +649,6 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"create_backups", func() bool { return AppConfig.CreateBackups }},
 		{"enable_disk_quota", func() bool { return AppConfig.EnableDiskQuota }},
 		{"enable_user_quotas", func() bool { return AppConfig.EnableUserQuotas }},
-		{"auto_fetch_metadata", func() bool { return AppConfig.AutoFetchMetadata }},
 		{"openlibrary_dump_enabled", func() bool { return AppConfig.OpenLibraryDumpEnabled }},
 		{"enable_ai_parsing", func() bool { return AppConfig.EnableAIParsing }},
 		{"enable_auth", func() bool { return AppConfig.EnableAuth }},

@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-27
+// last-edited: 2026-09-12
 
 package config
 
@@ -354,14 +354,6 @@ func TestApplySetting(t *testing.T) {
 			check: func() bool { return AppConfig.DefaultUserQuotaGB == 50 },
 		},
 		{
-			name:  "auto_fetch_metadata",
-			key:   "auto_fetch_metadata",
-			value: "false",
-			typ:   "bool",
-			setup: func() { AppConfig.AutoFetchMetadata = true },
-			check: func() bool { return !AppConfig.AutoFetchMetadata },
-		},
-		{
 			name:  "language",
 			key:   "language",
 			value: "de",
@@ -512,7 +504,6 @@ func TestSaveConfigToDatabase(t *testing.T) {
 			DiskQuotaPercent:     90,
 			EnableUserQuotas:     true,
 			DefaultUserQuotaGB:   50,
-			AutoFetchMetadata:    true,
 			Language:             "de",
 			EnableAIParsing:      true,
 			OpenAIAPIKey:         "sk-test",

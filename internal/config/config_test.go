@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package config
 
@@ -91,10 +91,6 @@ func TestMetadataDefaults(t *testing.T) {
 	// Arrange-Act-Assert: Test metadata defaults
 	viper.Reset()
 	InitConfig()
-
-	if autoFetch := viper.GetBool("auto_fetch_metadata"); !autoFetch {
-		t.Error("Expected auto_fetch_metadata to be true by default")
-	}
 
 	language := viper.GetString("language")
 	if language != "en" {
@@ -202,7 +198,6 @@ func TestConfigStructure(t *testing.T) {
 		DatabasePath:         "/data/audiobooks.db",
 		DatabaseType:         "pebble",
 		OrganizationStrategy: "auto",
-		AutoFetchMetadata:    true,
 		Language:             "en",
 	}
 

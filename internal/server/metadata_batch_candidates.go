@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.1.2
+// version: 4.2.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-12
 //
@@ -573,9 +573,14 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			}
 
 			candidate := *cr.Candidate
-			if _, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil); err != nil {
+			resp, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil)
+			if err != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
 				return nil
+			}
+			pendingCover := ""
+			if resp != nil {
+				pendingCover = resp.PendingCoverURL
 			}
 
 			// Persist "applied" status so re-opens of the dialog don't show
@@ -604,11 +609,13 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 					// handler has already answered, so outcomes[i] is long
 					// since written. The response cannot report it; the log is
 					// the only channel left.
-					if err := mfs.ApplyMetadataFileIO(bid); err != nil {
-						slog.Warn("background apply file I/O failed", "bid", bid, "err", err)
-					}
-					if _, err := mfs.WriteBackMetadataForBook(bid); err != nil {
-						slog.Warn("write-back failed for", "bid", bid, "err", err)
+					//
+					// The shared sequel: cover download (this path never fetched
+					// the new cover before 2026-09-12), file I/O, and the tags
+					// exactly once (ApplyMetadataFileIO followed by its own
+					// write-back tagged twice under auto_write_tags_on_apply).
+					if err := mfs.FinishApplyFileWork(bid, pendingCover, true, true); err != nil {
+						slog.Warn("background apply file work failed", "bid", bid, "err", err)
 					}
 					if s.writeBackBatcher != nil {
 						s.writeBackBatcher.Enqueue(bid)

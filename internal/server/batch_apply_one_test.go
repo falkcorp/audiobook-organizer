@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -24,18 +24,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
+// finishCall is one FinishApplyFileWork invocation.
+type finishCall struct {
+	id        string
+	cover     string
+	fileIO    bool
+	writeTags bool
+}
+
 // fakeApplySvc records which of the file-side calls were made.
 type fakeApplySvc struct {
 	candidates    []json.RawMessage
 	getErr        error
 	applyErr      error
-	fileIOErr     error
-	writeBackErr  error
+	finishErr     error
+	pendingCover  string
 	skippedLocked []string
 	appliedIDs    []string
 	invalidatedID []string
-	fileIOIDs     []string
-	writeBackIDs  []string
+	finishCalls   []finishCall
 }
 
 func (f *fakeApplySvc) GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error) {
@@ -53,7 +60,7 @@ func (f *fakeApplySvc) ApplyMetadataCandidate(id string, _ metafetch.MetadataCan
 		return nil, f.applyErr
 	}
 	f.appliedIDs = append(f.appliedIDs, id)
-	return &metafetch.FetchMetadataResponse{SkippedLockedFields: f.skippedLocked}, nil
+	return &metafetch.FetchMetadataResponse{SkippedLockedFields: f.skippedLocked, PendingCoverURL: f.pendingCover}, nil
 }
 
 func (f *fakeApplySvc) InvalidateCachedCandidates(bookID string) error {
@@ -61,17 +68,9 @@ func (f *fakeApplySvc) InvalidateCachedCandidates(bookID string) error {
 	return nil
 }
 
-func (f *fakeApplySvc) ApplyMetadataFileIO(id string) error {
-	f.fileIOIDs = append(f.fileIOIDs, id)
-	return f.fileIOErr
-}
-
-func (f *fakeApplySvc) WriteBackMetadataForBook(id string, _ ...[]string) (int, error) {
-	f.writeBackIDs = append(f.writeBackIDs, id)
-	if f.writeBackErr != nil {
-		return 0, f.writeBackErr
-	}
-	return 1, nil
+func (f *fakeApplySvc) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error {
+	f.finishCalls = append(f.finishCalls, finishCall{id: id, cover: pendingCoverURL, fileIO: fileIO, writeTags: writeTags})
+	return f.finishErr
 }
 
 type fakeBookReader struct {
@@ -113,11 +112,13 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	if !out.Applied || out.WriteBackFailed {
 		t.Fatalf("expected clean apply, got %+v", out)
 	}
-	if len(svc.fileIOIDs) != 1 || svc.fileIOIDs[0] != "b1" {
-		t.Errorf("ApplyMetadataFileIO not called for b1: %v", svc.fileIOIDs)
-	}
-	if len(svc.writeBackIDs) != 1 || svc.writeBackIDs[0] != "b1" {
-		t.Errorf("WriteBackMetadataForBook not called for b1: %v", svc.writeBackIDs)
+	// Exactly ONE file-side sequel, asking for file I/O and tags. The core
+	// itself guarantees the tags are written once (TestFinishApplyFileWork_*
+	// in internal/metafetch); this path used to call ApplyMetadataFileIO and
+	// then WriteBackMetadataForBook, which tagged twice.
+	want := []finishCall{{id: "b1", fileIO: true, writeTags: true}}
+	if !reflect.DeepEqual(svc.finishCalls, want) {
+		t.Errorf("file work = %+v, want %+v", svc.finishCalls, want)
 	}
 	if len(itunes.ids) != 1 {
 		t.Errorf("iTunes batcher not enqueued: %v", itunes.ids)
@@ -139,9 +140,11 @@ func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	if !out.Applied {
 		t.Fatalf("expected applied, got %+v", out)
 	}
-	if len(svc.fileIOIDs) != 0 || len(svc.writeBackIDs) != 0 {
-		t.Errorf("file work ran despite write_back=false: fileIO=%v writeBack=%v",
-			svc.fileIOIDs, svc.writeBackIDs)
+	// The only file-side call allowed is the cover download: no file I/O,
+	// no tags.
+	want := []finishCall{{id: "b1", fileIO: false, writeTags: false}}
+	if !reflect.DeepEqual(svc.finishCalls, want) {
+		t.Errorf("file work ran despite write_back=false: %+v, want %+v", svc.finishCalls, want)
 	}
 	if len(itunes.ids) != 0 {
 		t.Errorf("iTunes enqueued despite write_back=false: %v", itunes.ids)
@@ -170,8 +173,8 @@ func TestApplyCachedCandidate_ReportsSkipReasons(t *testing.T) {
 			if out.Reason != tt.wantReason {
 				t.Errorf("reason = %q, want %q", out.Reason, tt.wantReason)
 			}
-			if len(tt.svc.fileIOIDs) != 0 {
-				t.Errorf("file work ran for a skipped book: %v", tt.svc.fileIOIDs)
+			if len(tt.svc.finishCalls) != 0 {
+				t.Errorf("file work ran for a skipped book: %+v", tt.svc.finishCalls)
 			}
 		})
 	}
@@ -190,8 +193,8 @@ func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 	if out.Reason != applySkipApplyFailed {
 		t.Errorf("reason = %q, want %q", out.Reason, applySkipApplyFailed)
 	}
-	if len(svc.writeBackIDs) != 0 {
-		t.Errorf("wrote files for a book whose apply failed: %v", svc.writeBackIDs)
+	if len(svc.finishCalls) != 0 {
+		t.Errorf("wrote files for a book whose apply failed: %+v", svc.finishCalls)
 	}
 }
 
@@ -200,7 +203,7 @@ func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 // fails, so the book must NOT be reported as unapplied — that would send
 // someone re-applying work that already succeeded.
 func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
-	svc := &fakeApplySvc{candidates: oneCandidate(t), writeBackErr: errors.New("disk full")}
+	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("disk full")}
 	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 
 	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
@@ -222,7 +225,7 @@ func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 // Applied must stay true (the database row really was written) and
 // WriteBackFailed must now be set, so the batch op counts and logs it.
 func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
-	svc := &fakeApplySvc{candidates: oneCandidate(t), fileIOErr: errors.New("rename files: cross-device link")}
+	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("rename files: cross-device link")}
 	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 
 	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
@@ -238,38 +241,25 @@ func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
 	}
 }
 
-// TestApplyCachedCandidate_FileIOFailureStillWritesBack pins that surfacing the
-// file-I/O error did not quietly stop tag writing. Tag writing is independent of
-// the rename — correct tags in a file that did not move are still correct — and
-// it ran unconditionally before the error could be observed. Only which error is
-// reported changed.
-func TestApplyCachedCandidate_FileIOFailureStillWritesBack(t *testing.T) {
-	svc := &fakeApplySvc{candidates: oneCandidate(t), fileIOErr: errors.New("rename files: boom")}
+// The "tags still written after a rename failure" and "rename error wins over
+// the tag error" guarantees moved with the logic into the shared core: see
+// TestFinishApplyFileWork_RenameFailureStillWritesTags in internal/metafetch.
+
+// TestApplyCachedCandidate_DownloadsPendingCover is the regression test for the
+// batch path never fetching the new cover. ApplyMetadataCandidate keeps serving
+// the previous cover until the image is on disk, and only the single-book
+// handler ever downloaded it, so a batch-applied book kept its old cover
+// forever. The cover must reach the core with and without write-back.
+func TestApplyCachedCandidate_DownloadsPendingCover(t *testing.T) {
+	const cover = "https://covers.example.test/new.jpg"
 	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
-
-	_ = applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
-
-	if len(svc.writeBackIDs) != 1 || svc.writeBackIDs[0] != "b1" {
-		t.Errorf("write-back skipped after a file-I/O failure: %v", svc.writeBackIDs)
-	}
-}
-
-// TestApplyCachedCandidate_FileIOErrorWinsOverWriteBackError pins the precedence.
-// A failed rename usually CAUSES the write-back to fail too, because the paths it
-// writes to are the ones that did not move. Reporting the write-back error would
-// name the symptom; the file-I/O error names the fault.
-func TestApplyCachedCandidate_FileIOErrorWinsOverWriteBackError(t *testing.T) {
-	svc := &fakeApplySvc{
-		candidates:   oneCandidate(t),
-		fileIOErr:    errors.New("rename files: the real fault"),
-		writeBackErr: errors.New("downstream symptom"),
-	}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
-
-	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
-
-	if out.Err == nil || !strings.Contains(out.Err.Error(), "the real fault") {
-		t.Errorf("Err = %v, want the file-I/O error to win", out.Err)
+	for _, writeBack := range []bool{true, false} {
+		svc := &fakeApplySvc{candidates: oneCandidate(t), pendingCover: cover}
+		_ = applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", writeBack, nil)
+		if len(svc.finishCalls) != 1 || svc.finishCalls[0].cover != cover {
+			t.Errorf("writeBack=%v: file work = %+v, want one call carrying the pending cover %q",
+				writeBack, svc.finishCalls, cover)
+		}
 	}
 }
 
@@ -329,7 +319,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 	})
 
 	t.Run("write-back fails", func(t *testing.T) {
-		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked, writeBackErr: errors.New("disk full")}
+		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked, finishErr: errors.New("disk full")}
 		out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
 		if !out.Applied || !out.WriteBackFailed {
 			t.Fatalf("expected applied with write-back failure: %+v", out)

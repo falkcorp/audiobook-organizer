@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -9,13 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"log/slog"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 // queueISBNEnrichment starts a background goroutine to enrich ISBN/ASIN for a book
@@ -287,31 +287,22 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 
 			mfs.persistFetchedMetadata(id, fetched)
 
-			// Download cover art locally if we got a cover URL
-			if meta.CoverURL != "" && config.AppConfig.RootDir != "" {
-				coverPath, coverErr := metadata.DownloadCoverArt(meta.CoverURL, config.AppConfig.RootDir, id)
-				if coverErr != nil {
-					slog.Warn("cover art download failed for", "id", id, "error", coverErr)
-				} else {
-					slog.Info("cover art saved to", "path", coverPath)
-					// Update book's cover_url to the local path for serving
-					localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
-					if updatedBook != nil {
-						updatedBook.CoverURL = &localCoverURL
-						// Write the full book back — UpdateBook does full column
-						// replacement, so passing only CoverURL would wipe everything.
-						mfs.db.UpdateBook(id, updatedBook)
-					}
-					// Embed cover art into all audio files for this book
-					if updatedBook != nil {
-						mfs.embedCoverInBookFiles(updatedBook, coverPath)
-					}
-				}
+			// File side through the SAME sequel every apply path uses: cover
+			// download, embed, rename/tags under auto_rename_on_apply /
+			// auto_write_tags_on_apply, and tags once more only if
+			// write_back_metadata asks and the pipeline did not already write
+			// them. Auto-fetch used to do its own cover download and write tags
+			// ONLY under write_back_metadata, so with that off (the production
+			// setting) the DB took the fetched metadata and the files kept the
+			// old tags, while a manual apply of the same candidate wrote them.
+			// meta.CoverURL is post-lock-guard, so a locked cover is not fetched.
+			if err := mfs.FinishApplyFileWork(id, meta.CoverURL, true, config.AppConfig.WriteBackMetadata); err != nil {
+				slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", id, "error", err)
 			}
-
-			// Write metadata back to audio file(s) if enabled
-			if config.AppConfig.WriteBackMetadata {
-				mfs.writeBackMetadata(updatedBook, meta)
+			// The cover download above repoints cover_url at the local copy;
+			// return the row as it now is, not the pre-download struct.
+			if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
+				updatedBook = fresh
 			}
 
 			// Queue background ISBN/ASIN enrichment if identifiers are missing

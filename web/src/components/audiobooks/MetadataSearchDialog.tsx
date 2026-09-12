@@ -1,6 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.10.2
+// version: 1.11.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
+// last-edited: 2026-09-12
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -33,6 +34,11 @@ import HeadphonesIcon from '@mui/icons-material/Headphones';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
+import {
+  METADATA_APPLY_FIELDS,
+  METADATA_APPLY_FIELD_LABELS,
+  candidateApplyFieldValue,
+} from '../../config/metadataApplyFields';
 
 interface MetadataSearchDialogProps {
   open: boolean;
@@ -46,36 +52,8 @@ interface MetadataSearchDialogProps {
   ) => void;
 }
 
-const FIELD_OPTIONS = [
-  'title',
-  'author',
-  'narrator',
-  'series',
-  'series_position',
-  'year',
-  'publisher',
-  'isbn',
-  'cover_url',
-  'description',
-  'language',
-] as const;
-
-const FIELD_LABELS: Record<string, string> = {
-  title: 'Title',
-  author: 'Author',
-  narrator: 'Narrator',
-  series: 'Series',
-  series_position: 'Series Position',
-  year: 'Year',
-  publisher: 'Publisher',
-  isbn: 'ISBN',
-  cover_url: 'Cover Image',
-  description: 'Description',
-  language: 'Language',
-};
-
 function humanizeField(field: string): string {
-  return FIELD_LABELS[field] || field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return METADATA_APPLY_FIELD_LABELS[field as keyof typeof METADATA_APPLY_FIELD_LABELS] || field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 const SOURCE_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
@@ -734,12 +712,11 @@ export function MetadataSearchDialog({
                   <Collapse in={expandedCard === idx}>
                     <Box sx={{ mt: 1, pl: 1 }}>
                       {(() => {
-                        const visibleFields = FIELD_OPTIONS.filter((f) => {
-                          const v = candidate[f as keyof MetadataCandidate];
-                          return v !== undefined && v !== null && v !== '';
-                        });
+                        const visibleFields = METADATA_APPLY_FIELDS.filter(
+                          (f) => candidateApplyFieldValue(candidate, f) !== undefined
+                        );
                         return visibleFields.map((field) => {
-                          const value = candidate[field as keyof MetadataCandidate];
+                          const value = candidateApplyFieldValue(candidate, field);
                           return (
                             <FormControlLabel
                               key={field}

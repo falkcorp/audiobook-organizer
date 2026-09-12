@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.115.0
+// version: 1.116.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-12
 
@@ -1076,7 +1076,6 @@ type Config struct {
 	DefaultUserQuotaGB int  `json:"default_user_quota_gb"`
 
 	// Metadata
-	AutoFetchMetadata         bool             `json:"auto_fetch_metadata"`
 	WriteBackMetadata         bool             `json:"write_back_metadata"`
 	EmbedCoverArt             bool             `json:"embed_cover_art"`
 	MetadataSources           []MetadataSource `json:"metadata_sources"`
@@ -2082,7 +2081,6 @@ func InitConfig() {
 	viper.SetDefault("default_user_quota_gb", 100)
 
 	// Set metadata defaults
-	viper.SetDefault("auto_fetch_metadata", true)
 	viper.SetDefault("write_back_metadata", false)
 	viper.SetDefault("embed_cover_art", false)
 	viper.SetDefault("language", "en")
@@ -2603,7 +2601,6 @@ func InitConfig() {
 			DefaultUserQuotaGB: viper.GetInt("default_user_quota_gb"),
 
 			// Metadata
-			AutoFetchMetadata: viper.GetBool("auto_fetch_metadata"),
 			WriteBackMetadata: viper.GetBool("write_back_metadata"),
 			EmbedCoverArt:     viper.GetBool("embed_cover_art"),
 			Language:          viper.GetString("language"),
@@ -3355,9 +3352,8 @@ func ResetToDefaults() {
 			DefaultUserQuotaGB: 100,
 
 			// Metadata
-			AutoFetchMetadata: true,
-			EmbedCoverArt:     false,
-			Language:          "en",
+			EmbedCoverArt: false,
+			Language:      "en",
 
 			// Open Library dumps
 			OpenLibraryDumpEnabled: false,

@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-12
 
@@ -42,6 +42,11 @@ import UndoIcon from '@mui/icons-material/Undo';
 import type { Audiobook } from '../../types';
 import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
+import {
+  METADATA_APPLY_FIELDS,
+  METADATA_APPLY_FIELD_LABELS,
+  candidateApplyFieldValue,
+} from '../../config/metadataApplyFields';
 
 interface BulkMetadataSearchDialogProps {
   open: boolean;
@@ -60,34 +65,6 @@ interface BulkMetadataSearchDialogProps {
     action?: { label: string; onClick: () => void }
   ) => void;
 }
-
-const FIELD_OPTIONS = [
-  'title',
-  'author',
-  'narrator',
-  'series',
-  'series_position',
-  'year',
-  'publisher',
-  'isbn',
-  'cover_url',
-  'description',
-  'language',
-] as const;
-
-const FIELD_LABELS: Record<string, string> = {
-  title: 'Title',
-  author: 'Author',
-  narrator: 'Narrator',
-  series: 'Series',
-  series_position: 'Series Position',
-  year: 'Year',
-  publisher: 'Publisher',
-  isbn: 'ISBN',
-  cover_url: 'Cover Image',
-  description: 'Description',
-  language: 'Language',
-};
 
 const SOURCE_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warning' | 'info'> = {
   openlibrary: 'primary',
@@ -1085,12 +1062,11 @@ export function BulkMetadataSearchDialog({
                   <Collapse in={expandedCard === idx}>
                     <Box sx={{ mt: 0.5, pl: 1 }}>
                       {(() => {
-                        const visibleFields = FIELD_OPTIONS.filter((f) => {
-                          const v = candidate[f as keyof MetadataCandidate];
-                          return v !== undefined && v !== null && v !== '';
-                        });
+                        const visibleFields = METADATA_APPLY_FIELDS.filter(
+                          (f) => candidateApplyFieldValue(candidate, f) !== undefined
+                        );
                         return visibleFields.map((field) => {
-                          const value = candidate[field as keyof MetadataCandidate];
+                          const value = candidateApplyFieldValue(candidate, field);
                           return (
                             <FormControlLabel
                               key={field}
@@ -1107,7 +1083,7 @@ export function BulkMetadataSearchDialog({
                               }
                               label={
                                 <Typography variant="body2">
-                                  {FIELD_LABELS[field] || field}: {String(value)}
+                                  {METADATA_APPLY_FIELD_LABELS[field]}: {value}
                                 </Typography>
                               }
                             />
