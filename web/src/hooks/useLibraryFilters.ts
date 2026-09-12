@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-12
 
@@ -7,11 +7,6 @@ import { useState, useEffect, useCallback } from 'react';
 import type { FilterOptions } from '../types';
 import * as api from '../services/api';
 
-// shallowEqualFilters compares two FilterOptions by value across the union of
-// their keys. Non-URL fields (e.g. `tags`) are preserved by reference via the
-// `...prev` spread in the sync effect, so a reference compare is correct for
-// them. Used to keep a stable `filters` reference when a searchParams change
-// (like page navigation) didn't actually change any filter value.
 // parseSeriesIdParam reads the `series_id` URL param (TASK-167). Only a
 // positive integer counts: the server parses the param with ParseQueryIntPtr,
 // and an unparseable value there is treated as absent, which would list the
@@ -23,6 +18,11 @@ export function parseSeriesIdParam(raw: string | null): number | undefined {
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
+// shallowEqualFilters compares two FilterOptions by value across the union of
+// their keys. Non-URL fields (e.g. `tags`) are preserved by reference via the
+// `...prev` spread in the sync effect, so a reference compare is correct for
+// them. Used to keep a stable `filters` reference when a searchParams change
+// (like page navigation) didn't actually change any filter value.
 export function shallowEqualFilters(a: FilterOptions, b: FilterOptions): boolean {
   const keys = new Set<keyof FilterOptions>([
     ...(Object.keys(a) as (keyof FilterOptions)[]),
