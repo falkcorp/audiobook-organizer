@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 99027475-b084-4603-adf4-4061987f30b0
 // last-edited: 2026-09-12
 
@@ -424,8 +424,9 @@ func TestInPlace_ConcurrentAdopt_OnePrimary(t *testing.T) {
 	}
 }
 
-// The negative: two books from DIFFERENT source directories computing one
-// destination are not fragments. They reach the worker, one takes the target
+// The negative: two books from DIFFERENT, non-sibling source directories (not a
+// "<Book> - N" chapter-per-folder layout) computing one destination are not
+// fragments. They reach the worker, one takes the target
 // and the other is suffixed.
 func TestInPlace_SameTargetDifferentDirs_NotFragmentCollapse(t *testing.T) {
 	svc, store, root := setupInPlace(t)
@@ -468,4 +469,195 @@ func TestDirIsEmpty(t *testing.T) {
 	if !dirIsEmpty(empty) || dirIsEmpty(full) || dirIsEmpty(filepath.Join(empty, "missing")) {
 		t.Fatalf("dirIsEmpty: empty=%v full=%v missing=%v", dirIsEmpty(empty), dirIsEmpty(full), dirIsEmpty(filepath.Join(empty, "missing")))
 	}
+}
+
+// chapterFolderBooks lays out the prod shape: a complete book whose chapters
+// each sit in their own "<Book> - N" folder, one single-file row per chapter.
+// A single-file row has no track, so every chapter computes the same target.
+func chapterFolderBooks(t *testing.T, svc *Service, store *database.PebbleStore, root string) (b1, b2 *database.Book, target string) {
+	t.Helper()
+	book := filepath.Join(root, "incoming", "The Shining")
+	b1 = addInPlaceBook(t, store, "ch-1", "The Shining", filepath.Join(book, "The Shining - 1", "58.MP3"), filled(3000, 0x51), nil, 0)
+	b2 = addInPlaceBook(t, store, "ch-11", "The Shining", filepath.Join(book, "The Shining - 11", "58.MP3"), filled(3300, 0x52), nil, 0)
+	target = targetFor(t, svc, b1)
+	if other := targetFor(t, svc, b2); other != target {
+		t.Fatalf("fixture: chapters should compute one target, got %s and %s", target, other)
+	}
+	return b1, b2, target
+}
+
+// assertChaptersUntouched: neither chapter moved, both chapter folders still
+// exist (cleanupEmptyParents did not remove them), nothing landed at the
+// shared target and no _copyN file was minted.
+func assertChaptersUntouched(t *testing.T, root, target string, b1, b2 *database.Book) {
+	t.Helper()
+	mustContent(t, b1.FilePath, filled(3000, 0x51))
+	mustContent(t, b2.FilePath, filled(3300, 0x52))
+	for _, b := range []*database.Book{b1, b2} {
+		if fi, err := os.Stat(filepath.Dir(b.FilePath)); err != nil || !fi.IsDir() {
+			t.Fatalf("chapter folder %s lost: %v", filepath.Dir(b.FilePath), err)
+		}
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("nothing may land at the shared target %s (stat err=%v)", target, err)
+	}
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && strings.Contains(filepath.Base(path), "_copy") {
+			t.Fatalf("a chapter was suffixed: %s", path)
+		}
+		return nil
+	})
+}
+
+// Chapter siblings in one batch never move and never lose their folders.
+func TestInPlace_ChapterPerFolder_NeverMoved(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	b1, b2, target := chapterFolderBooks(t, svc, store, root)
+
+	stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+	if got := stats.Collisions[OutcomeFragmentCollapse]; got != 2 || stats.Failed != 0 {
+		t.Fatalf("want 2 fragment_collapse and no failures, got %+v", stats)
+	}
+	assertChaptersUntouched(t, root, target, b1, b2)
+}
+
+// The siblings arrive in different organize batches (the scan hook splits
+// them). Each batch holds one chapter, so no grouping can see a sibling: the
+// decision has to come from the source path alone. Chapter 1 meets a FREE
+// target and must still not move.
+func TestInPlace_ChapterPerFolder_BatchSplit(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	b1, b2, target := chapterFolderBooks(t, svc, store, root)
+
+	for _, b := range []*database.Book{b1, b2} {
+		stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+		if got := stats.Collisions[OutcomeFragmentCollapse]; got != 1 || stats.Failed != 0 {
+			t.Fatalf("%s: want fragment_collapse, got %+v", b.ID, stats)
+		}
+	}
+	assertChaptersUntouched(t, root, target, b1, b2)
+	if rec, ok := loadDurableSkip(store, OrganizeCollisionSkipPrefix, b1.ID); !ok || rec.Category != OutcomeFragmentCollapse {
+		t.Fatalf("chapter decline not recorded: %+v %v", rec, ok)
+	}
+}
+
+// faultyInPlaceStore is a real store with two injectable faults.
+type faultyInPlaceStore struct {
+	*database.PebbleStore
+	vgErr      error
+	failUpdate string
+}
+
+func (s *faultyInPlaceStore) GetBooksByVersionGroup(g string) ([]database.Book, error) {
+	if s.vgErr != nil {
+		return nil, s.vgErr
+	}
+	return s.PebbleStore.GetBooksByVersionGroup(g)
+}
+
+func (s *faultyInPlaceStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
+	if id == s.failUpdate {
+		return nil, errors.New("injected: update failed")
+	}
+	return s.PebbleStore.UpdateBook(id, b)
+}
+
+// A version-group lookup that errors must not be read as "no primary": the
+// adopt is declined and neither row changes.
+func TestInPlace_Adopt_VersionGroupLookupError_FailsClosed(t *testing.T) {
+	_, store, root := setupInPlace(t)
+	audio := filled(4096, 0xB2)
+	b := addInPlaceBook(t, store, "book-b", "Title", filepath.Join(root, "incoming", "x.mp3"), audio, nil, 0)
+	svc := NewService(&faultyInPlaceStore{PebbleStore: store, vgErr: errors.New("injected: group read failed")})
+	target := targetFor(t, svc, b)
+	occ := addInPlaceBook(t, store, "book-o", "Title", target, audio, nil, 0)
+	group := "vg-existing"
+	stored := getInPlaceBook(t, store, occ.ID)
+	stored.VersionGroupID = &group
+	if _, err := store.UpdateBook(occ.ID, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.OrganizeOneBook(svc.newOrganizer(), b, &noopLogger{})
+	var conflict *DestinationConflictError
+	if !errors.As(err, &conflict) || conflict.Category != OutcomeUnresolvedConflict {
+		t.Fatalf("want an unresolved_conflict decline, got %v", err)
+	}
+	if got := getInPlaceBook(t, store, occ.ID); got.IsPrimaryVersion != nil {
+		t.Fatalf("occupant must not be made primary on a failed lookup: %v", *got.IsPrimaryVersion)
+	}
+	if got := getInPlaceBook(t, store, b.ID); got.VersionGroupID != nil {
+		t.Fatalf("book must not join the group: %v", *got.VersionGroupID)
+	}
+}
+
+// When the book's own write fails after the occupant was written, the
+// occupant is put back, so no group change is left without a ledger row.
+func TestInPlace_Adopt_BookWriteFails_OccupantRolledBack(t *testing.T) {
+	_, store, root := setupInPlace(t)
+	audio := filled(4096, 0xC3)
+	b := addInPlaceBook(t, store, "book-b", "Title", filepath.Join(root, "incoming", "x.mp3"), audio, nil, 0)
+	svc := NewService(&faultyInPlaceStore{PebbleStore: store, failUpdate: b.ID})
+	target := targetFor(t, svc, b)
+	occ := addInPlaceBook(t, store, "book-o", "Title", target, audio, nil, 0)
+
+	if _, err := svc.OrganizeOneBook(svc.newOrganizer(), b, &noopLogger{}); err == nil {
+		t.Fatal("want the injected book write failure")
+	}
+	got := getInPlaceBook(t, store, occ.ID)
+	if got.VersionGroupID != nil || got.IsPrimaryVersion != nil {
+		t.Fatalf("occupant not rolled back: group=%v primary=%v", got.VersionGroupID, got.IsPrimaryVersion)
+	}
+	mustContent(t, b.FilePath, audio)
+	mustContent(t, target, audio)
+}
+
+// A same_audio_unverified skip re-opens when fingerprints arrive, even though
+// a fingerprint backfill writes only rows and neither file changes.
+func TestInPlace_UnverifiedSkip_ReevaluatedWhenFingerprintsArrive(t *testing.T) {
+	svc, store, root := setupInPlace(t)
+	src := filepath.Join(root, "incoming", "x.mp3")
+	srcAudio, occAudio := filled(5000, 0x10), filled(5000, 0x20)
+	b := addInPlaceBook(t, store, "book-b", "Title", src, srcAudio, nil, 0)
+	target := targetFor(t, svc, b)
+	occ := addInPlaceBook(t, store, "book-o", "Title", target, occAudio, nil, 0)
+
+	category := func() string {
+		_, err := svc.OrganizeOneBook(svc.newOrganizer(), b, &noopLogger{})
+		var conflict *DestinationConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("want a DestinationConflictError, got %v", err)
+		}
+		return conflict.Category
+	}
+	if got := category(); got != OutcomeSameAudioUnverified {
+		t.Fatalf("first attempt: want %q, got %q", OutcomeSameAudioUnverified, got)
+	}
+	if got := category(); got != OutcomeSkippedDurable {
+		t.Fatalf("nothing changed: want %q, got %q", OutcomeSkippedDurable, got)
+	}
+
+	fp := fpStream(1000, 7)
+	for _, id := range []string{b.ID, occ.ID} {
+		files, err := store.GetBookFiles(id)
+		if err != nil || len(files) != 1 {
+			t.Fatalf("book files for %s: %v %d", id, err, len(files))
+		}
+		f := files[0]
+		f.AcoustIDFingerprint = fp
+		f.AcoustIDFingerprintDurationSec = 600
+		if err := store.UpdateBookFile(f.ID, &f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	landing, err := svc.OrganizeOneBook(svc.newOrganizer(), b, &noopLogger{})
+	if err != nil {
+		t.Fatalf("after the fingerprint backfill the pair must be re-evaluated, got %v", err)
+	}
+	if landing.Resolution == nil || landing.Resolution.Outcome != OutcomeAdoptedSameRecording {
+		t.Fatalf("want %q, got %+v", OutcomeAdoptedSameRecording, landing.Resolution)
+	}
+	mustContent(t, src, srcAudio)
+	mustContent(t, target, occAudio)
 }
