@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,6 +122,33 @@ func TestSeriesPositionPagesAreStableAcrossCalls(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, idsInOrder(first), idsInOrder(again))
 	}
+}
+
+// TestSeriesIDSearchWithoutSortKeepsMatchOrder pins a deliberate limit on the
+// default: a series_id request that also carries a search and no sort_by
+// keeps the search's own order (book-ID order on the no-index path, relevance
+// with an index) rather than being switched to series_position. The web UI
+// always sends an explicit sort, so this governs API callers only.
+func TestSeriesIDSearchWithoutSortKeepsMatchOrder(t *testing.T) {
+	seriesID := 11
+	cores := seriesPositionCores()
+	books := make([]database.Book, 0, len(cores))
+	for _, c := range cores {
+		books = append(books, database.Book{
+			ID: c.ID, Title: c.Title, SeriesSequence: c.SeriesSequence, SeriesPositionRaw: c.SeriesPositionRaw,
+		})
+	}
+	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetBooksBySeriesIDCore(seriesID).Return(cores, nil).Once()
+	mockStore.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil).Once()
+	svc := NewAudiobookService(mockStore)
+
+	got, total, err := svc.GetAudiobooksWithTotal(context.Background(), 20, 0, "t", nil, &seriesID, ListFilters{})
+	require.NoError(t, err)
+	require.Equal(t, 7, total)
+	require.Equal(t, []string{
+		"b-interlude", "b-none-beta", "b-ten", "b-ten-dup", "b-three", "b-two", "b-two-a",
+	}, idsInOrder(got))
 }
 
 // storeOrderFilteredStore declares the filtered-summary capability and, like
