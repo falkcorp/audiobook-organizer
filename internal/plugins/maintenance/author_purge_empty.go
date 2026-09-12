@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
 // last-edited: 2026-09-11
 
@@ -99,14 +99,27 @@ type emptyAuthorReport struct {
 	// (the per-book book_authors:<bookID> arrays) in every book state. So every
 	// entry is, by construction, referenced by no book_authors array anywhere.
 	HeldBackSample []heldBackAuthor
+	// HeldByRefsSample names up to emptyAuthorSampleLimit authors from the
+	// HeldByRefs population. This is where the 822 "zero books but has files"
+	// authors measured 2026-08-17 are expected to land NOW: fileCounts only
+	// counts files of books that reference the author, so an author with files
+	// also has a reference, and the refCounts guard (added after that
+	// measurement) claims it before the file check runs. Without this sample,
+	// HeldBackSample above would be empty on the real library, and the reviewer
+	// would again have only a count.
+	HeldByRefsSample []heldBackAuthor
 }
 
-// heldBackAuthor is one row of emptyAuthorReport.HeldBackSample.
+// heldBackAuthor is one row of emptyAuthorReport.HeldBackSample or
+// HeldByRefsSample.
 type heldBackAuthor struct {
 	// AuthorID lets a reviewer look the row up; the name alone is not unique.
 	AuthorID  int
 	Name      string
 	FileCount int
+	// RefCount is how many book references (any state, junction credits
+	// included) still hold the author. Always 0 in HeldBackSample.
+	RefCount int
 }
 
 func (r emptyAuthorReport) summary() string {
@@ -242,6 +255,12 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			"sampled", len(report.HeldBackSample),
 			"held_back_sample", report.HeldBackSample)
 	}
+	if report.HeldByRefs > 0 {
+		reporter.Logger().Info("purge-empty-authors held back (zero books by the display count, still referenced)",
+			"held_by_refs", report.HeldByRefs,
+			"sampled", len(report.HeldByRefsSample),
+			"held_by_refs_sample", report.HeldByRefsSample)
+	}
 
 	if !params.Apply {
 		msg := "DRY RUN (nothing deleted) — " + report.summary()
@@ -309,6 +328,14 @@ func classifyEmptyAuthors(authors []database.Author, bookCounts, refCounts, file
 		// These are precisely the rows the old guard deleted.
 		if refCounts[a.ID] != 0 {
 			report.HeldByRefs++
+			if len(report.HeldByRefsSample) < emptyAuthorSampleLimit {
+				report.HeldByRefsSample = append(report.HeldByRefsSample, heldBackAuthor{
+					AuthorID:  a.ID,
+					Name:      a.Name,
+					FileCount: fileCounts[a.ID], // nil map (require_zero_files=false) reads 0
+					RefCount:  refCounts[a.ID],
+				})
+			}
 			continue
 		}
 		if requireZeroFiles && fileCounts[a.ID] != 0 {

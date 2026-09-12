@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
 // last-edited: 2026-09-11
 
@@ -518,6 +518,41 @@ func TestPurgeEmptyAuthors_HeldBackSample_EmptyWhenNothingHeldBack(t *testing.T)
 	if len(report.HeldBackSample) != 0 || report.HeldByRefs != 1 {
 		t.Fatalf("referenced author: HeldBackSample=%+v HeldByRefs=%d, want empty/1",
 			report.HeldBackSample, report.HeldByRefs)
+	}
+}
+
+// The PRODUCTION shape the fixture caveat above describes: an author with files
+// also has references, so it is claimed by the refCounts guard first. It must
+// show up in HeldByRefsSample with both counts, leave HeldBackSample empty, and
+// that sample must be capped while HeldByRefs stays uncapped. Without this
+// sample the 822-author population would again be only a number.
+func TestPurgeEmptyAuthors_HeldByRefsSample_ProductionShape(t *testing.T) {
+	authors, books, files := purgeFixture()
+	report, eligible := classifyEmptyAuthors(authors, books, map[int]int{4: 3}, files, true)
+
+	want := heldBackAuthor{AuthorID: 4, Name: "Has Files But No Books", FileCount: 7, RefCount: 3}
+	if len(report.HeldByRefsSample) != 1 || report.HeldByRefsSample[0] != want {
+		t.Fatalf("HeldByRefsSample = %+v, want [%+v]", report.HeldByRefsSample, want)
+	}
+	if len(report.HeldBackSample) != 0 || report.ZeroBooksWithFiles != 0 {
+		t.Errorf("HeldBackSample=%+v ZeroBooksWithFiles=%d, want empty/0: a referenced author is never file-held",
+			report.HeldBackSample, report.ZeroBooksWithFiles)
+	}
+	if len(eligible) != 2 || eligible[0] != 2 || eligible[1] != 3 {
+		t.Errorf("eligible = %v, want [2 3]", eligible)
+	}
+
+	// Cap: more referenced authors than the limit → sample capped, count not.
+	const held = emptyAuthorSampleLimit + 5
+	var many []database.Author
+	refs := map[int]int{}
+	for i := 1; i <= held; i++ {
+		many = append(many, database.Author{ID: i, Name: fmt.Sprintf("Ref %d", i)})
+		refs[i] = 1
+	}
+	report, _ = classifyEmptyAuthors(many, map[int]int{}, refs, map[int]int{}, true)
+	if report.HeldByRefs != held || len(report.HeldByRefsSample) != emptyAuthorSampleLimit {
+		t.Fatalf("HeldByRefs=%d sample=%d, want %d/%d", report.HeldByRefs, len(report.HeldByRefsSample), held, emptyAuthorSampleLimit)
 	}
 }
 
