@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
 // last-edited: 2026-09-12
 
@@ -83,17 +83,25 @@ func TestUpdateConfig_WithoutRemovedKeyUnaffected(t *testing.T) {
 	}
 }
 
-// TestUpdateConfig_ViperOnlyRemovedKeyNotRejected pins the rejectOnUpdate
-// policy: enable_sqlite3_i_know_the_risks was only ever the flag's viper/env
-// key, never a config-API field, so a PUT carrying it was dropped by the JSON
-// round-trip on main too. It stays that way rather than gaining a new 400.
-func TestUpdateConfig_ViperOnlyRemovedKeyNotRejected(t *testing.T) {
+// TestUpdateConfig_ViperOnlyRemovedKeyRejected: enable_sqlite3_i_know_the_risks
+// was only ever the flag's viper/env key, never a config-API field, so a PUT
+// carrying it used to be dropped silently and answered 200. Since unknown keys
+// are refused, it gets a 400 — and the registry's removal message, which says
+// what to do, rather than the generic unknown-key text.
+func TestUpdateConfig_ViperOnlyRemovedKeyRejected(t *testing.T) {
 	restoreAppConfig(t)
-	ms, _ := ladderTestStore(t)
+	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite3_i_know_the_risks": true}); status != http.StatusOK {
-		t.Fatalf("status = %d; resp = %v", status, resp)
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite3_i_know_the_risks": true})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
+	}
+	if msg, _ := resp["error"].(string); !strings.Contains(msg, "was removed") {
+		t.Errorf("error %q is not the removal message", msg)
+	}
+	if len(*blobs) != 0 {
+		t.Error("rejected PUT persisted a blob")
 	}
 }
 

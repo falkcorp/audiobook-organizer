@@ -1021,18 +1021,6 @@ export interface Config {
   log_format: string;
   enable_json_logging: boolean;
 
-  // Auto-update
-  auto_update_enabled?: boolean;
-  auto_update_channel?: string;
-  auto_update_check_minutes?: number;
-  auto_update_window_start?: number;
-  auto_update_window_end?: number;
-
-  // Maintenance window
-  maintenance_window_enabled?: boolean;
-  maintenance_window_start?: number;
-  maintenance_window_end?: number;
-
   // Smart apply pipeline
   auto_rename_on_apply?: boolean;
   auto_write_tags_on_apply?: boolean;

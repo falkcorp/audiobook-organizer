@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -28,12 +28,14 @@
 //
 // # Cutover sequence (operational)
 //
-//	1. PUT /config {embedding_model, embedding_dimensions, embedding_base_url,
-//	   dedup_embeddings_enabled:false}   ← Layer 2 OFF during re-embed
+//	1. PUT /config {embedding:{model, dimensions, base_url},
+//	   dedup:{embeddings_enabled:false}}   ← Layer 2 OFF during re-embed
+//	   (nested form only: flat keys such as embedding_model or
+//	   dedup_embeddings_enabled are rejected with a 400)
 //	2. restart (chromem rebuilds at the new dim; embed client points at backend)
 //	3. POST /operations/v2 {def_id:"dedup.reembed-embeddings"}              # dry-run
 //	4. POST /operations/v2 {def_id:"dedup.reembed-embeddings",params:{apply:true}}
-//	5. restart (hydrate chromem from the fresh vectors) → set dedup_embeddings_enabled:true
+//	5. restart (hydrate chromem from the fresh vectors) → PUT /config {dedup:{embeddings_enabled:true}}
 //
 // Usage:
 //
