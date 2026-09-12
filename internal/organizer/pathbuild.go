@@ -1,7 +1,7 @@
 // file: internal/organizer/pathbuild.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f7c4a19-6e58-4b03-9d21-8a05e3f16c74
-// last-edited: 2026-08-16
+// last-edited: 2026-09-12
 
 // The single place a book's target path is computed.
 //
@@ -290,7 +290,7 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 		"{ext}":             v.Ext,
 	}
 
-	out := make(map[string]string, len(raw)+1)
+	out := make(map[string]string, len(raw)+2)
 	for k, val := range raw {
 		out[k] = scrubVar(strings.TrimSpace(val))
 	}
@@ -308,6 +308,27 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 		out["{series_prefix}"] = prefix + " - "
 	} else {
 		out["{series_prefix}"] = ""
+	}
+
+	// {edition_suffix} is built AFTER the trim pass for the same reason as
+	// {series_prefix}: its leading " (" and closing ")" are pattern structure,
+	// not metadata. Built alongside the others, TrimSpace would eat the leading
+	// space and "{title}{edition_suffix}" would render "Dune(Unabridged)".
+	//
+	// It exists because raw {edition} cannot be wrapped safely. A pattern
+	// author who writes "{title} ({edition})" wants the parens only when there
+	// is an edition; the token carries them so a book with no edition renders
+	// the bare title -- no dangling space, no "()". That lets a folder pattern
+	// such as "{author}/{series}/{title}{edition_suffix} ({print_year})" keep
+	// two editions of one title sharing a print year in DIFFERENT directories
+	// instead of colliding on one target (ErrTargetOccupied).
+	//
+	// The value is re-trimmed because scrubVar runs after TrimSpace: an edition
+	// of "/" scrubs to " ", which must collapse to "" rather than render " ( )".
+	if edition := strings.TrimSpace(out["{edition}"]); edition != "" {
+		out["{edition_suffix}"] = " (" + edition + ")"
+	} else {
+		out["{edition_suffix}"] = ""
 	}
 
 	return out

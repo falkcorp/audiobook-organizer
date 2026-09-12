@@ -1,7 +1,7 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -32,6 +32,7 @@ import {
   Delete as DeleteIcon,
 } from '@mui/icons-material';
 import * as api from '../services/api';
+import { NAMING_PATTERN_HELP_TEXT, generatePatternExample } from '../utils/namingPatternPreview';
 
 // SettingsState is imported, not redeclared. This file used to carry its own
 // 44-field structural copy that had to be updated in lockstep with the real one;
@@ -122,48 +123,6 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
     bitrate: '128kbps',
     codec: 'MP3',
     quality: '128kbps MP3',
-  };
-
-  const generateExample = (
-    pattern: string,
-    exampleData: typeof exampleNoSeries,
-    isFolder: boolean = false
-  ) => {
-    let result = pattern;
-    const replacements: Record<string, string> = {
-      '{title}': exampleData.title,
-      '{author}': exampleData.author,
-      '{narrator}': exampleData.narrator,
-      '{series}': exampleData.series || '',
-      '{series_number}': exampleData.series_number || '',
-      '{print_year}': exampleData.print_year.toString(),
-      '{audiobook_release_year}': exampleData.audiobook_release_year.toString(),
-      '{year}': exampleData.year.toString(),
-      '{publisher}': exampleData.publisher,
-      '{edition}': exampleData.edition,
-      '{language}': exampleData.language,
-      '{isbn13}': exampleData.isbn13,
-      '{isbn10}': exampleData.isbn10,
-      '{track_number}': exampleData.track_number.toString().padStart(2, '0'),
-      '{total_tracks}': exampleData.total_tracks.toString(),
-      '{bitrate}': exampleData.bitrate || '',
-      '{codec}': exampleData.codec || '',
-      '{quality}': exampleData.quality || '',
-    };
-
-    Object.entries(replacements).forEach(([key, value]) => {
-      result = result.split(key).join(value);
-    });
-
-    if (isFolder) {
-      result = result
-        .split('/')
-        .filter((segment) => segment.trim() !== '')
-        .join('/');
-      return result + '/';
-    }
-
-    return result + '.m4b';
   };
 
   return (
@@ -364,12 +323,7 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           label="Folder Naming Pattern"
           value={props.settings.folderNamingPattern}
           onChange={(e) => props.handleChange('folderNamingPattern', e.target.value)}
-          helperText={
-            'Available: {title}, {author}, {series}, {series_number}, ' +
-            '{print_year}, {audiobook_release_year}, {year}, ' +
-            '{publisher}, {edition}, {narrator}, {language}, ' +
-            '{isbn10}, {isbn13}, {track_number}, {total_tracks}.'
-          }
+          helperText={NAMING_PATTERN_HELP_TEXT}
         />
         <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
           <Typography variant="caption">
@@ -409,7 +363,7 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
               mb: 1,
             }}
           >
-            {generateExample(props.settings.folderNamingPattern, exampleWithSeries, true)}
+            {generatePatternExample(props.settings.folderNamingPattern, exampleWithSeries, true)}
           </Typography>
           <Typography
             variant="caption"
@@ -431,7 +385,7 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
               display: 'block',
             }}
           >
-            {generateExample(props.settings.folderNamingPattern, exampleNoSeries, true)}
+            {generatePatternExample(props.settings.folderNamingPattern, exampleNoSeries, true)}
           </Typography>
         </Box>
       </Grid>
@@ -479,7 +433,7 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
               mb: 1,
             }}
           >
-            {generateExample(props.settings.fileNamingPattern, exampleWithSeries, false)}
+            {generatePatternExample(props.settings.fileNamingPattern, exampleWithSeries, false)}
           </Typography>
           <Typography
             variant="caption"
@@ -501,10 +455,11 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
               wordBreak: 'break-word',
             }}
           >
-            {generateExample(props.settings.fileNamingPattern, exampleNoSeries, false).replace(
-              '.m4b',
-              ' 03 of 50.mp3'
-            )}
+            {generatePatternExample(
+              props.settings.fileNamingPattern,
+              exampleNoSeries,
+              false
+            ).replace('.m4b', ' 03 of 50.mp3')}
           </Typography>
         </Box>
         <Alert severity="info" sx={{ mt: 1 }}>
