@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/todo-completion-2026-09/QUADRANT.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 6f1d3b8e-2a47-4c95-b0e3-9d7c5a2e1f60 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -22,10 +22,10 @@ rows sit in bands by class, worst at the top, and are spread out only so the lab
 readable — horizontal position inside a band carries no meaning. Gated rows (owner decision,
 prod run, or a parked sibling initiative) are on the chart but marked 🔒 in the legend.
 
-**220 open rows** — {'Large impact · easy': 51, 'Large impact · hard': 79, 'Small impact · easy': 41, 'Small impact · hard': 49}. Done since the 2026-09-10 freeze: 83
+**207 open rows** — {'Large impact · easy': 49, 'Large impact · hard': 79, 'Small impact · easy': 30, 'Small impact · hard': 49}. Done since the 2026-09-10 freeze: 96
 (listed in PRIORITY-MATRIX.md section C).
-By class: {'data-loss': 19, 'security': 12, 'correctness': 99, 'perf': 21, 'ux': 8, 'hygiene': 61}.
-By effort: {'S': 92, 'M': 94, 'L': 34}.
+By class: {'data-loss': 19, 'security': 12, 'correctness': 97, 'perf': 18, 'ux': 6, 'hygiene': 55}.
+By effort: {'S': 79, 'M': 94, 'L': 34}.
 
 ```mermaid
 %%{init: {"quadrantChart": {"chartWidth": 1100, "chartHeight": 900, "pointRadius": 3, "pointLabelFontSize": 8, "quadrantPadding": 6, "xAxisLabelFontSize": 14, "yAxisLabelFontSize": 14, "quadrantLabelFontSize": 14}}}%%
@@ -68,52 +68,50 @@ quadrantChart
     L16949: [0.716, 0.725]
     L16966: [0.574, 0.682]
     L1935: [0.621, 0.682]
-    CI-03: [0.046, 0.635]
-    CI-04: [0.078, 0.635]
-    T086: [0.111, 0.635]
-    T138: [0.143, 0.635]
-    L1015: [0.175, 0.635]
-    L10306: [0.208, 0.635]
-    L10344: [0.24, 0.635]
-    L10488: [0.272, 0.635]
-    L11230: [0.305, 0.635]
-    L11668: [0.337, 0.635]
-    L12251: [0.369, 0.635]
-    L1311: [0.402, 0.635]
-    L1373: [0.434, 0.635]
-    L16515: [0.046, 0.605]
-    L17175: [0.078, 0.605]
-    L1952: [0.111, 0.605]
-    L2022: [0.143, 0.605]
-    L2187: [0.175, 0.605]
-    L2260: [0.208, 0.605]
-    L2272: [0.24, 0.605]
-    L2488: [0.272, 0.605]
-    L2551: [0.305, 0.605]
-    L2734: [0.337, 0.605]
-    L2933: [0.369, 0.605]
-    L3172: [0.402, 0.605]
-    L3260: [0.434, 0.605]
-    L3423: [0.046, 0.575]
-    L3489: [0.078, 0.575]
-    L3812: [0.111, 0.575]
-    L3965: [0.143, 0.575]
-    L4058: [0.175, 0.575]
-    L4190: [0.208, 0.575]
-    L4268: [0.24, 0.575]
-    L4383: [0.272, 0.575]
-    L45: [0.305, 0.575]
-    L4667: [0.337, 0.575]
-    L4714: [0.369, 0.575]
-    L6450: [0.402, 0.575]
-    L708: [0.434, 0.575]
-    L7179: [0.046, 0.545]
-    L7657: [0.078, 0.545]
-    L7789: [0.111, 0.545]
-    L823: [0.143, 0.545]
-    L9068: [0.175, 0.545]
-    L972: [0.208, 0.545]
-    L9937: [0.24, 0.545]
+    T086: [0.046, 0.635]
+    T138: [0.078, 0.635]
+    L1015: [0.111, 0.635]
+    L10306: [0.143, 0.635]
+    L10344: [0.175, 0.635]
+    L10488: [0.208, 0.635]
+    L11230: [0.24, 0.635]
+    L11668: [0.272, 0.635]
+    L12251: [0.305, 0.635]
+    L1311: [0.337, 0.635]
+    L1373: [0.369, 0.635]
+    L16515: [0.402, 0.635]
+    L17175: [0.434, 0.635]
+    L1952: [0.046, 0.605]
+    L2022: [0.078, 0.605]
+    L2187: [0.111, 0.605]
+    L2260: [0.143, 0.605]
+    L2272: [0.175, 0.605]
+    L2488: [0.208, 0.605]
+    L2551: [0.24, 0.605]
+    L2734: [0.272, 0.605]
+    L2933: [0.305, 0.605]
+    L3172: [0.337, 0.605]
+    L3260: [0.369, 0.605]
+    L3423: [0.402, 0.605]
+    L3489: [0.434, 0.605]
+    L3812: [0.046, 0.575]
+    L3965: [0.078, 0.575]
+    L4058: [0.111, 0.575]
+    L4190: [0.143, 0.575]
+    L4268: [0.175, 0.575]
+    L4383: [0.208, 0.575]
+    L45: [0.24, 0.575]
+    L4667: [0.272, 0.575]
+    L4714: [0.305, 0.575]
+    L6450: [0.337, 0.575]
+    L708: [0.369, 0.575]
+    L7179: [0.402, 0.575]
+    L7657: [0.434, 0.575]
+    L7789: [0.046, 0.545]
+    L823: [0.078, 0.545]
+    L9068: [0.111, 0.545]
+    L972: [0.143, 0.545]
+    L9937: [0.175, 0.545]
     T005: [0.562, 0.638]
     T049: [0.586, 0.638]
     T064: [0.609, 0.638]
@@ -170,61 +168,50 @@ quadrantChart
     SQ-02: [0.574, 0.448]
     WEB-01: [0.621, 0.448]
     WEB-02: [0.669, 0.448]
-    T063: [0.072, 0.438]
-    T214: [0.156, 0.438]
-    L1735: [0.24, 0.438]
-    L1826: [0.324, 0.438]
-    L2213: [0.408, 0.438]
-    L2569: [0.072, 0.372]
-    L6744: [0.156, 0.372]
+    L1735: [0.072, 0.405]
+    L1826: [0.156, 0.405]
+    L2213: [0.24, 0.405]
+    L2569: [0.324, 0.405]
+    L6744: [0.408, 0.405]
     T001: [0.716, 0.448]
-    T062: [0.574, 0.405]
-    T157: [0.621, 0.405]
-    L1069: [0.669, 0.405]
-    L10785: [0.716, 0.405]
-    L3063: [0.574, 0.362]
-    L6672: [0.621, 0.362]
+    T157: [0.574, 0.405]
+    L1069: [0.621, 0.405]
+    L10785: [0.669, 0.405]
+    L3063: [0.716, 0.405]
+    L6672: [0.574, 0.362]
     T206: [0.812, 0.438]
     L4484: [0.875, 0.438]
     L4567: [0.938, 0.438]
     L515: [0.812, 0.372]
-    L10591: [0.072, 0.297]
-    L10692: [0.156, 0.297]
-    L3326: [0.24, 0.297]
-    L4365: [0.324, 0.297]
-    L6229: [0.408, 0.297]
-    L9754: [0.072, 0.233]
-    L1035: [0.598, 0.265]
-    L1701: [0.693, 0.265]
+    L10591: [0.083, 0.265]
+    L10692: [0.188, 0.265]
+    L4365: [0.292, 0.265]
+    L1035: [0.582, 0.265]
+    L1701: [0.645, 0.265]
+    L9754: [0.708, 0.265]
     WEB-06: [0.566, 0.174]
-    T020: [0.053, 0.17]
-    T035: [0.1, 0.17]
-    T038: [0.147, 0.17]
-    T046: [0.193, 0.17]
-    T126: [0.24, 0.17]
-    T148: [0.287, 0.17]
-    T166: [0.333, 0.17]
-    T167: [0.38, 0.17]
-    T177: [0.427, 0.17]
-    T180: [0.053, 0.13]
-    T191: [0.1, 0.13]
-    L10187: [0.147, 0.13]
-    L11423: [0.193, 0.13]
-    L11821: [0.24, 0.13]
-    L17771: [0.287, 0.13]
-    L258: [0.333, 0.13]
-    L2966: [0.38, 0.13]
-    L2996: [0.427, 0.13]
-    L3136: [0.053, 0.09]
-    L4106: [0.1, 0.09]
-    L6192: [0.147, 0.09]
-    L6242: [0.193, 0.09]
-    L6373: [0.24, 0.09]
-    L7435: [0.287, 0.09]
-    AI-05: [0.333, 0.09]
-    BT-02: [0.38, 0.09]
-    TR-07: [0.427, 0.09]
-    UX-08: [0.053, 0.05]
+    T038: [0.056, 0.163]
+    T126: [0.109, 0.163]
+    T148: [0.161, 0.163]
+    T180: [0.214, 0.163]
+    T191: [0.266, 0.163]
+    L10187: [0.319, 0.163]
+    L11423: [0.371, 0.163]
+    L11821: [0.424, 0.163]
+    L17771: [0.056, 0.11]
+    L258: [0.109, 0.11]
+    L2966: [0.161, 0.11]
+    L2996: [0.214, 0.11]
+    L3136: [0.266, 0.11]
+    L4106: [0.319, 0.11]
+    L6192: [0.371, 0.11]
+    L6242: [0.424, 0.11]
+    L6373: [0.056, 0.057]
+    L7435: [0.109, 0.057]
+    AI-05: [0.161, 0.057]
+    BT-02: [0.214, 0.057]
+    TR-07: [0.266, 0.057]
+    UX-08: [0.319, 0.057]
     T016: [0.598, 0.174]
     T039: [0.629, 0.174]
     T045: [0.661, 0.174]
@@ -262,8 +249,6 @@ quadrantChart
 ## Start here — large impact, easy, not gated
 
 - **`L3966`** [Apply it, REPOINTING rather than deleting](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4019) — data-loss, effort S · `TODO.md:3966` · brief `TASK-352`
-- **`CI-03`** [Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses ](https://github.com/falkcorp/audiobook-organizer/blob/main/.github/workflows/security.yml#L77) — correctness/medium, effort S · `CI-03` · brief `TASK-312`
-- **`CI-04`** [The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warn](https://github.com/falkcorp/audiobook-organizer/blob/main/.github/workflows/test-action-integration.yml#L105) — correctness/medium, effort S · `CI-04` · brief `TASK-313`
 - **`T086`** [Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md) — correctness, effort S · `TASK-086`
 - **`T138`** [Exempt the ABS router group from the global BasicAuth() middleware](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md) — correctness, effort S · `TASK-138`
 - **`L1015`** [Why the books are `imported` is NOT yet established](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1065) — correctness, effort S, 2 items · `TODO.md:1015`
@@ -273,6 +258,8 @@ quadrantChart
 - **`L11230`** [Search placeholder hint missing when navigating to All Books from Finished](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L11324) — correctness, effort S, 6 items · `TODO.md:11230`
 - **`L11668`** [🐛 `book_file.missing` / `file_exists` are stale — nothing maintains them](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L11762) — correctness, effort S, 5 items · `TODO.md:11668`
 - **`L12251`** [Missing-file lane — follow-ups after the report-only change (#2614)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L12351) — correctness, effort S, 24 items · `TODO.md:12251`
+- **`L1311`** [Two incidental defects found en route](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1361) — correctness, effort S, 2 items · `TODO.md:1311`
+- **`L1373`** [Terminal ops never get `completed_at`, so they linger as zombies (2026-09-07)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1423) — correctness, effort S, 6 items · `TODO.md:1373`
 
 ## Legend
 
@@ -280,15 +267,13 @@ Every label on the chart, grouped by quadrant and ordered worst-first (class, th
 then effort). Links open the brief, the finding's source line, or the section's first open
 TODO.md line on `main`.
 
-### Large impact · easy — 51 rows (4 gated)
+### Large impact · easy — 49 rows (4 gated)
 
 - **`L3395`** [Decide whether a backup that lands on the same filesystem should warn at startup](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L3448) — data-loss, effort S · `TODO.md:3395` · brief `TASK-349` 🔒 **GATED:** HOLD-FOR-OWNER — The item's own text is a policy decision, not a spec an agent can implement.
 - **`L3966`** [Apply it, REPOINTING rather than deleting](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4019) — data-loss, effort S · `TODO.md:3966` · brief `TASK-352`
 - **`DD-06`** [Prod drain of ~387k exact-candidate backlog via dedup.drain-stale (dry-run -> AskUserQuestion -> apply -> veri](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/dedup-pipeline-hardening/TASK-06-prod-drain-run.md) — data-loss, effort S · `dedup-pipeline-hardening/TASK-06` 🔒 **GATED:** DEFER — drainStaleDoneFlag present (drain_stale.go:47) so the prerequisite (TASK-03) is merged and the mechanism matches design;
 - **`L16960`** [TODO-SEC-JWT — Rotate `ABS_JWT_SECRET`](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L17068) — security, effort S · `TODO.md:16960` · brief `TASK-371` 🔒 **GATED:** HOLD-FOR-OWNER — Every cited item is un-dispatchable as a worktree+PR code task; this brief is an operator runbook, not a code brief.
 - **`L4726`** [SEC-BACKUP-ABSPATH — Decide whether the backup restore path should *reject* absolute tar en](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4779) — security, effort S · `TODO.md:4726` · brief `TASK-357` 🔒 **GATED:** HOLD-FOR-OWNER — Real heading is an unrelated WAL-teardown bug; the decision gate blocks straight dispatch.
-- **`CI-03`** [Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses ](https://github.com/falkcorp/audiobook-organizer/blob/main/.github/workflows/security.yml#L77) — correctness/medium, effort S · `CI-03` · brief `TASK-312`
-- **`CI-04`** [The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warn](https://github.com/falkcorp/audiobook-organizer/blob/main/.github/workflows/test-action-integration.yml#L105) — correctness/medium, effort S · `CI-04` · brief `TASK-313`
 - **`T086`** [Collapse internal whitespace in util.NormalizeAuthor so double-spaced names dedupe correctly](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/misc-go/TASK-086-collapse-internal-whitespace-in-util-normalizeau.md) — correctness, effort S · `TASK-086`
 - **`T138`** [Exempt the ABS router group from the global BasicAuth() middleware](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server/TASK-138-exempt-the-abs-router-group-from-the-global-basi.md) — correctness, effort S · `TASK-138`
 - **`L1015`** [Why the books are `imported` is NOT yet established](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1065) — correctness, effort S, 2 items · `TODO.md:1015`
@@ -416,10 +401,8 @@ TODO.md line on `main`.
 - **`L3842`** [Stage 3 — durable deferral — When no rung answers, the candidates are currently just left unparsed](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L3895) — correctness, effort L · `TODO.md:3842` · brief `TASK-351` 🔒 **GATED:** RECLASSIFY — Section matches exactly, but this is a pipeline-completeness feature, mislabelled into the data-loss/security bucket.
 - **`L4601`** [resume-sweep — never started, needs the user's go-ahead](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4654) — correctness, effort L · `TODO.md:4601`
 
-### Small impact · easy — 41 rows (2 gated)
+### Small impact · easy — 30 rows (2 gated)
 
-- **`T063`** [internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md) — perf, effort S · `TASK-063`
-- **`T214`** [Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log wh](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md) — perf, effort S · `TASK-214`
 - **`L1735`** [N+1 / batch-endpoint audit follow-ups (2026-09-08)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1785) — perf, effort S, 10 items · `TODO.md:1735`
 - **`L1826`** [New hotspots INSIDE search, ranked (these are the real follow-ups)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1876) — perf, effort S, 5 items · `TODO.md:1826`
 - **`L2213`** [Author-numbering cleanup follow-ups (from the 2026-09-05 production runs)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L2266) — perf, effort S · `TODO.md:2213`
@@ -427,19 +410,10 @@ TODO.md line on `main`.
 - **`L6744`** [Tasks](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L6818) — perf, effort S, 2 items · `TODO.md:6744`
 - **`L10591`** [Likely cause](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L10684) — ux, effort S · `TODO.md:10591`
 - **`L10692`** [PERF-4 is still live: iTunes search calls `SearchBooks(search, 0, 0)`](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L10785) — ux, effort S, 3 items · `TODO.md:10692`
-- **`L3326`** [Applied books stay in the list in BulkMetadataSearchDialog](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L3379) — ux, effort S, 2 items · `TODO.md:3326`
 - **`L4365`** [Fix](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4418) — ux, effort S · `TODO.md:4365`
-- **`L6229`** [Bulk book-merge shows "Merged all" even when individual merges failed](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L6303) — ux, effort S · `TODO.md:6229`
-- **`L9754`** [Make metadata fields on the book page clickable (future improvement)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L9844) — ux, effort S, 2 items · `TODO.md:9754`
-- **`T020`** [Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md) — hygiene, effort S · `TASK-020`
-- **`T035`** [Add DeleteNarrator to the store (CRUD building block only)](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md) — hygiene, effort S · `TASK-035`
 - **`T038`** [Filter system-sourced tags out of the Browse-by-Tag cloud](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md) — hygiene, effort S · `TASK-038`
-- **`T046`** [Route merge.AsExternalIDReassigner through database.AsCapability instead of a bare assertion](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/dedup/TASK-046-route-merge-asexternalidreassigner-through-datab.md) — hygiene, effort S · `TASK-046`
 - **`T126`** [Surface to the user when 'all'/'and' (or any stopword) is silently dropped from a search query](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/search/TASK-126-surface-to-the-user-when-all-and-or-any-stopword.md) — hygiene, effort S · `TASK-126`
 - **`T148`** [Re-capture the series ABS fixture against a populated library (it currently contains zero series)](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-148-re-capture-the-series-abs-fixture-against-a-popu.md) — hygiene, effort S · `TASK-148`
-- **`T166`** [Make the book-detail page's Author field(s) link to a library view filtered by that author](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/web/TASK-166-make-the-book-detail-page-s-author-field-s-link-.md) — hygiene, effort S · `TASK-166`
-- **`T167`** [Make the book-detail page's Series field link to a library view filtered by that series, landing at series_ind](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/web/TASK-167-make-the-book-detail-page-s-series-field-link-to.md) — hygiene, effort S · `TASK-167`
-- **`T177`** [Add a per-test deadline (context.WithTimeout) to internal/database's riskiest unbounded-wait test helpers](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-177-add-a-per-test-deadline-context-withtimeout-to-i.md) — hygiene, effort S · `TASK-177`
 - **`T180`** [Measure whether dedup:duration-abridged (3,573) is over-firing before touching its display](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/dedup/TASK-180-measure-whether-dedup-duration-abridged-3-573-is.md) — hygiene, effort S · `TASK-180`
 - **`T191`** [Bump the github-common reusable-workflow pins in at least two PRs, low-consequence first](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-191-bump-the-github-common-reusable-workflow-pins-in.md) — hygiene, effort S · `TASK-191`
 - **`L10187`** [Author table: copyright text and HTML entities leaked into artist tags](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L10277) — hygiene, effort S, 2 items · `TODO.md:10187`
@@ -466,7 +440,6 @@ TODO.md line on `main`.
 - **`WEB-01`** [Authors page fetches the entire authors table on every mount, no server pagination](https://github.com/falkcorp/audiobook-organizer/blob/main/web/src/services/api.ts#L1893) — perf/high, effort M · `WEB-01` · brief `TASK-324`
 - **`WEB-02`** [Series page fetches the entire series table on every mount, no server pagination](https://github.com/falkcorp/audiobook-organizer/blob/main/web/src/services/api.ts#L1827) — perf/medium, effort M · `WEB-02` · brief `TASK-327`
 - **`T001`** [Add a short-TTL cache to the search branch of GetAudiobooksWithTotal](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-001-add-a-short-ttl-cache-to-the-search-branch-of-ge.md) — perf, effort M · `TASK-001`
-- **`T062`** [internal/itunes/backfill.go BackfillExternalIDs: replace offset pagination with GetAllBooksFullFrom cursor](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/itunes/TASK-062-internal-itunes-backfill-go-backfillexternalids-.md) — perf, effort M · `TASK-062`
 - **`T157`** [Parallelize the per-candidate synchronous label/breakdown refresh in DismissDedupCluster](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-157-parallelize-the-per-candidate-synchronous-label-.md) — perf, effort M · `TASK-157`
 - **`L1069`** [Re-enable SQLite activity backend after details compression (2026-09-07)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1119) — perf, effort M · `TODO.md:1069`
 - **`L10785`** [✅ Root cause (2026-08-14, fixed in `fix/author-getter-conformance`)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L10878) — perf, effort M · `TODO.md:10785`
@@ -478,6 +451,7 @@ TODO.md line on `main`.
 - **`L515`** [Two db-optimize ops exist; only one reports progress](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L565) — perf, effort L · `TODO.md:515`
 - **`L1035`** [Activity-log reset feature + reauth gate (2026-09-07)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1085) — ux, effort M · `TODO.md:1035`
 - **`L1701`** [Finish the v1 resume teardown: the `opstate:params` side table and `GetInterruptedOperations`](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L1751) — ux, effort M · `TODO.md:1701`
+- **`L9754`** [Make metadata fields on the book page clickable (future improvement)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L9847) — ux, effort M · `TODO.md:9754`
 - **`WEB-06`** [No Vitest or Playwright coverage exists for the Authors or Series pages](https://github.com/falkcorp/audiobook-organizer/blob/main/web/src/pages/__tests__) — hygiene/medium, effort M · `WEB-06` · brief `TASK-332`
 - **`T016`** [Rename write_back_metadata config key to auto_write_tags_on_fetch with deprecated-alias migration](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/config/TASK-016-rename-write-back-metadata-config-key-to-auto-wr.md) — hygiene, effort M · `TASK-016`
 - **`T039`** [Add transcribe_status to the book-summary list projection and a frontend quality filter control](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-039-add-transcribe-status-to-the-book-summary-list-p.md) — hygiene, effort M · `TASK-039`
