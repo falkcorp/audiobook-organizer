@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
 // last-edited: 2026-09-12
 
@@ -736,6 +736,43 @@ func TestTagBackfill_CancelFlushesCompleteBooks(t *testing.T) {
 	}
 	joined := strings.Join(logs, "\n")
 	assertSummaryHas(t, joined, "flushed 20 pending rows of complete books, dropped 0", "wrote 20 rows;")
+}
+
+// A failed batch write stops the run: nothing is written after it, the rows
+// still pending are reported dropped, the error counts only rows actually
+// written, and the summary is still emitted.
+func TestTagBackfill_WriteErrorReportsDroppedAndSummary(t *testing.T) {
+	old := tagBackfillWriteBatchSize
+	tagBackfillWriteBatchSize = 2
+	t.Cleanup(func() { tagBackfillWriteBatchSize = old })
+
+	var files []database.BookFile
+	tags := map[string]metadata.Metadata{}
+	for i := range 6 {
+		for j, suffix := range []string{"a", "b"} {
+			id := fmt.Sprintf("w-%d-%s", i, suffix)
+			files = append(files, database.BookFile{ID: id, BookID: fmt.Sprintf("w-%d", i), TrackNumber: j + 1})
+			tags[id+".mp3"] = tagMeta(j+1, 2, 0, 0)
+		}
+	}
+	fx := newTagFixture(t, files, tags)
+	var calls atomic.Int32
+	fx.store.BatchUpsertBookFilesFunc = func(batch []*database.BookFile) error {
+		calls.Add(1)
+		return errors.New("simulated store failure")
+	}
+
+	logs, err := fx.runErr(context.Background(), tagBackfillParams{})
+	if err == nil || !strings.Contains(err.Error(), "batch write of 2 rows failed (0 rows written before it)") {
+		t.Fatalf("err = %v, want the failed-batch error counting 0 rows written", err)
+	}
+	// Every two-row book fills a batch, so the first enqueue flushes and fails;
+	// no later book may reach the store.
+	if n := calls.Load(); n != 1 {
+		t.Errorf("BatchUpsertBookFiles called %d times, want 1 (no writes after the first failure)", n)
+	}
+	joined := strings.Join(logs, "\n")
+	assertSummaryHas(t, joined, "flushed 0 pending rows of complete books, dropped 2", "wrote 0 rows;", "examined=12")
 }
 
 func mustWriteFile(t *testing.T, path string) {
