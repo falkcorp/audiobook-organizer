@@ -152,6 +152,18 @@ var (
 		Help:      "Total iTunes writeback location values skipped because they could not be normalized into a valid 0x0B/0x0D pair (CRIT-2)",
 	}, []string{"reason"})
 
+	// organizeTargetPathCollision counts how many times generateTargetPath
+	// produced a path already claimed by a DIFFERENT book within the same
+	// organize run (DEC-11). Detection-only: the fix (deduping the collision)
+	// is explicitly deferred — see docs/plans/DECISIONS-PENDING.md row 11. No
+	// labels: the path itself is unbounded cardinality, and a single counter
+	// is enough to measure how often the degenerate pattern occurs.
+	organizeTargetPathCollision = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "organize_target_path_collision_total",
+		Help:      "Total times generateTargetPath produced a path already claimed by a DIFFERENT book within the same organize run (detection-only; the fix is deferred — see docs/plans/DECISIONS-PENDING.md row 11)",
+	}, []string{})
+
 	// aiBackendAvailable exports the reachability of AI backends (e.g. Ollama)
 	// so it can be alerted on (OPS-4). Values are 0/1, set at server-init time
 	// from the same signal that already feeds EmbeddingClient.SetOllamaAvailable.
@@ -207,7 +219,7 @@ func Register() {
 			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
 			opActivityMirrorDroppedTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
-			itunesLocationUnmappable, aiBackendAvailable,
+			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
 			absListeningStatsReadFailures)
 	})
@@ -218,6 +230,14 @@ func Register() {
 // reason is a small enum: "url_unmappable" or "invalid_path".
 func RecordITunesLocationUnmappable(reason string) {
 	itunesLocationUnmappable.WithLabelValues(reason).Inc()
+}
+
+// RecordOrganizeTargetPathCollision counts one instance of generateTargetPath
+// producing a path already claimed by a different book within the same
+// organize run (DEC-11, detection-only — see docs/plans/DECISIONS-PENDING.md
+// row 11). It does not influence which books organize or how.
+func RecordOrganizeTargetPathCollision() {
+	organizeTargetPathCollision.WithLabelValues().Inc()
 }
 
 // SetBackendAvailable records whether the named AI backend (e.g. "ollama")

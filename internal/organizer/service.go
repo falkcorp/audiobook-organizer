@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 package organizer
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	ulid "github.com/oklog/ulid/v2"
@@ -1213,6 +1214,14 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 	var statsMu sync.Mutex
 	var progressCounter atomic.Int64
 
+	// pathMu/claimedPaths back a run-scoped, detection-only check for two
+	// different books computing the SAME target path in one organizeBooks
+	// call (DEC-11). Purely observational — it never changes which path a
+	// book organizes to; the fix (deduping the collision) is deferred. See
+	// docs/plans/DECISIONS-PENDING.md row 11.
+	var pathMu sync.Mutex
+	claimedPaths := make(map[string]string, len(booksToOrganize))
+
 	const numWorkers = 8
 	jobs := make(chan int, numWorkers*2)
 
@@ -1266,6 +1275,29 @@ func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []data
 				landing, err = orgSvc.OrganizeOneBook(workerOrg, &book, log)
 				if landing != nil {
 					newPath = landing.Path
+				}
+
+				// Detection-only collision check (DEC-11): record which book
+				// claimed newPath first, and flag when a DIFFERENT book's
+				// path collides with an already-claimed one. This runs
+				// before any of the branching below so detection happens
+				// regardless of which branch (already-correct/in-place/
+				// versioned) the book takes, and it does not alter any of
+				// those branches' outcomes. A failed organize (err != nil)
+				// or an empty newPath is not recorded as a claim, since it
+				// cannot collide with anything. The check-then-set happens
+				// under one lock acquisition so two workers computing the
+				// same newPath at the same instant cannot both observe
+				// "unclaimed" and both skip the counter.
+				if err == nil && newPath != "" {
+					pathMu.Lock()
+					if otherBookID, claimed := claimedPaths[newPath]; claimed && otherBookID != book.ID {
+						metrics.RecordOrganizeTargetPathCollision()
+						log.Warn("organize: target path collision — two different books would organize to the same path: path=%s book_id=%s other_book_id=%s", newPath, book.ID, otherBookID)
+					} else if !claimed {
+						claimedPaths[newPath] = book.ID
+					}
+					pathMu.Unlock()
 				}
 
 				// --- Step 2: DB operations ---
