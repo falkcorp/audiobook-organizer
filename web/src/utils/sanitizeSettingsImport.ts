@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
 // last-edited: 2026-09-12
 
@@ -27,7 +27,7 @@ export const sanitizeSettingsImport = (
     'root_dir', 'playlist_dir', 'organization_strategy', 'scan_on_startup', 'auto_organize',
     'folder_naming_pattern', 'file_naming_pattern', 'create_backups', 'supported_extensions',
     'exclude_patterns', 'enable_disk_quota', 'disk_quota_percent', 'enable_user_quotas',
-    'default_user_quota_gb', 'auto_fetch_metadata', 'enable_ai_parsing',
+    'default_user_quota_gb', 'enable_ai_parsing',
     'openai_api_key', 'metadata_sources', 'language',
     'concurrent_scans', 'memory_limit_type', 'cache_size', 'cache_invalidate_on_book_update',
     'metadata_fetch_cache_ttl_days', 'memory_limit_percent', 'memory_limit_mb',
@@ -112,7 +112,6 @@ export const sanitizeSettingsImport = (
       case 'create_backups':
       case 'enable_disk_quota':
       case 'enable_user_quotas':
-      case 'auto_fetch_metadata':
       case 'enable_ai_parsing':
         case 'cache_invalidate_on_book_update':
       case 'purge_soft_deleted_delete_files':
