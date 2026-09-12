@@ -1,5 +1,5 @@
 # file: .github/workflows/test-action-integration.yml
-# version: 1.4.0
+# version: 1.4.1
 # guid: test-action-integration-001
 # last-edited: 2026-09-12
 
@@ -13,11 +13,11 @@ on:
     paths:
       - '.github/repository-config.yml'
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'go.mod'
       - 'Makefile'
       - '.envrc'
-      - 'Dockerfile'
-      - 'Dockerfile.*'
+      - 'Dockerfile*'
       - '.vscode/settings.json'
       - 'scripts/check_toolchain_versions.py'
       - 'scripts/tests/test_check_toolchain_versions.py'
@@ -27,11 +27,11 @@ on:
     paths:
       - '.github/repository-config.yml'
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'go.mod'
       - 'Makefile'
       - '.envrc'
-      - 'Dockerfile'
-      - 'Dockerfile.*'
+      - 'Dockerfile*'
       - '.vscode/settings.json'
       - 'scripts/check_toolchain_versions.py'
       - 'scripts/tests/test_check_toolchain_versions.py'

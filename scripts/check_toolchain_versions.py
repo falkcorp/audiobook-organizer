@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check_toolchain_versions.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 983ded55-56c4-4f7e-b15e-a2f724b54016
 # last-edited: 2026-09-12
 """Fail when any Go or Node toolchain copy drifts from its pin (CI-04, CI-03).
@@ -19,9 +19,12 @@ two-component / minimum by design and the check would go red on a correct tree.
      goX.Y.Z`` in ``Makefile``; every one of these must equal it:
        - ``.envrc``                 ``export GOTOOLCHAIN=goX.Y.Z``
        - ``.vscode/settings.json``  every ``"GOTOOLCHAIN": "goX.Y.Z"``
-       - ``Dockerfile``, ``Dockerfile.build-cgo`` (and any other ``Dockerfile*``
-         with a golang stage) ``FROM golang:X.Y.Z-...``; the ``@sha256:``
-         digests of the golang image must also be identical across files.
+       - ``Dockerfile``, ``Dockerfile.build-cgo`` (and any other top-level
+         ``Dockerfile*`` with a golang stage) ``FROM golang:X.Y.Z-...``. EVERY
+         golang stage, in the required files and in any other ``Dockerfile*``,
+         must carry an ``@sha256:`` digest (a stage without one is an error at
+         its file:line), and the digests are compared per stage: every golang
+         stage in every file must name the same digest.
   2. Major.minor (``X.Y``) -- every literal ``go-version:`` in
      ``.github/workflows/*.yml`` and ``versions.go`` in
      ``.github/repository-config.yml`` must equal the pin's ``X.Y``
@@ -48,13 +51,22 @@ import argparse
 import pathlib
 import re
 import sys
+from collections import Counter
 
 MAKEFILE_PIN_RE = re.compile(r"^export\s+GOTOOLCHAIN\s*:=\s*go(\S+)\s*$", re.M)
 ENVRC_PIN_RE = re.compile(r"^\s*export\s+GOTOOLCHAIN=go(\S+)\s*$", re.M)
 VSCODE_PIN_RE = re.compile(r'"GOTOOLCHAIN"\s*:\s*"go([^"]*)"')
-DOCKER_GOLANG_RE = re.compile(
-    r"^\s*FROM\s+(?:--\S+\s+)*golang:([^\s@]+?)(?:-[a-z][^\s@]*)?(?:@sha256:([0-9a-f]+))?(?:\s|$)",
+# Deliberately loose: every FROM line naming the golang image is a stage, even
+# one whose reference is malformed, so a typo cannot drop a stage from the
+# check. GOLANG_REF_RE then parses the reference strictly. Anchored on FROM so
+# the "golang:X.Y.Z-alpine" comment above each stage is not mistaken for one.
+DOCKER_FROM_GOLANG_RE = re.compile(
+    r"^\s*FROM\s+(?:--\S+\s+)*(?:(?:docker\.io/)?library/)?golang(?P<ref>[:@]\S*)?(?:\s|$)",
     re.M | re.I,
+)
+GOLANG_REF_RE = re.compile(
+    r"^:(?P<version>[^\s@-]+)(?:-[a-z][^\s@]*)?(?:@sha256:(?P<digest>[0-9a-f]{64}))?$",
+    re.I,
 )
 GOMOD_GO_RE = re.compile(r"^go\s+(\S+)\s*$", re.M)
 GOMOD_TOOLCHAIN_RE = re.compile(r"^toolchain\s+\S+", re.M)
@@ -159,23 +171,39 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
                 c.error(rel, f"GOTOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
 
     dockerfiles = sorted({p.name for p in root.glob("Dockerfile*") if p.is_file()} | set(REQUIRED_DOCKERFILES))
-    digests: dict[str, str] = {}
+    # One entry per golang STAGE, not per file: a file with two golang stages
+    # must not let the second overwrite the first.
+    stages: list[tuple[str, int, str]] = []
     for rel in dockerfiles:
         text = c.read(rel)
         if text is None:
             continue
-        found = list(DOCKER_GOLANG_RE.finditer(text))
+        found = list(DOCKER_FROM_GOLANG_RE.finditer(text))
         if not found and rel in REQUIRED_DOCKERFILES:
             c.error(rel, f"no 'FROM golang:{pin_full}-...' stage found")
         for m in found:
-            c.info(rel, f"golang:{m.group(1)}" + (f" @sha256:{m.group(2)[:12]}..." if m.group(2) else ""))
-            if m.group(1) != pin_full:
-                c.error(rel, f"golang:{m.group(1)} != Makefile pin {pin_full}", _line_of(text, m.start()))
-            if m.group(2):
-                digests[rel] = m.group(2)
-    if len(set(digests.values())) > 1:
-        detail = ", ".join(f"{k}={v[:12]}" for k, v in sorted(digests.items()))
-        c.error(REQUIRED_DOCKERFILES[0], f"golang image digests differ across Dockerfiles: {detail}")
+            line = _line_of(text, m.start())
+            ref = m.group("ref") or ""
+            rm = GOLANG_REF_RE.match(ref)
+            if not rm:
+                c.error(rel, f"golang stage 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'", line)
+                continue
+            version, digest = rm.group("version"), rm.group("digest")
+            c.info(f"{rel}:{line}", f"golang:{version}" + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"))
+            if version != pin_full:
+                c.error(rel, f"golang:{version} != Makefile pin {pin_full}", line)
+            if not digest:
+                c.error(rel, f"golang:{version} stage has no @sha256: digest; every golang stage must be pinned by digest", line)
+                continue
+            stages.append((rel, line, digest))
+    if len({d for _, _, d in stages}) > 1:
+        # Flag every stage that disagrees with the most common digest, each at
+        # its own file:line, and list them all so the odd one out is obvious.
+        majority = Counter(d for _, _, d in stages).most_common(1)[0][0]
+        detail = ", ".join(f"{r}:{ln}={d[:12]}" for r, ln, d in stages)
+        for rel, line, digest in stages:
+            if digest != majority:
+                c.error(rel, f"golang image digests differ across stages: {detail}", line)
 
     print(f"--- Go major.minor ({pin_minor}) and go.mod minimum ---")
     text = c.read("go.mod")

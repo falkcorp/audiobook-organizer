@@ -1,5 +1,5 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
 # last-edited: 2026-09-12
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
@@ -17,6 +17,7 @@ so the fixtures track the tree and nothing touches the checkout itself.
 from __future__ import annotations
 
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,41 @@ class CheckToolchainVersionsTest(unittest.TestCase):
     def test_dockerfile_digest_mismatch_fails(self) -> None:
         self.mutate("Dockerfile", "golang:1.27.1-alpine@sha256:c", "golang:1.27.1-alpine@sha256:0")
         self.assertFails("digests differ")
+
+    def test_dockerfile_unpinned_golang_stage_fails(self) -> None:
+        # The old check stored a digest only when one was present and then
+        # compared the set, so a stage that dropped its @sha256: passed.
+        path = self.root / "Dockerfile"
+        text = path.read_text(encoding="utf-8")
+        unpinned, n = re.subn(r"(FROM golang:1\.27\.1-alpine)@sha256:[0-9a-f]+", r"\1", text)
+        self.assertEqual(n, 1, "fixture drifted: expected one digest-pinned golang stage in Dockerfile")
+        path.write_text(unpinned, encoding="utf-8")
+        line = unpinned[: unpinned.index("FROM golang:1.27.1-alpine")].count("\n") + 1
+        self.assertFails(f"::error file=Dockerfile,line={line}::golang:1.27.1 stage has no @sha256: digest")
+
+    def test_two_stages_in_one_file_with_different_digests_fails(self) -> None:
+        # The old check kept ONE digest per file (the last stage's), so an
+        # earlier stage with a different digest was overwritten and never
+        # compared. Prepend such a stage; the last stage still matches the
+        # other Dockerfile, which is exactly the case the old check passed.
+        other = "0" * 64
+        self.mutate(
+            "Dockerfile",
+            "FROM golang:1.27.1-alpine@sha256:",
+            f"FROM golang:1.27.1-alpine@sha256:{other} AS early\n\nFROM golang:1.27.1-alpine@sha256:",
+        )
+        self.assertFails("digests differ across stages")
+        self.assertFails(f"Dockerfile:{self._line_of_first('Dockerfile', other)}={other[:12]}")
+
+    def test_malformed_golang_reference_fails(self) -> None:
+        # A stage whose reference the strict parser rejects must be an error,
+        # not silently skipped (which would also skip its version check).
+        self.mutate("Dockerfile", "golang:1.27.1-alpine@sha256:c", "golang:1.27.1-alpine@sha256:Zc")
+        self.assertFails("is not 'golang:<version>[-<variant>]@sha256:<64 hex>'")
+
+    def _line_of_first(self, rel: str, needle: str) -> int:
+        text = (self.root / rel).read_text(encoding="utf-8")
+        return text[: text.index(needle)].count("\n") + 1
 
     def test_gomod_requiring_more_than_pin_fails(self) -> None:
         self.mutate("go.mod", "\ngo 1.27.0\n", "\ngo 1.27.2\n")
