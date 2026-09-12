@@ -1,5 +1,5 @@
 // file: internal/quarantine/service_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e9d41-5a3b-4f86-b0e7-1d9a6c3f8e52
 // last-edited: 2026-09-12
 
@@ -265,6 +265,228 @@ func TestQuarantineBook_BookUpdateFailureRollsBackRows(t *testing.T) {
 		require.True(t, ok, "row must be restored to %s (rows: %v)", src[i], keys(rows))
 		requireOnDisk(t, src[i])
 		requireGone(t, dst[i])
+	}
+	require.Zero(t, countChanges(t, store, book.ID, changeQuarantineFile),
+		"a rolled-back pass must leave no quarantine_file entry for unquarantine to follow")
+}
+
+func countChanges(t *testing.T, store *database.PebbleStore, bookID, changeType string) int {
+	t.Helper()
+	hist, err := store.GetBookPathHistory(bookID)
+	require.NoError(t, err)
+	n := 0
+	for _, h := range hist {
+		if h.ChangeType == changeType {
+			n++
+		}
+	}
+	return n
+}
+
+func requireRowsAt(t *testing.T, store *database.PebbleStore, bookID string, paths ...string) {
+	t.Helper()
+	rows := rowPaths(t, store, bookID)
+	for _, p := range paths {
+		_, ok := rows[p]
+		require.True(t, ok, "no row at %s (rows: %v)", p, keys(rows))
+	}
+}
+
+func requireQuarantined(t *testing.T, store *database.PebbleStore, bookID string, want bool) *database.Book {
+	t.Helper()
+	got, err := store.GetBookByID(bookID)
+	require.NoError(t, err)
+	require.Equal(t, want, got.QuarantinedAt != nil, "QuarantinedAt set = %v, want %v", got.QuarantinedAt != nil, want)
+	return got
+}
+
+// P1: a directory book whose 02.mp3 row was missing BEFORE quarantine. The
+// missing row cannot move and must not block the quarantine; before the fix
+// the book was left half-quarantined forever (QuarantinedAt nil, retry failed
+// "outside the book directory", unquarantine a no-op).
+func TestQuarantineBook_DirectoryBookWithPreMissingRowCompletes(t *testing.T) {
+	qs, store, root := newTestService(t)
+	dir := filepath.Join(root, "Author", "Book")
+	qdir := filepath.Join(root, ".failed", "Unknown Author", "Book", "Book")
+	var src, dst []string
+	for _, n := range []string{"01.mp3", "02.mp3", "03.mp3"} {
+		src = append(src, filepath.Join(dir, n))
+		dst = append(dst, filepath.Join(qdir, n))
+	}
+	writeAudio(t, src[0], "a")
+	writeAudio(t, src[2], "c") // 02.mp3 is already missing
+	book := seedBook(t, store, dir, src)
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "manual"))
+	requireQuarantined(t, store, book.ID, true)
+	requireRowsAt(t, store, book.ID, dst[0], src[1], dst[2])
+	requireOnDisk(t, dst[0])
+	requireOnDisk(t, dst[2])
+
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+	requireQuarantined(t, store, book.ID, false)
+	requireRowsAt(t, store, book.ID, src...)
+	requireOnDisk(t, src[0])
+	requireOnDisk(t, src[2])
+}
+
+// P5: the file-shaped twin of P1 -- one sibling missing before quarantine.
+func TestQuarantineBook_FileBookWithMissingSiblingCompletes(t *testing.T) {
+	qs, store, root := newTestService(t)
+	src, dst := threeFiles(root)
+	writeAudio(t, src[0], "a")
+	writeAudio(t, src[2], "c")
+	book := seedBook(t, store, src[0], src)
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	requireQuarantined(t, store, book.ID, true)
+	requireRowsAt(t, store, book.ID, dst[0], src[1], dst[2])
+
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+	requireQuarantined(t, store, book.ID, false)
+	requireRowsAt(t, store, book.ID, src...)
+	requireOnDisk(t, src[0])
+	requireOnDisk(t, src[2])
+}
+
+// P2: a resumed pass keeps the subfolder layout and the original destination.
+// Before the fix the retry derived srcBase from the book's CURRENT path (now
+// under .failed), flattened disc2/01.mp3 onto the book's own 01.mp3 and failed
+// forever; and a title edit between runs moved the book a second time.
+func TestQuarantineBook_ResumeKeepsSubfolderLayoutAndDestination(t *testing.T) {
+	qs, store, root := newTestService(t)
+	bookDir := filepath.Join(root, "Author", "Book")
+	qdir := filepath.Join(root, ".failed", "Unknown Author", "Book")
+	src := []string{filepath.Join(bookDir, "01.mp3"), filepath.Join(bookDir, "disc2", "01.mp3")}
+	dst := []string{filepath.Join(qdir, "01.mp3"), filepath.Join(qdir, "disc2", "01.mp3")}
+	writeAudio(t, src[0], "disc1")
+	writeAudio(t, src[1], "disc2")
+	writeAudio(t, dst[1], "obstacle")
+	book := seedBook(t, store, src[0], src)
+
+	require.Error(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	requireQuarantined(t, store, book.ID, false)
+
+	require.NoError(t, os.Remove(dst[1]))
+	b, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	b.Title = "Renamed Since"
+	_, err = store.UpdateBook(book.ID, b)
+	require.NoError(t, err)
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	got := requireQuarantined(t, store, book.ID, true)
+	require.Equal(t, dst[0], got.FilePath, "a resumed pass must not move the book again")
+	requireRowsAt(t, store, book.ID, dst...)
+	body, err := os.ReadFile(dst[1])
+	require.NoError(t, err)
+	require.Equal(t, "disc2", string(body))
+	require.Equal(t, 1, countChanges(t, store, book.ID, changeQuarantine),
+		"one quarantine entry per cycle; a second one would point inside .failed")
+
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+	requireRowsAt(t, store, book.ID, src...)
+	requireOnDisk(t, src[0])
+	requireOnDisk(t, src[1])
+}
+
+// P3: quarantine, unquarantine, organize elsewhere, quarantine, unquarantine.
+// PebbleStore returns history newest-first; the old loop kept the LAST match,
+// i.e. the oldest, and sent everything back to where it lived before the
+// first quarantine.
+func TestUnquarantineBook_SecondCycleRestoresLatestOrigin(t *testing.T) {
+	qs, store, root := newTestService(t)
+	src, _ := threeFiles(root)
+	for _, p := range src {
+		writeAudio(t, p, filepath.Base(p))
+	}
+	book := seedBook(t, store, src[0], src)
+	require.NoError(t, qs.QuarantineBook(book.ID, "first"))
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+
+	// Organize the book to Author2/Book.
+	var org []string
+	for _, p := range src {
+		np := filepath.Join(root, "Author2", "Book", filepath.Base(p))
+		require.NoError(t, os.MkdirAll(filepath.Dir(np), 0o755))
+		require.NoError(t, os.Rename(p, np))
+		org = append(org, np)
+	}
+	rows, err := store.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	for i := range rows {
+		r := rows[i]
+		r.FilePath = filepath.Join(root, "Author2", "Book", filepath.Base(r.FilePath))
+		require.NoError(t, store.UpdateBookFile(r.ID, &r))
+	}
+	b, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	b.FilePath = org[0]
+	_, err = store.UpdateBook(book.ID, b)
+	require.NoError(t, err)
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "second"))
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+
+	got := requireQuarantined(t, store, book.ID, false)
+	require.Equal(t, org[0], got.FilePath)
+	requireRowsAt(t, store, book.ID, org...)
+	for i := range org {
+		requireOnDisk(t, org[i])
+		requireGone(t, src[i])
+	}
+}
+
+// P4: the process died after the directory rename and before any DB write.
+// The source is gone and the destination holds the book; a retry must treat
+// that as already moved and repoint the rows, not fail on a missing source.
+func TestQuarantineBook_ResumesAfterCrashBetweenDirRenameAndDBWrite(t *testing.T) {
+	qs, store, root := newTestService(t)
+	dir := filepath.Join(root, "Author", "Book")
+	qBookDir := filepath.Join(root, ".failed", "Unknown Author", "Book", "Book")
+	var src, dst []string
+	for _, n := range []string{"01.mp3", "02.mp3", "03.mp3"} {
+		src = append(src, filepath.Join(dir, n))
+		dst = append(dst, filepath.Join(qBookDir, n))
+		writeAudio(t, src[len(src)-1], n)
+	}
+	book := seedBook(t, store, dir, src)
+	require.NoError(t, os.MkdirAll(filepath.Dir(qBookDir), 0o755))
+	require.NoError(t, os.Rename(dir, qBookDir)) // the "crash"
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	got := requireQuarantined(t, store, book.ID, true)
+	require.Equal(t, qBookDir, got.FilePath)
+	requireRowsAt(t, store, book.ID, dst...)
+	require.Equal(t, 1, countChanges(t, store, book.ID, changeQuarantine))
+
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+	requireRowsAt(t, store, book.ID, src...)
+	for _, p := range src {
+		requireOnDisk(t, p)
+	}
+}
+
+// P4, file-shaped: one file was renamed and the process died before its row
+// was written. The retry repoints (and journals) it so unquarantine returns it.
+func TestQuarantineBook_ResumesAfterCrashBetweenFileRenameAndRowWrite(t *testing.T) {
+	qs, store, root := newTestService(t)
+	src, dst := threeFiles(root)
+	for _, p := range src {
+		writeAudio(t, p, filepath.Base(p))
+	}
+	book := seedBook(t, store, src[0], src)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst[1]), 0o755))
+	require.NoError(t, os.Rename(src[1], dst[1])) // the "crash"
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	requireQuarantined(t, store, book.ID, true)
+	requireRowsAt(t, store, book.ID, dst...)
+
+	require.NoError(t, qs.UnquarantineBook(book.ID))
+	requireRowsAt(t, store, book.ID, src...)
+	for _, p := range src {
+		requireOnDisk(t, p)
 	}
 }
 
