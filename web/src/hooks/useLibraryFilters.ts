@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-07-02
+// last-edited: 2026-09-11
 
 import { useState, useEffect, useCallback } from 'react';
 import type { FilterOptions } from '../types';
@@ -67,6 +67,8 @@ export function useLibraryFilters({
     inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
     noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
     duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+    versionGroupId: searchParams.get('version_group_id') || undefined,
+    isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
   }));
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [availableAuthors, setAvailableAuthors] = useState<string[]>([]);
@@ -165,6 +167,8 @@ export function useLibraryFilters({
         inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
         noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
         duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+        versionGroupId: searchParams.get('version_group_id') || undefined,
+        isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
       };
       return shallowEqualFilters(prev, next) ? prev : next;
     });

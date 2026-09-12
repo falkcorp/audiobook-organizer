@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.2.2
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 import {
   Alert,
   Box,
@@ -11,6 +11,7 @@ import {
   Collapse,
   Grid,
   IconButton,
+  Link as MuiLink,
   Paper,
   Stack,
   Table,
@@ -27,13 +28,32 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import TransformIcon from '@mui/icons-material/Transform';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
 import type { Book, BookFile, BookSegment, BookTags } from '../../services/api';
 import * as api from '../../services/api';
 import { TagComparison } from '../TagComparison';
 import { formatDuration, formatBytes, formatTagValue } from './bookDetailUtils';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link as RouterLink } from 'react-router-dom';
+
+// buildVersionGroupLibraryUrl targets the same generic field-filter mechanism
+// as the (not-yet-built) narrator/publisher/genre links: version_group_id has
+// no dedicated int query param like author_id/series_id, so it goes through
+// `filters=[{field,value,negated}]` (TASK-169, TODO.md "Do not link
+// version_group_id..." — unblocked by commit b0ebccb0, 2026-08-14).
+//
+// `is_primary_version=false` is required, not cosmetic: the Library page's
+// book list (api.ts getBooks) defaults to `is_primary_version=true`
+// unconditionally, so without this override the link would show at most the
+// one primary version of the group — the opposite of "other versions of this
+// book". Omitting the param (rather than the server ever seeing `true`) is
+// what surfaces non-primary siblings; see service_query.go's
+// `ParseQueryBoolPtr` (nil when absent = no primary/non-primary filter).
+function buildVersionGroupLibraryUrl(versionGroupId: string): string {
+  const filters = [{ field: 'version_group_id', value: versionGroupId, negated: false }];
+  return `/library?filters=${encodeURIComponent(JSON.stringify(filters))}&is_primary_version=false`;
+}
 
 const SEGMENT_PREVIEW_COUNT = 5;
 
@@ -175,6 +195,17 @@ export const BookDetailVersionGroup = ({
 
   const allVersions = versions.length > 0 ? versions : [book];
 
+  // BookDetailVersionGroup renders once PER FORMAT TRAY (BookDetailFilesTab
+  // maps over formatGroups), so `book` (the current version) appears in
+  // exactly one tray's `groupVersions`. Gating the link on that containment
+  // check — rather than on `book.version_group_id` alone — keeps it to a
+  // single render per version group instead of once per format tray.
+  const containsCurrentBook = groupVersions.some((v) => v.id === book.id);
+  const otherVersionsUrl =
+    containsCurrentBook && book.version_group_id
+      ? buildVersionGroupLibraryUrl(book.version_group_id)
+      : null;
+
   return (
     <Paper
       key={groupId}
@@ -290,6 +321,25 @@ export const BookDetailVersionGroup = ({
           )}
           {hasPrimary && <Chip label="Primary" size="small" color="warning" />}
           {hasItunes && <Chip label="iTunes" size="small" color="info" variant="outlined" />}
+          {otherVersionsUrl && (
+            <MuiLink
+              component={RouterLink}
+              to={otherVersionsUrl}
+              onClick={(e) => e.stopPropagation()}
+              underline="hover"
+              variant="body2"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 0.5,
+                color: 'inherit',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <OpenInNewIcon fontSize="inherit" />
+              Other versions
+            </MuiLink>
+          )}
         </Stack>
       </Box>
 
