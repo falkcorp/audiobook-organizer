@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.authorlink.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b0c4a12-9f7d-4e35-8c61-2a0d9e4f7b58
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -72,12 +72,16 @@ function renderTab(book: Record<string, unknown>) {
 describe('BookDetailInfoTab author link', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('renders each credited author as a control that opens that author', async () => {
+  // Role queries are 'link', not 'button': TASK-166 deliberately turned these
+  // onClick buttons into real anchors. A leftover 'button' query in the
+  // negative case below would pass vacuously, since nothing is a button now.
+  it('renders each credited author as its own real link to that author', async () => {
     const user = userEvent.setup();
     renderTab(bookWithIds);
 
-    const pratchett = await screen.findByRole('button', { name: 'Terry Pratchett' });
-    expect(screen.getByRole('button', { name: 'Neil Gaiman' })).toBeInTheDocument();
+    const pratchett = await screen.findByRole('link', { name: 'Terry Pratchett' });
+    expect(pratchett).toHaveAttribute('href', '/authors/7');
+    expect(screen.getByRole('link', { name: 'Neil Gaiman' })).toHaveAttribute('href', '/authors/9');
 
     await user.click(pratchett);
     await waitFor(() => expect(screen.getByText('Author page 7')).toBeInTheDocument());
@@ -87,7 +91,7 @@ describe('BookDetailInfoTab author link', () => {
     const user = userEvent.setup();
     renderTab(bookWithIds);
 
-    await user.click(await screen.findByRole('button', { name: 'Neil Gaiman' }));
+    await user.click(await screen.findByRole('link', { name: 'Neil Gaiman' }));
     // Asserts the id that actually reached the route. A handler hardcoded to
     // the first author renders "Author page 7" here and fails.
     await waitFor(() => expect(screen.getByText('Author page 9')).toBeInTheDocument());
@@ -99,6 +103,19 @@ describe('BookDetailInfoTab author link', () => {
 
     expect(await screen.findByText('Someone Uncredited')).toBeInTheDocument();
     // A control that looks clickable but leads nowhere is worse than text.
-    expect(screen.queryByRole('button', { name: 'Someone Uncredited' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Someone Uncredited' })).toBeNull();
+  });
+
+  it('links a single credited author', async () => {
+    renderTab({
+      id: '01GHI',
+      title: 'The Dispossessed',
+      authors: [{ id: 3, name: 'Ursula K. Le Guin', role: 'author', position: 0 }],
+    });
+
+    expect(await screen.findByRole('link', { name: 'Ursula K. Le Guin' })).toHaveAttribute(
+      'href',
+      '/authors/3'
+    );
   });
 });

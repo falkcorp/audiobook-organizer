@@ -1,7 +1,7 @@
 // file: web/src/types/index.ts
-// version: 1.19.0
+// version: 1.20.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // Audiobook (Book) type
 export interface Audiobook {
@@ -190,6 +190,12 @@ export interface FilterOptions {
   // filter can surface non-primary siblings; `undefined` preserves today's
   // primary-only behavior everywhere else.
   isPrimaryVersion?: boolean;
+  // seriesId drives the book-detail Series link (BookDetailInfoTab.tsx,
+  // TASK-167). It is the server's dedicated exact-match `series_id` param,
+  // NOT the `series` field filter above: that one is a case-insensitive
+  // substring match on the series name, so "Dune" would also list
+  // "Dune Chronicles".
+  seriesId?: number;
 }
 
 // QuickQuery is one entry returned by GET /api/v1/library/quick-queries.

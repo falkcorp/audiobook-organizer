@@ -1128,6 +1128,16 @@ export async function getBooks(
      * default would show at most one book, defeating its own purpose.
      */
     isPrimaryVersion?: boolean;
+    /**
+     * Sent as the server's dedicated `series_id` integer param
+     * (handlers/audiobooks/handler.go `ParseQueryIntPtr(c, "series_id")`),
+     * which lists exactly the books of that series. Not a field filter.
+     *
+     * Caveat owned by the server: service_query.go tests `search` before
+     * `series_id` in one else-if chain, so a request carrying BOTH answers the
+     * search and ignores the series.
+     */
+    seriesId?: number;
     signal?: AbortSignal;
   }
 ): Promise<BooksPage> {
@@ -1154,6 +1164,7 @@ export async function getBooks(
   if (options?.coveragePercentMax !== undefined)
     params.set('coverage_percent_max', String(options.coveragePercentMax));
   if (options?.isPrimaryVersion !== false) params.set('is_primary_version', 'true');
+  if (options?.seriesId !== undefined) params.set('series_id', String(options.seriesId));
 
   const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal: options?.signal });
   if (!response.ok) {

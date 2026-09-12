@@ -1,11 +1,11 @@
 // file: web/src/hooks/useLibraryFilters.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2d9f14-3a7c-4e80-9c51-2f8e0d413a6b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { shallowEqualFilters, useLibraryFilters } from './useLibraryFilters';
+import { shallowEqualFilters, useLibraryFilters, parseSeriesIdParam } from './useLibraryFilters';
 import type { FilterOptions } from '../types';
 
 // useLibraryFilters fires several fetches on mount (tags/facets/authors/
@@ -83,5 +83,37 @@ describe('useLibraryFilters version_group_id / is_primary_version', () => {
     const { result } = renderHook(() => useLibraryFilters({ searchParams }));
     expect(result.current.filters.versionGroupId).toBeUndefined();
     expect(result.current.filters.isPrimaryVersion).toBeUndefined();
+  });
+});
+
+// TASK-167: the book-detail Series link targets `/library?series_id=<id>`.
+// These pin that the library actually reads the id back — on mount AND when
+// the URL changes afterwards (the sync effect is a separate copy of the parse).
+describe('useLibraryFilters series_id', () => {
+  it('parses a positive integer series_id from the URL', () => {
+    const searchParams = new URLSearchParams('series_id=7');
+    const { result } = renderHook(() => useLibraryFilters({ searchParams }));
+    expect(result.current.filters.seriesId).toBe(7);
+  });
+
+  it('drops a series_id that is not a positive integer', () => {
+    for (const raw of ['abc', '0', '-3', '7x', '1.5', '', null]) {
+      expect(parseSeriesIdParam(raw)).toBeUndefined();
+    }
+    expect(parseSeriesIdParam('42')).toBe(42);
+  });
+
+  it('re-reads series_id when the URL changes after mount', () => {
+    const { result, rerender } = renderHook(
+      ({ searchParams }: { searchParams: URLSearchParams }) => useLibraryFilters({ searchParams }),
+      { initialProps: { searchParams: new URLSearchParams('series_id=7') } }
+    );
+    expect(result.current.filters.seriesId).toBe(7);
+
+    rerender({ searchParams: new URLSearchParams('series_id=9') });
+    expect(result.current.filters.seriesId).toBe(9);
+
+    rerender({ searchParams: new URLSearchParams('page=2') });
+    expect(result.current.filters.seriesId).toBeUndefined();
   });
 });
