@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-24
+// last-edited: 2026-09-12
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 func TestComputeSeriesNormalizeActions_Basic(t *testing.T) {
@@ -137,15 +138,33 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) { return b, nil }
 	store.DeleteSeriesFunc = func(id int) error { return nil }
 
+	var recorded []*database.OperationChange
+	store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		recorded = append(recorded, c)
+		return nil
+	}
+
 	var enqueuedBooks []string
 	enqueueWB := func(id string) { enqueuedBooks = append(enqueuedBooks, id) }
 
-	affected, err := executeSeriesNormalizeCore(context.Background(), store, enqueueWB)
+	affected, err := executeSeriesNormalizeCore(context.Background(), store, "op-norm", enqueueWB)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if renamed[1] != "The Long Earth" {
 		t.Errorf("expected series 1 renamed to 'The Long Earth', got %q", renamed[1])
+	}
+	// The rename is journaled as the series-scoped row the revert renames back.
+	var renameRows []*database.OperationChange
+	for _, c := range recorded {
+		if c.ChangeType == undo.ChangeTypeSeriesRename {
+			renameRows = append(renameRows, c)
+		}
+	}
+	if len(renameRows) != 1 || renameRows[0].SeriesID == nil || *renameRows[0].SeriesID != 1 ||
+		renameRows[0].OldValue != "The Long Earth One" || renameRows[0].NewValue != "The Long Earth" ||
+		renameRows[0].OperationID != "op-norm" || renameRows[0].BookID != "" {
+		t.Errorf("series_rename rows = %+v, want one: series 1, The Long Earth One -> The Long Earth, op-norm", renameRows)
 	}
 	if len(enqueuedBooks) == 0 {
 		t.Errorf("expected write-back enqueues for affected books")

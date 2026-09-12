@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 05f380f7-79a1-4953-8339-85979484c6a2
 // last-edited: 2026-09-12
 
@@ -29,11 +29,18 @@ const formatTypeCounts = (counts: Record<string, number> | undefined): string =>
     .join(', ');
 
 /**
- * Preflight groups whose rows the revert refuses every time it runs (the
- * series is gone, was renamed since, its old name is taken, or it could not be
- * read). They are named in the message but never count toward canUndo.
+ * Preflight groups whose rows the revert refuses every time it runs (the book
+ * or series is gone, the series was renamed since or its old name is taken, or
+ * a lookup failed). They are named in the message but never count toward
+ * canUndo.
  */
-const REFUSED_GROUPS = ['series_deleted', 'series_renamed_since', 'series_name_taken', 'series_check_failed'] as const;
+const REFUSED_GROUPS = [
+  'book_missing',
+  'series_deleted',
+  'series_renamed_since',
+  'series_name_taken',
+  'check_failed',
+] as const;
 
 /**
  * The confirmation to show before calling the revert endpoint, built from the

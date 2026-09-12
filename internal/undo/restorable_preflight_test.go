@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_preflight_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e41b8d2a-6c07-4f95-a3e8-1d9c5b7f2a60
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package undo
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -80,7 +81,7 @@ func (seriesErrStore) GetSeriesByID(int) (*database.Series, error) {
 }
 
 // A series lookup that errors fails closed in the preflight too: the row is
-// never Safe, it is filed under series_check_failed with the lookup reason.
+// never Safe, it is filed under check_failed with the lookup reason.
 func TestPreflightUndoConflicts_SeriesLookupErrorFailsClosed(t *testing.T) {
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -106,13 +107,78 @@ func TestPreflightUndoConflicts_SeriesLookupErrorFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
-	if report.Safe != 0 || len(report.SeriesCheckFailed) != 3 {
-		t.Fatalf("safe = %d, series_check_failed = %+v, want 0 and 3 rows", report.Safe, report.SeriesCheckFailed)
+	if report.Safe != 0 || len(report.CheckFailed) != 3 {
+		t.Fatalf("safe = %d, check_failed = %+v, want 0 and 3 rows", report.Safe, report.CheckFailed)
 	}
 	want := map[string]string{"c1": ReasonSeriesLookupFailed, "c2": ReasonSeriesLookupFailed, "c3": ReasonOldValueUnparsable}
-	for _, item := range report.SeriesCheckFailed {
+	for _, item := range report.CheckFailed {
 		if item.Reason != want[item.ChangeID] {
 			t.Errorf("%s reason = %q, want %q", item.ChangeID, item.Reason, want[item.ChangeID])
+		}
+	}
+}
+
+// bookErrStore fails every book read.
+type bookErrStore struct{ *database.PebbleStore }
+
+func (bookErrStore) GetBookByID(string) (*database.Book, error) {
+	return nil, errors.New("pebble: closed")
+}
+
+// Rows whose book is gone are refused by the revert every time it runs
+// (RevertService.loadBook is CheckRestoreBook), so the preflight files them
+// under book_missing, never as Safe or as book_deleted, which the web counts
+// as restorable. A book read that errors fails closed under check_failed.
+func TestPreflightUndoConflicts_BookRows(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	live, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/b.m4b", Format: "m4b"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	// The file is still at the move's new location, so the revert would read
+	// the book before moving it back.
+	moved := filepath.Join(t.TempDir(), "moved.m4b")
+	if err := os.WriteFile(moved, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []*database.OperationChange{
+		{ID: "c1", OperationID: "op1", BookID: "gone", ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "New"},
+		{ID: "c2", OperationID: "op1", BookID: "gone", ChangeType: "tag_write", FieldName: "TITLE", OldValue: "Old", NewValue: "New"},
+		{ID: "c3", OperationID: "op1", BookID: "gone", ChangeType: "file_move", OldValue: "/library/old.m4b", NewValue: moved},
+		{ID: "c4", OperationID: "op1", BookID: live.ID, ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "T"},
+	} {
+		if err := store.CreateOperationChange(r); err != nil {
+			t.Fatalf("create change %s: %v", r.ID, err)
+		}
+	}
+
+	report, err := PreflightUndoConflicts(store, "op1")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if report.Safe != 1 || len(report.BookMissing) != 3 || len(report.BookDeleted) != 0 || len(report.ContentChanged) != 0 {
+		t.Fatalf("report = %+v, want safe 1 (c4) and c1-c3 in book_missing only", report)
+	}
+	for _, item := range report.BookMissing {
+		if item.Reason != ReasonBookMissing {
+			t.Errorf("%s reason = %q, want %q", item.ChangeID, item.Reason, ReasonBookMissing)
+		}
+	}
+
+	report, err = PreflightUndoConflicts(bookErrStore{store}, "op1")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if report.Safe != 0 || len(report.CheckFailed) != 4 {
+		t.Fatalf("safe = %d, check_failed = %+v, want 0 and all 4 rows", report.Safe, report.CheckFailed)
+	}
+	for _, item := range report.CheckFailed {
+		if item.Reason != ReasonBookLookupFailed {
+			t.Errorf("%s reason = %q, want %q", item.ChangeID, item.Reason, ReasonBookLookupFailed)
 		}
 	}
 }

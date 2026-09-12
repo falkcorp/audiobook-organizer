@@ -1,7 +1,7 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package server
 
@@ -93,7 +93,7 @@ func newNormalizeFixture(t *testing.T, series []database.Series, books map[strin
 
 func (f *normalizeFixture) run(t *testing.T) {
 	t.Helper()
-	if _, err := executeSeriesNormalizeCore(context.Background(), f.store, func(string) {}); err != nil {
+	if _, err := executeSeriesNormalizeCore(context.Background(), f.store, "", func(string) {}); err != nil {
 		t.Fatalf("executeSeriesNormalizeCore: %v", err)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
 // last-edited: 2026-09-12
 
@@ -30,8 +30,11 @@ type ledgerStub struct {
 	seriesErr error
 	// nameErr fails only GetSeriesByName (the collision lookup).
 	nameErr error
-	// renames records UpdateSeriesName calls as "id:name".
+	// renames records the renames RenameSeriesIf applied, as "id:name".
 	renames []string
+	// renameErr makes RenameSeriesIf refuse, as the store does when a create
+	// or rename lands after CheckRestoreReferent passed.
+	renameErr error
 }
 
 func (s *ledgerStub) GetBookByID(id string) (*database.Book, error) {
@@ -68,7 +71,12 @@ func (s *ledgerStub) GetSeriesByID(id int) (*database.Series, error) {
 	if s.seriesErr != nil {
 		return nil, s.seriesErr
 	}
-	return s.series[id], nil
+	// A copy, as a real store returns: only RenameSeriesIf may change s.series.
+	if ser := s.series[id]; ser != nil {
+		cp := *ser
+		return &cp, nil
+	}
+	return nil, nil
 }
 
 // GetSeriesByName matches case-insensitively under the same author, as the
@@ -83,17 +91,32 @@ func (s *ledgerStub) GetSeriesByName(name string, authorID *int) (*database.Seri
 	for _, ser := range s.series {
 		sameAuthor := (ser.AuthorID == nil) == (authorID == nil) && (authorID == nil || *ser.AuthorID == *authorID)
 		if sameAuthor && strings.EqualFold(ser.Name, name) {
-			return ser, nil
+			cp := *ser
+			return &cp, nil
 		}
 	}
 	return nil, nil
 }
 
-func (s *ledgerStub) UpdateSeriesName(id int, name string) error {
-	s.renames = append(s.renames, fmt.Sprintf("%d:%s", id, name))
-	if ser := s.series[id]; ser != nil {
-		ser.Name = name
+// RenameSeriesIf mirrors PebbleStore.RenameSeriesIf: it refuses when the
+// series is gone, is not named expectCurrent, or newName belongs to another
+// series of the same author, and otherwise renames and records "id:name".
+func (s *ledgerStub) RenameSeriesIf(id int, expectCurrent, newName string) error {
+	if s.renameErr != nil {
+		return s.renameErr
 	}
+	ser := s.series[id]
+	switch {
+	case ser == nil:
+		return database.ErrRenameSeriesNotFound
+	case ser.Name != expectCurrent:
+		return database.ErrRenameSeriesRenamedSince
+	}
+	if holder, _ := s.GetSeriesByName(newName, ser.AuthorID); holder != nil && holder.ID != id {
+		return database.ErrRenameSeriesNameTaken
+	}
+	s.renames = append(s.renames, fmt.Sprintf("%d:%s", id, newName))
+	ser.Name = newName
 	return nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -138,11 +138,11 @@ func (s *Server) ExecuteSeriesPrune(ctx context.Context, progress operations.Pro
 	return s.executeSeriesPrune(ctx, s.store, progress, opID)
 }
 
-func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, enqueueWB func(string)) ([]string, error) {
+func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, opID string, enqueueWB func(string)) ([]string, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	return executeSeriesNormalizeCore(ctx, s.store, enqueueWB)
+	return executeSeriesNormalizeCore(ctx, s.store, opID, enqueueWB)
 }
 
 // ---- one-shot startup ops ----

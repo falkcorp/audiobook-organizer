@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b1f4c2e-6d3a-4e8b-a7f0-2c5d8e1b4a63
 // last-edited: 2026-09-12
 
@@ -119,12 +119,25 @@ describe('describeUndoPreflight', () => {
       series_deleted: [{ change_id: 'c1', book_id: 'b', reason: 'series deleted' }],
       series_renamed_since: [{ change_id: 'c2', book_id: '', reason: 'series renamed since' }],
       series_name_taken: [{ change_id: 'c3', book_id: '', reason: 'series name taken' }],
-      series_check_failed: [{ change_id: 'c4', book_id: 'b', reason: 'series lookup failed' }],
+      check_failed: [{ change_id: 'c4', book_id: 'b', reason: 'series lookup failed' }],
     });
     expect(plan.canUndo).toBe(false);
     expect(plan.message).toContain('4 change(s) will be refused');
     expect(plan.message).toContain('1 series renamed since row');
     expect(plan.message).not.toMatch(/can be undone;/);
+  });
+
+  it('never offers Undo for rows whose book was hard-deleted', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      total_changes: 2,
+      book_missing: [
+        { change_id: 'c1', book_id: 'b', reason: 'book missing' },
+        { change_id: 'c2', book_id: 'b', reason: 'book missing' },
+      ],
+    });
+    expect(plan.canUndo).toBe(false);
+    expect(plan.message).toContain('2 change(s) will be refused (2 book missing rows)');
   });
 
   it('offers only the restorable rows when others will be refused', () => {

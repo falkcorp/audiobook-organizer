@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
 // last-edited: 2026-09-12
 
@@ -268,10 +268,10 @@ func TestSeriesPhantomRepair_NullApplyUndoIsRefused(t *testing.T) {
 	report, err := undo.PreflightUndoConflicts(s, "op-345")
 	require.NoError(t, err)
 	require.Equal(t, 0, report.Safe, "no phantom id may be offered for restore")
-	// The trashed holder is reported as a deleted book; the three live ones
-	// as rows whose series does not exist.
-	require.Len(t, report.BookDeleted, 1)
-	require.Len(t, report.SeriesDeleted, 3)
+	// The trashed holder's row is refused for its dangling series id too, so it
+	// is a series_deleted refusal, not a (restorable) book_deleted conflict.
+	require.Empty(t, report.BookDeleted)
+	require.Len(t, report.SeriesDeleted, 4)
 	for _, item := range report.SeriesDeleted {
 		require.Equal(t, undo.ReasonSeriesDeleted, item.Reason)
 	}

@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
 package audiobooks
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,7 +39,10 @@ type revertServiceStore interface {
 	// revertSeriesRename) and by the series rename-back itself.
 	GetSeriesByID(id int) (*database.Series, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
-	UpdateSeriesName(id int, name string) error
+	// RenameSeriesIf is the rename-back. It repeats CheckRestoreReferent's
+	// current-name and name-free checks under the store's series name-index
+	// lock, so nothing can land between check and write.
+	RenameSeriesIf(id int, expectCurrent, newName string) error
 
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
@@ -252,19 +256,14 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 	}
 }
 
-// loadBook returns the change's book, or an error when it cannot be read or no
+// loadBook returns the change's book, or a refusal when it cannot be read or no
 // longer exists. PebbleStore.GetBookByID answers a missing id with (nil, nil);
 // without this guard every restore path dereferenced that nil and panicked
-// inside the revert endpoint instead of counting the row Failed.
+// inside the revert endpoint instead of counting the row Failed. It is
+// undo.CheckRestoreBook, the check the preflight runs, so the preflight never
+// offers a row this refuses.
 func (rs *RevertService) loadBook(id string) (*database.Book, error) {
-	book, err := rs.db.GetBookByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get book %s: %w", id, err)
-	}
-	if book == nil {
-		return nil, fmt.Errorf("book %s not found", id)
-	}
-	return book, nil
+	return undo.CheckRestoreBook(rs.db, id)
 }
 
 func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
@@ -322,19 +321,37 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 // revertSeriesRename renames the series a series_rename row names back to
 // OldValue. CheckRestoreReferent refuses first when the series is gone, has
 // been renamed again since, or its old name now belongs to another series, and
-// on any store error; nothing is written in those cases.
-//
-// The check and the rename are two store calls, not one transaction: a rename
-// landing between them is not caught. PebbleStore.UpdateSeriesName takes the
-// series name-index lock only for its own write.
+// on any store error; nothing is written in those cases. RenameSeriesIf then
+// repeats the current-name and name-free checks under the store's series
+// name-index lock, which CreateSeries and UpdateSeriesName also hold, so a
+// create or rename that lands after the first check is refused, not clobbered.
 func (rs *RevertService) revertSeriesRename(c *database.OperationChange) error {
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
 		return fmt.Errorf("series rename not reverted, %w", err)
 	}
-	if err := rs.db.UpdateSeriesName(*c.SeriesID, c.OldValue); err != nil {
-		return fmt.Errorf("rename series %d back to %q: %w", *c.SeriesID, c.OldValue, err)
+	if err := rs.db.RenameSeriesIf(*c.SeriesID, c.NewValue, c.OldValue); err != nil {
+		return fmt.Errorf("series rename not reverted, %w", renameRefusal(err))
 	}
 	return nil
+}
+
+// renameRefusal turns a RenameSeriesIf refusal into the undo.ReferentError
+// carrying the reason the preflight gives for the same state. Any other error
+// is returned unchanged.
+func renameRefusal(err error) error {
+	for _, m := range []struct {
+		sentinel error
+		reason   string
+	}{
+		{database.ErrRenameSeriesNotFound, undo.ReasonSeriesDeleted},
+		{database.ErrRenameSeriesRenamedSince, undo.ReasonSeriesRenamedSince},
+		{database.ErrRenameSeriesNameTaken, undo.ReasonSeriesNameTaken},
+	} {
+		if errors.Is(err, m.sentinel) {
+			return &undo.ReferentError{Reason: m.reason, Detail: err.Error()}
+		}
+	}
+	return err
 }
 
 func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {

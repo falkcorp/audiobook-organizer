@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -41,7 +42,7 @@ func (p *Plugin) runSeriesNormalize(ctx context.Context, _ json.RawMessage, repo
 	enqueueWB := func(bookID string) {
 		p.deps.EnqueueWriteBack(bookID)
 	}
-	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, enqueueWB)
+	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, registry.ReporterOpID(reporter), enqueueWB)
 	// Renaming a series changes the cached series list, which carries a 24-hour
 	// TTL. Without this the normalize lands in the store while /api/v1/series
 	// keeps serving the old names. Only invalidate when rows actually changed;

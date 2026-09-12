@@ -1,5 +1,5 @@
 // file: internal/server/undo_engine_prop_test.go
-// version: 1.4.0
+// version: 1.5.0
 // last-edited: 2026-09-12
 // guid: 1ff3d071-4c60-4bb0-92ed-d197fe8ad9d0
 //
@@ -67,9 +67,17 @@ func TestProp_UndoConflictConservative(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 
+		// The revert reads the book before moving the file back and refuses a
+		// row whose book is gone, so the book must exist for the mtime check to
+		// be what decides.
+		book, bErr := store.CreateBook(&database.Book{Title: "T", FilePath: newPath, Format: "m4b"})
+		if bErr != nil {
+			t.Fatalf("create book: %v", bErr)
+		}
+
 		change := &database.OperationChange{
 			OperationID: opID,
-			BookID:      "b-conf",
+			BookID:      book.ID,
 			ChangeType:  "file_move",
 			OldValue:    oldPath,
 			NewValue:    newPath,

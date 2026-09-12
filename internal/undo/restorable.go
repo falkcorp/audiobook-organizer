@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -55,6 +55,10 @@ import (
 // series_rename rows (dedup.MergeSeries, carrying SeriesID) are restorable:
 // the revert renames the series back to OldValue, after CheckRestoreReferent
 // has confirmed the rename can land without clobbering anything.
+//
+// A restorable row that writes to a book is refused when the book no longer
+// exists or cannot be read (CheckRestoreBook). A soft-deleted book is still
+// there, and the revert restores it.
 
 // ChangeTypeSeriesRename is the series-scoped change row for a Series rename:
 // SeriesID names the series, OldValue/NewValue are the names before and after.
@@ -143,6 +147,11 @@ type SeriesLookup interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
+// BookLookup is the book read CheckRestoreBook needs.
+type BookLookup interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
 // Reasons a restorable row is refused at revert time. The preflight files each
 // under the conflict bucket of the same name (see UndoConflictReport).
 const (
@@ -163,6 +172,11 @@ const (
 	// ReasonSeriesIDMissing: a series_rename row with no SeriesID (the
 	// classifier already calls it record-only; this is defence in depth).
 	ReasonSeriesIDMissing = "series id missing"
+	// ReasonBookMissing: the book the row writes to no longer exists
+	// (hard-deleted). A soft-deleted book is still there and is restored.
+	ReasonBookMissing = "book missing"
+	// ReasonBookLookupFailed: the store could not read the book; fail closed.
+	ReasonBookLookupFailed = "book lookup failed"
 )
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
@@ -203,9 +217,9 @@ func refuse(reason, format string, args ...any) error {
 //     new name (anything else is a later rename, which a revert must not
 //     clobber), and the old name must not now belong to another series under
 //     the same author. PebbleStore.UpdateSeriesName does not check that last
-//     one — it overwrites the series:name: index key — so without this check
-//     the revert would leave two series answering to one name with the index
-//     pointing at only one of them.
+//     one — it overwrites the series:name: index key — so the revert writes
+//     with PebbleStore.RenameSeriesIf, which repeats the current-name and
+//     name-free checks under the series name-index lock.
 //
 // Every other row passes.
 func CheckRestoreReferent(store SeriesLookup, c *database.OperationChange) error {
@@ -250,6 +264,24 @@ func liveSeries(store SeriesLookup, id int) (*database.Series, error) {
 		return nil, refuse(ReasonSeriesDeleted, "series %d no longer exists", id)
 	}
 	return s, nil
+}
+
+// CheckRestoreBook returns the book a restorable row writes to, or a
+// *ReferentError when there is none to write: ReasonBookMissing when the store
+// has no such book (PebbleStore.GetBookByID answers a missing id with (nil,
+// nil)) and ReasonBookLookupFailed on a store error. The revert refuses the row
+// on either, every time it runs (RevertService.loadBook is this function), so
+// the preflight files such rows as refused and never as restorable. A
+// soft-deleted book is returned: the revert restores it like any other.
+func CheckRestoreBook(store BookLookup, bookID string) (*database.Book, error) {
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		return nil, refuse(ReasonBookLookupFailed, "look up book %s: %v", bookID, err)
+	}
+	if book == nil {
+		return nil, refuse(ReasonBookMissing, "book %s no longer exists", bookID)
+	}
+	return book, nil
 }
 
 // NotRestorableLabel returns "" when the revert engine can reverse c, and

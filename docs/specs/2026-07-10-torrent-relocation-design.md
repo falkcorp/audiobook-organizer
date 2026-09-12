@@ -1,7 +1,7 @@
 <!-- file: docs/specs/2026-07-10-torrent-relocation-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 29285d3c-78ba-4e2e-8cc4-8c5b30639150 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Torrent Hardening + Client-Agnostic Relocation — Design Spec
 
@@ -298,8 +298,9 @@ protocol" (3)). Deluge stays the default.
 
 The deferred bullet "Torrent move_storage on undo"
 (`docs/archive/superpowers/plans/2026-04-15-bulk-organize-undo.md:97,100`) was since implemented:
-`undo.RunUndoOperation` is wired to `deluge.NotifyDelugeAfterUndo` (verify:
-`grep -n 'NotifyDelugeAfterUndo' internal/server/undo_engine.go`) and organize calls
+`undo.RunUndoOperation` was wired to `deluge.NotifyDelugeAfterUndo`. (Update 2026-09-12: both
+were deleted, since nothing in production called them. The revert endpoint,
+`audiobooks.RevertService`, moves files back without notifying Deluge.) Organize calls
 `NotifyDelugeAfterOrganize` (verify: `grep -rn 'NotifyDelugeAfterOrganize' internal/server/handlers/organize.go`).
 **Happy/skip/error coverage of the fan-out helpers ALREADY EXISTS** — do not duplicate it:
 `TestNotifyDelugeAfterUndo_{Enabled,Disabled,NoHash,DelugeError}` and
