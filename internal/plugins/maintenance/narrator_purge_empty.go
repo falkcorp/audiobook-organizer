@@ -324,11 +324,13 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 			continue
 		}
 
-		// THE UNDO-LEDGER ROW, written BEFORE the delete: once the row is gone
-		// the name exists nowhere else, so a post-delete journal failure would be
-		// exactly the loss this op must not cause. A failed write skips the
-		// delete. The row can describe a delete that then fails; a stray record
-		// of a narrator that still exists is harmless, the reverse is not.
+		// THE UNDO-LEDGER ROW, written BEFORE the delete. The narrator's name
+		// often survives in some book's Narrator text (that is what
+		// require_no_name_match holds on), but its id and the id-to-name pairing
+		// do not: once the row is gone, only this ledger row records them. So a
+		// failed write skips the delete. The row can describe a delete that
+		// then fails; a stray record of a narrator that still exists is
+		// harmless, the reverse is not.
 		if jerr := store.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
