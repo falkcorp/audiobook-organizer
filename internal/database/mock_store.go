@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.108.0
+// version: 1.109.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-12
 
@@ -187,6 +187,14 @@ type MockStore struct {
 	// stubbing it fails loudly instead of being handed an empty map and quietly
 	// asserting against a dead guard.
 	GetAllAuthorFileRefCountsFunc func() (map[int]int, error)
+
+	// GetAllNarratorRefsFunc and CountNarratorBookLinksFunc back the
+	// NarratorRefStore capability (internal/database/narrator_bookref.go). Like
+	// GetAllAuthorFileRefCountsFunc, an unset func is an ERROR, not an empty
+	// answer: these are new delete guards, and a mock that silently answered
+	// "referenced by nothing" would let a purge test pass against a dead guard.
+	GetAllNarratorRefsFunc     func() (NarratorRefs, error)
+	CountNarratorBookLinksFunc func(narratorID int) (int, error)
 
 	// Metadata
 	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
@@ -836,6 +844,24 @@ func (m *MockStore) GetAllAuthorFileRefCounts() (map[int]int, error) {
 	}
 	return nil, fmt.Errorf("MockStore.GetAllAuthorFileRefCountsFunc is not set: " +
 		"a test reaching the author file-safety gate must say what the unfiltered file count is")
+}
+
+// GetAllNarratorRefs satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) GetAllNarratorRefs() (NarratorRefs, error) {
+	if m.GetAllNarratorRefsFunc != nil {
+		return m.GetAllNarratorRefsFunc()
+	}
+	return NarratorRefs{}, fmt.Errorf("MockStore.GetAllNarratorRefsFunc is not set: " +
+		"a test reaching the narrator purge guard must say what the unfiltered reference count is")
+}
+
+// CountNarratorBookLinks satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) CountNarratorBookLinks(narratorID int) (int, error) {
+	if m.CountNarratorBookLinksFunc != nil {
+		return m.CountNarratorBookLinksFunc(narratorID)
+	}
+	return 0, fmt.Errorf("MockStore.CountNarratorBookLinksFunc is not set: "+
+		"a test reaching the per-narrator re-check must say what the live link count is (narrator %d)", narratorID)
 }
 
 func (m *MockStore) UpdateSeriesName(id int, name string) error {

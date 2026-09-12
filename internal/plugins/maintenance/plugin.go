@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-12
 
@@ -76,6 +76,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// automatic "these two look like the same person" classifier would.
 		p.authorDuplicateMergeDef(),
 		p.purgeEmptyAuthorsDef(),
+		// purge-empty-narrators is the narrator twin, but with two guards the
+		// author op lacks: a per-narrator link re-check immediately before each
+		// delete, and the scan stand-down on apply.
+		p.purgeEmptyNarratorsDef(),
 		p.authorStripMergeDef(),
 		p.missingFileAuditDef(),
 		p.missingFileRepairDef(),
