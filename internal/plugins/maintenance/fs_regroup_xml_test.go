@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-09-12
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,8 +22,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // itoa is shared with regroup_shattered_ai_test.go.
@@ -786,6 +789,9 @@ func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
 	if err == nil || res == nil || res.Failed < 2 {
 		t.Fatalf("revert err=%v res=%+v, want the two edited rows refused", err, res)
 	}
+	if res.ChangedSince != 2 {
+		t.Errorf("revert changed_since = %d, want 2 (%s)", res.ChangedSince, res.Summary())
+	}
 	if got, _ := s.GetBookByID(survivor); got.FilePath != edited {
 		t.Errorf("revert overwrote the edited path with %q", got.FilePath)
 	}
@@ -928,4 +934,211 @@ func TestFsRegroupApply_ProtectedAfterPlanSkipsGroup(t *testing.T) {
 	if led := fsLedgerTypes(t, s, "op-prot-late"); len(led) != 0 {
 		t.Errorf("ledger %v, want none", led)
 	}
+}
+
+// fsOneFragmentsGroup plans the store and requires exactly one fragments group.
+func fsOneFragmentsGroup(t *testing.T, s regroupSnapshotReader) (*fsRepairPlan, fsRepairGroup) {
+	t.Helper()
+	plan := fsPlan(t, s)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d, want 1 (plan %s)", len(frag), plan.summary())
+	}
+	return plan, frag[0]
+}
+
+// fsRequireUntouched checks that a skipped apply wrote nothing.
+func fsRequireUntouched(t *testing.T, s *database.PebbleStore, ids []string, rowsBefore int, opID string) {
+	t.Helper()
+	for _, id := range ids {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("book %s soft-deleted by a group that should have been skipped", id)
+		}
+	}
+	if got := fsRowCount(t, s); got != rowsBefore {
+		t.Errorf("rows %d -> %d", rowsBefore, got)
+	}
+	if led := fsLedgerTypes(t, s, opID); len(led) != 0 {
+		t.Errorf("ledger %v, want none", led)
+	}
+}
+
+// F1: the title revert is compare-and-set. A title the user edited after the
+// apply is reported by the preflight and left alone by the revert.
+func TestFsRegroupRevert_RefusesTitleEditedSince(t *testing.T) {
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	plan, g := fsOneFragmentsGroup(t, s)
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-title"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	sb, _ := s.GetBookByID(g.SurvivorID)
+	if sb.Title != "Cage of Souls" {
+		t.Fatalf("apply set title %q, want %q", sb.Title, "Cage of Souls")
+	}
+	sb.Title = "User Edited Title"
+	if _, err := s.UpdateBook(sb.ID, sb); err != nil {
+		t.Fatal(err)
+	}
+	report, err := undo.PreflightUndoConflicts(s, "op-title")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	titleDrift := false
+	for _, it := range report.CheckFailed {
+		titleDrift = titleDrift || (it.ChangeType == "metadata_update" && it.Reason == undo.ReasonChangedSince)
+	}
+	if !titleDrift {
+		t.Errorf("preflight does not report the edited title (safe=%d, check_failed=%+v)", report.Safe, report.CheckFailed)
+	}
+	res, err := audiobooks.NewRevertService(s).RevertOperation("op-title")
+	if err == nil || res == nil || res.ChangedSince != 1 {
+		t.Fatalf("revert err=%v res=%+v, want the edited title refused as changed since", err, res)
+	}
+	if got, _ := s.GetBookByID(g.SurvivorID); got.Title != "User Edited Title" {
+		t.Errorf("revert overwrote the user's title with %q", got.Title)
+	}
+}
+
+// F2: a book that appears at the book folder after the plan is re-checked
+// under the merge lock; the apply does not leave two live books there.
+func TestFsRegroupApply_BookAtFolderAfterPlanSkipsGroup(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	ids := seedFragments(t, s, base, "Cage of Souls", 3)
+	plan, _ := fsOneFragmentsGroup(t, s)
+	late := fsSeedBook(t, s, "Cage of Souls", base)
+	before := fsRowCount(t, s)
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-late-book"})
+	if err != nil || res.Skipped != 1 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	fsRequireUntouched(t, s, append(ids, late), before, "op-late-book")
+}
+
+// F3: a member demoted, or moved to another version group, after the plan is
+// re-checked by the apply, which refuses on the planner's conditions.
+func TestFsRegroupApply_VersionChangeAfterPlanSkipsGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(b []*database.Book)
+	}{
+		{"member demoted", func(b []*database.Book) {
+			notPrimary := false
+			b[2].IsPrimaryVersion = &notPrimary
+		}},
+		{"members in two version groups", func(b []*database.Book) {
+			a, c := "vg-a", "vg-b"
+			b[1].VersionGroupID, b[2].VersionGroupID = &a, &c
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+			plan, _ := fsOneFragmentsGroup(t, s)
+			books := make([]*database.Book, len(ids))
+			for i, id := range ids {
+				books[i], _ = s.GetBookByID(id)
+			}
+			tc.change(books)
+			for _, b := range books {
+				if _, err := s.UpdateBook(b.ID, b); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := fsRowCount(t, s)
+			res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-version"})
+			if err != nil || res.Skipped != 1 {
+				t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+			}
+			fsRequireUntouched(t, s, ids, before, "op-version")
+		})
+	}
+}
+
+// F4: a member that gained a row after the plan (here at an unused chapter
+// path, so no other check fires) makes the apply skip the group.
+func TestFsRegroupApply_MemberRowsChangedAfterPlanSkipsGroup(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	ids := seedFragments(t, s, base, "Cage of Souls", 3)
+	plan, _ := fsOneFragmentsGroup(t, s)
+	fsSeedRow(t, s, ids[0], base+"/Cage of Souls - 9/9.mp3")
+	before := fsRowCount(t, s)
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-gained"})
+	if err != nil || res.Skipped != 1 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	fsRequireUntouched(t, s, ids, before, "op-gained")
+}
+
+// F5: fs-regroup-xml and every op that repoints or rewrites book_file rows
+// declare overlapping write-sets, so the dispatcher never runs them together
+// (a repoint between fs-regroup-xml's path lookup and its row create would
+// put two rows on one file).
+func TestFsRegroupXML_WriteSetExcludesBookFileWriters(t *testing.T) {
+	p := &Plugin{}
+	fs := p.fsRegroupXMLDef()
+	if !slices.Contains(fs.Writes, sdk.ResBookFiles) || !slices.Contains(fs.Writes, sdk.ResBooks) {
+		t.Fatalf("fs-regroup-xml Writes = %v, want books and book_files", fs.Writes)
+	}
+	for _, def := range []sdk.OperationDef{
+		p.missingFileRepointDef(), p.recoverMissingFilesDef(), p.mergeSamePathDupesDef(), p.dedupeBookFileRowsDef(),
+	} {
+		if !slices.Contains(def.Writes, sdk.ResBookFiles) {
+			t.Errorf("%s declares Writes %v, want book_files so it cannot run beside fs-regroup-xml", def.ID, def.Writes)
+		}
+	}
+}
+
+// F6: a member row outside a "<prefix> - N" chapter folder cannot be numbered
+// and could collide with a chapter's track. GroupShatteredBooks only admits
+// single-file chapter books and the planner requires a member's one row to be
+// at its own path, so a real snapshot never yields one; the check guards the
+// classification against that changing. The plan side is tested on a
+// hand-built index, the apply side on a plan that recorded the row.
+func TestFsRegroupFragments_FileOutsideChapterFolderRefused(t *testing.T) {
+	base := fsFragBase(t)
+	pa, pb := base+"/Cage of Souls - 1/1.mp3", base+"/Cage of Souls - 2/2.mp3"
+	bonus := base + "/bonus.mp3"
+	for _, f := range []string{pa, pb, bonus} {
+		fsWriteFile(t, f)
+	}
+	target := itunesservice.FSRegroupTarget{BookFolder: base, Members: []itunesservice.FSBook{{ID: "a", FilePath: pa}, {ID: "b", FilePath: pb}}}
+	idx := &fsFileIndex{
+		primary: map[string]bool{"a": true, "b": true},
+		files:   map[string][]fsFileRef{"a": {{ID: "r1", Path: pa}, {ID: "r2", Path: bonus}}},
+	}
+	if why := fsFragmentsRefusal(target, idx); !strings.Contains(why, "outside a chapter folder") {
+		t.Errorf("plan refusal = %q, want the file outside a chapter folder refused", why)
+	}
+
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	plan, g := fsOneFragmentsGroup(t, s)
+	if err := s.CreateBookFile(&database.BookFile{BookID: ids[0], FilePath: bonus, TrackNumber: 2}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range plan.Groups {
+		if plan.Groups[i].SurvivorID == g.SurvivorID {
+			plan.Groups[i].PlanRows[ids[0]] = []string{bonus, ids0Path(t, s, ids[0])}
+			sort.Strings(plan.Groups[i].PlanRows[ids[0]])
+		}
+	}
+	before := fsRowCount(t, s)
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-bonus"})
+	if err != nil || res.Skipped != 1 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	fsRequireUntouched(t, s, ids, before, "op-bonus")
+}
+
+// ids0Path is a book's own file path.
+func ids0Path(t *testing.T, s *database.PebbleStore, id string) string {
+	t.Helper()
+	b, err := s.GetBookByID(id)
+	if err != nil || b == nil {
+		t.Fatalf("book %s: %v", id, err)
+	}
+	return b.FilePath
 }

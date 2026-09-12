@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-12
 
@@ -228,11 +228,15 @@ func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 			"cooperatively stands the library scanner down for the write phase (PR #3080) and re-stats each " +
 			"candidate before writing, so a concurrent scan can no longer clobber the rewrite.",
 		DefaultPriority: sdk.PriorityLow,
-		// Its OWN ConcurrencyKey, like every maintenance op. It declares no Writes for the
-		// same reason mark-missing/repoint do: library.scan declares no Writes either, so a
-		// Writes conflict-set gates against nothing (Gate 3b is Writes∩Writes). The
-		// scan/apply interlock is the runtime scan stand-down — see the SCAN INTERLOCK note up top.
+		// Its OWN ConcurrencyKey, like every maintenance op. Its Writes (below) do not
+		// gate library.scan, which declares none (Gate 3b is Writes∩Writes); the
+		// scan/apply interlock is the runtime scan stand-down — see the SCAN INTERLOCK
+		// note up top.
 		ConcurrencyKey: "maintenance.recover-missing-files",
+		// Declared write-set (dispatcher Gate 3b): never runs beside another op
+		// that rewrites book_file rows, e.g. maintenance.fs-regroup-xml, which
+		// looks a path up and then creates a row for it.
+		Writes: []sdk.Resource{sdk.ResBookFiles},
 		// ResumeDrop, matching the other missing-file ops: this WRITES, and an apply
 		// interrupted midway must not silently resume. Re-running is cheap and safe (a
 		// repointed row is no longer missing, so it is simply not selected again).

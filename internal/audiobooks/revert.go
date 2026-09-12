@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -113,6 +113,10 @@ type RevertResult struct {
 	// caller can drop the caches a restore made stale (the server clears the
 	// series caches when a series_rename row was restored).
 	RestoredTypes map[string]int `json:"restored_types,omitempty"`
+	// ChangedSince counts the Failed rows refused because their field no
+	// longer holds what the operation wrote (undo.ReasonChangedSince): the
+	// revert left a later edit in place instead of overwriting it.
+	ChangedSince int `json:"changed_since,omitempty"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -134,6 +138,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
+		if r.ChangedSince > 0 {
+			fmt.Fprintf(&b, " (%d changed since the operation and were left as they are)", r.ChangedSince)
+		}
 	}
 	if r.NotRestorable > 0 {
 		fmt.Fprintf(&b, "; %d cannot be undone automatically (%s)", r.NotRestorable, formatTypeCounts(r.NotRestorableTypes))
@@ -218,6 +225,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	for _, c := range slices.Backward(restorable) {
 		if err := rs.revertChange(c); err != nil {
 			result.Failed++
+			if undo.RefusalReason(err) == undo.ReasonChangedSince {
+				result.ChangedSince++
+			}
 			errors = append(errors, fmt.Sprintf("change %s: %v", c.ID, err))
 			slog.Warn("revert failed for change", "c", c.ID, "err", err)
 			continue
@@ -478,6 +488,8 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 	if !ok {
 		return fmt.Errorf("no external id in field %q", c.FieldName)
 	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
 	if _, err := rs.loadBook(c.OldValue); err != nil {
 		return err
 	}
@@ -495,6 +507,8 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 }
 
 func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
@@ -505,6 +519,16 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	// preflight runs the same check, so it reports this row as a conflict.
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+	}
+	// Compare-and-set: restore only while the field still holds what the
+	// operation wrote, so a user edit made since is never overwritten. The
+	// preflight reports the same state.
+	current, err := undo.CurrentBookField(book, c.FieldName)
+	if err != nil {
+		return err
+	}
+	if current != c.NewValue {
+		return driftRefusal("book %s %s changed since the operation", book.ID, c.FieldName)
 	}
 	// Exactly OldValue goes back, typed by the Book field it names; "" clears
 	// a pointer field to nil. An unparsable value is an error, not a no-op, so

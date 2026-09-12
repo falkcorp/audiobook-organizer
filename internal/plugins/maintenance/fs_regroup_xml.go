@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-12
 
@@ -144,6 +144,9 @@ type fsRepairStore interface {
 	// A retired shell's external ids move one at a time, so each move can be
 	// journaled and reversed.
 	itunesExternalIDReassigner
+	// The apply re-checks, under the merge lock, that no other book has taken
+	// the book folder since the plan.
+	GetBookByFilePath(path string) (*database.Book, error)
 }
 
 var _ fsRepairStore = (*database.PebbleStore)(nil)
@@ -163,11 +166,18 @@ func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.fs-regroup-xml",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         120 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runFSRegroupXML,
+		// Declared write-set (dispatcher Gate 3b): this op never runs beside another
+		// op that declares books or book_files -- missing-file-repoint,
+		// recover-missing-files, merge-same-path-dupes and dedupe-book-file-rows
+		// among them -- so no repoint can land between this op's path lookup and
+		// its row create, and no other declared writer interleaves a whole-row
+		// book write with its UpdateBook calls.
+		Writes:       []sdk.Resource{sdk.ResBooks, sdk.ResBookFiles},
+		Cancellable:  true,
+		Isolate:      false,
+		Timeout:      120 * time.Minute,
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runFSRegroupXML,
 	}
 }
 
@@ -221,6 +231,9 @@ type fsRepairGroup struct {
 	Rows       int            // book rows (fragments etc.) or files (layout) in the group
 	Conflicts  int            // layout: planned targets already taken
 	Reason     string
+	// PlanRows is each member's row paths at plan time, sorted. The apply
+	// skips the group when what it re-reads differs.
+	PlanRows map[string][]string
 }
 
 type fsLayoutMove struct{ FileID, From, To string }
@@ -462,15 +475,28 @@ func memberPaths(m itunesservice.FSBook, idx *fsFileIndex) []string {
 	return out
 }
 
+// fsSortedRowPaths is a member's row paths, sorted, so the apply can compare
+// what it re-reads with what the plan saw.
+func fsSortedRowPaths(rows []fsFileRef) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Path)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // classifyShatteredTarget sorts one GroupShatteredBooks target into
 // fragments, duplicates, mixed or protected.
 func classifyShatteredTarget(t itunesservice.FSRegroupTarget, idx *fsFileIndex) fsRepairGroup {
 	g := fsRepairGroup{BookFolder: t.BookFolder, Title: t.Title, SurvivorID: t.SurvivorID,
 		Members: t.Members, Rows: len(t.Members)}
 	members := make(map[string]bool, len(t.Members))
+	g.PlanRows = make(map[string][]string, len(t.Members))
 	for _, m := range t.Members {
 		g.MemberIDs = append(g.MemberIDs, m.ID)
 		members[m.ID] = true
+		g.PlanRows[m.ID] = fsSortedRowPaths(idx.files[m.ID])
 	}
 	// Protected first, from the DB paths alone, so nothing below (and nothing in
 	// the apply) ever reads or writes that tree.
@@ -563,7 +589,11 @@ func classifyShatteredTarget(t itunesservice.FSRegroupTarget, idx *fsFileIndex) 
 //     for one file);
 //   - two paths claim the same chapter number (track numbers would collide);
 //   - a member with no row has no file on disk (the op must not add a row for a
-//     missing file; the library already holds tens of thousands of those).
+//     missing file; the library already holds tens of thousands of those);
+//   - a member has a file outside a "<prefix> - N" chapter folder: its track
+//     number cannot be derived, so it would keep one that can collide. Refused
+//     rather than numbered after the last chapter, which would guess where
+//     bonus material belongs; such a group needs a person to look at it.
 func fsFragmentsRefusal(t itunesservice.FSRegroupTarget, idx *fsFileIndex) string {
 	if ids := idx.bookAt[t.BookFolder]; len(ids) > 0 {
 		return "book " + ids[0] + " already sits at the book folder (an earlier merge's survivor); merging the rest would split the book"
@@ -591,12 +621,14 @@ func fsFragmentsRefusal(t itunesservice.FSRegroupTarget, idx *fsFileIndex) strin
 				return fmt.Sprintf("members %s and %s share a file path", o, m.ID)
 			}
 			pathOf[p] = m.ID
-			if _, _, n, ok := chaptershape.Parts(p); ok {
-				if q, seen := chapter[n]; seen && q != p {
-					return fmt.Sprintf("chapter %d is claimed by two paths", n)
-				}
-				chapter[n] = p
+			_, _, n, ok := chaptershape.Parts(p)
+			if !ok {
+				return fmt.Sprintf("member %s has a file outside a chapter folder (its track could not be numbered)", m.ID)
 			}
+			if q, seen := chapter[n]; seen && q != p {
+				return fmt.Sprintf("chapter %d is claimed by two paths", n)
+			}
+			chapter[n] = p
 		}
 		if !hasOwn && m.FilePath != "" {
 			if _, err := os.Stat(m.FilePath); err != nil {
@@ -950,8 +982,10 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 // applyFragments merges one fragments group onto its survivor.
 //
 // It runs under merge.LockMergeRMW and starts by re-reading every member. The
-// plan is a snapshot: a member retired, moved or given rows since the plan is a
-// group this op no longer understands, so it is skipped. The shape checks the
+// plan is a snapshot: a group is skipped when a member has been retired, moved,
+// demoted from primary, moved to another version group, or has rows other than
+// the plan saw, or when a book other than the survivor now sits at the book
+// folder. The shape checks the
 // planner ran (fsFragmentsRefusal) are repeated on the re-read state, with the
 // protected-path check on every re-read row, and nothing is written unless the
 // group still passes all of them.
@@ -980,6 +1014,7 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 	}
 	cur := make(map[string]current, len(g.Members))
 	memberOf := make(map[string]itunesservice.FSBook, len(g.Members))
+	groups := map[string]bool{} // version groups the members are in now
 	for _, m := range g.Members {
 		memberOf[m.ID] = m
 		b, err := a.store.GetBookByID(m.ID)
@@ -991,16 +1026,49 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 			skip("member %s is gone, retired or moved since the plan", m.ID)
 			return
 		}
+		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			skip("member %s is no longer the primary version", m.ID)
+			return
+		}
+		if vg := fsStr(b.VersionGroupID); vg != "" {
+			groups[vg] = true
+		}
 		rows, err := a.store.GetBookFiles(m.ID)
 		if err != nil {
 			fail("read rows of %s: %v", m.ID, err)
 			return
 		}
+		paths := make([]string, 0, len(rows))
+		for _, r := range rows {
+			paths = append(paths, r.FilePath)
+		}
+		sort.Strings(paths)
+		if !slices.Equal(paths, g.PlanRows[m.ID]) {
+			skip("member %s has rows other than the plan saw", m.ID)
+			return
+		}
 		cur[m.ID] = current{book: b, rows: rows}
+	}
+	if len(groups) > 1 {
+		skip("members now span %d version groups", len(groups))
+		return
 	}
 	if _, ok := cur[g.SurvivorID]; !ok {
 		skip("survivor %s is not a member of the group", g.SurvivorID)
 		return
+	}
+	// A book that took the book folder since the plan is an earlier or parallel
+	// survivor; merging onto a second one would leave two live books there.
+	if g.BookFolder != "" {
+		at, err := a.store.GetBookByFilePath(g.BookFolder)
+		if err != nil {
+			fail("look up the book at the book folder: %v", err)
+			return
+		}
+		if at != nil && !at.IsSoftDeleted() && at.ID != g.SurvivorID {
+			skip("book %s now sits at the book folder", at.ID)
+			return
+		}
 	}
 
 	pathOf := map[string]string{} // path -> the member standing for it
@@ -1031,13 +1099,16 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 				return
 			}
 			pathOf[p] = m.ID
-			if _, _, n, ok := chaptershape.Parts(p); ok {
-				if q, seen := chapter[n]; seen && q != p {
-					skip("chapter %d is claimed by two paths", n)
-					return
-				}
-				chapter[n] = p
+			_, _, n, parsed := chaptershape.Parts(p)
+			if !parsed {
+				skip("member %s has a file outside a chapter folder", m.ID)
+				return
 			}
+			if q, seen := chapter[n]; seen && q != p {
+				skip("chapter %d is claimed by two paths", n)
+				return
+			}
+			chapter[n] = p
 		}
 		if !hasOwn && c.book.FilePath != "" {
 			gaps = append(gaps, c.book)
