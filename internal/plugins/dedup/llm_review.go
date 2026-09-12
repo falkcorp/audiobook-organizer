@@ -16,12 +16,12 @@ import (
 
 func (p *Plugin) llmReviewDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "dedup.llm-review",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "dedup",
-		DisplayName:     "LLM review of candidates",
-		Description:     "Runs LLM review pass over ambiguous embedding-layer candidates.",
-		ResumePolicy:    sdk.ResumeDrop,
+		ID:           "dedup.llm-review",
+		Liveness:     sdk.LivenessManual,
+		Plugin:       "dedup",
+		DisplayName:  "LLM review of candidates",
+		Description:  "Runs LLM review pass over ambiguous embedding-layer candidates.",
+		ResumePolicy: sdk.ResumeDrop,
 		// Serialize against itself like every other write-declaring dedup op.
 		// Without a key the scheduler can start a second review while the
 		// first is mid-flight, both holding CapLibraryWrite over the same
