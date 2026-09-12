@@ -1,7 +1,7 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.5.1
+# version: 1.6.0
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
-# last-edited: 2026-09-01
+# last-edited: 2026-09-12
 
 name: Binary Smoke
 
@@ -36,7 +36,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version: '26'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 

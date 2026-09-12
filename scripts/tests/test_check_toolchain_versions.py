@@ -1,5 +1,5 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
 # last-edited: 2026-09-12
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
@@ -77,7 +77,7 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         self.assertIn(needle, res.stdout)
 
     def test_current_tree_passes(self) -> None:
-        res = self.run_check("--action-node-output", "22")
+        res = self.run_check("--action-node-output", "26")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertIn("Toolchain versions consistent", res.stdout)
 
@@ -150,13 +150,13 @@ class CheckToolchainVersionsTest(unittest.TestCase):
         self.assertFails("!= Makefile pin go1.27.3")
 
     def test_security_yml_node_20x_fails(self) -> None:
-        self.mutate(".github/workflows/security.yml", "node-version: '22'", "node-version: '20.x'")
+        self.mutate(".github/workflows/security.yml", "node-version: '26'", "node-version: '20.x'")
         self.assertFails("node-version '20.x'")
 
     def test_top_level_versions_node_drift_fails(self) -> None:
         # repository-config.yml has two versions: blocks; the old grep -A1
         # read only the first. Drift the top-level one alone.
-        self.mutate(".github/repository-config.yml", "versions:\n  node: ['22']", "versions:\n  node: ['20']")
+        self.mutate(".github/repository-config.yml", "versions:\n  node: ['26']", "versions:\n  node: ['20']")
         self.assertFails("versions.node blocks disagree")
 
     def test_action_output_mismatch_fails(self) -> None:

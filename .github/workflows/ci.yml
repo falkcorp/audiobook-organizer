@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.11.1
+# version: 3.12.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-09-01
+# last-edited: 2026-09-12
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -45,7 +45,7 @@ jobs:
     uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@828afb50d0d18c426c72a6ed1060123677bee674 # main 2026-08-18 (adds go-lint + advisory super-linter jobs)
     with:
       go-version: '1.27'
-      node-version: '22'
+      node-version: '26'
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
       run-frontend: true

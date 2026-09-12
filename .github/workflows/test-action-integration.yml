@@ -1,5 +1,5 @@
 # file: .github/workflows/test-action-integration.yml
-# version: 1.4.1
+# version: 1.5.0
 # guid: test-action-integration-001
 # last-edited: 2026-09-12
 
@@ -94,9 +94,9 @@ jobs:
 
           echo "--- Checking node-version ---"
           echo "  actual:   '$OUT_NODE'"
-          echo "  expected: '22'"
-          if [ "$OUT_NODE" != "22" ]; then
-            echo "::error::Expected node-version='22', got '$OUT_NODE'"
+          echo "  expected: '26'"
+          if [ "$OUT_NODE" != "26" ]; then
+            echo "::error::Expected node-version='26', got '$OUT_NODE'"
             FAIL=1
           fi
 
@@ -152,7 +152,7 @@ jobs:
 
           **Expected action outputs:**
           - \`dir\` = \`web\`
-          - \`node-version\` = \`22\`
+          - \`node-version\` = \`26\`
           - \`has-frontend\` = \`true\`
 
           **Actual action outputs:**
