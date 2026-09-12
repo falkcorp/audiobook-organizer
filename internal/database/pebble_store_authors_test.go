@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 57e95a96-18e4-4bef-afd7-e33a56e37e98
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 
 package database
 
@@ -11,6 +11,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // scanBookAuthorRows reads every live book_authors:<bookID> row straight out of
@@ -172,4 +174,225 @@ func TestPebbleDeleteAuthorJunctionSweepMemDB(t *testing.T) {
 		count++
 	}
 	require.Equal(t, 1, count, "the surviving co-author's memdb row must remain")
+}
+
+// scanBookNarratorRows reads every live book_narrators:<bookID> row straight
+// out of Pebble, bypassing GetBookNarrators and memdb. It uses
+// prefixUpperBound rather than a "~" sentinel so non-ASCII book IDs are not
+// silently excluded from the assertions.
+func scanBookNarratorRows(t *testing.T, store Store) map[string][]BookNarrator {
+	t.Helper()
+	ps, ok := store.(*PebbleStore)
+	require.True(t, ok, "expected a *PebbleStore")
+
+	prefix := []byte("book_narrators:")
+	iter, err := ps.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	rows := make(map[string][]BookNarrator)
+	for iter.First(); iter.Valid(); iter.Next() {
+		val, valErr := iter.ValueAndErr()
+		require.NoError(t, valErr)
+		var narrators []BookNarrator
+		require.NoError(t, json.Unmarshal(val, &narrators))
+		rows[string(iter.Key())[len(prefix):]] = narrators
+	}
+	require.NoError(t, iter.Error())
+	return rows
+}
+
+// TestDeleteNarrator_RemovesRecordAndIndex proves both keys go: the record
+// (GetNarratorByID) and the narrator_name: index (GetNarratorByName). A delete
+// that only removed the record would still pass the ID check.
+func TestDeleteNarrator_RemovesRecordAndIndex(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	doomed, err := store.CreateNarrator("Doomed Narrator")
+	require.NoError(t, err)
+	keeper, err := store.CreateNarrator("Kept Narrator")
+	require.NoError(t, err)
+
+	require.NoError(t, store.DeleteNarrator(doomed.ID))
+
+	byID, err := store.GetNarratorByID(doomed.ID)
+	require.NoError(t, err)
+	require.Nil(t, byID, "narrator record must be gone")
+
+	byName, err := store.GetNarratorByName("Doomed Narrator")
+	require.NoError(t, err)
+	require.Nil(t, byName, "narrator_name index must be gone")
+
+	ps := store.(*PebbleStore)
+	_, closer, getErr := ps.db.Get([]byte("narrator_name:" + util.NormalizeAuthor("Doomed Narrator")))
+	if closer != nil {
+		closer.Close()
+	}
+	require.ErrorIs(t, getErr, pebble.ErrNotFound, "raw narrator_name key must be deleted")
+
+	// A different narrator is untouched.
+	kept, err := store.GetNarratorByName("Kept Narrator")
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	require.Equal(t, keeper.ID, kept.ID)
+
+	all, err := store.ListNarrators()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	require.Equal(t, keeper.ID, all[0].ID)
+
+	// Re-creating the same name after delete works and gets a fresh row.
+	again, err := store.CreateNarrator("Doomed Narrator")
+	require.NoError(t, err)
+	require.NotEqual(t, doomed.ID, again.ID)
+}
+
+// TestDeleteNarrator_UnknownID_Idempotent pins the not-found contract to
+// DeleteAuthor's: a missing id (never created, or already deleted) is nil.
+func TestDeleteNarrator_UnknownID_Idempotent(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	require.NoError(t, store.DeleteNarrator(424242))
+	require.NoError(t, store.DeleteAuthor(424242), "sibling contract this test mirrors")
+
+	n, err := store.CreateNarrator("Twice Deleted")
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteNarrator(n.ID))
+	require.NoError(t, store.DeleteNarrator(n.ID))
+}
+
+// TestDeleteNarrator_RemovesJunctionRows mirrors
+// TestPebbleDeleteAuthorRemovesJunctionRows: the deleted narrator leaves no
+// junction entry, a shared book keeps its co-narrator intact, a sole-narrator
+// book loses its row, and an unrelated book is untouched.
+func TestDeleteNarrator_RemovesJunctionRows(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	doomed, err := store.CreateNarrator("Junction Doomed")
+	require.NoError(t, err)
+	survivor, err := store.CreateNarrator("Junction Survivor")
+	require.NoError(t, err)
+	bystander, err := store.CreateNarrator("Junction Bystander")
+	require.NoError(t, err)
+
+	const (
+		sharedBook  = "book-shared"
+		soleBook    = "book-sole"
+		unrelatedBk = "book-unrelated"
+	)
+	require.NoError(t, store.SetBookNarrators(sharedBook, []BookNarrator{
+		{BookID: sharedBook, NarratorID: doomed.ID, Role: "narrator", Position: 0},
+		{BookID: sharedBook, NarratorID: survivor.ID, Role: "co-narrator", Position: 1},
+	}))
+	require.NoError(t, store.SetBookNarrators(soleBook, []BookNarrator{
+		{BookID: soleBook, NarratorID: doomed.ID, Role: "narrator", Position: 0},
+	}))
+	require.NoError(t, store.SetBookNarrators(unrelatedBk, []BookNarrator{
+		{BookID: unrelatedBk, NarratorID: bystander.ID, Role: "narrator", Position: 0},
+	}))
+
+	before := scanBookNarratorRows(t, store)
+	require.Len(t, before, 3)
+
+	require.NoError(t, store.DeleteNarrator(doomed.ID))
+
+	after := scanBookNarratorRows(t, store)
+	for bookID, narrators := range after {
+		for _, n := range narrators {
+			require.NotEqual(t, doomed.ID, n.NarratorID,
+				"book %s still references deleted narrator %d", bookID, doomed.ID)
+		}
+	}
+
+	shared, ok := after[sharedBook]
+	require.True(t, ok, "shared book's row must survive, not be deleted wholesale")
+	require.Len(t, shared, 1)
+	require.Equal(t, survivor.ID, shared[0].NarratorID)
+	require.Equal(t, "co-narrator", shared[0].Role)
+	require.Equal(t, 1, shared[0].Position)
+	require.Equal(t, sharedBook, shared[0].BookID)
+
+	_, stillThere := after[soleBook]
+	require.False(t, stillThere, "sole-narrator row must be removed, not left empty")
+
+	require.Equal(t, before[unrelatedBk], after[unrelatedBk])
+
+	viaAPI, err := store.GetBookNarrators(soleBook)
+	require.NoError(t, err)
+	require.Empty(t, viaAPI)
+}
+
+// TestDeleteNarrator_MemDBSync checks both memdb cleanups — the narrator row
+// in memTableNarrators and its memTableBookNarrators junction rows — because
+// they are separate code paths and every memdb-enabled reader answers from
+// memdb. It also covers a surviving junction row stored with an empty BookID:
+// without the sweep's backfill, the memdb replay aborts and the survivor
+// vanishes from memdb.
+func TestDeleteNarrator_MemDBSync(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+
+	ps, ok := store.(*PebbleStore)
+	require.True(t, ok)
+	if !ps.UseMemDB || ps.mem() == nil {
+		t.Skip("memdb not enabled in this build/config")
+	}
+
+	doomed, err := store.CreateNarrator("MemDB Doomed Narrator")
+	require.NoError(t, err)
+	survivor, err := store.CreateNarrator("MemDB Survivor Narrator")
+	require.NoError(t, err)
+
+	const bookID = "book-memdb-narr"
+	// Written straight to Pebble with an empty BookID on the survivor, the way
+	// an older writer could have stored it; memdb is seeded with a correct copy.
+	raw, err := json.Marshal([]BookNarrator{
+		{BookID: bookID, NarratorID: doomed.ID, Role: "narrator", Position: 0},
+		{NarratorID: survivor.ID, Role: "co-narrator", Position: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ps.db.Set([]byte("book_narrators:"+bookID), raw, pebble.Sync))
+	ps.ReplaceBookNarratorsInMemDB(bookID, []BookNarrator{
+		{BookID: bookID, NarratorID: doomed.ID, Role: "narrator", Position: 0},
+		{BookID: bookID, NarratorID: survivor.ID, Role: "co-narrator", Position: 1},
+	})
+	ps.WaitForWarmup()
+
+	require.NoError(t, store.DeleteNarrator(doomed.ID))
+	ps.WaitForWarmup()
+
+	txn := ps.mem().db.Txn(false)
+	defer txn.Abort()
+
+	gone, err := txn.First(memTableNarrators, memIdxID, doomed.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone, "memdb still holds the deleted narrator row")
+
+	kept, err := txn.First(memTableNarrators, memIdxID, survivor.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "surviving narrator must remain in memdb")
+
+	it, err := txn.Get(memTableBookNarrators, memIdxNarratorID, doomed.ID)
+	require.NoError(t, err)
+	var leftovers []string
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		bn, castOK := obj.(*BookNarrator)
+		require.True(t, castOK)
+		leftovers = append(leftovers, bn.BookID)
+	}
+	require.Empty(t, leftovers, "memdb still holds book_narrators rows for the deleted narrator on %v", leftovers)
+
+	surv, err := txn.Get(memTableBookNarrators, memIdxNarratorID, survivor.ID)
+	require.NoError(t, err)
+	var survBooks []string
+	for obj := surv.Next(); obj != nil; obj = surv.Next() {
+		survBooks = append(survBooks, obj.(*BookNarrator).BookID)
+	}
+	require.Equal(t, []string{bookID}, survBooks, "the surviving co-narrator's memdb row must remain")
 }

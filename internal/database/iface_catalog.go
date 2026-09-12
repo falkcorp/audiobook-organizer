@@ -1,7 +1,7 @@
 // file: internal/database/iface_catalog.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
-// last-edited: 2026-08-22
+// last-edited: 2026-09-12
 
 package database
 
@@ -54,6 +54,10 @@ type WorkStore interface {
 // NarratorStore covers narrators + book-narrator joins.
 type NarratorStore interface {
 	CreateNarrator(name string) (*Narrator, error)
+	// DeleteNarrator removes the narrator row, its name-index key, and every
+	// book_narrators junction entry that points at it. Deleting an id that does
+	// not exist is a no-op returning nil, matching DeleteAuthor.
+	DeleteNarrator(id int) error
 	GetNarratorByID(id int) (*Narrator, error)
 	GetNarratorByName(name string) (*Narrator, error)
 	ListNarrators() ([]Narrator, error)

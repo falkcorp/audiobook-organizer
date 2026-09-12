@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 
 package database
 
@@ -936,6 +936,126 @@ func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) 
 	}
 	p.ReplaceBookNarratorsInMemDB(bookID, narrators)
 	return nil
+}
+
+// DeleteNarrator removes a narrator and every reference the store holds to it,
+// mirroring DeleteAuthor: the narrator:<id> record, its narrator_name:<norm>
+// index key (underscore, not colon — see CreateNarrator), and its entries in
+// the book_narrators junction all go in one Pebble batch, then memdb is
+// brought in line. A missing id is a no-op returning nil, as with DeleteAuthor.
+func (p *PebbleStore) DeleteNarrator(id int) error {
+	narrator, err := p.GetNarratorByID(id)
+	if err != nil {
+		return err
+	}
+	if narrator == nil {
+		return nil
+	}
+
+	batch := p.db.NewBatch()
+	if err := batch.Delete([]byte(fmt.Sprintf("narrator:%d", id)), nil); err != nil {
+		batch.Close()
+		return fmt.Errorf("pebble Delete narrator:%d: %w", id, err)
+	}
+	if err := batch.Delete([]byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(narrator.Name))), nil); err != nil {
+		batch.Close()
+		return fmt.Errorf("pebble Delete narrator_name: %w", err)
+	}
+
+	// Drop this narrator from the book_narrators junction in the same batch,
+	// so no book keeps a NarratorID that no longer resolves. Same shape and
+	// cost as DeleteAuthor's sweep: one full scan of the junction keyspace,
+	// because there is no narrator -> books reverse index in Pebble.
+	affected, sweepErr := p.sweepNarratorFromBookNarrators(batch, id)
+	if sweepErr != nil {
+		batch.Close()
+		return sweepErr
+	}
+
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return err
+	}
+	p.DeleteNarratorFromMemDB(id)
+	// Mirror the junction rewrites into memdb; Pebble is the source of truth,
+	// but readers running with memdb enabled answer from memdb.
+	for bookID, remaining := range affected {
+		p.ReplaceBookNarratorsInMemDB(bookID, remaining)
+	}
+	return nil
+}
+
+// sweepNarratorFromBookNarrators stages, on batch, the removal of narratorID
+// from every book_narrators:<bookID> row that references it. It returns the
+// surviving association slice for each row it touched, keyed by book ID, so the
+// caller can replay the same edit into memdb once the batch commits. It is the
+// narrator twin of sweepAuthorFromBookAuthors; see that function for the
+// reasoning behind the upper bound and the skip-unparseable-row rule.
+func (p *PebbleStore) sweepNarratorFromBookNarrators(batch *pebble.Batch, narratorID int) (map[string][]BookNarrator, error) {
+	prefix := []byte("book_narrators:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pebble iterate book_narrators: %w", err)
+	}
+	defer iter.Close()
+
+	affected := make(map[string][]BookNarrator)
+	for iter.First(); iter.Valid(); iter.Next() {
+		val, valErr := iter.ValueAndErr()
+		if valErr != nil {
+			return nil, fmt.Errorf("pebble read book_narrators row: %w", valErr)
+		}
+		var narrators []BookNarrator
+		if json.Unmarshal(val, &narrators) != nil {
+			// A row we cannot parse is a row we cannot safely rewrite.
+			continue
+		}
+		// iter.Key() is invalidated by Next(); string() copies.
+		key := string(iter.Key())
+		bookID := strings.TrimPrefix(key, "book_narrators:")
+		remaining := make([]BookNarrator, 0, len(narrators))
+		for _, n := range narrators {
+			if n.NarratorID == narratorID {
+				continue
+			}
+			// memdb's book_narrators primary index is a non-AllowMissing
+			// compound on {BookID, NarratorID}, and ReplaceBookNarratorsInMemDB
+			// (unlike ReplaceBookAuthorsInMemDB) does not backfill BookID. A
+			// surviving row with an empty BookID would abort the memdb replay
+			// below and drop every row for this book from memdb, so fill it
+			// from the key — which is where the BookID is authoritatively held.
+			// This only fires on rows the sweep is already rewriting; it is not
+			// a general repair of rows that never referenced this narrator.
+			if n.BookID == "" {
+				n.BookID = bookID
+			}
+			remaining = append(remaining, n)
+		}
+		if len(remaining) == len(narrators) {
+			continue // narrator not on this book; leave the row untouched
+		}
+		if len(remaining) == 0 {
+			if err := batch.Delete([]byte(key), nil); err != nil {
+				return nil, fmt.Errorf("pebble Delete %s: %w", key, err)
+			}
+			affected[bookID] = nil
+			continue
+		}
+		data, mErr := json.Marshal(remaining)
+		if mErr != nil {
+			return nil, fmt.Errorf("marshal remaining book_narrators for %s: %w", bookID, mErr)
+		}
+		if err := batch.Set([]byte(key), data, nil); err != nil {
+			return nil, fmt.Errorf("pebble Set %s: %w", key, err)
+		}
+		affected[bookID] = remaining
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("pebble iterate book_narrators: %w", err)
+	}
+	return affected, nil
 }
 
 // CreateAuthorTombstone writes a tombstone that redirects oldID to canonicalID.
