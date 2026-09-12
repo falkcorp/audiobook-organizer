@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-12
 
@@ -46,6 +46,13 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 // logged. It is not silently capped. A search scoped by author_id or
 // series_id is NOT windowed: it is evaluated against the scoped book set
 // itself (see searchWithinIDs), so its total is always exact.
+//
+// Any request carrying author_id or series_id — with or without a search or
+// other filters — pages with limit/offset and returns the exact size of the
+// scoped set. Until 2026-09-12 a BARE ?author_id=N or ?series_id=N (no other
+// filter) ignored limit/offset and returned the whole set with total -1.
+// limit follows the same contract as every other path: <=0 (or >100000)
+// means the default 50, never "all".
 func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, int, error) {
 	if svc.store == nil {
 		return nil, 0, fmt.Errorf("database not initialized")
@@ -182,6 +189,17 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 		}
 		hasPostFilters = true
 	}
+	// A bare id listing (author_id and/or series_id, no search) must page too.
+	// Its base branch below fetches the author's/series' WHOLE set, and before
+	// 2026-09-12 a request with no other filter skipped the post-filter block
+	// entirely: every row came back, limit/offset were ignored, and the total
+	// was -1. Routing it through the post-filter block gives it the same
+	// count-then-paginate treatment as every other filtered request, so the
+	// total is the exact size of the set (the getters already apply the
+	// primary-version and soft-delete rules; quarantine is applied below).
+	if search == "" && (authorID != nil || seriesID != nil) {
+		hasPostFilters = true
+	}
 
 	// Apply filters in order of precedence
 	if search != "" {
@@ -257,6 +275,16 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			for i := range booksCore {
 				books[i] = booksCore[i].ToBook()
 			}
+			// The memdb author getter gathers IDs into a map and returns them
+			// in map-iteration order, which differs per call. That was harmless
+			// while this listing was never paginated; now that it is, an
+			// unordered base set would repeat and skip rows between pages. ID
+			// order is the key order the Pebble fallback already returns. The
+			// store getter is left alone because its other callers (ABS
+			// caches, merges) do not need an order and should not pay for one.
+			// The series branch is NOT re-sorted: its getter returns books in
+			// series order, which is the order a series listing should keep.
+			sort.Slice(books, func(i, j int) bool { return books[i].ID < books[j].ID })
 		}
 	} else if seriesID != nil {
 		// GetBooksBySeriesIDCore is Core-typed (STOREFID W4); same rationale
@@ -515,6 +543,14 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					continue
 				}
 			}
+			// The store pushes ExcludeQuarantined down on the summaries paths,
+			// but the author/series getters and the search hydration do not
+			// read it. The handler drops quarantined rows again after this
+			// returns, so without this check a page came back short and the
+			// total counted books the listing never shows.
+			if f.ExcludeQuarantined && b.QuarantinedAt != nil {
+				continue
+			}
 			if f.IsPrimaryVersion != nil {
 				// nil counts as primary. Routed through the shared helper so
 				// this post-filter, the pushdown, and the serialized DTO all
@@ -626,14 +662,21 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 		// the listing in agreement for those requests.
 		resultTotal = len(filtered)
 
-		// Apply pagination after filtering
+		// Sort the WHOLE match set, then paginate. Sorting after slicing only
+		// orders each page within itself, so page 2 could hold titles that
+		// belong before page 1's. A bare author_id/series_id listing used to
+		// dodge this by never paginating; now that it pages, sort_by has to be
+		// applied here to stay globally correct.
+		applySorting(filtered, f)
 		books = paginateFilteredBooks(filtered, limit, offset)
+		alreadySortedAndPaginated = true
 	}
 
-	// Apply sorting after all filtering but before returning. Skipped when the
-	// didPushdown+heavySorting branch above already sorted (and paginated) the
-	// pushdown result — re-sorting an already-paginated ≤limit-sized page is
-	// wasted work, not a correctness issue, but there is no reason to pay it.
+	// Apply sorting to whatever reached here unsorted. Skipped when a branch
+	// above already sorted (and paginated): the didPushdown+heavySorting branch,
+	// or the post-filter block, which sorts the full match set before slicing.
+	// Re-sorting an already-paginated ≤limit-sized page would only order it
+	// within itself, never fix its membership.
 	if !alreadySortedAndPaginated {
 		applySorting(books, f)
 	}

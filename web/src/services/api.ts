@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.95.0
+// version: 2.96.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -1657,17 +1657,49 @@ export async function mergeAuthors(keepId: number, mergeIds: number[]): Promise<
   return body.data;
 }
 
+/** Page size getBooksByAuthor requests: the server's per-request cap (httputil.ParsePaginationParams). */
+export const AUTHOR_BOOKS_PAGE_SIZE = 1000;
+/** Hard stop so a server that misreports `count` can never spin the loop forever. */
+const AUTHOR_BOOKS_MAX_PAGES = 100;
+
+/**
+ * Every book credited to the author, fetched page by page.
+ *
+ * A bare `?author_id=N` listing is paginated server-side like every other
+ * query (default 50, capped at 1000 per request), so one unparameterised
+ * request returns only the first page. This walks the pages until it has
+ * `count` rows, a short or empty page arrives, or the page cap is hit.
+ */
 export async function getBooksByAuthor(authorId: number): Promise<Book[]> {
-  const response = await apiFetch(`${API_BASE}/audiobooks?author_id=${authorId}`);
-  if (!response.ok) {
-    // Deliberately throw rather than returning []: a caller that renders this
-    // list in a merge-decision UI (AuthorBooksPopover) must be able to tell a
-    // failed fetch apart from an author that genuinely has zero books. See
-    // WEB-04.
-    throw await buildApiError(response, 'Failed to fetch books for author');
+  const all: Book[] = [];
+  for (let page = 0; page < AUTHOR_BOOKS_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      author_id: String(authorId),
+      limit: String(AUTHOR_BOOKS_PAGE_SIZE),
+      offset: String(page * AUTHOR_BOOKS_PAGE_SIZE),
+    });
+    const response = await apiFetch(`${API_BASE}/audiobooks?${params}`);
+    if (!response.ok) {
+      // Deliberately throw rather than returning []: a caller that renders this
+      // list in a merge-decision UI (AuthorBooksPopover) must be able to tell a
+      // failed fetch apart from an author that genuinely has zero books. See
+      // WEB-04. A failure on a later page throws too: a partial list would read
+      // as "this author has fewer books" in the same UI.
+      throw await buildApiError(response, 'Failed to fetch books for author');
+    }
+    // The server wraps the list in the standard `{ data: ... }` envelope.
+    // Reading `items` off the raw body (as this did before 2026-09-12) always
+    // yielded undefined against the real server, so the list was always empty.
+    const body = await response.json();
+    const data = body.data ?? body;
+    const items: Book[] = data.items ?? [];
+    all.push(...items);
+    const count = typeof data.count === 'number' ? data.count : undefined;
+    if (items.length < AUTHOR_BOOKS_PAGE_SIZE || (count !== undefined && all.length >= count)) {
+      break;
+    }
   }
-  const data = await response.json();
-  return data.items || [];
+  return all;
 }
 
 export interface AuthorAlias {
