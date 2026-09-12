@@ -1,7 +1,7 @@
 // file: internal/database/store_global_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c1e3a2b-4d5f-4a6b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -56,5 +56,5 @@ func TestGlobalStoreConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent global-store accessors")
 }

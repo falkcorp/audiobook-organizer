@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_index_consistency_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f7a9c21-6b4d-4e8f-a1c2-5d6e7f8091ab
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -193,7 +193,7 @@ func TestCreateNarratorConcurrent(t *testing.T) {
 		}(i)
 	}
 	close(start)
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent index-consistency writers")
 
 	for i, err := range errs {
 		if err != nil {

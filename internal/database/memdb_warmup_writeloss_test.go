@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_writeloss_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e1c9f27-3a64-4b18-9d02-c7f5a8e3b410
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -297,8 +297,8 @@ func TestWarmupWriteLoss_ConcurrentWritesAllVisible(t *testing.T) {
 			}
 		}(w)
 	}
-	wg.Wait()
-	store.WaitForWarmup()
+	waitGroupOrFatal(t, &wg, "writers racing the memdb warmup")
+	waitOrFatal(t, "store.WaitForWarmup (async memdb warmup to finish)", store.WaitForWarmup)
 
 	if !store.IsMemReady() {
 		t.Fatal("memdb never published; this test only means something on the memdb read path")

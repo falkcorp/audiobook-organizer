@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -228,7 +228,7 @@ func TestHNSW_ConcurrentAddSearch(t *testing.T) {
 			}
 		}(r)
 	}
-	wg.Wait()
+	waitGroupOrFatal(t, &wg, "concurrent HNSW embedding-store workers")
 }
 
 // addNoise returns base perturbed by a small random vector and re-normalized,

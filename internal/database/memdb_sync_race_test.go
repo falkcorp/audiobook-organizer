@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e7b9d21-8f3a-4c56-9e02-7a1d5b8c3f60
-// last-edited: 2026-08-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -78,7 +78,7 @@ func TestUpsertBookToMemDB_SnapshotsCallerBookAtEnqueue(t *testing.T) {
 			book.ID = fmt.Sprintf("race-book-%d", i)
 		}
 	}()
-	<-started
+	recvOrFatal(t, started, "the book-mutator goroutine to start looping")
 
 	// Replay the buffered op — this is the warmup-goroutine side of the race.
 	// On unfixed code this dereferences the caller's *Book right here, while
@@ -86,5 +86,5 @@ func TestUpsertBookToMemDB_SnapshotsCallerBookAtEnqueue(t *testing.T) {
 	require.True(t, store.publishWarmMemStore(m), "publish must succeed")
 
 	close(stop)
-	<-done
+	recvOrFatal(t, done, "the book-mutator goroutine to observe stop and exit")
 }
