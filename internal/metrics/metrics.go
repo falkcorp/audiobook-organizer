@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.9.0
+// version: 1.11.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-09-11
 
@@ -158,11 +158,11 @@ var (
 	// is explicitly deferred — see docs/plans/DECISIONS-PENDING.md row 11. No
 	// labels: the path itself is unbounded cardinality, and a single counter
 	// is enough to measure how often the degenerate pattern occurs.
-	organizeTargetPathCollision = prometheus.NewCounterVec(prometheus.CounterOpts{
+	organizeTargetPathCollision = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "organize_target_path_collision_total",
 		Help:      "Total times generateTargetPath produced a path already claimed by a DIFFERENT book within the same organize run (detection-only; the fix is deferred — see docs/plans/DECISIONS-PENDING.md row 11)",
-	}, []string{})
+	})
 
 	// aiBackendAvailable exports the reachability of AI backends (e.g. Ollama)
 	// so it can be alerted on (OPS-4). Values are 0/1, set at server-init time
@@ -237,7 +237,7 @@ func RecordITunesLocationUnmappable(reason string) {
 // organize run (DEC-11, detection-only — see docs/plans/DECISIONS-PENDING.md
 // row 11). It does not influence which books organize or how.
 func RecordOrganizeTargetPathCollision() {
-	organizeTargetPathCollision.WithLabelValues().Inc()
+	organizeTargetPathCollision.Inc()
 }
 
 // SetBackendAvailable records whether the named AI backend (e.g. "ollama")
