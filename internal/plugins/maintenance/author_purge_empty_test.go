@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
 // last-edited: 2026-09-12
 
@@ -810,5 +810,28 @@ func TestPurgeEmptyAuthors_ApplyJournalsBeforeEachDelete(t *testing.T) {
 	}
 	if got := deletesIn(events); len(got) != 1 || got[0] != "delete:3" {
 		t.Fatalf("deleted %v, want only author 3 — author 2's ledger write failed, so it must not be deleted", got)
+	}
+}
+
+// An apply with nothing eligible must not park the scanner: acquiring the
+// stand-down blocks until a running scan parks, which would pause a days-long
+// scan to delete nothing.
+func TestPurgeEmptyAuthors_ApplyWithNothingEligibleTakesNoStandDown(t *testing.T) {
+	var events []string
+	store := guardedPurgeStore(&events)
+	// Every author now has a book, except author 4, which the file guard holds.
+	store.GetAllAuthorBookCountsFunc = func() (map[int]int, error) {
+		return map[int]int{1: 12, 2: 1, 3: 1, 4: 0}, nil
+	}
+	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: store}, renewAllowed: -1}
+	p := &Plugin{deps: deps}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-empty"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if deps.acquires != 0 {
+		t.Fatalf("acquires=%d, want 0 — nothing was eligible, so the scan must not be parked", deps.acquires)
+	}
+	if len(events) != 0 {
+		t.Fatalf("wrote %v with nothing eligible", events)
 	}
 }
