@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -29,24 +29,64 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// MetadataCacheBookStore is the narrow persistence interface required by
-// MetadataCacheHandler. It also satisfies metabatch.BookFilesGetter so that
-// BuildCandidateBookInfo can be called with the same store value.
 // reviewListConcurrency bounds the concurrent cached-candidate reads when
 // building the review listing. These are store reads, not network calls, and
 // this runs inline on a user-facing request — a small fixed pool, not
 // runtime.NumCPU(), so one large listing cannot starve the rest of the server.
 const reviewListConcurrency = 8
 
+// defaultReviewPageSize bounds a review-listing request that does not explicitly
+// ask for everything. limit=0/absent used to mean "return every row", measured
+// at 34.8s and 18.4s in production while a library.scan ran concurrently; a
+// caller that forgets to page (or a stray curl) must not pay for the whole cache.
+// A caller that genuinely needs the whole set sends all=true.
+const defaultReviewPageSize = 200
+
+// slowReviewListing is the handler-time threshold past which
+// GetCacheReviewResults logs a WARN with enough context to correlate the slow
+// request with what else the server was doing.
+const slowReviewListing = 5 * time.Second
+
+// MetadataCacheBookStore is the narrow persistence interface required by
+// MetadataCacheHandler. It also satisfies metabatch.BookFilesGetter so that
+// BuildCandidateBookInfo can be called with the same store value.
 type MetadataCacheBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	// GetBooksByIDs fetches many books in one store call, preserving input
-	// order. The review listing is served with limit=0 and previously did two
-	// GetBookByID point reads per entry over the whole pending set.
+	// order. The review listing is served over the whole pending set (the lane
+	// sends all=true) and previously did two GetBookByID point reads per entry.
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// ListActiveOperationsV2 backs the diagnostic "is a library.scan running"
+	// check logged when GetCacheReviewResults exceeds slowReviewListing. The
+	// concrete store passed in (database.Store, via storeForWiring()) already
+	// implements this.
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
+// LibraryScanActive reports whether a "library.scan" op is currently queued or
+// running. Diagnostic only: a nil store or a lookup error is reported as "not
+// scanning" rather than aborting or erroring the caller.
+//
+// No status filter here: ListActiveOperationsV2's contract already restricts
+// its rows to queued/running, and re-checking would let this silently diverge
+// from the store if that contract ever changed.
+func LibraryScanActive(store MetadataCacheBookStore) bool {
+	if store == nil {
+		return false
+	}
+	active, err := store.ListActiveOperationsV2()
+	if err != nil {
+		return false
+	}
+	for _, op := range active {
+		if op.DefID == "library.scan" {
+			return true
+		}
+	}
+	return false
 }
 
 // MetadataCacheFetchService is the narrow interface required for the
@@ -109,7 +149,8 @@ func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetc
 // ListCachedCandidates handles GET /api/v1/audiobooks/metadata/cached.
 //
 // Optional query params: status=pending|matched, limit, offset.
-// limit=0 means "return all rows", matching GetCacheReviewResults below.
+// limit=0 means "return all rows". GetCacheReviewResults below no longer
+// matches this: it caps an unpaged request unless all=true is sent.
 func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
@@ -245,12 +286,25 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 // GetCacheReviewResults handles GET /api/v1/audiobooks/metadata/cache/review.
 //
 // Returns a paginated list of CandidateResult items sourced from the
-// persistent metadata cache. limit=0 means "return all rows".
+// persistent metadata cache.
+//
+// Query params: limit, offset, all. A positive limit is honoured as sent. A
+// zero or absent limit is capped to defaultReviewPageSize unless all=true, which
+// returns every reviewable row. The response reports `truncated` (the rows
+// returned are not the whole reviewable set) and the `limit` actually applied
+// (0 when all=true), and total_count is always the size of the whole set.
+//
+// Unlike ListCachedCandidates above, whose unpaged default is kept because
+// quietly capping it would turn a client's complete list into a silently
+// truncated one, this cap is not silent: the response says it truncated, the
+// server logs when the default did it, and the one caller that needs every row
+// (useMetadataLane) sends all=true.
 func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	if h.store == nil || h.svc == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
 		return
 	}
+	began := time.Now()
 
 	limit := httputil.ParseQueryInt(c, "limit", 0)
 	offset := httputil.ParseQueryInt(c, "offset", 0)
@@ -259,6 +313,14 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 	if offset < 0 {
 		offset = 0
+	}
+	all := httputil.ParseQueryBool(c, "all", false)
+	// defaulted records that the cap below, not the caller, chose the page size,
+	// so a truncation it causes can be logged as the caller's missing limit.
+	defaulted := false
+	if limit == 0 && !all {
+		limit = defaultReviewPageSize
+		defaulted = true
 	}
 
 	summaries, err := h.svc.ListCachedSummaries(c.Request.Context())
@@ -283,8 +345,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	}
 	// Fetch every book in ONE batch read instead of a GetBookByID per summary.
 	//
-	// This endpoint is called with limit=0 ("return all rows"), so the loops below
-	// run over the entire pending set. It previously did GetBookByID once here to
+	// The loops below run over the entire pending set whatever the page size
+	// (the review lane sends all=true for every row, and the counts span the
+	// whole set regardless). It previously did GetBookByID once here to
 	// compute status counts and AGAIN further down to build each row — 2N
 	// sequential point reads. Production served it in 21.7s and 35.2s, which is
 	// what was timing the UI out.
@@ -375,8 +438,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// is not a summary, it is a lie with a number on it.
 	//
 	// Doing this for all rows rather than one page also makes `total_count`
-	// correct for pagination. It is not new work in the real call path: both
-	// callers pass limit=0, so the page has always BEEN every row.
+	// correct for pagination. It is also why capping the default page size does
+	// NOT bound this fan-out: it runs over every prepared row whatever `limit`
+	// is. In the real call path the lane sends all=true, so its page is every
+	// row anyway; that describes the current caller, and is not an argument
+	// that the full fan-out is cheap.
 	cachedByIdx := make([]*metafetch.MetadataCandidateCache, len(prepared))
 	var cg errgroup.Group
 	cg.SetLimit(reviewListConcurrency)
@@ -488,6 +554,21 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		end = min(start+limit, len(reviewable))
 	}
 	page := reviewable[start:end]
+	// truncated follows GET /operations/timeline's convention (operations_v2.go:
+	// `matched > len(resp)`): true when this response is not the whole
+	// reviewable set -- rows exist before the offset or after the page. It is
+	// computed from the slice bounds, not len(results), because the build loop
+	// below drops a row whose book vanished mid-request, and that must not make a
+	// complete answer read as a truncated one.
+	truncated := end-start < len(reviewable)
+	if defaulted && truncated {
+		slog.Warn("GetCacheReviewResults capped an unpaged request to the default page size; send limit/offset to page, or all=true for every row",
+			"limit", limit,
+			"offset", offset,
+			"returned", end-start,
+			"total_reviewable", len(reviewable),
+		)
+	}
 
 	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
 	// per-row-expensive call here, and a paginated caller must not pay for rows
@@ -518,11 +599,31 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		})
 	}
 
+	// Handler time, not client-observed latency: this turns "sometimes slow" into
+	// a line that can be correlated with a concurrent library.scan. Capping the
+	// page does not remove the per-row GetCachedCandidates fan-out above, so a
+	// slow request is still possible and should say why it might have been.
+	if d := time.Since(began); d > slowReviewListing {
+		slog.Warn("GetCacheReviewResults exceeded slow-request threshold",
+			"duration", d.Round(time.Millisecond),
+			"threshold", slowReviewListing,
+			"total_reviewable", len(reviewable),
+			"returned", len(results),
+			"all", all,
+			"library_scan_active", LibraryScanActive(h.store),
+		)
+	}
+
 	httputil.RespondWithOK(c, gin.H{
 		"results":     results,
 		"total_count": len(reviewable),
-		"matched":     matched,
-		"no_match":    noMatch,
+		// Whether `results` is the whole reviewable set, and the page size that
+		// was applied (0 = all=true, no cap). A caller that sent no limit is
+		// capped to defaultReviewPageSize and must be able to tell.
+		"truncated": truncated,
+		"limit":     limit,
+		"matched":   matched,
+		"no_match":  noMatch,
 		// Real decode failures, not a hardcoded zero. A row counted here is one
 		// the cache holds but nobody can review until it is repaired.
 		"errors":        decodeErrors,

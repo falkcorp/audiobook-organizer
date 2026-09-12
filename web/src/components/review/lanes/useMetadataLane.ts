@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.13.0
+// version: 1.13.1
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-08
+// last-edited: 2026-09-12
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -394,7 +394,7 @@ export interface MetadataLane {
    * Derived here rather than in the rail because the rail only ever sees a
    * page, and the whole point of the stale set is that it spans the library:
    * on production 5,771 of 5,774 reviewable rows are stale, which no page can
-   * show. `results` holds every row (the lane fetches with limit=0 and
+   * show. `results` holds every row (the lane fetches with all=true and
    * paginates client-side), so the full set is available without a round trip.
    */
   staleIds: string[];
@@ -540,7 +540,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setError(null);
     const fetchId = ++fetchIdRef.current;
     api
-      .getCachedReviewResults(0, 0)
+      // all=true is required, not incidental: the server caps an unpaged
+      // request to a default page, and every derivation below (filters,
+      // grouping, staleIds) must see the whole library, not its first page.
+      .getCachedReviewResults(0, 0, true)
       .then((data) => {
         if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
         const allResults = data.results || [];

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.92.0
+// version: 2.93.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3996,8 +3996,8 @@ export async function getPendingReview(): Promise<{
 // loads its own data through getCachedReviewResults below — and the sole
 // caller of this function reads `total` and discards every field of every row.
 // ("pages its own data" is what this said first, and that was wrong in a
-// misleading direction: useMetadataLane calls getCachedReviewResults(0, 0),
-// which is limit=0 — the whole set, not a page. See todo.d.)
+// misleading direction: useMetadataLane calls getCachedReviewResults(0, 0, true),
+// which is all=true — the whole set, not a page. See todo.d.)
 // The wide row shape is kept because it is a public response contract, but do
 // not treat this comment as a reason to fetch rows you do not read.
 export interface CachedMetadataEntry {
@@ -4037,12 +4037,31 @@ export async function listCachedCandidates(
 // from the persistent metadata cache. Replaces getOperationResults for the
 // MetadataReviewDialog. Status values: "matched" (pending review),
 // "no_match" (user rejected), "applied" (already applied).
+//
+// The server caps a request that sends no positive `limit` to a default page
+// (200 rows) unless `all` is true. Pass `all = true` only when the caller
+// genuinely needs every reviewable row in one response -- useMetadataLane does,
+// because its filters, grouping and stale set span the whole library. The
+// response's `truncated` says whether the rows returned are the whole set.
 export async function getCachedReviewResults(
   limit: number,
-  offset: number
+  offset: number,
+  all = false
 ): Promise<{
   results: CandidateResult[];
   total_count: number;
+  /**
+   * True when `results` is not the whole reviewable set -- rows exist before
+   * `offset` or after the page. Same meaning as `truncated` on
+   * GET /operations/timeline. `total_count` is always the size of the whole set.
+   */
+  truncated?: boolean;
+  /**
+   * The page size the server actually applied: the caller's positive `limit`,
+   * the default page size when none was sent, or 0 when `all=true` returned
+   * everything.
+   */
+  limit?: number;
   matched: number;
   no_match: number;
   errors: number;
@@ -4081,10 +4100,11 @@ export async function getCachedReviewResults(
    */
   resolved_no_candidates?: number;
 }> {
-  const response = await apiFetch(
-    `${API_BASE}/audiobooks/metadata/cache/review?limit=${limit}&offset=${offset}`,
-    { timeoutMs: CACHED_REVIEW_TIMEOUT_MS }
-  );
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (all) params.set('all', 'true');
+  const response = await apiFetch(`${API_BASE}/audiobooks/metadata/cache/review?${params}`, {
+    timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
+  });
   if (!response.ok) throw await buildApiError(response, 'Failed to load cached review results');
   const data = await response.json();
   return data.data ?? data;
