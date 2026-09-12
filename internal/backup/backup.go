@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-09-12
 
@@ -378,6 +378,9 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	// Calculate checksum
 	checksum, err := calculateFileChecksum(backupPath, config.Progress)
 	if err != nil {
+		// Same cleanup as the archive phase: a stand-down abort (or a read
+		// error) here must not leave an unverifiable archive behind.
+		os.Remove(backupPath)
 		return nil, fmt.Errorf("failed to calculate checksum: %w", err)
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -149,15 +149,19 @@ func (p *FileIOPool) worker(id int) {
 	}
 }
 
-// Submit queues a file I/O job with the default "apply_metadata" op type.
-func (p *FileIOPool) Submit(bookID string, fn func()) {
-	p.SubmitTyped(bookID, "apply_metadata", fn)
+// Submit queues a file I/O job with the default "apply_metadata" op type. It
+// reports whether fn will run; false means the pool is stopped and the job was
+// dropped, so a caller holding a resource for fn (the scan stand-down) must
+// release it itself.
+func (p *FileIOPool) Submit(bookID string, fn func()) bool {
+	return p.SubmitTyped(bookID, "apply_metadata", fn)
 }
 
-// SubmitTyped queues a file I/O job with a specific operation type.
-func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) {
-	if p.tryQueue(bookID, opType, fn) {
-		return
+// SubmitTyped queues a file I/O job with a specific operation type. Its result
+// is Submit's: false when the job was dropped without running.
+func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
+	if done, accepted := p.tryQueue(bookID, opType, fn); done {
+		return accepted
 	}
 
 	// The worker buffer is full. Take an overflow slot BEFORE re-entering the
@@ -177,7 +181,7 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) {
 		// rather than silently lost.
 		<-p.overflow
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
-		return
+		return false
 	}
 	slog.Warn("file I/O pool buffer full, running overflow for book (op)", "bookID", bookID, "opType", opType)
 	// wg.Go under the read lock. Stop cannot have reached wg.Wait(), because it
@@ -188,19 +192,20 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) {
 		p.pending.Delete(pendingKey(bookID, opType))
 		p.removePendingFileOp(bookID, opType)
 	})
+	return true
 }
 
 // tryQueue records the job and attempts a non-blocking send onto the worker
 // channel, holding submitMu for reading so Stop cannot close p.ch underneath
-// the send. It reports whether the caller is done: true when the job was
-// queued, or when the pool is stopped and the job was dropped. False means the
-// buffer was full and the caller must take the overflow path.
-func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) bool {
+// the send. done reports whether the caller is finished: true when the job was
+// queued (accepted) or the pool is stopped and the job was dropped (!accepted).
+// done=false means the buffer was full and the caller must take the overflow path.
+func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) (done, accepted bool) {
 	p.submitMu.RLock()
 	defer p.submitMu.RUnlock()
 	if p.stopped {
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
-		return true
+		return true, false
 	}
 	job := FileIOJob{BookID: bookID, OpType: opType, CreatedAt: time.Now()}
 	p.pending.Store(pendingKey(bookID, opType), job)
@@ -208,9 +213,9 @@ func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) bool {
 
 	select {
 	case p.ch <- fileIOJobEntry{bookID: bookID, opType: opType, fn: fn}:
-		return true
+		return true, true
 	default:
-		return false
+		return false, false
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/metadata_scan_standdown.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e0a4c28-9d71-4b3f-bc5e-81f7a2d34c96
 // last-edited: 2026-09-12
 
@@ -52,8 +52,8 @@ func (s *Server) holdMetadataScanStandDown(ctx context.Context, reporter opsregi
 // holdScanStandDownForRequest is the request-side gate: it never quiesces a scan
 // and never waits. While a library scan is running it writes 409 and returns
 // ok=false; otherwise the caller holds the gate until it calls release.
-func (s *Server) holdScanStandDownForRequest(c *gin.Context, reason string) (release func(), ok bool) {
-	rel, err := s.scanGate().TryAcquireScanStandDown(opsregistry.RequestScanStandDownHolderID(reason), reason)
+func (s *Server) holdScanStandDownForRequest(c *gin.Context, reason string) (*opsregistry.ScanStandDownHold, bool) {
+	hold, err := opsregistry.TryHoldScanStandDown(s.scanGate(), reason)
 	if err != nil {
 		if errors.Is(err, opsregistry.ErrScanRunning) {
 			httputil.RespondWithError(c, http.StatusConflict, opsregistry.ErrScanRunning.Error(), "SCAN_RUNNING")
@@ -62,5 +62,5 @@ func (s *Server) holdScanStandDownForRequest(c *gin.Context, reason string) (rel
 		httputil.InternalError(c, "scan stand-down", err)
 		return nil, false
 	}
-	return rel, true
+	return hold, true
 }

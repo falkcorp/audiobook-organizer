@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.1.1
+// version: 4.1.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-12
 //
@@ -476,11 +476,11 @@ const batchApplyConcurrency = 4
 // handleBatchApplyCandidates applies stored metadata candidates for the selected books.
 func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	// Metadata is never applied during a library scan: 409 at once, no wait.
-	release, ok := s.holdScanStandDownForRequest(c, "batch-apply-candidates")
+	hold, ok := s.holdScanStandDownForRequest(c, "batch-apply-candidates")
 	if !ok {
 		return
 	}
-	defer release()
+	defer hold.Release()
 
 	// The list this feeds is memoised; a status change must not keep offering a
 	// candidate the user just acted on.
@@ -549,6 +549,12 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: canceled: %v", bookID, gctx.Err())}
 				return nil
 			}
+			// Per-book stand-down beat: renews the request's hold; once it is
+			// lost a scan may be running again, so this book is not applied.
+			if err := hold.Checkpoint(); err != nil {
+				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: %v", bookID, err)}
+				return nil
+			}
 
 			opResult, ok := resultsByBook[bookID]
 			if !ok {
@@ -587,7 +593,13 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			// Queue file I/O through the worker pool (bounded concurrency).
 			if pool := s.fileIOPool; pool != nil {
 				bid := bookID
-				pool.Submit(bid, func() {
+				jobDone := hold.Retain()
+				if !pool.Submit(bid, func() {
+					defer jobDone()
+					if err := hold.Checkpoint(); err != nil {
+						slog.Warn("background apply file I/O skipped: scan stand-down lost", "bid", bid, "err", err)
+						return
+					}
 					// Logged, not returned: this runs in the pool AFTER the
 					// handler has already answered, so outcomes[i] is long
 					// since written. The response cannot report it; the log is
@@ -601,7 +613,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 					if s.writeBackBatcher != nil {
 						s.writeBackBatcher.Enqueue(bid)
 					}
-				})
+				}) {
+					// Dropped (pool stopped): fn will never run, so release its share of the hold here.
+					jobDone()
+				}
 			}
 
 			outcomes[i] = applyOutcome{applied: true}

@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -23,6 +23,7 @@ package metabatch
 import (
 	"context"
 	"fmt"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"log/slog"
 	"strings"
 
@@ -110,8 +111,10 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 		slog.Info("metadata-upgrade found books tagged", "count", len(bookIDs), "tag", tag)
 
 		for _, bookID := range bookIDs {
-			if ctx.Err() != nil {
-				return result, ctx.Err()
+			// Per-book stand-down beat: tryUpgradeBook is a network call, so the
+			// scan hold must be renewed per book, not per 25-book progress stamp.
+			if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
+				return result, err
 			}
 			if result.Checked >= limit {
 				break

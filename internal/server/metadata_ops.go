@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-12
 //
@@ -135,7 +135,14 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 			break // stop dispatching promptly on cancellation
 		}
 		i := i
-		g.Go(func() error { return processOne(gctx, i) })
+		g.Go(func() error {
+			// Per-item stand-down beat: renews the metadata op's hold on the
+			// scan and stops the pool before this book's write if it was lost.
+			if err := opsregistry.ScanStandDownCheckpoint(gctx); err != nil {
+				return err
+			}
+			return processOne(gctx, i)
+		})
 	}
 	return g.Wait()
 }
@@ -1017,7 +1024,9 @@ func (s *Server) runBulkWriteBack(
 				// the feeder: with a deep buffer the feeder can be finished long
 				// before the workers are, so a feeder-only check would let a
 				// canceled op keep writing files for the length of the backlog.
-				if ctx.Err() != nil || progress.IsCanceled() {
+				// ScanStandDownCheckpoint also renews the scan stand-down per
+				// book and fails once it is lost, so no file is written after.
+				if ctx.Err() != nil || progress.IsCanceled() || opsregistry.ScanStandDownCheckpoint(ctx) != nil {
 					canceled.Store(true)
 					continue // drain, don't return — returning would deadlock the feeder
 				}
@@ -1141,10 +1150,8 @@ func (s *Server) runMetadataRefreshScan(ctx context.Context, progress operations
 	_ = progress.Log("info", fmt.Sprintf("Checking %d books for incomplete metadata", len(books)), nil)
 	incomplete := 0
 	for i, book := range books {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
+			return err
 		}
 		if book.AuthorID == nil || book.Title == "" {
 			incomplete++

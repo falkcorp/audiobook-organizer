@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -276,7 +276,7 @@ func TestApplyAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()
 	// Background pool submit fires synchronously in test (we don't run fn).
-	d.pool.EXPECT().Submit("b1", mock.Anything).Return()
+	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		map[string]any{"candidate": map[string]any{"title": "X"}, "fields": []string{"title"}}, idParam("b1"))
