@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup.spec.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a
-// last-edited: 2026-08-20
+// last-edited: 2026-09-11
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -160,12 +160,24 @@ test.describe('Author Dedup', () => {
     });
 
     // Also mock the status polling to return completed immediately
-    await page.route('**/api/v1/operations/*/status', async (route) => {
+    await page.route('**/api/v1/operations/v2/*', async (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          id: 'resolve-prod-1', type: 'resolve-production-author', status: 'completed', progress: 100, total: 100, message: 'Done',
+          data: {
+            operation: {
+              id: 'resolve-prod-1',
+              def_id: 'entities.resolve-production-author',
+              status: 'completed',
+              progress_current: 100,
+              progress_total: 100,
+              progress_message: 'Done',
+              error_message: null,
+              queued_at: new Date().toISOString(),
+            },
+            logs: [],
+          },
         }),
       });
     });
