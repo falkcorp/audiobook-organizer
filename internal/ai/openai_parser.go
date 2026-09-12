@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.15.0
+// version: 13.16.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -541,11 +541,13 @@ func (p *OpenAIParser) TestConnection(ctx context.Context) error {
 // an object with none of ParsedMetadata's keys is accepted only as a wrapper
 // with exactly one key holding one result (an object, or an array of at most
 // one element, where an empty array is an empty result, matching the batch
-// path). What the wrapper holds goes through decodeResultElement, so an error
-// payload such as {"error": {"message": "..."}} is an error and not an empty
-// parse, and a key other than "results" must hold something metadata-shaped
-// to count as a wrapper at all. Anything else is a *ReplyParseError that
-// carries a sanitized excerpt of the reply.
+// path). A wrapper key of "error" or "errors" with a non-empty value, such as
+// {"error": {"message": "..."}} or {"error": {"title": "Solo"}}, is an error
+// report whatever it holds. What any other wrapper holds goes through
+// decodeResultElement, so a foreign object such as {"data": {"message": "..."}}
+// is an error and not an empty parse, and a key other than "results" must hold
+// something metadata-shaped to count as a wrapper at all. Anything else is a
+// *ReplyParseError that carries a sanitized excerpt of the reply.
 func parseMetadataFromJSON(content string) (*ParsedMetadata, error) {
 	m, err := extractSingleMetadata([]byte(content))
 	if err != nil {
@@ -957,16 +959,20 @@ The roles object fields are all optional — only include roles that are detecte
 //   - {"<any single key>": [...]}       -- unobserved; a wrapper under a key
 //     other than "results". Accepted only when it is the object's ONLY key,
 //     so an unrelated array can never be mistaken for the results, and only
-//     when at least one element is a metadata object, so {"error": []} or
-//     {"error": [{"code": 500}]} is never taken for a results list.
+//     when at least one element is a metadata object, so {"data": []} or
+//     {"data": [{"code": 500}]} is never taken for a results list. A key of
+//     "error" or "errors" with a non-empty value is never a wrapper: the
+//     JSON:API body {"errors": [{"title": "Too Many Requests"}]} is an error
+//     report.
 //   - {"title": ..., ...}               -- unobserved; a bare metadata object.
 //     Accepted only when the batch had exactly one filename, where position
 //     cannot be ambiguous.
 //
-// In every array shape each element must be null, {}, or an object carrying
-// at least one ParsedMetadata key (decodeResultElement); an element whose keys
-// are all foreign, e.g. {"error": "x"}, fails the whole reply. Every failure is
-// a *ReplyParseError.
+// In every array shape, and for the bare object, each element must be null,
+// {}, or an object carrying at least one ParsedMetadata key and no non-empty
+// "error" or "errors" value (decodeResultElement). An element whose keys are
+// all foreign, e.g. {"error": "x"}, or one like {"title": "Solo", "error": "x"}
+// fails the whole reply. Every failure is a *ReplyParseError.
 //
 // {"results": []} is ZERO RESULTS, not an error. qwen2.5:7b-instruct returns it
 // for inputs that carry no metadata at all ("Disc 1".."Disc 8", "Season 2");
@@ -1043,7 +1049,8 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 
 	if expected == 1 && hasParsedMetadataKey(obj) {
 		// Same element rules as every other shape: a bare object that also
-		// carries "error" is an error report, not the one result.
+		// carries a non-empty "error" or "errors" value is an error report,
+		// not the one result. An empty value (null, [] or {}) is ignored.
 		m, _, err := decodeResultElement(raw)
 		if err != nil {
 			return nil, fmt.Errorf("the reply object %w", err)
@@ -1070,9 +1077,10 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 				return nil, err
 			}
 			// Only "results" is trusted to mean "results" when it holds
-			// nothing: {"error": []} or {"errors": [null]} carries no evidence
+			// nothing: {"data": []} or {"data": [null]} carries no evidence
 			// that it is a results list, and taking it as one would be the
-			// same silent empty parse as an error payload.
+			// same silent empty parse as an error payload. An empty "error"
+			// or "errors" value, e.g. {"errors": []}, also ends up here.
 			if !anyMetadata {
 				return nil, fmt.Errorf(`object's only key %q holds no metadata object, so it is not a results wrapper`,
 					sanitizeReplyText(key))
@@ -1190,8 +1198,9 @@ const maxResponseExcerptBytes = 300
 // reply can contain "permission_error" or "invalid_api_key", and
 // internal/scanner's isPermanentAIFailure used to abort the whole AI phase on
 // such a substring. A reply we could not decode is by definition not an auth
-// or quota failure from the provider, so that classifier returns false for
-// anything that unwraps to *ReplyParseError before it looks at any text.
+// or quota failure from the provider, so that classifier never reads the text
+// of a *ReplyParseError, and a reply error on its own is never permanent. A
+// *PermanentError joined or wrapped next to one still is.
 type ReplyParseError struct {
 	// Err says what was wrong with the reply. Its message can quote
 	// model-written JSON keys, sanitized the same way as Excerpt.
