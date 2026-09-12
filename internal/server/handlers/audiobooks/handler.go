@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-09-11
 
