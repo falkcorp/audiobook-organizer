@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package registry_test
 
@@ -212,6 +212,14 @@ func (f *fakeStore) SetOperationV2StatusIfQueued(id, newStatus string) (bool, er
 		return false, nil
 	}
 	op.Status = newStatus
+	// Mirror PebbleStore.SetOperationV2StatusIfQueued: this writer takes no
+	// completedAt argument, so the real store stamps a terminal status itself.
+	// Without this a registry test of the queued-cancel path would assert the
+	// fake's gap rather than the store's behaviour.
+	if database.IsTerminalV2Status(newStatus) && op.CompletedAt == nil {
+		now := time.Now().UTC()
+		op.CompletedAt = &now
+	}
 	f.ops[id] = op
 	return true, nil
 }
