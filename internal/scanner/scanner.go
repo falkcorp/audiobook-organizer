@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.89.0
+// version: 1.90.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -2137,6 +2137,10 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 				segmentFiles = append(segmentFiles, filepath.Join(scanDir, entry.Name()))
 			}
 		}
+		// os.ReadDir is alphabetical ("Chapter 10" before "Chapter 2"). This
+		// list IS the positional order a book falls back to when its tag
+		// numbers are refused, so put it in natural order.
+		slices.SortFunc(segmentFiles, util.CompareNatural)
 	}
 
 	bfs := make([]*database.BookFile, 0, len(segmentFiles))
@@ -2580,11 +2584,21 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 	var books []Book
 	for _, albumFiles := range albumGroups {
 		if len(albumFiles) > 1 {
-			// Multi-file book: use first file as FilePath, store all files for segment creation
+			// Multi-file book: use first file as FilePath, store all files for
+			// segment creation. The files arrive in os.ReadDir (alphabetical)
+			// order, and SegmentFiles is the positional order the book falls
+			// back to when its tag numbers are refused, so the segments are put
+			// in natural order ("Chapter 2" before "Chapter 10"). FilePath is
+			// deliberately still albumFiles[0] as before: it is the book's
+			// lookup key until createBookFilesForBook normalizes it to the
+			// directory, and changing which file it names would stop a rescan
+			// from finding a row that was never normalized.
+			segs := slices.Clone(albumFiles)
+			slices.SortFunc(segs, util.CompareNatural)
 			books = append(books, Book{
 				FilePath:     albumFiles[0],
 				Format:       strings.ToLower(filepath.Ext(albumFiles[0])),
-				SegmentFiles: albumFiles,
+				SegmentFiles: segs,
 			})
 		} else {
 			books = append(books, Book{

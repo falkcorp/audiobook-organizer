@@ -1,17 +1,20 @@
 // file: internal/scanner/create_book_files_tag_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91ef8708-fbbd-4341-9dcd-4b994c0456c9
 // last-edited: 2026-09-12
 
 package scanner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -208,4 +211,140 @@ func TestApplyTagPositionsIfTrusted_RepeatedPath(t *testing.T) {
 			}
 		}
 	})
+}
+
+// chapterFiles returns "Chapter 1.mp3" .. "Chapter n.mp3".
+func chapterFiles(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "Chapter " + strconv.Itoa(i+1) + ".mp3"
+	}
+	return out
+}
+
+// TestCreateBookFilesForBook_RefusedBookFallsBackToNaturalOrder pins the
+// positional fallback on the directory-read path (segmentFiles nil), where the
+// list comes from os.ReadDir and is therefore alphabetical: Chapter 1, 10, 11,
+// 12, 2, ... With one tag read failing the whole book is refused, and the
+// positional numbers must still follow the chapter numbers, not the
+// alphabet. With every tag readable the tag numbers are taken as before.
+func TestCreateBookFilesForBook_RefusedBookFallsBackToNaturalOrder(t *testing.T) {
+	oldExts := config.AppConfig.SupportedExtensions
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	defer func() { config.AppConfig.SupportedExtensions = oldExts }()
+
+	for _, tc := range []struct {
+		name       string
+		unreadable string
+	}{
+		{name: "one unreadable file refuses and keeps numeric order", unreadable: "Chapter 5.mp3"},
+		{name: "all readable takes the tag tracks"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, cleanup := setupPebbleStore(t)
+			defer cleanup()
+			SetStore(store)
+			defer SetStore(nil)
+
+			names := chapterFiles(12)
+			tags := make(map[string]metadata.Metadata, len(names))
+			for i, n := range names {
+				if n != tc.unreadable {
+					tags[n] = tagAt(i+1, 12, 0, 0)
+				}
+			}
+			metadata.SetMetadataExtractor(tagGuardExtractor(tags))
+			defer metadata.SetMetadataExtractor(nil)
+
+			dir := t.TempDir()
+			for _, n := range names {
+				if err := os.WriteFile(filepath.Join(dir, n), []byte("audio "+n), 0o644); err != nil {
+					t.Fatalf("write fixture: %v", err)
+				}
+			}
+			book, err := store.CreateBook(&database.Book{FilePath: dir, Title: "Chapters"})
+			if err != nil {
+				t.Fatalf("CreateBook: %v", err)
+			}
+
+			createBookFilesForBook(dir, nil, logger.New("test"), normalizeToDirectory)
+
+			rows, err := store.GetBookFiles(book.ID)
+			if err != nil {
+				t.Fatalf("GetBookFiles: %v", err)
+			}
+			if len(rows) != 12 {
+				t.Fatalf("got %d rows, want 12", len(rows))
+			}
+			for _, r := range rows {
+				name := filepath.Base(r.FilePath)
+				n, _ := strconv.Atoi(name[len("Chapter ") : len(name)-len(".mp3")])
+				if r.TrackNumber != n {
+					t.Errorf("%s: TrackNumber %d, want %d", name, r.TrackNumber, n)
+				}
+			}
+		})
+	}
+}
+
+// id3AlbumFile is the bytes of a file carrying only an ID3v2.3 TALB frame,
+// enough for tag.ReadFrom (quickReadAlbum) to see the album.
+func id3AlbumFile(album string) []byte {
+	body := append([]byte{0}, album...) // ISO-8859-1 text
+	frame := append([]byte("TALB"), byte(len(body)>>24), byte(len(body)>>16), byte(len(body)>>8), byte(len(body)), 0, 0)
+	frame = append(frame, body...)
+	n := len(frame)
+	hdr := []byte{'I', 'D', '3', 3, 0, 0, byte(n >> 21 & 0x7f), byte(n >> 14 & 0x7f), byte(n >> 7 & 0x7f), byte(n & 0x7f)}
+	return append(append(hdr, frame...), make([]byte, 64)...)
+}
+
+// TestGroupFilesIntoBooks_AlbumGroupSegmentsInNaturalOrder pins the album-tag
+// grouping path: 8 of 12 chapter files (Chapter 5..12) share an album tag,
+// which is below the multi-file detector's shared-album threshold, so the book
+// comes from the album group, whose files arrive alphabetically: 10, 11, 12,
+// 5, ... 9. Its SegmentFiles is the positional fallback order and must be
+// numeric; FilePath stays the first file in arrival order (Chapter 10), as
+// before, because it is the book's lookup key.
+func TestGroupFilesIntoBooks_AlbumGroupSegmentsInNaturalOrder(t *testing.T) {
+	dir := t.TempDir()
+	names := chapterFiles(12)
+	tagged := map[string]bool{}
+	for i, n := range names {
+		content := []byte("untagged " + n)
+		if i >= 4 { // Chapter 5..12 carry the album tag
+			content = id3AlbumFile("The Book")
+			tagged[n] = true
+		}
+		if err := os.WriteFile(filepath.Join(dir, n), content, 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	// Alphabetical, as os.ReadDir hands them to the scan walk.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	files := make([]string, 0, len(entries))
+	for _, e := range entries {
+		files = append(files, filepath.Join(dir, e.Name()))
+	}
+
+	var album *Book
+	books := groupFilesIntoBooks(context.Background(), files)
+	for i := range books {
+		if len(books[i].SegmentFiles) == 8 {
+			album = &books[i]
+		}
+	}
+	if album == nil {
+		t.Fatalf("no 8-file album-group book; got %d books: %+v", len(books), books)
+	}
+	for i, p := range album.SegmentFiles {
+		if want := "Chapter " + strconv.Itoa(i+5) + ".mp3"; filepath.Base(p) != want {
+			t.Fatalf("SegmentFiles[%d] = %s, want %s (full order %v)", i, filepath.Base(p), want, album.SegmentFiles)
+		}
+	}
+	if want := filepath.Join(dir, "Chapter 10.mp3"); album.FilePath != want {
+		t.Errorf("FilePath = %s, want %s (first file in arrival order)", album.FilePath, want)
+	}
 }
