@@ -24,3 +24,9 @@ operation id refuses. The apply also refuses while a library scan is queued or
 running, and holds the scan stand-down while it writes. A failed path lookup now
 skips the group instead of creating a second row for the same path. Dry run is
 still the default.
+
+An apply can be undone from the Activity Log. The revert clears each shell's
+deletion mark, moves every reassigned book_file row back to its original book
+with its old track number, and restores the survivor's title and path. Two kinds
+of change are reported as not undoable: book_file rows the apply created (undoing
+them would mean deleting a row), and the move of external ids onto the survivor.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-12
 
@@ -62,6 +62,7 @@ import (
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -78,16 +79,20 @@ const (
 // fsCategoryOrder is the order categories are reported in.
 var fsCategoryOrder = []string{fsCatFragments, fsCatDuplicates, fsCatLayout, fsCatMixed, fsCatProtected, fsCatOverlap}
 
-// Ledger change types this op writes besides metadata_update. They are
-// record-only, like the book_delete / author_delete rows other ops journal:
-// undo.NotRestorableLabel counts them as not restorable, so the Activity Log
-// revert reports them rather than guessing. A soft-deleted shell is restored
-// by clearing marked_for_deletion; a reassigned row by moving it back to the
-// OldValue book.
+// Ledger change types this op writes besides metadata_update (title). The
+// Activity Log revert (audiobooks.RevertService) reverses the reassign, track,
+// path and soft-delete rows: it moves a row back to the OldValue book, restores
+// a track number or path, and clears a shell's deletion mark. The two marked
+// record-only are reported as not undoable instead: undoing a created row
+// would delete it, and the external-id row does not say which ids moved. See
+// the constants' docs in internal/undo.
 const (
-	fsChangeFileReassign = "book_file_reassign"
-	fsChangeFileCreate   = "book_file_create"
-	fsChangeSoftDelete   = "book_soft_delete"
+	fsChangeFileReassign = undo.ChangeTypeBookFileReassign
+	fsChangeFileTrack    = undo.ChangeTypeBookFileTrack
+	fsChangeFileCreate   = undo.ChangeTypeBookFileCreate // record-only
+	fsChangePathUpdate   = undo.ChangeTypeBookPathUpdate
+	fsChangeSoftDelete   = undo.ChangeTypeBookSoftDelete
+	fsChangeExtIDs       = undo.ChangeTypeExternalIDReassign // record-only
 )
 
 // fsLayoutApplyRefusal is returned when an apply asks for the layout category.
@@ -944,11 +949,14 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 		for i := range rows {
 			f := &rows[i]
 			if n, ok := track[f.FilePath]; ok && f.TrackNumber != n {
+				old := f.TrackNumber
 				f.TrackNumber = n
 				if err := a.store.UpdateBookFile(f.ID, f); err != nil {
 					a.errs.Add(1)
 					a.log(slog.LevelWarn, "fragments %q: set track %d on %s: %v", g.BookFolder, n, f.ID, err)
+					continue
 				}
+				a.journal(g.SurvivorID, fsChangeFileTrack, "book_file:"+f.ID, strconv.Itoa(old), strconv.Itoa(n))
 			}
 		}
 	}
@@ -983,6 +991,8 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 				// The ids stay on the soft-deleted shell, which is recoverable.
 				a.errs.Add(1)
 				a.log(slog.LevelWarn, "fragments %q: reassign external ids %s → %s: %v", g.BookFolder, m.ID, g.SurvivorID, rerr)
+			} else {
+				a.journal(m.ID, fsChangeExtIDs, "external_ids", m.ID, g.SurvivorID)
 			}
 		}
 	}
@@ -1030,7 +1040,7 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		a.journal(b.ID, "metadata_update", "title", oldTitle, b.Title)
 	}
 	if b.FilePath != oldPath {
-		a.journal(b.ID, "metadata_update", "file_path", oldPath, b.FilePath)
+		a.journal(b.ID, fsChangePathUpdate, "file_path", oldPath, b.FilePath)
 	}
 }
 

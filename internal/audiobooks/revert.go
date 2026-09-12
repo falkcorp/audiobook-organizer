@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -47,6 +48,12 @@ type revertServiceStore interface {
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
 	GetAllImportPaths() ([]database.ImportPath, error)
+
+	// Needed by the maintenance.fs-regroup-xml reversals: a reassigned
+	// book_file row moves back, and a track number is restored in place.
+	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
 }
 
 // RevertService handles reverting operations by undoing recorded changes.
@@ -247,6 +254,14 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertTagWrite(c)
 	case undo.ChangeTypeSeriesRename:
 		return rs.revertSeriesRename(c)
+	case undo.ChangeTypeBookFileReassign:
+		return rs.revertBookFileReassign(c)
+	case undo.ChangeTypeBookFileTrack:
+		return rs.revertBookFileTrack(c)
+	case undo.ChangeTypeBookPathUpdate:
+		return rs.revertBookPathUpdate(c)
+	case undo.ChangeTypeBookSoftDelete:
+		return rs.revertBookSoftDelete(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -290,6 +305,87 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 		return fmt.Errorf("failed to update book path: %w", err)
 	}
 
+	return nil
+}
+
+// revertBookFileReassign moves one book_file row from the book it was moved
+// onto (BookID) back to the book it came from (OldValue). The store refuses the
+// move when the row is no longer under BookID, so a row something else has
+// moved since fails the change instead of being taken from its new owner.
+// Nothing is deleted either way.
+func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) error {
+	fileID, ok := undo.BookFileIDFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no book_file id in field %q", c.FieldName)
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	if _, err := rs.loadBook(c.OldValue); err != nil {
+		return err
+	}
+	if err := rs.db.MoveBookFilesToBook([]string{fileID}, c.BookID, c.OldValue); err != nil {
+		return fmt.Errorf("move book_file %s from %s back to %s: %w", fileID, c.BookID, c.OldValue, err)
+	}
+	return nil
+}
+
+// revertBookFileTrack puts a book_file row's track number back. The ledger is
+// reversed newest first, so this runs while the row is still on BookID, before
+// its book_file_reassign row moves it back.
+func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error {
+	fileID, ok := undo.BookFileIDFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no book_file id in field %q", c.FieldName)
+	}
+	old, err := strconv.Atoi(c.OldValue)
+	if err != nil {
+		return fmt.Errorf("track %q is not a number: %w", c.OldValue, err)
+	}
+	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil {
+		return fmt.Errorf("read book_file %s of %s: %w", fileID, c.BookID, err)
+	}
+	if f == nil {
+		return fmt.Errorf("book_file %s is no longer on book %s", fileID, c.BookID)
+	}
+	f.TrackNumber = old
+	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
+		return fmt.Errorf("restore track of book_file %s: %w", fileID, err)
+	}
+	return nil
+}
+
+// revertBookPathUpdate restores a book's file_path that was changed with
+// nothing moved on disk (unlike file_move, which moves the file back too).
+func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error {
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
+		return err
+	}
+	book.FilePath = c.OldValue
+	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
+		return fmt.Errorf("restore path of book %s: %w", book.ID, err)
+	}
+	return nil
+}
+
+// revertBookSoftDelete clears a book's deletion mark. A book purged since is
+// refused by loadBook; one already restored is left as it is.
+func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error {
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
+		return err
+	}
+	if !book.IsSoftDeleted() {
+		return nil
+	}
+	notMarked := false
+	book.MarkedForDeletion = &notMarked
+	book.MarkedForDeletionAt = nil
+	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
+		return fmt.Errorf("clear deletion mark on book %s: %w", book.ID, err)
+	}
 	return nil
 }
 

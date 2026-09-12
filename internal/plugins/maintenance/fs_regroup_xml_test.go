@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-09-12
 
@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -245,8 +246,12 @@ func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 	if led[fsChangeFileReassign]+led[fsChangeFileCreate] != 2 || res.RowsMoved+res.RowsCreated != 2 {
 		t.Errorf("reassign+create rows = %d+%d (res %s), want 2 total", led[fsChangeFileReassign], led[fsChangeFileCreate], res)
 	}
-	if led["metadata_update"] != 2 {
-		t.Errorf("metadata_update rows = %d, want 2 (title, file_path)", led["metadata_update"])
+	if led["metadata_update"] != 1 || led[fsChangePathUpdate] != 1 {
+		t.Errorf("metadata_update/book_path_update rows = %d/%d, want 1/1 (title, path)",
+			led["metadata_update"], led[fsChangePathUpdate])
+	}
+	if led[fsChangeExtIDs] != 1 {
+		t.Errorf("external_id_reassign rows = %d, want 1 (PID-X)", led[fsChangeExtIDs])
 	}
 }
 
@@ -479,5 +484,76 @@ func TestFsRegroupApply_LookupErrorSkipsGroupAndOpIDRequired(t *testing.T) {
 	}
 	if after := fsRowCount(t, s); after != before {
 		t.Errorf("rows %d → %d", before, after)
+	}
+}
+
+// Undo: reverting the apply's operation through the Activity Log revert engine
+// clears every shell's deletion mark, moves each reassigned row back to the
+// book it came from with its old track number, and restores the survivor's
+// title and path. No row is deleted either way.
+func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
+	s := regroupStore(t)
+	var ids []string
+	for i := 1; i <= 3; i++ {
+		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", fsFragBase, i, 3)
+		id := fsSeedBook(t, s, "", p)
+		fsSeedRow(t, s, id, p)
+		ids = append(ids, id)
+	}
+	owner := map[string]string{} // row id -> its book before the apply
+	track := map[string]int{}
+	for _, id := range ids {
+		rows, err := s.GetBookFiles(id)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("seed rows of %s = %d (err=%v), want 1", id, len(rows), err)
+		}
+		owner[rows[0].ID] = id
+		track[rows[0].ID] = rows[0].TrackNumber
+	}
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d, want 1 (plan %s)", len(frag), plan.summary())
+	}
+	survivor := frag[0].SurvivorID
+	pre, _ := s.GetBookByID(survivor)
+	preTitle, prePath := pre.Title, pre.FilePath
+
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-undo"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	led := fsLedgerTypes(t, s, "op-undo")
+	if led[fsChangeFileReassign] != 2 || led[fsChangeSoftDelete] != 2 || led[fsChangeFileTrack] == 0 {
+		t.Fatalf("ledger = %v, want 2 reassign, 2 soft-delete and track rows", led)
+	}
+
+	res, err := audiobooks.NewRevertService(s).RevertOperation("op-undo")
+	if err != nil {
+		t.Fatalf("revert: %v (%+v)", err, res)
+	}
+	if res.Failed != 0 || res.NotRestorable != 0 || res.Restored != res.Total {
+		t.Errorf("revert result = %+v, want every row restored", res)
+	}
+	for rowID, bookID := range owner {
+		f, err := s.GetBookFileByID(bookID, rowID)
+		if err != nil || f == nil {
+			t.Errorf("row %s is not back on %s (err=%v)", rowID, bookID, err)
+			continue
+		}
+		if f.TrackNumber != track[rowID] {
+			t.Errorf("row %s track = %d, want %d", rowID, f.TrackNumber, track[rowID])
+		}
+	}
+	for _, id := range ids {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("book %s still soft-deleted after revert", id)
+		}
+	}
+	if sb, _ := s.GetBookByID(survivor); sb.Title != preTitle || sb.FilePath != prePath {
+		t.Errorf("survivor = %q @ %q after revert, want %q @ %q", sb.Title, sb.FilePath, preTitle, prePath)
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("book_file rows %d -> %d across apply+revert", before, got)
 	}
 }
