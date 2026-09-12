@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-09-12
 
@@ -144,13 +144,21 @@ func (p *PebbleStore) GetRoleByID(id string) (*Role, error) {
 	return &r, nil
 }
 
+// roleNameIndexKey is the name-index key for a role. CreateRole writes it,
+// GetRoleByName reads it and DeleteRole removes it; all three must go through
+// this one function so they cannot disagree. Until 2026-09-12 CreateRole wrote
+// strings.ToLower(name) with no trim, so a padded name like " Editor " was
+// stored under a key the trimming lookup and delete never reached.
+//
+// NormalizeString, not NormalizeAuthor: role names are not person names, and
+// NormalizeAuthor collapses internal whitespace since 2026-09-12. Role keys
+// keep plain trim+lowercase.
+func roleNameIndexKey(name string) string {
+	return "idx:role:name:" + util.NormalizeString(name)
+}
+
 func (p *PebbleStore) GetRoleByName(name string) (*Role, error) {
-	// NormalizeString, not NormalizeAuthor: role names are not person names,
-	// and NormalizeAuthor collapses internal whitespace since 2026-09-12 while
-	// CreateRole's writer (strings.ToLower) does not. NormalizeString is the
-	// exact trim+lowercase this lookup has always used.
-	lower := util.NormalizeString(name)
-	v, closer, err := p.db.Get([]byte("idx:role:name:" + lower))
+	v, closer, err := p.db.Get([]byte(roleNameIndexKey(name)))
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -183,7 +191,9 @@ func (p *PebbleStore) ListRoles() ([]Role, error) {
 }
 
 func (p *PebbleStore) CreateRole(role *Role) (*Role, error) {
-	if role == nil || role.Name == "" {
+	// A whitespace-only name normalizes to "" and would claim the bare
+	// "idx:role:name:" key, so it is rejected like an empty one.
+	if role == nil || util.NormalizeString(role.Name) == "" {
 		return nil, fmt.Errorf("role name required")
 	}
 	if role.ID == "" {
@@ -194,13 +204,15 @@ func (p *PebbleStore) CreateRole(role *Role) (*Role, error) {
 		}
 		role.ID = id
 	}
-	// Uniqueness check on name.
-	lower := strings.ToLower(role.Name)
-	if existing, closer, err := p.db.Get([]byte("idx:role:name:" + lower)); err == nil {
-		closer.Close()
-		if string(existing) != role.ID {
-			return nil, fmt.Errorf("role name already exists")
-		}
+	// Uniqueness check on name. A read error fails closed: treating it as
+	// "no such key" would let a second role claim the same name.
+	nameKey := []byte(roleNameIndexKey(role.Name))
+	existing, err := p.getValueCopy(nameKey)
+	if err != nil {
+		return nil, fmt.Errorf("role name uniqueness check: %w", err)
+	}
+	if existing != nil && string(existing) != role.ID {
+		return nil, fmt.Errorf("role name already exists")
 	}
 	now := time.Now()
 	if role.CreatedAt.IsZero() {
@@ -219,7 +231,7 @@ func (p *PebbleStore) CreateRole(role *Role) (*Role, error) {
 		b.Close()
 		return nil, err
 	}
-	if err := b.Set([]byte("idx:role:name:"+lower), []byte(role.ID), nil); err != nil {
+	if err := b.Set(nameKey, []byte(role.ID), nil); err != nil {
 		b.Close()
 		return nil, err
 	}
@@ -253,14 +265,25 @@ func (p *PebbleStore) DeleteRole(id string) error {
 	if r.IsSeed {
 		return fmt.Errorf("cannot delete seed role %q", r.Name)
 	}
+	// Remove the name-index entry only if it points at this role. A row
+	// written before 2026-09-12 with a padded name (" Editor ") sits under an
+	// untrimmed key, and its normalized key ("editor") may belong to a
+	// different role; deleting by key alone would take that role's entry.
+	nameKey := []byte(roleNameIndexKey(r.Name))
+	owner, err := p.getValueCopy(nameKey)
+	if err != nil {
+		return err
+	}
 	b := p.db.NewBatch()
 	if err := b.Delete([]byte("role:"+id), nil); err != nil {
 		b.Close()
 		return err
 	}
-	if err := b.Delete([]byte("idx:role:name:"+util.NormalizeString(r.Name)), nil); err != nil {
-		b.Close()
-		return err
+	if owner != nil && string(owner) == id {
+		if err := b.Delete(nameKey, nil); err != nil {
+			b.Close()
+			return err
+		}
 	}
 	return b.Commit(pebble.Sync)
 }
