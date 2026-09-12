@@ -1,0 +1,5 @@
+### Fixed
+
+- Applying metadata to two versions of the same protected (iTunes or import) book at once no longer creates two library copies in one version group. Making a library copy now takes a short lock on the version group: the job re-reads the book under that lock, and uses a copy that another job has just made instead of making a second one.
+- Each file step of an apply now writes the library copy its job locked. Before, each step looked up the copy again. If a sibling became the copy in between, the step could write files this job had not locked. That case is now an error, and nothing is written.
+- Metadata write-back (bulk write-back, batch save and the write-back button) and the "Save to Files" rename now lock in the same order as an apply: the book first, then its library copy, then the files they write. Before, they made library copies with no lock, and the bulk write-back and batch save held a file-path lock around them. With the book lock added, that order would have deadlocked against an apply of the same book.

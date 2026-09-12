@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -497,10 +497,30 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 // a caller that forgets to run it (three of the four do) gets Description,
 // Genre and MetadataReviewStatus on the new copy rather than the narrower
 // field set CreateOrganizedVersion clones.
+//
+// VERSION-GROUP LOCK. The re-check-and-create runs under the book's version
+// group lock (lockVersionGroup, vgLockKey), and under it the book is re-read
+// and its copy looked up again: a copy another job made while this one waited
+// is returned, not made twice. Two applies on different versions of one book
+// hold different book locks, so until 2026-09-12 both could find no copy and
+// both make one, leaving two library copies in one version group. The lock is
+// taken only AFTER the unlocked fast path below and released before this
+// returns; see lockBook for why that placement is what keeps the lock order
+// acyclic. It is the only place the vg lock is taken.
 func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	if target, ok := mfs.existingLibraryCopy(book); ok {
 		return target
 	}
+	fresh, release, err := mfs.lockVersionGroup(book)
+	if err != nil {
+		slog.Warn("library copy: not made", "id", logger.SanitizeLogValue(book.ID), "error", logger.SanitizeLogValue(err.Error()))
+		return nil
+	}
+	defer release()
+	if target, ok := mfs.existingLibraryCopy(fresh); ok {
+		return target
+	}
+	book = fresh
 	if mfs.libraryCopyMaker != nil {
 		return mfs.libraryCopyMaker(book)
 	}
@@ -1068,16 +1088,6 @@ func (mfs *Service) firstProtectedFileRow(bookID string) string {
 		}
 	}
 	return ""
-}
-
-// libraryCopyFor is ensureLibraryCopy under a copy policy: createLibraryCopy
-// may create one, existingCopyOnly never does and returns nil instead.
-func (mfs *Service) libraryCopyFor(book *database.Book, policy copyPolicy) *database.Book {
-	if policy == existingCopyOnly {
-		target, _ := mfs.existingLibraryCopy(book)
-		return target
-	}
-	return mfs.ensureLibraryCopy(book)
 }
 
 // autoFetchHasLibraryCopy reports whether auto-fetch may do file work for

@@ -1,7 +1,7 @@
 // file: internal/metafetch/ensure_library_copy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f0c81ad-9b2e-4f37-8a51-c4d739e0b182
-// last-edited: 2026-08-16
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -72,6 +72,8 @@ func TestEnsureLibraryCopy_EmptyOrganizeIsNotSuccess(t *testing.T) {
 		FilePath: bookDir,
 		Author:   &database.Author{Name: "Ghost Author"},
 	}
+	// ensureLibraryCopy re-reads the book under its version-group lock.
+	mock.GetBookByIDFunc = func(string) (*database.Book, error) { b := *book; return &b, nil }
 	require.True(t, svc.isProtectedPath(book.FilePath),
 		"test precondition: the book must be on a protected path or ensureLibraryCopy returns early")
 

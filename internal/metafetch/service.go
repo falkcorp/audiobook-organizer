@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.20.0
+// version: 5.21.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-12
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -358,7 +359,12 @@ type SearchOptions struct {
 // Always overwrites existing cover art. Before overwriting, extracts the old
 // cover and saves it as a timestamped version in covers/history/ so it can be
 // restored later via the changelog.
-func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string, policy copyPolicy) {
+//
+// book is the file-work target its caller resolved and locked (fileWorkTarget:
+// the library copy, for a protected book). It used to resolve the copy again
+// here, under a copy policy, which is how a step could write a copy its job
+// had not locked; now it only refuses a protected book outright.
+func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string) {
 	if book == nil || book.FilePath == "" || coverPath == "" {
 		return
 	}
@@ -371,16 +377,10 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string,
 		".ogg": true, ".flac": true,
 	}
 
-	// If book is in a protected path, get or create a library copy. Same
-	// resolution the path-lock key uses (fileWorkTarget).
-	if target := mfs.fileWorkTarget(book, policy); target != book {
-		if target == nil {
-			slog.Warn("cannot embed cover: protected book has no library copy",
-				"book_id", book.ID, "book_title", book.Title,
-				"protected_path", book.FilePath)
-			return
-		}
-		book = target
+	if mfs.isProtectedPath(book.FilePath) {
+		slog.Warn("cannot embed cover: book is under a protected path; embeds go to its library copy",
+			"book_id", logger.SanitizeLogValue(book.ID), "protected_path", logger.SanitizeLogValue(book.FilePath))
+		return
 	}
 
 	// collectFiles gathers all audio files that need cover embedding
@@ -632,17 +632,45 @@ func virtualBookFiles(id string, book *database.Book) []database.BookFile {
 }
 
 // RunApplyPipelineRenameOnly runs only the rename portion of the apply pipeline.
-// Used by the "Save to Files" button to rename files without re-writing tags (tags are written separately).
-func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) error {
-	// If the book is in a protected path, run on library copy
-	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.ensureLibraryCopy(book)
-		if libCopy == nil {
-			return fmt.Errorf("no library copy for protected book %s", id)
-		}
-		id = libCopy.ID
-		book = libCopy
+// Used by the "Save to Files" button and the bulk write-back to rename files
+// without re-writing tags (tags are written separately).
+//
+// It takes the apply file work's locks, in the same order (see lockBook): the
+// book's own lock; its library copy's, through lockLibraryCopy, which makes a
+// protected book's copy under the version-group lock; then the path lock on
+// the files it renames. Until 2026-09-12 it took none and made the copy with
+// no lock, so it could make a second copy alongside an apply of another
+// version, or rename files an apply of the same book was writing. A caller
+// must not hold any key from the same lock table around it.
+//
+// The caller's book is not used: it was read before these locks, and a job
+// that held them may have moved the files since. The book is re-read under
+// them instead.
+func (mfs *Service) RunApplyPipelineRenameOnly(id string, _ *database.Book) error {
+	releaseBook := mfs.lockBook(id)
+	defer releaseBook()
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	if err != nil {
+		return err
 	}
+	defer releaseCopy()
+	book, err := mfs.db.GetBookByID(id)
+	if err != nil {
+		return fmt.Errorf("rename files: load book %s: %w", id, err)
+	}
+	if book == nil {
+		return fmt.Errorf("rename files: book %s not found", id)
+	}
+	target, err := mfs.fileWorkTarget(book, targetID)
+	if err != nil {
+		return fmt.Errorf("rename files: %w", err)
+	}
+	if target == nil {
+		return fmt.Errorf("no library copy for protected book %s", id)
+	}
+	id, book = target.ID, target
+	release := mfs.lockPath(book.FilePath)
+	defer release()
 
 	bookFiles, err := mfs.db.GetBookFiles(id)
 	if err != nil {

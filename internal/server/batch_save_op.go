@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-12
 //
@@ -188,17 +188,18 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// or move the same file at once — see internal/server/path_locks.go
 				// for the three ways two book IDs collapse onto one path.
 				//
-				// RESIDUAL GAP, stated rather than hidden: for a book in a protected
-				// path, WriteBackMetadataForBook redirects internally to a library
-				// copy (internal/metafetch/service_writeback.go:681-691) whose path
-				// is not visible from this package. Two protected books sharing one
-				// library copy therefore remain unserialized here. Unlike
-				// runBulkWriteBack, this op has no protected-path skip, so the gap is
-				// real; closing it needs an exported resolver in internal/metafetch.
-				release := writeBackPathLocks.lock(book.FilePath)
+				// WriteBackMetadataForBook takes that lock itself: the book's lock,
+				// its library copy's, then the path lock on the files it writes --
+				// the library copy's, for a protected book -- from
+				// writeBackPathLocks, which metafetch shares through SetPathLocker.
+				// Until 2026-09-12 it was called under a path lock taken here on
+				// the ORIGINAL's path. That left two protected books sharing one
+				// library copy unserialized (this op has no protected-path skip),
+				// and with the book lock now inside the call it would be
+				// path-then-book, the reverse of every apply's order: a deadlock
+				// against an apply of the same book.
 				_, wbErr := s.metadataFetchService.WriteBackMetadataForBook(id)
 				if wbErr != nil {
-					release()
 					failed.Add(1)
 					detail := wbErr.Error()
 					_ = progress.Log("warn", fmt.Sprintf("write-back failed for %s", book.Title), &detail)
@@ -208,17 +209,21 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// Stamp last_written_at on the book the user sees (may differ from library copy)
 				_ = store.SetLastWrittenAt(id, time.Now())
 
-				// Organize. Still under the same path lock: organizing MOVES the file,
-				// so releasing between the write and the move would reopen the race.
+				// Organize under the path lock: organizing MOVES the file, so it
+				// must not run alongside another worker's write to it. Taken once
+				// the write-back has returned and released its own locks from the
+				// same table, which is not reentrant. A write by another worker
+				// between the two runs before the move, never during it.
 				if p.Organize {
+					release := writeBackPathLocks.lock(book.FilePath)
 					if organizedOne, orgErr := s.organizeAfterWriteBack(id, opsregistry.ReporterOpID(reporter), log2); orgErr != nil {
 						detail := orgErr.Error()
 						_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
 					} else if organizedOne {
 						organized.Add(1)
 					}
+					release()
 				}
-				release()
 
 				// Enqueue ITL write-back
 				if s.writeBackBatcher != nil {

@@ -1,7 +1,7 @@
 // file: internal/server/path_locks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e2a9c14-7d3b-4f58-9a01-2c8b4d5e6f70
-// last-edited: 2026-08-27
+// last-edited: 2026-09-12
 
 package server
 
@@ -22,8 +22,12 @@ import (
 //     resolve to the same underlying file(s), so writing both at once means two
 //     TagLib writers on one file.
 //  2. Protected-path redirect. internal/metafetch's WriteBackMetadataForBook
-//     (service_writeback.go:681-691) redirects a book in a protected path to its
-//     library copy, so two DISTINCT book IDs can collapse onto one destination.
+//     redirects a book in a protected path to its library copy, so two
+//     DISTINCT book IDs can collapse onto one destination. metafetch takes the
+//     path lock itself, on the resolved copy's path, from this same table
+//     (SetPathLocker, wired in server.go), after its book and library-copy
+//     locks. Callers must not hold a key from this table around it -- see
+//     metafetch's lockBook for the lock order.
 //  3. Backup-filename collision. The copy-on-write backup name is
 //     filePath + ".bak-" + time.Now().Format("20060102-150405")
 //     (internal/metafetch/service_files.go:65) — ONE-SECOND granularity. Two

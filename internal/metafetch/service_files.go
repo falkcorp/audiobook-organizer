@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.13.1
+// version: 1.14.1
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -101,45 +101,76 @@ type tagWriteResult struct {
 	err error
 }
 
-// writeTags is the one tag write every apply path goes through. tagWriter is
-// a test seam that counts it; nil in production.
-func (mfs *Service) writeTags(id string, policy copyPolicy) (int, error) {
+// writeTags is the one tag write every apply path goes through, on the files
+// of targetID: the book the job locked (lockLibraryCopy). tagWriter is a test
+// seam that counts it; nil in production.
+func (mfs *Service) writeTags(id, targetID string) (int, error) {
 	if mfs.tagWriter != nil {
 		return mfs.tagWriter(id)
 	}
-	return mfs.writeBackForBook(id, nil, policy)
+	return mfs.writeBackForBook(id, nil, targetID)
 }
 
-// copyPolicy says whether file work may create a library copy for a book that
-// lives under a protected (iTunes/import) path.
+// copyPolicy says whether lockLibraryCopy may create a library copy for a book
+// that lives under a protected (iTunes/import) path. It is read ONLY there. The
+// file steps after it take the target it locked (fileWorkTarget) and never
+// create or pick a copy of their own.
 type copyPolicy bool
 
 const (
-	// createLibraryCopy: user-initiated applies. A protected book gets a
-	// library copy made if it has none, and the file work runs on the copy.
+	// createLibraryCopy: user-initiated applies and write-backs. A protected
+	// book gets a library copy made if it has none, and the file work runs on
+	// the copy.
 	createLibraryCopy copyPolicy = true
-	// existingCopyOnly: auto-fetch, and every apply file step after
-	// lockLibraryCopy (which made any copy the job needs). File work runs on a
-	// library copy that already exists, and is skipped when there is none.
+	// existingCopyOnly: auto-fetch, and an apply that writes no audio files.
+	// File work runs on a library copy that already exists, and is skipped
+	// when there is none.
 	existingCopyOnly copyPolicy = false
 )
 
-// fileWorkTarget is the book whose audio files the file work writes: book
-// itself, or -- for a book under a protected (iTunes/import) path -- its
-// library copy, created under createLibraryCopy and only looked up under
-// existingCopyOnly. Nil means a protected book with no copy: nothing may be
-// written.
+// errFileTargetChanged means a file step resolved a different book than the
+// one its job locked.
+var errFileTargetChanged = errors.New("the book's library copy changed after its file work locked one")
+
+// fileWorkTarget is the book whose audio files a file step writes: book itself,
+// or -- for a book under a protected (iTunes/import) path -- its library copy.
+// Nil means a protected book with no copy: nothing may be written.
 //
-// It is the ONE resolution both the writers (embed, rename pipeline) and the
-// path-lock key use. Until 2026-09-12 they disagreed: auto-fetch locked the
-// original book's path while runApplyPipeline wrote the library copy's, so the
-// lock guarded a path nothing wrote and a manual apply of the copy ran
-// alongside it.
-func (mfs *Service) fileWorkTarget(book *database.Book, policy copyPolicy) *database.Book {
-	if book == nil || !mfs.isProtectedPath(book.FilePath) {
-		return book
+// targetID is what the job locked: lockLibraryCopy's result, "" when it locked
+// no copy. The step's own resolution must agree with it; when it does not, the
+// result is errFileTargetChanged and nothing is written. Until 2026-09-12 each
+// step resolved the copy again on its own, so a version sibling that became a
+// library copy between the lock step and a file step was written by a job that
+// did not hold its lock. The resolution is still made, rather than the locked
+// row being re-read by id, because a rename earlier in the job moves the files
+// and the fresh row is the one carrying the post-rename path.
+//
+// It never creates a copy. It is the ONE resolution both the writers (embed,
+// rename pipeline, tag write) and the path-lock key use: before 2026-09-12
+// auto-fetch locked the original book's path while runApplyPipeline wrote the
+// library copy's, so the lock guarded a path nothing wrote.
+func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*database.Book, error) {
+	if book == nil {
+		return nil, nil
 	}
-	return mfs.libraryCopyFor(book, policy)
+	resolved, _ := mfs.existingLibraryCopy(book)
+	resolvedID := ""
+	if resolved != nil {
+		resolvedID = resolved.ID
+	}
+	if resolvedID != targetID {
+		return nil, fmt.Errorf("book %s: its file work locked %s but the book now resolves to %s, so nothing was written: %w",
+			book.ID, describeFileTarget(targetID), describeFileTarget(resolvedID), errFileTargetChanged)
+	}
+	return resolved, nil
+}
+
+// describeFileTarget names a file-work target in an error.
+func describeFileTarget(id string) string {
+	if id == "" {
+		return "no library copy"
+	}
+	return "book " + id
 }
 
 // lockPath takes the server's per-path write lock (SetPathLocker) and returns
@@ -152,45 +183,126 @@ func (mfs *Service) lockPath(path string) func() {
 }
 
 // lockWriteTarget re-reads book id, resolves the files the next write touches
-// (fileWorkTarget) and locks THAT path. The re-read matters: a rename earlier
-// in the same file work moves the files, and a lock on the pre-rename path
-// guards nothing.
-func (mfs *Service) lockWriteTarget(id string, policy copyPolicy) func() {
+// (fileWorkTarget, checked against targetID, the book the job locked) and
+// locks THAT path. The re-read matters: a rename earlier in the same file work
+// moves the files, and a lock on the pre-rename path guards nothing. A
+// resolution that disagrees with targetID is an error, and the caller must not
+// write. The release is never nil.
+func (mfs *Service) lockWriteTarget(id, targetID string) (func(), error) {
+	noop := func() {}
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
-		return func() {}
+		// The write re-reads the book and reports this itself.
+		return noop, nil
 	}
-	target := mfs.fileWorkTarget(book, policy)
+	target, err := mfs.fileWorkTarget(book, targetID)
+	if err != nil {
+		return noop, err
+	}
 	if target == nil {
-		return func() {}
+		return noop, nil
 	}
-	return mfs.lockPath(target.FilePath)
+	return mfs.lockPath(target.FilePath), nil
 }
 
 // bookLockKey is the lock-table key for one book's whole file-work sequence.
 // Path keys are absolute paths, so the "book:" prefix cannot collide with one.
 func bookLockKey(id string) string { return "book:" + id }
 
+// vgLockKey is the lock-table key ensureLibraryCopy holds around the
+// re-check-and-create of a library copy. It names the book's version group:
+// a library copy is found through the group (librarySibling), and every
+// version of one book shares it, so two versions that are linked always take
+// the same key. A book with no group yet is keyed by its own id, as
+// "vg:book:<id>" (never "book:<id>", which is lockBook's key). Such a book has
+// no version sibling, so no other book's job can find or make a copy for it,
+// and its own jobs are serialized by its book lock. CreateOrganizedVersion
+// gives it a fresh group, and from then on it keys by that group.
+func vgLockKey(book *database.Book) string {
+	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
+		return "vg:" + *book.VersionGroupID
+	}
+	return "vg:book:" + book.ID
+}
+
+// lockVersionGroup takes book's version-group lock (vgLockKey) and returns the
+// book re-read under it, with the release (never nil). The key comes from a
+// row read before blocking, so the re-read checks it again: a book moved to
+// another group in between would otherwise be checked under a lock its new
+// siblings do not take. On a changed key the lock is swapped and the check
+// repeated, a bounded number of times.
+func (mfs *Service) lockVersionGroup(book *database.Book) (*database.Book, func(), error) {
+	noop := func() {}
+	key := vgLockKey(book)
+	for range 3 {
+		release := noop
+		if mfs.pathLock != nil {
+			release = mfs.pathLock(key)
+		}
+		fresh, err := mfs.db.GetBookByID(book.ID)
+		if err != nil {
+			release()
+			return nil, noop, fmt.Errorf("re-read book %s under its version-group lock: %w", book.ID, err)
+		}
+		if fresh == nil {
+			release()
+			return nil, noop, fmt.Errorf("book %s vanished before its library copy was made", book.ID)
+		}
+		if next := vgLockKey(fresh); next != key {
+			release()
+			key = next
+			continue
+		}
+		return fresh, release, nil
+	}
+	return nil, noop, fmt.Errorf("book %s kept changing version group while its library copy was being made", book.ID)
+}
+
 // lockBook takes book id's own file-work lock and returns its release. With no
 // locker wired, or no id, it is a no-op.
 //
-// Per-book locks serialize file-work jobs for the same book. A job takes its
-// own book's lock first, then -- for a protected book -- the lock of the
-// library copy whose files it writes (lockLibraryCopy), and holds both across
-// the whole sequence (cover download, embed, rename, tags). Path locks are
-// taken only inside them: book locks first, path locks second, never the other
-// way round.
+// Per-book locks serialize file-work jobs for the same book. Without them the
+// pool ran two jobs for one book at once, and the path lock was keyed from a
+// read made before blocking: job X renamed P to Q under P's lock and then
+// tagged Q, while job Y, which had read P earlier, took P's lock once X
+// released it and embedded or renamed files that were already at Q.
 //
-// Without them the pool ran two jobs for one book at once, and the path lock
-// was keyed from a read made before blocking: job X renamed P to Q under P's
-// lock and then tagged Q, while job Y, which had read P earlier, took P's lock
-// once X released it and embedded or renamed files that were already at Q.
+// LOCK ORDER. Every key below lives in one table (SetPathLocker: the server's
+// writeBackPathLocks), and none is reentrant. Every entry point that writes a
+// book's files -- FinishApplyFileWork, FinishAutoFetchFileWork,
+// ApplyMetadataFileIO, WriteBackMetadataForBook, RunApplyPipelineRenameOnly --
+// takes them in this order and in no other:
 //
-// Lock order cannot cycle. A job takes its own book, then at most one other --
-// its copy -- and a copy's own job takes only the copy's lock: a library copy
-// always resolves to itself, because existingLibraryCopy returns any book under
-// root_dir as its own target and librarySibling only hands back siblings under
-// root_dir. So no job holding a copy's lock ever waits for another book's.
+//  1. its own book (lockBook), held for the whole job;
+//  2. the version group (vgLockKey), ONLY inside ensureLibraryCopy, around the
+//     re-check-and-create of the library copy. It is released before
+//     ensureLibraryCopy returns, so before anything else is locked;
+//  3. the book whose files it writes (lockLibraryCopy): for a protected book,
+//     its library copy. Held for the rest of the job;
+//  4. path locks (lockPath, lockWriteTarget), taken and released per write.
+//
+// Why this cannot cycle:
+//   - A vg lock is held with only the job's own book lock above it, and nothing
+//     in this table is locked under it (OrganizeOneBook, CreateOrganizedVersion
+//     and syncMetadataToLibraryCopy take no key here). ensureLibraryCopy is
+//     reached only from createUsableLibraryCopy in lockLibraryCopy, before step
+//     3, and returns through its unlocked fast path whenever a copy exists. So
+//     no job holding a copy's lock ever waits for a vg lock.
+//   - Step 3 comes after the vg lock is released, so it does not matter that
+//     the copy and the own book are different books.
+//   - A library copy always resolves to itself: existingLibraryCopy returns any
+//     book under root_dir as its own target, and librarySibling only hands back
+//     siblings under root_dir. So a copy's own job never takes a second book
+//     lock, and a job waiting for a copy's lock waits on one that is never
+//     held across a wait for another book.
+//   - Path locks are innermost: a job holding one takes no book or vg lock.
+//
+// A caller outside this package must NOT hold a key from the same table
+// around these entry points. The server's bulk write-back and batch save used
+// to hold a path lock around WriteBackMetadataForBook and
+// RunApplyPipelineRenameOnly; with the book lock now inside those, that is
+// path-then-book, the reverse of step 1-then-4, and it deadlocks against an
+// apply of the same book. They no longer do.
 func (mfs *Service) lockBook(id string) func() {
 	if mfs.pathLock == nil || id == "" {
 		return func() {}
@@ -199,16 +311,18 @@ func (mfs *Service) lockBook(id string) func() {
 }
 
 // lockLibraryCopy runs under book id's own lock (lockBook). It resolves the
-// book whose audio files the job writes and locks it for the rest of the job.
-// The release is never nil, error or not.
+// book whose audio files the job writes, locks it for the rest of the job and
+// returns its id: the target every file step after it must use
+// (fileWorkTarget). The id is "" when there is nothing to write (a protected
+// book with no copy under existingCopyOnly, or a deleted book, which the file
+// steps report). The release is never nil, error or not.
 //
-// It is the ONE place a file-work job (FinishApplyFileWork,
-// FinishAutoFetchFileWork, ApplyMetadataFileIO) makes a library copy. Two
-// callers outside file work still make one with no book lock:
-// WriteBackMetadataForBook (bulk write-back, batch save, the write-back
-// handler) and RunApplyPipelineRenameOnly. Under
-// createLibraryCopy a protected book with no copy gets one here, and every file
-// step after it only looks the copy up (existingCopyOnly). Two gaps it closes,
+// It is the ONE place a library copy is made, for every entry point listed at
+// lockBook. WriteBackMetadataForBook (bulk write-back, batch save, the
+// write-back handler) and RunApplyPipelineRenameOnly made one with no lock
+// until 2026-09-12. Under createLibraryCopy a protected book with no copy gets
+// one here, through ensureLibraryCopy and its version-group lock, so two jobs
+// on two versions of one book make one copy between them. Two gaps it closes,
 // both 2026-09-12:
 //   - the copy used to be made part-way through, by whichever step reached it
 //     first, so the job never held its lock and an apply of another protected
@@ -225,35 +339,39 @@ func (mfs *Service) lockBook(id string) func() {
 // Making the copy writes rows and files, so the stand-down checkpoint runs
 // first; a failed check returns with nothing created. existingCopyOnly
 // (auto-fetch, and an apply that writes no audio files) never creates one.
-func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint func() error) (func(), error) {
+func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint func() error) (string, func(), error) {
 	noop := func() {}
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		// Carrying on would run the file steps, which re-read the book and
 		// resolve its copy, without the copy's lock.
-		return noop, fmt.Errorf("apply file work for book %s: load book: %w", id, err)
+		return "", noop, fmt.Errorf("apply file work for book %s: load book: %w", id, err)
 	}
 	if book == nil {
 		// Deleted: the file steps re-read it and report that.
-		return noop, nil
+		return "", noop, nil
 	}
 	target, ok := mfs.existingLibraryCopy(book)
 	if !ok && policy == createLibraryCopy {
 		if err := standDown(checkpoint, id, "creating the library copy"); err != nil {
-			return noop, err
+			return "", noop, err
 		}
 		if target, err = mfs.createUsableLibraryCopy(id, book); err != nil {
-			return noop, err
+			return "", noop, err
 		}
 	}
-	if target == nil || target.ID == id {
-		return noop, nil
+	if target == nil {
+		return "", noop, nil
 	}
-	return mfs.lockBook(target.ID), nil
+	if target.ID == id {
+		// The book's own files: its own lock, already held, covers them.
+		return id, noop, nil
+	}
+	return target.ID, mfs.lockBook(target.ID), nil
 }
 
 // createUsableLibraryCopy makes book's library copy and checks that the file
-// steps, which look it up again under existingCopyOnly, will find it. A copy
+// steps, which resolve it again (fileWorkTarget), will find it. A copy
 // they would not find -- one of its file rows kept a protected source path,
 // which is resolveOrganizedFilePath's fallback for a row a scan added
 // mid-organize -- would make every step skip without a word, so it is an error.
@@ -348,12 +466,12 @@ func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writ
 	if fileIO || writeTags {
 		lockPolicy = createLibraryCopy
 	}
-	releaseCopy, err := mfs.lockLibraryCopy(id, lockPolicy, checkpoint)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, lockPolicy, checkpoint)
 	if err != nil {
 		return err
 	}
 	defer releaseCopy()
-	return mfs.finishFileWork(id, fileIO, writeTags, checkpoint)
+	return mfs.finishFileWork(id, targetID, fileIO, writeTags, checkpoint)
 }
 
 // standDown runs a stand-down checkpoint before a file-writing step. A nil
@@ -401,7 +519,7 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 	mfs.downloadAutoFetchCover(id, pendingCoverURL)
 	// existingCopyOnly never creates a copy, so no checkpoint; the error is a
 	// failed read of the book.
-	releaseCopy, err := mfs.lockLibraryCopy(id, existingCopyOnly, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, existingCopyOnly, nil)
 	if err != nil {
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
@@ -415,13 +533,16 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 			"book_id", logger.SanitizeLogValue(id), "path", logger.SanitizeLogValue(book.FilePath))
 		return nil
 	}
-	mfs.embedCover(id, book, existingCopyOnly)
+	mfs.embedCover(id, book, targetID)
 	if !writeTags {
 		return nil
 	}
-	release := mfs.lockWriteTarget(id, existingCopyOnly)
+	release, err := mfs.lockWriteTarget(id, targetID)
+	if err != nil {
+		return fmt.Errorf("auto-fetch file work: %w", err)
+	}
 	defer release()
-	if _, err := mfs.writeTags(id, existingCopyOnly); err != nil {
+	if _, err := mfs.writeTags(id, targetID); err != nil {
 		return fmt.Errorf("auto-fetch file work: write tags for book %s: %w", id, err)
 	}
 	return nil
@@ -429,16 +550,17 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 
 // finishFileWork is steps 2 and 3 of FinishApplyFileWork, with the stand-down
 // checkpoint run before each (nil passes). It runs after lockLibraryCopy, which
-// made any library copy the job needs, so every step here only looks the copy
-// up (existingCopyOnly) and none can make one outside that lock.
-func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, checkpoint func() error) error {
+// made and locked any library copy the job needs and returned it as targetID.
+// Every step here writes that target (fileWorkTarget) and none can make or
+// switch to a copy outside that lock.
+func (mfs *Service) finishFileWork(id, targetID string, fileIO, writeTags bool, checkpoint func() error) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
 		if err := standDown(checkpoint, id, "the file I/O"); err != nil {
 			return err
 		}
-		tags, fileErr = mfs.applyMetadataFileIO(id)
+		tags, fileErr = mfs.applyMetadataFileIO(id, targetID)
 	}
 	if writeTags && !tags.handled {
 		if err := standDown(checkpoint, id, "the tag write"); err != nil {
@@ -451,11 +573,15 @@ func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, checkpoint
 		}
 		// Resolved and locked after the pipeline returned (and released its
 		// own locks), so the key is the post-rename path of the files written.
-		release := mfs.lockWriteTarget(id, existingCopyOnly)
-		if _, err := mfs.writeTags(id, existingCopyOnly); err != nil {
+		release, err := mfs.lockWriteTarget(id, targetID)
+		if err != nil {
 			tags.err = err
+		} else {
+			if _, err := mfs.writeTags(id, targetID); err != nil {
+				tags.err = err
+			}
+			release()
 		}
-		release()
 	}
 	if fileErr != nil {
 		return fileErr
@@ -467,13 +593,20 @@ func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, checkpoint
 }
 
 // embedCover embeds book id's stored cover into the audio files the file work
-// writes (fileWorkTarget: the library copy's, for a protected book), holding
-// the path lock on those files. Slow: ffmpeg.
-func (mfs *Service) embedCover(id string, book *database.Book, policy copyPolicy) {
+// writes (fileWorkTarget, checked against targetID, the book the job locked:
+// the library copy's, for a protected book), holding the path lock on those
+// files. Slow: ffmpeg. A target that no longer matches is logged and nothing
+// is embedded; the embed reports no error by design (ApplyMetadataFileIO).
+func (mfs *Service) embedCover(id string, book *database.Book, targetID string) {
 	if config.AppConfig.RootDir == "" {
 		return
 	}
-	target := mfs.fileWorkTarget(book, policy)
+	target, err := mfs.fileWorkTarget(book, targetID)
+	if err != nil {
+		slog.Warn("cannot embed cover: the book's file-work target changed after it was locked",
+			"book_id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
+		return
+	}
 	if target == nil {
 		slog.Warn("cannot embed cover: protected book has no library copy",
 			"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title), "protected_path", logger.SanitizeLogValue(book.FilePath))
@@ -481,7 +614,7 @@ func (mfs *Service) embedCover(id string, book *database.Book, policy copyPolicy
 	}
 	release := mfs.lockPath(target.FilePath)
 	defer release()
-	mfs.embedCoverInBookFiles(target, metadata.CoverPathForBook(config.AppConfig.RootDir, id), policy)
+	mfs.embedCoverInBookFiles(target, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
 }
 
 // ApplyMetadataFileIO runs the slow file operations after metadata is applied:
@@ -508,19 +641,19 @@ func (mfs *Service) embedCover(id string, book *database.Book, policy copyPolicy
 func (mfs *Service) ApplyMetadataFileIO(id string) error {
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
-	releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
 	if err != nil {
 		return err
 	}
 	defer releaseCopy()
-	_, err = mfs.applyMetadataFileIO(id)
+	_, err = mfs.applyMetadataFileIO(id, targetID)
 	return err
 }
 
 // applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
 // pipeline did about tags, for FinishApplyFileWork's write-once guard. Its
-// callers have run lockLibraryCopy, so it only looks the library copy up.
-func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
+// callers have run lockLibraryCopy, and it writes the target that locked.
+func (mfs *Service) applyMetadataFileIO(id, targetID string) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
@@ -533,11 +666,11 @@ func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: book %s not found", id)
 	}
 
-	mfs.embedCover(id, book, existingCopyOnly)
+	mfs.embedCover(id, book, targetID)
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		tags, err := mfs.runApplyPipeline(id, book, existingCopyOnly)
+		tags, err := mfs.runApplyPipeline(id, book, targetID)
 		if err != nil {
 			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}

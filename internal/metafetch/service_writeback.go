@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-12
 
@@ -437,11 +437,16 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copyPolicy) (tagWriteResult, error) {
+func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID string) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy
-	// instead. fileWorkTarget is also what picks the lock key below, so the
-	// lock and the files written cannot name different books.
-	target := mfs.fileWorkTarget(book, policy)
+	// instead: targetID, the one its job locked (lockLibraryCopy). A book that
+	// now resolves to anything else is an error, not a switch to a copy the job
+	// does not hold. fileWorkTarget is also what picks the lock key below, so
+	// the lock and the files written cannot name different books.
+	target, err := mfs.fileWorkTarget(book, targetID)
+	if err != nil {
+		return tagWriteResult{}, fmt.Errorf("apply pipeline: %w", err)
+	}
 	if target == nil {
 		slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
 			"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
@@ -449,7 +454,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 			"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
 		return tagWriteResult{}, nil
 	}
-	if target != book {
+	if target.ID != book.ID {
 		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", logger.SanitizeLogValue(target.ID), "bookID", logger.SanitizeLogValue(id))
 		id = target.ID
 		book = target
@@ -622,7 +627,8 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 	if config.AppConfig.AutoWriteTagsOnApply {
 		tags.handled = true
 		if !hasCheckpoint(mfs.db, id, phaseTags) {
-			if written, err := mfs.writeTags(id, policy); err != nil {
+			// id is the target's own id here, and targetID names that book.
+			if written, err := mfs.writeTags(id, targetID); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
 					"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
@@ -650,13 +656,37 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 
 // WriteBackMetadataForBook reads current DB metadata for the book, resolves authors and
 // narrators, writes comprehensive tags to all active audio file segments, and records a
-// history entry. It is called by POST /api/v1/audiobooks/:id/write-back.
+// history entry. It is called by POST /api/v1/audiobooks/:id/write-back, the
+// bulk write-back and the batch save.
+//
+// LOCKING. It takes the apply file work's locks, in the same order (see
+// lockBook): the book's own lock; its library copy's, through lockLibraryCopy,
+// which makes a protected book's copy under the version-group lock; then the
+// path lock on the files it writes, resolved after both. Until 2026-09-12 it
+// took none and made the copy with no lock, and its server callers held a
+// path lock from the same table around it -- path-then-book once a book lock
+// is inside, the reverse of every apply's order. A caller must not hold any
+// key from that table (SetPathLocker) around it; none is reentrant. The
+// internal tag write (writeTags) calls writeBackForBook directly, never this,
+// because it already holds these locks.
 func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error) {
 	var sf []string
 	if len(segmentFilter) > 0 {
 		sf = segmentFilter[0]
 	}
-	return mfs.writeBackForBook(id, sf, createLibraryCopy)
+	releaseBook := mfs.lockBook(id)
+	defer releaseBook()
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseCopy()
+	releasePath, err := mfs.lockWriteTarget(id, targetID)
+	if err != nil {
+		return 0, err
+	}
+	defer releasePath()
+	return mfs.writeBackForBook(id, sf, targetID)
 }
 
 // writeBackForBook is the single tag-write implementation behind
@@ -664,7 +694,10 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 // reaches through FinishApplyFileWork. It used to take fallback overrides for
 // the fetch path's own wrapper; auto-fetch now writes what the DB holds, like
 // every other apply, so the tags and the row agree.
-func (mfs *Service) writeBackForBook(id string, segmentFilter []string, policy copyPolicy) (int, error) {
+//
+// targetID is the book its caller locked (lockLibraryCopy); the files written
+// are that book's, and a book that now resolves elsewhere is an error.
+func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID string) (int, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return 0, fmt.Errorf("audiobook not found: %s", id)
@@ -675,11 +708,14 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, policy c
 	// metadata for building the tag map, rather than the library copy's stale data.
 	originalBook := book
 	originalID := id
-	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.libraryCopyFor(book, policy)
-		if libCopy == nil {
-			return 0, fmt.Errorf("cannot write back: no library copy for protected book %s", id)
-		}
+	libCopy, err := mfs.fileWorkTarget(book, targetID)
+	if err != nil {
+		return 0, fmt.Errorf("cannot write back: %w", err)
+	}
+	if libCopy == nil {
+		return 0, fmt.Errorf("cannot write back: no library copy for protected book %s", id)
+	}
+	if libCopy.ID != book.ID {
 		// Sync metadata from the original book to the library copy so both
 		// DB records stay in sync and the tag map uses current data.
 		mfs.syncMetadataToLibraryCopy(originalBook, libCopy)
@@ -764,7 +800,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, policy c
 
 	// Embed cover art via TagLib (independent of tag writes — no ordering constraint).
 	if config.AppConfig.RootDir != "" {
-		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID), policy)
+		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID))
 	}
 
 	// Use the original book's title for tag content (it has freshly-applied metadata)
