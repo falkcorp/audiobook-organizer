@@ -1,7 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -15,6 +15,8 @@ import {
   batchWriteBackMetadata,
   batchFetchCandidates,
   getMaintenanceWindowStatus,
+  getBooksByAuthor,
+  AUTHOR_BOOKS_PAGE_SIZE,
 } from './api';
 
 const mockFetch = vi.fn();
@@ -455,5 +457,81 @@ describe('getOperationTimeline failure handling', () => {
     );
 
     await expect(getOperationTimeline()).resolves.toEqual([{ id: 'op-1' }]);
+  });
+});
+
+// A bare ?author_id=N listing is paginated server-side (default 50, max 1000
+// per request). getBooksByAuthor feeds the author-merge popover, which must
+// show EVERY book, so it has to walk the pages and read the `{ data: ... }`
+// envelope the server actually sends.
+describe('getBooksByAuthor paging', () => {
+  beforeEach(() => {
+    global.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const page = (ids: string[], count: number) =>
+    new Response(JSON.stringify({ data: { items: ids.map((id) => ({ id, title: id })), count } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  const ids = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+  const requestedParams = (call: number) => {
+    const url = new URL(String(mockFetch.mock.calls[call][0]), 'http://localhost');
+    return {
+      path: url.pathname,
+      author_id: url.searchParams.get('author_id'),
+      limit: url.searchParams.get('limit'),
+      offset: url.searchParams.get('offset'),
+    };
+  };
+
+  it('walks every page until it has count rows', async () => {
+    const total = AUTHOR_BOOKS_PAGE_SIZE + 3;
+    mockFetch
+      .mockResolvedValueOnce(page(ids('a', AUTHOR_BOOKS_PAGE_SIZE), total))
+      .mockResolvedValueOnce(page(ids('b', 3), total));
+
+    const books = await getBooksByAuthor(7);
+
+    expect(books).toHaveLength(total);
+    expect(new Set(books.map((b) => b.id)).size).toBe(total);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(requestedParams(0)).toEqual({
+      path: '/api/v1/audiobooks',
+      author_id: '7',
+      limit: String(AUTHOR_BOOKS_PAGE_SIZE),
+      offset: '0',
+    });
+    expect(requestedParams(1).offset).toBe(String(AUTHOR_BOOKS_PAGE_SIZE));
+  });
+
+  it('reads items from the data envelope (a single short page is one request)', async () => {
+    mockFetch.mockResolvedValueOnce(page(['x1', 'x2'], 2));
+
+    const books = await getBooksByAuthor(3);
+
+    expect(books.map((b) => b.id)).toEqual(['x1', 'x2']);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at count even when the last page is full', async () => {
+    mockFetch.mockResolvedValueOnce(page(ids('a', AUTHOR_BOOKS_PAGE_SIZE), AUTHOR_BOOKS_PAGE_SIZE));
+
+    const books = await getBooksByAuthor(1);
+
+    expect(books).toHaveLength(AUTHOR_BOOKS_PAGE_SIZE);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws when a later page fails instead of returning a partial list', async () => {
+    mockFetch
+      .mockResolvedValueOnce(page(ids('a', AUTHOR_BOOKS_PAGE_SIZE), AUTHOR_BOOKS_PAGE_SIZE + 5))
+      .mockResolvedValueOnce(new Response('boom', { status: 500 }));
+
+    await expect(getBooksByAuthor(1)).rejects.toThrow();
   });
 });
