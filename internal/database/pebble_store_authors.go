@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -590,11 +590,29 @@ func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
 	if err := json.Unmarshal(val, &authors); err != nil {
 		return nil, err
 	}
+	// The key names the book; a row stored before 2026-09-12 may not. Stamp it
+	// so no reader -- above all UpsertBookToMemDB's reload, whose memdb insert
+	// rejects an empty BookID and aborts the whole book -- sees the gap. See
+	// junction_bookid.go.
+	stampBookAuthorsInPlace(bookID, authors)
 	return authors, nil
 }
 
+// SetBookAuthors replaces the book's author credits. The store owns the
+// row's BookID: every row is stamped with bookID before it is persisted, since
+// bookID is the key the rows live under and a row carrying anything else would
+// be indexed under the wrong book (or rejected) by memdb. A caller-supplied
+// BookID naming a DIFFERENT book is overridden, not rejected, and logged: the
+// call says "these are bookID's credits", every copy-shaped call site already
+// stamps the target, and rejecting would turn a caller bug into a lost write.
 func (p *PebbleStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
 	key := []byte(fmt.Sprintf("book_authors:%s", bookID))
+	// Copy before stamping: the caller may still own and reuse the slice.
+	authors = append([]BookAuthor(nil), authors...)
+	if n := stampBookAuthorsInPlace(bookID, authors); n > 0 {
+		slog.Warn("SetBookAuthors: overriding caller-supplied book_id that names a different book",
+			"book_id", bookID, "mismatched_rows", n)
+	}
 	data, err := json.Marshal(authors)
 	if err != nil {
 		return err
@@ -923,11 +941,23 @@ func (p *PebbleStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
 	if err := json.Unmarshal(val, &narrators); err != nil {
 		return nil, err
 	}
+	// Key-authoritative stamp; see GetBookAuthors and junction_bookid.go.
+	stampBookNarratorsInPlace(bookID, narrators)
 	return narrators, nil
 }
 
+// SetBookNarrators replaces the book's narrator credits, stamping bookID onto
+// every row before it is persisted. Same contract and same reasoning as
+// SetBookAuthors: before this, POST /operations/optimize-database and PUT
+// /audiobooks/:id/narrators could store rows with an empty book_id, which
+// memdb rejects -- and every later memdb upsert of the book then failed on it.
 func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) error {
 	key := []byte(fmt.Sprintf("book_narrators:%s", bookID))
+	narrators = append([]BookNarrator(nil), narrators...)
+	if n := stampBookNarratorsInPlace(bookID, narrators); n > 0 {
+		slog.Warn("SetBookNarrators: overriding caller-supplied book_id that names a different book",
+			"book_id", bookID, "mismatched_rows", n)
+	}
 	data, err := json.Marshal(narrators)
 	if err != nil {
 		return err

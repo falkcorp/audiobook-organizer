@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sync.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
 // last-edited: 2026-09-12
 
@@ -430,11 +430,12 @@ func (p *PebbleStore) ReplaceBookAuthorsInMemDB(bookID string, authors []BookAut
 	// fixing it alone leaves the trap armed for the next caller: the bookID is
 	// right here in the argument list, so there is no reason for a row to reach
 	// the index without it.
-	for i := range authors {
-		if authors[i].BookID == "" {
-			authors[i].BookID = bookID
-		}
-	}
+	//
+	// Since 2026-09-12 this OVERRIDES rather than fills: SetBookAuthors stamps
+	// Pebble with bookID too, so a row carrying another book's ID would
+	// otherwise be indexed in memdb under a book that Pebble never filed it
+	// under -- the same divergence, pointed the other way.
+	stampBookAuthorsInPlace(bookID, authors)
 	p.memSync("ReplaceBookAuthors", func(txn memTxn) error {
 		if _, err := txn.DeleteAll(memTableBookAuthors, memIdxBookID, bookID); err != nil {
 			return err
@@ -455,6 +456,9 @@ func (p *PebbleStore) ReplaceBookNarratorsInMemDB(bookID string, narrators []Boo
 	}
 	// Copy the slice at enqueue — see ReplaceBookAuthorsInMemDB.
 	narrators = append([]BookNarrator(nil), narrators...)
+	// Same primary-index rule as book_authors: {BookID, NarratorID}, not
+	// AllowMissing. See ReplaceBookAuthorsInMemDB and junction_bookid.go.
+	stampBookNarratorsInPlace(bookID, narrators)
 	p.memSync("ReplaceBookNarrators", func(txn memTxn) error {
 		if _, err := txn.DeleteAll(memTableBookNarrators, memIdxBookID, bookID); err != nil {
 			return err

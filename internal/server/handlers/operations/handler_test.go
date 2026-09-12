@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -463,4 +463,53 @@ func TestClearStaleOperations_ReportsRepairFailure(t *testing.T) {
 	h := newClearStaleHandler(t, 0, errors.New("pebble closed"))
 	w := clearStale(h)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestOptimizeDatabase_NarratorSplitKeepsMemDBLive runs the handler against a
+// real, warm PebbleStore. The narrator split used to build BookNarrator rows
+// with no BookID; memdb rejected them, and every later update of the book then
+// aborted its memdb upsert. The proof is therefore not the split count but that
+// a subsequent UpdateBook is visible through GetAllBooksCore, which answers
+// from memdb when it is warm.
+func TestOptimizeDatabase_NarratorSplitKeepsMemDBLive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	store.WaitForWarmup()
+	t.Cleanup(func() { _ = store.Close() })
+
+	credit := "Alice Reader & Bob Voice"
+	book, err := store.CreateBook(&database.Book{Title: "Split Me", FilePath: "/optimize/split-me", Narrator: &credit})
+	require.NoError(t, err)
+
+	h := operations.New(store, nil, nil, nil, nil, nil, nil, nil, nil)
+	w := run(http.MethodPost, "/operations/optimize-database", "/operations/optimize-database", nil, func(r *gin.Engine) {
+		r.POST("/operations/optimize-database", h.OptimizeDatabase)
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Data struct {
+			NarratorsSplit int `json:"narrators_split"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 1, resp.Data.NarratorsSplit, "fixture must reach the narrator split")
+
+	narrators, err := store.GetBookNarrators(book.ID)
+	require.NoError(t, err)
+	require.Len(t, narrators, 2)
+	for _, n := range narrators {
+		require.Equal(t, book.ID, n.BookID)
+	}
+
+	full, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	full.Title = "Split Me (renamed)"
+	_, err = store.UpdateBook(book.ID, full)
+	require.NoError(t, err)
+	cores, err := store.GetAllBooksCore(0, 0)
+	require.NoError(t, err)
+	require.Len(t, cores, 1)
+	require.Equal(t, "Split Me (renamed)", cores[0].Title,
+		"memdb kept the old title: the book's memdb upsert aborted on its narrator rows")
 }
