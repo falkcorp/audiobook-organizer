@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -39,9 +39,11 @@ func TestNotRestorableLabel(t *testing.T) {
 		{ChangeTypeBookFileTrack, "book_file:", "book_file_track:(no book_file id)"},
 		{ChangeTypeBookPathUpdate, "file_path", ""},
 		{ChangeTypeBookSoftDelete, "marked_for_deletion", ""},
-		// Reversing these would delete a book_file row or guess at external ids.
+		{ChangeTypeBookPrimaryDemote, "is_primary_version", ""},
+		{ChangeTypeExternalIDReassign, "external_id:itunes/PID-1", ""},
+		{ChangeTypeExternalIDReassign, "external_ids", "external_id_reassign:(no external id)"},
+		// Reversing this would delete a book_file row.
 		{ChangeTypeBookFileCreate, "book_file:f1", "book_file_create"},
-		{ChangeTypeExternalIDReassign, "external_ids", "external_id_reassign"},
 	}
 	for _, tc := range cases {
 		c := &database.OperationChange{ChangeType: tc.changeType, FieldName: tc.field}

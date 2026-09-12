@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -18,6 +18,7 @@ package undo
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -41,7 +42,8 @@ type UndoConflictReport struct {
 	// exists. SeriesRenamedSince: a series_rename whose series was renamed
 	// again after the operation. SeriesNameTaken: a series_rename whose old
 	// name now belongs to another series. CheckFailed: the book or series
-	// could not be read, or the row's value is malformed (Reason says which).
+	// could not be read, the row's value is malformed, or the field no longer
+	// holds what the operation wrote, ReasonChangedSince (Reason says which).
 	BookMissing        []UndoConflictItem `json:"book_missing,omitempty"`
 	SeriesDeleted      []UndoConflictItem `json:"series_deleted,omitempty"`
 	SeriesRenamedSince []UndoConflictItem `json:"series_renamed_since,omitempty"`
@@ -176,22 +178,9 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			} else {
 				report.Safe++
 			}
-		case ChangeTypeBookFileReassign:
-			// The revert moves the row from BookID back to OldValue and reads
-			// both books first; either one missing fails the row.
-			_, refusal := CheckRestoreBook(store, c.BookID)
-			if refusal == nil {
-				_, refusal = CheckRestoreBook(store, c.OldValue)
-			}
-			if refusal != nil {
-				report.addReferentConflict(c, refusal)
-			} else {
-				report.Safe++
-			}
-		case ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete:
-			// Each reads the book before writing (a soft-deleted book is still
-			// there, and restoring it is the point of book_soft_delete).
-			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
+		case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
+			ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign:
+			if refusal := checkFsRegroupRow(store, c); refusal != nil {
 				report.addReferentConflict(c, refusal)
 			} else {
 				report.Safe++
@@ -248,4 +237,82 @@ func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) (
 		}, nil
 	}
 	return nil, nil
+}
+
+// Reads the fs-regroup-xml drift checks use when the store has them. They are
+// not on ConflictChecker, so its implementers need not grow: a store without
+// them gets the book checks only, and the revert still refuses drift under its
+// own compare-and-set.
+type bookFileByIDReader interface {
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+}
+
+type externalIDOwnerReader interface {
+	GetBookByExternalID(source, externalID string) (string, error)
+}
+
+// checkFsRegroupRow predicts the revert of one maintenance.fs-regroup-xml row:
+// the books it reads must exist, and the field it restores must still hold the
+// value the operation wrote (ReasonChangedSince otherwise), as the revert's
+// compare-and-set requires.
+func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange) error {
+	book, refusal := CheckRestoreBook(store, c.BookID)
+	if refusal != nil {
+		return refusal
+	}
+	switch c.ChangeType {
+	case ChangeTypeBookFileReassign:
+		if _, refusal := CheckRestoreBook(store, c.OldValue); refusal != nil {
+			return refusal
+		}
+		return checkFsRegroupRowOn(store, c, nil)
+	case ChangeTypeBookFileTrack:
+		return checkFsRegroupRowOn(store, c, func(f *database.BookFile) bool {
+			return strconv.Itoa(f.TrackNumber) == c.NewValue
+		})
+	case ChangeTypeBookPathUpdate:
+		if book.FilePath != c.NewValue {
+			return refuse(ReasonChangedSince, "book %s path changed since the operation", c.BookID)
+		}
+	case ChangeTypeBookPrimaryDemote:
+		if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
+			return refuse(ReasonChangedSince, "book %s was made primary again since the operation", c.BookID)
+		}
+	case ChangeTypeExternalIDReassign:
+		source, id, ok := ExternalIDFromField(c.FieldName)
+		if !ok {
+			return refuse(ReasonOldValueUnparsable, "no external id in %q", c.FieldName)
+		}
+		if r, ok := store.(externalIDOwnerReader); ok {
+			owner, err := r.GetBookByExternalID(source, id)
+			if err != nil {
+				return refuse(ReasonBookLookupFailed, "look up external id %s/%s: %v", source, id, err)
+			}
+			if owner != c.NewValue {
+				return refuse(ReasonChangedSince, "external id %s/%s now names %q", source, id, owner)
+			}
+		}
+	}
+	return nil
+}
+
+// checkFsRegroupRowOn checks that the row a book_file change names is still on
+// BookID and, when holds is given, still holds the value the operation set.
+func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, holds func(*database.BookFile) bool) error {
+	r, ok := store.(bookFileByIDReader)
+	if !ok {
+		return nil
+	}
+	id, ok := BookFileIDFromField(c.FieldName)
+	if !ok {
+		return refuse(ReasonOldValueUnparsable, "no book_file id in %q", c.FieldName)
+	}
+	f, err := r.GetBookFileByID(c.BookID, id)
+	if err != nil || f == nil {
+		return refuse(ReasonChangedSince, "book_file %s is no longer on book %s", id, c.BookID)
+	}
+	if holds != nil && !holds(f) {
+		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
+	}
+	return nil
 }

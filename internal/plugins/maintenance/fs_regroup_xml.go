@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-12
 
@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -60,6 +61,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -80,19 +82,21 @@ const (
 var fsCategoryOrder = []string{fsCatFragments, fsCatDuplicates, fsCatLayout, fsCatMixed, fsCatProtected, fsCatOverlap}
 
 // Ledger change types this op writes besides metadata_update (title). The
-// Activity Log revert (audiobooks.RevertService) reverses the reassign, track,
-// path and soft-delete rows: it moves a row back to the OldValue book, restores
-// a track number or path, and clears a shell's deletion mark. The two marked
-// record-only are reported as not undoable instead: undoing a created row
-// would delete it, and the external-id row does not say which ids moved. See
-// the constants' docs in internal/undo.
+// Activity Log revert (audiobooks.RevertService) reverses all of them but one:
+// it moves a row back to the OldValue book, restores a track number, the
+// survivor's path and a shell's primary flag, clears a shell's deletion mark,
+// and moves each external id back, each only if the field still holds what the
+// op wrote. book_file_create is record-only because undoing it would delete a
+// row; the op creates a row only on the book whose path it is, so after a
+// revert every row sits on the book it belongs to. See internal/undo.
 const (
-	fsChangeFileReassign = undo.ChangeTypeBookFileReassign
-	fsChangeFileTrack    = undo.ChangeTypeBookFileTrack
-	fsChangeFileCreate   = undo.ChangeTypeBookFileCreate // record-only
-	fsChangePathUpdate   = undo.ChangeTypeBookPathUpdate
-	fsChangeSoftDelete   = undo.ChangeTypeBookSoftDelete
-	fsChangeExtIDs       = undo.ChangeTypeExternalIDReassign // record-only
+	fsChangeFileReassign  = undo.ChangeTypeBookFileReassign
+	fsChangeFileTrack     = undo.ChangeTypeBookFileTrack
+	fsChangeFileCreate    = undo.ChangeTypeBookFileCreate // record-only
+	fsChangePathUpdate    = undo.ChangeTypeBookPathUpdate
+	fsChangeSoftDelete    = undo.ChangeTypeBookSoftDelete
+	fsChangePrimaryDemote = undo.ChangeTypeBookPrimaryDemote
+	fsChangeExtIDs        = undo.ChangeTypeExternalIDReassign
 )
 
 // fsLayoutApplyRefusal is returned when an apply asks for the layout category.
@@ -137,6 +141,9 @@ type fsRepairStore interface {
 	regroupSnapshotReader
 	CreateOperationChange(change *database.OperationChange) error
 	database.MetadataFieldStateReader
+	// A retired shell's external ids move one at a time, so each move can be
+	// journaled and reversed.
+	itunesExternalIDReassigner
 }
 
 var _ fsRepairStore = (*database.PebbleStore)(nil)
@@ -253,10 +260,13 @@ type fsFileRef struct{ ID, Path string }
 // before the worker pool starts and never written after, so concurrent reads
 // need no lock.
 type fsFileIndex struct {
-	owners map[string][]string    // file path -> live book ids with a row at that path
-	count  map[string]int         // live book id -> book_file rows
-	files  map[string][]fsFileRef // live book id -> its rows
-	paths  map[string]string      // live book id -> Book.FilePath
+	owners  map[string][]string    // file path -> live book ids with a row at that path
+	count   map[string]int         // live book id -> book_file rows
+	files   map[string][]fsFileRef // live book id -> its rows
+	paths   map[string]string      // live book id -> Book.FilePath
+	bookAt  map[string][]string    // Book.FilePath -> live book ids at that path
+	primary map[string]bool        // live book id -> IsPrimaryVersion (nil reads as primary)
+	vgroup  map[string]string      // live book id -> VersionGroupID ("" when none)
 }
 
 // fsRegroupProtectedPath reports whether p is in a tree this op must not read
@@ -299,6 +309,7 @@ func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk
 	idx := &fsFileIndex{
 		owners: map[string][]string{}, count: map[string]int{},
 		files: map[string][]fsFileRef{}, paths: map[string]string{},
+		bookAt: map[string][]string{}, primary: map[string]bool{}, vgroup: map[string]string{},
 	}
 	const page = 1000
 	afterID := ""
@@ -337,6 +348,13 @@ func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk
 			bookMeta[b.ID] = &fsb
 			titles[b.ID] = b.Title
 			idx.paths[b.ID] = b.FilePath
+			idx.primary[b.ID] = fsb.IsPrimary
+			if b.VersionGroupID != nil {
+				idx.vgroup[b.ID] = *b.VersionGroupID
+			}
+			if b.FilePath != "" {
+				idx.bookAt[b.FilePath] = append(idx.bookAt[b.FilePath], b.ID)
+			}
 		}
 		afterID = books[len(books)-1].ID
 		_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: scanned %d books…", len(bookMeta)))
@@ -491,6 +509,10 @@ func classifyShatteredTarget(t itunesservice.FSRegroupTarget, idx *fsFileIndex) 
 	}
 	switch {
 	case owned == 0:
+		if reason := fsFragmentsRefusal(t, idx); reason != "" {
+			g.Category, g.Reason = fsCatMixed, reason
+			return g
+		}
 		g.Category = fsCatFragments
 	case owned == len(t.Members) && len(owners) == 1:
 		var owner string
@@ -509,12 +531,83 @@ func classifyShatteredTarget(t itunesservice.FSRegroupTarget, idx *fsFileIndex) 
 				}
 			}
 		}
+		// Retiring a primary shell in favour of a non-primary owner, or across
+		// version groups, would hide the book the user picked as primary.
+		if !idx.primary[owner] {
+			g.Category, g.Reason = fsCatMixed, "the owner "+owner+" is not the primary version"
+			return g
+		}
+		for _, m := range t.Members {
+			if vg := idx.vgroup[m.ID]; vg != "" && vg != idx.vgroup[owner] {
+				g.Category, g.Reason = fsCatMixed, fmt.Sprintf("member %s is in a different version group from the owner", m.ID)
+				return g
+			}
+		}
 		g.Category, g.OwnerID = fsCatDuplicates, owner
 	default:
 		g.Category = fsCatMixed
 		g.Reason = fmt.Sprintf("%d of %d members' files are already owned by %d other book(s)", owned, len(t.Members), len(owners))
 	}
 	return g
+}
+
+// fsFragmentsRefusal returns why a fragments-shaped group must not be merged,
+// or "" when it can be. Each check is a shape the apply cannot repair safely,
+// and applyFragments repeats them on the state it re-reads before writing:
+//   - an earlier merge's survivor already sits at the book folder, so merging
+//     the remaining shells again would split the book in two;
+//   - a member is not the primary version, or the members span version groups;
+//   - a member owns rows but none at its own path (it would get a moved row and
+//     a created one);
+//   - two members stand for the same file path (the survivor would get two rows
+//     for one file);
+//   - two paths claim the same chapter number (track numbers would collide);
+//   - a member with no row has no file on disk (the op must not add a row for a
+//     missing file; the library already holds tens of thousands of those).
+func fsFragmentsRefusal(t itunesservice.FSRegroupTarget, idx *fsFileIndex) string {
+	if ids := idx.bookAt[t.BookFolder]; len(ids) > 0 {
+		return "book " + ids[0] + " already sits at the book folder (an earlier merge's survivor); merging the rest would split the book"
+	}
+	pathOf := map[string]string{}
+	chapter := map[int]string{}
+	groups := map[string]bool{}
+	for _, m := range t.Members {
+		if !idx.primary[m.ID] {
+			return "member " + m.ID + " is not the primary version"
+		}
+		if vg := idx.vgroup[m.ID]; vg != "" {
+			groups[vg] = true
+		}
+		rows := idx.files[m.ID]
+		hasOwn := false
+		for _, f := range rows {
+			hasOwn = hasOwn || f.Path == m.FilePath
+		}
+		if len(rows) > 0 && !hasOwn {
+			return fmt.Sprintf("member %s owns %d row(s) but none at its own path", m.ID, len(rows))
+		}
+		for _, p := range memberPaths(m, idx) {
+			if o, dup := pathOf[p]; dup && o != m.ID {
+				return fmt.Sprintf("members %s and %s share a file path", o, m.ID)
+			}
+			pathOf[p] = m.ID
+			if _, _, n, ok := chaptershape.Parts(p); ok {
+				if q, seen := chapter[n]; seen && q != p {
+					return fmt.Sprintf("chapter %d is claimed by two paths", n)
+				}
+				chapter[n] = p
+			}
+		}
+		if !hasOwn && m.FilePath != "" {
+			if _, err := os.Stat(m.FilePath); err != nil {
+				return fmt.Sprintf("member %s has no row and its file is not on disk (or unreadable)", m.ID)
+			}
+		}
+	}
+	if len(groups) > 1 {
+		return fmt.Sprintf("members span %d version groups", len(groups))
+	}
+	return ""
 }
 
 // classifyLayoutBook reports whether a multi-file book has every file in its
@@ -638,8 +731,9 @@ func (g fsRepairGroup) planLine() string {
 	switch g.Category {
 	case fsCatFragments:
 		shells := slices.DeleteFunc(slices.Clone(g.MemberIDs), func(id string) bool { return id == g.SurvivorID })
-		return fmt.Sprintf("PLAN fragments folder=%q title=%q survivor=%s shells=%d %s → move each shell's rows "+
-			"onto the survivor, create a row for any chapter path with none, soft-delete the emptied shells",
+		return fmt.Sprintf("PLAN fragments folder=%q title=%q survivor=%s shells=%d %s → create a row on any "+
+			"member whose own chapter path has none, move the shells' rows onto the survivor, number tracks from "+
+			"the folder numbers, demote and soft-delete the emptied shells",
 			g.BookFolder, g.Title, g.SurvivorID, len(shells), fsIDList(shells))
 	case fsCatDuplicates:
 		return fmt.Sprintf("PLAN duplicates folder=%q owner=%s shells=%d %s → soft-delete each shell; "+
@@ -854,64 +948,165 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 }
 
 // applyFragments merges one fragments group onto its survivor.
+//
+// It runs under merge.LockMergeRMW and starts by re-reading every member. The
+// plan is a snapshot: a member retired, moved or given rows since the plan is a
+// group this op no longer understands, so it is skipped. The shape checks the
+// planner ran (fsFragmentsRefusal) are repeated on the re-read state, with the
+// protected-path check on every re-read row, and nothing is written unless the
+// group still passes all of them.
+//
+// A member with no row at its own chapter path gets one created on ITSELF,
+// filling its own gap. The shells' rows, those included, then move to the
+// survivor as ordinary book_file_reassign rows, which a revert moves back.
+// Nothing is ever deleted.
 func (a *fsApplier) applyFragments(g fsRepairGroup) {
-	members := make(map[string]bool, len(g.MemberIDs))
-	for _, id := range g.MemberIDs {
-		members[id] = true
-	}
-	track := map[string]int{}
-	var moves []database.BookFileMove
-	var creates []itunesservice.FSBook
-
-	// Resolve every member first; any read error skips the whole group before
-	// anything is written. An unreadable lookup is not proof there is no row,
-	// and treating it as one would create a second row for the same path.
-	for i, m := range g.Members {
-		track[m.FilePath] = i + 1
-		rows, err := a.store.GetBookFiles(m.ID)
-		if err != nil {
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: read rows of %s: %v — group skipped", g.BookFolder, m.ID, err)
-			return
-		}
-		hasOwnPath := false
-		ids := make([]string, 0, len(rows))
-		for _, r := range rows {
-			if r.FilePath == m.FilePath {
-				hasOwnPath = true
-			}
-			ids = append(ids, r.ID)
-		}
-		if m.ID != g.SurvivorID && len(ids) > 0 {
-			moves = append(moves, database.BookFileMove{FileIDs: ids, SourceBookID: m.ID})
-		}
-		if hasOwnPath || m.FilePath == "" {
-			continue
-		}
-		existing, err := a.store.GetBookFileByPath(m.FilePath)
-		if err != nil {
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: look up %q: %v — group skipped", g.BookFolder, m.FilePath, err)
-			return
-		}
-		switch {
-		case existing == nil:
-			creates = append(creates, m)
-		case !members[existing.BookID]:
-			a.skipped.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: %q is owned by %s outside the group (plan is stale) — group skipped",
-				g.BookFolder, m.FilePath, existing.BookID)
-			return
-		}
-	}
-
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 
+	folder := logger.SanitizeLogValue(g.BookFolder)
+	skip := func(format string, args ...any) {
+		a.skipped.Add(1)
+		a.log(slog.LevelWarn, "fragments %q: "+format+" — group skipped", append([]any{folder}, args...)...)
+	}
+	fail := func(format string, args ...any) {
+		a.errs.Add(1)
+		a.log(slog.LevelWarn, "fragments %q: "+format+" — group skipped", append([]any{folder}, args...)...)
+	}
+
+	type current struct {
+		book *database.Book
+		rows []database.BookFile
+	}
+	cur := make(map[string]current, len(g.Members))
+	memberOf := make(map[string]itunesservice.FSBook, len(g.Members))
+	for _, m := range g.Members {
+		memberOf[m.ID] = m
+		b, err := a.store.GetBookByID(m.ID)
+		if err != nil {
+			fail("read member %s: %v", m.ID, err)
+			return
+		}
+		if b == nil || b.IsSoftDeleted() || b.FilePath != m.FilePath {
+			skip("member %s is gone, retired or moved since the plan", m.ID)
+			return
+		}
+		rows, err := a.store.GetBookFiles(m.ID)
+		if err != nil {
+			fail("read rows of %s: %v", m.ID, err)
+			return
+		}
+		cur[m.ID] = current{book: b, rows: rows}
+	}
+	if _, ok := cur[g.SurvivorID]; !ok {
+		skip("survivor %s is not a member of the group", g.SurvivorID)
+		return
+	}
+
+	pathOf := map[string]string{} // path -> the member standing for it
+	chapter := map[int]string{}   // folder number -> path
+	var gaps []*database.Book     // members with no row at their own path
+	for _, m := range g.Members {
+		c := cur[m.ID]
+		paths := []string{c.book.FilePath}
+		hasOwn := false
+		for _, r := range c.rows {
+			paths = append(paths, r.FilePath)
+			hasOwn = hasOwn || r.FilePath == c.book.FilePath
+		}
+		if len(c.rows) > 0 && !hasOwn {
+			skip("member %s owns rows but none at its own path", m.ID)
+			return
+		}
+		for _, p := range paths {
+			if p == "" {
+				continue
+			}
+			if protected := fsRegroupProtectedPath(p); protected {
+				skip("member %s now has a path under the iTunes tree or a protected path", m.ID)
+				return
+			}
+			if o, ok := pathOf[p]; ok && o != m.ID {
+				skip("members %s and %s share %q", o, m.ID, logger.SanitizeLogValue(p))
+				return
+			}
+			pathOf[p] = m.ID
+			if _, _, n, ok := chaptershape.Parts(p); ok {
+				if q, seen := chapter[n]; seen && q != p {
+					skip("chapter %d is claimed by two paths", n)
+					return
+				}
+				chapter[n] = p
+			}
+		}
+		if !hasOwn && c.book.FilePath != "" {
+			gaps = append(gaps, c.book)
+		}
+	}
+	for _, b := range gaps {
+		// A lookup error is not proof there is no row; creating one on it could
+		// put a second row on the same path.
+		existing, err := a.store.GetBookFileByPath(b.FilePath)
+		if err != nil {
+			fail("look up %q: %v", logger.SanitizeLogValue(b.FilePath), err)
+			return
+		}
+		if existing != nil {
+			skip("%q already has a row on %s outside the group (plan is stale)", logger.SanitizeLogValue(b.FilePath), existing.BookID)
+			return
+		}
+		if _, err := os.Stat(b.FilePath); err != nil {
+			skip("member %s has no row and its file is not on disk (or unreadable)", b.ID)
+			return
+		}
+	}
+
+	// 1. Fill each gap on the member whose path it is.
+	moveIDs := map[string][]string{}
+	for _, m := range g.Members {
+		if m.ID == g.SurvivorID {
+			continue
+		}
+		for _, r := range cur[m.ID].rows {
+			moveIDs[m.ID] = append(moveIDs[m.ID], r.ID)
+		}
+	}
+	createFailed := map[string]bool{}
+	for _, b := range gaps {
+		_, _, n, _ := chaptershape.Parts(b.FilePath)
+		bf := &database.BookFile{
+			ID:          ulid.Make().String(),
+			BookID:      b.ID,
+			FilePath:    b.FilePath,
+			Format:      strings.TrimPrefix(strings.ToLower(filepath.Ext(b.FilePath)), "."),
+			Duration:    memberOf[b.ID].DurationSec,
+			TrackNumber: n,
+		}
+		if err := a.store.CreateBookFile(bf); err != nil {
+			createFailed[b.ID] = true
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "fragments %q: create row for %q: %v", folder, logger.SanitizeLogValue(b.FilePath), err)
+			continue
+		}
+		a.created.Add(1)
+		a.journal(b.ID, fsChangeFileCreate, "book_file:"+bf.ID, "", b.FilePath)
+		if b.ID != g.SurvivorID {
+			moveIDs[b.ID] = append(moveIDs[b.ID], bf.ID)
+		}
+	}
+
+	// 2. Move the shells' rows onto the survivor.
+	var moves []database.BookFileMove
+	for _, m := range g.Members {
+		if ids := moveIDs[m.ID]; len(ids) > 0 {
+			moves = append(moves, database.BookFileMove{FileIDs: ids, SourceBookID: m.ID})
+		}
+	}
 	if len(moves) > 0 {
 		if err := a.store.MoveBookFilesToBookBulk(moves, g.SurvivorID); err != nil {
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: move rows onto %s: %v — nothing moved, group skipped", g.BookFolder, g.SurvivorID, err)
+			// Nothing moved; a row just created stays on its own shell, where it
+			// belongs, and no shell is retired.
+			fail("move rows onto %s: %v", g.SurvivorID, err)
 			return
 		}
 		for _, mv := range moves {
@@ -921,39 +1116,21 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 			}
 		}
 	}
-	createFailed := map[string]bool{}
-	for _, m := range creates {
-		bf := &database.BookFile{
-			ID:          ulid.Make().String(),
-			BookID:      g.SurvivorID,
-			FilePath:    m.FilePath,
-			Format:      strings.TrimPrefix(strings.ToLower(filepath.Ext(m.FilePath)), "."),
-			Duration:    m.DurationSec,
-			TrackNumber: track[m.FilePath],
-		}
-		if err := a.store.CreateBookFile(bf); err != nil {
-			createFailed[m.ID] = true
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: create row for %q: %v", g.BookFolder, m.FilePath, err)
-			continue
-		}
-		a.created.Add(1)
-		a.journal(g.SurvivorID, fsChangeFileCreate, "book_file:"+bf.ID, "", m.FilePath)
-	}
 
-	// Chapter order from the folder number, the only place it lives.
+	// 3. Track numbers from each row's own chapter folder, gaps kept. The shape
+	// check above refused any group where two paths claim one number.
 	if rows, err := a.store.GetBookFiles(g.SurvivorID); err != nil {
 		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: re-read survivor rows: %v", g.BookFolder, err)
+		a.log(slog.LevelWarn, "fragments %q: re-read survivor rows: %v", folder, err)
 	} else {
 		for i := range rows {
 			f := &rows[i]
-			if n, ok := track[f.FilePath]; ok && f.TrackNumber != n {
+			if _, _, n, ok := chaptershape.Parts(f.FilePath); ok && f.TrackNumber != n {
 				old := f.TrackNumber
 				f.TrackNumber = n
 				if err := a.store.UpdateBookFile(f.ID, f); err != nil {
 					a.errs.Add(1)
-					a.log(slog.LevelWarn, "fragments %q: set track %d on %s: %v", g.BookFolder, n, f.ID, err)
+					a.log(slog.LevelWarn, "fragments %q: set track %d on %s: %v", folder, n, f.ID, err)
 					continue
 				}
 				a.journal(g.SurvivorID, fsChangeFileTrack, "book_file:"+f.ID, strconv.Itoa(old), strconv.Itoa(n))
@@ -963,12 +1140,13 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 
 	a.updateSurvivor(g)
 
+	// 4. Retire each shell that provably owns nothing now.
 	for _, m := range g.Members {
 		if m.ID == g.SurvivorID {
 			continue
 		}
 		if createFailed[m.ID] {
-			a.kept.Add(1) // its chapter path has no row yet; the shell is the only pointer to it
+			a.kept.Add(1) // its chapter path still has no row; the shell is the only pointer to it
 			continue
 		}
 		rows, err := a.store.GetBookFiles(m.ID)
@@ -976,40 +1154,28 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 			// A read error counts as "still owns files": never retire a shell we
 			// cannot prove is empty.
 			a.kept.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: shell %s kept (rows=%d err=%v)", g.BookFolder, m.ID, len(rows), err)
+			a.log(slog.LevelWarn, "fragments %q: shell %s kept (rows=%d err=%v)", folder, m.ID, len(rows), err)
 			continue
 		}
-		if err := merge.SoftDeleteBook(a.store, m.ID); err != nil {
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: soft-delete %s: %v", g.BookFolder, m.ID, err)
-			continue
-		}
-		a.softDeleted.Add(1)
-		a.journal(m.ID, fsChangeSoftDelete, "marked_for_deletion", "", "merged into "+g.SurvivorID)
-		if exts, err := a.store.GetExternalIDsForBook(m.ID); err != nil || len(exts) > 0 {
-			if rerr := a.store.ReassignExternalIDs(m.ID, g.SurvivorID); rerr != nil {
-				// The ids stay on the soft-deleted shell, which is recoverable.
-				a.errs.Add(1)
-				a.log(slog.LevelWarn, "fragments %q: reassign external ids %s → %s: %v", g.BookFolder, m.ID, g.SurvivorID, rerr)
-			} else {
-				a.journal(m.ID, fsChangeExtIDs, "external_ids", m.ID, g.SurvivorID)
-			}
-		}
+		a.retire("fragments", folder, m.ID, g.SurvivorID, "merged into "+g.SurvivorID)
 	}
 	if err := a.store.RecomputeBookAggregates(g.SurvivorID); err != nil {
 		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: recompute %s: %v", g.BookFolder, g.SurvivorID, err)
+		a.log(slog.LevelWarn, "fragments %q: recompute %s: %v", folder, g.SurvivorID, err)
 	}
 	a.groups.Add(1)
 }
 
 // updateSurvivor sets the survivor's title (unless the user locked it; fails
 // closed on an unreadable lock set) and its folder path, and journals both.
+// The caller holds merge.LockMergeRMW.
 func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
+	folder := logger.SanitizeLogValue(g.BookFolder)
 	b, err := a.store.GetBookByID(g.SurvivorID)
-	if err != nil || b == nil {
+	if err != nil || b == nil || b.IsSoftDeleted() {
 		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: read survivor %s: %v", g.BookFolder, g.SurvivorID, err)
+		a.log(slog.LevelWarn, "fragments %q: survivor %s unreadable or retired (err=%v); title and path left as they are",
+			folder, g.SurvivorID, err)
 		return
 	}
 	oldTitle, oldPath := b.Title, b.FilePath
@@ -1018,7 +1184,7 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		switch {
 		case lerr != nil:
 			a.titleKept.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: title not changed, field locks unreadable: %v", g.BookFolder, lerr)
+			a.log(slog.LevelWarn, "fragments %q: title not changed, field locks unreadable: %v", folder, lerr)
 		case locks.Locked(database.FieldKeyTitle):
 			a.titleKept.Add(1)
 		default:
@@ -1033,7 +1199,7 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 	}
 	if _, err := a.store.UpdateBook(b.ID, b); err != nil {
 		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: update survivor %s: %v", g.BookFolder, b.ID, err)
+		a.log(slog.LevelWarn, "fragments %q: update survivor %s: %v", folder, b.ID, err)
 		return
 	}
 	if b.Title != oldTitle {
@@ -1044,22 +1210,90 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 	}
 }
 
+// retire demotes and soft-deletes one shell, then moves each of its external
+// ids to target, journaling every step so a revert can undo it. The shell's
+// ids are read first and the shell is kept when that read fails: a PID mapping
+// is never left silently on a retired book. The caller holds
+// merge.LockMergeRMW.
+func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
+	exts, err := a.store.GetExternalIDsForBook(shellID)
+	if err != nil {
+		a.kept.Add(1)
+		a.log(slog.LevelWarn, "%s %q: shell %s kept, its external ids are unreadable: %v", kind, folder, shellID, err)
+		return
+	}
+	b, err := a.store.GetBookByID(shellID)
+	if err != nil || b == nil {
+		a.kept.Add(1)
+		a.log(slog.LevelWarn, "%s %q: shell %s kept, unreadable (err=%v)", kind, folder, shellID, err)
+		return
+	}
+	// merge.MergeBooks demotes its losers; a retired shell left primary would
+	// still compete for its version group.
+	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+		prev := ""
+		if b.IsPrimaryVersion != nil {
+			prev = "true"
+		}
+		notPrimary := false
+		b.IsPrimaryVersion = &notPrimary
+		if _, err := a.store.UpdateBook(b.ID, b); err != nil {
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "%s %q: demote shell %s: %v — shell kept", kind, folder, shellID, err)
+			return
+		}
+		a.journal(shellID, fsChangePrimaryDemote, "is_primary_version", prev, "false")
+	}
+	if err := merge.SoftDeleteBook(a.store, shellID); err != nil {
+		a.errs.Add(1)
+		a.log(slog.LevelWarn, "%s %q: soft-delete %s: %v", kind, folder, shellID, err)
+		return
+	}
+	a.softDeleted.Add(1)
+	a.journal(shellID, fsChangeSoftDelete, "marked_for_deletion", "", note)
+	for _, e := range exts {
+		if err := a.store.ReassignExternalID(e.Source, e.ExternalID, targetID); err != nil {
+			// The id stays on the soft-deleted shell, which a revert restores.
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "%s %q: move external id %s/%s to %s: %v", kind, folder,
+				logger.SanitizeLogValue(e.Source), logger.SanitizeLogValue(e.ExternalID), targetID, err)
+			continue
+		}
+		a.journal(shellID, fsChangeExtIDs, "external_id:"+e.Source+"/"+e.ExternalID, shellID, targetID)
+	}
+}
+
+func fsStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 // applyDuplicates retires the duplicate shells of one duplicates group. The
-// owner and every book_file row (the shells' included) are left in place.
+// owner and every book_file row (the shells' included) stay where they are.
+// The shells' external ids move to the owner, which owns the same files, so a
+// PID that named a shell names the owner's copy; each move is journaled.
 func (a *fsApplier) applyDuplicates(g fsRepairGroup) {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 
+	folder := logger.SanitizeLogValue(g.BookFolder)
 	owner, err := a.store.GetBookByID(g.OwnerID)
 	if err != nil || owner == nil || owner.IsSoftDeleted() {
 		a.skipped.Add(1)
-		a.log(slog.LevelWarn, "duplicates %q: owner %s unreadable or gone (err=%v) — group skipped", g.BookFolder, g.OwnerID, err)
+		a.log(slog.LevelWarn, "duplicates %q: owner %s unreadable or gone (err=%v) — group skipped", folder, g.OwnerID, err)
+		return
+	}
+	if owner.IsPrimaryVersion != nil && !*owner.IsPrimaryVersion {
+		a.skipped.Add(1)
+		a.log(slog.LevelWarn, "duplicates %q: owner %s is not the primary version — group skipped", folder, g.OwnerID)
 		return
 	}
 	ownerRows, err := a.store.GetBookFiles(owner.ID)
 	if err != nil {
 		a.errs.Add(1)
-		a.log(slog.LevelWarn, "duplicates %q: read owner rows: %v — group skipped", g.BookFolder, err)
+		a.log(slog.LevelWarn, "duplicates %q: read owner rows: %v — group skipped", folder, err)
 		return
 	}
 	ownerPaths := make(map[string]bool, len(ownerRows))
@@ -1075,10 +1309,15 @@ func (a *fsApplier) applyDuplicates(g fsRepairGroup) {
 		if shell.IsSoftDeleted() {
 			continue
 		}
+		if vg := fsStr(shell.VersionGroupID); vg != "" && vg != fsStr(owner.VersionGroupID) {
+			a.kept.Add(1)
+			a.log(slog.LevelWarn, "duplicates %q: shell %s is in a different version group from %s — kept", folder, m.ID, owner.ID)
+			continue
+		}
 		rows, err := a.store.GetBookFiles(m.ID)
 		if err != nil {
 			a.kept.Add(1)
-			a.log(slog.LevelWarn, "duplicates %q: read rows of %s: %v — shell kept", g.BookFolder, m.ID, err)
+			a.log(slog.LevelWarn, "duplicates %q: read rows of %s: %v — shell kept", folder, m.ID, err)
 			continue
 		}
 		paths := []string{shell.FilePath}
@@ -1087,23 +1326,17 @@ func (a *fsApplier) applyDuplicates(g fsRepairGroup) {
 		}
 		dup := true
 		for _, p := range paths {
-			if p != "" && !ownerPaths[p] {
+			if p != "" && (!ownerPaths[p] || fsRegroupProtectedPath(p)) {
 				dup = false
 				break
 			}
 		}
 		if !dup {
 			a.kept.Add(1)
-			a.log(slog.LevelWarn, "duplicates %q: shell %s has a file owner %s does not — kept", g.BookFolder, m.ID, owner.ID)
+			a.log(slog.LevelWarn, "duplicates %q: shell %s has a file %s does not own, or a protected path — kept", folder, m.ID, owner.ID)
 			continue
 		}
-		if err := merge.SoftDeleteBook(a.store, m.ID); err != nil {
-			a.errs.Add(1)
-			a.log(slog.LevelWarn, "duplicates %q: soft-delete %s: %v", g.BookFolder, m.ID, err)
-			continue
-		}
-		a.softDeleted.Add(1)
-		a.journal(m.ID, fsChangeSoftDelete, "marked_for_deletion", "", "duplicate of "+owner.ID)
+		a.retire("duplicates", folder, m.ID, owner.ID, "duplicate of "+owner.ID)
 	}
 	a.groups.Add(1)
 }
