@@ -1,7 +1,7 @@
 // file: web/src/utils/operationPolling.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d8c7b6a-5f4e-3d2c-1b0a-9e8d7c6b5a4f
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 
 import * as api from '../services/api';
 
@@ -91,9 +91,26 @@ export function pollOperation(
  * it never stops, and the UI spins on an op that finished.
  */
 export function isTerminal(status: string): boolean {
-  return (
-    ['completed', 'failed', 'canceled'].includes(status) ||
-    status === 'interrupted' ||
-    status.startsWith('interrupted_')
-  );
+  return ['completed', 'failed', 'canceled'].includes(status) || isInterrupted(status);
+}
+
+/**
+ * isInterrupted reports whether a status belongs to the interrupted family:
+ * the legacy bare "interrupted" plus every "interrupted_*". Prefix-matched for
+ * the reason given on isTerminal. Mirrors the server's
+ * registry.IsInterruptedStatus; a Retry on one of these resumes the SAME
+ * operation in place rather than starting a new one.
+ */
+export function isInterrupted(status: string): boolean {
+  return status === 'interrupted' || status.startsWith('interrupted_');
+}
+
+/**
+ * isRetryable reports whether the Activity page offers Retry for a status:
+ * failed, canceled and the interrupted family. Every status here is one the
+ * server's retry endpoint accepts (isRetryableV2Status); completed is accepted
+ * there too but deliberately not offered here.
+ */
+export function isRetryable(status: string): boolean {
+  return status === 'failed' || status === 'canceled' || isInterrupted(status);
 }

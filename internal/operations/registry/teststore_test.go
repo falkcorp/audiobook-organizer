@@ -1,5 +1,5 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
 // last-edited: 2026-09-12
 
@@ -279,6 +279,19 @@ func (f *fakeStore) IncrementResumeCountV2(id string) error {
 		return nil
 	}
 	op.ResumeCount++
+	f.ops[id] = op
+	return nil
+}
+
+func (f *fakeStore) MarkOperationV2ManualRetry(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	op, ok := f.ops[id]
+	if !ok {
+		return nil
+	}
+	op.ManualRetryCount++
+	op.ResumeCountAtManualRetry = op.ResumeCount
 	f.ops[id] = op
 	return nil
 }

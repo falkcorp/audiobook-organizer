@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.33.0
+// version: 2.34.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-12
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -60,7 +60,7 @@ import { usePendingFileOps } from '../hooks/usePendingFileOps';
 import { useOperationsStore } from '../stores/useOperationsStore';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { tagChipProps } from '../utils/activityTagColors';
-import { isTerminal } from '../utils/operationPolling';
+import { isInterrupted, isRetryable, isTerminal } from '../utils/operationPolling';
 import { operationDisplayName } from '../components/layout/operationsFormat';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
@@ -800,15 +800,32 @@ export default function ActivityLog() {
     }
   };
 
-  // Per-op retry: requeues a failed / canceled / interrupted op as a NEW run
-  // and reloads the list so the queued row appears. The toast carries the new
-  // id so the user can find it; the failure toast carries the server's reason
-  // (a def with no retry, an op still running, ...) rather than a generic one.
+  // Per-op retry. An interrupted op is re-queued IN PLACE by the server (mode
+  // 'resumed_in_place'): same id, so the row moves out of Interrupted into
+  // Pending/Active, its log continues, and an open detail view stays on it —
+  // the Pending and Active sections are opened so the row does not vanish into
+  // a rolled-up section, and the expanded log is reloaded to show the
+  // retry boundary line. A failed / canceled op gets a NEW run
+  // ('requeued_new') and the toast names the new id. The failure toast
+  // carries the server's reason (another run still live, ...).
   const handleRetryOp = async (opId: string) => {
     try {
-      const requeued = await api.retryOperation(opId);
+      const result = await api.retryOperation(opId);
       await loadActiveOpsFromServer();
-      setToast(`Requeued as ${requeued.id.slice(0, 8)}`);
+      if (result.mode === 'resumed_in_place') {
+        setCollapsedSections((prev) => {
+          const next = new Set(prev);
+          next.delete('pending');
+          next.delete('active');
+          return next;
+        });
+        if (expandedOpId === opId) {
+          await loadOperationLogs(opId);
+        }
+        setToast(`Retrying ${opId.slice(0, 8)} in place — resumed from where it stopped`);
+      } else {
+        setToast(`Requeued as ${result.id.slice(0, 8)}`);
+      }
     } catch (err) {
       console.error('Failed to retry operation', err);
       setToast(describeError(err));
@@ -1500,7 +1517,7 @@ export default function ActivityLog() {
                     title: 'Interrupted',
                     // The whole interrupted_* family, by prefix, so a policy
                     // added on the backend lands here instead of in Active.
-                    match: (o) => o.status === 'interrupted' || o.status.startsWith('interrupted_'),
+                    match: (o) => isInterrupted(o.status),
                     compare: newestFirst,
                   },
                 ];
@@ -1677,10 +1694,18 @@ export default function ActivityLog() {
                               </IconButton>
                             </Tooltip>
                           )}
-                          {/* Failed, canceled and the interrupted_* family:
-                              everything that ended without finishing. */}
-                          {!group && isTerminal(op.status) && op.status !== 'completed' && (
-                            <Tooltip title="Retry — requeue this operation">
+                          {/* Failed, canceled and the interrupted family:
+                              everything that ended without finishing. One
+                              predicate, shared with the server's retry
+                              endpoint via isRetryable. */}
+                          {!group && isRetryable(op.status) && (
+                            <Tooltip
+                              title={
+                                isInterrupted(op.status)
+                                  ? 'Retry — resume this operation in place'
+                                  : 'Retry — requeue this operation as a new run'
+                              }
+                            >
                               <IconButton
                                 size="small"
                                 onClick={(e) => {
@@ -1700,23 +1725,21 @@ export default function ActivityLog() {
                               sweep for good. (It used to call cancel, which
                               the server refuses with 404 on an already-
                               dropped row — see handleDiscardOp.) */}
-                          {!group &&
-                            (op.status === 'interrupted' ||
-                              op.status.startsWith('interrupted_')) && (
-                              <Tooltip title="Discard — remove this run; it will never resume">
-                                <IconButton
-                                  size="small"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDiscardOp(op.id);
-                                  }}
-                                  aria-label="Discard"
-                                  disabled={discarding.has(op.id)}
-                                >
-                                  <DeleteSweepIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            )}
+                          {!group && isInterrupted(op.status) && (
+                            <Tooltip title="Discard — remove this run; it will never resume">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDiscardOp(op.id);
+                                }}
+                                aria-label="Discard"
+                                disabled={discarding.has(op.id)}
+                              >
+                                <DeleteSweepIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                           {!group && (
                             <Tooltip title="Copy op summary">
                               <IconButton

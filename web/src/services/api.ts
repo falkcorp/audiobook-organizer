@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.99.0
+// version: 2.100.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -2377,12 +2377,23 @@ export async function discardOperation(id: string): Promise<void> {
 }
 
 /**
- * retryOperation requeues a finished (failed / canceled / interrupted) operation
- * as a NEW run with the same definition and parameters. The server answers 202
- * with the new operation; the original row is left as it was, so the history
- * still shows what happened the first time.
+ * RetryResult is the 202 body of POST /operations/v2/:id/retry.
+ * - mode 'resumed_in_place': an interrupted operation was re-queued as the SAME
+ *   row; `id` is the id that was retried and its logs continue there.
+ * - mode 'requeued_new': a failed / canceled operation got a NEW run with the
+ *   same definition and parameters; `id` is the new run (empty for a batchable
+ *   def, which is assigned an id when its batch flushes). The original row is
+ *   left as it was, so the history still shows what happened the first time.
  */
-export async function retryOperation(id: string): Promise<{ id: string }> {
+export interface RetryResult {
+  id: string;
+  def_id?: string;
+  status?: string;
+  mode?: 'resumed_in_place' | 'requeued_new';
+}
+
+/** retryOperation retries a finished operation; see RetryResult for the two outcomes. */
+export async function retryOperation(id: string): Promise<RetryResult> {
   const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}/retry`, {
     method: 'POST',
   });

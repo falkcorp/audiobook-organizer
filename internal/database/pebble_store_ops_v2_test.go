@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-09-12
 
@@ -11,6 +11,61 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestManualRetry_DroppedRowRequeuesWithBaselineMoved pins the two store writes
+// the operator's same-row Retry makes, against the real Pebble store:
+//
+//   - MarkOperationV2ManualRetry bumps manual_retry_count and moves the
+//     restart-strike baseline to the current resume_count WITHOUT incrementing
+//     resume_count (which keeps counting automatic restarts only).
+//   - ResetOperationV2ForResume accepts an interrupted_dropped row — the one
+//     status the boot resume sweep never re-queues — and puts it back in the
+//     queue index, so ListQueuedOperationsV2 (the dispatcher's only source)
+//     returns it, with CompletedAt and the drop message cleared.
+func TestManualRetry_DroppedRowRequeuesWithBaselineMoved(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-dropped-1", "queued")))
+	for range 3 {
+		require.NoError(t, s.IncrementResumeCountV2("op-dropped-1"))
+	}
+	droppedAt := time.Now().UTC()
+	msg := "force-dropped: infinite restart without progress"
+	require.NoError(t, s.UpdateOperationV2Status("op-dropped-1", "interrupted_dropped", nil, &droppedAt, &msg))
+
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	for _, r := range queued {
+		require.NotEqual(t, "op-dropped-1", r.ID, "a dropped row must not be in the queue before the retry")
+	}
+
+	require.NoError(t, s.MarkOperationV2ManualRetry("op-dropped-1"))
+	require.NoError(t, s.ResetOperationV2ForResume("op-dropped-1"))
+
+	got, err := s.GetOperationV2("op-dropped-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "queued", got.Status)
+	require.Nil(t, got.CompletedAt)
+	require.Nil(t, got.ErrorMessage)
+	require.Equal(t, 3, got.ResumeCount, "a manual retry must not count as an automatic restart")
+	require.Equal(t, 1, got.ManualRetryCount)
+	require.Equal(t, 3, got.ResumeCountAtManualRetry, "baseline must move to the resume_count at the retry")
+
+	queued, err = s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	found := 0
+	for _, r := range queued {
+		if r.ID == "op-dropped-1" {
+			found++
+		}
+	}
+	require.Equal(t, 1, found, "the retried row must be queued exactly once (QueuedAt untouched, one index entry)")
+
+	require.Error(t, s.MarkOperationV2ManualRetry("op-missing"), "a missing row is an error, not a silent no-op")
+}
 
 // buildTestOpRow constructs a minimal OperationV2Row with the given id and status.
 // All other fields are set to non-zero defaults so InsertOperationV2 succeeds.

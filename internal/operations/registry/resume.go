@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package registry
 
@@ -227,7 +227,26 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 		r.logger.Warn("registry: resumeAfterStartup: failed to increment resume_count",
 			"op_id", row.ID, "error", err)
 	}
+	if !r.requeueInPlace(row, def, "automatic resume") {
+		return false
+	}
+	r.logger.Info("registry: resumeAfterStartup: re-queued restart op",
+		"op_id", row.ID, "def_id", def.ID, "resume_count_new", row.ResumeCount+1)
+	return true
+}
 
+// requeueInPlace is the shared tail of every same-row re-queue: the automatic
+// resumes (resumeRestart, from the boot sweep and the scan stand-down release)
+// and the operator's Retry (RetryInterrupted). It merges any schema_version=2
+// checkpoint into the row's params and consumes it, flips the row back to
+// "queued" with CompletedAt and the error cleared, restates the queued summary,
+// announces op.created and nudges the dispatcher. It does NOT touch
+// resume_count — whether this re-queue counts toward the restart-strike guard
+// is the caller's decision. trigger only labels the log line.
+//
+// Returns false when the row could not be flipped back to "queued"; nothing
+// is announced in that case (see the reset block).
+func (r *Registry) requeueInPlace(row database.OperationV2Row, def OperationDef, trigger string) bool {
 	// Restore checkpoint state into params so Run can read it on resume.
 	if stateRow, err := r.store.GetOpStateV2(row.ID); err == nil &&
 		stateRow != nil && stateRow.SchemaVersion == 2 {
@@ -309,8 +328,8 @@ func (r *Registry) resumeRestart(ctx context.Context, row database.OperationV2Ro
 		row.ProgressMessage = message
 	}
 
-	r.logger.Info("registry: resumeAfterStartup: re-queued restart op",
-		"op_id", row.ID, "def_id", def.ID, "resume_count_new", row.ResumeCount+1)
+	r.logger.Info("registry: re-queued op in place",
+		"op_id", row.ID, "def_id", def.ID, "previous_status", row.Status, "trigger", trigger)
 
 	// Emit op.created so the UI can pick the op back up — without this,
 	// connected clients only ever see op.updated for a row they don't know
@@ -355,6 +374,12 @@ func (r *Registry) recordResumeResetFailure(row database.OperationV2Row, resetEr
 // path. A no-op if the row is missing, no longer quiesced (already terminal or
 // resumed by another path), or its def is unknown.
 func (r *Registry) resumeQuiescedOp(opID string) {
+	// Serialized with RetryInterrupted: both read an interrupted row and flip
+	// it to queued, and an operator may press Retry on the quiesced scan at the
+	// same moment the last stand-down holder releases.
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+
 	row, err := r.store.GetOperationV2(opID)
 	if err != nil || row == nil {
 		r.logger.Warn("registry: resumeQuiescedOp: op row missing", "op_id", opID, "error", err)

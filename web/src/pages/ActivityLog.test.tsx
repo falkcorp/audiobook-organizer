@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
 // last-edited: 2026-09-12
 
@@ -42,7 +42,9 @@ vi.mock('../services/api', () => ({
   getOperationLogs: vi.fn().mockResolvedValue([]),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
   discardOperation: vi.fn().mockResolvedValue(undefined),
-  retryOperation: vi.fn().mockResolvedValue({ id: 'op-requeued-1234', status: 'queued' }),
+  retryOperation: vi
+    .fn()
+    .mockResolvedValue({ id: 'op-requeued-1234', status: 'queued', mode: 'requeued_new' }),
   clearStaleOperations: vi.fn().mockResolvedValue(undefined),
   revertOperation: vi.fn().mockResolvedValue(undefined),
 }));
@@ -601,6 +603,46 @@ describe('Active Operations retry and discard controls', () => {
     await waitFor(() => expect(loadActiveOpsFromServer).toHaveBeenCalled());
     // The new id, so the user can find the requeued run.
     expect(await screen.findByText(/Requeued as op-reque/)).toBeInTheDocument();
+  });
+
+  // An interrupted op is resumed IN PLACE: same id, so the toast must not claim
+  // a new run, the row must leave Interrupted (no Discard/Retry once it is
+  // queued), and an open detail view stays on it with its log reloaded.
+  it('retrying an interrupted row resumes it in place and keeps its detail view', async () => {
+    const user = userEvent.setup();
+    // The server resets the row, so the timeline the page reloads next answers
+    // the same id as queued. Done inside the retry call, not in a
+    // loadFromServer stub: the page also loads on mount, and a one-shot stub
+    // there would flip the row before Retry was ever clicked.
+    mockedRetryOperation.mockImplementationOnce(async () => {
+      operationsStoreState.activeOperations = operationsStoreState.activeOperations.map((o) =>
+        (o as { id: string }).id === 'op-interrupted' ? { ...(o as object), status: 'queued' } : o
+      );
+      return { id: 'op-interrupted', status: 'queued', mode: 'resumed_in_place' };
+    });
+    const { getOperationLogs } = await import('../services/api');
+    // Open the page with this op's detail view already expanded (?op=), the
+    // way a deep link or a prior click leaves it.
+    render(
+      <MemoryRouter initialEntries={['/activity?op=op-interrupted']}>
+        <ActivityLog />
+      </MemoryRouter>
+    );
+    await user.click(await screen.findByRole('button', { name: 'Expand All' }));
+    const findRow = () =>
+      screen.getAllByText('Hash Backfill')[0].closest('.MuiPaper-root') as HTMLElement;
+    await waitFor(() => expect(findRow()).not.toBeNull());
+    vi.mocked(getOperationLogs).mockClear();
+
+    await user.click(within(findRow()).getByRole('button', { name: 'Retry' }));
+
+    expect(mockedRetryOperation).toHaveBeenCalledWith('op-interrupted');
+    expect(await screen.findByText(/Retrying op-inter\S* in place/)).toBeInTheDocument();
+    expect(screen.queryByText(/Requeued as/)).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(getOperationLogs)).toHaveBeenCalledWith('op-interrupted'));
+    const row = findRow();
+    expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('reports the server error when a retry is refused', async () => {

@@ -3246,6 +3246,57 @@ func (_c *MockOpsV2Store_ListWaitingDepsOps_Call) RunAndReturn(run func() ([]dat
 	return _c
 }
 
+// MarkOperationV2ManualRetry provides a mock function for the type MockOpsV2Store
+func (_mock *MockOpsV2Store) MarkOperationV2ManualRetry(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkOperationV2ManualRetry")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOpsV2Store_MarkOperationV2ManualRetry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkOperationV2ManualRetry'
+type MockOpsV2Store_MarkOperationV2ManualRetry_Call struct {
+	*mock.Call
+}
+
+// MarkOperationV2ManualRetry is a helper method to define mock.On call
+//   - id string
+func (_e *MockOpsV2Store_Expecter) MarkOperationV2ManualRetry(id any) *MockOpsV2Store_MarkOperationV2ManualRetry_Call {
+	return &MockOpsV2Store_MarkOperationV2ManualRetry_Call{Call: _e.mock.On("MarkOperationV2ManualRetry", id)}
+}
+
+func (_c *MockOpsV2Store_MarkOperationV2ManualRetry_Call) Run(run func(id string)) *MockOpsV2Store_MarkOperationV2ManualRetry_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOpsV2Store_MarkOperationV2ManualRetry_Call) Return(err error) *MockOpsV2Store_MarkOperationV2ManualRetry_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOpsV2Store_MarkOperationV2ManualRetry_Call) RunAndReturn(run func(id string) error) *MockOpsV2Store_MarkOperationV2ManualRetry_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PromoteToQueued provides a mock function for the type MockOpsV2Store
 func (_mock *MockOpsV2Store) PromoteToQueued(id string) error {
 	ret := _mock.Called(id)
@@ -23789,6 +23840,57 @@ func (_c *MockStore_MarkOperationChangesReverted_Call) Return(err error) *MockSt
 }
 
 func (_c *MockStore_MarkOperationChangesReverted_Call) RunAndReturn(run func(operationID string, changeIDs []string) error) *MockStore_MarkOperationChangesReverted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// MarkOperationV2ManualRetry provides a mock function for the type MockStore
+func (_mock *MockStore) MarkOperationV2ManualRetry(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkOperationV2ManualRetry")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_MarkOperationV2ManualRetry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkOperationV2ManualRetry'
+type MockStore_MarkOperationV2ManualRetry_Call struct {
+	*mock.Call
+}
+
+// MarkOperationV2ManualRetry is a helper method to define mock.On call
+//   - id string
+func (_e *MockStore_Expecter) MarkOperationV2ManualRetry(id any) *MockStore_MarkOperationV2ManualRetry_Call {
+	return &MockStore_MarkOperationV2ManualRetry_Call{Call: _e.mock.On("MarkOperationV2ManualRetry", id)}
+}
+
+func (_c *MockStore_MarkOperationV2ManualRetry_Call) Run(run func(id string)) *MockStore_MarkOperationV2ManualRetry_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_MarkOperationV2ManualRetry_Call) Return(err error) *MockStore_MarkOperationV2ManualRetry_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_MarkOperationV2ManualRetry_Call) RunAndReturn(run func(id string) error) *MockStore_MarkOperationV2ManualRetry_Call {
 	_c.Call.Return(run)
 	return _c
 }

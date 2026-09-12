@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -37,6 +37,10 @@ type OperationsRegistry interface {
 	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive (409).
 	Discard(opID string) error
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
+	// RetryInterrupted re-queues an interrupted run in place (same id). Errors:
+	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive and
+	// opsregistry.ErrOpNotRetryable (409).
+	RetryInterrupted(ctx context.Context, opID, actor string) error
 	ActiveDefs() []opsregistry.OperationDef
 	// Def looks up a single registered def. Used by TriggerOperationV2 to read
 	// the def's declared Permissions before enqueueing.
@@ -649,33 +653,46 @@ func (h *OperationsV2Handler) defPermissionsHeld(c *gin.Context, defID string) b
 
 // isRetryableV2Status reports whether a v2 row is finished from the caller's
 // point of view and may be re-run: completed, failed, canceled, or any of the
-// interrupted_* family (quiesced, dropped, ask, restart). Everything else —
-// queued, running, waiting_deps — is still owned by the scheduler, and a
-// "retry" of it would be a duplicate run rather than a new attempt.
+// interrupted family (opsregistry.IsInterruptedStatus — bare "interrupted" and
+// every interrupted_*). Everything else — queued, running, waiting_deps — is
+// still owned by the scheduler, and a "retry" of it would be a duplicate run
+// rather than a new attempt. The web's isRetryable
+// (web/src/utils/operationPolling.ts) offers Retry on a subset of this —
+// failed, canceled and the interrupted family; completed is accepted here but
+// deliberately not offered there.
 func isRetryableV2Status(status string) bool {
 	switch status {
 	case "completed", "failed", "canceled":
 		return true
 	}
-	return strings.HasPrefix(status, "interrupted_")
+	return opsregistry.IsInterruptedStatus(status)
 }
+
+// Retry response modes: whether POST .../retry re-queued the same row or
+// minted a new one. The web page words its toast from this.
+const (
+	retryModeResumedInPlace = "resumed_in_place"
+	retryModeRequeuedNew    = "requeued_new"
+)
 
 // RetryOperationV2 implements POST /api/v1/operations/v2/:id/retry.
 //
-// It enqueues a NEW run with the same def_id and the same params as the
-// finished op :id, through registry.EnqueueOp — the exact path POST
-// /operations/v2 takes, so the def's ConcurrencyKey dedupe, MergeQueuedParams
-// and Batchable handling all apply unchanged. Responds 202 with the new op's
-// id, def_id and status. 404 for an unknown id; 409 when the row is not in a
-// finished status (see isRetryableV2Status).
+// An INTERRUPTED row (opsregistry.IsInterruptedStatus) is re-queued in place
+// through registry.RetryInterrupted: the response carries the SAME id with
+// mode "resumed_in_place", the row leaves the Interrupted list, its logs
+// continue under that id, and it resumes from its checkpoint when one exists.
+// 409 when a run of it (or another run of the same def) is still live.
 //
-// Whether the new run continues from the old one's checkpoint is the def's
-// ResumePolicy's business, not this handler's: params are copied verbatim.
-// For a ResumeRestart def such as library.scan, resumeRestart merges the saved
-// checkpoint into the row's params on every resume, so a row that was resumed
-// at least once hands its resume_* position to the new run; a row that was
-// never resumed still has its checkpoint in op_state keyed by the OLD id, which
-// the new id never reads, so that run starts from the beginning.
+// A completed, failed or canceled row keeps the old behavior: a NEW run with
+// the same def_id and params through registry.EnqueueOp — the exact path POST
+// /operations/v2 takes, so ConcurrencyKey dedupe, MergeQueuedParams and
+// Batchable handling all apply unchanged — answered with mode "requeued_new".
+// Those rows are not reused because resetting them would erase the error and
+// completion time of a run that really ended. Its params are copied verbatim;
+// it does not read the old row's checkpoint.
+//
+// 404 for an unknown id; 409 when the row is not in a finished status (see
+// isRetryableV2Status).
 //
 // The status in the response is read back from the store rather than assumed:
 // a def with a ConcurrencyKey and DedupeQueuedRuns (library.scan again) makes
@@ -708,6 +725,11 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 		return
 	}
 
+	if opsregistry.IsInterruptedStatus(row.Status) {
+		h.retryInterruptedInPlace(c, row)
+		return
+	}
+
 	// Pass the stored JSON through as-is. EnqueueOp marshals whatever it is
 	// given; a json.RawMessage marshals to its own bytes, so the new row carries
 	// byte-identical params. An empty stored value is left nil, which EnqueueOp
@@ -735,6 +757,38 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 		"id":     newID,
 		"def_id": row.DefID,
 		"status": status,
+		"mode":   retryModeRequeuedNew,
+	})
+}
+
+// retryInterruptedInPlace is RetryOperationV2's interrupted-row branch. The
+// status in the response is "queued" — what the row was reset to; the
+// dispatcher may already have moved it on by the time the client reads it.
+func (h *OperationsV2Handler) retryInterruptedInPlace(c *gin.Context, row *database.OperationV2Row) {
+	actor := "an unauthenticated request"
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok && u.Username != "" {
+		actor = u.Username
+	}
+	err := h.registry.RetryInterrupted(c.Request.Context(), row.ID, actor)
+	switch {
+	case err == nil:
+	case errors.Is(err, opsregistry.ErrOpNotFound):
+		httputil.RespondWithNotFound(c, "operation", row.ID)
+		return
+	case errors.Is(err, opsregistry.ErrOpActive), errors.Is(err, opsregistry.ErrOpNotRetryable):
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	default:
+		httputil.InternalError(c, "retry failed", err)
+		return
+	}
+	slog.Info("retry: re-queued interrupted operation in place",
+		"op_id", row.ID, "old_status", row.Status, "def_id", row.DefID, "actor", actor)
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"id":     row.ID,
+		"def_id": row.DefID,
+		"status": "queued",
+		"mode":   retryModeResumedInPlace,
 	})
 }
 

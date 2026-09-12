@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package registry
 
@@ -429,6 +429,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			// and spawn a replacement so the pool doesn't shrink; the runaway
 			// goroutine is monitored so the abandoned counter drains when it
 			// eventually returns.
+			//
+			// Mark the op as abandoned-but-alive BEFORE releasing the handle, so
+			// there is no instant at which RetryInterrupted sees neither and
+			// re-queues a row whose first Run is still executing.
+			r.mu.Lock()
+			r.abandonedAlive[qr.opID] = struct{}{}
+			r.mu.Unlock()
 			r.releaseRunHandle(qr.opID)
 			// C-3: write a terminal status so the row leaves the opv2 active
 			// index. Without this the row stayed "running" forever, and the
@@ -463,6 +470,9 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.goroutineWG.Go(func() { r.startWorker(parentCtx, -1) })
 			go func() {
 				<-done
+				r.mu.Lock()
+				delete(r.abandonedAlive, qr.opID)
+				r.mu.Unlock()
 				r.abandoned.decrement(qr.plugin)
 				r.logger.Info("registry: abandoned goroutine returned",
 					"op_id", qr.opID, "plugin", qr.plugin)
@@ -587,7 +597,16 @@ func (r *Registry) checkInfiniteRestart(qr *queuedRun, def OperationDef) bool {
 	if err != nil || row == nil {
 		return false
 	}
-	if row.ResumeCount < 3 {
+	// Count only AUTOMATIC restarts since the operator last retried this row.
+	// A manual retry (RetryInterrupted) never increments resume_count and
+	// records resume_count_at_manual_retry = resume_count, so the operator's
+	// explicit decision to run it again is not mistaken for a boot loop. That
+	// matters most for the row this guard itself force-dropped: it carries
+	// resume_count >= 3 with no progress by construction, so without the
+	// baseline every manual retry of it would be re-dropped on first dispatch.
+	// After three further automatic restarts without progress the guard
+	// re-arms on its own; there is no flag to clear.
+	if row.ResumeCount-row.ResumeCountAtManualRetry < 3 {
 		return false
 	}
 	// Check if high_water_progress advanced. We use 0 as the baseline when
