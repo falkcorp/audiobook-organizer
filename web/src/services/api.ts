@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.94.0
+// version: 2.95.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -2901,11 +2901,17 @@ export interface ITunesBookMapping {
   local_path: string;
 }
 
+// getITunesBooks lists books that carry an iTunes persistent ID.
+// `count` is exact unless `truncated` is true: a search that filled the
+// backend's over-fetch window (10,000 search rows) only saw the matches inside
+// it, so `count` is then a lower bound and the caller should prompt the user to
+// refine the search. `truncated` is omitted when false. It is unrelated to
+// PaginatedResponse's `has_more`, which means "another page exists".
 export async function getITunesBooks(
   search?: string,
   limit?: number,
   offset?: number
-): Promise<{ items: ITunesBookMapping[]; count: number }> {
+): Promise<{ items: ITunesBookMapping[]; count: number; truncated?: boolean }> {
   const params = new URLSearchParams();
   if (search) params.set('search', search);
   if (limit != null) params.set('limit', String(limit));
