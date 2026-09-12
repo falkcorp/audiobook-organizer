@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-12
 
@@ -10,6 +10,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"log/slog"
@@ -443,13 +444,13 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 	target := mfs.fileWorkTarget(book, policy)
 	if target == nil {
 		slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
-			"book_id", id, "book_title", book.Title,
-			"protected_path", book.FilePath,
+			"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
+			"protected_path", logger.SanitizeLogValue(book.FilePath),
 			"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
 		return tagWriteResult{}, nil
 	}
 	if target != book {
-		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", target.ID, "bookID", id)
+		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", logger.SanitizeLogValue(target.ID), "bookID", logger.SanitizeLogValue(id))
 		id = target.ID
 		book = target
 	}
@@ -624,10 +625,10 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 			if written, err := mfs.writeTags(id, policy); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
-					"book_id", id, "book_title", book.Title,
-					"book_path", book.FilePath, "error", err)
+					"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
+					"book_path", logger.SanitizeLogValue(book.FilePath), "error", logger.SanitizeLogValue(err.Error()))
 			} else {
-				slog.Info("wrote metadata tags to file(s) for book", "value", written, "id", id)
+				slog.Info("wrote metadata tags to file(s) for book", "value", written, "id", logger.SanitizeLogValue(id))
 				setCheckpoint(mfs.db, id, phaseTags)
 			}
 		}
@@ -982,7 +983,7 @@ func (mfs *Service) dropProtectedRenameEntries(bookID string, entries []FileRena
 	for _, e := range entries {
 		if mfs.isProtectedPath(e.SourcePath) {
 			slog.Warn("apply rename: leaving a file under a protected path where it is",
-				"book_id", bookID, "protected_path", e.SourcePath)
+				"book_id", logger.SanitizeLogValue(bookID), "protected_path", logger.SanitizeLogValue(e.SourcePath))
 			continue
 		}
 		kept = append(kept, e)

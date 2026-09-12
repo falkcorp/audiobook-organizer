@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -247,7 +248,7 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 	}
 	if !mfs.autoFetchHasLibraryCopy(book) {
 		slog.Info("auto-fetch: book has no library copy under root_dir; file work skipped (auto-fetch never creates one)",
-			"book_id", id, "path", book.FilePath)
+			"book_id", logger.SanitizeLogValue(id), "path", logger.SanitizeLogValue(book.FilePath))
 		return nil
 	}
 	// Auto-fetch holds no scan stand-down of its own: nil checkpoint.
@@ -337,7 +338,7 @@ func (mfs *Service) applyMetadataFileIO(id string, policy copyPolicy) (tagWriteR
 			release()
 		} else {
 			slog.Warn("cannot embed cover: protected book has no library copy",
-				"book_id", id, "book_title", book.Title, "protected_path", book.FilePath)
+				"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title), "protected_path", logger.SanitizeLogValue(book.FilePath))
 		}
 	}
 

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -829,7 +829,7 @@ func (mfs *Service) saveCover(bookID, coverURL string, replace bool) {
 		coverPath = metadata.CoverPathForBook(config.AppConfig.RootDir, bookID)
 	}
 	if coverPath != "" {
-		slog.Info("auto-fetch: book already has a local cover; kept it", "path", coverPath, "id", bookID)
+		slog.Info("auto-fetch: book already has a local cover; kept it", "path", logger.SanitizeLogValue(coverPath), "id", logger.SanitizeLogValue(bookID))
 	} else {
 		// ReplaceCoverArt, not DownloadCoverArt: on an explicit apply of a new
 		// cover, DownloadCoverArt returns an existing cover file untouched, so a
@@ -844,10 +844,10 @@ func (mfs *Service) saveCover(bookID, coverURL string, replace bool) {
 		var err error
 		coverPath, err = download(coverURL, config.AppConfig.RootDir, bookID)
 		if err != nil {
-			slog.Warn("background cover art download failed", "id", bookID, "error", err)
+			slog.Warn("background cover art download failed", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(err.Error()))
 			return
 		}
-		slog.Info("cover art saved to", "path", coverPath, "id", bookID)
+		slog.Info("cover art saved to", "path", logger.SanitizeLogValue(coverPath), "id", logger.SanitizeLogValue(bookID))
 	}
 
 	// Re-read rather than reusing the book the caller had: the apply path and the

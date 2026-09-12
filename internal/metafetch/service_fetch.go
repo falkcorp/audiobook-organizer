@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-12
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -312,7 +313,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if sched := mfs.fileWorkScheduler; sched != nil {
 				sched(id, func() {
 					if err := mfs.FinishAutoFetchFileWork(id, pendingCover, writeBack); err != nil {
-						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", id, "error", err)
+						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 					}
 				})
 			} else {

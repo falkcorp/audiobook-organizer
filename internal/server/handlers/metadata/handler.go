@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-12
 
@@ -63,6 +63,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -676,7 +677,7 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			// The HTTP response has already been written by the time this runs,
 			// so a failure can only be logged.
 			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, shouldWriteBack, hold.Checkpoint); err != nil {
-				slog.Warn("background apply file work failed", "bookID", bookID, "err", err)
+				slog.Warn("background apply file work failed", "bookID", logger.SanitizeLogValue(bookID), "err", logger.SanitizeLogValue(err.Error()))
 			}
 		}) {
 			// Dropped (pool stopped): fn will never run, so release its share of the hold here.
