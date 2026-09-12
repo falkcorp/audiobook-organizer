@@ -1,11 +1,12 @@
 // file: internal/config/unknown_keys.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
 // last-edited: 2026-09-12
 
 package config
 
 import (
+	"bytes"
 	"encoding"
 	"encoding/json"
 	"fmt"
@@ -149,4 +150,14 @@ func joinKeyPath(path, key string) string {
 func unknownKeysMessage(keys []string) string {
 	return "unknown setting key(s): " + strings.Join(keys, ", ") +
 		` — nothing was saved. Nested settings take the nested form, e.g. {"dedup":{"auto_merge_enabled":false}}, not a flat dedup_auto_merge_enabled`
+}
+
+// decodeConfigPayload decodes a PUT payload onto candidate with unknown fields
+// disallowed. It backs up the unknownConfigKeys check: if the walker and the
+// decoder ever disagree about a key, the request still fails instead of
+// silently dropping the key.
+func decodeConfigPayload(payloadJSON []byte, candidate *Config) error {
+	dec := json.NewDecoder(bytes.NewReader(payloadJSON))
+	dec.DisallowUnknownFields()
+	return dec.Decode(candidate)
 }

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 import { Box, Typography, TextField, FormControlLabel, Switch, Grid, Divider } from '@mui/material';
 import * as api from '../../services/api';
@@ -271,57 +271,6 @@ export function DedupSettingsSection({ config, onChange }: DedupSettingsSectionP
             helperText="0–100 composite score. Pairs below this are not shown for review. Must be < Medium and ≥ 0 (default 60)."
             slotProps={{
               htmlInput: { min: 0, max: 100, step: 0.5 },
-            }}
-          />
-        </Grid>
-
-        <Grid size={12}>
-          <Divider sx={{ my: 1 }} />
-          <Typography variant="subtitle2" gutterBottom>
-            Signal Boosts
-          </Typography>
-        </Grid>
-
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Duration boost"
-            value={config.signals.duration_boost}
-            onChange={(e) =>
-              onChange({ signals: { ...config.signals, duration_boost: Number(e.target.value) } })
-            }
-            size="small"
-            slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
-            }}
-          />
-        </Grid>
-
-        <Grid
-          size={{
-            xs: 12,
-            sm: 6,
-          }}
-        >
-          <TextField
-            fullWidth
-            type="number"
-            label="Folder path boost"
-            value={config.signals.folder_path_boost}
-            onChange={(e) =>
-              onChange({
-                signals: { ...config.signals, folder_path_boost: Number(e.target.value) },
-              })
-            }
-            size="small"
-            slotProps={{
-              htmlInput: { min: 0, max: 1, step: 0.01 },
             }}
           />
         </Grid>

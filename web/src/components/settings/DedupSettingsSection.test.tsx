@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c7d6e5-f4a3-2109-bcde-fa8765432109
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -23,8 +23,6 @@ const defaultConfig: DedupConfig = {
     band_high_min: 85.5,
     band_medium_min: 75,
     band_review_min: 60,
-    duration_boost: 0.1,
-    folder_path_boost: 0.05,
   },
 };
 

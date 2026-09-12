@@ -1,7 +1,7 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 import { Dispatch, SetStateAction } from 'react';
 import {
   Box,
@@ -42,7 +42,6 @@ interface MetadataSettingsTabProps {
   settings: {
     autoFetchMetadata: boolean;
     enableAIParsing: boolean;
-    metadataLLMScoringEnabled: boolean;
     openaiApiKey: string;
     metadataSources: UiMetadataSource[];
     language: string;
@@ -143,26 +142,6 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
             <strong>What is this?</strong> Uses OpenAI to intelligently parse complex audiobook
             filenames into title, author, series, narrator, etc. This dramatically improves metadata
             extraction from poorly named files where traditional parsing fails.
-          </Typography>
-        </Alert>
-      </Grid>
-
-      <Grid size={12}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={settings.metadataLLMScoringEnabled}
-              onChange={(e) => handleChange('metadataLLMScoringEnabled', e.target.checked)}
-            />
-          }
-          label="Enable AI rerank for metadata search (opt-in per search)"
-        />
-        <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
-          <Typography variant="caption">
-            <strong>What is this?</strong> Allows users to request a higher-quality LLM rerank pass
-            on ambiguous metadata search results. The per-search toggle in the search dialog is only
-            effective when this server-wide switch is on. Adds approximately $0.003 per search when
-            a user opts in.
           </Typography>
         </Alert>
       </Grid>

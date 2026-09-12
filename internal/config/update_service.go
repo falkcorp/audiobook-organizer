@@ -1,12 +1,11 @@
 // file: internal/config/update_service.go
-// version: 3.23.0
+// version: 3.24.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-12
 
 package config
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -579,12 +578,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// their own mask. See restoreRoundTripSecrets.
 		priorRoundTrip := snapshotRoundTripSecrets(candidate)
 
-		// DisallowUnknownFields backs up the unknownConfigKeys check above: if
-		// the walker and the decoder ever disagree about a key, the request
-		// still fails instead of silently dropping the key.
-		dec := json.NewDecoder(bytes.NewReader(payloadJSON))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(candidate); err != nil {
+		if err := decodeConfigPayload(payloadJSON, candidate); err != nil {
 			unmarshalErr = err
 			return
 		}
