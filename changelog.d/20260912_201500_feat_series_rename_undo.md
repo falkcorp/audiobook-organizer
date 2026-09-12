@@ -1,0 +1,4 @@
+### Changed
+
+- Series renames are now undoable. `PUT /api/v1/series/:id/name` and `PATCH /api/v1/series/:id` no longer rename synchronously and answer `200` with the series; they validate the request (`400` bad id or empty name, `404` unknown series), queue an `entities.series-rename` operation and answer `202` with `{ id, type, status: "queued" }`. The operation performs the same rename and cache invalidation as before and journals a `series_rename` change row, so reverting the operation renames the series back. The web callers (`renameSeries`, `updateSeriesName`) poll the operation and resolve once it completed.
+- Reverting a `series_rename` row now counts a series that already holds the recorded old name as restored instead of refusing it as "renamed since". A series holding any other name is still refused.
