@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -108,14 +108,14 @@ type OperationsV2Option func(*OperationsV2Handler)
 // only the legacy DELETE /operations/:id knew about AI scans, so retiring it
 // without this would have silently broken cancellation.
 //
-// UNVERIFIED AT THE WIRING. The handler behaviour is covered by
-// TestCancelOperationV2_CancelsAnAIScanThroughThePipeline, but that nothing
-// dropped this option in wire_handlers.go is not asserted anywhere: the two
-// collaborators are concrete types on Server (*aiscan.PipelineManager,
-// *database.AIScanStore), so no test can substitute them and drive the real
-// construction path. Omitting the option here fails silently in the worst
-// direction — cancel returns 204 and the scan runs on. Tracked in
-// todo.d/20260816-ai-scan-cancel-wiring-unverified.md.
+// Omitting the option fails silently in the worst direction — cancel returns
+// 204 and the scan runs on — so it is covered at two levels. The handler
+// behaviour: TestCancelOperationV2_CancelsAnAIScanThroughThePipeline. The
+// wiring: TestWireHandlers_CancelOperationV2ReachesAIScanPipeline
+// (internal/server/wire_handlers_test.go), which builds the server through
+// setupRoutes with a real *aiscan.PipelineManager and *database.AIScanStore,
+// cancels a running scan through the real router, and fails if
+// wire_handlers.go stops passing this option.
 func WithAIScanCancellation(canceler ScanCanceler, lister AIScanLister) OperationsV2Option {
 	return func(h *OperationsV2Handler) {
 		h.scanCanceler = canceler
@@ -132,12 +132,12 @@ func WithAIScanCancellation(canceler ScanCanceler, lister AIScanLister) Operatio
 //
 // Why not an option: an option that is forgotten defaults to false and the
 // permission gate is silently inert — it would still return 202 on a request it
-// was added to reject. This file already carries one instance of that exact
-// failure (WithAIScanCancellation, "UNVERIFIED AT THE WIRING" above, tracked in
-// todo.d/20260816-ai-scan-cancel-wiring-unverified.md), where a dropped option
-// makes cancel answer 204 while the scan runs on. A positional parameter makes
-// omission a compile error instead, so the type checker verifies the wiring that
-// no test can reach.
+// was added to reject. WithAIScanCancellation above shows the cost of that
+// shape: a dropped option makes cancel answer 204 while the scan runs on, and
+// catching it needs a dedicated server-level wiring test
+// (TestWireHandlers_CancelOperationV2ReachesAIScanPipeline). A positional
+// parameter makes omission a compile error instead, so the type checker
+// verifies this wiring with no test at all.
 func NewOperationsV2Handler(opsStore database.OpsV2Store, registry OperationsRegistry, hub OperationsEventHub, enforcePerms bool, opts ...OperationsV2Option) *OperationsV2Handler {
 	h := &OperationsV2Handler{opsStore: opsStore, registry: registry, hub: hub, enforcePerms: enforcePerms}
 	for _, opt := range opts {
