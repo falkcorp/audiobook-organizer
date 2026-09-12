@@ -1,5 +1,5 @@
 // file: internal/undo/engine_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f8b0e2d-4c5e-4f9g-b2d6-8e0f3g5c9d4b
 // last-edited: 2026-09-12
 
@@ -27,10 +27,18 @@ func TestPreflightUndoConflicts_ReportsContentChanged(t *testing.T) {
 
 	writeTestFile(t, newPath, "content")
 
+	// The revert reads the book before moving the file back and refuses a row
+	// whose book is gone, so the book must exist for the content check to be
+	// what decides.
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: newPath, Format: "m4b"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
 	// Create a change and wait so ModTime is definitely after CreatedAt
 	changeTime := time.Now().Add(-2 * time.Second)
 	_ = store.CreateOperationChange(&database.OperationChange{
-		ID: "c1", OperationID: "op1", BookID: "b1",
+		ID: "c1", OperationID: "op1", BookID: book.ID,
 		ChangeType: "file_move",
 		OldValue:   oldPath,
 		NewValue:   newPath,
@@ -49,8 +57,8 @@ func TestPreflightUndoConflicts_ReportsContentChanged(t *testing.T) {
 	if len(report.ContentChanged) == 0 {
 		t.Error("expected content_changed conflict")
 	}
-	if len(report.ContentChanged) > 0 && report.ContentChanged[0].BookID != "b1" {
-		t.Errorf("conflict book_id = %q, want 'b1'", report.ContentChanged[0].BookID)
+	if len(report.ContentChanged) > 0 && report.ContentChanged[0].BookID != book.ID {
+		t.Errorf("conflict book_id = %q, want %q", report.ContentChanged[0].BookID, book.ID)
 	}
 }
 

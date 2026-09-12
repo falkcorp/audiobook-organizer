@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
 // last-edited: 2026-09-12
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 func intp(n int) *int { return &n }
@@ -142,8 +143,8 @@ func TestRevertOperation_DeletedBookFailsInsteadOfPanicking(t *testing.T) {
 	if err == nil || result == nil || result.Failed != 3 || result.Restored != 0 {
 		t.Fatalf("err = %v, result = %+v, want failed 3", err, result)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("err = %v, want a not-found error", err)
+	if !strings.Contains(err.Error(), undo.ReasonBookMissing) {
+		t.Errorf("err = %v, want reason %q", err, undo.ReasonBookMissing)
 	}
 	if s.markCalls != 0 {
 		t.Errorf("mark called %d times, want 0", s.markCalls)
