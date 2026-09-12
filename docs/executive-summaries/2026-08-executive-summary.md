@@ -281,7 +281,7 @@ has no preview option. It was run 0 times against its 10,161 pending operations.
   link to their file that organising needs. Both are fixed, and the box is now unticked by
   default.
 
-### Collections (roundup)
+### Collections (late August)
 
 The mobile app has a "collections" button, but the server never supported it. On 16
 August it was tried five times in two seconds and failed every time, while the list of
@@ -325,7 +325,7 @@ rule-based collection rewrote it every time.
   causes were images stored outside the normal download, contention for the processor,
   and timeouts. All were fixed.
 - The result is 552 passing and 0 failing across both browsers, with 7 tests marked as
-  expected to fail. The roundup also quotes 544 tests overall, and 278 as of 10 August.
+  expected to fail. Other counts from the month give 544 tests overall, and 278 as of 10 August.
 - Since 9 August a failing browser test blocks a change from merging.
 - Search now keeps its filters and waits for typing to pause, and two of the
   expected-to-fail tests now pass.
@@ -668,7 +668,7 @@ of them.
 **The fix.** All four delete paths and the "clear" action are fixed, and a nightly repair
 runs. The space is not recovered until compaction runs.
 
-### Other file work (roundup)
+### Other file work (late August)
 
 - **The library's own folders (30 August).** Sixteen file walks now skip the organiser's
   own folders, which hold about 100 GB and more than 1,000 catalogue files. Two routines
