@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -516,6 +516,13 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		// previousConfig is also a SHALLOW Snapshot, so it could never restore
 		// map contents anyway.
 		errMsg, _ := resp["error"].(string)
+		// A refused unknown key is named in errMsg, and also returned as a list
+		// so a client can point at the exact setting without parsing prose.
+		if unknown, ok := resp["unknown_keys"].([]string); ok && len(unknown) > 0 {
+			httputil.RespondWithErrorFields(c, status, errMsg, "CONFIG_ERROR",
+				map[string]any{"unknown_keys": unknown})
+			return
+		}
 		httputil.RespondWithError(c, status, errMsg, "CONFIG_ERROR")
 		return
 	}

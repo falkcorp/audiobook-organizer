@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -25,6 +25,21 @@ func RespondWithError(c *gin.Context, statusCode int, message string, code strin
 		Code:   code,
 		Status: statusCode,
 	})
+}
+
+// RespondWithErrorFields sends the standard error envelope plus extra top-level
+// fields a client can act on (PUT /config's unknown_keys), and logs it like
+// RespondWithError. A field named error, code or status is ignored so the
+// envelope itself cannot be overwritten.
+func RespondWithErrorFields(c *gin.Context, statusCode int, message, code string, fields map[string]any) {
+	logErrorWithContext(c, statusCode, message)
+	body := gin.H{"error": message, "code": code, "status": statusCode}
+	for k, v := range fields {
+		if _, reserved := body[k]; !reserved {
+			body[k] = v
+		}
+	}
+	c.JSON(statusCode, body)
 }
 
 // RespondWithBadRequest sends a 400 Bad Request error response.
