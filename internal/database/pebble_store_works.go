@@ -1,14 +1,13 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-08-13
+// last-edited: 2026-09-12
 
 package database
 
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -26,16 +25,12 @@ func (p *PebbleStore) GetAllWorks() ([]Work, error) {
 // GetAllWorks_Pebble returns all works by iterating the Pebble "work:" prefix.
 func (p *PebbleStore) GetAllWorks_Pebble() ([]Work, error) {
 	var works []Work
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("work:0"), UpperBound: []byte("work:;")})
+	iter, err := newBareRowIter(p.db, "work:")
 	if err != nil {
 		return nil, err
 	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Skip index keys
-		if strings.Contains(string(iter.Key()), ":title:") {
-			continue
-		}
 		var w Work
 		if err := json.Unmarshal(iter.Value(), &w); err != nil {
 			return nil, err
@@ -213,24 +208,13 @@ func (p *PebbleStore) GetAllWorkBookCounts() (map[string]int, error) {
 		return p.mem().GetAllWorkBookCounts()
 	}
 	counts := make(map[string]int)
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") {
-			continue
-		}
-		parts := strings.Split(key, ":")
-		if len(parts) != 2 {
-			continue
-		}
 
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {

@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-09-12
 
@@ -254,18 +254,12 @@ func (p *PebbleStore) getAllAuthorBookRefBucketsPebble() (map[int]AuthorRefBucke
 	defer func() { _ = snap.Close() }()
 
 	// Pass 1: every book row -- its state, and its legacy AuthorID.
-	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
+	iter, err := newBookRowIter(snap)
 	if err != nil {
 		return nil, err
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") || strings.Count(key, ":") != 1 {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			_ = iter.Close()

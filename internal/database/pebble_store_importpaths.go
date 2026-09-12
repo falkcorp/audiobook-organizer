@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 package database
 
@@ -72,23 +72,12 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 		return p.mem().CountBooksByPathPrefix(prefix)
 	}
 	count := 0
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return 0, err
 	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Skip secondary-index keys. The primary form is "book:<id>"; anything
-		// with a third segment is an index (book:<id>:path:..., :series:, etc).
-		// This scan previously relied on those index values failing to unmarshal
-		// as a Book, which happens to hold today but is not a guarantee — every
-		// sibling scan in this package checks the key shape explicitly.
-		if strings.Count(string(iter.Key()), ":") != 1 {
-			continue
-		}
 		var b Book
 		if json.Unmarshal(iter.Value(), &b) != nil {
 			continue

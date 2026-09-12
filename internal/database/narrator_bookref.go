@@ -1,5 +1,5 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
 // last-edited: 2026-09-12
 
@@ -220,18 +220,12 @@ func (p *PebbleStore) GetAllNarratorRefs() (NarratorRefs, error) {
 	// and the one-colon filter below is what makes that range safe: it also
 	// admits book:path:, book:hash: and book:versiongroup:, whose values are
 	// bare ids rather than book JSON. Bounds and filter are one change.
-	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
+	iter, err := newBookRowIter(snap)
 	if err != nil {
 		return NarratorRefs{}, fmt.Errorf("narrator ref scan: open book iterator: %w", err)
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		if strings.Count(key, ":") != 1 {
-			continue
-		}
 		val, vErr := iter.ValueAndErr()
 		if vErr != nil {
 			_ = iter.Close()

@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-08-24
+// last-edited: 2026-09-12
 
 package database
 
@@ -10,9 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // Unfiltered series reference counting, for DELETION decisions.
@@ -166,23 +163,12 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 // Bounds and filter are one change; do not separate them.
 func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 	counts := make(map[int]int)
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") {
-			continue
-		}
-		// Exactly one colon: skip the secondary indexes (book:path:, book:hash:,
-		// book:versiongroup:) that share the prefix.
-		if strings.Count(key, ":") != 1 {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			// FATAL, not skippable. A row we cannot decode may well carry a

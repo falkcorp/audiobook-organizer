@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -25,19 +25,11 @@ func (p *PebbleStore) CountFiles() (int, error) {
 	}
 	// Pass 1: collect IDs of all primary, non-deleted books (key scan + JSON decode)
 	primaryBookIDs := make(map[string]struct{})
-	bookIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	bookIter, err := newBookRowIter(p.db)
 	if err != nil {
 		return 0, err
 	}
 	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
-		key := string(bookIter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var book Book
 		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
 			return 0, err
@@ -341,19 +333,11 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 
 	// Pass 1: book: range
 	primaryBookIDs := make(map[string]struct{}, 12000)
-	bookIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	bookIter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
 	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
-		key := string(bookIter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(bookIter.Value(), &b); err != nil {
 			continue

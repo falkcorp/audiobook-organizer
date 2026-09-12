@@ -1,16 +1,13 @@
 // file: internal/database/pebble_store_published_years.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 25de50ea-ea39-4e25-a304-1b95b87e1919
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
 import (
 	"encoding/json"
 	"sort"
-	"strings"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // bookPublishedYear is the one place the "published year" of a book is defined:
@@ -54,10 +51,7 @@ func (p *PebbleStore) GetDistinctPublishedYears() ([]int, error) {
 		return p.mem().GetDistinctPublishedYears()
 	}
 
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
-	})
+	iter, err := newBookRowIter(p.db)
 	if err != nil {
 		return nil, err
 	}
@@ -65,12 +59,6 @@ func (p *PebbleStore) GetDistinctPublishedYears() ([]int, error) {
 
 	seen := map[int]struct{}{}
 	for iter.First(); iter.Valid(); iter.Next() {
-		// Skip index keys (same as GetAllBooks / GetDistinctLanguages).
-		key := string(iter.Key())
-		if strings.Contains(key, ":path:") || strings.Contains(key, ":series:") ||
-			strings.Contains(key, ":author:") {
-			continue
-		}
 		var b Book
 		if err := json.Unmarshal(iter.Value(), &b); err != nil {
 			continue
