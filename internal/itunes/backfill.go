@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package itunes
 
@@ -66,6 +66,40 @@ const (
 	// whole backfill (idempotent) so the XML pass finally happens.
 	externalIDBackfillDoneBooksOnly = "books_only"
 )
+
+// backfillChunkSize bounds each BulkCreateExternalIDMappings write in the
+// book pass and sets how often progress is reported. It is a slice stride
+// over an in-memory snapshot, not a store page size.
+const backfillChunkSize = 10000
+
+// loadBackfillBooks enumerates the whole library in ONE store call (limit 0
+// is unbounded on both store paths) instead of offset pages (PERF-5). Offset
+// pages are each served from whichever memdb snapshot is current, and the
+// reconciler swaps snapshots asynchronously: a swap, insert, or soft-delete
+// between page N and N+1 shifts every position, silently skipping or
+// repeating rows — and BackfillExternalIDs would then set its done flag over
+// a library it never fully read. One call reads one consistent snapshot, so
+// there is no cross-page window. This is the same fix reconcile's
+// loadAllBooksCore applied to AssignOrphanVGs, which skipped 1 of 40 books in
+// CI and reported success.
+//
+// It deliberately does not use GetAllBooksFullFrom's ID cursor, although
+// that is the pager the PERF-5 TODO item names:
+//   - Its memdb branch (the production default) walks ListBookIDs on every
+//     page and then point-reads each book from Pebble with sidecar hydration
+//     — ~one Pebble read per book, the exact per-book read pattern PERF-5
+//     removed from this file, to fetch heavy fields nothing here reads (only
+//     ID, Title and ITunesPersistentID are used, all Core-safe).
+//   - On that branch an afterID that has vanished from the ID list (the
+//     cursor book soft-deleted between pages) ends iteration with no error,
+//     which would turn "skip a row" into "stop early and mark done".
+//
+// The cost is that the whole Core projection is resident at once rather
+// than 10,000 rows at a time. BackfillITunesTrackPIDs already keeps a
+// per-book index for the whole library, so the peak is the same order.
+func loadBackfillBooks(store ExternalIDBackfillStore) ([]database.BookCore, error) {
+	return store.GetAllBooksCore(0, 0)
+}
 
 // itunesXMLConfigured reports whether the iTunes XML track-PID pass can run.
 func itunesXMLConfigured() bool {
@@ -173,26 +207,33 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		filesByBook[f.BookID] = append(filesByBook[f.BookID], f)
 	}
 
-	offset := 0
+	if err := ctx.Err(); err != nil {
+		slog.Info("external ID backfill canceled before book read", "err", err)
+		return nil
+	}
+	allBooks, err := loadBackfillBooks(store)
+	if err != nil {
+		// H7: a read failure here used to `break` silently, letting the
+		// loop fall through to the track-PID pass and mark the whole
+		// backfill "done" despite skipping the rest of the library.
+		return fmt.Errorf("external ID backfill: read books: %w", err)
+	}
+
+	// The snapshot is walked in chunks only to bound each bulk write and to
+	// report progress per chunk; there is no store read between chunks, so no
+	// cross-page window. Per-book work is a map lookup and slice appends (no
+	// I/O), so the walk stays sequential — the one write per chunk is the
+	// only store call, and BulkCreateExternalIDMappings is a single batch.
 	backfilled := 0
 	booksScanned := 0
-	for {
+	for start := 0; start < len(allBooks); start += backfillChunkSize {
 		if err := ctx.Err(); err != nil {
-			slog.Info("external ID backfill canceled at offset after mappings", "offset", offset, "backfilled", backfilled, "err", err)
+			slog.Info("external ID backfill canceled between chunks after mappings", "books_scanned", booksScanned, "backfilled", backfilled, "err", err)
 			return nil
 		}
-		books, err := store.GetAllBooksCore(10000, offset)
-		if err != nil {
-			// H7: a read failure here used to `break` silently, letting the
-			// loop fall through to the track-PID pass and mark the whole
-			// backfill "done" despite skipping the rest of the library.
-			return fmt.Errorf("external ID backfill: read books at offset %d: %w", offset, err)
-		}
-		if len(books) == 0 {
-			break
-		}
+		books := allBooks[start:min(start+backfillChunkSize, len(allBooks))]
 
-		// Accumulate per-page so we can flush with a single bulk write rather
+		// Accumulate per-chunk so we can flush with a single bulk write rather
 		// than one CreateExternalIDMapping call per book/file (PERF-5).
 		var batch []database.ExternalIDMapping
 		for _, book := range books {
@@ -224,12 +265,11 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		}
 		if len(batch) > 0 {
 			if err := store.BulkCreateExternalIDMappings(batch); err != nil {
-				return fmt.Errorf("external ID backfill: bulk write at offset %d: %w", offset, err)
+				return fmt.Errorf("external ID backfill: bulk write after %d books: %w", booksScanned, err)
 			}
 			backfilled += len(batch)
 		}
 		booksScanned += len(books)
-		offset += 10000
 		if progress != nil {
 			progress(booksScanned, 0, fmt.Sprintf("Backfilling external IDs: %d books scanned (%d mappings written)", booksScanned, backfilled))
 		}
@@ -301,31 +341,26 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore,
 	slog.Info("BackfillITunesTrackPIDs loading book index...")
 	pidToBook := make(map[string]string)
 	titleToBook := make(map[string]string) // lowercase title → book_id
-	totalBooks := 0
-	offset := 0
-	for {
-		if err := ctx.Err(); err != nil {
-			slog.Info("BackfillITunesTrackPIDs canceled mid-index at offset", "offset", offset)
-			return 0, nil
-		}
-		books, err := store.GetAllBooksCore(10000, offset)
-		if err != nil {
-			// H7: a read failure here used to `break` silently and fall through
-			// to a stream parse over a partial (or empty) PID/title index.
-			return 0, fmt.Errorf("BackfillITunesTrackPIDs: read books at offset %d: %w", offset, err)
-		}
-		if len(books) == 0 {
-			break
-		}
-		for _, book := range books {
-			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
-				pidToBook[*book.ITunesPersistentID] = book.ID
-			}
-			titleToBook[strings.ToLower(strings.TrimSpace(book.Title))] = book.ID
-		}
-		totalBooks += len(books)
-		offset += 10000
+	if err := ctx.Err(); err != nil {
+		slog.Info("BackfillITunesTrackPIDs canceled before index build", "err", err)
+		return 0, nil
 	}
+	// One snapshot read, not offset pages — see loadBackfillBooks (PERF-5).
+	books, err := loadBackfillBooks(store)
+	if err != nil {
+		// H7: a read failure here used to `break` silently and fall through
+		// to a stream parse over a partial (or empty) PID/title index.
+		return 0, fmt.Errorf("BackfillITunesTrackPIDs: read books: %w", err)
+	}
+	// Sequential on purpose: per-book work is two map writes with no I/O,
+	// and the maps are shared, so a worker pool would only add locking.
+	for _, book := range books {
+		if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
+			pidToBook[*book.ITunesPersistentID] = book.ID
+		}
+		titleToBook[strings.ToLower(strings.TrimSpace(book.Title))] = book.ID
+	}
+	totalBooks := len(books)
 	slog.Info("BackfillITunesTrackPIDs loaded books ( PIDs, titles)", "totalBooks", totalBooks, "pidToBook_count", len(pidToBook), "titleToBook_count", len(titleToBook))
 
 	// Stream-parse tracks and register PIDs
@@ -335,7 +370,7 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore,
 	var currentAlbumTracks []*Track
 
 	trackedCount := 0
-	_, err := StreamingParseLibrary(ctx, xmlPath, func(track *Track) error {
+	_, err = StreamingParseLibrary(ctx, xmlPath, func(track *Track) error {
 		trackedCount++
 		if trackedCount%10000 == 0 {
 			slog.Info("BackfillITunesTrackPIDs streaming progress", "tracks_processed", trackedCount)
