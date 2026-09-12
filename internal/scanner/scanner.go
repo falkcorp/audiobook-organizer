@@ -2041,14 +2041,20 @@ func applyTagPositionsIfTrusted(bfs []*database.BookFile, placements []metadata.
 	if len(bfs) == 0 {
 		return
 	}
+	// Key by the row's fresh ULID, not its path: JudgeTagPositions needs
+	// distinct keys, and a segment list can repeat a path (album groups are
+	// concatenated without dedup). With path keys two rows of one path would
+	// share one entry of the accepted map, so each would be moved to whichever
+	// placement was stored last rather than its own. The basename is only there
+	// to make the reason readable.
 	keys := make([]string, len(bfs))
 	for i, bf := range bfs {
-		keys[i] = bf.FilePath
+		keys[i] = bf.ID + ":" + filepath.Base(bf.FilePath)
 	}
 	verdict, why, accepted := metadata.JudgeTagPositions(keys, placements)
 	if verdict == metadata.TagTakePositions {
-		for _, bf := range bfs {
-			metadata.ApplyTagPlacement(bf, accepted[bf.FilePath])
+		for i, bf := range bfs {
+			metadata.ApplyTagPlacement(bf, accepted[keys[i]])
 		}
 		return
 	}
@@ -2134,8 +2140,10 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	}
 
 	bfs := make([]*database.BookFile, 0, len(segmentFiles))
-	// tagPlacements[i] is the position file i's tag states; parallel to bfs.
-	tagPlacements := make([]metadata.TagPlacement, len(segmentFiles))
+	// tagPlacements[i] is the position the tag of bfs[i] states. It is appended
+	// in the same statement group as bfs, never indexed by the loop counter, so
+	// a future `continue` in the loop cannot shift one slice against the other.
+	tagPlacements := make([]metadata.TagPlacement, 0, len(segmentFiles))
 	for i, filePath := range segmentFiles {
 		trackNum := i + 1
 		ext := strings.ToLower(filepath.Ext(filePath))
@@ -2161,9 +2169,10 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// per-file "tag wins when present" rule is what let a rip tagged
 		// "track 1" on every chapter import with every file at track 1.
 		// A failed read leaves a zero placement, which refuses the book.
+		var placement metadata.TagPlacement
 		if meta, merr := metadata.ExtractMetadata(filePath, nil); merr == nil {
 			bf.RawTags = meta.AllTags
-			tagPlacements[i] = metadata.PlacementFromMetadata(meta)
+			placement = metadata.PlacementFromMetadata(meta)
 			if meta.Title != "" {
 				bf.Title = meta.Title
 			}
@@ -2184,6 +2193,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		}
 
 		bfs = append(bfs, bf)
+		tagPlacements = append(tagPlacements, placement)
 	}
 
 	applyTagPositionsIfTrusted(bfs, tagPlacements, bookFilePath, scanLog)

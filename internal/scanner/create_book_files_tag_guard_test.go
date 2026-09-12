@@ -166,3 +166,46 @@ func TestCreateBookFilesForBook_TagTrackGuard(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyTagPositionsIfTrusted_RepeatedPath pins how the guard treats a
+// segment list that repeats a path (album groups are concatenated without
+// dedup), so each row carries its own position.
+func TestApplyTagPositionsIfTrusted_RepeatedPath(t *testing.T) {
+	newRows := func() []*database.BookFile {
+		return []*database.BookFile{
+			{ID: "r1", FilePath: "/lib/book/a.mp3", TrackNumber: 1},
+			{ID: "r2", FilePath: "/lib/book/b.mp3", TrackNumber: 2},
+			{ID: "r3", FilePath: "/lib/book/a.mp3", TrackNumber: 3},
+		}
+	}
+
+	t.Run("same tag position twice is refused", func(t *testing.T) {
+		bfs := newRows()
+		placements := []metadata.TagPlacement{
+			{Track: 2, TrackTotal: 2}, {Track: 1, TrackTotal: 2}, {Track: 2, TrackTotal: 2},
+		}
+		applyTagPositionsIfTrusted(bfs, placements, "/lib/book", logger.New("test"))
+		for i, bf := range bfs {
+			if bf.TrackNumber != i+1 || bf.TrackCount != 0 || bf.DiscNumber != 0 {
+				t.Errorf("row %s: track %d/%d disc %d, want positional track %d with no tag numbers",
+					bf.ID, bf.TrackNumber, bf.TrackCount, bf.DiscNumber, i+1)
+			}
+		}
+	})
+
+	// Rows are keyed by ID, so an accepted book moves every row to its OWN
+	// placement. Keyed by path, r1 and r3 would share one map entry and both
+	// land on the placement stored last.
+	t.Run("each row takes its own placement", func(t *testing.T) {
+		bfs := newRows()
+		placements := []metadata.TagPlacement{
+			{Track: 2, TrackTotal: 3}, {Track: 1, TrackTotal: 3}, {Track: 3, TrackTotal: 3},
+		}
+		applyTagPositionsIfTrusted(bfs, placements, "/lib/book", logger.New("test"))
+		for i, bf := range bfs {
+			if bf.TrackNumber != placements[i].Track || bf.TrackCount != 3 {
+				t.Errorf("row %s: track %d/%d, want %d/3", bf.ID, bf.TrackNumber, bf.TrackCount, placements[i].Track)
+			}
+		}
+	})
+}
