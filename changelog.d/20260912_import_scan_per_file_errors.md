@@ -10,4 +10,9 @@
   progress message says how many files failed and `library.scan` persists the
   count and sample as its result. The Paths tab now polls the real operation
   (it used to run a 3-second fake progress timer) and reads the failures back
-  off its log into "View Errors".
+  off its log into "View Errors". The poll ends instead of spinning: a 404 (the
+  operation was discarded or purged) stops it with "the scan operation no
+  longer exists", ten failed reads in a row stop it with an error, and an
+  `interrupted_*` scan shows as interrupted rather than failed, still polled
+  only for `interrupted_quiesced`, which resumes in place when the scan
+  stand-down lifts.

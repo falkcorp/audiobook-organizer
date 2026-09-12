@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c9d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -31,14 +31,9 @@ import {
 } from '@mui/icons-material';
 import * as api from '../../services/api';
 import DelugeSettingsTab from './DelugeSettingsTab';
-
-interface ScanStatus {
-  status: 'scanning' | 'complete' | 'error' | 'cancelled';
-  scanned: number;
-  total: number;
-  operationId?: string;
-  errors?: string[];
-}
+// Imported, not redeclared: a local copy of the status union silently rendered
+// any status it lacked (such as `interrupted`) as the folder's book count.
+import type { ScanStatus } from '../../hooks/useSettingsHandlers';
 
 interface PathsSettingsTabProps {
   settings: any;
@@ -281,9 +276,15 @@ export function PathsSettingsTab(props: PathsSettingsTabProps) {
                     }
                   } else if (scanStatus.status === 'cancelled') {
                     secondaryText = 'Scan cancelled. Processed ' + scanStatus.scanned + ' files.';
+                  } else if (scanStatus.status === 'interrupted') {
+                    secondaryText = scanStatus.message ?? 'Scan interrupted.';
                   } else if (scanStatus.status === 'error') {
-                    secondaryText =
-                      errorCount > 0 ? `Scan failed. ${errorCount} errors.` : 'Scan failed.';
+                    if (scanStatus.message) {
+                      secondaryText = `Scan failed: ${scanStatus.message}`;
+                    } else {
+                      secondaryText =
+                        errorCount > 0 ? `Scan failed. ${errorCount} errors.` : 'Scan failed.';
+                    }
                   }
                 }
 
