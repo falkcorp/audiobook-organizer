@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -17,12 +17,22 @@ import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';
 
 export type { SettingsState };
 
+/**
+ * ScanStatus is the one definition of an import-path scan row's state. The
+ * settings components import it rather than redeclaring it: a local copy of the
+ * union that lacks a status compiles fine and renders that status as nothing.
+ *
+ * `interrupted` is neutral, not a failure: the operation stopped without
+ * finishing and `message` says whether and when it resumes. `message` is set
+ * only on `interrupted` and `error` rows.
+ */
 export interface ScanStatus {
-  status: 'scanning' | 'complete' | 'error' | 'cancelled';
+  status: 'scanning' | 'complete' | 'error' | 'cancelled' | 'interrupted';
   scanned: number;
   total: number;
   operationId?: string;
   errors?: string[];
+  message?: string;
 }
 
 export interface ScanErrorTarget {

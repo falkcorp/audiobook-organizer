@@ -1,5 +1,5 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
 // last-edited: 2026-09-12
 
@@ -41,14 +41,9 @@ import { NAMING_PATTERN_HELP_TEXT, generatePatternExample } from '../utils/namin
 // Settings -> SettingsGeneral runtime import stays one-directional.
 // useSettingsHandlers.ts already imports the type this way.
 import type { SettingsState } from '../pages/Settings';
-
-interface ScanStatus {
-  status: 'scanning' | 'complete' | 'error' | 'cancelled';
-  scanned: number;
-  total: number;
-  operationId?: string;
-  errors?: string[];
-}
+// ScanStatus is imported for the same reason: a local copy of the status union
+// silently rendered any status it lacked (such as `interrupted`) as the book count.
+import type { ScanStatus } from '../hooks/useSettingsHandlers';
 
 interface SettingsGeneralProps {
   settings: SettingsState;
@@ -608,9 +603,15 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
                       } else if (scanStatus.status === 'cancelled') {
                         secondaryText =
                           'Scan cancelled. Processed ' + scanStatus.scanned + ' files.';
+                      } else if (scanStatus.status === 'interrupted') {
+                        secondaryText = scanStatus.message ?? 'Scan interrupted.';
                       } else if (scanStatus.status === 'error') {
-                        secondaryText =
-                          errorCount > 0 ? `Scan failed. ${errorCount} errors.` : 'Scan failed.';
+                        if (scanStatus.message) {
+                          secondaryText = `Scan failed: ${scanStatus.message}`;
+                        } else {
+                          secondaryText =
+                            errorCount > 0 ? `Scan failed. ${errorCount} errors.` : 'Scan failed.';
+                        }
                       }
                     }
 
