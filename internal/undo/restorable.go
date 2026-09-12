@@ -1,11 +1,12 @@
 // file: internal/undo/restorable.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
 package undo
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -43,12 +44,22 @@ import (
 //     the same write also demoted the book (IsPrimaryVersion=false,
 //     LibraryState=organized_source) and created the organized copy, none of
 //     which the row records or a field write undoes.
-//   - series_name (dedup.MergeSeries rename): it renames a Series entity, not
-//     a book, and the row carries no series id, so there is no way to tell
-//     which series to rename back.
+//   - series_name: the book-scoped rows dedup.MergeSeries wrote before
+//     series_rename existed. They record a Series rename but carry no series
+//     id, so there is no way to tell which series to rename back; they stay
+//     record-only rather than guessing one by name.
+//   - series_rename without a SeriesID (malformed).
 //   - any change type the revert engine has no case for (db_update and
 //     dir_create are reversed only by RunUndoOperation, not by the revert
 //     endpoint).
+//
+// series_rename rows (dedup.MergeSeries, carrying SeriesID) are restorable:
+// the revert renames the series back to OldValue, after CheckRestoreReferent
+// has confirmed the rename can land without clobbering anything.
+
+// ChangeTypeSeriesRename is the series-scoped change row for a Series rename:
+// SeriesID names the series, OldValue/NewValue are the names before and after.
+const ChangeTypeSeriesRename = "series_rename"
 
 // revertableBookFields maps a metadata_update field name to the Book struct
 // field the revert engine restores it into by reflection. Every value must name
@@ -127,37 +138,113 @@ func RestoreBookField(book *database.Book, field, oldValue string) error {
 	return nil
 }
 
-// SeriesGetter is the one read CheckRestoreReferent needs.
-type SeriesGetter interface {
+// SeriesLookup is the series reads CheckRestoreReferent needs.
+type SeriesLookup interface {
 	GetSeriesByID(id int) (*database.Series, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
-// CheckRestoreReferent returns an error when restoring c would point a book at
-// a row that no longer exists. Today that is series_id: series dedup deletes
-// the merged-from series in the same operation (a record-only series_delete
-// row), and series-phantom-repair's old value is a dangling id by definition,
-// so writing either back would create exactly the dangling reference
-// series-phantom-repair exists to clean up. The revert refuses such a row
-// (Failed, left unmarked) and the preflight reports it as a conflict; both call
-// this function so they agree.
+// Reasons a restorable row is refused at revert time. The preflight files each
+// under the conflict bucket of the same name (see UndoConflictReport).
+const (
+	// ReasonSeriesDeleted: the series the row names no longer exists.
+	ReasonSeriesDeleted = "series deleted"
+	// ReasonSeriesLookupFailed: the store could not answer; fail closed.
+	ReasonSeriesLookupFailed = "series lookup failed"
+	// ReasonSeriesRenamedSince: the series is no longer called the name the
+	// row recorded, so someone renamed it after the operation.
+	ReasonSeriesRenamedSince = "series renamed since"
+	// ReasonSeriesNameTaken: another series under the same author now holds
+	// the old name (compared the way the store's name index compares: case
+	// and whitespace insensitive).
+	ReasonSeriesNameTaken = "series name taken"
+)
+
+// ReferentError is CheckRestoreReferent's refusal: Reason is one of the
+// Reason* constants, Detail the human-readable specifics.
+type ReferentError struct {
+	Reason string
+	Detail string
+}
+
+func (e *ReferentError) Error() string { return e.Reason + ": " + e.Detail }
+
+// RefusalReason returns the Reason of a CheckRestoreReferent refusal, or ""
+// when err is not one.
+func RefusalReason(err error) string {
+	var re *ReferentError
+	if errors.As(err, &re) {
+		return re.Reason
+	}
+	return ""
+}
+
+func refuse(reason, format string, args ...any) error {
+	return &ReferentError{Reason: reason, Detail: fmt.Sprintf(format, args...)}
+}
+
+// CheckRestoreReferent returns a *ReferentError when restoring c would
+// clobber or dangle something. The revert refuses such a row (Failed, left
+// unmarked) and the preflight reports it as a conflict; both call this
+// function so they agree. Every store error refuses (fail closed).
 //
-// Rows for any other field, and a series_id row restoring "no series", pass.
-func CheckRestoreReferent(store SeriesGetter, c *database.OperationChange) error {
-	if c.ChangeType != "metadata_update" || c.FieldName != "series_id" || c.OldValue == "" {
-		return nil
-	}
-	id, err := strconv.Atoi(c.OldValue)
-	if err != nil {
-		return fmt.Errorf("series_id old value %q is not an integer id", c.OldValue)
-	}
-	s, err := store.GetSeriesByID(id)
-	if err != nil {
-		return fmt.Errorf("look up series %d: %w", id, err)
-	}
-	if s == nil {
-		return fmt.Errorf("series %d no longer exists; restoring it would leave the book pointing at a deleted series", id)
+//   - metadata_update series_id: series dedup deletes the merged-from series
+//     in the same operation (a record-only series_delete row), and
+//     series-phantom-repair's old value is a dangling id by definition, so
+//     writing either back would create exactly the dangling reference
+//     series-phantom-repair exists to clean up. A row restoring "no series"
+//     passes.
+//   - series_rename: the series must still exist, still carry the recorded
+//     new name (anything else is a later rename, which a revert must not
+//     clobber), and the old name must not now belong to another series under
+//     the same author. PebbleStore.UpdateSeriesName does not check that last
+//     one — it overwrites the series:name: index key — so without this check
+//     the revert would leave two series answering to one name with the index
+//     pointing at only one of them.
+//
+// Every other row passes.
+func CheckRestoreReferent(store SeriesLookup, c *database.OperationChange) error {
+	switch {
+	case c.ChangeType == "metadata_update" && c.FieldName == "series_id" && c.OldValue != "":
+		id, err := strconv.Atoi(c.OldValue)
+		if err != nil {
+			return fmt.Errorf("series_id old value %q is not an integer id", c.OldValue)
+		}
+		_, err = liveSeries(store, id)
+		return err
+	case c.ChangeType == ChangeTypeSeriesRename:
+		if c.SeriesID == nil {
+			return fmt.Errorf("series_rename row %s carries no series id", c.ID)
+		}
+		s, err := liveSeries(store, *c.SeriesID)
+		if err != nil {
+			return err
+		}
+		if s.Name != c.NewValue {
+			return refuse(ReasonSeriesRenamedSince, "series %d is now named %q, not %q as the operation left it; not renaming it back to %q",
+				s.ID, s.Name, c.NewValue, c.OldValue)
+		}
+		holder, err := store.GetSeriesByName(c.OldValue, s.AuthorID)
+		if err != nil {
+			return refuse(ReasonSeriesLookupFailed, "look up series named %q: %v", c.OldValue, err)
+		}
+		if holder != nil && holder.ID != s.ID {
+			return refuse(ReasonSeriesNameTaken, "series %d already holds the name %q; renaming series %d back would duplicate it",
+				holder.ID, holder.Name, s.ID)
+		}
 	}
 	return nil
+}
+
+func liveSeries(store SeriesLookup, id int) (*database.Series, error) {
+	s, err := store.GetSeriesByID(id)
+	if err != nil {
+		return nil, refuse(ReasonSeriesLookupFailed, "look up series %d: %v", id, err)
+	}
+	if s == nil {
+		return nil, refuse(ReasonSeriesDeleted, "series %d no longer exists", id)
+	}
+	return s, nil
 }
 
 // NotRestorableLabel returns "" when the revert engine can reverse c, and
@@ -169,6 +256,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	case "file_move", "organize_rename", "tag_write",
 		"organize_failed", "organize_skipped", "organize_summary":
 		return ""
+	case ChangeTypeSeriesRename:
+		if c.SeriesID != nil {
+			return ""
+		}
+		return ChangeTypeSeriesRename + ":(no series id)"
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""

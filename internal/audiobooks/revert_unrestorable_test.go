@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package audiobooks
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -24,8 +25,11 @@ type ledgerStub struct {
 	markCalls int
 	// failBook makes GetBookByID fail for that book ID.
 	failBook string
-	// series is what GetSeriesByID can find.
-	series map[int]*database.Series
+	// series is what GetSeriesByID / GetSeriesByName can find.
+	series    map[int]*database.Series
+	seriesErr error
+	// renames records UpdateSeriesName calls as "id:name".
+	renames []string
 }
 
 func (s *ledgerStub) GetBookByID(id string) (*database.Book, error) {
@@ -49,9 +53,35 @@ func (s *ledgerStub) MarkOperationChangesReverted(_ string, ids []string) error 
 func (s *ledgerStub) GetAllImportPaths() ([]database.ImportPath, error) { return nil, nil }
 
 // GetSeriesByID answers from s.series; a missing id is (nil, nil), as the
-// Pebble store reports ErrNotFound.
+// Pebble store reports ErrNotFound. seriesErr makes every series read fail.
 func (s *ledgerStub) GetSeriesByID(id int) (*database.Series, error) {
+	if s.seriesErr != nil {
+		return nil, s.seriesErr
+	}
 	return s.series[id], nil
+}
+
+// GetSeriesByName matches case-insensitively under the same author, as the
+// store's name index does.
+func (s *ledgerStub) GetSeriesByName(name string, authorID *int) (*database.Series, error) {
+	if s.seriesErr != nil {
+		return nil, s.seriesErr
+	}
+	for _, ser := range s.series {
+		sameAuthor := (ser.AuthorID == nil) == (authorID == nil) && (authorID == nil || *ser.AuthorID == *authorID)
+		if sameAuthor && strings.EqualFold(ser.Name, name) {
+			return ser, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *ledgerStub) UpdateSeriesName(id int, name string) error {
+	s.renames = append(s.renames, fmt.Sprintf("%d:%s", id, name))
+	if ser := s.series[id]; ser != nil {
+		ser.Name = name
+	}
+	return nil
 }
 
 func deleteRow(id, changeType string) *database.OperationChange {

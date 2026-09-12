@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b1f4c2e-6d3a-4e8b-a7f0-2c5d8e1b4a63
 // last-edited: 2026-09-12
 
@@ -119,5 +119,16 @@ describe('describeUndoPreflight', () => {
     });
     expect(plan.canUndo).toBe(true);
     expect(plan.message).toMatch(/^2 change\(s\) can be undone; 1 of them have conflicts/);
+  });
+
+  it('counts series renames that were renamed since or whose old name is taken as conflicts', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      safe: 1,
+      series_renamed_since: [{ change_id: 'c1', book_id: '', reason: 'series renamed since' }],
+      series_name_taken: [{ change_id: 'c2', book_id: '', reason: 'series name taken' }],
+    });
+    expect(plan.canUndo).toBe(true);
+    expect(plan.message).toMatch(/^3 change\(s\) can be undone; 2 of them have conflicts/);
   });
 });

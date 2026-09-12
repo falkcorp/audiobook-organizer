@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -34,9 +34,11 @@ type revertServiceStore interface {
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 
-	// Needed by undo.CheckRestoreReferent in revertMetadataUpdate: a series_id
-	// row is restored only while the series it names still exists.
+	// Needed by undo.CheckRestoreReferent (revertMetadataUpdate,
+	// revertSeriesRename) and by the series rename-back itself.
 	GetSeriesByID(id int) (*database.Series, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	UpdateSeriesName(id int, name string) error
 
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
@@ -239,6 +241,8 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertMetadataUpdate(c)
 	case "tag_write":
 		return rs.revertTagWrite(c)
+	case undo.ChangeTypeSeriesRename:
+		return rs.revertSeriesRename(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -294,6 +298,24 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 
 	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
 		return fmt.Errorf("failed to update book: %w", err)
+	}
+	return nil
+}
+
+// revertSeriesRename renames the series a series_rename row names back to
+// OldValue. CheckRestoreReferent refuses first when the series is gone, has
+// been renamed again since, or its old name now belongs to another series, and
+// on any store error; nothing is written in those cases.
+//
+// The check and the rename are two store calls, not one transaction: a rename
+// landing between them is not caught. PebbleStore.UpdateSeriesName takes the
+// series name-index lock only for its own write.
+func (rs *RevertService) revertSeriesRename(c *database.OperationChange) error {
+	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
+		return fmt.Errorf("series rename not reverted, %w", err)
+	}
+	if err := rs.db.UpdateSeriesName(*c.SeriesID, c.OldValue); err != nil {
+		return fmt.Errorf("rename series %d back to %q: %w", *c.SeriesID, c.OldValue, err)
 	}
 	return nil
 }
