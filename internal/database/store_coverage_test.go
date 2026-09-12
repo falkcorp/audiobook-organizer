@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -570,8 +570,15 @@ func TestCoverage_OperationChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, bookChanges, 1)
 
+	// Marking an ID that is not this operation's change touches nothing.
+	err = store.MarkOperationChangesReverted(op.ID, []string{"not-a-change"})
+	require.NoError(t, err)
+	changes, err = store.GetOperationChanges(op.ID)
+	require.NoError(t, err)
+	assert.Nil(t, changes[0].RevertedAt)
+
 	// Revert
-	err = store.RevertOperationChanges(op.ID)
+	err = store.MarkOperationChangesReverted(op.ID, []string{change.ID})
 	require.NoError(t, err)
 
 	changes, err = store.GetOperationChanges(op.ID)

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-09-12
 
@@ -33,15 +33,20 @@ package operations
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
@@ -80,8 +85,17 @@ type Handler struct {
 	preflightUndo func(id string) (*undo.UndoConflictReport, error)
 
 	// revert wraps audiobooks.NewRevertService(s.Ops()).RevertOperation(id).
-	// Same opaque-store rationale as preflightUndo.
-	revert func(id string) error
+	// Same opaque-store rationale as preflightUndo. The result carries the
+	// restored / failed / not-restorable counts the response reports.
+	revert func(id string) (*audiobooks.RevertResult, error)
+}
+
+// revertResponse is the POST /operations/:id/revert success body. Partial is
+// true when any change row was left un-reverted (failed or not restorable).
+type revertResponse struct {
+	Message string `json:"message"`
+	Partial bool   `json:"partial"`
+	*audiobooks.RevertResult
 }
 
 // New constructs an operations Handler from its dependencies. getScheduler is a
@@ -96,7 +110,7 @@ func New(
 	collectStale func(timeout time.Duration) ([]database.Operation, error),
 	repairPhantomLive func() (int, error),
 	preflightUndo func(id string) (*undo.UndoConflictReport, error),
-	revert func(id string) error,
+	revert func(id string) (*audiobooks.RevertResult, error),
 ) *Handler {
 	return &Handler{
 		store:             store,
@@ -499,13 +513,34 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	httputil.RespondWithOK(c, report)
 }
 
-// RevertOperation undoes all changes from a given operation. Implements POST
-// /operations/:id/revert.
+// RevertOperation undoes the restorable changes of a given operation.
+// Implements POST /operations/:id/revert.
+//
+//   - 200: every restorable row was reversed. The body reports restored /
+//     failed / not_restorable counts and partial=true when some rows (e.g.
+//     record-only author_delete rows) were left un-reverted.
+//   - 409: the operation has no restorable row at all (a purge op's ledger is
+//     a record only); nothing was changed.
+//   - 500: a restore failed, or the store failed. When restores were
+//     attempted the message carries the counts, never the per-row errors
+//     (those hold file paths).
 func (h *Handler) RevertOperation(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.revert(id); err != nil {
+	result, err := h.revert(id)
+	var notRestorable *audiobooks.NotRestorableError
+	switch {
+	case errors.As(err, &notRestorable):
+		httputil.RespondWithConflict(c, notRestorable.Error())
+		return
+	case err != nil && result != nil:
+		slog.Error("operation revert partially failed", "operation", logger.SanitizeLogValue(id),
+			"summary", result.Summary(), "err", logging.SanitizeErr(err))
+		httputil.RespondWithError(c, http.StatusInternalServerError,
+			"failed to revert operation: "+result.Summary(), "REVERT_PARTIAL_FAILURE")
+		return
+	case err != nil:
 		httputil.InternalError(c, "failed to revert operation", err)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"message": "operation reverted successfully"})
+	httputil.RespondWithOK(c, revertResponse{Message: result.Summary(), Partial: result.Partial(), RevertResult: result})
 }

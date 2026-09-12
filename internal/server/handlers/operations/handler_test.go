@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-09-12
 
@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	operationsmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations/mocks"
@@ -64,7 +65,9 @@ func newTestHandler(t *testing.T) (*operations.Handler, *operationsmocks.MockOpe
 		func(id string) (*undo.UndoConflictReport, error) {
 			return &undo.UndoConflictReport{TotalChanges: 1}, nil
 		},
-		func(id string) error { return nil },
+		func(id string) (*audiobooks.RevertResult, error) {
+			return &audiobooks.RevertResult{OperationID: id, Total: 1, Restored: 1}, nil
+		},
 	)
 	return h, store, reg, sched, pipe, scans
 }
@@ -350,7 +353,7 @@ func TestUndoPreflightHandler_Error(t *testing.T) {
 	store := operationsmocks.NewMockOperationsStore(t)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, errors.New("boom") },
-		func(id string) error { return nil },
+		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
@@ -373,12 +376,76 @@ func TestRevertOperation_Error(t *testing.T) {
 	store := operationsmocks.NewMockOperationsStore(t)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
-		func(id string) error { return errors.New("revert failed") },
+		func(id string) (*audiobooks.RevertResult, error) { return nil, errors.New("revert failed") },
 	)
 	w := run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
 		r.POST("/operations/:id/revert", h.RevertOperation)
 	})
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// newRevertHandler builds a Handler whose revert func returns the given values.
+func newRevertHandler(t *testing.T, result *audiobooks.RevertResult, err error) *operations.Handler {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	return operations.New(operationsmocks.NewMockOperationsStore(t), nil, nil, nil, nil, nil, nil,
+		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
+		func(id string) (*audiobooks.RevertResult, error) { return result, err },
+	)
+}
+
+func postRevert(h *operations.Handler) *httptest.ResponseRecorder {
+	return run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
+		r.POST("/operations/:id/revert", h.RevertOperation)
+	})
+}
+
+// An op whose rows are all record-only (a purge op) is refused with 409 and the
+// engine's message, never a 200 "reverted".
+func TestRevertOperation_NotRestorable_Returns409(t *testing.T) {
+	h := newRevertHandler(t, nil, &audiobooks.NotRestorableError{
+		OperationID: "op-1", Total: 1742, Types: map[string]int{"author_delete": 1742},
+	})
+	w := postRevert(h)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "cannot be undone automatically: 1742 author_delete rows")
+}
+
+// A partial revert is a 200 that says partial=true and reports the counts.
+func TestRevertOperation_Partial_ReportsCounts(t *testing.T) {
+	h := newRevertHandler(t, &audiobooks.RevertResult{
+		OperationID: "op-1", Total: 2, Restored: 1, NotRestorable: 1,
+		NotRestorableTypes: map[string]int{"narrator_delete": 1},
+	}, nil)
+	w := postRevert(h)
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Message            string         `json:"message"`
+			Partial            bool           `json:"partial"`
+			Restored           int            `json:"restored"`
+			NotRestorable      int            `json:"not_restorable"`
+			NotRestorableTypes map[string]int `json:"not_restorable_types"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.True(t, body.Data.Partial)
+	assert.Equal(t, 1, body.Data.Restored)
+	assert.Equal(t, 1, body.Data.NotRestorable)
+	assert.Equal(t, 1, body.Data.NotRestorableTypes["narrator_delete"])
+	assert.Contains(t, body.Data.Message, "partially reverted")
+	assert.NotContains(t, body.Data.Message, "successfully")
+}
+
+// A restore failure with a result reports the counts in the 500 message.
+func TestRevertOperation_PartialFailure_Returns500WithCounts(t *testing.T) {
+	h := newRevertHandler(t, &audiobooks.RevertResult{
+		OperationID: "op-1", Total: 2, Restored: 1, Failed: 1,
+	}, errors.New("partially reverted with 1 errors: change c2: boom"))
+	w := postRevert(h)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "1 of 2 changes restored; 1 failed to restore")
+	assert.NotContains(t, w.Body.String(), "boom")
 }
 
 // --- ClearStaleOperations: the v2 half ---
@@ -402,7 +469,7 @@ func newClearStaleHandler(t *testing.T, v2Count int, v2Err error) *operations.Ha
 	return operations.New(store, nil, nil, nil, nil, nil,
 		func() (int, error) { return v2Count, v2Err },
 		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
-		func(id string) error { return nil },
+		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 }
 

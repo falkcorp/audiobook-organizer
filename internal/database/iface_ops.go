@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b93b0da0-8afb-46fb-983e-c43f238ea67c
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -41,7 +41,10 @@ type OperationChangeStore interface {
 	CreateOperationChange(change *OperationChange) error
 	GetOperationChanges(operationID string) ([]*OperationChange, error)
 	GetBookChanges(bookID string) ([]*OperationChange, error)
-	RevertOperationChanges(operationID string) error
+	// MarkOperationChangesReverted stamps RevertedAt on exactly the listed
+	// change rows of the operation. The revert engine passes only the rows it
+	// actually restored, so a row it could not reverse never reads as undone.
+	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 }
 
 // OperationLogStore covers operation logs and summary logs.

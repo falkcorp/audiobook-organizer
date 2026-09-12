@@ -1,8 +1,9 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.32.0
+// version: 2.33.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { describeRevertResult } from '../utils/revertResult';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -834,10 +835,14 @@ export default function ActivityLog() {
     if (!revertEntry?.operation_id) return;
     setReverting(true);
     try {
-      await api.revertOperation(revertEntry.operation_id);
+      const result = await api.revertOperation(revertEntry.operation_id);
+      setToast(describeRevertResult(result));
       loadFeed(page);
     } catch (err) {
+      // A 409 (every row record-only) or 500 carries the server's reason;
+      // show it rather than closing the dialog as if the revert worked.
       console.error('Failed to revert operation', err);
+      setToast(describeError(err));
     } finally {
       setReverting(false);
       setRevertEntry(null);

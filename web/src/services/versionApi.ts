@@ -1,6 +1,9 @@
 // file: web/src/services/versionApi.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-09-12
+
+import type { RevertOperationResult } from './api';
 
 const API_BASE = '/api/v1';
 
@@ -63,6 +66,7 @@ export async function getUndoPreflight(operationId: string): Promise<UndoConflic
   return jsonFetch(`${API_BASE}/operations/${operationId}/undo/preflight`);
 }
 
-export async function revertOperation(operationId: string): Promise<void> {
-  await jsonFetch(`${API_BASE}/operations/${operationId}/revert`, { method: 'POST' });
+export async function revertOperation(operationId: string): Promise<RevertOperationResult> {
+  const body = await jsonFetch(`${API_BASE}/operations/${operationId}/revert`, { method: 'POST' });
+  return (body?.data ?? body) as RevertOperationResult;
 }

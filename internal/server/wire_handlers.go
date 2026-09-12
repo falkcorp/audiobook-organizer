@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.31.0
+// version: 2.32.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-12
 
@@ -243,7 +243,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		func(id string) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
-		func(id string) error {
+		func(id string) (*RevertResult, error) {
 			return NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)
