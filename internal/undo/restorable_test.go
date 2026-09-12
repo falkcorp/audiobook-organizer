@@ -1,11 +1,12 @@
 // file: internal/undo/restorable_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
 package undo
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -20,6 +21,11 @@ func TestNotRestorableLabel(t *testing.T) {
 		{"organize_summary", "", ""},
 		{"metadata_update", "title", ""},
 		{"metadata_update", "author_id", "metadata_update:author_id"},
+		{"metadata_update", "series_id", ""},
+		// Record-only on purpose; see the file comment in restorable.go.
+		{"metadata_update", "version_group_id", "metadata_update:version_group_id"},
+		{"metadata_update", "series_name", "metadata_update:series_name"},
+		{"series_merge", "series_id", "series_merge"},
 		{"metadata_update", "", "metadata_update:(no field)"},
 		{"author_delete", "author", "author_delete"},
 		{"narrator_delete", "narrator", "narrator_delete"},
@@ -37,10 +43,12 @@ func TestNotRestorableLabel(t *testing.T) {
 	}
 }
 
-// Every revertable field must name a string or *string field of Book. A bad
-// entry would be classified restorable but fail the reflection write at revert
-// time, so the preflight would promise a row the revert then counts as Failed.
-func TestRevertableBookFields_NameStringFieldsOfBook(t *testing.T) {
+// Every revertable field must name a string, *string or *int field of Book —
+// the three shapes RestoreBookField writes. A bad entry would be classified
+// restorable but fail at revert time (the string-only writer this replaced
+// panicked on an *int: SetString on an int Value), so the preflight would
+// promise a row the revert then counts as Failed.
+func TestRevertableBookFields_NameRestorableFieldsOfBook(t *testing.T) {
 	bt := reflect.TypeOf(database.Book{})
 	for field, name := range revertableBookFields {
 		f, ok := bt.FieldByName(name)
@@ -49,11 +57,94 @@ func TestRevertableBookFields_NameStringFieldsOfBook(t *testing.T) {
 			continue
 		}
 		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
+		switch {
+		case ft.Kind() == reflect.String:
+		case ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.String:
+		case ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.Int:
+		default:
+			t.Errorf("%s -> %s: type %s, want string, *string or *int", field, name, ft)
 		}
-		if ft.Kind() != reflect.String {
-			t.Errorf("%s -> %s: kind %s, want string or *string", field, name, ft.Kind())
+	}
+}
+
+// Every mapped field round-trips through RestoreBookField: a non-empty old
+// value lands exactly, and "" restores the empty state (nil for a pointer).
+func TestRestoreBookField_RoundTripsEveryMappedField(t *testing.T) {
+	for field, name := range revertableBookFields {
+		book := &database.Book{}
+		f := reflect.ValueOf(book).Elem().FieldByName(name)
+		old := "Old value"
+		if f.Kind() == reflect.Pointer && f.Type().Elem().Kind() == reflect.Int {
+			old = "42"
 		}
+		if err := RestoreBookField(book, field, old); err != nil {
+			t.Errorf("%s: RestoreBookField(%q): %v", field, old, err)
+			continue
+		}
+		got := f
+		if got.Kind() == reflect.Pointer {
+			if got.IsNil() {
+				t.Errorf("%s: restored %q as nil", field, old)
+				continue
+			}
+			got = got.Elem()
+		}
+		if s := fmt.Sprint(got.Interface()); s != old {
+			t.Errorf("%s: restored %q, want %q", field, s, old)
+		}
+
+		if err := RestoreBookField(book, field, ""); err != nil {
+			t.Errorf("%s: RestoreBookField(\"\"): %v", field, err)
+			continue
+		}
+		if f.Kind() == reflect.Pointer && !f.IsNil() {
+			t.Errorf("%s: \"\" restored as non-nil %v, want nil", field, f.Elem().Interface())
+		}
+		if f.Kind() == reflect.String && f.String() != "" {
+			t.Errorf("%s: \"\" restored as %q", field, f.String())
+		}
+	}
+}
+
+func TestRestoreBookField_SeriesID(t *testing.T) {
+	nine := 9
+	book := &database.Book{SeriesID: &nine}
+	if err := RestoreBookField(book, "series_id", "4"); err != nil {
+		t.Fatalf("restore 4: %v", err)
+	}
+	if book.SeriesID == nil || *book.SeriesID != 4 {
+		t.Fatalf("SeriesID = %v, want 4", book.SeriesID)
+	}
+	if err := RestoreBookField(book, "series_id", "12 (Foo)"); err == nil {
+		t.Error("unparsable old value: want an error")
+	}
+	if *book.SeriesID != 4 {
+		t.Errorf("failed restore changed SeriesID to %d", *book.SeriesID)
+	}
+	if err := RestoreBookField(book, "series_id", ""); err != nil || book.SeriesID != nil {
+		t.Errorf("restore \"\": err %v, SeriesID %v, want nil", err, book.SeriesID)
+	}
+}
+
+type seriesMap map[int]*database.Series
+
+func (m seriesMap) GetSeriesByID(id int) (*database.Series, error) { return m[id], nil }
+
+func TestCheckRestoreReferent(t *testing.T) {
+	store := seriesMap{4: {ID: 4}}
+	row := func(field, old string) *database.OperationChange {
+		return &database.OperationChange{ChangeType: "metadata_update", FieldName: field, OldValue: old}
+	}
+	if err := CheckRestoreReferent(store, row("series_id", "4")); err != nil {
+		t.Errorf("live series: %v", err)
+	}
+	if err := CheckRestoreReferent(store, row("series_id", "5")); err == nil {
+		t.Error("deleted series: want an error")
+	}
+	if err := CheckRestoreReferent(store, row("series_id", "")); err != nil {
+		t.Errorf("restore to no series: %v", err)
+	}
+	if err := CheckRestoreReferent(store, row("title", "5")); err != nil {
+		t.Errorf("other field: %v", err)
 	}
 }

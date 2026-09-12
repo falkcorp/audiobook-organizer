@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 05f380f7-79a1-4953-8339-85979484c6a2
 // last-edited: 2026-09-12
 
@@ -36,7 +36,11 @@ const formatTypeCounts = (counts: Record<string, number> | undefined): string =>
  * offered at all.
  */
 export function describeUndoPreflight(p: UndoConflictReport): { canUndo: boolean; message: string } {
-  const conflicts = (p.content_changed?.length ?? 0) + (p.book_deleted?.length ?? 0) + (p.re_organized?.length ?? 0);
+  const conflicts =
+    (p.content_changed?.length ?? 0) +
+    (p.book_deleted?.length ?? 0) +
+    (p.re_organized?.length ?? 0) +
+    (p.series_deleted?.length ?? 0);
   const restorable = (p.safe ?? 0) + conflicts;
   const notRestorable = p.not_restorable ?? 0;
   const types = formatTypeCounts(p.not_restorable_types);

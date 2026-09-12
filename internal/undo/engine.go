@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -324,11 +324,14 @@ type UndoConflictReport struct {
 	ContentChanged  []UndoConflictItem `json:"content_changed,omitempty"`
 	BookDeleted     []UndoConflictItem `json:"book_deleted,omitempty"`
 	ReOrganized     []UndoConflictItem `json:"re_organized,omitempty"`
-	Safe            int                `json:"safe"`
+	// SeriesDeleted holds series_id rows whose old series no longer exists
+	// (see CheckRestoreReferent); the revert will refuse each of them.
+	SeriesDeleted []UndoConflictItem `json:"series_deleted,omitempty"`
+	Safe          int                `json:"safe"`
 	// NotRestorable counts rows the revert endpoint cannot reverse (see
 	// NotRestorableLabel), by label in NotRestorableTypes. They are in no
 	// other bucket, and AlreadyReverted counts only restorable rows, so
-	// Safe plus the three conflict buckets is what the revert will attempt.
+	// Safe plus the four conflict buckets is what the revert will attempt.
 	NotRestorable      int            `json:"not_restorable"`
 	NotRestorableTypes map[string]int `json:"not_restorable_types,omitempty"`
 }
@@ -341,11 +344,14 @@ type UndoConflictItem struct {
 	Reason     string `json:"reason"`
 }
 
-// ConflictChecker is the two-method slice the preflight conflict scan needs.
+// ConflictChecker is the three-method slice the preflight conflict scan needs.
 // Both entry points previously took database.Store — all 398 methods.
+// GetSeriesByID serves CheckRestoreReferent, the series_id check the revert
+// also runs.
 type ConflictChecker interface {
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	GetBookByID(id string) (*database.Book, error)
+	GetSeriesByID(id int) (*database.Series, error)
 }
 
 // PreflightUndoConflicts scans the operation's changes and reports
@@ -404,6 +410,11 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 					report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
 						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 						Reason: "book deleted",
+					})
+				} else if CheckRestoreReferent(store, c) != nil {
+					report.SeriesDeleted = append(report.SeriesDeleted, UndoConflictItem{
+						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+						Reason: "series deleted",
 					})
 				} else {
 					report.Safe++
