@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.10.0
+# version: 2.11.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-09-01
+# last-edited: 2026-09-12
 
 name: Frontend CI
 
@@ -17,13 +17,23 @@ on:
       - 'web/**'
       - '.github/workflows/frontend-ci.yml'
 
+# Least privilege (CI-02). This block is the ceiling for every job below,
+# including every job inside the external reusable workflow the `frontend` job
+# calls — code this repo does not control. Read access to the repository is
+# all that is needed:
+#   - `frontend-config` only checks out the repo and parses a config file.
+#   - `falkcorp/github-common/.github/workflows/reusable-ci.yml` at the pinned
+#     SHA declares top-level `permissions: contents: read`, and every job in it
+#     that sets permissions sets `contents: read` only; its nested
+#     `reusable-advanced-cache.yml` call does the same. A called workflow cannot
+#     use more than it declares, so any wider grant here was dead privilege.
+# This previously granted `contents/actions/packages/id-token/attestations:
+# write` and `checks: write` with no stated reason. When the reusable-ci pin
+# moves, re-read its `permissions:` blocks: if it starts requesting a wider
+# scope the run fails at startup, and the scope must be added here with a
+# comment saying which job needs it and why.
 permissions:
-  contents: write
-  actions: write
-  checks: write
-  packages: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   frontend-config:
@@ -59,3 +69,48 @@ jobs:
       system-packages: 'libtag1-dev'
       coverage-threshold: '30'  # repo gate is 30% (coverage-check-short); reusable default of 80 is aspirational
     secrets: inherit
+
+  # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an
+  # output computed by an external action. If that output ever comes back
+  # empty or unexpected, the job is SKIPPED, and a skipped job reads as green,
+  # so the PR would show a passing run with zero frontend build/test coverage.
+  # This job always runs (unless the run was cancelled) and fails unless the
+  # frontend work actually ran and passed.
+  #
+  # Invariant: this repo always has a frontend in `web/` (the workflow only
+  # triggers on `web/**` changes). So `has-frontend` must be exactly 'true'.
+  # Any other value, including empty, is a detection fault, not "no frontend".
+  # Removing `web/` means editing this workflow anyway; change this gate
+  # deliberately then. Do not add a second "is web/ present?" output to relax
+  # it: that output would travel through the same `needs.*.outputs` wiring and
+  # come back empty in the same failure, turning this gate fail-open.
+  frontend-gate:
+    name: Frontend CI Gate
+    needs: [frontend-config, frontend]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Assert the frontend build and tests ran and passed
+        env:
+          CONFIG_RESULT: ${{ needs.frontend-config.result }}
+          HAS_FRONTEND: ${{ needs.frontend-config.outputs.has-frontend }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          fail=0
+          if [ "$CONFIG_RESULT" != "success" ]; then
+            echo "::error::Determine Frontend Configuration finished '${CONFIG_RESULT}', expected 'success'."
+            fail=1
+          fi
+          if [ "$HAS_FRONTEND" != "true" ]; then
+            echo "::error::has-frontend is '${HAS_FRONTEND:-<empty>}', expected exactly 'true' (this repo has a frontend in web/). Frontend config detection is misbehaving; the frontend job was skipped."
+            fail=1
+          fi
+          if [ "$FRONTEND_RESULT" != "success" ]; then
+            echo "::error::Frontend Build and Test finished '${FRONTEND_RESULT:-<none>}', expected 'success'."
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Frontend build and tests ran and passed (has-frontend=true)."
