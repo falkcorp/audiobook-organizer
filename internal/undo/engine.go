@@ -1,319 +1,26 @@
 // file: internal/undo/engine.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
-// Undo engine (spec 3.2 task 3). Reverses the destructive changes
-// recorded by a prior operation by walking its operation_changes
-// rows in reverse order and applying the inverse transform.
+// Undo preflight. PreflightUndoConflicts predicts what POST
+// /operations/:id/revert (audiobooks.RevertService) will do with each change
+// row of an operation, so the UI can show it before the user confirms. The
+// revert lives in internal/audiobooks/revert.go; the classifier both share is
+// restorable.go.
 //
-// Supported change_type reversals:
-//   - file_move / organize_rename: os.Rename(new_value → old_value)
-//   - metadata_update / db_update: restore field from old_value
-//   - dir_create: remove directory if empty
-//   - tag_write: no-op (tags are idempotently re-derived)
-//
-// Each change row is marked reverted_at on success; already-reverted
-// rows are skipped (idempotent for resume after crash).
+// RunUndoOperation, a second undo walk that used to live here, was deleted on
+// 2026-09-12: nothing outside tests called it, and it restored series_id with
+// no existence check and no nil-on-empty.
 
 package undo
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-// UndoResult summarizes the outcome of an undo operation.
-type UndoResult struct {
-	Reverted        int      `json:"reverted"`
-	SkippedConflict int      `json:"skipped_conflict"`
-	SkippedReverted int      `json:"skipped_reverted"`
-	Failed          int      `json:"failed"`
-	Errors          []string `json:"errors,omitempty"`
-}
-
-// OnFileMovedFunc is the callback signature for handling file moves during undo.
-// Called when a file_move or organize_rename change is successfully reverted.
-// store: the database store
-// bookID: the ID of the book being reverted
-// oldFilePath: the path the file was restored to (original location before organize)
-// OnFileMovedFunc is notified after a file_move or organize_rename revert.
-// It takes no store: the implementor closes over whatever it needs, so this
-// package neither names nor propagates a database interface.
-type OnFileMovedFunc func(bookID, oldFilePath string)
-
-// undoStore is what the undo walk needs: the operation-change log, the two
-// book fields it rewrites, and enough to hand to the file-moved callback. The
-// parameter previously embedded database.BookStore + BookVersionStore +
-// OperationStore — 90 methods.
-type undoStore interface {
-	// MetadataFieldStateReader: revertMetadataUpdate consults the book's
-	// user locks before restoring a field. See that function.
-	database.MetadataFieldStateReader
-	GetBookByID(id string) (*database.Book, error)
-	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
-	CreateOperationChange(change *database.OperationChange) error
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-}
-
-// RunUndoOperation loads the changes for targetOpID, walks them in
-// reverse order, and applies the inverse of each change. Progress
-// is reported via the callback (step description + percentage).
-//
-// onFileMoved is an optional callback invoked after a file_move or
-// organize_rename change is successfully reverted. Pass nil if no
-// callback is needed.
-func RunUndoOperation(
-	store undoStore,
-	targetOpID string,
-	progress func(step string, pct int),
-	onFileMoved OnFileMovedFunc,
-) (*UndoResult, error) {
-	if progress == nil {
-		progress = func(string, int) {}
-	}
-
-	changes, err := store.GetOperationChanges(targetOpID)
-	if err != nil {
-		return nil, fmt.Errorf("load operation changes: %w", err)
-	}
-	if len(changes) == 0 {
-		return &UndoResult{}, nil
-	}
-
-	// Reverse order: last change undone first.
-	reversed := make([]*database.OperationChange, len(changes))
-	for i, c := range changes {
-		reversed[len(changes)-1-i] = c
-	}
-
-	result := &UndoResult{}
-	total := len(reversed)
-
-	for i, change := range reversed {
-		pct := int(float64(i+1) / float64(total) * 100)
-		progress(fmt.Sprintf("undo %s on %s", change.ChangeType, change.BookID), pct)
-
-		if change.RevertedAt != nil {
-			result.SkippedReverted++
-			continue
-		}
-
-		err := revertChange(store, change, onFileMoved)
-		if err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: %v", change.BookID, change.ChangeType, err))
-			continue
-		}
-
-		now := time.Now()
-		change.RevertedAt = &now
-		if updateErr := store.CreateOperationChange(change); updateErr != nil {
-			// Best effort — the FS/DB change already succeeded.
-			result.Errors = append(result.Errors, fmt.Sprintf("mark reverted %s: %v", change.ID, updateErr))
-		}
-		result.Reverted++
-	}
-
-	return result, nil
-}
-
-// revertChange applies the inverse of a single operation change.
-func revertChange(
-	store undoStore,
-	change *database.OperationChange,
-	onFileMoved OnFileMovedFunc,
-) error {
-	switch change.ChangeType {
-	case "file_move", "organize_rename":
-		if err := revertFileMove(change); err != nil {
-			return err
-		}
-		if onFileMoved != nil {
-			onFileMoved(change.BookID, change.OldValue)
-		}
-		return nil
-	case "metadata_update", "db_update":
-		return revertMetadataUpdate(store, change)
-	case "dir_create":
-		return revertDirCreate(change)
-	case "tag_write":
-		return nil // tags are re-derived on next metadata apply
-	default:
-		return fmt.Errorf("unknown change_type: %s", change.ChangeType)
-	}
-}
-
-// revertFileMove renames new_value back to old_value. If old_value
-// already exists (conflict), returns an error rather than clobbering.
-func revertFileMove(change *database.OperationChange) error {
-	if change.OldValue == "" || change.NewValue == "" {
-		return fmt.Errorf("missing path in change %s", change.ID)
-	}
-
-	// Check that new_value (the current location) exists.
-	if _, err := os.Stat(change.NewValue); os.IsNotExist(err) {
-		// Already moved back or deleted — idempotent no-op.
-		return nil
-	}
-
-	// Check that old_value (restore target) doesn't already exist.
-	if _, err := os.Stat(change.OldValue); err == nil {
-		return fmt.Errorf("conflict: restore target already exists: %s", change.OldValue)
-	}
-
-	// Ensure parent directory of old_value exists.
-	if err := os.MkdirAll(parentDir(change.OldValue), 0o775); err != nil {
-		return fmt.Errorf("mkdir for restore: %w", err)
-	}
-
-	return os.Rename(change.NewValue, change.OldValue)
-}
-
-// metadataReverter is the slice of the book store that reverting a
-// metadata change needs: read the row, read its user locks, write the row.
-// Was database.BookStore (51 methods).
-type metadataReverter interface {
-	database.MetadataFieldStateReader
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-}
-
-// revertMetadataUpdate restores a book field from the change's
-// OldValue. OldValue is either a plain string (for single-field
-// changes) or a JSON object (for multi-field snapshots).
-//
-// FIELD LOCKS. An undo writes the value a field held BEFORE the recorded
-// operation. If the user has edited and locked the field since, the user's
-// value is newer than both the operation's and the one being restored, and
-// putting the old value back is exactly the overwrite the lock promises to
-// prevent. So the restore goes through database.ApplyRespectingLocks: the
-// unlocked fields of the change are written, the locked ones are left as the
-// user set them, and the change is reported as an error -- naming the locked
-// fields -- so the row is NOT marked reverted_at. The undo of that change did
-// not fully happen, and the report says so instead of claiming it did.
-// Fails closed on an unreadable lock set: nothing is written.
-//
-// The field names on a change row are the database.FieldKey vocabulary where
-// the field is lockable at all (title, narrator, description, language,
-// publisher, genre); file_path / format / edition / library_state have no lock
-// and are always restored. series_id (written by
-// maintenance.series-phantom-repair) is restored through the SeriesID column,
-// which the series_name lock covers — ApplyRespectingLocks compares columns,
-// not field names, so the lock still holds.
-func revertMetadataUpdate(store metadataReverter, change *database.OperationChange) error {
-	if change.BookID == "" {
-		return fmt.Errorf("no book_id on metadata change %s", change.ID)
-	}
-
-	book, err := store.GetBookByID(change.BookID)
-	if err != nil || book == nil {
-		return fmt.Errorf("book %s not found", change.BookID)
-	}
-
-	fields := map[string]string{}
-	if change.FieldName != "" && change.OldValue != "" {
-		fields[change.FieldName] = change.OldValue
-	} else if change.OldValue != "" {
-		// Multi-field JSON snapshot.
-		var snapshot map[string]any
-		if err := json.Unmarshal([]byte(change.OldValue), &snapshot); err == nil {
-			for field, val := range snapshot {
-				if s, ok := val.(string); ok {
-					fields[field] = s
-				}
-			}
-		}
-	}
-
-	kept, err := database.ApplyRespectingLocks(store, book, func(b *database.Book) {
-		for field, value := range fields {
-			applyFieldRestore(b, field, value)
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("book %s: not restored, %w", change.BookID, err)
-	}
-	if len(kept) < len(fields) || len(fields) == 0 {
-		// At least one field of the change was not locked (or the change
-		// carried none we know how to restore): write what changed.
-		if _, err := store.UpdateBook(book.ID, book); err != nil {
-			return err
-		}
-	}
-	if len(kept) > 0 {
-		return fmt.Errorf("book %s: user-locked field(s) left as the user set them, not restored: %s",
-			change.BookID, strings.Join(kept, ", "))
-	}
-	return nil
-}
-
-// applyFieldRestore sets a single field on a Book from a string value.
-func applyFieldRestore(book *database.Book, field, value string) {
-	switch field {
-	case "title":
-		book.Title = value
-	case "file_path":
-		book.FilePath = value
-	case "format":
-		book.Format = value
-	case "narrator":
-		book.Narrator = &value
-	case "edition":
-		book.Edition = &value
-	case "description":
-		book.Description = &value
-	case "language":
-		book.Language = &value
-	case "publisher":
-		book.Publisher = &value
-	case "genre":
-		book.Genre = &value
-	case "library_state":
-		book.LibraryState = &value
-	case "series_id":
-		// Written by maintenance.series-phantom-repair (old_value is the
-		// dangling series id it cleared or repointed). A value that does not
-		// parse restores nothing rather than guessing.
-		if n, err := strconv.Atoi(value); err == nil {
-			book.SeriesID = &n
-		}
-	}
-}
-
-// revertDirCreate removes a directory if it's empty. Non-empty
-// directories are left alone (the files inside may still be needed).
-func revertDirCreate(change *database.OperationChange) error {
-	if change.NewValue == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(change.NewValue)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // already gone
-		}
-		return err
-	}
-	if len(entries) > 0 {
-		return nil // not empty, leave it
-	}
-	return os.Remove(change.NewValue)
-}
-
-func parentDir(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[:i]
-		}
-	}
-	return "."
-}
 
 // UndoConflictReport summarizes potential conflicts detected before
 // executing an undo operation. The caller shows this to the user
@@ -324,20 +31,24 @@ type UndoConflictReport struct {
 	ContentChanged  []UndoConflictItem `json:"content_changed,omitempty"`
 	BookDeleted     []UndoConflictItem `json:"book_deleted,omitempty"`
 	ReOrganized     []UndoConflictItem `json:"re_organized,omitempty"`
-	// The three series buckets hold rows CheckRestoreReferent refuses; the
-	// revert will refuse each of them too. SeriesDeleted: series_id or
-	// series_rename rows whose series no longer exists, or could not be read
-	// (Reason says which). SeriesRenamedSince: series_rename rows whose series
-	// was renamed again after the operation. SeriesNameTaken: series_rename
-	// rows whose old name now belongs to another series.
+	// The four series buckets hold rows CheckRestoreReferent refuses. The
+	// revert refuses every one of them each time it runs, so they are NOT
+	// restorable and must never count toward offering an Undo (the web
+	// confirmation names them separately). SeriesDeleted: the series no longer
+	// exists. SeriesRenamedSince: a series_rename whose series was renamed
+	// again after the operation. SeriesNameTaken: a series_rename whose old
+	// name now belongs to another series. SeriesCheckFailed: the series could
+	// not be read, or the row's value is malformed (Reason says which).
 	SeriesDeleted      []UndoConflictItem `json:"series_deleted,omitempty"`
 	SeriesRenamedSince []UndoConflictItem `json:"series_renamed_since,omitempty"`
 	SeriesNameTaken    []UndoConflictItem `json:"series_name_taken,omitempty"`
+	SeriesCheckFailed  []UndoConflictItem `json:"series_check_failed,omitempty"`
 	Safe               int                `json:"safe"`
 	// NotRestorable counts rows the revert endpoint cannot reverse (see
 	// NotRestorableLabel), by label in NotRestorableTypes. They are in no
-	// other bucket, and AlreadyReverted counts only restorable rows, so
-	// Safe plus the six conflict buckets is what the revert will attempt.
+	// other bucket, and AlreadyReverted counts only restorable rows, so Safe
+	// plus ContentChanged, BookDeleted and ReOrganized is what the revert can
+	// restore.
 	NotRestorable      int            `json:"not_restorable"`
 	NotRestorableTypes map[string]int `json:"not_restorable_types,omitempty"`
 }
@@ -362,8 +73,9 @@ type ConflictChecker interface {
 }
 
 // addReferentConflict files a CheckRestoreReferent refusal under the bucket
-// matching its reason. A lookup failure goes to SeriesDeleted with its own
-// reason text: the revert refuses it just the same.
+// matching its reason. Anything that is not deleted / renamed since / name
+// taken (a lookup failure, a malformed row, or an error without a reason) goes
+// to SeriesCheckFailed: the revert refuses it just the same.
 func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, err error) {
 	reason := RefusalReason(err)
 	if reason == "" {
@@ -371,12 +83,14 @@ func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, er
 	}
 	item := UndoConflictItem{ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType, Reason: reason}
 	switch reason {
+	case ReasonSeriesDeleted:
+		r.SeriesDeleted = append(r.SeriesDeleted, item)
 	case ReasonSeriesRenamedSince:
 		r.SeriesRenamedSince = append(r.SeriesRenamedSince, item)
 	case ReasonSeriesNameTaken:
 		r.SeriesNameTaken = append(r.SeriesNameTaken, item)
 	default:
-		r.SeriesDeleted = append(r.SeriesDeleted, item)
+		r.SeriesCheckFailed = append(r.SeriesCheckFailed, item)
 	}
 }
 

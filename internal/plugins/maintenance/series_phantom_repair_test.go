@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -251,7 +251,12 @@ func TestSeriesPhantomRepair_NullApplyClearsEveryHolderAndJournalsEachOne(t *tes
 	require.Equal(t, 0, again.PhantomSeries)
 }
 
-func TestSeriesPhantomRepair_NullApplyIsUndoable(t *testing.T) {
+// The null apply's ledger rows record dangling ids. Writing one back would
+// recreate exactly the phantom reference this op removed, so the undo preflight
+// reports every row as one the revert will refuse, and none as safe. (This test
+// used to prove the rows replayed through undo.RunUndoOperation, a walk with no
+// production caller that was deleted on 2026-09-12.)
+func TestSeriesPhantomRepair_NullApplyUndoIsRefused(t *testing.T) {
 	s := newSeriesPhantomStore(t)
 	fx := seedSeriesPhantomFixture(t, s)
 	p := &Plugin{deps: fakeDeps{store: s}}
@@ -260,13 +265,16 @@ func TestSeriesPhantomRepair_NullApplyIsUndoable(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, seriesIDOf(t, s, fx.live777[0]), "precondition: the apply cleared it")
 
-	// The ledger rows must be enough for internal/undo to put the ids back.
-	ures, err := undo.RunUndoOperation(s, "op-345", nil, nil)
+	report, err := undo.PreflightUndoConflicts(s, "op-345")
 	require.NoError(t, err)
-	require.Equal(t, 4, ures.Reverted, "undo errors: %v", ures.Errors)
-	require.Equal(t, 0, ures.Failed, "undo errors: %v", ures.Errors)
-
-	requireFixtureUntouched(t, s, fx)
+	require.Equal(t, 0, report.Safe, "no phantom id may be offered for restore")
+	// The trashed holder is reported as a deleted book; the three live ones
+	// as rows whose series does not exist.
+	require.Len(t, report.BookDeleted, 1)
+	require.Len(t, report.SeriesDeleted, 3)
+	for _, item := range report.SeriesDeleted {
+		require.Equal(t, undo.ReasonSeriesDeleted, item.Reason)
+	}
 }
 
 // phantomJournalFailStore is a store whose undo ledger is broken (named for this

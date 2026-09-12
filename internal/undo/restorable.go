@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -49,9 +49,8 @@ import (
 //     id, so there is no way to tell which series to rename back; they stay
 //     record-only rather than guessing one by name.
 //   - series_rename without a SeriesID (malformed).
-//   - any change type the revert engine has no case for (db_update and
-//     dir_create are reversed only by RunUndoOperation, not by the revert
-//     endpoint).
+//   - any change type the revert engine has no case for (e.g. db_update,
+//     dir_create).
 //
 // series_rename rows (dedup.MergeSeries, carrying SeriesID) are restorable:
 // the revert renames the series back to OldValue, after CheckRestoreReferent
@@ -158,6 +157,12 @@ const (
 	// the old name (compared the way the store's name index compares: case
 	// and whitespace insensitive).
 	ReasonSeriesNameTaken = "series name taken"
+	// ReasonOldValueUnparsable: a series_id row whose old value is not an
+	// integer id.
+	ReasonOldValueUnparsable = "old value unparsable"
+	// ReasonSeriesIDMissing: a series_rename row with no SeriesID (the
+	// classifier already calls it record-only; this is defence in depth).
+	ReasonSeriesIDMissing = "series id missing"
 )
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
@@ -208,13 +213,13 @@ func CheckRestoreReferent(store SeriesLookup, c *database.OperationChange) error
 	case c.ChangeType == "metadata_update" && c.FieldName == "series_id" && c.OldValue != "":
 		id, err := strconv.Atoi(c.OldValue)
 		if err != nil {
-			return fmt.Errorf("series_id old value %q is not an integer id", c.OldValue)
+			return refuse(ReasonOldValueUnparsable, "series_id old value %q is not an integer id", c.OldValue)
 		}
 		_, err = liveSeries(store, id)
 		return err
 	case c.ChangeType == ChangeTypeSeriesRename:
 		if c.SeriesID == nil {
-			return fmt.Errorf("series_rename row %s carries no series id", c.ID)
+			return refuse(ReasonSeriesIDMissing, "series_rename row %s carries no series id", c.ID)
 		}
 		s, err := liveSeries(store, *c.SeriesID)
 		if err != nil {

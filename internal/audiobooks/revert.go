@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -252,6 +252,21 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 	}
 }
 
+// loadBook returns the change's book, or an error when it cannot be read or no
+// longer exists. PebbleStore.GetBookByID answers a missing id with (nil, nil);
+// without this guard every restore path dereferenced that nil and panicked
+// inside the revert endpoint instead of counting the row Failed.
+func (rs *RevertService) loadBook(id string) (*database.Book, error) {
+	book, err := rs.db.GetBookByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get book %s: %w", id, err)
+	}
+	if book == nil {
+		return nil, fmt.Errorf("book %s not found", id)
+	}
+	return book, nil
+}
+
 func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 	// Check file exists at new location
 	if _, err := os.Stat(c.NewValue); os.IsNotExist(err) {
@@ -259,16 +274,18 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 		return nil
 	}
 
+	// Load the book BEFORE moving anything: a missing book must fail the row
+	// with the file still where the operation left it, not after the move.
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
+		return err
+	}
+
 	// Move file back
 	if err := os.Rename(c.NewValue, c.OldValue); err != nil {
 		return fmt.Errorf("failed to move file back from %s to %s: %w", c.NewValue, c.OldValue, err)
 	}
 
-	// Update book record
-	book, err := rs.db.GetBookByID(c.BookID)
-	if err != nil {
-		return fmt.Errorf("failed to get book %s: %w", c.BookID, err)
-	}
 	book.FilePath = c.OldValue
 	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
 		return fmt.Errorf("failed to update book path: %w", err)
@@ -278,9 +295,9 @@ func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
 }
 
 func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
-	book, err := rs.db.GetBookByID(c.BookID)
+	book, err := rs.loadBook(c.BookID)
 	if err != nil {
-		return fmt.Errorf("failed to get book %s: %w", c.BookID, err)
+		return err
 	}
 
 	// Refuse before writing anything: a series_id whose series row the same
@@ -321,9 +338,9 @@ func (rs *RevertService) revertSeriesRename(c *database.OperationChange) error {
 }
 
 func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
-	book, err := rs.db.GetBookByID(c.BookID)
+	book, err := rs.loadBook(c.BookID)
 	if err != nil {
-		return fmt.Errorf("failed to get book %s: %w", c.BookID, err)
+		return err
 	}
 
 	if _, statErr := os.Stat(book.FilePath); os.IsNotExist(statErr) {

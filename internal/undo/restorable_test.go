@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -30,7 +30,7 @@ func TestNotRestorableLabel(t *testing.T) {
 		{"metadata_update", "", "metadata_update:(no field)"},
 		{"author_delete", "author", "author_delete"},
 		{"narrator_delete", "narrator", "narrator_delete"},
-		// Reversed by RunUndoOperation only, not by the revert endpoint.
+		// The revert endpoint has no case for db_update.
 		{"db_update", "title", "db_update"},
 	}
 	for _, tc := range cases {
