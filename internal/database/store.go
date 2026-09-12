@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.95.0
+// version: 2.96.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -1362,7 +1362,7 @@ func InitializeStore(dbType, path string) (Store, error) {
 
 	switch dbType {
 	case "sqlite", "sqlite3":
-		return nil, fmt.Errorf("SQLite3 support has been removed; PebbleDB is the only supported database backend")
+		return nil, fmt.Errorf("database_type %q is not supported: SQLite3 support has been removed and PebbleDB is the only database backend; set database_type to \"pebble\" (or drop --db-type %s) and point database_path at a PebbleDB directory", dbType, dbType)
 	case "pebble", "":
 		// PebbleDB is the default and only supported backend.
 		s, err = NewPebbleStore(path)
