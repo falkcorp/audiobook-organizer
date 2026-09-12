@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
 // last-edited: 2026-09-12
 
@@ -140,7 +140,7 @@ func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) d
 			}
 			return nil, nil
 		},
-		UpdateBookFunc:  func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
+		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
 	}
 	return fx
 }
