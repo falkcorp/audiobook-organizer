@@ -1,7 +1,7 @@
 // file: cmd/pid-census/main.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f2b0d61-4a37-4c95-9e12-7d3a6b1c0e58
-// last-edited: 2026-07-25
+// last-edited: 2026-09-11
 //
 // READ-ONLY book_file iTunes-PID integrity census. Point it at a COPY of the
 // production Pebble DB (never the live dir — Pebble opens read-write and wants the
@@ -12,10 +12,18 @@
 // docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md.
 //
 //	go run ./cmd/pid-census --db /tmp/pebble-copy [--itl /tmp/iTunes\ Library.itl]
+//
+// Track Persistent ID coverage (TASK-184, READ-ONLY): how many library tracks —
+// and how many tracks referenced by smart playlists with a materialized Playlist
+// Items list — resolve to a book_file / live book. Point --itl at a COPY of the
+// iTunes Library.xml export (the binary .itl yields no smart playlists):
+//
+//	go run ./cmd/pid-census --db /tmp/pebble-copy --itl /tmp/iTunes\ Library.xml --coverage [--full]
 
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -37,6 +45,7 @@ func main() {
 	syncRoot := flag.String("sync-writeback-root", "audiobook-organizer/.itunes-writeback/", "F7 AllowedWritebackRoot for the AO library's own media root")
 	mapFrom := flag.String("map-from", "W:", "path-mapping source prefix (Windows drive)")
 	mapTo := flag.String("map-to", "/mnt/bigdata/books", "path-mapping target prefix (local mount)")
+	coverage := flag.Bool("coverage", false, "READ-ONLY track Persistent ID coverage census; requires --itl pointing at a COPY of iTunes Library.xml (preferred) or a .itl")
 	flag.Parse()
 
 	if *dbPath == "" {
@@ -50,6 +59,53 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Track Persistent ID coverage census (TASK-184) — READ-ONLY. Checked before
+	// every other mode so --coverage can never fall through to a write path such
+	// as --sync-apply when flags are combined.
+	if *coverage {
+		if *itlPath == "" {
+			fmt.Fprintln(os.Stderr, "error: --coverage requires --itl (a COPY of iTunes Library.xml, or of the .itl)")
+			os.Exit(2)
+		}
+		r, cerr := itunes.ComputePIDCoverage(context.Background(), store, *itlPath)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "pid coverage census: %v\n", cerr)
+			os.Exit(1)
+		}
+		fmt.Printf("=== ITUNES TRACK PERSISTENT ID COVERAGE (source=%s, read-only) ===\n", r.Source)
+		fmt.Printf("total_tracks=%d tracks_without_pid=%d db_book_file_pids=%d db_book_pids=%d\n",
+			r.TotalTracks, r.TracksWithoutPID, r.DBBookFilePIDs, r.DBBookPIDs)
+		printCoverageBucket("library", r.Library)
+		fmt.Printf("playlists=%d smart=%d smart_with_items=%d smart_criteria_only=%d regular_with_items=%d\n",
+			r.Playlists, r.SmartPlaylists, r.SmartWithItems, r.SmartCriteriaOnly, r.RegularWithItems)
+		fmt.Printf("smart_item_refs=%d smart_distinct_track_ids=%d smart_dangling_track_ids=%d smart_referenced_without_pid=%d\n",
+			r.SmartItemRefs, r.SmartDistinctTrackIDs, r.SmartDanglingTrackIDs, r.SmartReferencedWithoutPID)
+		printCoverageBucket("smart_referenced", r.SmartReferenced)
+		fmt.Printf(">>> SMART-PLAYLIST TRACK COVERAGE (book_file level) = %.2f%% (%d/%d)\n",
+			r.SmartReferenced.ResolvedFileLevelPercent, r.SmartReferenced.ResolvedFileLevel, r.SmartReferenced.Tracks)
+		samples, label := r.UnresolvedSmartSamples, "smart-referenced"
+		if len(samples) == 0 {
+			samples, label = r.UnresolvedSamples, "library"
+		}
+		for i, s := range samples {
+			if i >= 10 {
+				fmt.Printf("    ... +%d more in --full\n", len(samples)-10)
+				break
+			}
+			fmt.Printf("    UNRESOLVED (%s) track_id=%d pid=%s name=%q artist=%q album=%q\n",
+				label, s.TrackID, s.PID, s.Name, s.Artist, s.Album)
+		}
+		for _, n := range r.Notes {
+			fmt.Printf("    NOTE: %s\n", n)
+		}
+		if *full {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(r)
+		}
+		return
+	}
 
 	// P2 relocate sync cycle — DRY-RUN (plan + in-memory oracle verify; NO write).
 	if *syncDryRun {
@@ -256,4 +312,13 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// printCoverageBucket prints one --coverage resolution tally on two lines.
+func printCoverageBucket(label string, b itunes.PIDCoverageBucket) {
+	fmt.Printf("%s: tracks_with_pid=%d unresolved=%d\n", label, b.Tracks, b.Unresolved)
+	fmt.Printf("  resolved_file_level=%d (%.2f%%) resolved_book_level=%d (%.2f%%) resolved_either=%d (%.2f%%)\n",
+		b.ResolvedFileLevel, b.ResolvedFileLevelPercent,
+		b.ResolvedBookLevel, b.ResolvedBookLevelPercent,
+		b.ResolvedEither, b.ResolvedEitherPercent)
 }
