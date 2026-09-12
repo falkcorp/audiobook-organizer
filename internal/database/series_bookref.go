@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-09-12
 
@@ -182,7 +182,10 @@ func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 		// A truncated map with a nil error would answer "nothing else references
 		// anything" (the permissive answer) to callers that delete on the strength of
 		// it. This is the counter a delete guard consults, so a read error the helper
-		// reports must reach the caller unchanged.
+		// reports must reach the caller unchanged. Do not justify this by "every
+		// other scan checks": that sibling survey was written here once and was
+		// false within nine days. A survey of sibling code is a claim with an
+		// expiry date; the reason above stands on its own.
 		return nil, err
 	}
 
