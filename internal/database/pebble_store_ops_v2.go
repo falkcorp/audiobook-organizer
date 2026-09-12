@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -139,8 +139,15 @@ func (p *PebbleStore) DeleteOrphanOpDefsV2(keepIDs []string) (err error) {
 }
 
 // InsertOperationV2 inserts a new queued operation row and adds it to the queue index.
+//
+// A row inserted with a terminal status and no CompletedAt is stamped here, for
+// the same reason UpdateOperationV2Status does it: CompletedAt is the canonical
+// liveness signal and a terminal row without one reads as in-flight forever.
+// No production caller inserts a terminal row today; this closes the door
+// before one does.
 func (p *PebbleStore) InsertOperationV2(row OperationV2Row) (err error) {
 	defer recoverPebbleClosed("InsertOperationV2", &err)
+	stampCompletedAtIfTerminal(&row)
 	if err := p.pebbleSetJSON(opv2OpKey(row.ID), &row); err != nil {
 		return err
 	}
@@ -241,6 +248,13 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 	if completedAt != nil {
 		row.CompletedAt = completedAt
 	}
+	// A nil completedAt means "leave unchanged", which on a terminal write used
+	// to mean "leave null" -- the invariant held only because every caller
+	// passed &now. Enforce it here so the store is the one choke point every
+	// terminal transition goes through, instead of an argument each new caller
+	// has to remember. Live statuses are untouched (see isTerminalV2Status for
+	// why that is an allowlist), and an existing stamp is never overwritten.
+	stampCompletedAtIfTerminal(&row)
 	if errMsg != nil {
 		row.ErrorMessage = errMsg
 	}
@@ -411,10 +425,7 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 	// "waiting_deps" are both live and both would have been stamped. Only the
 	// fact that the two real call sites (registry.go:990, :999) pass a literal
 	// "canceled" kept that from being reachable.
-	if isTerminalV2Status(newStatus) && row.CompletedAt == nil {
-		now := time.Now().UTC()
-		row.CompletedAt = &now
-	}
+	stampCompletedAtIfTerminal(&row)
 	data, err := json.Marshal(&row)
 	if err != nil {
 		return false, err
@@ -1182,6 +1193,19 @@ func isTerminalV2Status(status string) bool {
 // still waiting to be resumed.
 func IsTerminalV2Status(status string) bool { return isTerminalV2Status(status) }
 
+// stampCompletedAtIfTerminal sets row.CompletedAt to now when the row holds a
+// terminal status and has no stamp yet. It is the single rule every opv2 row
+// writer that can set a status applies (InsertOperationV2,
+// UpdateOperationV2Status, SetOperationV2StatusIfQueued), so a terminal row can
+// never be written with a null completed_at. An existing stamp always wins: it
+// is the earlier, truer completion time.
+func stampCompletedAtIfTerminal(row *OperationV2Row) {
+	if isTerminalV2Status(row.Status) && row.CompletedAt == nil {
+		now := time.Now().UTC()
+		row.CompletedAt = &now
+	}
+}
+
 // RepairOpsV2MissingCompletedAt stamps completed_at on every operation row that
 // holds a terminal status but has completed_at null, and returns the number of
 // rows actually written.
@@ -1191,8 +1215,10 @@ func IsTerminalV2Status(status string) bool { return isTerminalV2Status(status) 
 // it sits in the UI's Active Operations panel forever with no user action able
 // to clear it. Before 2026-09-07 the only producer was
 // SetOperationV2StatusIfQueued, which wrote a terminal status without a stamp;
-// every other writer of a terminal status passes a non-nil completedAt. That
-// bug is fixed at the source, and this is the repair for rows it already made.
+// every other writer of a terminal status passed a non-nil completedAt. That
+// bug is fixed at the source, and since 2026-09-12 every status-setting writer
+// applies stampCompletedAtIfTerminal, so no writer can produce the shape at
+// all. This is the repair for rows written before either fix.
 //
 // The scan reads the opv2:op: keyspace rather than the opv2:act: index because
 // the affected rows are exactly the ones the index has already dropped

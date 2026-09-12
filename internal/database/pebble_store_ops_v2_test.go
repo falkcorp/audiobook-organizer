@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -573,12 +573,16 @@ func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
 	s := store.(OpsV2Store)
 
 	// insert writes a row with CompletedAt forced to nil, bypassing the status
-	// setters so the test can construct the corrupt shape directly.
+	// setters so the test can construct the corrupt shape directly. It writes the
+	// raw opv2:op: key rather than calling InsertOperationV2, because since
+	// 2026-09-12 InsertOperationV2 stamps a terminal row itself -- the corrupt
+	// shape is no longer constructible through any store writer, which is the
+	// point, and is why the fixture has to forge it.
 	insert := func(t *testing.T, id, status string) {
 		t.Helper()
 		row := buildTestOpRow(id, status)
 		row.CompletedAt = nil
-		require.NoError(t, s.InsertOperationV2(row))
+		writeRawOpRowForTest(t, s, row)
 	}
 
 	t.Run("stamps terminal rows and leaves live rows alone", func(t *testing.T) {
@@ -647,7 +651,7 @@ func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
 		row := buildTestOpRow("term-ancient", "canceled")
 		row.CompletedAt = nil
 		row.QueuedAt = old
-		require.NoError(t, s.InsertOperationV2(row))
+		writeRawOpRowForTest(t, s, row)
 
 		n, err := s.RepairOpsV2MissingCompletedAt()
 		require.NoError(t, err)
@@ -658,6 +662,161 @@ func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
 		require.NotNil(t, got)
 		require.NotNil(t, got.CompletedAt)
 	})
+}
+
+// writeRawOpRowForTest writes an operation row straight to its opv2:op: key,
+// bypassing every store writer. It exists to forge the corrupt shape (terminal
+// status, null completed_at) that the writers now refuse to produce, so the
+// repair that cleans up rows written before the fix can still be tested.
+func writeRawOpRowForTest(t *testing.T, s OpsV2Store, row OperationV2Row) {
+	t.Helper()
+	p, ok := s.(*PebbleStore)
+	require.True(t, ok, "writeRawOpRowForTest needs the real PebbleStore")
+	require.NoError(t, p.pebbleSetJSON(opv2OpKey(row.ID), &row))
+}
+
+// opsV2TerminalStatusesForTest is every status isTerminalV2Status accepts. It is
+// spelled out rather than derived so that adding a terminal status without
+// covering it here is a visible decision, not an automatic pass.
+var opsV2TerminalStatusesForTest = []string{"completed", "failed", "canceled", "interrupted_dropped"}
+
+// opsV2LiveStatusesForTest are statuses a row can hold while something still
+// owns it: the dispatcher (queued, running), the deps scheduler (waiting_deps),
+// the startup resume sweep (interrupted_quiesced, interrupted_restart), or a
+// user decision (interrupted_ask). Plus one invented status, because
+// isTerminalV2Status is an allowlist and an unknown status must read as live.
+var opsV2LiveStatusesForTest = []string{
+	"queued", "running", "waiting_deps", "interrupted_quiesced",
+	"interrupted_ask", "interrupted_restart", "invented_by_a_future_feature",
+}
+
+// TestUpdateOperationV2Status_StampsCompletedAtOnEveryTerminalStatus pins the
+// store-level invariant: a row written with a terminal status always carries a
+// completed_at, whether or not the caller supplied one.
+//
+// Before 2026-09-12 UpdateOperationV2Status copied completedAt through only when
+// non-nil, so the invariant held only because every caller happened to pass
+// &now on a terminal write. SetOperationV2StatusIfQueued was the one writer that
+// did not, and it produced the canceled transcribe-book-intros row that sat in
+// Active Operations for 73 days. This makes the store the choke point so a new
+// caller cannot reintroduce that shape by forgetting an argument.
+func TestUpdateOperationV2Status_StampsCompletedAtOnEveryTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	for _, status := range opsV2TerminalStatusesForTest {
+		t.Run(status+" with no caller stamp is stamped by the store", func(t *testing.T) {
+			id := "op-upd-term-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+			started := time.Now().UTC()
+			require.NoError(t, s.UpdateOperationV2Status(id, "running", &started, nil, nil))
+
+			msg := "terminal write with a nil completedAt"
+			before := time.Now().UTC()
+			require.NoError(t, s.UpdateOperationV2Status(id, status, nil, nil, &msg))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Equal(t, status, got.Status)
+			require.NotNil(t, got.CompletedAt,
+				"%s is terminal; a null completed_at reads as in-flight forever", status)
+			require.False(t, got.CompletedAt.Before(before.Add(-time.Second)),
+				"the store stamp must be the time of the terminal write")
+		})
+	}
+
+	t.Run("a caller-supplied stamp is kept as given", func(t *testing.T) {
+		id := "op-upd-caller-stamp"
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+		supplied := time.Now().UTC().Add(-5 * time.Minute)
+		require.NoError(t, s.UpdateOperationV2Status(id, "completed", nil, &supplied, nil))
+
+		got, err := s.GetOperationV2(id)
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, supplied, *got.CompletedAt, time.Millisecond)
+	})
+
+	t.Run("an existing stamp is not overwritten by a nil-stamp terminal write", func(t *testing.T) {
+		// interrupted_quiesced is stamped at its write site; a later drop of the
+		// same row must keep that earlier, truer time.
+		id := "op-upd-keep-stamp"
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+		earlier := time.Now().UTC().Add(-48 * time.Hour)
+		require.NoError(t, s.UpdateOperationV2Status(id, "interrupted_quiesced", nil, &earlier, nil))
+		require.NoError(t, s.UpdateOperationV2Status(id, "interrupted_dropped", nil, nil, nil))
+
+		got, err := s.GetOperationV2(id)
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+
+	for _, status := range opsV2LiveStatusesForTest {
+		t.Run(status+" with no caller stamp is NOT stamped", func(t *testing.T) {
+			id := "op-upd-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+			require.NoError(t, s.UpdateOperationV2Status(id, status, nil, nil, nil))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt,
+				"%s is live; stamping it hides an op something still owns", status)
+		})
+	}
+}
+
+// TestInsertOperationV2_StampsCompletedAtOnTerminalStatus covers the other door
+// into the opv2:op: keyspace. No production caller inserts a terminal row today
+// (they insert queued, waiting_deps or running), but InsertOperationV2 accepted
+// one with a null completed_at and wrote it verbatim -- the same dead-to-the-
+// worker, alive-to-every-reader shape, reachable by the next caller that
+// records an already-finished op.
+func TestInsertOperationV2_StampsCompletedAtOnTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	for _, status := range opsV2TerminalStatusesForTest {
+		t.Run(status+" is stamped on insert", func(t *testing.T) {
+			id := "op-ins-term-" + status
+			row := buildTestOpRow(id, status)
+			row.CompletedAt = nil
+			require.NoError(t, s.InsertOperationV2(row))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.NotNil(t, got.CompletedAt, "%s inserted with no completed_at", status)
+		})
+	}
+
+	t.Run("a supplied stamp is kept", func(t *testing.T) {
+		earlier := time.Now().UTC().Add(-24 * time.Hour)
+		row := buildTestOpRow("op-ins-stamped", "failed")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		got, err := s.GetOperationV2("op-ins-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+
+	for _, status := range opsV2LiveStatusesForTest {
+		t.Run(status+" is NOT stamped on insert", func(t *testing.T) {
+			id := "op-ins-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, status)))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt, "%s is live and must not be stamped", status)
+		})
+	}
 }
 
 // TestDeleteOperationV2_RemovesRowIndexesStateAndLogs pins the storage half
