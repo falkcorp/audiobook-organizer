@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -73,6 +73,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.missingFileAuditDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
+		// filepath-collision-report is a standing library-health check, decoupled
+		// from the missing-file-audit/repair/repoint trio above: it answers
+		// whether Book.FilePath is safe to trust as an identity signal at all,
+		// which any future write path touching Book.FilePath must re-check first.
+		p.filePathCollisionReportDef(),
 		// mark-missing-files is the WRITER for the book_file.Missing flag that the
 		// dashboard's BrokenFiles counter now reads. missing-file-audit measures the
 		// same disk truth but is read-only; this op persists it so the counter is
