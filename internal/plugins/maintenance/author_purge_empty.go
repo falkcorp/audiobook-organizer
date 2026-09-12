@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
 // last-edited: 2026-09-12
 
@@ -168,9 +168,15 @@ func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.purge-empty-authors",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         30 * time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runPurgeEmptyAuthors,
+		// 2h, not 30m. Each delete sweeps the whole book_authors junction (see
+		// the loop below), measured on production on 2026-09-12 at about one
+		// delete per second; a 3,958-author apply hit a 30m timeout after 1,742
+		// deletes. Every delete is journaled first and the loop checks ctx
+		// between items, so a timeout leaves consistent state -- but it strands
+		// the rest of the run. Use `limit` to size a run below this bound.
+		Timeout:      2 * time.Hour,
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runPurgeEmptyAuthors,
 	}
 }
 
@@ -310,11 +316,13 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// deleted author id. A dry run writes nothing and takes no gate -- parking
 	// the scanner to read would be a real cost for no reason.
 	//
-	// 🔴 THE STAND-DOWN IS NOT THE PRIMARY GUARD. It is known not to quiesce a
-	// RESUMED scan (a scan restarted from its checkpoint does not see the gate
-	// it did not start under), and it is inert when the reporter carries no op
-	// id. The per-item re-check in the loop below is what actually closes the
-	// race; the stand-down narrows the window in which that re-check can fire.
+	// 🔴 THE STAND-DOWN IS NOT THE PRIMARY GUARD. It parks library.scan only --
+	// metadata apply, book edits and AI ops can still link a book to one of
+	// these authors -- and it is inert when the reporter carries no op id. The
+	// per-item re-check in the loop below is what actually closes the race; the
+	// stand-down narrows the window in which that re-check can fire. (It does
+	// park a scan resumed after a restart: on 2026-09-12 a scan at
+	// resume_count=5 went interrupted_quiesced for the whole of this op's apply.)
 	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "purge-empty-authors apply")
 	if sdErr != nil {
 		return fmt.Errorf("purge-empty-authors: acquire scan stand-down: %w", sdErr)
@@ -328,17 +336,21 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		reporter.Logger().Warn("purge-empty-authors: no operation id on the reporter, undo-ledger rows will be unattributed")
 	}
 
-	// Deleted one at a time rather than in a bulk batch. DeleteAuthor already
-	// removes the author row, its name index and its aliases, and its junction
-	// sweep iterates the `book_author:` keyspace — which is EMPTY (nothing in the
-	// repo writes it; the live data is the per-book `book_authors:<id>` array), so
-	// the per-author cost is a seek that finds nothing, not a table scan. A bulk
-	// path would duplicate that cleanup for no measured gain.
+	// Deleted one at a time rather than in a bulk batch. DeleteAuthor removes the
+	// author row, its name index and its aliases, and sweeps the author out of
+	// the per-book `book_authors:<bookID>` junction -- a FULL scan of that
+	// keyspace on every delete (sweepAuthorFromBookAuthors, pebble_store_authors.go;
+	// there is no author -> books reverse index). That sweep is the per-item
+	// cost: measured on production on 2026-09-12 at about one delete per second,
+	// so a 3,958-author apply held the scan stand-down for over an hour. A bulk
+	// delete that swept the junction once for the whole eligible set would
+	// remove that cost; it needs a store method that does not exist yet.
 	//
 	// Deliberately SEQUENTIAL, against the repo's default preference for a
 	// worker pool: the per-item re-check -> journal -> delete sequence must run
 	// under a live stand-down lease, and the renew-then-abort contract is per
-	// item. The per-item cost is one point lookup and two small writes.
+	// item. Parallel deletes would also serialize on the name-index lock, which
+	// DeleteAuthor holds across its sweep and commit.
 	authorNames := make(map[int]string, len(eligible))
 	for _, a := range authors {
 		authorNames[a.ID] = a.Name
