@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/report_path.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5591f89d-611e-4e24-83c2-e02a887bd301
 // last-edited: 2026-09-12
 
@@ -28,8 +28,15 @@ import (
 //
 // {RootDir}/.reports follows the same convention as {RootDir}/.wav-cache
 // (intro_transcribe.go) and {RootDir}/.activity (config.ResolveActivityDBPath):
-// app-owned state on the large library volume, dot-prefixed so pathutil's
-// hidden-dir rule keeps every library walker out of it.
+// app-owned state on the large library volume, dot-prefixed so walkers that
+// call pathutil.ShouldSkipDir (cleanup.go and file_provenance_capture.go in
+// this package, for example) stay out of it.
+//
+// NOT every walker does. recover-missing-files' inventory walk descends into
+// every directory under RootDir, dot-dirs included, so it can count report
+// files (and .activity, .wav-cache, and a database kept under RootDir) as
+// unclaimed candidates in its size-keyed inventory. That is a gap in the walker,
+// not something a different directory name here would close.
 const maintenanceReportDirName = ".reports"
 
 // resolveReportPath returns where an op writes its report: the caller's
