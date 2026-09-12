@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-09-12-the-books-in-the-trash-that-lost-their-author-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 9a2f6c1e-4b83-47d5-b0e9-5c71d8f23a64 -->
 <!-- last-edited: 2026-09-12 -->
 
 # The books in the trash that lost their author
 
-**Pull request:** to be filled in when the pull request is opened.
+**Pull request:** [#3309](https://github.com/falkcorp/audiobook-organizer/pull/3309)
 
 ## Executive Summary
 
