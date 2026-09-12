@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -988,7 +988,12 @@ func (p *PebbleStore) DeleteNarrator(id int) error {
 		batch.Close()
 		return fmt.Errorf("pebble Delete narrator:%d: %w", id, err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(narrator.Name))), nil); err != nil {
+	// Ownership-checked, as in DeleteAuthor: another narrator whose name
+	// collapses to the same key may own the current entry, and deleting it
+	// would make that narrator unfindable by name (the next CreateNarrator
+	// would then mint a duplicate). This row's own legacy entry, if it has
+	// one, is removed too.
+	if err := p.deleteNameIndexIfOwned(batch, nil, narratorNameIndexKey, narrator.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete narrator_name: %w", err)
 	}

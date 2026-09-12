@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_name_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f51fb8d5-ac26-4268-85ee-c4bdb523de0b
 // last-edited: 2026-09-12
 
@@ -173,6 +173,30 @@ func TestNameIndex_LegacyNarratorAndAliasKeysResolve(t *testing.T) {
 	require.Error(t, err, "duplicate alias must still be refused when the existing one sits under the legacy key")
 	require.NoError(t, p.DeleteAuthorAlias(alias.ID))
 	require.False(t, keyExists(t, p, aliasNameIndexKey("a.  owner")), "alias delete must remove its legacy entry")
+}
+
+// DeleteNarrator took the index entry by raw key, so deleting a legacy-keyed
+// "john  smith" removed the canonical "john smith" narrator's current entry
+// and left its own legacy entry behind.
+func TestNameIndex_DeleteNarratorDoesNotRemoveAnotherNarratorsEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	legacyRow, err := p.CreateNarrator("John  Smith")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, narratorNameIndexKey, legacyRow.Name)
+	canonical, err := p.CreateNarrator("John Smith")
+	require.NoError(t, err)
+	require.NotEqual(t, legacyRow.ID, canonical.ID, "setup: two rows expected")
+
+	require.NoError(t, p.DeleteNarrator(legacyRow.ID))
+
+	got, err := p.GetNarratorByName("John Smith")
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the double-spaced narrator removed the canonical narrator's index entry")
+	require.Equal(t, canonical.ID, got.ID)
+	again, err := p.CreateNarrator("John Smith")
+	require.NoError(t, err)
+	require.Equal(t, canonical.ID, again.ID, "canonical narrator was duplicated after the other row's delete")
+	require.False(t, keyExists(t, p, narratorNameIndexKey("john  smith")), "the deleted narrator's own legacy entry must go")
 }
 
 // Roles and playlists are not person names: their indexes keep the plain
