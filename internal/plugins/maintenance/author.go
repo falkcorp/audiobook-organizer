@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -54,7 +54,14 @@ func (p *Plugin) runAuthorDedupScan(ctx context.Context, _ json.RawMessage, repo
 		return fmt.Errorf("failed to get authors: %w", err)
 	}
 
-	bookCounts, _ := store.GetAllAuthorBookCounts()
+	bookCounts, err := store.GetAllAuthorBookCounts()
+	if err != nil {
+		// Fail rather than rank duplicates against an empty count map: every
+		// author would tie at zero books and the scan would still report
+		// success. This is also where ErrMemdbIncomplete surfaces once that
+		// getter is guarded.
+		return fmt.Errorf("failed to get author book counts: %w", err)
+	}
 	booksWithCounts := 0
 	for _, cnt := range bookCounts {
 		if cnt > 0 {

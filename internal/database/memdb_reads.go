@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-09-11
 
@@ -179,7 +179,13 @@ func (m *MemStore) GetAllAuthorBookCounts() (map[int]int, error) {
 		ba := obj.(*BookAuthor)
 		// Check that the book is primary and not deleted.
 		raw, bErr := txn.First(memTableBooks, memIdxID, ba.BookID)
-		if bErr != nil || raw == nil {
+		if bErr != nil {
+			// A failed lookup is not "book absent". Skipping it would silently
+			// under-count the author, and callers select delete candidates
+			// from these counts.
+			return nil, fmt.Errorf("memdb book lookup (book_id=%s): %w", ba.BookID, bErr)
+		}
+		if raw == nil {
 			continue
 		}
 		b := raw.(*Book)
@@ -648,7 +654,12 @@ func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOn
 	all := make([]Book, 0, len(bookIDSet))
 	for bookID := range bookIDSet {
 		raw, bErr := txn.First(memTableBooks, memIdxID, bookID)
-		if bErr != nil || raw == nil {
+		if bErr != nil {
+			// Same rule as GetAllAuthorBookCounts: a failed lookup must not
+			// silently drop the book from the author's list.
+			return nil, fmt.Errorf("memdb book lookup (book_id=%s): %w", bookID, bErr)
+		}
+		if raw == nil {
 			continue
 		}
 		b := raw.(*Book)
