@@ -1,5 +1,5 @@
 // file: internal/database/book_row_iter.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c032ba7-3cab-4fd8-9e0b-b08a0939dd0b
 // last-edited: 2026-09-12
 
@@ -158,7 +158,9 @@ func openRowCursor(r bareRowIterReader, o *pebble.IterOptions) (*rowCursor, erro
 	}
 	c := &rowCursor{it: it}
 	if f, ok := rowScanFaults.Load(r); ok {
-		c.fault = f.(*rowScanFault)
+		if f := f.(*rowScanFault); bytes.HasPrefix(o.LowerBound, f.lowerPrefix) {
+			c.fault = f
+		}
 	}
 	return c, nil
 }
@@ -214,20 +216,27 @@ func (c *rowCursor) run(start, next func() bool, visit func(key, value []byte) e
 	return nil
 }
 
-// rowScanFault makes every scan opened on one reader fail after afterRows rows.
+// rowScanFault makes scans opened on one reader fail after afterRows rows.
 // Tests only: production never stores into rowScanFaults, so the per-scan cost
 // is one Load on an empty sync.Map. It is keyed by reader (a test's own
 // *pebble.DB), so parallel tests on other stores are unaffected.
+//
+// lowerPrefix limits the fault to scans whose lower bound starts with it (""
+// matches every scan). A function that makes two passes needs this: with every
+// scan faulted, dropping the error check on its first pass goes unnoticed
+// because the second pass trips the same fault and fails the call anyway.
 type rowScanFault struct {
-	afterRows int
-	err       error
+	lowerPrefix []byte
+	afterRows   int
+	err         error
 }
 
 var rowScanFaults sync.Map // bareRowIterReader -> *rowScanFault
 
-// setRowScanFault arms a fault on r and returns the function that disarms it.
-func setRowScanFault(r bareRowIterReader, afterRows int, err error) (clear func()) {
-	rowScanFaults.Store(r, &rowScanFault{afterRows: afterRows, err: err})
+// setRowScanFault arms a fault on r for scans whose lower bound starts with
+// lowerPrefix ("" for all) and returns the function that disarms it.
+func setRowScanFault(r bareRowIterReader, lowerPrefix string, afterRows int, err error) (clear func()) {
+	rowScanFaults.Store(r, &rowScanFault{lowerPrefix: []byte(lowerPrefix), afterRows: afterRows, err: err})
 	return func() { rowScanFaults.Delete(r) }
 }
 

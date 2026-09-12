@@ -1,5 +1,5 @@
 // file: internal/database/book_scan_fault_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d1f7c2e-8a4b-4e3f-9c6d-2b7a1e0f4d93
 // last-edited: 2026-09-12
 
@@ -42,13 +42,13 @@ func TestForEachRow_FaultEndsScanWithError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, all, n, "baseline: every book row is visited")
 
-	clear := setRowScanFault(p.db, 3, errInjectedScanFault)
+	clear := setRowScanFault(p.db, "", 3, errInjectedScanFault)
 	n, err = count()
 	clear()
 	require.ErrorIs(t, err, errInjectedScanFault, "a truncated scan must fail")
 	require.Equal(t, 3, n, "the fault must land partway through the scan, not before it")
 
-	clear = setRowScanFault(p.db, 1, errInjectedScanFault)
+	clear = setRowScanFault(p.db, "", 1, errInjectedScanFault)
 	visited := 0
 	err = forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(_, _ []byte) error {
 		visited++
@@ -57,6 +57,13 @@ func TestForEachRow_FaultEndsScanWithError(t *testing.T) {
 	clear()
 	require.ErrorIs(t, err, errInjectedScanFault)
 	require.Equal(t, 1, visited)
+
+	// A scoped fault leaves scans outside its prefix alone.
+	clear = setRowScanFault(p.db, "book_file:", 0, errInjectedScanFault)
+	n, err = count()
+	clear()
+	require.NoError(t, err, "a book_file:-scoped fault must not touch a book: scan")
+	require.Equal(t, all, n)
 
 	seen := 0
 	require.NoError(t, forEachBookRow(p.db, func(string, []byte) error {
@@ -103,72 +110,85 @@ func TestBookScans_FailOnMidScanReadError(t *testing.T) {
 		name  string
 		after int // rows delivered before the fault; 0 only for one-row scans
 		run   func() error
+		scope string // fault only scans whose lower bound starts with this; "" = all
 	}{
 		// book:<id> row scans (forEachBookRow / forEachBookRowAfter / forEachBareRow)
-		{"CountSoftDeletedBooks", 1, func() error { return err1(p.CountSoftDeletedBooks(nil)) }},
-		{"getAllBooksCoreFromPebble", 1, func() error { return err1(p.getAllBooksCoreFromPebble(0, 0)) }},
-		{"GetAllBooksFullFrom", 1, func() error { return err1(p.GetAllBooksFullFrom("", 0)) }},
-		{"ListBookIDs", 1, func() error { return err1(p.ListBookIDs()) }},
+		{"CountSoftDeletedBooks", 1, func() error { return err1(p.CountSoftDeletedBooks(nil)) }, ""},
+		{"getAllBooksCoreFromPebble", 1, func() error { return err1(p.getAllBooksCoreFromPebble(0, 0)) }, ""},
+		{"GetAllBooksFullFrom", 1, func() error { return err1(p.GetAllBooksFullFrom("", 0)) }, ""},
+		{"ListBookIDs", 1, func() error { return err1(p.ListBookIDs()) }, ""},
 		{"walkFilteredBooksPebble", 1, func() error {
 			return p.walkFilteredBooksPebble(BookSummaryFilter{}, func(*Book) bool { return true })
-		}},
-		{"GetBookByITunesPersistentID", 1, func() error { return err1(p.GetBookByITunesPersistentID("no-such-pid")) }},
-		{"ListBooksByITunesPID", 1, func() error { return err1(p.ListBooksByITunesPID(0, 0)) }},
-		{"GetDuplicateBooks", 1, func() error { return err1(p.GetDuplicateBooks()) }},
-		{"GetBooksByTitleInDir", 1, func() error { return err1(p.GetBooksByTitleInDir("x", "/lib/range")) }},
-		{"getBooksBySeriesIDFull", 1, func() error { return err1(p.getBooksBySeriesIDFull(fx.seriesID, false)) }},
-		{"getBooksByAuthorIDFull", 1, func() error { return err1(p.getBooksByAuthorIDFull(1)) }},
-		{"booksByAuthorIDForMutation", 1, func() error { return err1(p.booksByAuthorIDForMutation(1, true)) }},
-		{"SearchBooks", 1, func() error { return err1(p.SearchBooks("no-such-title", 0, 0)) }},
-		{"countPrimaryBooksScan", 1, func() error { return err1(p.countPrimaryBooksScan()) }},
-		{"CountAllBooks", 1, func() error { return err1(p.CountAllBooks()) }},
-		{"GetDistinctGenres", 1, func() error { return err1(p.GetDistinctGenres()) }},
-		{"GetDistinctLanguages", 1, func() error { return err1(p.GetDistinctLanguages()) }},
-		{"ListSoftDeletedBooks", 1, func() error { return err1(p.ListSoftDeletedBooks(0, 0, nil)) }},
-		{"GetBooksByMetadataSourceHash", 1, func() error { return err1(p.GetBooksByMetadataSourceHash("no-such-hash")) }},
-		{"GetDistinctPublishedYears", 1, func() error { return err1(p.GetDistinctPublishedYears()) }},
-		{"computeQuickQueryCount", 1, func() error { return err1(p.computeQuickQueryCount("missing_covers")) }},
-		{"GetAllBookIDsForQuickQuery", 1, func() error { return err1(p.GetAllBookIDsForQuickQuery("missing_covers")) }},
-		{"CountFiles", 1, func() error { return err1(p.CountFiles()) }},
-		{"computeLibraryStats", 1, func() error { return err1(p.computeLibraryStats()) }},
-		{"GetITunesPurgePendingBooks", 1, func() error { return err1(p.GetITunesPurgePendingBooks()) }},
-		{"GetITunesDirtyBooks", 1, func() error { return err1(p.GetITunesDirtyBooks()) }},
-		{"getAllSeriesBookRefCountsPebble", 1, func() error { return err1(p.getAllSeriesBookRefCountsPebble()) }},
-		{"GetAllWorks_Pebble", 1, func() error { return err1(p.GetAllWorks_Pebble()) }},
-		{"GetAllWorkBookCounts", 1, func() error { return err1(p.GetAllWorkBookCounts()) }},
-		{"CountBooksByPathPrefix", 1, func() error { return err1(p.CountBooksByPathPrefix("/lib")) }},
-		{"getAllBooksPebbleScan", 1, func() error { return err1(p.getAllBooksPebbleScan()) }},
+		}, ""},
+		{"GetBookByITunesPersistentID", 1, func() error { return err1(p.GetBookByITunesPersistentID("no-such-pid")) }, ""},
+		{"ListBooksByITunesPID", 1, func() error { return err1(p.ListBooksByITunesPID(0, 0)) }, ""},
+		{"GetDuplicateBooks", 1, func() error { return err1(p.GetDuplicateBooks()) }, ""},
+		{"GetBooksByTitleInDir", 1, func() error { return err1(p.GetBooksByTitleInDir("x", "/lib/range")) }, ""},
+		{"getBooksBySeriesIDFull", 1, func() error { return err1(p.getBooksBySeriesIDFull(fx.seriesID, false)) }, ""},
+		{"getBooksByAuthorIDFull", 1, func() error { return err1(p.getBooksByAuthorIDFull(1)) }, ""},
+		{"booksByAuthorIDForMutation", 1, func() error { return err1(p.booksByAuthorIDForMutation(1, true)) }, ""},
+		{"SearchBooks", 1, func() error { return err1(p.SearchBooks("no-such-title", 0, 0)) }, ""},
+		{"countPrimaryBooksScan", 1, func() error { return err1(p.countPrimaryBooksScan()) }, ""},
+		{"CountAllBooks", 1, func() error { return err1(p.CountAllBooks()) }, ""},
+		{"GetDistinctGenres", 1, func() error { return err1(p.GetDistinctGenres()) }, ""},
+		{"GetDistinctLanguages", 1, func() error { return err1(p.GetDistinctLanguages()) }, ""},
+		{"ListSoftDeletedBooks", 1, func() error { return err1(p.ListSoftDeletedBooks(0, 0, nil)) }, ""},
+		{"GetBooksByMetadataSourceHash", 1, func() error { return err1(p.GetBooksByMetadataSourceHash("no-such-hash")) }, ""},
+		{"GetDistinctPublishedYears", 1, func() error { return err1(p.GetDistinctPublishedYears()) }, ""},
+		{"computeQuickQueryCount", 1, func() error { return err1(p.computeQuickQueryCount("missing_covers")) }, ""},
+		{"GetAllBookIDsForQuickQuery", 1, func() error { return err1(p.GetAllBookIDsForQuickQuery("missing_covers")) }, ""},
+		{"CountFiles", 1, func() error { return err1(p.CountFiles()) }, ""},
+		{"computeLibraryStats", 1, func() error { return err1(p.computeLibraryStats()) }, ""},
+		{"GetITunesPurgePendingBooks", 1, func() error { return err1(p.GetITunesPurgePendingBooks()) }, ""},
+		{"GetITunesDirtyBooks", 1, func() error { return err1(p.GetITunesDirtyBooks()) }, ""},
+		{"getAllSeriesBookRefCountsPebble", 1, func() error { return err1(p.getAllSeriesBookRefCountsPebble()) }, ""},
+		{"GetAllWorks_Pebble", 1, func() error { return err1(p.GetAllWorks_Pebble()) }, ""},
+		{"GetAllWorkBookCounts", 1, func() error { return err1(p.GetAllWorkBookCounts()) }, ""},
+		{"CountBooksByPathPrefix", 1, func() error { return err1(p.CountBooksByPathPrefix("/lib")) }, ""},
+		{"getAllBooksPebbleScan", 1, func() error { return err1(p.getAllBooksPebbleScan()) }, ""},
 		{"BackfillVersionGroupIndex", 1, func() error {
 			// Clear the sentinel so the backfill scans instead of returning early.
 			require.NoError(t, p.db.Delete([]byte(versionGroupBackfillKey), nil))
 			return p.BackfillVersionGroupIndex()
-		}},
-		{"GetQuarantinedBooks", 1, func() error { return err1(p.GetQuarantinedBooks(0, 0)) }},
-		{"CountQuarantinedBooks", 1, func() error { return err1(p.CountQuarantinedBooks()) }},
-		{"GetAllSeriesBookCounts_Pebble", 1, func() error { return err1(p.GetAllSeriesBookCounts_Pebble()) }},
-		{"GetAllSeriesFileCounts", 1, func() error { return err1(p.GetAllSeriesFileCounts()) }},
-		{"GetAllAuthorBookCounts", 1, func() error { return err1(p.GetAllAuthorBookCounts()) }},
-		{"GetAllAuthorFileCounts_Pebble", 1, func() error { return err1(p.GetAllAuthorFileCounts_Pebble()) }},
-		{"BackfillBookFileScanCache", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }},
-		{"GetDirtyBookFolders", 1, func() error { return err1(p.GetDirtyBookFolders()) }},
+		}, ""},
+		{"GetQuarantinedBooks", 1, func() error { return err1(p.GetQuarantinedBooks(0, 0)) }, ""},
+		{"CountQuarantinedBooks", 1, func() error { return err1(p.CountQuarantinedBooks()) }, ""},
+		{"GetAllSeriesBookCounts_Pebble", 1, func() error { return err1(p.GetAllSeriesBookCounts_Pebble()) }, ""},
+		{"GetAllSeriesFileCounts", 1, func() error { return err1(p.GetAllSeriesFileCounts()) }, ""},
+		{"GetAllAuthorBookCounts", 1, func() error { return err1(p.GetAllAuthorBookCounts()) }, ""},
+		{"GetAllAuthorFileCounts_Pebble", 1, func() error { return err1(p.GetAllAuthorFileCounts_Pebble()) }, ""},
+		{"BackfillBookFileScanCache", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }, ""},
+		{"GetDirtyBookFolders", 1, func() error { return err1(p.GetDirtyBookFolders()) }, ""},
 
 		// raw-range scans in the book / book_file families (forEachKeyInRange)
-		{"GetBookFiles", 1, func() error { return err1(p.GetBookFiles("lower")) }},
-		{"getBookFilesForIDsPebbleScan", 1, func() error { return err1(p.getBookFilesForIDsPebbleScan([]string{"lower"})) }},
-		{"getAllBookFilesPebbleScan", 1, func() error { return err1(p.getAllBookFilesPebbleScan()) }},
-		{"scanForBookFileByID", 1, func() error { return err1(p.scanForBookFileByID("f3")) }},
-		{"GetScanCacheMap", 1, func() error { return err1(p.GetScanCacheMap()) }},
-		{"loadBookFilesForBookID", 1, func() error { return err1(p.loadBookFilesForBookID("lower")) }},
-		{"ListBooksWithFileErrors", 1, func() error { return err1(p.ListBooksWithFileErrors()) }},
-		{"GetBooksByVersionGroup", 1, func() error { return err1(p.GetBooksByVersionGroup("vg-range")) }},
-		{"GetBooksByWorkID", 1, func() error { return err1(p.GetBooksByWorkID("wk-fault")) }},
-		{"GetBookIDsByISBNASIN", 0, func() error { return err1(p.GetBookIDsByISBNASIN("", "", "B0RANGElower")) }},
+		{"GetBookFiles", 1, func() error { return err1(p.GetBookFiles("lower")) }, ""},
+		{"getBookFilesForIDsPebbleScan", 1, func() error { return err1(p.getBookFilesForIDsPebbleScan([]string{"lower"})) }, ""},
+		{"getAllBookFilesPebbleScan", 1, func() error { return err1(p.getAllBookFilesPebbleScan()) }, ""},
+		{"scanForBookFileByID", 1, func() error { return err1(p.scanForBookFileByID("f3")) }, ""},
+		{"GetScanCacheMap", 1, func() error { return err1(p.GetScanCacheMap()) }, ""},
+		{"loadBookFilesForBookID", 1, func() error { return err1(p.loadBookFilesForBookID("lower")) }, ""},
+		{"ListBooksWithFileErrors", 1, func() error { return err1(p.ListBooksWithFileErrors()) }, ""},
+		{"GetBooksByVersionGroup", 1, func() error { return err1(p.GetBooksByVersionGroup("vg-range")) }, ""},
+		{"GetBooksByWorkID", 1, func() error { return err1(p.GetBooksByWorkID("wk-fault")) }, ""},
+		{"GetBookIDsByISBNASIN", 0, func() error { return err1(p.GetBookIDsByISBNASIN("", "", "B0RANGElower")) }, ""},
+
+		// Two-pass functions, one pass at a time. Unscoped, the first pass's
+		// check is untested: the second pass trips the same fault and fails the
+		// call even if the first pass swallowed its error.
+		{"CountFiles/book_pass", 1, func() error { return err1(p.CountFiles()) }, "book:"},
+		{"CountFiles/book_file_pass", 1, func() error { return err1(p.CountFiles()) }, "book_file:"},
+		{"computeLibraryStats/book_pass", 1, func() error { return err1(p.computeLibraryStats()) }, "book:"},
+		{"computeLibraryStats/book_file_pass", 1, func() error { return err1(p.computeLibraryStats()) }, "book_file:"},
+		{"GetAllSeriesFileCounts/book_pass", 1, func() error { return err1(p.GetAllSeriesFileCounts()) }, "book:"},
+		{"GetAllSeriesFileCounts/book_file_pass", 1, func() error { return err1(p.GetAllSeriesFileCounts()) }, "book_file:"},
+		{"BackfillBookFileScanCache/book_file_pass", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }, "book_file:"},
+		{"BackfillBookFileScanCache/book_pass", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }, "book:"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, tc.run(), "baseline: the scan must succeed with no fault armed")
 
-			clear := setRowScanFault(p.db, tc.after, errInjectedScanFault)
+			clear := setRowScanFault(p.db, tc.scope, tc.after, errInjectedScanFault)
 			defer clear()
 			require.ErrorIs(t, tc.run(), errInjectedScanFault,
 				"a scan truncated by a read error must return that error, not a short result")

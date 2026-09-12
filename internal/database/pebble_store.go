@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.154.0
+// version: 1.155.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -3743,8 +3743,11 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 		books = append(books, *b)
 		return nil
 	}); err != nil {
-		// Not a fall-through to the full scan below: a partial index walk would
-		// otherwise return its few members as the whole group.
+		// A read error fails the call; it does NOT fall through to the full scan
+		// below. That fallback exists for an index with no rows for this group
+		// (see the KNOWN LIMITATION note), which is a statement about membership.
+		// A failed walk is not: it may already have found some members, and the
+		// `len(books) > 0` oracle would then return those few as the whole group.
 		return nil, err
 	}
 
