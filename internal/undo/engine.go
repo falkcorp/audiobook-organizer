@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -16,6 +16,7 @@
 package undo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -173,7 +174,9 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 				report.Safe++
 			}
 		case ChangeTypeSeriesRename:
-			if err := CheckRestoreReferent(store, c); err != nil {
+			// ErrAlreadyRestored is not a conflict: the revert counts that row
+			// Restored without writing.
+			if err := CheckRestoreReferent(store, c); err != nil && !errors.Is(err, ErrAlreadyRestored) {
 				report.addReferentConflict(c, err)
 			} else {
 				report.Safe++

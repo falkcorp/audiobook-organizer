@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -518,11 +518,23 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 // repeats the current-name and name-free checks under the store's series
 // name-index lock, which CreateSeries and UpdateSeriesName also hold, so a
 // create or rename that lands after the first check is refused, not clobbered.
+//
+// A series already named OldValue is counted restored with nothing written
+// (undo.ErrAlreadyRestored), both when the first check sees it and when a
+// concurrent rename-back lands between that check and RenameSeriesIf.
 func (rs *RevertService) revertSeriesRename(c *database.OperationChange) error {
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
+		if errors.Is(err, undo.ErrAlreadyRestored) {
+			return nil
+		}
 		return fmt.Errorf("series rename not reverted, %w", err)
 	}
 	if err := rs.db.RenameSeriesIf(*c.SeriesID, c.NewValue, c.OldValue); err != nil {
+		if errors.Is(err, database.ErrRenameSeriesRenamedSince) {
+			if s, gerr := rs.db.GetSeriesByID(*c.SeriesID); gerr == nil && s != nil && s.Name == c.OldValue {
+				return nil
+			}
+		}
 		return fmt.Errorf("series rename not reverted, %w", renameRefusal(err))
 	}
 	return nil

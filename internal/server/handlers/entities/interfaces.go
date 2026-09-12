@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 43710377-fdb3-490c-872e-fd03309163be
 // last-edited: 2026-09-12
 
@@ -131,8 +131,8 @@ type AuthorSeriesService interface {
 }
 
 // OperationsRegistry is the narrow operations-registry subset the entities
-// handlers require. Only EnqueueOp is called (author-merge and
-// resolve-production-author). The variadic opts param is preserved so the
+// handlers require. Only EnqueueOp is called (author-merge,
+// resolve-production-author and series-rename). The variadic opts param is preserved so the
 // concrete *opsregistry.Registry satisfies the interface.
 type OperationsRegistry interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)

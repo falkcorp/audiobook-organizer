@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-09-12
 
@@ -615,13 +615,54 @@ func TestGetSeriesBooks(t *testing.T) {
 	assert.Equal(t, 1, d.enrichCalls)
 }
 
+// seriesRenameParams matches the params EnqueueOp receives by their JSON
+// encoding, which is what the server-side op decodes. A tag drift between the
+// two mirrored structs fails here.
+func seriesRenameParams(want string) any {
+	return mock.MatchedBy(func(p any) bool {
+		b, err := json.Marshal(p)
+		return err == nil && string(b) == want
+	})
+}
+
+// PUT /series/:id/name no longer writes: it enqueues entities.series-rename
+// and answers 202 with the op id. No UpdateSeriesName expectation is set, so
+// a synchronous write fails the mock.
 func TestRenameSeries(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().UpdateSeriesName(5, "New").Return(nil)
-	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "New"}, nil)
+	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "Old"}, nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.series-rename",
+		seriesRenameParams(`{"series_id":5,"name":"New"}`)).Return("v2rename1", nil)
+	c, w := newCtx(http.MethodPut, "/series/5/name", `{"name":"  New  "}`, idParam("5"))
+	h.RenameSeries(c)
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), `"id":"v2rename1"`)
+	assert.Contains(t, w.Body.String(), `"type":"entities.series-rename"`)
+	assert.Contains(t, w.Body.String(), `"status":"queued"`)
+}
+
+func TestRenameSeries_EmptyName(t *testing.T) {
+	h, _ := newHandler(t)
+	c, w := newCtx(http.MethodPut, "/series/5/name", `{"name":"   "}`, idParam("5"))
+	h.RenameSeries(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestRenameSeries_UnknownSeries(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetSeriesByID(9).Return(nil, nil)
+	c, w := newCtx(http.MethodPut, "/series/9/name", `{"name":"New"}`, idParam("9"))
+	h.RenameSeries(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestRenameSeries_EnqueueFails(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "Old"}, nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.series-rename", mock.Anything).Return("", fmt.Errorf("queue full"))
 	c, w := newCtx(http.MethodPut, "/series/5/name", `{"name":"New"}`, idParam("5"))
 	h.RenameSeries(c)
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestRenameSeries_BadID(t *testing.T) {
@@ -691,13 +732,31 @@ func TestBulkDeleteSeries_SkipsReferencedSeries(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"deleted":0`)
 }
 
+// PATCH /series/:id is the same queued op as PUT /series/:id/name.
 func TestUpdateSeriesName(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().UpdateSeriesName(5, "New").Return(nil)
-	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "New"}, nil)
+	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "Old"}, nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.series-rename",
+		seriesRenameParams(`{"series_id":5,"name":"New"}`)).Return("v2rename2", nil)
 	c, w := newCtx(http.MethodPatch, "/series/5", `{"name":"New"}`, idParam("5"))
 	h.UpdateSeriesName(c)
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), `"id":"v2rename2"`)
+}
+
+func TestUpdateSeriesName_EmptyName(t *testing.T) {
+	h, _ := newHandler(t)
+	c, w := newCtx(http.MethodPatch, "/series/5", `{"name":""}`, idParam("5"))
+	h.UpdateSeriesName(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestUpdateSeriesName_UnknownSeries(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetSeriesByID(9).Return(nil, nil)
+	c, w := newCtx(http.MethodPatch, "/series/9", `{"name":"New"}`, idParam("9"))
+	h.UpdateSeriesName(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestUpdateSeriesName_BadID(t *testing.T) {

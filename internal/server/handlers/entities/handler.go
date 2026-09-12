@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-09-12
 
@@ -36,6 +36,17 @@ type authorMergeOpParams struct {
 	KeepID   int    `json:"keep_id"`
 	MergeIDs []int  `json:"merge_ids"`
 	KeepName string `json:"keep_name"`
+}
+
+// seriesRenameOpID is the op PUT /series/:id/name and PATCH /series/:id
+// enqueue. It must match the id package server registers.
+const seriesRenameOpID = "entities.series-rename"
+
+// seriesRenameOpParams mirrors the server-package type of the same name. The
+// json tags MUST stay identical to the server-package definition.
+type seriesRenameOpParams struct {
+	SeriesID int    `json:"series_id"`
+	Name     string `json:"name"`
 }
 
 // resolveProductionAuthorOpParams holds the parameters for the
@@ -1096,16 +1107,38 @@ func (h *Handler) RenameSeries(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "name must not be empty")
 		return
 	}
-	if err := h.store.UpdateSeriesName(seriesID, name); err != nil {
-		httputil.InternalError(c, "failed to rename series", err)
+	h.enqueueSeriesRename(c, seriesID, name)
+}
+
+// enqueueSeriesRename is the shared tail of RenameSeries and UpdateSeriesName:
+// 404 for an unknown series, then enqueue entities.series-rename and answer 202
+// with the v2 op id. The op does the rename and journals the undo row; the
+// caches are invalidated there, after the write.
+//
+// There is no 409: the synchronous handlers never refused a name another
+// series already holds (PebbleStore.UpdateSeriesName overwrites the name-index
+// key) and the op keeps that behaviour.
+func (h *Handler) enqueueSeriesRename(c *gin.Context, seriesID int, name string) {
+	series, err := h.store.GetSeriesByID(seriesID)
+	if err != nil {
+		httputil.InternalError(c, "failed to look up series", err)
 		return
 	}
-	if h.dedupCache != nil {
-		h.dedupCache.Invalidate("series-duplicates")
+	if series == nil {
+		httputil.RespondWithNotFound(c, "series", strconv.Itoa(seriesID))
+		return
 	}
-	h.seriesCache.InvalidateAll()
-	series, _ := h.store.GetSeriesByID(seriesID)
-	httputil.RespondWithOK(c, series)
+	params := seriesRenameOpParams{SeriesID: seriesID, Name: name}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), seriesRenameOpID, params)
+	if enqErr != nil {
+		httputil.InternalError(c, "failed to enqueue operation", enqErr)
+		return
+	}
+	httputil.RespondWithSuccess(c, 202, entityOpResponse{
+		ID:     opID,
+		Type:   seriesRenameOpID,
+		Status: "queued",
+	})
 }
 
 // SplitSeries implements POST /series/:id/split.
@@ -1232,6 +1265,10 @@ func (h *Handler) BulkDeleteSeries(c *gin.Context) {
 }
 
 // UpdateSeriesName implements PATCH /series/:id.
+//
+// The request body has only a name: there is no other series field this
+// endpoint writes (unknown JSON keys are ignored, as before). So the whole
+// PATCH is the queued entities.series-rename op, and it stays atomic.
 func (h *Handler) UpdateSeriesName(c *gin.Context) {
 	idStr := c.Param("id")
 	id := 0
@@ -1251,14 +1288,7 @@ func (h *Handler) UpdateSeriesName(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "name cannot be empty")
 		return
 	}
-	if err := h.store.UpdateSeriesName(id, name); err != nil {
-		httputil.InternalError(c, "failed to update series", err)
-		return
-	}
-	h.dedupCache.Invalidate("series-duplicates")
-	h.seriesCache.InvalidateAll()
-	series, _ := h.store.GetSeriesByID(id)
-	httputil.RespondWithOK(c, series)
+	h.enqueueSeriesRename(c, id, name)
 }
 
 // --- Narrators ---

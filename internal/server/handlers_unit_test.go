@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -1075,10 +1075,12 @@ func TestHandler_CountSeries_Success(t *testing.T) {
 func TestHandler_RenameSeries_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().UpdateSeriesName(10, "New Series Name").Return(nil)
-	mockStore.EXPECT().GetSeriesByID(10).Return(&database.Series{ID: 10, Name: "New Series Name"}, nil)
+	// The rename is queued, not written: no UpdateSeriesName expectation, so a
+	// synchronous write fails the mock.
+	mockStore.EXPECT().GetSeriesByID(10).Return(&database.Series{ID: 10, Name: "Old Series Name"}, nil)
+	reg := &fakeSeriesRenameRegistry{}
 
-	router.PUT("/series/:id/rename", newEntitiesHandler(srv).RenameSeries)
+	router.PUT("/series/:id/rename", newEntitiesHandlerWithRegistry(srv, reg).RenameSeries)
 
 	body, _ := json.Marshal(map[string]string{"name": "New Series Name"})
 	req := httptest.NewRequest("PUT", "/series/10/rename", bytes.NewReader(body))
@@ -1086,7 +1088,9 @@ func TestHandler_RenameSeries_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Equal(t, "entities.series-rename", reg.defID)
+	assert.Contains(t, w.Body.String(), `"id":"op-series-rename"`)
 }
 
 func TestHandler_RenameSeries_InvalidID(t *testing.T) {
@@ -1122,10 +1126,10 @@ func TestHandler_RenameSeries_EmptyName(t *testing.T) {
 func TestHandler_UpdateSeriesName_Success(t *testing.T) {
 	srv, mockStore, router := setupHandlerTest(t)
 
-	mockStore.EXPECT().UpdateSeriesName(10, "Updated Name").Return(nil)
-	mockStore.EXPECT().GetSeriesByID(10).Return(&database.Series{ID: 10, Name: "Updated Name"}, nil)
+	mockStore.EXPECT().GetSeriesByID(10).Return(&database.Series{ID: 10, Name: "Old Name"}, nil)
+	reg := &fakeSeriesRenameRegistry{}
 
-	router.PATCH("/series/:id/name", newEntitiesHandler(srv).UpdateSeriesName)
+	router.PATCH("/series/:id/name", newEntitiesHandlerWithRegistry(srv, reg).UpdateSeriesName)
 
 	body, _ := json.Marshal(map[string]string{"name": "Updated Name"})
 	req := httptest.NewRequest("PATCH", "/series/10/name", bytes.NewReader(body))
@@ -1133,7 +1137,9 @@ func TestHandler_UpdateSeriesName_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Equal(t, "entities.series-rename", reg.defID)
+	assert.Contains(t, w.Body.String(), `"id":"op-series-rename"`)
 }
 
 func TestHandler_UpdateSeriesName_InvalidID(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.102.0
+// version: 2.103.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -1923,7 +1923,32 @@ export async function getSeriesBooks(seriesId: number): Promise<Book[]> {
   return data.items || data.books || [];
 }
 
-export async function renameSeries(seriesId: number, name: string): Promise<void> {
+/**
+ * awaitSeriesRenameOp reads the 202 `{ data: { id, type, status } }` body a
+ * series rename endpoint returns, polls that operation to a terminal state
+ * with pollOperation, and resolves with the final operation only when it
+ * completed. Any other terminal status rejects with the operation's error.
+ */
+async function awaitSeriesRenameOp(response: Response, failMessage: string): Promise<Operation> {
+  const body = await response.json();
+  const opId: string | undefined = body?.data?.id;
+  if (!opId) {
+    throw new Error(`${failMessage}: the server returned no operation id`);
+  }
+  const final = await pollOperation(opId);
+  if (final.status !== 'completed') {
+    throw new Error(final.error_message || `${failMessage}: operation ${final.status}`);
+  }
+  return final;
+}
+
+/**
+ * renameSeries renames a series through PUT /series/:id/name. The server
+ * queues an undoable entities.series-rename operation and answers 202 with its
+ * id; this resolves once that operation has completed (see
+ * awaitSeriesRenameOp), so callers can refresh straight after.
+ */
+export async function renameSeries(seriesId: number, name: string): Promise<Operation> {
   const response = await apiFetch(`${API_BASE}/series/${seriesId}/name`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1932,6 +1957,7 @@ export async function renameSeries(seriesId: number, name: string): Promise<void
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to rename series');
   }
+  return awaitSeriesRenameOp(response, 'Failed to rename series');
 }
 
 export async function splitSeries(
@@ -3210,7 +3236,14 @@ export async function seriesPrune(): Promise<Operation> {
   return body.data;
 }
 
-export async function updateSeriesName(id: number, name: string): Promise<Series> {
+/**
+ * updateSeriesName renames a series through PATCH /series/:id. Like
+ * renameSeries, the server queues an undoable entities.series-rename operation
+ * (202 plus its id) and this resolves with the completed operation. It used to
+ * resolve with the updated Series; the one caller ignored that value and
+ * refetches instead.
+ */
+export async function updateSeriesName(id: number, name: string): Promise<Operation> {
   const response = await apiFetch(`${API_BASE}/series/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -3219,8 +3252,7 @@ export async function updateSeriesName(id: number, name: string): Promise<Series
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to update series name');
   }
-  const body = await response.json();
-  return body.data;
+  return awaitSeriesRenameOp(response, 'Failed to update series name');
 }
 
 // Metadata Fetching

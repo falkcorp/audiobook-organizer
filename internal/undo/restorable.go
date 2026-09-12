@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -202,6 +202,14 @@ type SeriesLookup interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
+// ErrAlreadyRestored is what CheckRestoreReferent returns for a series_rename
+// row whose series already holds the row's OldValue: the change is undone
+// already (by hand, or by a rename op that failed after journaling), so there
+// is nothing to write. It is not a refusal. The revert returns nil for it, so
+// the row is counted Restored and marked reverted, and the preflight counts it
+// Safe.
+var ErrAlreadyRestored = errors.New("already restored")
+
 // BookLookup is the book read CheckRestoreBook needs.
 type BookLookup interface {
 	GetBookByID(id string) (*database.Book, error)
@@ -272,9 +280,10 @@ func refuse(reason, format string, args ...any) error {
 //     writing either back would create exactly the dangling reference
 //     series-phantom-repair exists to clean up. A row restoring "no series"
 //     passes.
-//   - series_rename: the series must still exist, still carry the recorded
+//   - series_rename: the series must still exist and still carry the recorded
 //     new name (anything else is a later rename, which a revert must not
-//     clobber), and the old name must not now belong to another series under
+//     clobber). A series already carrying the recorded OLD name returns
+//     ErrAlreadyRestored instead of a refusal. The old name must not now belong to another series under
 //     the same author. PebbleStore.UpdateSeriesName does not check that last
 //     one — it overwrites the series:name: index key — so the revert writes
 //     with PebbleStore.RenameSeriesIf, which repeats the current-name and
@@ -297,6 +306,12 @@ func CheckRestoreReferent(store SeriesLookup, c *database.OperationChange) error
 		s, err := liveSeries(store, *c.SeriesID)
 		if err != nil {
 			return err
+		}
+		// Compare-and-set, three ways: still the name the operation wrote ->
+		// restore; already the old name -> nothing to write, counted restored;
+		// anything else -> a later rename, refused.
+		if s.Name == c.OldValue && c.OldValue != c.NewValue {
+			return ErrAlreadyRestored
 		}
 		if s.Name != c.NewValue {
 			return refuse(ReasonSeriesRenamedSince, "series %d is now named %q, not %q as the operation left it; not renaming it back to %q",
