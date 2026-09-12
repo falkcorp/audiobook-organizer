@@ -10,8 +10,11 @@
   has metadata keys, so `{"title": null, "error": "rate limited"}` no longer
   reads as "nothing found" and `{"title": "Solo", "error": "x"}` no longer
   saves the title. An empty `error` or `errors` value (`null`, `[]` or `{}`)
-  is ignored, so `{"title": "Solo", "error": null}` is a normal result; any
-  other value, `""` included, is an error. This applies to every result,
+  next to metadata keys is ignored, so `{"title": "Solo", "error": null}` is a
+  normal result; any other value, `""` included, is an error, and so is an
+  `error` or `errors` key that appears more than once. A reply that is only
+  `{"error": null}` or `{"errors": []}` is still an error. This applies to
+  every result,
   including a bare object in a one-filename batch and the single-book
   parser's top-level object. Unrelated extra keys such as `filename` are
   still accepted.

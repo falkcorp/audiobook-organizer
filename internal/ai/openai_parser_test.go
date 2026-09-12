@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -1951,6 +1951,58 @@ func TestErrorKeyWithAnEmptyValueIsIgnored(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// encoding/json keeps only the last copy of a repeated key, so
+// {"title":"Solo","error":"x","error":null} would decode to an empty error and
+// be accepted, while the same keys in the other order were rejected. A
+// repeated "error"/"errors" key, in either order or in two case variants, is
+// an error report whatever its values say (PR #3330 round 6).
+func TestRepeatedErrorKeyIsAnErrorReport(t *testing.T) {
+	rejected := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s: accepted; a repeated error key must be an error report", what)
+			return
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), `carries an "error`) {
+			t.Errorf("%s: error %q is not the error-report message", what, err)
+		}
+	}
+	for _, obj := range []string{
+		`{"title":"Solo","error":"x","error":null}`,
+		`{"title":"Solo","error":null,"error":"x"}`,
+		`{"title":"Solo","error":null,"Error":"x"}`,
+		`{"title":"Solo","error":null,"Error":null}`,
+		`{"title":"Solo","errors":[],"ERRORS":[]}`,
+	} {
+		t.Run(obj, func(t *testing.T) {
+			_, err := parseBatchMetadataFromJSON(`{"results": [`+obj+`]}`, 1)
+			rejected(t, "batch element", err)
+			_, err = parseBatchMetadataFromJSON(obj, 1)
+			rejected(t, "bare one-filename object", err)
+			_, err = parseMetadataFromJSON(obj)
+			rejected(t, "single-book top level", err)
+			_, err = parseMetadataFromJSON(`{"results": [` + obj + `]}`)
+			rejected(t, "single-book results element", err)
+		})
+	}
+	// A repeated wrapper key is caught the same way, before the wrapper
+	// rules read whichever copy encoding/json kept.
+	for _, js := range []string{
+		`{"errors":[{"title":"Too Many Requests"}],"errors":[]}`,
+		`{"error":{"title":"Solo"},"error":null}`,
+	} {
+		_, err := parseBatchMetadataFromJSON(js, 1)
+		rejected(t, "batch "+js, err)
+		_, err = parseMetadataFromJSON(js)
+		rejected(t, "single-book "+js, err)
+	}
+	// Different error keys, each once and empty, are still ignored.
+	m, err := parseMetadataFromJSON(`{"title":"Solo","error":null,"errors":[]}`)
+	if err != nil || m == nil || m.Title != "Solo" {
+		t.Errorf("error and errors, each once and empty: got %+v, %v; want title Solo", m, err)
 	}
 }
 
