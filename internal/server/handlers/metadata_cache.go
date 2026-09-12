@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-12
 
@@ -59,25 +59,26 @@ type MetadataCacheBookStore interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	// ListActiveOperationsV2 backs the diagnostic "is a library.scan running"
-	// check logged when GetCacheReviewResults exceeds slowReviewListing. The
-	// concrete store passed in (database.Store, via storeForWiring()) already
-	// implements this.
-	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
+// ActiveOpsLister is the shape of database.Store's ListActiveOperationsV2. It
+// is a func, not an interface method on MetadataCacheBookStore, because the
+// only consumer is a diagnostic log attribute: the wiring closes over the real
+// store instead of widening the handler's persistence interface for it.
+type ActiveOpsLister func() ([]database.OperationV2Row, error)
+
 // LibraryScanActive reports whether a "library.scan" op is currently queued or
-// running. Diagnostic only: a nil store or a lookup error is reported as "not
+// running. Diagnostic only: a nil lister or a lookup error is reported as "not
 // scanning" rather than aborting or erroring the caller.
 //
 // No status filter here: ListActiveOperationsV2's contract already restricts
 // its rows to queued/running, and re-checking would let this silently diverge
 // from the store if that contract ever changed.
-func LibraryScanActive(store MetadataCacheBookStore) bool {
-	if store == nil {
+func LibraryScanActive(list ActiveOpsLister) bool {
+	if list == nil {
 		return false
 	}
-	active, err := store.ListActiveOperationsV2()
+	active, err := list()
 	if err != nil {
 		return false
 	}
@@ -87,6 +88,16 @@ func LibraryScanActive(store MetadataCacheBookStore) bool {
 		}
 	}
 	return false
+}
+
+// ScanActiveLogAttrs returns the slog key/value pair for the slow-request
+// WARN's library_scan_active attribute, or nil when scanActive is nil so the
+// attribute is omitted rather than reported as a false "not scanning".
+func ScanActiveLogAttrs(scanActive func() bool) []any {
+	if scanActive == nil {
+		return nil
+	}
+	return []any{"library_scan_active", scanActive()}
 }
 
 // MetadataCacheFetchService is the narrow interface required for the
@@ -129,6 +140,11 @@ type MetadataCacheHandler struct {
 	// inline fallback would be a second implementation that only ever ran in
 	// tests, so the tested path and the shipped path would diverge.
 	ops OpEnqueuer
+	// scanActive reports whether a library.scan is queued or running, for the
+	// slow-request WARN in GetCacheReviewResults. May be nil; the attribute is
+	// then omitted. Injected at wiring time as a closure over the real store so
+	// MetadataCacheBookStore does not grow a method only a log line reads.
+	scanActive func() bool
 }
 
 // OpEnqueuer is the slice of the v2 operations registry this handler needs:
@@ -142,8 +158,10 @@ type OpEnqueuer interface {
 // fileIOPool may be nil (tests, or a server built without a pool). Callers must
 // pass a nil INTERFACE, not a typed-nil pointer, or the nil guards below become
 // false-negatives — see the wiring in wire_handlers.go.
-func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer) *MetadataCacheHandler {
-	return &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops}
+//
+// scanActive may be nil; the slow-request WARN then omits library_scan_active.
+func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
+	return &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
 }
 
 // ListCachedCandidates handles GET /api/v1/audiobooks/metadata/cached.
@@ -604,14 +622,15 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// page does not remove the per-row GetCachedCandidates fan-out above, so a
 	// slow request is still possible and should say why it might have been.
 	if d := time.Since(began); d > slowReviewListing {
-		slog.Warn("GetCacheReviewResults exceeded slow-request threshold",
+		attrs := []any{
 			"duration", d.Round(time.Millisecond),
 			"threshold", slowReviewListing,
 			"total_reviewable", len(reviewable),
 			"returned", len(results),
 			"all", all,
-			"library_scan_active", LibraryScanActive(h.store),
-		)
+		}
+		attrs = append(attrs, ScanActiveLogAttrs(h.scanActive)...)
+		slog.Warn("GetCacheReviewResults exceeded slow-request threshold", attrs...)
 	}
 
 	httputil.RespondWithOK(c, gin.H{

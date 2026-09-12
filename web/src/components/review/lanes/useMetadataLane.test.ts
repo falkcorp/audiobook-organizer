@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-12
 //
@@ -1129,5 +1129,36 @@ describe('fetches the whole reviewable set', () => {
     const { result } = renderHook(() => useMetadataLane(toast));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true);
+  });
+
+  it('warns when the server still reports the response as truncated', async () => {
+    // A partial set must not be presented as the whole library: filters,
+    // grouping and staleIds would silently cover only the returned rows.
+    toast.mockClear();
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      total_count: 500,
+      truncated: true,
+      limit: 200,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Only 1 of 500'), 'warning');
+    // Rows still load; this is a warning, not a load failure.
+    expect(result.current.results).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('does not warn when truncated is false or absent', async () => {
+    toast.mockClear();
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      ...reviewPayload([makeResult('b1')]),
+      truncated: false,
+    } as Awaited<ReturnType<typeof api.getCachedReviewResults>>);
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(toast).not.toHaveBeenCalledWith(expect.anything(), 'warning');
   });
 });
