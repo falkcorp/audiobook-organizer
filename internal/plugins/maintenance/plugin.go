@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-12
 
@@ -59,6 +59,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// --- author/series ---
 		p.authorDedupScanDef(),
 		p.authorSplitScanDef(),
+		// author-title-fragment-scan is REPORT ONLY (read capability, no
+		// schedule): it enumerates title-fragment author rows and changes nothing.
+		p.authorTitleFragmentScanDef(),
 		// author-conjunction-repair is NOT reachable from author-split-scan:
 		// SplitCompositeAuthorName("& Conrad Westmaas") returns nil (no
 		// delimiter, three words), so the split scan skips these rows entirely.
