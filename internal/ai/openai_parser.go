@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.16.0
+// version: 13.17.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -578,7 +578,7 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 	// The one-key wrapper below never looks at the key's name, so check it
 	// here: {"error": {"title": "Solo"}} is an error report, and "Solo"
 	// must not be saved as the book's title.
-	if key, ok := errorReportKey(obj); ok {
+	if key, ok := errorReportKey(raw, obj); ok {
 		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
 	}
 	if len(obj) != 1 {
@@ -680,7 +680,7 @@ func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata boo
 	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
 		return nil, false, fmt.Errorf("has %d key(s) and none of them is a metadata field", len(obj))
 	}
-	if key, ok := errorReportKey(obj); ok {
+	if key, ok := errorReportKey(raw, obj); ok {
 		return nil, false, fmt.Errorf("carries an %q key, so it is an error report and not a result", sanitizeReplyText(key))
 	}
 	var metadata ParsedMetadata
@@ -1062,7 +1062,7 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 	// the key's name is checked here. JSON:API and RFC 7807 error bodies
 	// look like {"errors": [{"status": "429", "title": "Too Many Requests"}]},
 	// and that title must not be saved as a book's title.
-	if key, ok := errorReportKey(obj); ok {
+	if key, ok := errorReportKey(raw, obj); ok {
 		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
 	}
 
@@ -1080,7 +1080,8 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 			// nothing: {"data": []} or {"data": [null]} carries no evidence
 			// that it is a results list, and taking it as one would be the
 			// same silent empty parse as an error payload. An empty "error"
-			// or "errors" value, e.g. {"errors": []}, also ends up here.
+			// or "errors" array, e.g. {"errors": []}, also ends up here; null
+			// or {} fails the array check above.
 			if !anyMetadata {
 				return nil, fmt.Errorf(`object's only key %q holds no metadata object, so it is not a results wrapper`,
 					sanitizeReplyText(key))
@@ -1150,13 +1151,72 @@ var errorReportKeys = []string{"error", "errors"}
 // there is no error, so {"title": "Solo", "error": null} is a result. Any
 // other value is an error report, "" included.
 //
+// raw is the object obj was decoded from. encoding/json keeps only the last
+// copy of a repeated key, so {"title": "Solo", "error": "x", "error": null}
+// decodes to an empty error. When obj has an error key at all, raw's keys are
+// walked, and an "error" or "errors" key that appears more than once, in any
+// mix of case, is an error report whatever its values say.
+//
 // An object whose only key is an empty "error" is not accepted either: it has
 // no metadata key, so it falls to the wrapper rules, which reject it.
-func errorReportKey(obj map[string]json.RawMessage) (string, bool) {
+func errorReportKey(raw json.RawMessage, obj map[string]json.RawMessage) (string, bool) {
+	hasErrorKey := false
+	for key := range obj {
+		if isErrorReportKeyName(key) {
+			hasErrorKey = true
+			break
+		}
+	}
+	if !hasErrorKey {
+		return "", false
+	}
+	if key, repeated := repeatedErrorReportKey(raw); repeated {
+		return key, true
+	}
 	for key, value := range obj {
+		if isErrorReportKeyName(key) && !errorValueIsEmpty(value) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// isErrorReportKeyName reports whether key is "error" or "errors" in any case.
+func isErrorReportKeyName(key string) bool {
+	for _, k := range errorReportKeys {
+		if strings.EqualFold(key, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// repeatedErrorReportKey walks the top-level keys of the JSON object raw and
+// returns the second occurrence of an "error" or "errors" key, compared
+// without case. It fails closed: if raw cannot be walked it reports "error"
+// as repeated, so an object it cannot check is treated as an error report.
+func repeatedErrorReportKey(raw json.RawMessage) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "error", true
+	}
+	seen := make(map[string]bool, len(errorReportKeys))
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return "error", true
+		}
+		key, _ := tok.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return "error", true
+		}
 		for _, k := range errorReportKeys {
-			if strings.EqualFold(key, k) && !errorValueIsEmpty(value) {
-				return key, true
+			if strings.EqualFold(key, k) {
+				if seen[k] {
+					return key, true
+				}
+				seen[k] = true
 			}
 		}
 	}
