@@ -680,7 +680,7 @@ def generate_matrices(_: argparse.Namespace) -> None:
     fallback_go = os.environ.get("FALLBACK_GO_VERSION", "1.24")
     fallback_python = os.environ.get("FALLBACK_PYTHON_VERSION", "3.13")
     fallback_rust = os.environ.get("FALLBACK_RUST_VERSION", "stable")
-    fallback_node = os.environ.get("FALLBACK_NODE_VERSION", "22")
+    fallback_node = os.environ.get("FALLBACK_NODE_VERSION", "26")
     fallback_threshold = os.environ.get("FALLBACK_COVERAGE_THRESHOLD", "80")
 
     versions_config = _config_path({}, "languages", "versions") or {}

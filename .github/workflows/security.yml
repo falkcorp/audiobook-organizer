@@ -1,5 +1,5 @@
 # file: .github/workflows/security.yml
-# version: 2.6.0
+# version: 2.7.0
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
 # last-edited: 2026-09-12
 #
@@ -77,7 +77,7 @@ jobs:
           # Must equal repository-config.yml versions.node so the submitted npm
           # graph resolves under the same engine CI builds with (CI-03);
           # scripts/check_toolchain_versions.py fails the build otherwise.
-          node-version: '22'
+          node-version: '26'
 
       - name: Install NPM dependencies
         working-directory: web

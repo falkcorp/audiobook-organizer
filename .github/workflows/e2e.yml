@@ -1,7 +1,7 @@
 # file: .github/workflows/e2e.yml
-# version: 1.5.1
+# version: 1.6.0
 # guid: 6a2f47c9-1e83-4d05-b7f6-92c4a0d81b3e
-# last-edited: 2026-09-01
+# last-edited: 2026-09-12
 
 # Runs the Playwright end-to-end suite.
 #
@@ -157,7 +157,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version: '26'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
