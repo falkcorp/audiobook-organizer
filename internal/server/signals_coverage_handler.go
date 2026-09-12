@@ -1,5 +1,5 @@
 // file: internal/server/signals_coverage_handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ca3e529b-ef05-451d-8a67-8a643e16c176
 // last-edited: 2026-09-12
 
@@ -67,6 +67,12 @@ func (s *Server) handleGetSignalCoverage(c *gin.Context) {
 	}
 	if errors.Is(err, database.ErrMemDBNotReady) {
 		httputil.RespondWithServiceUnavailable(c, err.Error())
+		return
+	}
+	// 409, not a shared result: a second caller would otherwise sit inside
+	// its request for the minutes the first scan takes.
+	if errors.Is(err, database.ErrDeepCoverageBusy) {
+		httputil.RespondWithConflict(c, err.Error())
 		return
 	}
 	if err != nil {

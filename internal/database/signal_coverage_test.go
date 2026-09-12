@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 23717253-07aa-46c2-8759-470f05fa4c74
 // last-edited: 2026-09-12
 
@@ -111,4 +111,48 @@ func TestGetBookFileSignalCoverage_DeepReadsStrippedFields(t *testing.T) {
 	assert.Contains(t, fast.Unavailable, SignalRawFingerprint)
 	_, has := fast.Signals["acoustid_seg0"]
 	assert.False(t, has, "memdb rows have Seg0 stripped; counting it would report zero coverage")
+}
+
+// TestGetBookFileSignalCoverage_OneDeepScanAtATime: a second deep request while
+// one is running is refused with ErrDeepCoverageBusy rather than starting a
+// second full Pebble scan, and the guard is released when a scan returns.
+func TestGetBookFileSignalCoverage_OneDeepScanAtATime(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	book, err := s.CreateBook(&Book{Title: "Busy", FilePath: "/test/busy"})
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookFile(&BookFile{BookID: book.ID, FilePath: "/test/busy/a.mp3"}))
+
+	// Hold the guard the way an in-flight scan does.
+	require.True(t, s.deepCoverageBusy.CompareAndSwap(false, true))
+	_, err = s.GetBookFileSignalCoverage(context.Background(), true, 2)
+	require.ErrorIs(t, err, ErrDeepCoverageBusy)
+	s.deepCoverageBusy.Store(false)
+
+	// Sequential scans both succeed: the guard is released on return.
+	for range 2 {
+		cov, err := s.GetBookFileSignalCoverage(context.Background(), true, 2)
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, cov.TotalBookFiles)
+	}
+	assert.False(t, s.deepCoverageBusy.Load(), "guard must be released after a scan")
+
+	// The fast path is not gated by a running deep scan.
+	s.WaitForWarmup()
+	require.True(t, s.deepCoverageBusy.CompareAndSwap(false, true))
+	defer s.deepCoverageBusy.Store(false)
+	if _, err := s.GetBookFileSignalCoverage(context.Background(), false, 2); err != nil {
+		assert.ErrorIs(t, err, ErrMemDBNotReady, "only memdb availability may refuse the fast path")
+	}
+}
+
+// The 503 text must say what is actually true: a store with memdb disabled is
+// not "warming up".
+func TestGetBookFileSignalCoverage_FastPathRefusalSaysWhy(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	s.WaitForWarmup()
+	s.UseMemDB = false
+	_, err := s.GetBookFileSignalCoverage(context.Background(), false, 2)
+	require.ErrorIs(t, err, ErrMemDBNotReady)
+	assert.Contains(t, err.Error(), "disabled")
+	assert.NotContains(t, err.Error(), "warmup has not completed")
 }
