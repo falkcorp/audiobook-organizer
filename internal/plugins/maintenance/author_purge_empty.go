@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
 // last-edited: 2026-09-12
 
@@ -287,6 +287,17 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		reporter.Logger().Info("purge-empty-authors dry run",
 			"eligible", report.Eligible, "held_by_refs", report.HeldByRefs,
 			"sample", report.Sample)
+		_ = reporter.UpdateProgress(3, 3, msg)
+		return nil
+	}
+
+	// Nothing eligible: finish WITHOUT taking the stand-down. Acquiring it blocks
+	// until a running library.scan parks, so an apply that has nothing to delete
+	// would pause a days-long production scan for no write at all.
+	if len(eligible) == 0 {
+		msg := "nothing to delete — " + report.summary()
+		reporter.Logger().Info("purge-empty-authors complete (nothing eligible)",
+			"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles)
 		_ = reporter.UpdateProgress(3, 3, msg)
 		return nil
 	}
