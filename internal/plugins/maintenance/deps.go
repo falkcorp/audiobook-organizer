@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -198,7 +198,17 @@ type opsSystemPreferences interface {
 	SetUserPreferenceForUser(userID string, key string, value string) error
 }
 
-// OpsStore is the 55 methods the maintenance ops need -- what they call directly
+// opsNarratorStore lists and deletes narrators. Its own interface rather than
+// two more lines on opsAuthorStore, which already sits at the interfacebloat
+// limit of 8. The unfiltered reference counts purge-empty-narrators deletes on
+// are deliberately NOT here: they are reached as a capability through
+// database.NarratorRefCounts / database.NarratorLinkCount, which fail closed.
+type opsNarratorStore interface {
+	ListNarrators() ([]database.Narrator, error)
+	DeleteNarrator(id int) error
+}
+
+// OpsStore is the 57 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
@@ -208,6 +218,7 @@ type OpsStore interface {
 	opsBookFileWriter
 	opsAuthorStore
 	opsSeriesStore
+	opsNarratorStore
 	opsLinkStore
 	opsHousekeeping
 }
