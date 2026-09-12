@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 43710377-fdb3-490c-872e-fd03309163be
-// last-edited: 2026-08-18
+// last-edited: 2026-09-12
 
 // Narrow dependency interfaces for the entities domain handlers (authors,
 // series, narrators, works). Each interface lists only the methods the
@@ -51,6 +51,10 @@ type BookLinkStore interface {
 	// GetBooksByAuthorIDWithRoleCore is Core-typed (STOREFID P3-W2b) — see
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	// GetBooksByAuthorIDForRelinkCore is the WithRole getter with the trash
+	// included: the relink list for split and reclassify, which delete the
+	// author afterwards.
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	// Book authors / narrators join tables
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error

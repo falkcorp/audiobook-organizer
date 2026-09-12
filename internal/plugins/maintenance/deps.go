@@ -145,6 +145,9 @@ type opsSeriesStore interface {
 type opsLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	// GetBooksByAuthorIDForRelinkCore includes the trash; relink-then-delete
+	// paths only. See database.PebbleStore.GetBooksByAuthorIDForRelinkCore.
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 	ReassignExternalID(source string, externalID string, newBookID string) error
 	ReassignExternalIDs(oldBookID string, newBookID string) error

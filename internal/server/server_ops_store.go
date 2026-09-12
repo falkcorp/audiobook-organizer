@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -178,6 +178,9 @@ type serverAuthorLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	// GetBooksByAuthorIDForRelinkCore includes the trash; relink-then-delete
+	// paths only (entities.author-merge, the AI merge apply).
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 }
 
 // serverEntityReader: Narrator and series reads.

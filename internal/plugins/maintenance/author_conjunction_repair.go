@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -294,10 +294,18 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // stranded rows sit at position 1+ of a credit list, which is why every one of
 // them reports file_count=0 while carrying books. A merge that only rewrote
 // AuthorID would report success and change nothing.
+//
+// The list comes from GetBooksByAuthorIDForRelinkCore, which includes books in
+// the trash: DeleteAuthor sweeps the author out of every junction row, trashed
+// books included, so a trashed book this loop skipped used to lose its credit
+// and keep an AuthorID naming the deleted row. The delete is gated on
+// database.VerifyAuthorUnlinked, so a link this loop could not move (including
+// a primary-author rewrite that only logged its failure) keeps the author row
+// instead of being destroyed with it.
 func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, log *slog.Logger) (int, error) {
 	store := p.deps.OpsStore()
 
-	books, err := store.GetBooksByAuthorIDWithRoleCore(from.ID)
+	books, err := store.GetBooksByAuthorIDForRelinkCore(from.ID)
 	if err != nil {
 		return 0, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
@@ -377,6 +385,9 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 
 	if dryRun {
 		return relinked, nil
+	}
+	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
+		return relinked, err
 	}
 	if err := store.DeleteAuthor(from.ID); err != nil {
 		return relinked, fmt.Errorf("delete author %d: %w", from.ID, err)

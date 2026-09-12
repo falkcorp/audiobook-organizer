@@ -2435,6 +2435,36 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 // Any other memdb error is propagated unchanged — falling back on an
 // unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
+	return p.booksByAuthorIDForMutation(authorID, false)
+}
+
+// GetBooksByAuthorIDForRelinkCore returns every book linked to the author in
+// ANY state -- live, non-primary, AND soft-deleted -- through the book_authors
+// junction plus the legacy AuthorID. It is GetBooksByAuthorIDWithRoleCore with
+// the trash included, and it is the list every relink-then-DeleteAuthor path
+// must iterate.
+//
+// Why a separate getter rather than widening the existing one: roughly twenty
+// callers of GetBooksByAuthorIDWithRoleCore are listing, AI-prompt and
+// metadata-refresh views that rely on it excluding the trash. The merge, split
+// and reclassify paths are the opposite case: DeleteAuthor's junction sweep
+// (sweepAuthorFromBookAuthors) removes the author from EVERY book_authors row,
+// trashed books included, so a trashed book the relink list skipped lost its
+// credit outright and was left with a legacy AuthorID naming a deleted row.
+// Restoring it from the trash then produced a book with no author.
+//
+// Same fail-closed shape as the sibling: memdb answers when it is complete,
+// ErrMemdbIncomplete falls through to the authoritative Pebble scan, and any
+// other memdb error propagates. Both paths are pinned to agree by
+// TestGetBooksByAuthorIDForRelinkCore_MemDBAndPebbleAgree.
+func (p *PebbleStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error) {
+	return p.booksByAuthorIDForMutation(authorID, true)
+}
+
+// booksByAuthorIDForMutation is the shared body of GetBooksByAuthorIDWithRoleCore
+// (includeTrashed=false) and GetBooksByAuthorIDForRelinkCore (includeTrashed=true).
+// One body so the two cannot drift on anything but the trash.
+func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bool) ([]BookCore, error) {
 	if m := p.mem(); p.UseMemDB && m != nil {
 		// AllVersions, not the plain getter: this method's callers are merges,
 		// deletes and dedup, and a link they cannot see is one they will not
@@ -2442,7 +2472,13 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 		// branch below has never filtered non-primary versions, so using the
 		// filtered memdb view here also made the two paths disagree. See
 		// internal/database/author_getter_conformance_test.go.
-		books, err := m.GetBooksByAuthorIDAllVersions(authorID, 0, 0)
+		var books []Book
+		var err error
+		if includeTrashed {
+			books, err = m.GetBooksByAuthorIDForRelink(authorID)
+		} else {
+			books, err = m.GetBooksByAuthorIDAllVersions(authorID, 0, 0)
+		}
 		if err == nil {
 			cores := make([]BookCore, len(books))
 			for i := range books {
@@ -2503,7 +2539,7 @@ func (p *PebbleStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, 
 			// reached through the repair path. See the doc comment.
 			return nil, fmt.Errorf("books by author scan: undecodable book row %q: %w", key, err)
 		}
-		if bookIsSoftDeleted(&book) {
+		if !includeTrashed && bookIsSoftDeleted(&book) {
 			continue
 		}
 		if _, inJunction := bookIDSet[book.ID]; inJunction {

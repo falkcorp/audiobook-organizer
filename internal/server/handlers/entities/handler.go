@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -580,8 +580,9 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 		newAuthors = append(newAuthors, *created)
 	}
 
-	// Get all books linked to the composite author
-	books, err := h.store.GetBooksByAuthorIDWithRoleCore(authorID)
+	// Get all books linked to the composite author, trash included: the
+	// DeleteAuthor below sweeps trashed books' junction rows too.
+	books, err := h.store.GetBooksByAuthorIDForRelinkCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return
@@ -637,7 +638,11 @@ func (h *Handler) SplitCompositeAuthor(c *gin.Context) {
 		booksUpdated++
 	}
 
-	// Delete the composite author
+	// Delete the composite author, unless a book the loop above skipped still
+	// credits it.
+	if h.refuseDeleteWhileLinked(c, authorID) {
+		return
+	}
 	if err := h.store.DeleteAuthor(authorID); err != nil {
 		httputil.InternalError(c, "failed to delete author", err)
 		return
@@ -895,8 +900,9 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 		}
 	}
 
-	// Get all books linked to this author
-	books, err := h.store.GetBooksByAuthorIDWithRoleCore(authorID)
+	// Get all books linked to this author, trash included: the DeleteAuthor
+	// below sweeps trashed books' junction rows too.
+	books, err := h.store.GetBooksByAuthorIDForRelinkCore(authorID)
 	if err != nil {
 		httputil.InternalError(c, "failed to get author books", err)
 		return
@@ -961,7 +967,11 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 		booksUpdated++
 	}
 
-	// Delete the author record
+	// Delete the author record, unless a book the loop above skipped still
+	// credits it.
+	if h.refuseDeleteWhileLinked(c, authorID) {
+		return
+	}
 	if err := h.store.DeleteAuthor(authorID); err != nil {
 		httputil.InternalError(c, "failed to delete author", err)
 		return
@@ -1317,4 +1327,21 @@ func (h *Handler) SetAudiobookNarrators(c *gin.Context) {
 	h.authorsCache.InvalidateAll()
 
 	httputil.RespondWithOK(c, gin.H{"status": "ok"})
+}
+
+// refuseDeleteWhileLinked runs database.VerifyAuthorUnlinked before a split or
+// reclassify deletes the author, and writes the response when it refuses: 409
+// when a book still credits the author, 500 when the re-check itself failed.
+// It returns true when the caller must stop without deleting.
+func (h *Handler) refuseDeleteWhileLinked(c *gin.Context, authorID int) bool {
+	err := database.VerifyAuthorUnlinked(h.store, authorID)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, database.ErrAuthorStillLinked) {
+		httputil.RespondWithConflict(c, err.Error())
+		return true
+	}
+	httputil.InternalError(c, "failed to re-check author links before delete", err)
+	return true
 }

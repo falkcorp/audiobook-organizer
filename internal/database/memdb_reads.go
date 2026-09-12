@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -571,7 +571,7 @@ func (m *MemStore) getBooksBySeriesID(seriesID int, limit, offset int, primaryOn
 // []Book and let each PebbleStore-layer caller project to Core. See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (m *MemStore) GetBooksByAuthorID(authorID int, limit, offset int) ([]Book, error) {
-	return m.getBooksByAuthorID(authorID, limit, offset, true)
+	return m.getBooksByAuthorID(authorID, limit, offset, true, false)
 }
 
 // GetBooksByAuthorIDAllVersions is GetBooksByAuthorID without the
@@ -617,14 +617,37 @@ func (m *MemStore) GetBooksByAuthorIDAllVersions(authorID int, limit, offset int
 	if err := m.requireTablesComplete("books by author (merge path)", memTableBooks, memTableBookAuthors); err != nil {
 		return nil, err
 	}
-	return m.getBooksByAuthorID(authorID, limit, offset, false)
+	return m.getBooksByAuthorID(authorID, limit, offset, false, false)
+}
+
+// GetBooksByAuthorIDForRelink is GetBooksByAuthorIDAllVersions with the trash
+// INCLUDED: every book linked to the author in any state -- live, non-primary,
+// or soft-deleted -- through the junction or the legacy AuthorID.
+//
+// It exists for the relink-then-DeleteAuthor paths and nothing else. Those
+// callers rewrite every link they are handed and then delete the author, and
+// DeleteAuthor's junction sweep removes the author from EVERY book_authors row,
+// trashed books included. A trashed book the relink list omitted therefore
+// lost its credit outright and kept a legacy AuthorID naming a deleted row, so
+// restoring it from the trash produced a book with no author. Listing callers
+// must keep using the trash-excluding getters.
+//
+// Same ErrMemdbIncomplete refusal as the AllVersions wrapper, for the same
+// reason: a short relink list is a stranded credit.
+func (m *MemStore) GetBooksByAuthorIDForRelink(authorID int) ([]Book, error) {
+	if err := m.requireTablesComplete("books by author (relink path)", memTableBooks, memTableBookAuthors); err != nil {
+		return nil, err
+	}
+	return m.getBooksByAuthorID(authorID, 0, 0, false, true)
 }
 
 // getBooksByAuthorID is the shared body. primaryOnly selects the listing view
 // (true) or the complete set (false); see GetBooksByAuthorIDAllVersions for why
-// both are needed. Soft-deleted books are excluded either way — no caller of
-// either getter wants the trash.
-func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOnly bool) ([]Book, error) {
+// both are needed. includeTrashed keeps soft-deleted books: only the relink
+// path (GetBooksByAuthorIDForRelink) sets it, because a relink that skips a
+// trashed book lets DeleteAuthor's junction sweep erase that book's credit.
+// Every listing caller passes false and must go on excluding the trash.
+func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOnly, includeTrashed bool) ([]Book, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -663,7 +686,7 @@ func (m *MemStore) getBooksByAuthorID(authorID int, limit, offset int, primaryOn
 			continue
 		}
 		b := raw.(*Book)
-		if bookIsSoftDeleted(b) {
+		if !includeTrashed && bookIsSoftDeleted(b) {
 			continue
 		}
 		if primaryOnly && b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {

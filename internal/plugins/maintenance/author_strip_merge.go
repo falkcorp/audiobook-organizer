@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-04
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -429,7 +429,9 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, doomed map[int]bool, dryRun bool, log *slog.Logger) (unlinked int, authorless []string, err error) {
 	store := p.deps.OpsStore()
 
-	books, err := store.GetBooksByAuthorIDWithRoleCore(from.ID)
+	// ForRelink, not WithRole: the trash is included, because DeleteAuthor
+	// below sweeps the author out of trashed books' junction rows too.
+	books, err := store.GetBooksByAuthorIDForRelinkCore(from.ID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
@@ -482,7 +484,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		if book.AuthorID != nil && *book.AuthorID == from.ID {
 			// Every failure below returns BEFORE DeleteAuthor. The junction
 			// row is already gone, but the author row still exists, and
-			// GetBooksByAuthorIDWithRoleCore unions the junction with the
+			// GetBooksByAuthorIDForRelinkCore unions the junction with the
 			// legacy AuthorID, so a re-run finds this book again and retries
 			// the rewrite. Logging and deleting anyway would leave AuthorID
 			// pointing at a row that no longer exists — the exact 2026-08-24
@@ -516,6 +518,9 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 
 	if dryRun {
 		return unlinked, authorless, nil
+	}
+	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
+		return unlinked, authorless, err
 	}
 	if err := store.DeleteAuthor(from.ID); err != nil {
 		return unlinked, authorless, fmt.Errorf("delete author %d: %w", from.ID, err)

@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -67,22 +67,32 @@ type ExtraOpsStore interface {
 	versions.TrashedVersionCleaner // CleanupTrashedVersions
 
 	extraOpsAuthorStore
+	extraOpsAuthorLinkStore
 	extraOpsMaintenanceStore
 
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 }
 
-// extraOpsAuthorStore is the author-consolidation op. Split out because
-// interfacebloat counts DECLARED ENTRIES, and these eight sit exactly at the
-// limit of 8 -- inlining them into ExtraOpsStore would put it at 12.
+// extraOpsAuthorStore is the author-consolidation op's author-row half. Split
+// out because interfacebloat counts DECLARED ENTRIES (limit 8); the book-link
+// half below was split off again on 2026-09-12 when the relink getter took the
+// combined set to nine.
 type extraOpsAuthorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
 	DeleteAuthor(id int) error
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+}
+
+// extraOpsAuthorLinkStore is the book<->author join the consolidation and
+// metadata-refresh ops read and rewrite.
+type extraOpsAuthorLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	// GetBooksByAuthorIDForRelinkCore includes the trash; the split path's
+	// relink list, because DeleteAuthor sweeps trashed books' credits too.
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
@@ -334,8 +344,10 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 					continue
 				}
 
-				// Re-link all books from composite author to individual authors
-				books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
+				// Re-link all books from composite author to individual
+				// authors. ForRelink includes the trash; see
+				// extraOpsAuthorLinkStore.
+				books, err := store.GetBooksByAuthorIDForRelinkCore(author.ID)
 				if err != nil {
 					errCount++
 					_ = progress.Log("warning", fmt.Sprintf("Failed to get books for author %q: %v", author.Name, err), nil)
@@ -412,8 +424,13 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 					booksUpdated++
 				}
 
-				// Delete the composite author record
-				if err := store.DeleteAuthor(author.ID); err != nil {
+				// Delete the composite author record -- only once nothing still
+				// credits it. The per-book loop above skips failures, and a
+				// delete after a skipped book erases that book's credit.
+				if err := database.VerifyAuthorUnlinked(store, author.ID); err != nil {
+					_ = progress.Log("warning", fmt.Sprintf("Composite author %q NOT deleted: %v", author.Name, err), nil)
+					errCount++
+				} else if err := store.DeleteAuthor(author.ID); err != nil {
 					_ = progress.Log("warning", fmt.Sprintf("Failed to delete composite author %q: %v", author.Name, err), nil)
 					errCount++
 				} else {

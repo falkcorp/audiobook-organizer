@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8c1b53-9a27-4d60-bf14-7c9e0a35d2f1
-// last-edited: 2026-07-16
+// last-edited: 2026-09-12
 
 package server
 
@@ -14,7 +14,7 @@ import (
 // authorReassignStore is the minimal store surface reassignBooksFromAuthor needs.
 // *database.PebbleStore (and the full database.Store) satisfy it.
 type authorReassignStore interface {
-	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
@@ -30,7 +30,9 @@ type authorReassignStore interface {
 // mergeID unconditionally even when a book's reassignment (or its author read)
 // had failed.
 func reassignBooksFromAuthor(store authorReassignStore, mergeID, keepID int) []string {
-	books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
+	// ForRelink includes the trash: the caller deletes mergeID afterwards,
+	// and DeleteAuthor sweeps trashed books' junction rows too.
+	books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
 	if err != nil {
 		return []string{fmt.Sprintf("get books for author %d: %v", mergeID, err)}
 	}

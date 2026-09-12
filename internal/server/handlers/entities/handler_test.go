@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-09-12
 
@@ -324,7 +324,7 @@ func TestSplitCompositeAuthor(t *testing.T) {
 	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
 	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).Return([]database.BookCore{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	// Provide explicit names so the split is deterministic (not dependent on the
 	// dedup auto-detect heuristic).
@@ -545,7 +545,7 @@ func TestReclassifyAuthorAsNarrator(t *testing.T) {
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).Return([]database.BookCore{}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
 	h.ReclassifyAuthorAsNarrator(c)
@@ -868,8 +868,10 @@ func TestSplitCompositeAuthor_RepointsPrimaryAuthorID(t *testing.T) {
 	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
 
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
-		Return([]database.BookCore{{ID: "b1", AuthorID: &composite}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &composite}}, nil).Once()
+	// Post-relink re-check (database.VerifyAuthorUnlinked): nothing left.
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return(nil, nil)
 	d.store.EXPECT().GetBookAuthors("b1").
 		Return([]database.BookAuthor{{BookID: "b1", AuthorID: 5, Role: "author"}}, nil)
 	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
@@ -919,8 +921,10 @@ func TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone(t *testing.T) {
 	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
 
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
-		Return([]database.BookCore{{ID: "b2", AuthorID: &otherPrimary}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b2", AuthorID: &otherPrimary}}, nil).Once()
+	// Post-relink re-check (database.VerifyAuthorUnlinked): nothing left.
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return(nil, nil)
 	d.store.EXPECT().GetBookAuthors("b2").
 		Return([]database.BookAuthor{{BookID: "b2", AuthorID: 5, Role: "contributor"}}, nil)
 	d.store.EXPECT().SetBookAuthors("b2", mock.Anything).Return(nil)
@@ -948,8 +952,10 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
 
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
-		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil).Once()
+	// Post-relink re-check (database.VerifyAuthorUnlinked): nothing left.
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return(nil, nil)
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{
 		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
 		{BookID: "b1", AuthorID: 7, Role: "author", Position: 1},
@@ -1002,8 +1008,10 @@ func TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives(t *testing.T) {
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
 
-	d.store.EXPECT().GetBooksByAuthorIDWithRoleCore(5).
-		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil).Once()
+	// Post-relink re-check (database.VerifyAuthorUnlinked): nothing left.
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return(nil, nil)
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{
 		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
 	}, nil)
@@ -1075,4 +1083,72 @@ func TestSetAudiobookNarrators_OmittedBookIDKeepsMemDBLive(t *testing.T) {
 	require.Len(t, cores, 1)
 	require.Equal(t, "Put Narrators (renamed)", cores[0].Title,
 		"memdb kept the old title: the book's memdb upsert aborted on its narrator rows")
+}
+
+// The split relink list includes the trash (GetBooksByAuthorIDForRelinkCore):
+// a trashed book crediting the composite is rewritten onto the individual
+// authors before the composite is deleted, instead of losing its credit to
+// DeleteAuthor's junction sweep.
+func TestSplitCompositeAuthor_RelinksTrashedBook(t *testing.T) {
+	h, d := newHandler(t)
+	trashed := true
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "A / B"}, nil)
+	d.store.EXPECT().GetAuthorByName("A").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
+	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "bt", MarkedForDeletion: &trashed}}, nil).Once()
+	d.store.EXPECT().GetBookAuthors("bt").
+		Return([]database.BookAuthor{{BookID: "bt", AuthorID: 5, Role: "author"}}, nil)
+	var wrote []database.BookAuthor
+	d.store.EXPECT().SetBookAuthors("bt", mock.Anything).
+		RunAndReturn(func(_ string, ba []database.BookAuthor) error { wrote = ba; return nil })
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return(nil, nil)
+	d.store.EXPECT().DeleteAuthor(5).Return(nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
+	h.SplitCompositeAuthor(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+	ids := make([]int, 0, len(wrote))
+	for _, ba := range wrote {
+		ids = append(ids, ba.AuthorID)
+	}
+	assert.Equal(t, []int{10, 11}, ids, "trashed book must be credited to the split authors")
+}
+
+// A book still crediting the composite after the relink (here: one the first
+// read did not return) blocks the delete with a 409. No DeleteAuthor
+// expectation is set, so reaching it fails the mock.
+func TestSplitCompositeAuthor_RefusesDeleteWhileStillLinked(t *testing.T) {
+	h, d := newHandler(t)
+	trashed := true
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "A / B"}, nil)
+	d.store.EXPECT().GetAuthorByName("A").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("A").Return(&database.Author{ID: 10, Name: "A"}, nil)
+	d.store.EXPECT().GetAuthorByName("B").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateAuthor("B").Return(&database.Author{ID: 11, Name: "B"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil).Once()
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b9", MarkedForDeletion: &trashed}}, nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
+	h.SplitCompositeAuthor(c)
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// Same gate on reclassify-as-narrator.
+func TestReclassifyAuthorAsNarrator_RefusesDeleteWhileStillLinked(t *testing.T) {
+	h, d := newHandler(t)
+	trashed := true
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
+	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil).Once()
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b9", MarkedForDeletion: &trashed}}, nil)
+
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusConflict, w.Code)
 }
