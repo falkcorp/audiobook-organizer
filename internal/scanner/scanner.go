@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -1361,8 +1361,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			}
 
 			// CONS-17 (Path B): a sequential multi-file group (SegmentFiles>1,
-			// detected at the grouping stage) carries FilePath=segs[0], a single
-			// chapter file. Without this, it would fall to the per-file ProcessFile
+			// detected at the grouping stage) carries a single chapter file as
+			// FilePath (segs[0], or for an album group the first file in arrival
+			// order). Without this, it would fall to the per-file ProcessFile
 			// path below and take its title from one chapter's tags — chapter
 			// titles ("Chapter 1", "Part 1") then leak into and collide across
 			// Book.Title. Route it through AssembleBookMetadata (folder preference)
@@ -1889,9 +1890,10 @@ func extractInfoFromPath(book *Book) {
 // filed under its parent directory?" and returns that directory if so.
 //
 // It exists because FilePath normalization is one-way and invisible: the scan
-// walk always re-emits a multi-file book as FilePath=segs[0] (it makes no store
-// calls, so it cannot know the row moved), while the row itself stays at the
-// directory. Every scan after the first therefore looks the book up at a path
+// walk always re-emits a multi-file book with one of its segment files as
+// FilePath (segs[0], or for an album group the first file in arrival order; it
+// makes no store calls, so it cannot know the row moved), while the row itself
+// stays at the directory. Every scan after the first therefore looks the book up at a path
 // that no longer has a row.
 //
 // The ownership check is the load-bearing part. Finding *a* book at the parent
@@ -2000,10 +2002,18 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	// SegmentFiles is empty for a genuinely single-file book, so fall back to
 	// the book's own path. A len==1 SegmentFiles whose element differs from
 	// FilePath would file the row somewhere the book-grain stamp mirror cannot
-	// match (it requires files[0].FilePath == book.FilePath) -- but the scanner
-	// cannot construct that shape: all four places that set SegmentFiles set
-	// FilePath = segs[0] alongside it. Checked 2026-08-25; if a fifth site
-	// appears that breaks the invariant, this needs to pass book.FilePath.
+	// match (it requires files[0].FilePath == book.FilePath).
+	//
+	// FilePath == SegmentFiles[0] is guaranteed ONLY for single-file groups,
+	// and those are the only books that reach this function: the scan worker
+	// sends every book with len(SegmentFiles) > 1 to createBookFilesForBook
+	// instead. It does NOT hold for multi-file books in general. The album-group
+	// site in groupFilesIntoBooks deliberately keeps FilePath on the first file
+	// in arrival (alphabetical) order while SegmentFiles is the natural-sorted
+	// clone -- see the comment there -- so for those books SegmentFiles[0] is a
+	// different file. Nothing may use SegmentFiles[0] as a book's lookup key;
+	// FilePath is the key. If a site ever produces a one-element SegmentFiles
+	// whose element differs from FilePath, this needs to pass book.FilePath.
 	segs := book.SegmentFiles
 	if len(segs) == 0 {
 		segs = []string{book.FilePath}
@@ -2091,7 +2101,7 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// normalized by an earlier scan and now lives at its parent directory.
 		//
 		// Without this, a book normalized on its first scan can never recover:
-		// every later scan re-emits FilePath=segs[0], finds no row there, and
+		// every later scan re-emits a segment file as FilePath, finds no row there, and
 		// returns "" -- so the caller keeps the dead path and BOTH consumers
 		// miss again, forever. The 2026-08-24 fix closed the path that CREATES
 		// the desync; this is the path that REPAIRS the rows it already made.
