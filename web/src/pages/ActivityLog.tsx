@@ -380,17 +380,34 @@ export default function ActivityLog() {
     []
   );
 
-  // Tracks pending scroll timers so they can be cancelled on unmount — a timer
-  // that fires after unmount would touch a detached ref (harmless here thanks to
-  // optional chaining, but still flagged by the memory-leak scanner).
-  const scrollTimeoutsRef = useRef<number[]>([]);
+  // At most one pending "scroll the open log to the bottom" timer. A new request
+  // replaces the pending one (a burst of SSE lines needs one scroll, not one per
+  // line), the timer forgets itself when it fires, and unmount cancels it.
+  // scrollTo is feature-checked because jsdom elements do not implement it: an
+  // unguarded call threw from the timer as an unhandled error and failed the
+  // vitest run even though every test passed.
+  const scrollLogTimeoutRef = useRef<number | null>(null);
   useEffect(
     () => () => {
-      scrollTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
-      scrollTimeoutsRef.current = [];
+      if (scrollLogTimeoutRef.current !== null) {
+        window.clearTimeout(scrollLogTimeoutRef.current);
+        scrollLogTimeoutRef.current = null;
+      }
     },
     []
   );
+  const scheduleLogScroll = useCallback(() => {
+    if (scrollLogTimeoutRef.current !== null) {
+      window.clearTimeout(scrollLogTimeoutRef.current);
+    }
+    scrollLogTimeoutRef.current = window.setTimeout(() => {
+      scrollLogTimeoutRef.current = null;
+      const el = opLogsRef.current;
+      if (el && typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: el.scrollHeight });
+      }
+    }, 50);
+  }, []);
 
   // Auto-pause refresh when a row is expanded so log lines don't jump away.
   // Restores the previous state when the row collapses, unless the user
@@ -454,16 +471,15 @@ export default function ActivityLog() {
     }
   }, [opRows]);
 
-  const loadOperationLogs = useCallback(async (opId: string) => {
-    const logs = await api.getOperationLogs(opId);
-    setOpLogs(logs.map((l: { message?: string }) => l.message || String(l)));
-    setOpLogsLoaded(true);
-    const scrollTimeout = window.setTimeout(
-      () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
-      50
-    );
-    scrollTimeoutsRef.current.push(scrollTimeout);
-  }, []);
+  const loadOperationLogs = useCallback(
+    async (opId: string) => {
+      const logs = await api.getOperationLogs(opId);
+      setOpLogs(logs.map((l: { message?: string }) => l.message || String(l)));
+      setOpLogsLoaded(true);
+      scheduleLogScroll();
+    },
+    [scheduleLogScroll]
+  );
 
   // Load logs once when an operation is expanded. Live lines append via SSE
   // below; the per-op refresh button is the explicit full reload path.
@@ -499,12 +515,8 @@ export default function ActivityLog() {
     // Cap retained log lines to avoid unbounded growth on long-running ops
     // (mirrors OperationActivityPanel's per-op cap).
     setOpLogs((prev) => [...prev, latestLogEvent.message].slice(-1000));
-    const scrollTimeout = window.setTimeout(
-      () => opLogsRef.current?.scrollTo({ top: opLogsRef.current.scrollHeight }),
-      50
-    );
-    scrollTimeoutsRef.current.push(scrollTimeout);
-  }, [latestLogEvent, expandedOpId]);
+    scheduleLogScroll();
+  }, [latestLogEvent, expandedOpId, scheduleLogScroll]);
 
   // Load sources. Pass silent=true from the auto-refresh tick so it can be
   // dropped rather than stacked when the previous one has not returned.
