@@ -1,0 +1,5 @@
+### Fixed
+
+#### Searching inside an author or series no longer returns the whole library
+
+`GET /api/v1/audiobooks` picked one base set from `search`, then `author_id`, then `series_id`, and nothing re-applied the ids it passed over. So `?series_id=N&search=foo` returned search matches from the entire library, and `author_id` silently overrode `series_id` when both were sent. The library page sends `series_id` from a book-detail link, so a user could hit this by searching inside a series. All three parameters are now ANDed. An `author_id` or `series_id` that accompanies a search is applied as a post-filter over the over-fetched search candidates, so paging stays full and `count` is the filtered match count. `author_id` together with `series_id` returns their intersection. Author membership uses the same book_authors junction as the plain `?author_id=` listing, so a co-author's books match. The search fallback used when no search index is loaded also over-fetches now when post-filters are active, and reports a real filtered count instead of the page length.
