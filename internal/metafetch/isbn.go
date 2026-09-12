@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"strconv"
 	"strings"
 	"sync"
@@ -333,11 +334,16 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 		pages++
 
 		for i := range books {
-			if ctx != nil && ctx.Err() != nil {
-				// Persist how far we got before the cancellation so the next run
-				// resumes there rather than repeating this range.
-				s.saveEnrichCursor(ctx, lastID)
-				return checked, updated, ctx.Err()
+			// Per-book scan stand-down beat (a no-op beyond the ctx check when
+			// the caller holds none): renews the hold and stops before the
+			// book's write once it is lost.
+			if ctx != nil {
+				if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
+					// Persist how far we got before the cancellation so the next
+					// run resumes there rather than repeating this range.
+					s.saveEnrichCursor(ctx, lastID)
+					return checked, updated, err
+				}
 			}
 			lastID = books[i].ID
 			core := books[i].Core()

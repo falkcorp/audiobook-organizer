@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -226,5 +226,5 @@ type OperationsRegistry interface {
 // I/O off the request path. Only Submit is used; the in-method `pool != nil`
 // guard is preserved by the controller passing a typed-nil-guarded value.
 type FileIOPool interface {
-	Submit(bookID string, fn func())
+	Submit(bookID string, fn func()) bool
 }

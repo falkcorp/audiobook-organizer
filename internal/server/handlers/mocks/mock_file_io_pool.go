@@ -36,9 +36,20 @@ func (_m *MockFileIOPool) EXPECT() *MockFileIOPool_Expecter {
 }
 
 // Submit provides a mock function for the type MockFileIOPool
-func (_mock *MockFileIOPool) Submit(bookID string, fn func()) {
-	_mock.Called(bookID, fn)
-	return
+func (_mock *MockFileIOPool) Submit(bookID string, fn func()) bool {
+	ret := _mock.Called(bookID, fn)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Submit")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func(string, func()) bool); ok {
+		r0 = returnFunc(bookID, fn)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
 }
 
 // MockFileIOPool_Submit_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Submit'
@@ -71,12 +82,12 @@ func (_c *MockFileIOPool_Submit_Call) Run(run func(bookID string, fn func())) *M
 	return _c
 }
 
-func (_c *MockFileIOPool_Submit_Call) Return() *MockFileIOPool_Submit_Call {
-	_c.Call.Return()
+func (_c *MockFileIOPool_Submit_Call) Return(b bool) *MockFileIOPool_Submit_Call {
+	_c.Call.Return(b)
 	return _c
 }
 
-func (_c *MockFileIOPool_Submit_Call) RunAndReturn(run func(bookID string, fn func())) *MockFileIOPool_Submit_Call {
-	_c.Run(run)
+func (_c *MockFileIOPool_Submit_Call) RunAndReturn(run func(bookID string, fn func()) bool) *MockFileIOPool_Submit_Call {
+	_c.Call.Return(run)
 	return _c
 }

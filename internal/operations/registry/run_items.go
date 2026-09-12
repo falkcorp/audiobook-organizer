@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package registry
 
@@ -223,6 +223,13 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 			var cancel context.CancelFunc
 			itemCtx, cancel = context.WithTimeout(ctx, opt.PerItemTimeout)
 			defer cancel()
+		}
+		// A metadata op running under a scan stand-down hold renews it per item,
+		// and a lost hold stops the item before its write rather than after it.
+		if h := holdFromContext(ctx); h != nil {
+			if err := h.Checkpoint(); err != nil {
+				return err
+			}
 		}
 		r.SetCurrentItem(lbl(i, progTotal))
 		err := fn(itemCtx, item)

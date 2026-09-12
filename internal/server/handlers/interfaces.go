@@ -1,7 +1,7 @@
 // file: internal/server/handlers/interfaces.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5f6a7b8-c9d0-1234-5678-90abcdef0123
-// last-edited: 2026-08-11
+// last-edited: 2026-09-12
 
 package handlers
 
@@ -38,5 +38,5 @@ type WriteBackEnqueuer interface {
 // import the other. Callers must guard against typed-nil boxing at wire time
 // (see wire_handlers.go) so the `pool != nil` checks in handlers stay honest.
 type FileIOPool interface {
-	Submit(bookID string, fn func())
+	Submit(bookID string, fn func()) bool
 }

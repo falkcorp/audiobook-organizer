@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
-// last-edited: 2026-09-06
+// last-edited: 2026-09-12
 
 package registry
 
@@ -53,6 +53,13 @@ type scanStandDown struct {
 	// scanOpID is the opID of the library.scan run this stand-down quiesced, if
 	// any. Cleared when the last holder releases; used to resume that exact run.
 	scanOpID string
+	// dropped holds library.scan runs the worker pickup gate dropped as
+	// interrupted_quiesced while a holder was registered (a scan claimed before
+	// the holder arrived, picked up after). The last release re-queues them.
+	dropped []string
+	// lastPersist throttles the marker write RenewScanStandDown makes: holders
+	// renew per item, and the marker only needs to be roughly current.
+	lastPersist time.Time
 }
 
 // scanStandDownMarker is the persisted (JSON) form of an active stand-down. Its
@@ -146,14 +153,27 @@ func (r *Registry) leaseTTL() time.Duration {
 func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	r.scanGate.mu.Lock()
 	defer r.scanGate.mu.Unlock()
-	if _, ok := r.scanGate.holders[holderOpID]; !ok {
+	prev, ok := r.scanGate.holders[holderOpID]
+	if !ok {
+		return false
+	}
+	// A lapsed lease is lost even if nothing has reaped it yet: the dispatcher
+	// may already have started a scan on the strength of that expiry, so a
+	// late renewal must not resurrect it.
+	if time.Now().After(prev) {
+		delete(r.scanGate.holders, holderOpID)
 		return false
 	}
 	expiry := time.Now().Add(r.leaseTTL())
 	r.scanGate.holders[holderOpID] = expiry
 	// Refresh the persisted lease so a reboot after a renewal carries the newer
 	// expiry (best-effort; marker persistence is a hardening, not the hot path).
-	r.persistScanStandDown(holderOpID, r.scanGate.scanOpID, expiry)
+	// At most once a second: holders renew per item, and a marker a second
+	// behind a 5m lease loses nothing.
+	if now := time.Now(); now.Sub(r.scanGate.lastPersist) >= time.Second {
+		r.scanGate.lastPersist = now
+		r.persistScanStandDown(holderOpID, r.scanGate.scanOpID, expiry)
+	}
 	return true
 }
 
@@ -175,8 +195,10 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 	delete(r.scanGate.holders, holderOpID)
 	live := r.liveHoldersLocked()
 	scanOpID := r.scanGate.scanOpID
+	var dropped []string
 	if live == 0 {
 		r.scanGate.scanOpID = ""
+		dropped, r.scanGate.dropped = r.scanGate.dropped, nil
 	}
 	r.scanGate.mu.Unlock()
 
@@ -192,6 +214,30 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 	if scanOpID != "" {
 		r.resumeQuiescedOp(scanOpID)
 	}
+	for _, id := range dropped {
+		if id != scanOpID {
+			r.resumeQuiescedOp(id)
+		}
+	}
+	r.pingDispatch()
+}
+
+// resumeDroppedScanOnRelease is called by the worker pickup gate AFTER it has
+// recorded a dropped scan as interrupted_quiesced. If a holder is still live the
+// scan joins scanGate.dropped and the last release re-queues it. If every holder
+// released while the status was being written, that release has already run and
+// saw nothing to resume, so the scan is re-queued here. Both branches decide
+// under scanGate.mu, which releaseScanStandDown also takes, so exactly one of
+// them re-queues the scan.
+func (r *Registry) resumeDroppedScanOnRelease(scanOpID string) {
+	r.scanGate.mu.Lock()
+	if r.liveHoldersLocked() > 0 {
+		r.scanGate.dropped = append(r.scanGate.dropped, scanOpID)
+		r.scanGate.mu.Unlock()
+		return
+	}
+	r.scanGate.mu.Unlock()
+	r.resumeQuiescedOp(scanOpID)
 	r.pingDispatch()
 }
 

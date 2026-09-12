@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/scan_standdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f2c9e04-b6d3-4a81-9e5f-0c4a8d2b61e7
 // last-edited: 2026-09-12
 
@@ -26,6 +26,8 @@ func (g *scanRunningGate) TryAcquireScanStandDown(holder, _ string) (func(), err
 	}
 	return nil, opsregistry.ErrScanRunning
 }
+
+func (g *scanRunningGate) RenewScanStandDown(string) bool { return false }
 
 // Every inline metadata-writing handler returns 409 at once while a scan is
 // running. The strict mocks (no expectations set) fail the test if any of them

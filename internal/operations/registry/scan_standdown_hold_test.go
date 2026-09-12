@@ -1,5 +1,5 @@
 // file: internal/operations/registry/scan_standdown_hold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a3f5d61-2c84-4e7b-8d19-6b0e4a7c3f58
 // last-edited: 2026-09-12
 

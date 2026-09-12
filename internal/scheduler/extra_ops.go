@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-09-12
 
@@ -989,10 +989,8 @@ func (r *ExtraOpsRegistrar) runMetadataRefreshScan(ctx context.Context, progress
 	_ = progress.Log("info", fmt.Sprintf("Checking %d books for incomplete metadata", total), nil)
 	incomplete := 0
 	for i, book := range books {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if err := opsregistry.ScanStandDownCheckpoint(ctx); err != nil {
+			return err
 		}
 		if book.AuthorID == nil || book.Title == "" {
 			incomplete++

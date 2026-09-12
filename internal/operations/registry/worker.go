@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-09-12
 
@@ -280,6 +280,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 		r.publishOpTerminal(qr.opID, qr.defID, status)
 		r.logger.Info("registry: scan quiesced before start (scan gate held)", "op_id", qr.opID, "status", status)
+		// Without this the dropped scan was never recorded anywhere a release
+		// reads, so it sat interrupted_quiesced until the next startup sweep.
+		if status == "interrupted_quiesced" {
+			r.resumeDroppedScanOnRelease(qr.opID)
+		}
 		return false
 	}
 

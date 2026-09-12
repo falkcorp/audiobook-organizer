@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.35.1
+// version: 1.35.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -250,6 +250,11 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 
 	// Auto-backup database before organizing
 	orgSvc.autoBackup(ctx, log)
+	// A canceled or stood-down run stops here: the backup above returned at its
+	// checkpoint, and the metadata fetch below must not start writing books.
+	if ctx.Err() != nil {
+		return fmt.Errorf("organize stopped after auto-backup: %w", context.Cause(ctx))
+	}
 
 	// Get books — either specific IDs or all books
 	const fetchPageSize = 1000
@@ -621,7 +626,7 @@ func (orgSvc *Service) autoBackup(ctx context.Context, log logger.Logger) backup
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			log.Info("Auto-backup stopped after %s: run canceled or stood down (%s); partial archive removed", time.Since(start).Truncate(time.Second), err.Error())
+			log.Info("Auto-backup stopped after %s: run canceled or stood down (%s); partial archive removed (archive or checksum phase)", time.Since(start).Truncate(time.Second), err.Error())
 			return backupFailed
 		}
 		log.Warn("Auto-backup failed after %s: %s", time.Since(start).Truncate(time.Second), err.Error())
