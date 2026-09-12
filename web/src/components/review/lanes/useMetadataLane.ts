@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.13.1
+// version: 1.14.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-12
 //
@@ -426,6 +426,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const [results, setResults] = useState<CandidateResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The load effect reads toast through a ref: adding `toast` to its deps would
+  // re-fetch the whole review set whenever a caller passed an unmemoized toast.
+  const toastRef = useRef(toast);
+  useEffect(() => {
+    toastRef.current = toast;
+  }, [toast]);
   const [rowStates, setRowStates] = useState<Map<string, RowState>>(new Map());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFiltersState] = useState<MetadataFilters>(initialFilters);
@@ -547,6 +553,18 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       .then((data) => {
         if (fetchId !== fetchIdRef.current) return; // stale -- a newer fetch is in flight
         const allResults = data.results || [];
+
+        // all=true should always return the whole set, but if the server still
+        // says the response is truncated, every derivation below (filters,
+        // grouping, staleIds) is over a partial set. Say so rather than present
+        // it as the library. A warning, not `error`: the load did succeed, and
+        // `error` is the failure Alert with a Retry that would not help.
+        if (data.truncated === true) {
+          toastRef.current(
+            `Only ${allResults.length} of ${data.total_count ?? 'unknown'} metadata review rows were returned; filters, groups and the stale set cover only these rows.`,
+            'warning'
+          );
+        }
 
         // Reconcile row state with the server, without clobbering decisions the
         // user made in this session.

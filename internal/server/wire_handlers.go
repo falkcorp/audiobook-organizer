@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.30.0
+// version: 2.31.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package server
 
@@ -70,7 +70,16 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.fileIOPool != nil {
 		mcFileIOPool = s.fileIOPool
 	}
-	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry)
+	// The slow-request WARN's "is a library.scan queued/running" attribute is
+	// injected as a closure over the real store rather than by widening
+	// MetadataCacheBookStore. Guard the nil interface here: a method value on a
+	// nil database.Store would panic at evaluation. A nil func omits the
+	// attribute.
+	var mcScanActive func() bool
+	if st := s.storeForWiring(); st != nil {
+		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
+	}
+	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
 	organizeH := handlers.NewOrganizeHandler(
 		s.storeForWiring(),
 		NewRenameService(s.storeForWiring()),

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_buckets_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e04b3d7-6c81-4a25-b3f0-72d9a1c86e53
-// last-edited: 2026-09-08
+// last-edited: 2026-09-12
 
 // The review rail's chips were reporting a different library than the one the
 // reviewer was looking at. Four separate defects, all visible in one screenshot
@@ -114,7 +114,7 @@ func TestGetCacheReviewResults_BucketsAndStaleness(t *testing.T) {
 	preserved.LastEmptyFetchAt = &now
 	svc.EXPECT().GetCachedCandidates("preserved").Return(preserved, true, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
 	c, w := reviewCtx("limit=0&offset=0")
 	h.GetCacheReviewResults(c)
 
