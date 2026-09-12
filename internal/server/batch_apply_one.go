@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-12
 
@@ -86,11 +86,15 @@ const (
 // 2026-09-12 this re-read the book and locked its path around the whole
 // sequel, which for a protected book was not the path the sequel wrote, and
 // which held one key across the rename.
+//
+// checkpoint is the op's scan stand-down check (nil in tests); the file-side
+// sequel re-runs it before each file-writing step.
 func applyCachedCandidateForBook(
 	svc cachedApplyService,
 	itunes itunesEnqueuer,
 	id string,
 	writeBack bool,
+	checkpoint func() error,
 ) applyOutcome {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
@@ -124,7 +128,7 @@ func applyCachedCandidateForBook(
 		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
-		if err := svc.FinishApplyFileWork(id, pendingCover, false, false, nil); err != nil {
+		if err := svc.FinishApplyFileWork(id, pendingCover, false, false, checkpoint); err != nil {
 			out.WriteBackFailed, out.Err = true, err
 		}
 		return out
@@ -146,7 +150,7 @@ func applyCachedCandidateForBook(
 	// WriteBackFailed is separate from !Applied. The core still writes tags
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
-	if err := svc.FinishApplyFileWork(id, pendingCover, true, true, nil); err != nil {
+	if err := svc.FinishApplyFileWork(id, pendingCover, true, true, checkpoint); err != nil {
 		out.WriteBackFailed, out.Err = true, err
 	}
 	return out

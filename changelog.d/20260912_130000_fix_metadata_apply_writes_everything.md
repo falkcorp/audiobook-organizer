@@ -20,10 +20,14 @@
   checked, not just the book, so a library copy with a row still pointing into
   the iTunes tree no longer has that iTunes file moved. Library-root checks now
   compare on a path-separator boundary.
-- **Auto-fetch keeps tags in step with the database, without creating copies.**
-  Auto-fetch file work (rename, tags, cover embed) now runs through the file-I/O
-  pool, only for books that already have a library copy under the library root.
-  It never creates one. It no longer writes a series position without a series
+- **Auto-fetch never renames files, and writes tags only under
+  `write_back_metadata`.** Auto-fetch (the per-book Fetch button, iTunes import
+  enrichment) does its file work through the file-I/O pool, and only for books
+  that already have a library copy under the library root; it never creates
+  one. That file work embeds the cover and, when `write_back_metadata` is on
+  (off by default), writes the tags. It never renames, whatever
+  `auto_rename_on_apply` and `auto_write_tags_on_apply` say: those settings are
+  for explicit applies. It no longer writes a series position without a series
   name, a failed cover download keeps the old cover, and a book that already has
   a local cover keeps it (an explicit apply still replaces it).
 - **Apply file work locks the files it actually writes.** Every apply's file
@@ -32,11 +36,18 @@
   on the files' current path for the cover embed and rename, and on the
   post-rename path for the tag write. An auto-fetch of an iTunes book and a
   manual apply of its library copy no longer write the same files at once.
+  Two file-work jobs for the same book run one after the other: each takes a
+  per-book lock before any path lock and holds it for the whole sequence.
 - **A lost scan stand-down stops apply file work between steps again.** The
-  single-book apply and the batch-candidates apply re-check the scan stand-down
+  single-book apply, the batch-candidates apply and the batch-apply-cached op
+  re-check the scan stand-down
   before the cover download, the file I/O and the tag write, as they did before
   the file-side sequel was shared. A scan that resumes mid-apply no longer runs
   alongside the rename or the tag write.
+- **Cover files are written only inside the covers directory.** The cover's
+  filename is built from the book ID and an allow-listed extension, and the
+  rename into place and the removal of stale covers go through an `os.Root` on
+  that directory.
 
 ### Removed
 
