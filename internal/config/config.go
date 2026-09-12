@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.114.0
+// version: 1.115.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-12
 
@@ -1111,9 +1111,10 @@ type Config struct {
 
 	// FingerprintLengthSec is how many seconds of audio fpcalc analyses per
 	// file (its -length flag). 0 or unset means 120, fpcalc's own default and
-	// what every stored fingerprint was made with; N > 0 caps at N seconds; a
-	// negative value fingerprints the WHOLE file (-length 0), which measured
-	// about 80x more decode work on 2026-09-12. See internal/fingerprint.
+	// what every stored fingerprint was made with; N > 0 analyses the first N
+	// seconds. Whole-file mode (-length 0, ~80x the decode work measured on
+	// 2026-09-12) is deliberately NOT reachable from here: negative values fall
+	// back to 120. See internal/fingerprint and internal/plugins/acoustid.
 	FingerprintLengthSec int `json:"fingerprint_length_sec" mapstructure:"fingerprint_length_sec"`
 
 	// WhisperClipCacheDir overrides where the intro-transcribe job caches

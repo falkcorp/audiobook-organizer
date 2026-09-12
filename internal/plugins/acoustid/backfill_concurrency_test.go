@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
 // last-edited: 2026-09-12
 
@@ -384,7 +384,9 @@ func TestFingerprintLengthSec_DefaultReproducesStoredPrints(t *testing.T) {
 	orig := config.AppConfig.FingerprintLengthSec
 	t.Cleanup(func() { config.AppConfig.FingerprintLengthSec = orig })
 
-	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, -1: fingerprint.WholeFileAnalysisLength} {
+	// A negative value must NOT reach whole-file mode (-length 0): that is
+	// ~80x the work and an owner decision, not a config typo.
+	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, -1: fingerprint.DefaultAnalysisLengthSec} {
 		config.AppConfig.FingerprintLengthSec = cfg
 		if got := fingerprintLengthSec(); got != want {
 			t.Errorf("fingerprint_length_sec=%d → -length %d, want %d", cfg, got, want)
@@ -394,12 +396,15 @@ func TestFingerprintLengthSec_DefaultReproducesStoredPrints(t *testing.T) {
 
 // fix (d): the def no longer carries the cron string nothing read, but keeps
 // the one effect it had — EnqueueOp deduping a second request on def id.
-func TestBackfillDef_NoDeadScheduleButStillDedupes(t *testing.T) {
+func TestBackfillDef_NoDeadScheduleNoSilentDedupe(t *testing.T) {
 	def := (&Plugin{}).backfillDef()
 	if def.Schedule != nil {
 		t.Errorf("Schedule = %q; OperationDef.Schedule is never evaluated — schedule via the TaskScheduler", *def.Schedule)
 	}
-	if !def.DedupeQueuedRuns {
-		t.Error("DedupeQueuedRuns is false: dropping Schedule would also drop EnqueueOp's def-id dedupe")
+	if def.DedupeQueuedRuns {
+		t.Error("DedupeQueuedRuns is an audited opt-in (op_dedupe_decision_test.go); acoustid.backfill is not on that list")
+	}
+	if def.ConcurrencyKey == "" {
+		t.Error("ConcurrencyKey is empty: a second backfill would run concurrently with the first")
 	}
 }
