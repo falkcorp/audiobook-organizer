@@ -1,5 +1,5 @@
 // file: internal/database/activity_storer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-0001-abcd-000000000001
 // last-edited: 2026-09-11
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -36,6 +37,32 @@ type ActivityReader interface {
 // that cannot count cheaply is not forced to fake it.
 type ActivityCounter interface {
 	CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error)
+}
+
+// CountAllActivity returns the exact number of rows store holds across every
+// tier, which is the number WipeAllActivity would delete. For the migrating
+// wrapper it counts the ACTIVE backend, the same backend whose count
+// WipeAllActivity returns. A backend that cannot count exactly is an error,
+// never an estimate: this feeds the wipe's dry-run preview, the number an
+// operator decides on, and until 2026-09-11 that preview used Query's total
+// and reported 2 on a 13-million-row store.
+func CountAllActivity(ctx context.Context, store ActivityStorer) (int64, error) {
+	if m, ok := store.(*MigratingActivityStore); ok {
+		store = m.active()
+	}
+	counter, ok := store.(ActivityCounter)
+	if !ok {
+		return 0, fmt.Errorf("activity backend %T cannot report an exact row count", store)
+	}
+	var total int64
+	for _, tier := range actTiers {
+		n, err := counter.CountActivity(ctx, tier, nil)
+		if err != nil {
+			return 0, fmt.Errorf("count activity rows (tier=%s): %w", tier, err)
+		}
+		total += int64(n)
+	}
+	return total, nil
 }
 
 // ActivityRetention covers pruning, compaction and migration.

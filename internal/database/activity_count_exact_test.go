@@ -1,7 +1,7 @@
 // file: internal/database/activity_count_exact_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 41ba9c07-52e8-4f36-a7d1-6e0b83c4915f
-// last-edited: 2026-09-08
+// last-edited: 2026-09-11
 
 // CountActivity exists because Query's total is a pagination probe, not a
 // census, on BOTH backends — and that is not obvious from either signature.
@@ -123,4 +123,39 @@ func TestPebbleCountActivity_DoesNotCountSecondaryIndexKeys(t *testing.T) {
 	n, err := store.CountActivity(context.Background(), "change", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "one row is one row however many index keys it wrote")
+}
+
+// CountAllActivity feeds the activity wipe's dry-run preview. It must count
+// every tier, and on the migrating wrapper it must count the ACTIVE backend,
+// because that is the backend whose count WipeAllActivity returns.
+func TestCountAllActivity_EveryTierOnTheActiveBackend(t *testing.T) {
+	primary := newTestPebbleActivityStore(t)
+	secondary := newTestSQLStore(t)
+	for range countExactRows {
+		seedActivity(t, primary, "change", 10*24*time.Hour, "row")
+	}
+	seedActivity(t, primary, "debug", time.Minute, "row")
+	seedActivity(t, primary, "audit", time.Minute, "row")
+	seedActivity(t, secondary, "change", time.Minute, "row")
+
+	mig := NewMigratingActivityStore(primary, secondary, false)
+	n, err := CountAllActivity(context.Background(), mig)
+	require.NoError(t, err)
+	assert.Equal(t, int64(countExactRows+2), n, "all tiers of the primary while it is active")
+
+	mig.SetReadSecondary(true)
+	n, err = CountAllActivity(context.Background(), mig)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "the secondary once reads flip")
+
+	n, err = CountAllActivity(context.Background(), primary)
+	require.NoError(t, err)
+	assert.Equal(t, int64(countExactRows+2), n, "an unwrapped backend counts itself")
+}
+
+// A backend that cannot count exactly must be refused, never estimated.
+func TestCountAllActivity_RefusesABackendThatCannotCount(t *testing.T) {
+	type noCounter struct{ ActivityStorer }
+	_, err := CountAllActivity(context.Background(), noCounter{})
+	require.Error(t, err)
 }

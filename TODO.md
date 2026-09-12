@@ -1,5 +1,9 @@
 <!-- file: TODO.md -->
 <!-- version: 10.66.0 -->
+<!-- version: 10.65.0 -->
+<!-- version: 10.62.0 -->
+<!-- version: 10.59.0 -->
+<!-- version: 10.60.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -8558,7 +8562,8 @@ step 4 propagates to the server package with no edit there.
       This is a latent-correctness fix, **not** the cause of any observed
       under-scan.
 
-- [ ] **`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in
+- [x] **✅ FIXED 2026-09-11:** the dry run now calls `database.CountAllActivity`, an exact per-tier count on the active backend built on the existing `ActivityCounter`, instead of `Query`'s total.
+- [x] **`wipeActivity` dry-run count saturates at 2.** `wipeActivity` in
   `internal/server/maintenance_fixups.go` reports its dry-run row count from
   `svc.Query(ctx, ActivityFilter{Limit: 1})`'s `total`. Since the bounded-scan
   change in `0adf6e97`, `total` is a LOWER BOUND: the walk stops once it has

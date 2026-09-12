@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package server
 
@@ -441,20 +441,13 @@ func wipeExternalIDs(store maintenanceStore, dryRun bool) (int64, error) {
 
 // wipeActivity deletes all activity log entries.
 //
-// NOTE (pre-existing, not introduced here): the dry-run count comes from
-// Query's total, which the bounded scan added in 0adf6e97 made a LOWER BOUND.
-// With Limit:1 the walk stops at offset+limit+1 == 2 matches, so the reported
-// dry-run count now saturates at 2 rather than reporting the real row count.
-// Left alone deliberately — fixing it means either a dedicated count path or a
-// different filter, which is out of scope for the cancellation work.
+// The dry-run count is an exact per-tier count (database.CountAllActivity).
+// It used to be Query's total with Limit:1, a pagination probe that the
+// bounded scan in 0adf6e97 made stop at offset+limit+1 == 2 matches, so the
+// preview reported "2" whatever the store held.
 func wipeActivity(ctx context.Context, svc *activity.Service, dryRun bool) (int64, error) {
 	if dryRun {
-		entries, total, err := svc.Query(ctx, database.ActivityFilter{Limit: 1})
-		if err != nil {
-			return 0, err
-		}
-		_ = entries
-		return int64(total), nil
+		return database.CountAllActivity(ctx, svc.Store())
 	}
 	return svc.Store().WipeAllActivity(ctx)
 }
