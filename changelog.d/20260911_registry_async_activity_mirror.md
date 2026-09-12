@@ -1,0 +1,3 @@
+### Fixed
+
+- An operation's log lines are now copied to the Activity Log by a background queue instead of on the operation's own goroutine. On 2026-09-11 a library scan logged a line while `maintenance.optimize-activity-db` held the SQLite activity store's only writer connection for its ANALYZE; the scan blocked inside that write, stopped advancing, and the watchdog killed it five minutes later. If the queue fills, the Activity Log copy of a line is dropped and counted in `audiobook_organizer_op_activity_mirror_dropped_total` with a rate-limited "activity mirror" WARN; the operation's own log in `op_logs_v2` still has every line.

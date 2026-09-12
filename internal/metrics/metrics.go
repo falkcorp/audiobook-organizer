@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-09-11
 
@@ -67,6 +67,15 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "search_index_dropped_total",
 		Help:      "Index events dropped because the search index queue was full (process lifetime); each one is parked in the durable dirty set for the reconciler",
+	})
+	// opActivityMirrorDroppedTotal counts operation log lines the registry's
+	// Activity Log mirror discarded instead of blocking the op on a stalled
+	// activity store (registry/activity_mirror.go). op_logs_v2 still holds
+	// every one; only the Activity view's copy is missing.
+	opActivityMirrorDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "op_activity_mirror_dropped_total",
+		Help:      "Operation log lines not copied to the Activity Log because the mirror queue was full or stopped (process lifetime); op_logs_v2 retains them",
 	})
 	// searchIndexDirtyBacklogGauge is the size of that dirty set, sampled at
 	// each reconcile tick, so a backlog that is not draining is visible.
@@ -196,6 +205,7 @@ func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
+			opActivityMirrorDroppedTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
@@ -240,6 +250,10 @@ func SetSearchIndexDocs(n uint64) { searchIndexDocsGauge.Set(float64(n)) }
 
 // IncSearchIndexDropped counts one index event dropped on a full queue (TASK-130).
 func IncSearchIndexDropped() { searchIndexDroppedTotal.Inc() }
+
+// IncOpActivityMirrorDropped counts one operation log line the registry's
+// Activity Log mirror discarded rather than block the op.
+func IncOpActivityMirrorDropped() { opActivityMirrorDroppedTotal.Inc() }
 
 // SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
 func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }

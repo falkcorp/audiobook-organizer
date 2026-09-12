@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.22.0
+// version: 3.23.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package registry
 
@@ -54,9 +54,12 @@ type Registry struct {
 	store            database.OpsV2Store
 	bus              Bus // may be nil; wired in UOS-06
 	activityRecorder ActivityRecorder
-	logger           *slog.Logger
-	workers          int
-	abandoned        *abandonedTracker
+	// activityMirror is the same object as activityRecorder when one is set,
+	// held by its concrete type so Shutdown can stop its drain goroutine.
+	activityMirror *activityMirror
+	logger         *slog.Logger
+	workers        int
+	abandoned      *abandonedTracker
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
 	// watchdog in executeRun stops spawning replacement workers. Without
@@ -358,10 +361,30 @@ func (r *Registry) SetBus(bus Bus) {
 
 // SetActivityRecorder mirrors operation log lines into the unified Activity
 // Log. Safe to call with nil.
+//
+// The recorder is wrapped in an activityMirror so that an operation's Log call
+// never waits on the Activity Log's storage — see activity_mirror.go for the
+// 2026-09-11 scan that froze, and was killed, doing exactly that. Replacing or
+// clearing the recorder stops the previous mirror's drain goroutine.
 func (r *Registry) SetActivityRecorder(recorder ActivityRecorder) {
+	var next *activityMirror
+	if recorder != nil {
+		next = newActivityMirror(recorder, r.logger, activityMirrorQueueSize)
+	}
 	r.mu.Lock()
-	r.activityRecorder = recorder
+	prev := r.activityMirror
+	r.activityMirror = next
+	if next != nil {
+		r.activityRecorder = next
+	} else {
+		// Untyped nil: a typed-nil *activityMirror would defeat the nil
+		// checks in recordActivity.
+		r.activityRecorder = nil
+	}
 	r.mu.Unlock()
+	if prev != nil {
+		prev.Stop()
+	}
 }
 
 // SetPluginMaxConcurrent configures the per-plugin concurrency cap.
@@ -1312,6 +1335,18 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 		r.logger.Info("registry: all goroutines exited")
 	case <-time.After(2 * time.Second):
 		r.logger.Warn("registry: goroutines did not exit within 2s; proceeding")
+	}
+	// Last, flush and stop the Activity Log mirror. It runs after the op
+	// goroutines are gone so their final lines are drained, and it must finish
+	// before Shutdown returns because the server closes the activity store
+	// right after (server_lifecycle.go). Any op that outlived the 2s escape
+	// above and logs later has its mirror line dropped and counted, not
+	// written into a closing store.
+	r.mu.RLock()
+	mirror := r.activityMirror
+	r.mu.RUnlock()
+	if mirror != nil {
+		mirror.Stop()
 	}
 	return shutdownErr
 }
