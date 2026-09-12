@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/sort_by_metric_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2e4b19-8c3a-4f60-a5e1-3b9d0c6f2e84
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package audiobookshandler
 
@@ -40,5 +40,14 @@ func TestSortByMetricLabel_EverySortableFieldKeepsItsName(t *testing.T) {
 		if got := sortByMetricLabel(f); got != f {
 			t.Errorf("sortByMetricLabel(%q) = %q, want the field name itself", f, got)
 		}
+	}
+}
+
+// TestSortByMetricLabelKeepsSeriesPosition: series_position is sorted by the
+// audiobooks service rather than database.SortBooks, so it is absent from
+// SortableBookFields; it must still get its own label rather than "other".
+func TestSortByMetricLabelKeepsSeriesPosition(t *testing.T) {
+	if got := sortByMetricLabel("series_position"); got != "series_position" {
+		t.Errorf("sortByMetricLabel(%q) = %q, want %q", "series_position", got, "series_position")
 	}
 }

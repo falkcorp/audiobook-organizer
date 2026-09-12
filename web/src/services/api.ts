@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.97.0
+// version: 2.98.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -1673,16 +1673,24 @@ const AUTHOR_BOOKS_MAX_PAGES = 100;
  *
  * A bare `?author_id=N` listing is paginated server-side like every other
  * query (default 50, capped at 1000 per request), so one unparameterised
- * request returns only the first page. This walks the pages until it has
- * `count` rows, a short or empty page arrives, or the page cap is hit.
+ * request returns only the first page. This walks the pages until it has the
+ * server-reported `count` rows or an empty page arrives.
+ *
+ * A page shorter than requested is NOT the end. Treating it as one only worked
+ * while AUTHOR_BOOKS_PAGE_SIZE equalled the server's cap; a server capping
+ * lower would have truncated every list at its first page. The next offset is
+ * the number of rows collected, so a short page cannot skip rows either. If
+ * the page cap runs out before `count` is reached this throws rather than
+ * returning a partial list, for the same reason a failed page throws (WEB-04).
  */
 export async function getBooksByAuthor(authorId: number): Promise<Book[]> {
   const all: Book[] = [];
+  let count: number | undefined;
   for (let page = 0; page < AUTHOR_BOOKS_MAX_PAGES; page++) {
     const params = new URLSearchParams({
       author_id: String(authorId),
       limit: String(AUTHOR_BOOKS_PAGE_SIZE),
-      offset: String(page * AUTHOR_BOOKS_PAGE_SIZE),
+      offset: String(all.length),
     });
     const response = await apiFetch(`${API_BASE}/audiobooks?${params}`);
     if (!response.ok) {
@@ -1700,12 +1708,15 @@ export async function getBooksByAuthor(authorId: number): Promise<Book[]> {
     const data = body.data ?? body;
     const items: Book[] = data.items ?? [];
     all.push(...items);
-    const count = typeof data.count === 'number' ? data.count : undefined;
-    if (items.length < AUTHOR_BOOKS_PAGE_SIZE || (count !== undefined && all.length >= count)) {
-      break;
+    if (typeof data.count === 'number') count = data.count;
+    if (items.length === 0 || (count !== undefined && all.length >= count)) {
+      return all;
     }
   }
-  return all;
+  throw new Error(
+    `getBooksByAuthor(${authorId}): stopped after ${AUTHOR_BOOKS_MAX_PAGES} pages with ` +
+      `${all.length} of ${count ?? 'an unreported number of'} books`
+  );
 }
 
 export interface AuthorAlias {

@@ -1,5 +1,5 @@
 // file: src/services/api.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 // last-edited: 2026-09-12
 
@@ -533,5 +533,44 @@ describe('getBooksByAuthor paging', () => {
       .mockResolvedValueOnce(new Response('boom', { status: 500 }));
 
     await expect(getBooksByAuthor(1)).rejects.toThrow();
+  });
+
+  it('keeps paging when the server returns fewer rows than requested', async () => {
+    // A server whose per-request cap is below AUTHOR_BOOKS_PAGE_SIZE answers a
+    // limit=1000 request with 500 rows. That is not the end of the list.
+    const total = 1200;
+    mockFetch
+      .mockResolvedValueOnce(page(ids('a', 500), total))
+      .mockResolvedValueOnce(page(ids('b', 500), total))
+      .mockResolvedValueOnce(page(ids('c', 200), total));
+
+    const books = await getBooksByAuthor(9);
+
+    expect(books).toHaveLength(total);
+    expect(new Set(books.map((b) => b.id)).size).toBe(total);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(requestedParams(1).offset).toBe('500');
+    expect(requestedParams(2).offset).toBe('1000');
+  });
+
+  it('stops on an empty page when the server reports no count', async () => {
+    const noCount = (items: string[]) =>
+      new Response(JSON.stringify({ data: { items: items.map((id) => ({ id, title: id })) } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    mockFetch.mockResolvedValueOnce(noCount(['x1', 'x2'])).mockResolvedValueOnce(noCount([]));
+
+    const books = await getBooksByAuthor(4);
+
+    expect(books.map((b) => b.id)).toEqual(['x1', 'x2']);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws instead of truncating when the page cap runs out before count', async () => {
+    mockFetch.mockImplementation(() => Promise.resolve(page(ids('p', 10), 1_000_000)));
+
+    await expect(getBooksByAuthor(2)).rejects.toThrow(/stopped after 100 pages/);
+    expect(mockFetch).toHaveBeenCalledTimes(100);
   });
 });

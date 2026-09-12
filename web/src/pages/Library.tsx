@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.88.0
+// version: 1.89.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-09-12
 
@@ -18,7 +18,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CachedIcon from '@mui/icons-material/Cached';
 import { ViewMode } from '../components/audiobooks/SearchBar';
 import { useColumnConfig } from '../hooks/useColumnConfig';
-import { useLibraryFilters } from '../hooks/useLibraryFilters';
+import { defaultSortField, parseSeriesIdParam, useLibraryFilters } from '../hooks/useLibraryFilters';
+import { FilterTagBar } from '../components/common/FilterTagBar';
 import { useLibraryQuery } from '../hooks/useLibraryQuery';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
@@ -141,7 +142,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (value && Object.values(SortField).includes(value as SortField)) {
       return value as SortField;
     }
-    return SortField.Title;
+    return defaultSortField(parseSeriesIdParam(searchParams.get('series_id')));
   })();
   const initialSortOrder =
     searchParams.get('order') === SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending;
@@ -209,6 +210,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     availableLanguages,
     availableTags,
     getActiveFilterCount,
+    seriesNameById,
   } = useLibraryFilters({ searchParams, onFiltersChange: () => setPage(1) });
   const [parsedSearch, setParsedSearch] = useState<ParsedSearch>(() => parseSearch(initialSearch));
   // The debounced twin of `parsedSearch`, moved by the same timer as
@@ -652,7 +654,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       )
     );
     const urlSearch = searchParams.get('search') ?? '';
-    const urlSort = (searchParams.get('sort') as SortField) || SortField.Title;
+    const urlSort =
+      (searchParams.get('sort') as SortField) ||
+      defaultSortField(parseSeriesIdParam(searchParams.get('series_id')));
     const urlOrder =
       searchParams.get('order') === SortOrder.Descending
         ? SortOrder.Descending
@@ -751,7 +755,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     // query string from state, so a param it does not write is stripped on the
     // first page change and the series link's narrowing silently disappears.
     if (filters.seriesId !== undefined) params.set('series_id', String(filters.seriesId));
-    if (sortBy !== SortField.Title) params.set('sort', sortBy);
+    // Omitted only when it is this view's default, which is what the read side
+    // assumes for an absent `sort`. Comparing against Title alone dropped an
+    // explicit title sort from a series view, which then reloaded in series order.
+    if (sortBy !== defaultSortField(filters.seriesId)) params.set('sort', sortBy);
     if (sortOrder !== SortOrder.Ascending) params.set('order', sortOrder);
     if (viewMode !== 'grid') params.set('view', viewMode);
     params.set('page', page.toString());
@@ -2147,6 +2154,20 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         onStorageDrawerClose={() => setStorageDrawerOpen(false)}
         navigate={navigate}
       />
+      {/* The series_id filter (book-detail series link) has no control in the
+          filter drawer, so it gets its own removable chip. Removing it clears
+          only series_id; the URL-write effect then drops the param. */}
+      {filters.seriesId !== undefined && (
+        <FilterTagBar
+          tags={[
+            {
+              id: `series_id:${filters.seriesId}`,
+              label: `Series: ${seriesNameById.get(filters.seriesId) ?? `Series #${filters.seriesId}`}`,
+              onRemove: () => handleFiltersChange({ ...filters, seriesId: undefined }),
+            },
+          ]}
+        />
+      )}
 
       <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, pb: 3 }}>
         {defaultPreset === 'fingerprints' && (

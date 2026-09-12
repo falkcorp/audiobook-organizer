@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.72.0 -->
+<!-- version: 10.73.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -44,7 +44,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **The Settings naming-pattern token list disagrees with the backend.** The frontend list (`web/src/components/SettingsGeneral.tsx`, moved to `web/src/utils/namingPatternPreview.ts` by #3275) advertises `{audiobook_release_year}` and `{track_number}`, which `internal/organizer/pathbuild.go` never resolves, so a pattern using them keeps the literal braces in the path. It also leaves out `{series_prefix}`, which the backend does resolve. Found by TASK-122. Fix: make one side the source of truth (serve the token list from the backend, or add a test that compares the two lists), then either implement or remove the two phantom tokens.
 
-- [ ] **No sort key for position within a series.** The library list's `series` sort orders by series *name*, which ties for every book in one series, so the book-detail series link (`/library?series_id=N`, TASK-167 / #3280) lands on that series in arbitrary order. TASK-167 asked for the link to pair with `series_index`. Add a server sort key (e.g. `series_position`, numeric on `series_index` with nil last and title as tie-break), expose it in the frontend sort list, and have the series link pass it.
+- [x] **No sort key for position within a series.** The library list's `series` sort orders by series *name*, which ties for every book in one series, so the book-detail series link (`/library?series_id=N`, TASK-167 / #3280) lands on that series in arbitrary order. TASK-167 asked for the link to pair with `series_index`. Add a server sort key (e.g. `series_position`, numeric on `series_index` with nil last and title as tie-break), expose it in the frontend sort list, and have the series link pass it. ✅ **DONE 2026-09-12:** `sort_by=series_position` sorts numerically on `series_position_raw` (decimals), falling back to `series_sequence`, with missing positions last and a title-then-ID tie-break, over the whole set before paging; it is the server default for a bare `series_id` listing, is in the grid sort menu and the table's Series # column, and the Library page defaults any `series_id` view to it, so the book-detail link needs no extra param.
 
 - [ ] **Four more workflows grant broad write permissions without a stated reason.** `nightly.yml` (actions, packages, id-token, attestations: write), `release-prod.yml` and `prerelease.yml` (packages, id-token, attestations: write; prerelease also actions: write) and `auto-revert.yml` (actions: write). #3274 cut `frontend-ci.yml` to `contents: read` after reading what the called reusable workflows actually request. Do the same review per workflow: keep a grant only where a job step needs it, and add a comment naming that step.
 

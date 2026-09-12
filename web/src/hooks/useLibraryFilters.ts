@@ -1,10 +1,10 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.6.1
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-12
 
 import { useState, useEffect, useCallback } from 'react';
-import type { FilterOptions } from '../types';
+import { SortField, type FilterOptions } from '../types';
 import * as api from '../services/api';
 
 // parseSeriesIdParam reads the `series_id` URL param (TASK-167). Only a
@@ -16,6 +16,16 @@ export function parseSeriesIdParam(raw: string | null): number | undefined {
   if (!raw || !/^\d+$/.test(raw)) return undefined;
   const n = Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
+// defaultSortField is the Library sort when the URL names none. A series view
+// (series_id set) defaults to series position: the book-detail series link
+// lands there, and the library-wide title default scrambles a series' reading
+// order. Every other view keeps title. Library.tsx uses this on BOTH sides of
+// the URL round-trip -- to read an absent `sort` and to decide when writing
+// one can be omitted -- so the two can never disagree.
+export function defaultSortField(seriesId: number | undefined): SortField {
+  return seriesId !== undefined ? SortField.SeriesPosition : SortField.Title;
 }
 
 // shallowEqualFilters compares two FilterOptions by value across the union of
@@ -52,6 +62,8 @@ export interface LibraryFiltersResult {
   refreshTags: () => void;
   availableAuthors: string[];
   availableSeries: string[];
+  /** Series id -> name, from the same getSeries() call that fills availableSeries. */
+  seriesNameById: Map<number, string>;
   availableGenres: string[];
   availableLanguages: string[];
   availableTags: Array<{ tag: string; count: number }>;
@@ -85,6 +97,7 @@ export function useLibraryFilters({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [availableAuthors, setAvailableAuthors] = useState<string[]>([]);
   const [availableSeries, setAvailableSeries] = useState<string[]>([]);
+  const [seriesNameById, setSeriesNameById] = useState<Map<number, string>>(() => new Map());
   const [availableGenres, setAvailableGenres] = useState<string[]>([]);
   const [availableLanguages, setAvailableLanguages] = useState<string[]>([]);
   const [availableTags, setAvailableTags] = useState<Array<{ tag: string; count: number }>>([]);
@@ -126,6 +139,7 @@ export function useLibraryFilters({
       .getSeries()
       .then((series) => {
         setAvailableSeries(series.map((s) => s.name).filter(Boolean).sort());
+        setSeriesNameById(new Map(series.filter((s) => s.name).map((s) => [s.id, s.name])));
       })
       .catch((e) => {
         console.error('Failed to load series:', e);
@@ -204,6 +218,7 @@ export function useLibraryFilters({
     refreshTags,
     availableAuthors,
     availableSeries,
+    seriesNameById,
     availableGenres,
     availableLanguages,
     availableTags,
