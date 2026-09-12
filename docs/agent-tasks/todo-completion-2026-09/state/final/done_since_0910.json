@@ -30,6 +30,7 @@
     "WEB-05": "#3229"
   },
   "briefs": {
+    "TASK-004": "already on main (isprimary_nil_agreement_test.go; verified 2026-09-12)",
     "TASK-009": "#3264",
     "TASK-014": "#3243",
     "TASK-068": "#3259",

@@ -22,10 +22,10 @@ rows sit in bands by class, worst at the top, and are spread out only so the lab
 readable — horizontal position inside a band carries no meaning. Gated rows (owner decision,
 prod run, or a parked sibling initiative) are on the chart but marked 🔒 in the legend.
 
-**228 open rows** — {'Large impact · easy': 55, 'Large impact · hard': 79, 'Small impact · easy': 43, 'Small impact · hard': 51}. Done since the 2026-09-10 freeze: 75
+**227 open rows** — {'Large impact · easy': 55, 'Large impact · hard': 79, 'Small impact · easy': 42, 'Small impact · hard': 51}. Done since the 2026-09-10 freeze: 76
 (listed in PRIORITY-MATRIX.md section C).
-By class: {'data-loss': 19, 'security': 13, 'correctness': 102, 'perf': 21, 'ux': 8, 'hygiene': 65}.
-By effort: {'S': 98, 'M': 96, 'L': 34}.
+By class: {'data-loss': 19, 'security': 13, 'correctness': 102, 'perf': 21, 'ux': 8, 'hygiene': 64}.
+By effort: {'S': 97, 'M': 96, 'L': 34}.
 
 ```mermaid
 %%{init: {"quadrantChart": {"chartWidth": 1100, "chartHeight": 900, "pointRadius": 3, "pointLabelFontSize": 8, "quadrantPadding": 6, "xAxisLabelFontSize": 14, "yAxisLabelFontSize": 14, "quadrantLabelFontSize": 14}}}%%
@@ -201,36 +201,35 @@ quadrantChart
     L1035: [0.598, 0.265]
     L1701: [0.693, 0.265]
     WEB-06: [0.566, 0.174]
-    T004: [0.053, 0.17]
-    T020: [0.1, 0.17]
-    T035: [0.147, 0.17]
-    T038: [0.193, 0.17]
-    T046: [0.24, 0.17]
-    T095: [0.287, 0.17]
-    T126: [0.333, 0.17]
-    T148: [0.38, 0.17]
-    T166: [0.427, 0.17]
-    T167: [0.053, 0.13]
-    T177: [0.1, 0.13]
-    T180: [0.147, 0.13]
-    T191: [0.193, 0.13]
-    L10187: [0.24, 0.13]
-    L11423: [0.287, 0.13]
-    L11821: [0.333, 0.13]
-    L17771: [0.38, 0.13]
-    L258: [0.427, 0.13]
-    L2966: [0.053, 0.09]
-    L2996: [0.1, 0.09]
-    L3136: [0.147, 0.09]
-    L4106: [0.193, 0.09]
-    L6192: [0.24, 0.09]
-    L6242: [0.287, 0.09]
-    L6373: [0.333, 0.09]
-    L7435: [0.38, 0.09]
-    AI-05: [0.427, 0.09]
-    BT-02: [0.053, 0.05]
-    TR-07: [0.1, 0.05]
-    UX-08: [0.147, 0.05]
+    T020: [0.053, 0.17]
+    T035: [0.1, 0.17]
+    T038: [0.147, 0.17]
+    T046: [0.193, 0.17]
+    T095: [0.24, 0.17]
+    T126: [0.287, 0.17]
+    T148: [0.333, 0.17]
+    T166: [0.38, 0.17]
+    T167: [0.427, 0.17]
+    T177: [0.053, 0.13]
+    T180: [0.1, 0.13]
+    T191: [0.147, 0.13]
+    L10187: [0.193, 0.13]
+    L11423: [0.24, 0.13]
+    L11821: [0.287, 0.13]
+    L17771: [0.333, 0.13]
+    L258: [0.38, 0.13]
+    L2966: [0.427, 0.13]
+    L2996: [0.053, 0.09]
+    L3136: [0.1, 0.09]
+    L4106: [0.147, 0.09]
+    L6192: [0.193, 0.09]
+    L6242: [0.24, 0.09]
+    L6373: [0.287, 0.09]
+    L7435: [0.333, 0.09]
+    AI-05: [0.38, 0.09]
+    BT-02: [0.427, 0.09]
+    TR-07: [0.053, 0.05]
+    UX-08: [0.1, 0.05]
     T016: [0.598, 0.174]
     T039: [0.629, 0.174]
     T045: [0.661, 0.174]
@@ -428,7 +427,7 @@ TODO.md line on `main`.
 - **`L3842`** [Stage 3 — durable deferral — When no rung answers, the candidates are currently just left unparsed](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L3895) — correctness, effort L · `TODO.md:3842` · brief `TASK-351` 🔒 **GATED:** RECLASSIFY — Section matches exactly, but this is a pipeline-completeness feature, mislabelled into the data-loss/security bucket.
 - **`L4601`** [resume-sweep — never started, needs the user's go-ahead](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4654) — correctness, effort L · `TODO.md:4601`
 
-### Small impact · easy — 43 rows (2 gated)
+### Small impact · easy — 42 rows (2 gated)
 
 - **`T063`** [internal/itunes/backfill.go BackfillITunesTrackPIDs: same offset-pagination bug](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/itunes/TASK-063-internal-itunes-backfill-go-backfillitunestrackp.md) — perf, effort S · `TASK-063`
 - **`T214`** [Cap GET /api/v1/audiobooks/metadata/cache/review to a default page size, add all=true escape hatch, and log wh](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/server-handlers/TASK-214-cap-get-api-v1-audiobooks-metadata-cache-review-.md) — perf, effort S · `TASK-214`
@@ -443,7 +442,6 @@ TODO.md line on `main`.
 - **`L4365`** [Fix](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L4418) — ux, effort S · `TODO.md:4365`
 - **`L6229`** [Bulk book-merge shows "Merged all" even when individual merges failed](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L6303) — ux, effort S · `TODO.md:6229`
 - **`L9754`** [Make metadata fields on the book page clickable (future improvement)](https://github.com/falkcorp/audiobook-organizer/blob/main/TODO.md?plain=1#L9841) — ux, effort S, 2 items · `TODO.md:9754`
-- **`T004`** [Add a conformance test asserting the library path and author path classify nil/true/false IsPrimaryVersion ide](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/audiobooks/TASK-004-add-a-conformance-test-asserting-the-library-pat.md) — hygiene, effort S · `TASK-004`
 - **`T020`** [Delete the fully inert --enable-sqlite3-i-know-the-risks flag and EnableSQLite config option](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/config/TASK-020-delete-the-fully-inert-enable-sqlite3-i-know-the.md) — hygiene, effort S · `TASK-020`
 - **`T035`** [Add DeleteNarrator to the store (CRUD building block only)](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-035-add-deletenarrator-to-the-store-crud-building-bl.md) — hygiene, effort S · `TASK-035`
 - **`T038`** [Filter system-sourced tags out of the Browse-by-Tag cloud](https://github.com/falkcorp/audiobook-organizer/blob/main/docs/agent-tasks/todo-completion-2026-09/database/TASK-038-filter-system-sourced-tags-out-of-the-browse-by-.md) — hygiene, effort S · `TASK-038`
