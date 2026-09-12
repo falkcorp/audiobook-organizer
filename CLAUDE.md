@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.14.2 -->
+<!-- version: 4.15.0 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-09-01 -->
+<!-- last-edited: 2026-09-12 -->
 
 # CLAUDE.md
 
@@ -290,10 +290,12 @@ the entire sequence:
 - The criteria (full list in `docs/process/executive-summaries.md`): it fixes something that
   could have silently caused data loss or corruption; it spans multiple files/PRs or one PR
   with a wide blast radius; it closes out a tracked set of issues; or the user signed off on a
-  multi-step plan that got executed to completion. If it qualifies, update the **current
-  month's** summary in `docs/executive-summaries/` in the SAME PR as the CHANGELOG/TODO edit —
-  not a follow-up PR, not "later." If it doesn't qualify (a typo fix, a single small change),
-  skip it — that's what CHANGELOG/TODO are for.
+  multi-step plan that got executed to completion. If it qualifies, add a dated
+  `docs/executive-summaries/YYYY-MM-DD-<topic>-executive-summary.md` in the SAME PR as the
+  CHANGELOG/TODO edit — not a follow-up PR, not "later." At month end the month's dated files
+  are combined into one `YYYY-MM-executive-summary.md` and the dated files are deleted (see
+  `docs/process/executive-summaries.md`). If it doesn't qualify (a typo fix, a single small
+  change), skip it — that's what CHANGELOG/TODO are for.
 - **If the work had a `todo.d` fragment, "update TODO" means grepping `TODO.md`, not just
   filing another fragment.** A fragment can be **assembled between** the PR that files it
   and the PR that finishes it: `scripts/assemble_todo.py` runs daily and `git rm`s each
