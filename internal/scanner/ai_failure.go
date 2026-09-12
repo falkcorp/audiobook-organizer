@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_failure.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f2c05d1-47ab-4e93-b60f-1d9a7e3c5482
 // last-edited: 2026-09-12
 
@@ -83,26 +83,67 @@ var permanentAIFailureMarkers = []string{
 // never went through DoWithRetry, or that didn't come back as a structured
 // *openai.Error in the first place (see the marker-list comment above).
 //
-// An *ai.ReplyParseError is checked FIRST and is never permanent. It means the
-// provider answered and the model's reply could not be decoded, which is not
-// an auth, billing, or quota state -- and its Error() quotes up to 300 bytes of
-// model-written text, so the marker loop below would otherwise be matching
-// words the model wrote. A filename echoed into a malformed reply
-// ("...permission_error..." in a book title) used to abort the whole AI phase
-// and, in parserChain.ParseBatch, stop the fallthrough to the next backend. A
-// bad reply now counts toward the phase's ordinary failure threshold and lets
-// the chain try the next rung, like any other transient failure.
+// An *ai.ReplyParseError is never permanent by itself and its text is never
+// read. It means the provider answered and the model's reply could not be
+// decoded, which is not an auth, billing, or quota state -- and its Error()
+// quotes up to 300 bytes of model-written text, so the marker loop would
+// otherwise be matching words the model wrote. A filename echoed into a
+// malformed reply ("...permission_error..." in a book title) used to abort the
+// whole AI phase and, in parserChain.ParseBatch, stop the fallthrough to the
+// next backend. A bad reply now counts toward the phase's ordinary failure
+// threshold and lets the chain try the next rung.
+//
+// The reply error does not mask anything next to it, though. The typed
+// *ai.PermanentError check walks %w chains and errors.Join trees, so a join of
+// a real PermanentError and a reply error is permanent. The text fallback
+// (markerTextIsPermanent) walks the same tree and reads only the branches that
+// do not contain a reply error.
 func isPermanentAIFailure(err error) bool {
 	if err == nil {
-		return false
-	}
-	if _, ok := errors.AsType[*ai.ReplyParseError](err); ok {
 		return false
 	}
 	if _, ok := errors.AsType[*ai.PermanentError](err); ok {
 		return true
 	}
-	msg := err.Error()
+	return markerTextIsPermanent(err)
+}
+
+// markerTextIsPermanent applies the permanentAIFailureMarkers substring match
+// to err, without ever reading text that came from the model.
+//
+// It can only keep that promise for errors wrapped with %w. A caller that
+// wraps an *ai.ReplyParseError with %v (or %s, or err.Error()) flattens it into
+// a plain string: the type is gone, and the excerpt is matched like any
+// provider text. Every wrap of a ParseBatch / ParseFilename error must use %w.
+func markerTextIsPermanent(err error) bool {
+	if _, ok := errors.AsType[*ai.ReplyParseError](err); !ok {
+		// No reply error anywhere in the tree: all of this text came from
+		// the provider or from our own wrapping, and is matched whole.
+		return containsPermanentMarker(err.Error())
+	}
+	// A reply error is somewhere below, so err's own Error() embeds the
+	// excerpt. Never read it; descend and read only branches without one.
+	switch e := err.(type) {
+	case *ai.ReplyParseError:
+		return false
+	case interface{ Unwrap() []error }:
+		// errors.Join, or fmt.Errorf with several %w: each branch on its own,
+		// so a provider marker in one branch still counts next to a reply
+		// error in another.
+		for _, branch := range e.Unwrap() {
+			if branch != nil && markerTextIsPermanent(branch) {
+				return true
+			}
+		}
+		return false
+	}
+	if inner := errors.Unwrap(err); inner != nil {
+		return markerTextIsPermanent(inner)
+	}
+	return false
+}
+
+func containsPermanentMarker(msg string) bool {
 	for _, marker := range permanentAIFailureMarkers {
 		if strings.Contains(msg, marker) {
 			return true
