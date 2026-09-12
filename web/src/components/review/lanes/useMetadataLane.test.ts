@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-08
+// last-edited: 2026-09-12
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -1113,5 +1113,21 @@ describe('a failed load is surfaced rather than swallowed', () => {
     });
 
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe('fetches the whole reviewable set', () => {
+  it('sends all=true so the server default page cap does not truncate the lane', async () => {
+    // The server caps a request with no positive limit to a default page unless
+    // all=true is sent. Every derivation in this hook (filters, grouping,
+    // staleIds) spans the whole library, so dropping the flag would silently
+    // confine all of them to the first page.
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('b1')]) as Awaited<ReturnType<typeof api.getCachedReviewResults>>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(api.getCachedReviewResults).toHaveBeenCalledWith(0, 0, true);
   });
 });

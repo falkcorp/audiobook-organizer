@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -23,10 +23,12 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -705,4 +707,178 @@ func TestListCachedCandidates_BatchFailureFallsBackToPointReads(t *testing.T) {
 	body := decodeCachedBody(t, w)
 	require.Len(t, body.Data.Entries, 2)
 	assert.Equal(t, 2, body.Data.Total)
+}
+
+// ---------------------------------------------------------------------------
+// GetCacheReviewResults — default page size, all=true, and truncation.
+// ---------------------------------------------------------------------------
+
+// pagedReviewHandler builds a handler over n reviewable rows (every book
+// resolves and every cache entry holds one decodable candidate), so the only
+// thing deciding how many rows come back is limit/offset/all.
+func pagedReviewHandler(t *testing.T, n int) *handlers.MetadataCacheHandler {
+	t.Helper()
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+
+	summaries := make([]metafetch.MetadataCacheSummary, 0, n)
+	books := make([]database.Book, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("b%04d", i)
+		summaries = append(summaries, metafetch.MetadataCacheSummary{BookID: id})
+		books = append(books, database.Book{ID: id})
+	}
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return(summaries, nil)
+	store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil)
+	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
+
+	raw, err := json.Marshal(map[string]any{"title": "T"})
+	require.NoError(t, err)
+	withCandidate := &metafetch.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}
+	svc.EXPECT().GetCachedCandidates(mock.Anything).Return(withCandidate, true, nil)
+
+	return handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
+}
+
+type pagedReviewBody struct {
+	Data struct {
+		Results    []map[string]any `json:"results"`
+		TotalCount int              `json:"total_count"`
+		Truncated  *bool            `json:"truncated"`
+		Limit      *int             `json:"limit"`
+	} `json:"data"`
+}
+
+func getPagedReview(t *testing.T, n int, query string) pagedReviewBody {
+	t.Helper()
+	h := pagedReviewHandler(t, n)
+	c, w := reviewCtx(query)
+	h.GetCacheReviewResults(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	var body pagedReviewBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.NotNil(t, body.Data.Truncated, "truncated must always be present, never omitted")
+	require.NotNil(t, body.Data.Limit, "limit must always be present, never omitted")
+	return body
+}
+
+// TestGetCacheReviewResults_PageSizeAndTruncation pins the cap, the escape hatch
+// and the truncation flag together, including the boundary rows on both sides
+// of the default page size and of an explicit limit.
+func TestGetCacheReviewResults_PageSizeAndTruncation(t *testing.T) {
+	cases := []struct {
+		name          string
+		rows          int
+		query         string
+		wantReturned  int
+		wantTruncated bool
+		wantLimit     int
+	}{
+		// The default cap, with no query at all (the "absent" branch) and with a
+		// literal limit=0 (which used to mean "everything").
+		{"absent limit is capped", 205, "", 200, true, 200},
+		{"limit=0 without all is capped", 205, "limit=0&offset=0", 200, true, 200},
+		// Exactly at the default page size the whole set fits: not truncated.
+		{"default cap at exactly the page size", 200, "", 200, false, 200},
+		{"default cap at page size + 1", 201, "", 200, true, 200},
+		// all=true is the escape hatch and must be literally everything, not a
+		// larger cap.
+		{"all=true returns everything", 205, "all=true", 205, false, 0},
+		{"limit=0&all=true returns everything", 205, "limit=0&offset=0&all=true", 205, false, 0},
+		{"all=1 is accepted", 205, "all=1", 205, false, 0},
+		{"all=false is capped", 205, "all=false", 200, true, 200},
+		// An explicit positive limit is honoured exactly; all does not widen it.
+		{"explicit limit honoured", 205, "limit=50", 50, true, 50},
+		{"explicit limit wins over all=true", 205, "limit=50&all=true", 50, true, 50},
+		{"explicit limit at exactly the set size", 50, "limit=50", 50, false, 50},
+		{"explicit limit at set size + 1", 51, "limit=50", 50, true, 50},
+		// A last page still reports truncated: rows exist before the offset, so
+		// the response is not the whole set (GET /operations/timeline's meaning).
+		{"last page after an offset", 205, "limit=50&offset=200", 5, true, 50},
+		{"offset past the end", 205, "limit=50&offset=500", 0, true, 50},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := getPagedReview(t, tc.rows, tc.query)
+			assert.Len(t, body.Data.Results, tc.wantReturned)
+			assert.Equal(t, tc.rows, body.Data.TotalCount, "total_count is the whole set, never the page")
+			assert.Equal(t, tc.wantTruncated, *body.Data.Truncated)
+			assert.Equal(t, tc.wantLimit, *body.Data.Limit)
+		})
+	}
+}
+
+// captureSlog redirects the default logger into a buffer for the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+const defaultCapLogLine = "GetCacheReviewResults capped an unpaged request to the default page size"
+
+// TestGetCacheReviewResults_LogsWhenDefaultCapTruncates pins the log half of
+// the cap: a truncation the DEFAULT caused is logged (a caller relying on the
+// old "everything" behaviour is otherwise invisible), while a truncation the
+// caller asked for, and a capped request that happened to fit, are not.
+func TestGetCacheReviewResults_LogsWhenDefaultCapTruncates(t *testing.T) {
+	t.Run("default cap truncates: logged", func(t *testing.T) {
+		buf := captureSlog(t)
+		getPagedReview(t, 201, "")
+		assert.Contains(t, buf.String(), defaultCapLogLine)
+		assert.Contains(t, buf.String(), "total_reviewable=201")
+	})
+	t.Run("default cap fits: not logged", func(t *testing.T) {
+		buf := captureSlog(t)
+		getPagedReview(t, 200, "")
+		assert.NotContains(t, buf.String(), defaultCapLogLine)
+	})
+	t.Run("explicit limit truncates: not logged", func(t *testing.T) {
+		buf := captureSlog(t)
+		getPagedReview(t, 205, "limit=50")
+		assert.NotContains(t, buf.String(), defaultCapLogLine)
+	})
+	t.Run("all=true: not logged", func(t *testing.T) {
+		buf := captureSlog(t)
+		getPagedReview(t, 205, "all=true")
+		assert.NotContains(t, buf.String(), defaultCapLogLine)
+	})
+}
+
+func TestLibraryScanActive_DetectsRunningScan(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return([]database.OperationV2Row{
+		{DefID: "metadata.batch-apply-cached", Status: "running"},
+		{DefID: "library.scan", Status: "running"},
+	}, nil)
+	assert.True(t, handlers.LibraryScanActive(store))
+}
+
+func TestLibraryScanActive_FalseWhenNoneActive(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return(nil, nil)
+	assert.False(t, handlers.LibraryScanActive(store))
+}
+
+func TestLibraryScanActive_OtherOpsOnlyIsFalse(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return([]database.OperationV2Row{
+		{DefID: "metadata.batch-apply-cached", Status: "running"},
+	}, nil)
+	assert.False(t, handlers.LibraryScanActive(store))
+}
+
+// A lookup error is diagnostic noise, not a reason to fail the request: it
+// reads as "not scanning".
+func TestLibraryScanActive_StoreErrorIsFalse(t *testing.T) {
+	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().ListActiveOperationsV2().Return(nil, errors.New("store unavailable"))
+	assert.False(t, handlers.LibraryScanActive(store))
+}
+
+func TestLibraryScanActive_NilStoreIsFalse(t *testing.T) {
+	assert.False(t, handlers.LibraryScanActive(nil))
 }

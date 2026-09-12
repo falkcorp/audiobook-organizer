@@ -222,6 +222,61 @@ func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(i
 	return _c
 }
 
+// ListActiveOperationsV2 provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListActiveOperationsV2")
+	}
+
+	var r0 []database.OperationV2Row
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.OperationV2Row, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.OperationV2Row); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.OperationV2Row)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_ListActiveOperationsV2_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListActiveOperationsV2'
+type MockMetadataCacheBookStore_ListActiveOperationsV2_Call struct {
+	*mock.Call
+}
+
+// ListActiveOperationsV2 is a helper method to define mock.On call
+func (_e *MockMetadataCacheBookStore_Expecter) ListActiveOperationsV2() *MockMetadataCacheBookStore_ListActiveOperationsV2_Call {
+	return &MockMetadataCacheBookStore_ListActiveOperationsV2_Call{Call: _e.mock.On("ListActiveOperationsV2")}
+}
+
+func (_c *MockMetadataCacheBookStore_ListActiveOperationsV2_Call) Run(run func()) *MockMetadataCacheBookStore_ListActiveOperationsV2_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ListActiveOperationsV2_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockMetadataCacheBookStore_ListActiveOperationsV2_Call {
+	_c.Call.Return(operationV2Rows, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ListActiveOperationsV2_Call) RunAndReturn(run func() ([]database.OperationV2Row, error)) *MockMetadataCacheBookStore_ListActiveOperationsV2_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateBook provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
 	ret := _mock.Called(id, book)
