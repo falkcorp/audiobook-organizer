@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
 // last-edited: 2026-09-12
 
@@ -218,17 +218,28 @@ func backfillWorkers() int {
 // fingerprintLengthSec maps config.FingerprintLengthSec onto fpcalc's -length.
 // Unset/0 is fpcalc's own 120 s default — the window every stored fingerprint
 // was made with — so an unconfigured deployment behaves exactly as before.
-// Negative asks for the whole file.
+//
+// Whole-file mode (-length 0) is deliberately NOT reachable from config: it
+// measured ~80x the decode work on 2026-09-12, so a stray minus sign must not
+// turn a two-hour pass into a multi-day one. Negative values fall back to the
+// default with a warning; choosing whole-file is a code change.
 func fingerprintLengthSec() int {
-	switch n := config.AppConfig.FingerprintLengthSec; {
+	n := config.AppConfig.FingerprintLengthSec
+	switch {
 	case n == 0:
 		return fingerprint.DefaultAnalysisLengthSec
 	case n < 0:
-		return fingerprint.WholeFileAnalysisLength
+		negativeLengthWarn.Do(func() {
+			slog.Warn("fingerprint_length_sec is negative; using the 120 s default (whole-file mode is not configurable)",
+				"configured", n)
+		})
+		return fingerprint.DefaultAnalysisLengthSec
 	default:
 		return n
 	}
 }
+
+var negativeLengthWarn sync.Once
 
 func (p *Plugin) backfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -250,12 +261,15 @@ func (p *Plugin) backfillDef() sdk.OperationDef {
 		// read by nothing — OperationDef.Schedule is never evaluated as a cron
 		// — so the op never ran unattended. The schedule now lives in the
 		// TaskScheduler (internal/scheduler/tasks.go, "acoustid_backfill",
-		// disabled by default). The one thing the string DID do was make
-		// EnqueueOp dedupe a second request onto the queued one by def id; the
-		// op takes no selection params, so that behaviour is kept explicitly.
-		DedupeQueuedRuns: true,
-		Isolate:          false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
-		Timeout:          24 * time.Hour,
+		// disabled by default). The string's one live effect was making
+		// EnqueueOp silently fold a second request into the queued run by def
+		// id. That is deliberately NOT carried over via DedupeQueuedRuns: that
+		// flag is an audited opt-in (internal/server/op_dedupe_decision_test.go)
+		// and a silent no-op on a manual enqueue is the failure class it guards.
+		// Tick pile-up is prevented visibly by the scheduler's previousRunID
+		// guard, and ConcurrencyKey keeps a second run queued, not concurrent.
+		Isolate: false, // DISABLED 2026-05-29: PR #1172 child-mode wire-up cannot work because Pebble is single-writer; child re-open fails. See MAYDEPLOY-A revisit.
+		Timeout: 24 * time.Hour,
 		Capabilities: []sdk.Capability{
 			sdk.CapLibraryRead,
 			sdk.CapLibraryWrite,
@@ -402,7 +416,28 @@ var fpcalcDecodableExtensions = map[string]bool{
 
 // fpcalcAvailable reports whether a raw (fpcalc) print can be produced. A
 // variable so eligibility tests do not depend on the test host's PATH.
-var fpcalcAvailable = fingerprint.WholeFileAvailable
+//
+// Cached for a minute: eligibility asks once per Seg0-only row, and the lookup
+// is an os.Stat or a PATH walk. The TTL still lets an fpcalc installed while
+// the process runs be noticed without a restart.
+var fpcalcAvailable = cachedAvailability(fingerprint.WholeFileAvailable, time.Minute)
+
+func cachedAvailability(probe func() bool, ttl time.Duration) func() bool {
+	var (
+		mu      sync.Mutex
+		at      time.Time
+		checked bool
+		val     bool
+	)
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if !checked || time.Since(at) > ttl {
+			val, at, checked = probe(), time.Now(), true
+		}
+		return val
+	}
+}
 
 // hasUsableFingerprint reports whether f already carries the fingerprint the
 // backfill would produce, so re-running fpcalc would gain nothing.
@@ -428,6 +463,12 @@ func hasUsableFingerprint(f database.BookFile) bool {
 func fingerprintEligibility(f database.BookFile, force bool) (fingerprintFileOutcome, string, bool) {
 	if !force && hasUsableFingerprint(f) {
 		return fingerprintOutcomeSkipped, "", true
+	}
+	// SkipScan is the user's explicit "exclude from scans/fingerprinting" and
+	// holds even under force. Before 2026-09-12 nothing here read it; a
+	// SkipScan row was left alone only when it happened to carry a Seg0.
+	if f.SkipScan {
+		return fingerprintOutcomeIneligible, "skip_scan", true
 	}
 	// Permanently-failed files (too short, corrupt, DRM) are skipped unless
 	// force=true, which allows an operator to retry specific files intentionally.

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
 // last-edited: 2026-09-12
 
@@ -67,6 +67,27 @@ func TestFingerprintEligibility_SegOnlyRowIsNotDoneWhenFpcalcExists(t *testing.T
 	got, reason, stop := fingerprintEligibility(f, false)
 	if stop {
 		t.Fatalf("Seg0-only row was not offered to fpcalc: outcome=%v reason=%q — it would never get a raw print", got, reason)
+	}
+}
+
+// SkipScan is a user exclusion. The eligibility fix above widened the set of
+// rows offered to fpcalc; this keeps excluded rows out of it, force or not.
+func TestFingerprintEligibility_HonoursSkipScan(t *testing.T) {
+	stubFpcalc(t, true)
+	path := filepath.Join(t.TempDir(), "excluded.mp3")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, force := range []bool{false, true} {
+		f := makeBookFile(func(bf *database.BookFile) {
+			bf.FilePath = path
+			bf.AcoustIDSeg0 = "AQADtAcSRY"
+			bf.SkipScan = true
+		})
+		got, reason, stop := fingerprintEligibility(f, force)
+		if !stop || got != fingerprintOutcomeIneligible || reason != "skip_scan" {
+			t.Errorf("force=%v: got stop=%v outcome=%v reason=%q, want ineligible skip_scan", force, stop, got, reason)
+		}
 	}
 }
 
