@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-09-12
 
@@ -39,6 +39,7 @@ import type { ParsedSearch } from '../../utils/searchParser';
 import type { ImportPath } from '../../pages/libraryTypes';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { libraryContentState } from './libraryContentState';
+import { isSortAvailable } from '../../config/columnDefinitions';
 
 // Sort keys offered by the grid-view "Sort by" control. These are SERVER sort
 // keys (memdb summary indexes): the backend sorts before pagination, so
@@ -52,6 +53,11 @@ const LIBRARY_SORT_OPTIONS = [
   { value: 'created_at', label: 'Date added' },
   { value: 'duration_seconds', label: 'Duration' },
 ];
+
+// Series position is offered only in a series view (see isSortAvailable).
+const LIBRARY_SORT_OPTIONS_UNSCOPED = LIBRARY_SORT_OPTIONS.filter((o) =>
+  isSortAvailable(o.value, false)
+);
 
 interface LibraryBookGridProps {
   audiobooks: Audiobook[];
@@ -71,6 +77,8 @@ interface LibraryBookGridProps {
   viewMode: ViewMode;
   setViewMode: (m: ViewMode) => void;
   sortBy: SortField;
+  /** True when a series_id filter narrows the listing; gates the series-position sort. */
+  seriesFilterActive?: boolean;
   handleSortChange: (s: SortField) => void;
   sortOrder: SortOrder;
   setSortOrder: (o: SortOrder) => void;
@@ -144,6 +152,7 @@ export const LibraryBookGrid = ({
   viewMode,
   setViewMode,
   sortBy,
+  seriesFilterActive = false,
   sortOrder,
   setStorageDrawerOpen,
   importPaths,
@@ -284,7 +293,7 @@ export const LibraryBookGrid = ({
           onLibraryInfoClick={() => setStorageDrawerOpen(true)}
           sortBy={sortBy}
           sortOrder={sortOrder === SortOrder.Ascending ? 'asc' : 'desc'}
-          sortOptions={LIBRARY_SORT_OPTIONS}
+          sortOptions={seriesFilterActive ? LIBRARY_SORT_OPTIONS : LIBRARY_SORT_OPTIONS_UNSCOPED}
           onSortChange={handleColumnSortChange}
         />
 

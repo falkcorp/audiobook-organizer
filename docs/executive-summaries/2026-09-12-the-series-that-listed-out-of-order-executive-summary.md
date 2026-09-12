@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-09-12-the-series-that-listed-out-of-order-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9e2d4c71-5a38-4b0f-8c16-d7a3e5f20b94 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -20,9 +20,10 @@ the library filtered to the series, but the page had no good way to show it.
 - **The filter can be seen and removed.** The series filter now shows as a
   labelled chip with the series name and a close button. Before, it narrowed the
   list silently, and the only way to clear it was to edit the address bar.
-- **The "Series #" column header sorts again.** Clicking it asked the server for
-  an order it did not recognise, so nothing happened. It now uses the new
-  reading-order sort.
+- **The "Series #" column header sorts again, in a series view.** Clicking it
+  asked the server for an order it did not recognise, so nothing happened. In a
+  series view it now uses the new reading-order sort. Elsewhere it does not
+  sort, for the reason in section 1.
 - **The author list used when merging authors no longer stops early.** It
   fetches an author's books a page at a time. It treated any page smaller than
   requested as the last one, which only worked because the requested size
@@ -45,7 +46,16 @@ series. It compares the numbers as numbers, so 10 comes after 2, and it keeps
 half-steps like 1.5 when the metadata source provided one. Books with no number
 go last. Ties are broken by title and then by the book's permanent ID, so every
 page of the list is stable. A series view uses this order unless the reader
-picks another. A sort the reader picks is remembered in the page address.
+picks another or types a search; a search keeps title order, as the server
+does. A sort the reader picks is remembered in the page address.
+
+The sort is offered only in a series view. Across the whole library it would
+mostly put every series' first book first, which is of little use, and the
+server would have to load and sort every book on each page request, about
+61 MB for a 68,000-book library. Without a series (or author) filter the server
+now ignores the request and uses its normal order, and says so by leaving the
+sort out of the list of filters it applied. An old link that asks for it
+outside a series view gets the normal order.
 
 ## 2. An invisible series filter
 
@@ -78,5 +88,5 @@ the last one ended, so a short page cannot skip books. If it reaches its
 safety limit of 100 pages first, it reports an error rather than returning part
 of the list.
 
-Verified with new automated tests. Each one fails against the code before this
-change and passes after it.
+Verified with new automated tests. Each test that guards a fix fails against
+the code before that fix and passes after it.

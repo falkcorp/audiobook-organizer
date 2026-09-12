@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-09-12
 
@@ -574,6 +574,14 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// It is built here (before UserID is attached) purely because filters is
 	// complete at this point; UserID itself is never echoed since it isn't a
 	// filter value a chip would render.
+	//
+	// The sort is reported as the service will run it, not as requested:
+	// series_position without an author_id or series_id is dropped (see
+	// audiobookspkg.ScopedSort), and its absence from applied_filters is how
+	// the caller learns that. The sort_by metric above still counts the
+	// request as series_position on purpose, because it records what clients
+	// ask for.
+	filters.SortBy, filters.SortOrder = audiobookspkg.ScopedSort(filters.SortBy, filters.SortOrder, authorID, seriesID)
 	appliedFilters := buildAppliedFilters(filters)
 
 	// Resolve caller for per-user filters; anon callers just don't

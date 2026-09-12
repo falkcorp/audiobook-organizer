@@ -1,6 +1,7 @@
 // file: web/src/config/columnDefinitions.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: a7b8c9d0-e1f2-4a3b-5c6d-7e8f9a0b1c2d
+// last-edited: 2026-09-12
 
 import { Audiobook } from '../types';
 
@@ -77,9 +78,42 @@ export interface ColumnDefinition {
   defaultVisible: boolean;
 }
 
+// --- Sort availability ---
+
+// isSortAvailable reports whether the Library may offer a sort key. Every key
+// is available except series_position, which needs a series filter: the server
+// honours it only when an author_id or series_id narrows the listing
+// (audiobooks.ScopedSort) and drops it otherwise, because sorting the whole
+// library by it means materialising every row on every page for an order that
+// is mostly "every book 1 first". The Library narrows by series_id only, so
+// that is the filter this checks.
+export function isSortAvailable(sortKey: string, seriesFilterActive: boolean): boolean {
+  return sortKey !== 'series_position' || seriesFilterActive;
+}
+
+// scopeColumnSorts returns `columns` with every column whose sort key is not
+// available (see isSortAvailable) marked unsortable. It returns new objects
+// and never mutates its input: ALL_COLUMNS is shared module state.
+export function scopeColumnSorts(
+  columns: ColumnDefinition[],
+  seriesFilterActive: boolean
+): ColumnDefinition[] {
+  if (seriesFilterActive) return columns;
+  return columns.map((c) =>
+    c.sortable && !isSortAvailable(c.sortKey, false) ? { ...c, sortable: false } : c
+  );
+}
+
 // --- Categories ---
 
-export const COLUMN_CATEGORIES = ['Basic', 'Media', 'iTunes', 'Lifecycle', 'Fingerprinting', 'IDs'] as const;
+export const COLUMN_CATEGORIES = [
+  'Basic',
+  'Media',
+  'iTunes',
+  'Lifecycle',
+  'Fingerprinting',
+  'IDs',
+] as const;
 export type ColumnCategory = (typeof COLUMN_CATEGORIES)[number];
 
 // --- Column Definitions ---
@@ -141,7 +175,8 @@ export const ALL_COLUMNS: ColumnDefinition[] = [
     accessor: (b) => b.series_number,
     formatter: formatNumber,
     // series_position: no server comparator has ever known series_number, so
-    // this column's header sort ordered nothing until it pointed here.
+    // this column's header sort ordered nothing until it pointed here. It is
+    // sortable only in a series view; Library.tsx applies scopeColumnSorts.
     sortKey: 'series_position',
     searchKey: 'series_number',
     defaultWidth: 80,

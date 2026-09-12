@@ -1,11 +1,12 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-12
 
 import { useState, useEffect, useCallback } from 'react';
 import { SortField, type FilterOptions } from '../types';
 import * as api from '../services/api';
+import { isSortAvailable } from '../config/columnDefinitions';
 
 // parseSeriesIdParam reads the `series_id` URL param (TASK-167). Only a
 // positive integer counts: the server parses the param with ParseQueryIntPtr,
@@ -18,14 +19,40 @@ export function parseSeriesIdParam(raw: string | null): number | undefined {
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
-// defaultSortField is the Library sort when the URL names none. A series view
-// (series_id set) defaults to series position: the book-detail series link
-// lands there, and the library-wide title default scrambles a series' reading
-// order. Every other view keeps title. Library.tsx uses this on BOTH sides of
-// the URL round-trip -- to read an absent `sort` and to decide when writing
-// one can be omitted -- so the two can never disagree.
-export function defaultSortField(seriesId: number | undefined): SortField {
-  return seriesId !== undefined ? SortField.SeriesPosition : SortField.Title;
+// defaultSortField is the Library sort when the user has chosen none. A series
+// view (series_id set) with no free-text search defaults to series position:
+// the book-detail series link lands there, and the library-wide title default
+// scrambles a series' reading order. A search keeps title, as the server does
+// (its series_position default applies only without a search). Every other
+// view keeps title. Library.tsx derives both the sort it sends and the default
+// it compares against when writing `sort` to the URL from this one call, so
+// the two can never disagree.
+export function defaultSortField(seriesId: number | undefined, searchText = ''): SortField {
+  return seriesId !== undefined && searchText.trim() === ''
+    ? SortField.SeriesPosition
+    : SortField.Title;
+}
+
+// parseSortParam reads the `sort` URL param: a known SortField, or null when
+// it is absent or unrecognised (no explicit choice, so the default applies).
+export function parseSortParam(raw: string | null): SortField | null {
+  return raw !== null && (Object.values(SortField) as string[]).includes(raw)
+    ? (raw as SortField)
+    : null;
+}
+
+// resolveSortField is the sort a Library request uses: the explicit choice
+// when there is one and it is available in this view, otherwise the default.
+// A series_position choice (from a shared URL, or left over after the series
+// chip is removed) falls back without a series filter, rather than asking the
+// server for a sort it drops.
+export function resolveSortField(
+  choice: SortField | null,
+  seriesId: number | undefined,
+  searchText = ''
+): SortField {
+  if (choice !== null && isSortAvailable(choice, seriesId !== undefined)) return choice;
+  return defaultSortField(seriesId, searchText);
 }
 
 // shallowEqualFilters compares two FilterOptions by value across the union of
@@ -81,15 +108,21 @@ export function useLibraryFilters({
     genre: searchParams.get('genre') || undefined,
     language: searchParams.get('language') || undefined,
     libraryState: searchParams.get('state') || undefined,
-    hasFileErrors: (searchParams.get('has_file_errors') === 'true') || undefined,
-    fingerprintStatus: (searchParams.get('fingerprint_status') as "complete" | "partial" | "none" | null) || undefined,
-    coveragePercentMin: searchParams.get('coverage_percent_min') ? parseInt(searchParams.get('coverage_percent_min')!, 10) : undefined,
-    coveragePercentMax: searchParams.get('coverage_percent_max') ? parseInt(searchParams.get('coverage_percent_max')!, 10) : undefined,
+    hasFileErrors: searchParams.get('has_file_errors') === 'true' || undefined,
+    fingerprintStatus:
+      (searchParams.get('fingerprint_status') as 'complete' | 'partial' | 'none' | null) ||
+      undefined,
+    coveragePercentMin: searchParams.get('coverage_percent_min')
+      ? parseInt(searchParams.get('coverage_percent_min')!, 10)
+      : undefined,
+    coveragePercentMax: searchParams.get('coverage_percent_max')
+      ? parseInt(searchParams.get('coverage_percent_max')!, 10)
+      : undefined,
     // Quick-filter preset params
-    missingCovers: (searchParams.get('missing_covers') === 'true') || undefined,
-    inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
-    noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
-    duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+    missingCovers: searchParams.get('missing_covers') === 'true' || undefined,
+    inImportPath: searchParams.get('in_import_path') === 'true' || undefined,
+    noIsbn: searchParams.get('no_isbn') === 'true' || undefined,
+    duplicatesFlagged: searchParams.get('duplicates_flagged') === 'true' || undefined,
     versionGroupId: searchParams.get('version_group_id') || undefined,
     isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
     seriesId: parseSeriesIdParam(searchParams.get('series_id')),
@@ -127,7 +160,12 @@ export function useLibraryFilters({
     api
       .getAuthors()
       .then((authors) => {
-        setAvailableAuthors(authors.map((a) => a.name).filter(Boolean).sort());
+        setAvailableAuthors(
+          authors
+            .map((a) => a.name)
+            .filter(Boolean)
+            .sort()
+        );
       })
       .catch((e) => {
         console.error('Failed to load authors:', e);
@@ -138,7 +176,12 @@ export function useLibraryFilters({
     api
       .getSeries()
       .then((series) => {
-        setAvailableSeries(series.map((s) => s.name).filter(Boolean).sort());
+        setAvailableSeries(
+          series
+            .map((s) => s.name)
+            .filter(Boolean)
+            .sort()
+        );
         setSeriesNameById(new Map(series.filter((s) => s.name).map((s) => [s.id, s.name])));
       })
       .catch((e) => {
@@ -185,14 +228,20 @@ export function useLibraryFilters({
         genre: searchParams.get('genre') || undefined,
         language: searchParams.get('language') || undefined,
         libraryState: searchParams.get('state') || undefined,
-        hasFileErrors: (searchParams.get('has_file_errors') === 'true') || undefined,
-        fingerprintStatus: (searchParams.get('fingerprint_status') as "complete" | "partial" | "none" | null) || undefined,
-        coveragePercentMin: searchParams.get('coverage_percent_min') ? parseInt(searchParams.get('coverage_percent_min')!, 10) : undefined,
-        coveragePercentMax: searchParams.get('coverage_percent_max') ? parseInt(searchParams.get('coverage_percent_max')!, 10) : undefined,
-        missingCovers: (searchParams.get('missing_covers') === 'true') || undefined,
-        inImportPath: (searchParams.get('in_import_path') === 'true') || undefined,
-        noIsbn: (searchParams.get('no_isbn') === 'true') || undefined,
-        duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
+        hasFileErrors: searchParams.get('has_file_errors') === 'true' || undefined,
+        fingerprintStatus:
+          (searchParams.get('fingerprint_status') as 'complete' | 'partial' | 'none' | null) ||
+          undefined,
+        coveragePercentMin: searchParams.get('coverage_percent_min')
+          ? parseInt(searchParams.get('coverage_percent_min')!, 10)
+          : undefined,
+        coveragePercentMax: searchParams.get('coverage_percent_max')
+          ? parseInt(searchParams.get('coverage_percent_max')!, 10)
+          : undefined,
+        missingCovers: searchParams.get('missing_covers') === 'true' || undefined,
+        inImportPath: searchParams.get('in_import_path') === 'true' || undefined,
+        noIsbn: searchParams.get('no_isbn') === 'true' || undefined,
+        duplicatesFlagged: searchParams.get('duplicates_flagged') === 'true' || undefined,
         versionGroupId: searchParams.get('version_group_id') || undefined,
         isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
         seriesId: parseSeriesIdParam(searchParams.get('series_id')),

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-12
 
@@ -45,9 +45,29 @@ func applySorting(books []database.Book, f ListFilters) {
 //
 // It is sorted here in the service, not by database.SortBooks or a memdb
 // index: the order needs the raw decimal position, which BookSummary does not
-// carry. That makes it a materialise-then-sort key on every path, and
-// GetAudiobooksWithTotal routes it accordingly (see its serviceSorted flag).
+// carry. So it is served only where the service already holds the whole scoped
+// set and sorts it before paging: an author_id or series_id listing. Everywhere
+// else it is dropped; see ScopedSort.
 const SortBySeriesPosition = "series_position"
+
+// ScopedSort returns the sort_by and sort_order a listing actually runs with.
+// GetAudiobooksWithTotal applies it and the list handler reports its result in
+// applied_filters, so what is run and what is reported cannot disagree.
+//
+// SortBySeriesPosition is dropped (both values come back "") unless an
+// author_id or series_id narrows the listing. Without that scope the only way
+// to honour it is to fetch every match unpaged, rebuild each as a Book and sort
+// them on every page request, about 61 MB for a 68K-row library. The result is
+// not worth that cost: whole-library BookSummary rows carry only the integer
+// sequence, so the order mostly means "every book 1 first". The listing falls
+// back to the store's paged default order instead. sort_order is dropped with
+// it, because on the default order it would reverse the library.
+func ScopedSort(sortBy, sortOrder string, authorID, seriesID *int) (string, string) {
+	if sortBy == SortBySeriesPosition && authorID == nil && seriesID == nil {
+		return "", ""
+	}
+	return sortBy, sortOrder
+}
 
 // CanSortBy reports whether applySorting understands field: every key
 // database.SortBooks knows, plus the service-side SortBySeriesPosition.

@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.seriesChip.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: c84a2f6e-1b3d-4e97-8a50-6f2d9b1c7e03
 // last-edited: 2026-09-12
 
@@ -45,9 +45,17 @@ vi.mock('../services/api', () => {
     countBooks: vi.fn().mockResolvedValue(1),
     getBookFacets: vi.fn().mockResolvedValue({ genres: [], languages: [] }),
     getAuthors: vi.fn().mockResolvedValue([]),
-    getSeries: vi.fn().mockResolvedValue([
-      { id: 42, name: 'The Expanse', created_at: '2026-01-01T00:00:00Z', book_count: 9, file_count: 9 },
-    ]),
+    getSeries: vi
+      .fn()
+      .mockResolvedValue([
+        {
+          id: 42,
+          name: 'The Expanse',
+          created_at: '2026-01-01T00:00:00Z',
+          book_count: 9,
+          file_count: 9,
+        },
+      ]),
     getSystemStatus: vi.fn().mockResolvedValue({
       status: 'ok',
       library: { path: '/tmp', book_count: 1, total_size: 0 },
@@ -140,5 +148,60 @@ describe('Library series_id chip and default sort', () => {
     // Written back explicitly: an omitted sort on this view would reload as
     // series order.
     await waitFor(() => expect(writtenParams().get('sort')).toBe('title'));
+  });
+
+  it('offers Series position in the sort menu only in a series view', async () => {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/library']}>
+        <Library />
+      </MemoryRouter>
+    );
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Sort by' }));
+    expect(await screen.findByRole('option', { name: 'Title' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Series position' })).toBeNull();
+    unmount();
+
+    render(
+      <MemoryRouter initialEntries={['/library?series_id=42']}>
+        <Library />
+      </MemoryRouter>
+    );
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Sort by' }));
+    expect(await screen.findByRole('option', { name: 'Series position' })).toBeInTheDocument();
+  });
+
+  it('does not send sort=series_position without a series filter', async () => {
+    render(
+      <MemoryRouter initialEntries={['/library?sort=series_position']}>
+        <Library />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getBooks).mock.calls.at(-1)?.[2]?.sortBy).toBe('title');
+    });
+    expect(
+      vi.mocked(api.getBooks).mock.calls.some((call) => call[2]?.sortBy === 'series_position')
+    ).toBe(false);
+  });
+
+  it('does not default a searched series view to series-position order', async () => {
+    render(
+      <MemoryRouter initialEntries={['/library?series_id=42&search=dune']}>
+        <Library />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getBooks).mock.calls.at(-1)?.[2]?.sortBy).toBe('title');
+    });
+    expect(
+      vi.mocked(api.getBooks).mock.calls.some((call) => call[2]?.sortBy === 'series_position')
+    ).toBe(false);
+    // Title is this view's default while searching, so it is not written back.
+    await waitFor(() => expect(writtenParams().get('search')).toBe('dune'));
+    expect(writtenParams().get('sort')).toBeNull();
   });
 });
