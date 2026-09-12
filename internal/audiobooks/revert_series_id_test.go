@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
 // last-edited: 2026-09-12
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -101,6 +102,48 @@ func TestRevertOperation_SeriesID_UnparsableOldValueFails(t *testing.T) {
 	}
 	if s.book.SeriesID == nil || *s.book.SeriesID != 9 {
 		t.Errorf("SeriesID = %v, want 9 (unchanged)", s.book.SeriesID)
+	}
+	if s.markCalls != 0 {
+		t.Errorf("mark called %d times, want 0", s.markCalls)
+	}
+}
+
+// A series lookup that errors fails closed: Failed, unmarked, book untouched.
+func TestRevertOperation_SeriesID_LookupErrorFailsClosed(t *testing.T) {
+	s := &ledgerStub{
+		book:      &database.Book{ID: "b1", Title: "T", SeriesID: intp(9)},
+		changes:   []*database.OperationChange{seriesIDRow("c1", "4", "9")},
+		series:    map[int]*database.Series{4: {ID: 4}},
+		seriesErr: errors.New("pebble: closed"),
+	}
+	result, err := NewRevertService(s).RevertOperation("op")
+	if err == nil || result == nil || result.Failed != 1 || result.Restored != 0 {
+		t.Fatalf("err = %v, result = %+v, want failed 1", err, result)
+	}
+	if s.book.SeriesID == nil || *s.book.SeriesID != 9 {
+		t.Errorf("SeriesID = %v, want 9 (unchanged)", s.book.SeriesID)
+	}
+	if s.markCalls != 0 {
+		t.Errorf("mark called %d times, want 0", s.markCalls)
+	}
+}
+
+// A book that no longer exists (the Pebble store returns nil, nil) fails its
+// rows instead of panicking the revert endpoint.
+func TestRevertOperation_DeletedBookFailsInsteadOfPanicking(t *testing.T) {
+	s := &ledgerStub{
+		changes: []*database.OperationChange{
+			titleRow("c1", "title"),
+			seriesIDRow("c2", "", "9"),
+			{ID: "c3", OperationID: "op", BookID: "b1", ChangeType: "tag_write", FieldName: "TITLE", OldValue: "Old"},
+		},
+	}
+	result, err := NewRevertService(s).RevertOperation("op")
+	if err == nil || result == nil || result.Failed != 3 || result.Restored != 0 {
+		t.Fatalf("err = %v, result = %+v, want failed 3", err, result)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v, want a not-found error", err)
 	}
 	if s.markCalls != 0 {
 		t.Errorf("mark called %d times, want 0", s.markCalls)

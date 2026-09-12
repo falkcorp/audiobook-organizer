@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -77,9 +77,11 @@ const (
 )
 
 // seriesPhantomChangeType / seriesPhantomFieldName are the undo-ledger vocabulary
-// for the writes this op makes. metadata_update is what internal/undo replays
-// (revertMetadataUpdate), and series_id is the field applyFieldRestore parses
-// back into Book.SeriesID.
+// for the writes this op makes: a metadata_update on series_id whose old value
+// is the phantom id. The revert endpoint refuses to write such a row back
+// (undo.CheckRestoreReferent: the series does not exist, and restoring it would
+// recreate the dangling reference this op removed), so these rows are the audit
+// record of what was cleared, not an undo path.
 const (
 	seriesPhantomChangeType = "metadata_update"
 	seriesPhantomFieldName  = "series_id"

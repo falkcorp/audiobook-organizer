@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b1f4c2e-6d3a-4e8b-a7f0-2c5d8e1b4a63
 // last-edited: 2026-09-12
 
@@ -111,24 +111,30 @@ describe('describeUndoPreflight', () => {
     expect(plan.message).toMatch(/^3 change\(s\) can be undone; 1 of them have conflicts/);
   });
 
-  it('counts series_id rows whose old series was deleted as conflicts', () => {
+  it('never offers Undo for rows the revert will always refuse, and names them', () => {
+    // A series-phantom-repair op: every row's old series does not exist.
+    const plan = describeUndoPreflight({
+      ...base,
+      total_changes: 4,
+      series_deleted: [{ change_id: 'c1', book_id: 'b', reason: 'series deleted' }],
+      series_renamed_since: [{ change_id: 'c2', book_id: '', reason: 'series renamed since' }],
+      series_name_taken: [{ change_id: 'c3', book_id: '', reason: 'series name taken' }],
+      series_check_failed: [{ change_id: 'c4', book_id: 'b', reason: 'series lookup failed' }],
+    });
+    expect(plan.canUndo).toBe(false);
+    expect(plan.message).toContain('4 change(s) will be refused');
+    expect(plan.message).toContain('1 series renamed since row');
+    expect(plan.message).not.toMatch(/can be undone;/);
+  });
+
+  it('offers only the restorable rows when others will be refused', () => {
     const plan = describeUndoPreflight({
       ...base,
       safe: 1,
       series_deleted: [{ change_id: 'c', book_id: 'b', reason: 'series deleted' }],
     });
     expect(plan.canUndo).toBe(true);
-    expect(plan.message).toMatch(/^2 change\(s\) can be undone; 1 of them have conflicts/);
-  });
-
-  it('counts series renames that were renamed since or whose old name is taken as conflicts', () => {
-    const plan = describeUndoPreflight({
-      ...base,
-      safe: 1,
-      series_renamed_since: [{ change_id: 'c1', book_id: '', reason: 'series renamed since' }],
-      series_name_taken: [{ change_id: 'c2', book_id: '', reason: 'series name taken' }],
-    });
-    expect(plan.canUndo).toBe(true);
-    expect(plan.message).toMatch(/^3 change\(s\) can be undone; 2 of them have conflicts/);
+    expect(plan.message).toMatch(/^Undo 1 change\(s\)/);
+    expect(plan.message).toContain('1 change(s) will be refused (1 series deleted row)');
   });
 });

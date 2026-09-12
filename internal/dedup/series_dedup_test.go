@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package dedup
 
@@ -857,8 +857,18 @@ func TestMergeSeries_RefusesDeleteWhenEveryReferencingBookIsTrashed(t *testing.T
 // CONTROL. Without it, a guard that refuses EVERY delete passes every test
 // above while silently turning the merge op into a no-op.
 func TestMergeSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
+	// The index copy carries a STALE series id (99) that disagrees with the
+	// hydrated row (20, from the fixture's GetBookByID). The ledger's OldValue
+	// must come from the hydrated row, the one UpdateBook overwrites: the
+	// revert writes it back into Book.SeriesID.
+	stale := 99
 	store, deleted, repointed := newMergeSeriesFixture(t,
-		[]database.BookCore{{ID: "BOOK_X"}}, map[int]int{20: 1})
+		[]database.BookCore{{ID: "BOOK_X", SeriesID: &stale}}, map[int]int{20: 1})
+	var rows []*database.OperationChange
+	store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		rows = append(rows, c)
+		return nil
+	}
 
 	result, err := MergeSeries(context.Background(), store, "op-normal", 10, []int{20}, "", nil)
 	require.NoError(t, err)
@@ -868,6 +878,16 @@ func TestMergeSeries_StillDeletesWhenNothingHiddenReferencesIt(t *testing.T) {
 	assert.Equal(t, 1, result.MergedCount)
 	assert.Empty(t, result.Errors)
 	assert.Equal(t, 10, (*repointed)["BOOK_X"])
+
+	var seriesIDRow *database.OperationChange
+	for _, c := range rows {
+		if c.ChangeType == "metadata_update" && c.FieldName == "series_id" {
+			seriesIDRow = c
+		}
+	}
+	require.NotNil(t, seriesIDRow, "the repoint must be journalled")
+	assert.Equal(t, "20", seriesIDRow.OldValue, "before-image from the hydrated row, not the index copy")
+	assert.Equal(t, "10", seriesIDRow.NewValue)
 }
 
 // TestMergeSeries_RefusesDeleteWhenAReassignmentFailed pins the subtrahend.

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
 // last-edited: 2026-09-12
 
@@ -36,10 +36,18 @@ func (s *ledgerStub) GetBookByID(id string) (*database.Book, error) {
 	if id != "" && id == s.failBook {
 		return nil, errors.New("book lookup failed")
 	}
-	return s.book, nil
+	if s.book == nil {
+		return nil, nil // the Pebble store's answer for a missing book
+	}
+	// A copy, as a real store returns: a restore that forgets UpdateBook must
+	// leave s.book (the persisted row) unchanged, so tests asserting on
+	// s.book catch it.
+	cp := *s.book
+	return &cp, nil
 }
 func (s *ledgerStub) UpdateBook(_ string, b *database.Book) (*database.Book, error) {
-	s.book = b
+	cp := *b
+	s.book = &cp
 	return b, nil
 }
 func (s *ledgerStub) GetOperationChanges(string) ([]*database.OperationChange, error) {

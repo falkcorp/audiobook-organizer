@@ -1,5 +1,5 @@
 // file: web/src/services/versionApi.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-12
 
@@ -28,12 +28,15 @@ export interface UndoConflictReport {
   content_changed: Array<{ change_id: string; book_id: string; reason: string }>;
   book_deleted: Array<{ change_id: string; book_id: string; reason: string }>;
   re_organized: Array<{ change_id: string; book_id: string; reason: string }>;
-  /** series_id / series_rename rows whose series is gone or unreadable; the revert refuses each. */
+  /** The revert refuses every row in the four series_* groups; they are not restorable. */
+  /** series_id / series_rename rows whose series no longer exists. */
   series_deleted?: Array<{ change_id: string; book_id: string; reason: string }>;
   /** series_rename rows whose series was renamed again after the operation. */
   series_renamed_since?: Array<{ change_id: string; book_id: string; reason: string }>;
   /** series_rename rows whose old name now belongs to another series. */
   series_name_taken?: Array<{ change_id: string; book_id: string; reason: string }>;
+  /** Rows whose series could not be read or whose recorded value is malformed. */
+  series_check_failed?: Array<{ change_id: string; book_id: string; reason: string }>;
   safe: number;
   /** Rows the revert endpoint cannot reverse; in no other bucket. */
   not_restorable?: number;
