@@ -1,5 +1,5 @@
 // file: internal/database/author_file_refs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c6e57d72-7048-499d-85aa-1714156d9481
 // last-edited: 2026-09-12
 
@@ -271,19 +271,14 @@ func (p *PebbleStore) getAllAuthorFileRefCountsPebble() (map[int]int, error) {
 		return nil, fmt.Errorf("author file ref scan: closing book_authors iterator: %w", cErr)
 	}
 
-	iter, err := newBookRowIter(snap)
-	if err != nil {
-		return nil, err
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
+	if err := forEachBookRow(snap, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			_ = iter.Close()
-			return nil, fmt.Errorf("author file ref scan: undecodable book row %q: %w", key, err)
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return fmt.Errorf("author file ref scan: undecodable book row %q: %w", key, err)
 		}
 		if b.AuthorID == nil {
-			continue
+			return nil
 		}
 		bookID := b.ID
 		if bookID == "" {
@@ -291,17 +286,13 @@ func (p *PebbleStore) getAllAuthorFileRefCountsPebble() (map[int]int, error) {
 		}
 		k := authorRefKey{bookID: bookID, authorID: *b.AuthorID}
 		if seen[k] {
-			continue
+			return nil
 		}
 		seen[k] = true
 		bookAuthors[bookID] = append(bookAuthors[bookID], *b.AuthorID)
-	}
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return nil, fmt.Errorf("author file ref scan truncated over books, refusing to answer from a partial count: %w", err)
-	}
-	if err := iter.Close(); err != nil {
-		return nil, fmt.Errorf("author file ref scan: closing book iterator: %w", err)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	bookIDs := make([]string, 0, len(bookAuthors))

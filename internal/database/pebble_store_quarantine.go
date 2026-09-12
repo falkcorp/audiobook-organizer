@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_quarantine.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ace123a3-f577-4065-b41c-ae9de32c9b45
 // last-edited: 2026-09-12
 
@@ -27,20 +27,17 @@ func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 	// Scan book:* index and only deserialize books that are quarantined
 	var result []Book
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.QuarantinedAt != nil {
 			result = append(result, b)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -75,20 +72,17 @@ func (p *PebbleStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
 func (p *PebbleStore) CountQuarantinedBooks() (int, error) {
 	n := 0
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.QuarantinedAt != nil {
 			n++
 		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return n, nil
 }

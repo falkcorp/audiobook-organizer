@@ -1,5 +1,5 @@
 // file: internal/database/narrator_bookref.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 36c225c3-b235-4aac-b164-0273255164fd
 // last-edited: 2026-09-12
 
@@ -220,26 +220,18 @@ func (p *PebbleStore) GetAllNarratorRefs() (NarratorRefs, error) {
 	// and the one-colon filter below is what makes that range safe: it also
 	// admits book:path:, book:hash: and book:versiongroup:, whose values are
 	// bare ids rather than book JSON. Bounds and filter are one change.
-	iter, err := newBookRowIter(snap)
-	if err != nil {
-		return NarratorRefs{}, fmt.Errorf("narrator ref scan: open book iterator: %w", err)
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		val, vErr := iter.ValueAndErr()
-		if vErr != nil {
-			_ = iter.Close()
-			return NarratorRefs{}, fmt.Errorf("narrator ref scan: reading book row %q: %w", key, vErr)
-		}
+	if err := forEachBookRow(snap, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
+		// The helper reads every value through ValueAndErr and fails the scan on
+		// a read error, so rowValue is never a silently-dropped nil.
 		var b narratorTextOnly
-		if err := json.Unmarshal(val, &b); err != nil {
+		if err := json.Unmarshal(rowValue, &b); err != nil {
 			// Fatal for the same reason as the junction pass: an unreadable
 			// book row may credit a candidate's name.
-			_ = iter.Close()
-			return NarratorRefs{}, fmt.Errorf("narrator ref scan: undecodable book row %q: %w", key, err)
+			return fmt.Errorf("narrator ref scan: undecodable book row %q: %w", key, err)
 		}
 		if b.Narrator == nil || strings.TrimSpace(*b.Narrator) == "" {
-			continue
+			return nil
 		}
 		// The same splitter the write paths use, so a name counts here exactly
 		// when a book edit would resolve it back into a narrator row.
@@ -252,13 +244,9 @@ func (p *PebbleStore) GetAllNarratorRefs() (NarratorRefs, error) {
 			counted[norm] = true
 			refs.ByName[norm]++
 		}
-	}
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return NarratorRefs{}, fmt.Errorf("narrator ref scan truncated over books, refusing to answer from a partial count: %w", err)
-	}
-	if err := iter.Close(); err != nil {
-		return NarratorRefs{}, fmt.Errorf("narrator ref scan: closing book iterator: %w", err)
+		return nil
+	}); err != nil {
+		return NarratorRefs{}, err
 	}
 	return refs, nil
 }

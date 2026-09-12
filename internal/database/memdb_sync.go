@@ -1,5 +1,5 @@
 // file: internal/database/memdb_sync.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
 // last-edited: 2026-09-12
 
@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // Write-through helpers from PebbleStore → MemStore.
@@ -568,22 +566,18 @@ func (p *PebbleStore) loadBookFilesForBookID(bookID string) ([]BookFile, error) 
 	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';'
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	var out []BookFile
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if !strings.HasPrefix(key, string(prefix)) {
-			continue
+	if err := forEachKeyInRange(p.db, prefix, upper, func(key, value []byte) error {
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			return nil
 		}
 		var bf BookFile
-		if err := json.Unmarshal(iter.Value(), &bf); err == nil {
+		if err := json.Unmarshal(value, &bf); err == nil {
 			out = append(out, bf)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

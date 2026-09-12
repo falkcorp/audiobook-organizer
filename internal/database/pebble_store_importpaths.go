@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
 // last-edited: 2026-09-12
 
@@ -72,20 +72,15 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 		return p.mem().CountBooksByPathPrefix(prefix)
 	}
 	count := 0
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if json.Unmarshal(iter.Value(), &b) != nil {
-			continue
+		if json.Unmarshal(rowValue, &b) != nil {
+			return nil
 		}
 		// Matches the memdb counterpart, which has always excluded the trash.
 		// See aggregate_count_conformance_test.go.
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {
 			if strings.HasPrefix(*b.SourceImportPath, prefix) {
@@ -94,6 +89,9 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 		} else if strings.HasPrefix(b.FilePath, prefix) {
 			count++
 		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return count, nil
 }

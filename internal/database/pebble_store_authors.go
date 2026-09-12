@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -702,30 +702,28 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 	jIter.Close()
 
 	// Pass 2: scan books for the legacy AuthorID field (for books without junction entries).
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if bookHasJunction[b.ID] {
-			continue // already counted via junction
+			return nil // already counted via junction
 		}
 		if b.AuthorID == nil {
-			continue
+			return nil
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		counts[*b.AuthorID]++
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return counts, nil
@@ -753,29 +751,26 @@ func (p *PebbleStore) GetAllAuthorFileCounts_Pebble() (map[int]int, error) {
 	}
 	var authorBooks []AuthorBook
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.AuthorID == nil {
-			continue
+			return nil
 		}
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		authorBooks = append(authorBooks, AuthorBook{AuthorID: *b.AuthorID, BookID: b.ID})
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	iter.Close()
 
 	// Phase 2: Batch-load all files for all books at once
 	bookIDs := make([]string, len(authorBooks))

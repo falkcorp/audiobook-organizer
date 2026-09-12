@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_published_years.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 25de50ea-ea39-4e25-a304-1b95b87e1919
 // last-edited: 2026-09-12
 
@@ -51,24 +51,21 @@ func (p *PebbleStore) GetDistinctPublishedYears() ([]int, error) {
 		return p.mem().GetDistinctPublishedYears()
 	}
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	seen := map[int]struct{}{}
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		if y, ok := bookPublishedYear(&b); ok {
 			seen[y] = struct{}{}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return sortedYears(seen), nil
 }
