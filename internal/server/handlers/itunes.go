@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package handlers
 
@@ -693,10 +693,21 @@ func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
 // exist further down the scan. Mirrors the searchPostFilterWindow
 // precedent (internal/audiobooks/service_query.go) for this exact
 // over-fetch-then-post-filter shape: bound the fetch instead of leaving it
-// unlimited, and warn rather than silently truncate.
+// unlimited. When a search fills the window, rows past it were never
+// scanned, so ListBooks logs a warning AND returns "truncated": true with
+// "count" reporting only the iTunes-tagged matches inside the window (a
+// lower bound on the real total). The UI reads the flag to tell the user
+// to refine the search instead of presenting that count as exact.
 const itunesSearchOverfetchWindow = 10000
 
 // ListBooks returns paginated books that have iTunes persistent IDs.
+//
+// Response data: {"items": [...], "count": N, "truncated": true?}. "count"
+// is the number of iTunes-tagged books the handler saw; it is exact unless
+// "truncated" is present, in which case the search filled
+// itunesSearchOverfetchWindow and "count" is a lower bound. "truncated" is
+// omitted when false and is only ever set on the search path — the
+// no-search path reads the full PID index and is never truncated.
 func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -708,6 +719,7 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	limit, offset := p.Limit, p.Offset
 
 	var filtered []database.Book
+	truncated := false
 	if search != "" {
 		// Search path still needs to scan the search results then filter,
 		// since SearchBooks doesn't have an iTunes-PID filter.
@@ -719,7 +731,9 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 		if len(allBooks) >= itunesSearchOverfetchWindow {
 			// Truncated: rows past the window were never scanned, so the
 			// PID-tagged results below are a lower bound, not a complete
-			// set. Say so rather than silently reporting it as complete.
+			// set. Flag it in the response (and the log) rather than
+			// reporting the count as exact.
+			truncated = true
 			stdlog.Warn("itunes ListBooks: search over-fetch window exhausted; iTunes-tagged results may be a lower bound",
 				"query", search, "window", itunesSearchOverfetchWindow)
 		}
@@ -765,10 +779,14 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 		})
 	}
 
-	httputil.RespondWithOK(c, gin.H{
+	resp := gin.H{
 		"items": items,
 		"count": total,
-	})
+	}
+	if truncated {
+		resp["truncated"] = true
+	}
+	httputil.RespondWithOK(c, resp)
 }
 
 // ImportStatus returns the status of an iTunes import operation.

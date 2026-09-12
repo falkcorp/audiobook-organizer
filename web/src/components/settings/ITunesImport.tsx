@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.21.0
+// version: 1.22.0
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-08-22
+// last-edited: 2026-09-12
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -151,6 +151,10 @@ export function ITunesImport() {
   const [previewItems, setPreviewItems] = useState<ITunesBookMapping[]>([]);
   const [browseItems, setBrowseItems] = useState<ITunesBookMapping[]>([]);
   const [browseTotal, setBrowseTotal] = useState(0);
+  // True when the backend's search hit its over-fetch window: browseTotal is
+  // then a lower bound (only the matches inside the window) and pagination
+  // covers just those, so the UI tells the user to refine the search.
+  const [browseTruncated, setBrowseTruncated] = useState(false);
   const [browseSearch, setBrowseSearch] = useState('');
   const [browsePage, setBrowsePage] = useState(0);
   const [browseRowsPerPage, setBrowseRowsPerPage] = useState(25);
@@ -342,7 +346,9 @@ export function ITunesImport() {
         const result = await getITunesBooks(search || undefined, rowsPerPage, page * rowsPerPage);
         setBrowseItems(result.items || []);
         setBrowseTotal(result.count);
+        setBrowseTruncated(result.truncated === true);
       } catch (err) {
+        setBrowseTruncated(false);
         toast(err instanceof Error ? err.message : 'Failed to load books', 'error');
       } finally {
         setBrowseLoading(false);
@@ -1427,9 +1433,18 @@ export function ITunesImport() {
                       </TableBody>
                     </Table>
                   </TableContainer>
+                  {browseTruncated && (
+                    <Alert severity="warning" data-testid="itunes-browse-truncated">
+                      Showing the first {browseTotal.toLocaleString()} matches — the search stopped
+                      early. Refine the search to see the rest.
+                    </Alert>
+                  )}
                   <TablePagination
                     component="div"
                     count={browseTotal}
+                    labelDisplayedRows={({ from, to, count }) =>
+                      `${from}–${to} of ${count.toLocaleString()}${browseTruncated ? '+' : ''}`
+                    }
                     page={browsePage}
                     onPageChange={(_e, newPage) => {
                       setBrowsePage(newPage);

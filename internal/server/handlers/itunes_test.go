@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package handlers_test
 
@@ -239,6 +239,43 @@ func TestITunesHandler_ListBooks_Happy(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "PID1")
+	// The no-search path reads the whole PID index; it is never truncated.
+	assert.NotContains(t, w.Body.String(), "truncated")
+}
+
+// itunesSearchFixture builds n search-matching books where every 80th one
+// carries an iTunes PID, returning the books and the PIDs in order.
+func itunesSearchFixture(t *testing.T, n int) ([]database.Book, []string) {
+	t.Helper()
+	books := make([]database.Book, 0, n)
+	var pids []string
+	for i := range n {
+		id := fmt.Sprintf("b%d", i)
+		var pid *string
+		if i%80 == 0 {
+			p := fmt.Sprintf("PID%04d", i)
+			pid = &p
+			pids = append(pids, p)
+		}
+		books = append(books, database.Book{ID: id, Title: "Match " + id, FilePath: "/x/" + id + ".m4b", ITunesPersistentID: pid})
+	}
+	return books, pids
+}
+
+// listITunesBooksRaw runs ListBooks for the given query and decodes the
+// response's data object generically, so a test can tell an omitted field
+// apart from one set to false.
+func listITunesBooksRaw(t *testing.T, h *handlers.ITunesHandler, query string) map[string]any {
+	t.Helper()
+	c, w := newITunesCtx(http.MethodGet, "/itunes/books?"+query, "", nil)
+	h.ListBooks(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.NotNil(t, body.Data)
+	return body.Data
 }
 
 func TestITunesHandler_ListBooks_Search_BoundedOverfetch_PinsResultSet(t *testing.T) {
@@ -253,18 +290,7 @@ func TestITunesHandler_ListBooks_Search_BoundedOverfetch_PinsResultSet(t *testin
 	store := handlersmocks.NewMockITunesStore(t)
 
 	const window = 10000
-	books := make([]database.Book, 0, window)
-	var wantPIDs []string
-	for i := range window {
-		id := fmt.Sprintf("b%d", i)
-		var pid *string
-		if i%80 == 0 { // 10000/80 = 125 PID-tagged matches, spanning >1 page
-			p := fmt.Sprintf("PID%04d", i)
-			pid = &p
-			wantPIDs = append(wantPIDs, p)
-		}
-		books = append(books, database.Book{ID: id, Title: "Match " + id, FilePath: "/x/" + id + ".m4b", ITunesPersistentID: pid})
-	}
+	books, wantPIDs := itunesSearchFixture(t, window) // 10000/80 = 125 PID-tagged matches, spanning >1 page
 	if len(wantPIDs) != 125 {
 		t.Fatalf("test setup produced %d PID-tagged books, want 125", len(wantPIDs))
 	}
@@ -308,6 +334,44 @@ func TestITunesHandler_ListBooks_Search_BoundedOverfetch_PinsResultSet(t *testin
 	for i, item := range page2.Data.Items {
 		assert.Equal(t, wantPIDs[100+i], item.ITunesPersistentID)
 	}
+}
+
+func TestITunesHandler_ListBooks_Search_WindowFilled_ReportsTruncated(t *testing.T) {
+	// A search that returns a full over-fetch window (10000 rows) may have
+	// more matches past it that were never scanned. The response must say so
+	// with "truncated": true, and "count" stays the PID-tagged total inside
+	// the window (125) — the lower bound the UI paginates over.
+	store := handlersmocks.NewMockITunesStore(t)
+	const window = 10000
+	books, pids := itunesSearchFixture(t, window)
+	require.Len(t, pids, 125)
+	store.EXPECT().SearchBooks("match", window, 0).Return(books, nil).Once()
+
+	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, store)
+	data := listITunesBooksRaw(t, h, "search=match")
+
+	assert.Equal(t, true, data["truncated"], "a filled window must be flagged as truncated")
+	assert.EqualValues(t, 125, data["count"], "count is the PID-tagged total within the window")
+	items, ok := data["items"].([]any)
+	require.True(t, ok)
+	assert.Len(t, items, 50, "default page size still applies")
+}
+
+func TestITunesHandler_ListBooks_Search_BelowWindow_OmitsTruncated(t *testing.T) {
+	// A search that returns fewer rows than the window saw every match, so
+	// "count" is exact and "truncated" is omitted entirely (not false).
+	store := handlersmocks.NewMockITunesStore(t)
+	const window = 10000
+	books, pids := itunesSearchFixture(t, 800) // 800/80 = 10 PID-tagged matches
+	require.Len(t, pids, 10)
+	store.EXPECT().SearchBooks("match", window, 0).Return(books, nil).Once()
+
+	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, store)
+	data := listITunesBooksRaw(t, h, "search=match")
+
+	_, present := data["truncated"]
+	assert.False(t, present, "truncated must be omitted when the window was not filled")
+	assert.EqualValues(t, 10, data["count"])
 }
 
 func TestITunesHandler_ListBooks_NilStore_500(t *testing.T) {
