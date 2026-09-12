@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-12
 
@@ -65,99 +65,36 @@ type tagBackfillBook struct {
 	rows   []database.BookFileCore
 }
 
-// tagVerdict is the per-book decision on whether tag track/disc numbers may
-// replace the stored ones.
-type tagVerdict int
-
-const (
-	tagTakePositions   tagVerdict = iota // tag numbers distinct across the whole book
-	tagRefuseDuplicate                   // two files share a (disc, track) pair
-	tagRefuseMissing                     // some file has no known tag track number
-	tagRefuseMixedDisc                   // some files have a tag disc number and some do not
-)
-
-// tagPlacement is one file's position as its tags state it. disc is 0 when the
-// tag carries no disc number.
-type tagPlacement struct{ track, trackTotal, disc, discTotal int }
-
-type tagPositionKey struct{ disc, track int }
-
-// judgeTagPositions decides whether a book's tag track/disc numbers may be
-// trusted. It looks at EVERY file of the book (full, from GetBookFiles), not just
-// the rows being fixed: a file freshly read this run contributes its tag reading
-// (readings[ID]); any other file contributes the position parsed from its stored
-// RawTags. A file with no known tag track number — missing on disk, unreadable,
-// untagged, never captured, or outside a Limit window — makes the book "not
-// distinct" and is refused. This fails closed on purpose: refusing costs only the
-// track numbers (RawTags still land), while a wrong accept scrambles chapter order.
-//
-// Positions are compared as (disc, track) pairs, so a multi-disc book with track
-// 1 on each disc passes and two files both at track 1 on the same disc do not.
-// Disc-tag presence must be uniform: either every file's tag carries a disc
-// number or none does (then all are disc 0). A book that mixes the two is refused
-// as "mixed-disc", because absent disc = 0 would never collide with disc 1 yet
-// would sort the disc-less files first — e.g. disc 1 tagged TPOS=1 tracks 1-5 and
-// disc 2 untagged tracks 1-5 would otherwise be accepted with disc 2 playing
-// before disc 1. A single-file book passes iff its tag carries a track number.
-// Rows with no BookID have no book to be ordered within and are refused as
-// "missing". Checks run per file in list order: a missing track refuses first,
-// then a disc-presence mismatch, then a duplicate pair.
+// judgeTagPositions resolves every file of a book to its tag position and hands
+// the book to metadata.JudgeTagPositions, the one copy of the track/disc guard
+// (the scanner calls it at import too). It looks at EVERY file of the book
+// (full, from GetBookFiles), not just the rows being fixed: a file freshly read
+// this run contributes its tag reading (readings[ID]); any other file
+// contributes the position parsed from its stored RawTags. A file with no known
+// tag track number — missing on disk, unreadable, untagged, never captured, or
+// outside a Limit window — makes the book "not distinct" and is refused; see
+// metadata.JudgeTagPositions for the distinctness and mixed-disc rules. Rows
+// with no BookID have no book to be ordered within and are refused as
+// "missing".
 //
 // On accept it returns every file's placement, keyed by file ID, so the caller
 // can move the whole book — siblings included — to its tag positions.
-func judgeTagPositions(bookID string, full []database.BookFile, readings map[string]metadata.Metadata) (tagVerdict, string, map[string]tagPlacement) {
+func judgeTagPositions(bookID string, full []database.BookFile, readings map[string]metadata.Metadata) (metadata.TagVerdict, string, map[string]metadata.TagPlacement) {
 	if bookID == "" {
-		return tagRefuseMissing, "no book id", nil
+		return metadata.TagRefuseMissing, "no book id", nil
 	}
-	placements := make(map[string]tagPlacement, len(full))
-	seen := make(map[tagPositionKey]string, len(full))
-	firstHasDisc := false
+	keys := make([]string, len(full))
+	placements := make([]metadata.TagPlacement, len(full))
 	for i := range full {
-		var p tagPlacement
+		keys[i] = full[i].ID
 		if m, ok := readings[full[i].ID]; ok {
-			p = tagPlacement{track: m.TrackNumber, trackTotal: m.TrackTotal, disc: m.DiscNumber, discTotal: m.DiscTotal}
-		} else {
-			p.track, p.trackTotal, p.disc, p.discTotal = metadata.TrackDiscFromTags(full[i].RawTags)
+			placements[i] = metadata.PlacementFromMetadata(m)
+			continue
 		}
-		if p.track <= 0 {
-			return tagRefuseMissing, fmt.Sprintf("file %s has no tag track", full[i].ID), nil
-		}
-		if hasDisc := p.disc > 0; i == 0 {
-			firstHasDisc = hasDisc
-		} else if hasDisc != firstHasDisc {
-			return tagRefuseMixedDisc, fmt.Sprintf("disc tag on only some files: %s has-disc=%v, %s has-disc=%v",
-				full[0].ID, firstHasDisc, full[i].ID, hasDisc), nil
-		}
-		key := tagPositionKey{disc: max(p.disc, 0), track: p.track}
-		if other, dup := seen[key]; dup {
-			return tagRefuseDuplicate, fmt.Sprintf("disc %d track %d on %s and %s", key.disc, key.track, other, full[i].ID), nil
-		}
-		seen[key] = full[i].ID
-		placements[full[i].ID] = p
+		p := &placements[i]
+		p.Track, p.TrackTotal, p.Disc, p.DiscTotal = metadata.TrackDiscFromTags(full[i].RawTags)
 	}
-	return tagTakePositions, "", placements
-}
-
-// applyTagPlacement moves a row to its tag position and reports whether any
-// position field changed. TrackNumber and DiscNumber are set exactly as the tag
-// states them (DiscNumber 0 when the tag has no disc) so the row sorts where the
-// judgement placed it. A tag total replaces the stored count; with no disc, the
-// disc count is cleared too, since a disc count without a disc is meaningless.
-// A missing track total keeps the stored TrackCount, which does not affect order.
-func applyTagPlacement(u *database.BookFile, p tagPlacement) bool {
-	before := [4]int{u.TrackNumber, u.TrackCount, u.DiscNumber, u.DiscCount}
-	u.TrackNumber = p.track
-	if p.trackTotal > 0 {
-		u.TrackCount = p.trackTotal
-	}
-	u.DiscNumber = max(p.disc, 0)
-	switch {
-	case p.discTotal > 0:
-		u.DiscCount = p.discTotal
-	case u.DiscNumber == 0:
-		u.DiscCount = 0
-	}
-	return before != [4]int{u.TrackNumber, u.TrackCount, u.DiscNumber, u.DiscCount}
+	return metadata.JudgeTagPositions(keys, placements)
 }
 
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
@@ -377,7 +314,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		}
 
 		verdict, why, placements := judgeTagPositions(b.bookID, full, readings)
-		take := verdict == tagTakePositions
+		take := verdict == metadata.TagTakePositions
 
 		updates := make([]*database.BookFile, 0, len(full))
 		found, bSiblings := 0, 0
@@ -391,7 +328,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				// file at disc 1 track 3) and scramble the order on a later run.
 				if take {
 					sib := full[j]
-					if applyTagPlacement(&sib, placements[sib.ID]) {
+					if metadata.ApplyTagPlacement(&sib, placements[sib.ID]) {
 						bSiblings++
 						updates = append(updates, &sib)
 						if wasMissing, ok := skipped[sib.ID]; ok {
@@ -409,7 +346,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			updated := full[j] // copy of the full hydrated row
 			updated.RawTags = meta.AllTags
 			if take {
-				applyTagPlacement(&updated, placements[updated.ID])
+				metadata.ApplyTagPlacement(&updated, placements[updated.ID])
 			}
 			if updated.Title == "" && meta.Title != "" {
 				updated.Title = meta.Title
@@ -431,9 +368,9 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			readRawOnly += bRead
 			if bRead > 0 {
 				switch verdict {
-				case tagRefuseDuplicate:
+				case metadata.TagRefuseDuplicate:
 					refusedDup++
-				case tagRefuseMixedDisc:
+				case metadata.TagRefuseMixedDisc:
 					refusedMix++
 				default:
 					refusedMissing++

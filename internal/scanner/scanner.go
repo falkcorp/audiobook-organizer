@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.88.0
+// version: 1.89.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -2019,6 +2019,50 @@ const (
 	keepFilePath         = false
 )
 
+// applyTagPositionsIfTrusted decides, once for the whole book, whether the
+// track/disc numbers its tags state may replace the positional ones, and applies
+// them to every row when they may.
+//
+// bfs must be EVERY file of ONE book and placements[i] the position file i's tag
+// states (zero when the tag read failed). createBookFilesForBook is the only
+// place book_file rows are created for a scanned book and it builds all of them
+// in one call before one BatchUpsertBookFiles, so the whole book is always in
+// view here; both of its scan call sites already run inside the per-book worker
+// pool, so this adds no serial pass over the library.
+//
+// The guard is metadata.JudgeTagPositions, the same one maintenance.tag-backfill
+// uses: tag numbers are taken only when every file has a tag track, the
+// (disc, track) pairs are distinct, and either every file or no file carries a
+// disc tag. On refusal the rows keep the positional TrackNumber they were built
+// with (i+1 in segment-list order) and get no tag DiscNumber, TrackCount or
+// DiscCount — nothing half-applied, so a book is never part tag-numbered and
+// part positional. RawTags and Title are unaffected either way.
+func applyTagPositionsIfTrusted(bfs []*database.BookFile, placements []metadata.TagPlacement, bookFilePath string, scanLog logger.Logger) {
+	if len(bfs) == 0 {
+		return
+	}
+	keys := make([]string, len(bfs))
+	for i, bf := range bfs {
+		keys[i] = bf.FilePath
+	}
+	verdict, why, accepted := metadata.JudgeTagPositions(keys, placements)
+	if verdict == metadata.TagTakePositions {
+		for _, bf := range bfs {
+			metadata.ApplyTagPlacement(bf, accepted[bf.FilePath])
+		}
+		return
+	}
+	// A single-file book is refused only when its tag has no track number,
+	// which is the ordinary untagged single-file shape and changes nothing
+	// (it stays track 1); keep that out of the Info log.
+	logf := scanLog.Info
+	if len(bfs) == 1 {
+		logf = scanLog.Debug
+	}
+	logf("tag track/disc numbers not used for book %s (%d files, %s: %s); keeping positional track order",
+		logger.SanitizeLogValue(bookFilePath), len(bfs), verdict, logger.SanitizeLogValue(why))
+}
+
 func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog logger.Logger, normalizeBookPath bool, knownHashes ...map[string]string) string {
 	if getStore() == nil {
 		return ""
@@ -2090,6 +2134,8 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	}
 
 	bfs := make([]*database.BookFile, 0, len(segmentFiles))
+	// tagPlacements[i] is the position file i's tag states; parallel to bfs.
+	tagPlacements := make([]metadata.TagPlacement, len(segmentFiles))
 	for i, filePath := range segmentFiles {
 		trackNum := i + 1
 		ext := strings.ToLower(filepath.Ext(filePath))
@@ -2109,22 +2155,20 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		}
 
 		// Read the file's tags so we capture EVERY tag losslessly (RawTags) and
-		// use the real track/disc position from the tag instead of the file's
-		// positional index (the index-based TrackNumber above is only a fallback,
-		// and grouping-by-folder over positional tracks is what shattered books).
+		// remember the track/disc position the tag states. Whether that position
+		// replaces the positional TrackNumber above is decided after the loop,
+		// once for the whole book (see the JudgeTagPositions call below): a
+		// per-file "tag wins when present" rule is what let a rip tagged
+		// "track 1" on every chapter import with every file at track 1.
+		// A failed read leaves a zero placement, which refuses the book.
 		if meta, merr := metadata.ExtractMetadata(filePath, nil); merr == nil {
 			bf.RawTags = meta.AllTags
-			if meta.TrackNumber > 0 {
-				bf.TrackNumber = meta.TrackNumber
-			}
-			bf.TrackCount = meta.TrackTotal
-			bf.DiscNumber = meta.DiscNumber
-			bf.DiscCount = meta.DiscTotal
+			tagPlacements[i] = metadata.PlacementFromMetadata(meta)
 			if meta.Title != "" {
 				bf.Title = meta.Title
 			}
 		} else {
-			scanLog.Debug("tag read failed for %s (keeping positional track): %v", filePath, merr)
+			scanLog.Debug("tag read failed for %s (keeping positional track): %v", logger.SanitizeLogValue(filePath), merr)
 		}
 
 		var preHash string
@@ -2141,6 +2185,8 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 
 		bfs = append(bfs, bf)
 	}
+
+	applyTagPositionsIfTrusted(bfs, tagPlacements, bookFilePath, scanLog)
 
 	if len(bfs) > 0 {
 		if serr := getStore().BatchUpsertBookFiles(bfs); serr != nil {
