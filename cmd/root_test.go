@@ -1,20 +1,84 @@
 // file: cmd/root_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package cmd
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/spf13/viper"
 )
+
+// TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning pins the #3268
+// follow-up: a command line that still carries the removed
+// --enable-sqlite3-i-know-the-risks flag must parse through the real Execute
+// path (before this, cobra failed startup with "unknown flag"), print the
+// deprecation warning, stay out of --help, and not leak into viper, where
+// config.warnRemovedViperKeys would log the removal a second time.
+func TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning(t *testing.T) {
+	flag := rootCmd.PersistentFlags().Lookup(removedSQLiteFlag)
+	if flag == nil {
+		t.Fatalf("--%s is not registered; a command line that passes it fails with unknown flag", removedSQLiteFlag)
+	}
+	if !flag.Hidden {
+		t.Errorf("--%s is not hidden", removedSQLiteFlag)
+	}
+	if flag.Deprecated != removedSQLiteFlagMessage {
+		t.Errorf("--%s Deprecated = %q, want %q", removedSQLiteFlag, flag.Deprecated, removedSQLiteFlagMessage)
+	}
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	// --help stops cobra before initConfig and the command body, so this
+	// exercises flag parsing and help rendering without starting a server.
+	rootCmd.SetArgs([]string{"serve", "--" + removedSQLiteFlag, "--help"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		_ = flag.Value.Set("false")
+		flag.Changed = false
+		if help := serveCmd.Flags().Lookup("help"); help != nil {
+			_ = help.Value.Set("false")
+			help.Changed = false
+		}
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Execute with --%s returned %v; the removed flag must never break startup", removedSQLiteFlag, err)
+	}
+
+	got := out.String()
+	wantWarning := "Flag --" + removedSQLiteFlag + " has been deprecated, " + removedSQLiteFlagMessage
+	if !strings.Contains(got, wantWarning) {
+		t.Errorf("output does not contain the deprecation warning %q:\n%s", wantWarning, got)
+	}
+	if !strings.Contains(got, "--db-type") {
+		t.Fatalf("serve --help output did not list the global flags; the hidden-flag check below would be vacuous:\n%s", got)
+	}
+	// The warning line is the only mention: the help listing omits the flag.
+	if n := strings.Count(got, removedSQLiteFlag); n != 1 {
+		t.Errorf("--%s appears %d times in the output, want 1 (the warning only, not the help listing):\n%s", removedSQLiteFlag, n, got)
+	}
+	if strings.Contains(rootCmd.UsageString(), removedSQLiteFlag) {
+		t.Errorf("root usage lists --%s", removedSQLiteFlag)
+	}
+	for _, key := range []string{"enable_sqlite3_i_know_the_risks", "enable_sqlite"} {
+		if viper.IsSet(key) {
+			t.Errorf("viper.IsSet(%q) = true after parsing the flag; it must stay unbound", key)
+		}
+	}
+}
 
 func TestFormatMetadataValue(t *testing.T) {
 	if got := formatMetadataValue("  "); got != "(empty)" {

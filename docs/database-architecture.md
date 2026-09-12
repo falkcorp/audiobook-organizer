@@ -1,7 +1,7 @@
 <!-- file: docs/database-architecture.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a -->
-<!-- last-edited: 2026-09-11 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Database Architecture
 
@@ -87,8 +87,11 @@ touching persistence. **Caveat:** The document's entity-ID convention (ULID stri
 ./audiobook-organizer scan --dir /audiobooks --db-type pebble --db audiobooks.pebble
 ```
 
-The SQLite3 backend has been removed. `--db-type sqlite` is rejected at startup,
-and the old `--enable-sqlite3-i-know-the-risks` flag no longer exists.
+The SQLite3 backend has been removed. `--db-type sqlite` is rejected at startup.
+The old `--enable-sqlite3-i-know-the-risks` flag is deprecated and does nothing:
+it is still accepted so existing command lines keep starting, is hidden from
+`--help`, and prints a deprecation warning to stderr (the journal, under the
+systemd unit) when passed. Remove it from your command line.
 
 ### Configuration File
 
