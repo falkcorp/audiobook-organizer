@@ -971,7 +971,8 @@ func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) 
 
 // DeleteNarrator removes a narrator and every reference the store holds to it,
 // mirroring DeleteAuthor: the narrator:<id> record, its narrator_name:<norm>
-// index key (underscore, not colon — see CreateNarrator), and its entries in
+// index entries (underscore, not colon — see CreateNarrator; current and
+// legacy key, each only while this row still owns it), and its entries in
 // the book_narrators junction all go in one Pebble batch, then memdb is
 // brought in line. A missing id is a no-op returning nil, as with DeleteAuthor.
 func (p *PebbleStore) DeleteNarrator(id int) error {
