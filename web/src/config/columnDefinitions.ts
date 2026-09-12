@@ -1,5 +1,5 @@
 // file: web/src/config/columnDefinitions.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: a7b8c9d0-e1f2-4a3b-5c6d-7e8f9a0b1c2d
 
 import { Audiobook } from '../types';
@@ -140,7 +140,9 @@ export const ALL_COLUMNS: ColumnDefinition[] = [
     category: 'Basic',
     accessor: (b) => b.series_number,
     formatter: formatNumber,
-    sortKey: 'series_number',
+    // series_position: no server comparator has ever known series_number, so
+    // this column's header sort ordered nothing until it pointed here.
+    sortKey: 'series_position',
     searchKey: 'series_number',
     defaultWidth: 80,
     minWidth: 60,

@@ -1,5 +1,5 @@
 // file: web/src/types/index.ts
-// version: 1.20.0
+// version: 1.21.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
 // last-edited: 2026-09-12
 
@@ -150,6 +150,7 @@ export enum SortField {
   FileSize = 'file_size_bytes',
   UpdatedAt = 'updated_at',
   LibraryState = 'library_state',
+  SeriesPosition = 'series_position',
 }
 
 // Sort order enum for type safety

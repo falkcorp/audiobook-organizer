@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-08-25
+// last-edited: 2026-09-12
 
 package audiobooks
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"math"
 )
 
 // applySorting sorts a slice of books in-place based on the filter's SortBy
@@ -31,7 +32,109 @@ func applySorting(books []database.Book, f ListFilters) {
 	if f.SortBy == "" {
 		return
 	}
+	if f.SortBy == SortBySeriesPosition {
+		sortBooksBySeriesPosition(books, f.SortOrder != "desc")
+		return
+	}
 	database.SortBooks(books, f.SortBy, f.SortOrder != "desc")
+}
+
+// SortBySeriesPosition is the sort_by key for a book's position within its
+// series. The `series` key orders by series NAME, which ties for every book in
+// one series, so a /library?series_id=N listing had no reading order at all.
+//
+// It is sorted here in the service, not by database.SortBooks or a memdb
+// index: the order needs the raw decimal position, which BookSummary does not
+// carry. That makes it a materialise-then-sort key on every path, and
+// GetAudiobooksWithTotal routes it accordingly (see its serviceSorted flag).
+const SortBySeriesPosition = "series_position"
+
+// CanSortBy reports whether applySorting understands field: every key
+// database.SortBooks knows, plus the service-side SortBySeriesPosition.
+func CanSortBy(field string) bool {
+	return field == SortBySeriesPosition || database.CanSortBooksBy(field)
+}
+
+// seriesPositionKey is a book's numeric series position. has is false for a
+// book with no usable position.
+type seriesPositionKey struct {
+	pos   float64
+	has   bool
+	title string
+}
+
+// bookSeriesPosition reads a book's position numerically. SeriesPositionRaw
+// wins when it parses, because it keeps the decimal ("1.5") the served *int
+// SeriesSequence truncates; an unparseable raw value ("Book 3") falls back to
+// SeriesSequence. Books built from BookSummary rows (the whole-library path)
+// have no raw value, so there the order is by the integer sequence only.
+func bookSeriesPosition(b *database.Book) (float64, bool) {
+	if b.SeriesPositionRaw != nil {
+		v, err := strconv.ParseFloat(strings.TrimSpace(*b.SeriesPositionRaw), 64)
+		if err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) {
+			return v, true
+		}
+	}
+	if b.SeriesSequence != nil {
+		return float64(*b.SeriesSequence), true
+	}
+	return 0, false
+}
+
+// seriesPositionSorter sorts books and their precomputed keys together. The
+// keys are swapped alongside the books on purpose: a key slice indexed from
+// inside a sort.Slice comparator goes stale after the first swap, which is the
+// bug database/series_ordering.go documents in its own history.
+type seriesPositionSorter struct {
+	books     []database.Book
+	keys      []seriesPositionKey
+	ascending bool
+}
+
+func (s *seriesPositionSorter) Len() int { return len(s.books) }
+
+func (s *seriesPositionSorter) Swap(i, j int) {
+	s.books[i], s.books[j] = s.books[j], s.books[i]
+	s.keys[i], s.keys[j] = s.keys[j], s.keys[i]
+}
+
+// Less orders by position (numerically, so 2 sorts before 10), puts books
+// without a position last in BOTH directions, and breaks ties by title
+// (case-insensitive) and then book ID, both ascending in both directions.
+//
+// Only the position reverses for descending. That is a deliberate difference
+// from database.SortBooks, which negates the whole comparison to match an
+// index read in reverse; there is no index behind this key, and a descending
+// series view that opened with its unnumbered books would be worse. The ID
+// tie-break makes the order total, so every page of a listing is stable.
+func (s *seriesPositionSorter) Less(i, j int) bool {
+	a, b := s.keys[i], s.keys[j]
+	if a.has != b.has {
+		return a.has
+	}
+	if a.has && a.pos != b.pos {
+		if s.ascending {
+			return a.pos < b.pos
+		}
+		return a.pos > b.pos
+	}
+	if a.title != b.title {
+		return a.title < b.title
+	}
+	return s.books[i].ID < s.books[j].ID
+}
+
+// sortBooksBySeriesPosition orders books in place by SortBySeriesPosition.
+func sortBooksBySeriesPosition(books []database.Book, ascending bool) {
+	if len(books) < 2 {
+		return
+	}
+	keys := make([]seriesPositionKey, len(books))
+	for i := range books {
+		pos, has := bookSeriesPosition(&books[i])
+		keys[i] = seriesPositionKey{pos: pos, has: has, title: strings.ToLower(books[i].Title)}
+	}
+	sort.Sort(&seriesPositionSorter{books: books, keys: keys, ascending: ascending})
 }
 
 // paginateFilteredBooks slices books to the given offset/limit window.

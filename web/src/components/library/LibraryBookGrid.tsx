@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.9.2
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 
 import {
   Typography,
@@ -47,6 +47,7 @@ const LIBRARY_SORT_OPTIONS = [
   { value: 'title', label: 'Title' },
   { value: 'author', label: 'Author' },
   { value: 'series', label: 'Series' },
+  { value: 'series_position', label: 'Series position' },
   { value: 'year', label: 'Year' },
   { value: 'created_at', label: 'Date added' },
   { value: 'duration_seconds', label: 'Duration' },

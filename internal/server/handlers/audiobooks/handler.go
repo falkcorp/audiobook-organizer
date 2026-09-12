@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -345,9 +345,11 @@ func intersectIDSets(a, b map[string]struct{}) map[string]struct{} {
 // sortByMetricLabel bounds a client-supplied sort_by to a metric label
 // (TASK-095). Every field SortBooks understands keeps its own name, an omitted
 // sort_by is "default", and anything else collapses to "other" -- the label
-// set is fixed by database.SortableBookFields, never by what a client types.
+// set is fixed by database.SortableBookFields plus the service-side
+// audiobookspkg.SortBySeriesPosition, never by what a client types.
 //
-// CanSortBooksBy, not CanPushDownSort: the question this metric answers is
+// audiobookspkg.CanSortBy (CanSortBooksBy plus series_position), not
+// CanPushDownSort: the question this metric answers is
 // which fields to ADD to enabled_sort_indexes, and CanPushDownSort only admits
 // fields already in that set (empty by default), so bucketing by it would
 // report every request as "other" and answer nothing.
@@ -355,7 +357,7 @@ func sortByMetricLabel(sortBy string) string {
 	switch {
 	case sortBy == "":
 		return "default"
-	case database.CanSortBooksBy(sortBy):
+	case audiobookspkg.CanSortBy(sortBy):
 		return sortBy
 	default:
 		return "other"

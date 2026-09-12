@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-12
 
@@ -70,6 +70,14 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	if len(filters) > 0 {
 		f = filters[0]
 	}
+
+	// A bare series listing with no sort defaults to reading order. Set here,
+	// before hasSorting/heavySorting below read SortBy, so the default takes
+	// the same materialise-sort-paginate route an explicit request does.
+	// Not applied to a search: with no sort, a search keeps relevance order.
+	if seriesID != nil && search == "" && f.SortBy == "" {
+		f.SortBy = SortBySeriesPosition
+	}
 	// An unrecognised sort_by is NOT a sort. sort_by reaches here straight
 	// from the query string (see server/audiobooks_helpers.go), and testing
 	// only `!= ""` made a typo expensive: it set heavySorting, which zeroes
@@ -84,7 +92,7 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	// deliberately NOT a rejection: sort_by has always accepted anything, and
 	// turning an accepted request into an error is a caller-visible change
 	// that belongs to whoever owns the API contract.
-	hasSorting := f.SortBy != "" && database.CanSortBooksBy(f.SortBy)
+	hasSorting := f.SortBy != "" && CanSortBy(f.SortBy)
 
 	// Sorts backed by a memdb sorted index are pushed down and streamed;
 	// everything else materialises the match set in the store and sorts it
@@ -409,15 +417,24 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 				// Book is 904 bytes against BookSummary's 240, so a 68K-row
 				// library rebuilt ~61 MB of Book values to keep `limit` of them.
 				//
-				// It is also no longer reachable: heavySorting now implies
-				// CanSortBooksBy (see hasSorting above), which implies bsf
-				// carries the sort, which implies the store ordered the page.
+				// That holds for every key database.CanSortBooksBy accepts:
+				// bsf carries the sort and the store orders the page. It does
+				// NOT hold for a service-side key (SortBySeriesPosition), which
+				// bsf cannot carry. For those the store is asked for every
+				// match, and this function sorts and pages them itself below;
+				// passing the page here would return store order labelled as
+				// sorted.
 				//
 				// When the store lacks the capability these arguments are
 				// ignored entirely (summariesPushdownFiltered calls
 				// GetAllBookSummaries(0, 0)) and didPushdown is false, so the
 				// post-filter path below still owns filtering and pagination.
-				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(limit, offset, bsf)
+				serviceSorted := hasSorting && !database.CanSortBooksBy(f.SortBy)
+				pushLimit, pushOffset := limit, offset
+				if serviceSorted {
+					pushLimit, pushOffset = 0, 0
+				}
+				summaries, didPushdown, sErr := svc.summariesPushdownFiltered(pushLimit, pushOffset, bsf)
 				if sErr == nil && summaries != nil {
 					books = bookSummariesToBooks(summaries)
 				}
@@ -451,6 +468,13 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 					// comparator reads a field BookSummary dropped), and
 					// re-paginating it is the "page 2 returns zero rows" bug:
 					// re-slicing a ≤limit page by the original offset.
+					if serviceSorted {
+						// Every match came back unordered and unpaged (see
+						// pushLimit above). The predicates are applied, so
+						// only the sort and the page are left to do.
+						applySorting(books, f)
+						books = paginateFilteredBooks(books, limit, offset)
+					}
 					alreadySortedAndPaginated = true
 				}
 			} else {
