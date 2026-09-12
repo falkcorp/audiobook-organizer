@@ -1,7 +1,7 @@
 <!-- file: docs/process/executive-summaries.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: b608794a-eac5-44bc-95b9-643872bd0ca8 -->
-<!-- last-edited: 2026-07-11 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Executive Summary Convention
 
@@ -27,23 +27,40 @@ for.
 
 ## Where it goes
 
-**Check for an existing rolling summary for the current month first**
-(`docs/executive-summaries/YYYY-MM-*-executive-summary.md`). If one exists,
-ADD a new Executive Summary bullet + a new numbered section to it — do not
-create a second file for the same month. One doc per month is the goal;
-several small dated files fragmenting the same month is exactly the sprawl
-this convention exists to prevent (it happened once, in three separate
-files, and had to be manually consolidated back into one roundup).
+Executive summaries follow a two-stage lifecycle: many small files during
+the month, then one combined file per month.
 
-Only create a new file when either no summary exists yet for the current
-month (first qualifying change of the month), or the work is big/
-self-contained enough to warrant its own deep-dive report that the monthly
-roundup then links to instead of repeating (see the iTunes-hardening report
-linked at the top of the current roundup for the pattern) — that's the
-exception, not the default.
-
-New-file naming: `docs/executive-summaries/YYYY-MM-DD-<short-topic>-executive-summary.md`,
+**During the month — per-day / per-topic files are allowed.** Each
+qualifying change gets its own file, written in the same PR as the change:
+`docs/executive-summaries/YYYY-MM-DD-<short-topic>-executive-summary.md`,
 using the date the work shipped (merge date), not the date work started.
+Several files in one month is expected; there is no need to hunt for and
+append to an existing file.
+
+**At month end — combine them into one monthly summary and delete the
+per-day files.** Once the month is over, merge that month's per-day files
+into a single `docs/executive-summaries/YYYY-MM-executive-summary.md`
+(for example `2026-07-executive-summary.md`), then `git rm` every per-day
+file it replaces. The combined file:
+
+- is grouped **by theme, not by date**, and follows the Structure below at
+  the month level (header, executive-summary bullets, one section per
+  theme);
+- keeps **every distinct outcome and number** from the per-day files —
+  data-loss fixes, counts, what users would notice — and drops only
+  repetition;
+- states its real coverage period at the top, especially when a per-day
+  file dated in this month covered work from an earlier one;
+- stays plain-language: no file paths or function names in the body.
+
+In the same PR, repoint every link to a removed per-day file (docs,
+`TODO.md`, other Markdown) at the monthly file. Do not hand-edit
+`CHANGELOG.md` — it is assembled; list any CHANGELOG references to the
+removed files in the PR description instead.
+
+A month that is already combined gets no new per-day files; a late
+qualifying change for a closed month is added to its monthly file as a new
+bullet and section.
 
 If the work also produced a formal spec (see `docs/specs/`), link to it and
 to the merged PR at the top of the summary.

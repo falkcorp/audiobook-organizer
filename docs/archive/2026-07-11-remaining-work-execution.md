@@ -1,7 +1,7 @@
 <!-- file: docs/archive/2026-07-11-remaining-work-execution.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 8877ac6a-c413-408f-b4b3-fd48a6ece32a -->
-<!-- last-edited: 2026-08-11 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Status — Remaining-Work Execution Wave (2026-07-10 – 2026-07-11)
 
@@ -25,7 +25,7 @@ belongs to (`docs/status/` vs `docs/executive-summaries/`), landed in
 
 For the polished, stakeholder-facing narrative version of this same body of
 work, see the "Remaining-work execution wave" theme in
-[`docs/executive-summaries/2026-07-04-monthly-roundup-executive-summary.md`](../executive-summaries/2026-07-04-monthly-roundup-executive-summary.md).
+[`docs/executive-summaries/2026-07-executive-summary.md`](../executive-summaries/2026-07-executive-summary.md).
 
 ## Shipped this session
 
