@@ -1,7 +1,7 @@
 // file: cmd/commands_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package cmd
 
@@ -37,7 +37,7 @@ func stubCommandDeps(t *testing.T) {
 	origDefaultCfg := getDefaultServerConfig
 	origStart := startServer
 
-	initializeStore = func(dbType, path string, enableSQLite bool) (database.Store, error) {
+	initializeStore = func(dbType, path string) (database.Store, error) {
 		// Command tests only need GlobalStore to be non-nil for the
 		// startup sequence to proceed. The only store method the
 		// startup path actually touches is GetAllImportPaths (in
@@ -119,7 +119,6 @@ func TestCommandsRunWithStubs(t *testing.T) {
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 	config.AppConfig.RootDir = tempDir
-	config.AppConfig.EnableSQLite = true
 	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
 
 	if err := scanCmd.RunE(scanCmd, nil); err != nil {
@@ -152,7 +151,6 @@ func TestScanCommandErrorPaths(t *testing.T) {
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 	config.AppConfig.RootDir = tempDir
-	config.AppConfig.EnableSQLite = true
 
 	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed")
@@ -183,7 +181,6 @@ func TestServeCommandErrorPaths(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.EnableSQLite = true
 
 	sandboxStateDir(t)
 	initEncryption = func(dir string, legacy ...string) error { return fmt.Errorf("encrypt fail") }
@@ -211,7 +208,6 @@ func TestPlaylistCommandError(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.EnableSQLite = true
 	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
 
 	generatePlaylists = func() error {
@@ -233,7 +229,6 @@ func TestTagCommandError(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.EnableSQLite = true
 
 	updateSeriesTags = func() error {
 		return fmt.Errorf("tag update failed")
@@ -254,7 +249,6 @@ func TestOrganizeCommandError(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.EnableSQLite = true
 
 	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed in organize")
@@ -275,9 +269,8 @@ func TestStoreInitializationError(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.EnableSQLite = true
 
-	initializeStore = func(dbType, path string, enableSQLite bool) (database.Store, error) {
+	initializeStore = func(dbType, path string) (database.Store, error) {
 		return nil, fmt.Errorf("store init failed")
 	}
 

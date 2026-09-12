@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-11
 
 package config
 
@@ -26,10 +26,6 @@ func TestInitConfig(t *testing.T) {
 	dbType := viper.GetString("database_type")
 	if dbType != "pebble" {
 		t.Errorf("Expected database_type to be 'pebble', got '%s'", dbType)
-	}
-
-	if enableSQLite := viper.GetBool("enable_sqlite3_i_know_the_risks"); enableSQLite {
-		t.Error("Expected enable_sqlite3_i_know_the_risks to be false by default")
 	}
 
 	// Verify organization strategy defaults
@@ -205,7 +201,6 @@ func TestConfigStructure(t *testing.T) {
 		RootDir:              "/media/audiobooks",
 		DatabasePath:         "/data/audiobooks.db",
 		DatabaseType:         "pebble",
-		EnableSQLite:         false,
 		OrganizationStrategy: "auto",
 		AutoFetchMetadata:    true,
 		Language:             "en",
@@ -218,10 +213,6 @@ func TestConfigStructure(t *testing.T) {
 
 	if config.DatabaseType != "pebble" {
 		t.Errorf("Expected DatabaseType to be 'pebble', got '%s'", config.DatabaseType)
-	}
-
-	if config.EnableSQLite {
-		t.Error("Expected EnableSQLite to be false")
 	}
 
 	if config.OrganizationStrategy != "auto" {
@@ -378,7 +369,6 @@ func TestResetToDefaults(t *testing.T) {
 	AppConfig.DatabasePath = "/custom/db"
 	AppConfig.PlaylistDir = "/custom/playlists"
 	AppConfig.DatabaseType = "sqlite"
-	AppConfig.EnableSQLite = true
 	AppConfig.SetupComplete = true
 	AppConfig.OrganizationStrategy = "manual"
 	AppConfig.ScanOnStartup = true
@@ -406,9 +396,6 @@ func TestResetToDefaults(t *testing.T) {
 	// Verify database defaults
 	if AppConfig.DatabaseType != "pebble" {
 		t.Errorf("expected DatabaseType to be reset to 'pebble', got %q", AppConfig.DatabaseType)
-	}
-	if AppConfig.EnableSQLite {
-		t.Error("expected EnableSQLite to be reset to false")
 	}
 	if AppConfig.SetupComplete {
 		t.Error("expected SetupComplete to be reset to false")

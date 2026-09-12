@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package server
 
@@ -97,12 +97,6 @@ func TestConfigUpdateService_ApplyUpdates_ErrorCases(t *testing.T) {
 			payload:   map[string]any{"database_type": "mysql"},
 			wantErr:   true,
 			errSubstr: "database_type cannot be changed at runtime",
-		},
-		{
-			name:      "enable_sqlite change rejected",
-			payload:   map[string]any{"enable_sqlite": true},
-			wantErr:   true,
-			errSubstr: "enable_sqlite cannot be changed at runtime",
 		},
 	}
 
@@ -674,18 +668,6 @@ func TestConfigUpdateService_UpdateConfig(t *testing.T) {
 		}
 		if !contains(resp["error"].(string), "database_type") {
 			t.Errorf("expected database_type error, got %v", resp["error"])
-		}
-	})
-
-	t.Run("enable_sqlite rejected", func(t *testing.T) {
-		mockStore := mocks.NewMockStore(t)
-		svc := config.NewUpdateService(mockStore)
-		status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite": true})
-		if status != 400 {
-			t.Errorf("expected 400, got %d", status)
-		}
-		if !contains(resp["error"].(string), "enable_sqlite") {
-			t.Errorf("expected enable_sqlite error, got %v", resp["error"])
 		}
 	})
 }

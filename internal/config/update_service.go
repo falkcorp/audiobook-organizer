@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package config
 
@@ -375,7 +375,7 @@ var secretFieldKeys = []string{
 }
 
 // immutableFieldKeys cannot be changed at runtime and are rejected if present.
-var immutableFieldKeys = []string{"database_type", "enable_sqlite"}
+var immutableFieldKeys = []string{"database_type"}
 
 // applySecretUpdates copies the five secret fields out of the payload onto cfg.
 //

@@ -927,7 +927,6 @@ export interface Config {
   path_aliases?: PathAlias[];
   database_path: string;
   database_type: string;
-  enable_sqlite: boolean;
   playlist_dir: string;
   setup_complete?: boolean;
 

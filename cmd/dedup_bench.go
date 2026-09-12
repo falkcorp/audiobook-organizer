@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-09-11
 
 //go:build bench
 
@@ -106,7 +106,6 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 		store, initErr := initializeStore(
 			config.AppConfig.DatabaseType,
 			config.AppConfig.DatabasePath,
-			config.AppConfig.EnableSQLite,
 		)
 		if initErr != nil {
 			return fmt.Errorf("failed to initialize database: %w", initErr)

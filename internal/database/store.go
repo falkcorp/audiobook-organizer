@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.94.0
+// version: 2.95.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package database
 
@@ -1354,16 +1354,15 @@ func SetGlobalStore(s Store) {
 // the returned Store and pass it explicitly down the call chain
 // (SERVER-GLOBAL-STORE-AUDIT, in flight).
 //
-// The enableSQLite parameter is retained for API compatibility but is
-// ignored — the SQLite backend was removed in fable5 TASK-022. Any
-// dbType value other than "pebble" (or empty) returns an error.
-func InitializeStore(dbType, path string, _ bool) (Store, error) {
+// The SQLite backend was removed in fable5 TASK-022. Any dbType value other
+// than "pebble" (or empty) returns an error.
+func InitializeStore(dbType, path string) (Store, error) {
 	var s Store
 	var err error
 
 	switch dbType {
 	case "sqlite", "sqlite3":
-		return nil, fmt.Errorf("SQLite3 support has been removed. PebbleDB is the only supported database backend. Migrate data with 'audiobook-organizer migrate-from-sqlite' if needed")
+		return nil, fmt.Errorf("SQLite3 support has been removed; PebbleDB is the only supported database backend")
 	case "pebble", "":
 		// PebbleDB is the default and only supported backend.
 		s, err = NewPebbleStore(path)

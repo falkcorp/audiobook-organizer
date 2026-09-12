@@ -1,6 +1,7 @@
 // file: cmd/root_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
+// last-edited: 2026-09-11
 
 package cmd
 
@@ -94,7 +95,6 @@ func TestInitConfigWithViper(t *testing.T) {
 	// Create a config file with some settings
 	configContent := `root_dir: /tmp/audiobooks
 database_path: /tmp/test.db
-enable_sqlite: true
 `
 	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("failed to write config: %v", err)

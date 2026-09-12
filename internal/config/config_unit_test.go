@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.12.1
-// last-edited: 2026-09-02
+// version: 1.13.0
+// last-edited: 2026-09-11
 
 package config
 
@@ -365,7 +365,6 @@ func TestInitConfigDefaults(t *testing.T) {
 
 	t.Run("core defaults", func(t *testing.T) {
 		assert.Equal(t, "pebble", AppConfig.DatabaseType)
-		assert.False(t, AppConfig.EnableSQLite)
 		assert.False(t, AppConfig.SetupComplete)
 	})
 

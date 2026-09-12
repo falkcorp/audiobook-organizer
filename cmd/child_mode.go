@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-06-10
+// last-edited: 2026-09-11
 
 package cmd
 
@@ -68,7 +68,7 @@ func RunOperationRunner() {
 	})
 
 	snap := config.Snapshot()
-	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath, snap.EnableSQLite)
+	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeStore: %v\n", err)
 		os.Exit(2)

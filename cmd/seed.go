@@ -1,7 +1,7 @@
 // file: cmd/seed.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
-// last-edited: 2026-08-18
+// last-edited: 2026-09-11
 //
 // `seed` populates a fresh database with synthetic books for local
 // development. Use it after `make build` so a dev can hit `make run`
@@ -92,7 +92,7 @@ func runSeed(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--series must be > 0")
 	}
 
-	store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite)
+	store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
