@@ -269,7 +269,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	// A canceled or stood-down run stops here: the backup above returned at its
 	// checkpoint, and the metadata fetch below must not start writing books.
 	if ctx.Err() != nil {
-		return fmt.Errorf("organize stopped after auto-backup: %w", context.Cause(ctx))
+		return nil, fmt.Errorf("organize stopped after auto-backup: %w", context.Cause(ctx))
 	}
 
 	// Get books — either specific IDs or all books
