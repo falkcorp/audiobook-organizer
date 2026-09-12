@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -1966,8 +1966,8 @@ func TestRepeatedErrorKeyIsAnErrorReport(t *testing.T) {
 			t.Errorf("%s: accepted; a repeated error key must be an error report", what)
 			return
 		}
-		if !strings.Contains(strings.ToLower(err.Error()), `carries an "error`) {
-			t.Errorf("%s: error %q is not the error-report message", what, err)
+		if !strings.Contains(err.Error(), "more than once") {
+			t.Errorf("%s: error %q is not the repeated-key message", what, err)
 		}
 	}
 	for _, obj := range []string{
@@ -2003,6 +2003,64 @@ func TestRepeatedErrorKeyIsAnErrorReport(t *testing.T) {
 	m, err := parseMetadataFromJSON(`{"title":"Solo","error":null,"errors":[]}`)
 	if err != nil || m == nil || m.Title != "Solo" {
 		t.Errorf("error and errors, each once and empty: got %+v, %v; want title Solo", m, err)
+	}
+}
+
+// Any repeated key the parser acts on would otherwise be decided by key
+// order, because encoding/json keeps the last copy (PR #3330 round 7).
+func TestRepeatedKeyIsAnError(t *testing.T) {
+	rejected := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s: accepted; a repeated key must fail the reply", what)
+			return
+		}
+		if !strings.Contains(err.Error(), "more than once") {
+			t.Errorf("%s: error %q is not the repeated-key message", what, err)
+		}
+	}
+	// A repeated wrapper key, in both orders: never "nothing found".
+	for _, js := range []string{
+		`{"results": [{"title":"A"}], "results": []}`,
+		`{"results": [], "results": [{"title":"A"}]}`,
+		`{"results": [{"title":"A"}], "Results": []}`,
+		`{"books": [{"title":"A"}], "books": []}`,
+		`{"books": [], "books": [{"title":"A"}]}`,
+	} {
+		_, err := parseBatchMetadataFromJSON(js, 1)
+		rejected(t, "batch "+js, err)
+		_, err = parseMetadataFromJSON(js)
+		rejected(t, "single-book "+js, err)
+	}
+	// A repeated metadata key, on each of the four paths.
+	for _, obj := range []string{
+		`{"title":"A","title":"B"}`,
+		`{"title":"A","Title":"B"}`,
+		`{"author":"X","title":"A","AUTHOR":"Y"}`,
+	} {
+		_, err := parseBatchMetadataFromJSON(`{"results": [`+obj+`]}`, 1)
+		rejected(t, "batch element "+obj, err)
+		_, err = parseBatchMetadataFromJSON(obj, 1)
+		rejected(t, "bare one-filename object "+obj, err)
+		_, err = parseMetadataFromJSON(obj)
+		rejected(t, "single-book top level "+obj, err)
+		_, err = parseMetadataFromJSON(`{"results": [` + obj + `]}`)
+		rejected(t, "single-book results element "+obj, err)
+	}
+
+	// Controls: no repeated key is accepted as before, each element is
+	// checked on its own, and an ignored key in two spellings is harmless.
+	r, err := parseBatchMetadataFromJSON(`{"results": [{"title":"A","author":"X"},{"title":"B"}]}`, 2)
+	if err != nil || len(r) != 2 || r[0] == nil || r[1] == nil || r[0].Title != "A" || r[1].Title != "B" {
+		t.Errorf("batch results with no repeated key: got %+v, %v", r, err)
+	}
+	m, err := parseMetadataFromJSON(`{"results": [{"title":"A"}]}`)
+	if err != nil || m == nil || m.Title != "A" {
+		t.Errorf("single-book results with no repeated key: got %+v, %v", m, err)
+	}
+	m, err = parseMetadataFromJSON(`{"title":"A","filename":"x","Filename":"y"}`)
+	if err != nil || m == nil || m.Title != "A" {
+		t.Errorf("an ignored key in two spellings: got %+v, %v", m, err)
 	}
 }
 

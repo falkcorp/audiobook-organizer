@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.17.0
+// version: 13.18.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -565,6 +565,9 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
+	if err := rejectRepeatedKeys(raw); err != nil {
+		return nil, fmt.Errorf("the reply object %w", err)
+	}
 
 	if len(obj) == 0 || hasParsedMetadataKey(obj) {
 		// decodeResultElement, not a bare Unmarshal, so a top-level
@@ -578,7 +581,7 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 	// The one-key wrapper below never looks at the key's name, so check it
 	// here: {"error": {"title": "Solo"}} is an error report, and "Solo"
 	// must not be saved as the book's title.
-	if key, ok := errorReportKey(raw, obj); ok {
+	if key, ok := errorReportKey(obj); ok {
 		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
 	}
 	if len(obj) != 1 {
@@ -653,6 +656,8 @@ func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
 //     all-empty result, and {"title": "Solo", "error": "x"} would save a
 //     title the backend itself flagged. An empty value (null, [] or {}) is
 //     ignored; see errorReportKey.
+//   - An object that repeats a key is an error, whatever the values
+//     (rejectRepeatedKeys): encoding/json keeps only the last copy.
 //   - Anything else is an error. In particular an object whose keys are all
 //     foreign -- {"error": "x"}, {"code": 500, "message": "overloaded"} -- is
 //     not a result. encoding/json would decode it to an all-empty
@@ -677,10 +682,13 @@ func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata boo
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, false, fmt.Errorf("is not a valid JSON object: %w", err)
 	}
+	if err := rejectRepeatedKeys(raw); err != nil {
+		return nil, false, err
+	}
 	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
 		return nil, false, fmt.Errorf("has %d key(s) and none of them is a metadata field", len(obj))
 	}
-	if key, ok := errorReportKey(raw, obj); ok {
+	if key, ok := errorReportKey(obj); ok {
 		return nil, false, fmt.Errorf("carries an %q key, so it is an error report and not a result", sanitizeReplyText(key))
 	}
 	var metadata ParsedMetadata
@@ -972,7 +980,9 @@ The roles object fields are all optional — only include roles that are detecte
 // {}, or an object carrying at least one ParsedMetadata key and no non-empty
 // "error" or "errors" value (decodeResultElement). An element whose keys are
 // all foreign, e.g. {"error": "x"}, or one like {"title": "Solo", "error": "x"}
-// fails the whole reply. Every failure is a *ReplyParseError.
+// fails the whole reply, and so does any object, the reply's own included,
+// that repeats a key (rejectRepeatedKeys). Every failure is a
+// *ReplyParseError.
 //
 // {"results": []} is ZERO RESULTS, not an error. qwen2.5:7b-instruct returns it
 // for inputs that carry no metadata at all ("Disc 1".."Disc 8", "Season 2");
@@ -1027,6 +1037,11 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
+	// Before any key is read: {"results": [{...}], "results": []} would
+	// otherwise decode to "nothing found" and stamp every book as attempted.
+	if err := rejectRepeatedKeys(raw); err != nil {
+		return nil, fmt.Errorf("the reply object %w", err)
+	}
 
 	if results, ok := obj[resultsKey]; ok {
 		if len(obj) != 1 {
@@ -1062,7 +1077,7 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 	// the key's name is checked here. JSON:API and RFC 7807 error bodies
 	// look like {"errors": [{"status": "429", "title": "Too Many Requests"}]},
 	// and that title must not be saved as a book's title.
-	if key, ok := errorReportKey(raw, obj); ok {
+	if key, ok := errorReportKey(obj); ok {
 		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
 	}
 
@@ -1151,28 +1166,14 @@ var errorReportKeys = []string{"error", "errors"}
 // there is no error, so {"title": "Solo", "error": null} is a result. Any
 // other value is an error report, "" included.
 //
-// raw is the object obj was decoded from. encoding/json keeps only the last
-// copy of a repeated key, so {"title": "Solo", "error": "x", "error": null}
-// decodes to an empty error. When obj has an error key at all, raw's keys are
-// walked, and an "error" or "errors" key that appears more than once, in any
-// mix of case, is an error report whatever its values say.
+// Every caller runs rejectRepeatedKeys on the same object first, so obj holds
+// at most one "error" and one "errors", each in one spelling, and the value
+// read here is the only one the reply sent: {"title": "Solo", "error": "x",
+// "error": null} never reaches this function.
 //
 // An object whose only key is an empty "error" is not accepted either: it has
 // no metadata key, so it falls to the wrapper rules, which reject it.
-func errorReportKey(raw json.RawMessage, obj map[string]json.RawMessage) (string, bool) {
-	hasErrorKey := false
-	for key := range obj {
-		if isErrorReportKeyName(key) {
-			hasErrorKey = true
-			break
-		}
-	}
-	if !hasErrorKey {
-		return "", false
-	}
-	if key, repeated := repeatedErrorReportKey(raw); repeated {
-		return key, true
-	}
+func errorReportKey(obj map[string]json.RawMessage) (string, bool) {
 	for key, value := range obj {
 		if isErrorReportKeyName(key) && !errorValueIsEmpty(value) {
 			return key, true
@@ -1191,36 +1192,64 @@ func isErrorReportKeyName(key string) bool {
 	return false
 }
 
-// repeatedErrorReportKey walks the top-level keys of the JSON object raw and
-// returns the second occurrence of an "error" or "errors" key, compared
-// without case. It fails closed: if raw cannot be walked it reports "error"
-// as repeated, so an object it cannot check is treated as an error report.
-func repeatedErrorReportKey(raw json.RawMessage) (string, bool) {
+// rejectRepeatedKeys fails when the JSON object raw has a key more than once.
+// encoding/json keeps only the last copy of a repeated key, so for
+// {"results": [{"title": "A"}], "results": []}, {"title": "A", "title": "B"}
+// or {"title": "Solo", "error": "x", "error": null}, which copy the parser
+// sees would depend on key order. A reply that says two things is not an
+// answer, so it is an error whatever the values are.
+//
+// The keys the parser acts on (results, error, errors and the metadata keys)
+// repeat when they match ignoring case: {"title": "A", "Title": "B"} decodes
+// either copy into Title. Any other key repeats only when it is spelled the
+// same, which also covers a one-key wrapper such as {"books": [...],
+// "books": []}; two spellings of an ignored key both survive decoding and do
+// no harm.
+//
+// It walks every key of the object once, and fails closed: an object it
+// cannot walk is an error. The returned error is a phrase meant to follow a
+// subject such as "result 0" or "the reply object".
+func rejectRepeatedKeys(raw []byte) error {
+	unreadable := errors.New("could not be read to check for repeated keys")
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return "error", true
+		return unreadable
 	}
-	seen := make(map[string]bool, len(errorReportKeys))
+	seen := make(map[string]bool)
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
-			return "error", true
+			return unreadable
 		}
-		key, _ := tok.(string)
+		key, ok := tok.(string)
+		if !ok {
+			return unreadable
+		}
 		var value json.RawMessage
 		if err := dec.Decode(&value); err != nil {
-			return "error", true
+			return unreadable
 		}
-		for _, k := range errorReportKeys {
+		name := canonicalReplyKey(key)
+		if seen[name] {
+			return fmt.Errorf("has the key %q more than once, so which copy counts would depend on key order",
+				sanitizeReplyText(key))
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+// canonicalReplyKey maps a key the parser acts on to one spelling, whatever
+// its case, and returns any other key unchanged.
+func canonicalReplyKey(key string) string {
+	for _, keys := range [][]string{parsedMetadataKeys, errorReportKeys, {resultsKey}} {
+		for _, k := range keys {
 			if strings.EqualFold(key, k) {
-				if seen[k] {
-					return key, true
-				}
-				seen[k] = true
+				return k
 			}
 		}
 	}
-	return "", false
+	return key
 }
 
 // errorValueIsEmpty reports whether an error key's value is null, [] or {}.
