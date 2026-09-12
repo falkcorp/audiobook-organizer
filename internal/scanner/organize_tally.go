@@ -1,5 +1,5 @@
 // file: internal/scanner/organize_tally.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7b9c14-5a2d-4f86-b1c0-9d4e8a6f2b71
 // last-edited: 2026-09-12
 
@@ -59,4 +59,21 @@ func (t *OrganizeTally) Snapshot() map[string]int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return maps.Clone(t.counts)
+}
+
+type scanOperationKey struct{}
+
+// WithScanOperationID carries the library.scan operation ID on ctx so the
+// post-scan auto-organize hook can record its change rows under it. Without it
+// every rename, adopt, _copyN move and skip made inside a scan was
+// unrecorded, and organize_rename is a revertible change type.
+func WithScanOperationID(ctx context.Context, opID string) context.Context {
+	return context.WithValue(ctx, scanOperationKey{}, opID)
+}
+
+// ScanOperationID returns the operation ID WithScanOperationID put on ctx, or
+// "" outside a tracked scan.
+func ScanOperationID(ctx context.Context) string {
+	id, _ := ctx.Value(scanOperationKey{}).(string)
+	return id
 }

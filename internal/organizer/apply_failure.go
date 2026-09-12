@@ -1,5 +1,5 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
 // last-edited: 2026-09-12
 
@@ -82,6 +82,11 @@ type ApplyRenameFailure struct {
 	SourcePath    string `json:"source_path,omitempty"`
 	SourceSize    int64  `json:"source_size,omitempty"`
 	SourceModUnix int64  `json:"source_mod_unix,omitempty"`
+	// Evidence is the organize decision's database evidence (skipEvidence in
+	// inplace_collision.go): occupant owner, version groups, fingerprint and
+	// duration presence. A change re-evaluates the pair. Empty for apply
+	// records.
+	Evidence string `json:"evidence,omitempty"`
 }
 
 // OrganizeCollisionSkipPrefix namespaces organize's in-place collision skips.
@@ -167,7 +172,7 @@ func clearDurableSkip(store DurableSkipStore, prefix, bookID string) {
 //
 // plannedTargets is the current run's target set. Passing nil means "the caller
 // has no plan to compare", and only the disk conditions are checked.
-func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTargets []string, source string) bool {
+func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTargets []string, source string, evidence func() string) bool {
 	rec, ok := loadDurableSkip(store, prefix, bookID)
 	if !ok {
 		return false
@@ -221,6 +226,19 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 		}
 	}
 
+	// Organize records also carry the database evidence the decision read. A
+	// fingerprint backfill or a version-group change writes only rows, so the
+	// file checks above cannot see it; a changed summary is a new situation.
+	if evidence != nil {
+		if now := evidence(); now != rec.Evidence {
+			slog.Info("durable skip cleared — the database evidence changed",
+				"book_id", logger.SanitizeLogValue(bookID),
+				"recorded", logger.SanitizeLogValue(rec.Evidence), "now", logger.SanitizeLogValue(now))
+			clearDurableSkip(store, prefix, bookID)
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -243,7 +261,7 @@ func ClearApplyRenameFailure(store database.UserPreferenceStore, bookID string) 
 // ApplyRenameBlocked reports whether the apply rename phase should skip a
 // book. See durableSkipBlocked.
 func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plannedTargets []string) bool {
-	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "")
+	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "", nil)
 }
 
 // RecordOrganizeCollisionSkip persists organize's durable skip for a declined
@@ -256,6 +274,6 @@ func RecordOrganizeCollisionSkip(store DurableSkipStore, f ApplyRenameFailure) {
 // was declined on an earlier run and nothing has changed since: same target,
 // same source path, and neither file's size nor mtime differs. Any change
 // clears the record and returns false, so the pair is retried.
-func OrganizeCollisionBlocked(store DurableSkipStore, bookID, target, source string) bool {
-	return durableSkipBlocked(store, OrganizeCollisionSkipPrefix, bookID, []string{target}, source)
+func OrganizeCollisionBlocked(store DurableSkipStore, bookID, target, source string, evidence func() string) bool {
+	return durableSkipBlocked(store, OrganizeCollisionSkipPrefix, bookID, []string{target}, source, evidence)
 }

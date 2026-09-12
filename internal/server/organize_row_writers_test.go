@@ -1,7 +1,7 @@
 // file: internal/server/organize_row_writers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f4c1a92-53d8-4a06-9c7e-1b0d2e6f84a3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package server
 
@@ -358,5 +358,30 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	for _, r := range rows {
 		require.True(t, strings.HasPrefix(r.FilePath, config.AppConfig.RootDir),
 			"book_file %s still names a path outside the library: %s", r.ID, r.FilePath)
+	}
+}
+
+// TestAutoOrganizeScannedBooksRecordsChangesUnderScanOp: organize inside
+// library.scan records its change rows under the scan's operation ID. The hook
+// used to build its Request with no OperationID, so every scan-path rename,
+// adopt, _copyN move and skip wrote no row at all.
+func TestAutoOrganizeScannedBooksRecordsChangesUnderScanOp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("touches the filesystem and the full organize pipeline")
+	}
+	store := rowWritersStore(t)
+	f := newRowWritersFixture(t, store)
+
+	const scanOp = "op-library-scan-under-test"
+	srv := &Server{store: store, organizeService: NewOrganizeService(store)}
+	srv.autoOrganizeScannedBooks(scanner.WithScanOperationID(context.Background(), scanOp),
+		[]scanner.Book{{FilePath: f.srcDir}}, logger.New("test"))
+
+	assertRowsLandedInLibrary(t, f)
+	changes, err := store.GetOperationChanges(scanOp)
+	require.NoError(t, err)
+	require.NotEmpty(t, changes, "organize inside a scan must record its changes under the scan's operation ID")
+	for _, c := range changes {
+		require.Equal(t, scanOp, c.OperationID)
 	}
 }

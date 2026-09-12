@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -883,6 +883,14 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 		return targetPath, res, nil
 	}
 
+	// A file in a one-chapter-per-folder layout is declined from its SOURCE
+	// path, whether or not the target is free and before any collision logic,
+	// so the answer is the same whatever batch its siblings arrive in. See
+	// declineChapterFolder.
+	if err := orgSvc.declineChapterFolder(book, oldPath, info, targetPath); err != nil {
+		return "", nil, err
+	}
+
 	// Create parent directory for target
 	parentDir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(parentDir, 0775); err != nil {
@@ -900,7 +908,10 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 	if dstLink, lerr := os.Lstat(targetPath); lerr == nil && !(info.IsDir() && dstLink.IsDir() && dirIsEmpty(targetPath)) {
 		// A pair declined on an earlier run stays declined until the source or
 		// the occupant changes size or mtime, or the book targets elsewhere.
-		if OrganizeCollisionBlocked(orgSvc.db, book.ID, targetPath, oldPath) {
+		// The database evidence the decision read is compared too, so a
+		// fingerprint backfill re-opens a same_audio_unverified pair.
+		evidence := func() string { return orgSvc.skipEvidence(book, oldPath, targetPath, info.Size(), dstLink.Size()) }
+		if OrganizeCollisionBlocked(orgSvc.db, book.ID, targetPath, oldPath, evidence) {
 			return "", nil, &DestinationConflictError{Category: OutcomeSkippedDurable, Source: oldPath, Target: targetPath,
 				Reason: "declined on an earlier run; retried once the source or the occupant changes"}
 		}

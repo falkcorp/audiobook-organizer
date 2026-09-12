@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
 // last-edited: 2026-09-12
 
@@ -58,6 +58,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
@@ -192,7 +193,7 @@ func IsPlaceholderTitle(title string) bool {
 func (orgSvc *Service) resolveOccupiedInPlace(book *database.Book, src, target string, srcInfo, dstLink os.FileInfo, log logger.Logger) (*InPlaceResolution, error) {
 	res := &InPlaceResolution{OriginalTarget: target, FinalTarget: target}
 	decline := func(category, reason string) error {
-		orgSvc.recordOrganizeSkip(book.ID, category, reason, src, srcInfo, target, dstLink)
+		orgSvc.recordOrganizeSkip(book, category, reason, src, srcInfo, target, dstLink)
 		return &DestinationConflictError{Category: category, Source: src, Target: target, Reason: reason}
 	}
 
@@ -327,8 +328,10 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 	if group == "" {
 		group = bookGroup
 	}
+	minted := false
 	if group == "" {
 		group = ulid.Make().String()
+		minted = true
 	}
 
 	res.Outcome = outcome
@@ -338,9 +341,16 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 	res.PriorPrimary = boolPtrString(book.IsPrimaryVersion)
 	res.FinalTarget = src // nothing moved
 
-	// Does the group already have a primary other than this book?
+	// Does the group already have a primary other than this book? A failed
+	// lookup fails closed: guessing "no primary" would make the occupant
+	// primary next to one that already is, leaving the group with two.
 	hasPrimary := false
-	if members, merr := orgSvc.db.GetBooksByVersionGroup(group); merr == nil {
+	if !minted {
+		members, merr := orgSvc.db.GetBooksByVersionGroup(group)
+		if merr != nil {
+			return nil, decline(OutcomeUnresolvedConflict,
+				fmt.Sprintf("could not read version group %s to see whether it already has a primary: %v", group, merr))
+		}
 		for i := range members {
 			if members[i].ID != book.ID && members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
 				hasPrimary = true
@@ -348,6 +358,12 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 			}
 		}
 	}
+	// The occupant is written first so the book is never left pointing at a
+	// group its occupant is not in. If the book's own write then fails, the
+	// occupant is put back: CommitLanding records change rows only for an
+	// adopt that finished, so an unrolled occupant change would have none.
+	priorOccGroup, priorOccPrimary := occupant.VersionGroupID, occupant.IsPrimaryVersion
+	occupantWritten := false
 	if occGroup == "" || !hasPrimary {
 		makePrimary := !hasPrimary
 		res.OccupantGroupSet = occGroup == ""
@@ -361,6 +377,7 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 		}); err != nil {
 			return nil, fmt.Errorf("adopt %s into version group of %s: update occupant: %w", book.ID, occupant.ID, err)
 		}
+		occupantWritten = true
 	}
 
 	notPrimary := false
@@ -368,6 +385,14 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 		b.VersionGroupID = &group
 		b.IsPrimaryVersion = &notPrimary
 	}); err != nil {
+		if occupantWritten {
+			if rbErr := orgSvc.hydrateAndUpdateBook(occupant.ID, func(b *database.Book) {
+				b.VersionGroupID = priorOccGroup
+				b.IsPrimaryVersion = priorOccPrimary
+			}); rbErr != nil {
+				return nil, fmt.Errorf("adopt %s into version group %s: %w; restoring occupant %s also failed: %v", book.ID, group, err, occupant.ID, rbErr)
+			}
+		}
 		return nil, fmt.Errorf("adopt %s into version group %s: %w", book.ID, group, err)
 	}
 	book.VersionGroupID = &group
@@ -378,23 +403,27 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 // recordOrganizeSkip persists the durable skip for a declined pair, keyed on
 // the target and fingerprinted by BOTH files' size and mtime, so the pair is
 // not re-attempted until one of them changes (see OrganizeCollisionBlocked).
-func (orgSvc *Service) recordOrganizeSkip(bookID, category, reason, src string, srcInfo os.FileInfo, target string, dstLink os.FileInfo) {
+func (orgSvc *Service) recordOrganizeSkip(book *database.Book, category, reason, src string, srcInfo os.FileInfo, target string, dstLink os.FileInfo) {
 	rec := ApplyRenameFailure{
-		BookID:       bookID,
+		BookID:       book.ID,
 		Category:     category,
 		TargetPath:   target,
 		OccupantPath: target,
 		SourcePath:   src,
 		Reason:       reason,
 	}
+	var srcSize, dstSize int64
 	if dstLink != nil {
-		rec.OccupantSize = dstLink.Size()
+		dstSize = dstLink.Size()
+		rec.OccupantSize = dstSize
 		rec.OccupantModUnix = dstLink.ModTime().Unix()
 	}
 	if srcInfo != nil {
-		rec.SourceSize = srcInfo.Size()
+		srcSize = srcInfo.Size()
+		rec.SourceSize = srcSize
 		rec.SourceModUnix = srcInfo.ModTime().Unix()
 	}
+	rec.Evidence = orgSvc.skipEvidence(book, src, target, srcSize, dstSize)
 	RecordOrganizeCollisionSkip(orgSvc.db, rec)
 }
 
@@ -502,21 +531,33 @@ func (orgSvc *Service) detectFragmentCollapse(ctx context.Context, books []datab
 	}
 	_ = g.Wait()
 
-	type key struct{ dir, target string }
-	groups := make(map[key][]string)
+	// Two grouping keys. (source directory, target) catches "Title - 01.mp3"
+	// and "Title - 02.mp3" side by side in one folder. (book folder,
+	// normalised prefix) catches the one-chapter-per-folder layout, where each
+	// chapter is alone in its own "<Book> - N" folder, so the first key never
+	// groups them. reOrganizeInPlace also declines that layout from the source
+	// path alone (declineChapterFolder), which covers siblings split across
+	// batches; this key makes the batch count them before any worker runs.
+	type key struct{ kind, a, b string }
+	groups := make(map[key][]int)
 	for i, t := range targets {
-		if t != "" {
-			k := key{filepath.Dir(books[i].FilePath), t}
-			groups[k] = append(groups[k], books[i].ID)
+		if t == "" {
+			continue
+		}
+		k := key{"dir", filepath.Dir(books[i].FilePath), t}
+		groups[k] = append(groups[k], i)
+		if parent, prefix, ok := chaptershape.IsChapterFolderFile(books[i].FilePath); ok {
+			ck := key{"chapters", parent, chaptershape.NormPrefix(prefix)}
+			groups[ck] = append(groups[ck], i)
 		}
 	}
 	out := make(map[string]string)
-	for k, ids := range groups {
-		if len(ids) < 2 {
+	for _, idxs := range groups {
+		if len(idxs) < 2 {
 			continue
 		}
-		for _, id := range ids {
-			out[id] = k.target
+		for _, i := range idxs {
+			out[books[i].ID] = targets[i]
 		}
 	}
 	return out
@@ -528,7 +569,7 @@ func (orgSvc *Service) detectFragmentCollapse(ctx context.Context, books []datab
 func (orgSvc *Service) recordFragmentCollapse(book *database.Book, target string) {
 	srcInfo, _ := os.Stat(book.FilePath)
 	dstLink, _ := os.Lstat(target)
-	orgSvc.recordOrganizeSkip(book.ID, OutcomeFragmentCollapse,
+	orgSvc.recordOrganizeSkip(book, OutcomeFragmentCollapse,
 		"several books from one source directory compute this destination; merging them is a separate decision",
 		book.FilePath, srcInfo, target, dstLink)
 }
@@ -559,4 +600,57 @@ func formatCollisionTally(c map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", k, c[k]))
 	}
 	return strings.Join(parts, " ")
+}
+
+// declineChapterFolder refuses to move src when it sits in a
+// one-chapter-per-folder layout (<Book>/<Book> - N/file, see
+// internal/chaptershape). The folder name is the only place the chapter
+// number lives: the scanner makes one single-file row per chapter folder, a
+// single-file row has no track, and the default "{title} - {track:02d}" file
+// pattern then drops " - NN", so every chapter computes the same target.
+// Moving chapter 1 there and suffixing the rest would scramble the order, and
+// cleanupEmptyParents would delete the emptied chapter folders, so it could
+// not be undone. The layout is merged by the scanner's coalesce and the
+// regroup ops, not here. Returns nil when src does not have the shape.
+func (orgSvc *Service) declineChapterFolder(book *database.Book, src string, srcInfo os.FileInfo, target string) error {
+	probe := src
+	if srcInfo != nil && srcInfo.IsDir() {
+		probe = filepath.Join(src, "_") // a directory book IS the chapter folder
+	}
+	if _, _, ok := chaptershape.IsChapterFolderFile(probe); !ok {
+		return nil
+	}
+	reason := "source is one chapter of a book laid out one chapter per folder (<Book>/<Book> - N/); moving it would drop the chapter number its folder carries, so it stays until the chapters are merged"
+	// Written once per (source, target): the check runs on every scan and the
+	// record is informational (it is what the clear op lists).
+	if rec, ok := loadDurableSkip(orgSvc.db, OrganizeCollisionSkipPrefix, book.ID); !ok ||
+		rec.Category != OutcomeFragmentCollapse || rec.SourcePath != src || rec.TargetPath != target {
+		dstLink, _ := os.Lstat(target)
+		orgSvc.recordOrganizeSkip(book, OutcomeFragmentCollapse, reason, src, srcInfo, target, dstLink)
+	}
+	return &DestinationConflictError{Category: OutcomeFragmentCollapse, Source: src, Target: target, Reason: reason}
+}
+
+// skipEvidence summarises the database facts an in-place decision read: which
+// book owns the occupant, both version groups, and whether each side has a
+// fingerprint and a known duration. A durable skip stores it and
+// OrganizeCollisionBlocked re-evaluates the pair when it changes. Size and
+// mtime cannot see these: a fingerprint backfill or a version-group merge
+// writes only rows, so without this a same_audio_unverified skip would never
+// clear once fingerprints arrived.
+func (orgSvc *Service) skipEvidence(book *database.Book, src, target string, srcSize, dstSize int64) string {
+	var occ *database.Book
+	var occRow *database.BookFile
+	occID, occGroup := "", ""
+	if o, _ := orgSvc.db.GetBookByFilePath(target); o != nil && o.ID != book.ID {
+		occ, occID, occGroup = o, o.ID, derefString(o.VersionGroupID)
+		occRow = orgSvc.bookFileAt(o.ID, target)
+	}
+	srcRow := orgSvc.bookFileAt(book.ID, src)
+	hasFP := func(r *database.BookFile) bool { return r != nil && len(r.AcoustIDFingerprint) > 0 }
+	durKnown := func(r *database.BookFile, b *database.Book, size int64) bool {
+		return r != nil && fileDurationSec(r, b, size) > 0
+	}
+	return fmt.Sprintf("owner=%s;vg=%s|%s;fp=%t|%t;dur=%t|%t", occID, derefString(book.VersionGroupID), occGroup,
+		hasFP(srcRow), hasFP(occRow), durKnown(srcRow, book, srcSize), durKnown(occRow, occ, dstSize))
 }

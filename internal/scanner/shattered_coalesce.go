@@ -1,7 +1,7 @@
 // file: internal/scanner/shattered_coalesce.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b4e2a17-6c08-4d35-8f91-3a7d05c2e6b4
-// last-edited: 2026-07-01
+// last-edited: 2026-09-12
 
 // Package scanner — scan-time prevention of the "shattered book" defect.
 //
@@ -28,46 +28,12 @@ package scanner
 import (
 	"context"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
-
-// shatterChapterDirRe matches a chapter subdir basename "<prefix> - <number>".
-// Mirrors itunesservice.chapterDirRe.
-var shatterChapterDirRe = regexp.MustCompile(`^(.*) - (\d+)$`)
-
-// shatterChapterParts returns the grandparent dir, book-title prefix, and chapter
-// number for a file inside a "<prefix> - N" chapter dir. ok=false otherwise.
-func shatterChapterParts(fp string) (parent, prefix string, num int, ok bool) {
-	chapterDir := filepath.Dir(fp)
-	m := shatterChapterDirRe.FindStringSubmatch(filepath.Base(chapterDir))
-	if m == nil || strings.TrimSpace(m[1]) == "" {
-		return "", "", 0, false
-	}
-	n, err := strconv.Atoi(m[2])
-	if err != nil {
-		return "", "", 0, false
-	}
-	return filepath.Dir(chapterDir), strings.TrimSpace(m[1]), n, true
-}
-
-// normShatterPrefix lowercases and strips non-alphanumerics — matches
-// itunesservice.normTitle so the prefix⊆parent guard behaves identically to the
-// production-validated heal (distinct from this package's space-joined
-// normForCompare).
-func normShatterPrefix(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
 
 // coalesceShatteredSiblings merges single-file books that are chapters of one
 // shattered book (sibling "<prefix> - N" subdirs under a book-named folder) into
@@ -81,7 +47,7 @@ func coalesceShatteredSiblings(ctx context.Context, books []Book) []Book {
 		if len(b.SegmentFiles) > 0 || b.FilePath == "" {
 			continue // already multi-file, or no path to reason about
 		}
-		parent, prefix, _, ok := shatterChapterParts(b.FilePath)
+		parent, prefix, _, ok := chaptershape.Parts(b.FilePath)
 		if !ok {
 			continue
 		}
@@ -99,12 +65,12 @@ func coalesceShatteredSiblings(ctx context.Context, books []Book) []Book {
 			continue // a lone chapter is not a shattered book
 		}
 		// Precision guard: the book folder must be named after the book.
-		if !strings.Contains(normShatterPrefix(filepath.Base(k.parent)), normShatterPrefix(k.prefix)) {
+		if !chaptershape.PrefixInParent(k.parent, k.prefix) {
 			continue
 		}
 		sort.SliceStable(idxs, func(a, b int) bool {
-			_, _, na, _ := shatterChapterParts(books[idxs[a]].FilePath)
-			_, _, nb, _ := shatterChapterParts(books[idxs[b]].FilePath)
+			_, _, na, _ := chaptershape.Parts(books[idxs[a]].FilePath)
+			_, _, nb, _ := chaptershape.Parts(books[idxs[b]].FilePath)
 			return na < nb
 		})
 		segs := make([]string, len(idxs))
