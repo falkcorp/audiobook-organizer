@@ -11,15 +11,21 @@
   reads as "nothing found" and `{"title": "Solo", "error": "x"}` no longer
   saves the title. An empty `error` or `errors` value (`null`, `[]` or `{}`)
   next to metadata keys is ignored, so `{"title": "Solo", "error": null}` is a
-  normal result; any other value, `""` included, is an error, and so is an
-  `error` or `errors` key that appears more than once. A reply that is only
-  `{"error": null}` or `{"errors": []}` is still an error. This applies to
-  every result,
+  normal result; any other value, `""` included, is an error. A reply that is
+  only `{"error": null}` or `{"errors": []}` is still an error. This applies
+  to every result,
   including a bare object in a one-filename batch and the single-book
   parser's top-level object. Unrelated extra keys such as `filename` are
   still accepted.
 - Metadata keys are matched without regard to case, as the JSON decoder does,
   so a reply using `"Title"` or `"Author"` is accepted again.
+- **A reply that repeats a key is an error.** The JSON decoder keeps only the
+  last copy of a repeated key, so key order decided the outcome:
+  `{"results": [{"title": "A"}], "results": []}` read as "nothing found", and
+  `{"title": "Solo", "error": "x", "error": null}` saved the title. A repeated
+  `results`, `error`, `errors` or metadata key (compared without case, so
+  `title` and `Title` count), or any other key spelled the same twice, now
+  fails the reply, in the reply object and in every result.
 - **Model-written text can no longer abort the AI phase.** A reply the parser
   cannot decode now returns a typed `ReplyParseError`, which the
   permanent-failure check skips before it reads any text. Before, a filename
