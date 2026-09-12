@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -201,7 +201,11 @@ func (mfs *Service) lockBook(id string) func() {
 // book whose audio files the job writes and locks it for the rest of the job.
 // The release is never nil, error or not.
 //
-// It is the ONE place a file-work job makes a library copy. Under
+// It is the ONE place a file-work job (FinishApplyFileWork,
+// FinishAutoFetchFileWork, ApplyMetadataFileIO) makes a library copy. Two
+// callers outside file work still make one with no book lock:
+// WriteBackMetadataForBook (bulk write-back, batch save, the write-back
+// handler) and RunApplyPipelineRenameOnly. Under
 // createLibraryCopy a protected book with no copy gets one here, and every file
 // step after it only looks the copy up (existingCopyOnly). Two gaps it closes,
 // both 2026-09-12:
@@ -223,8 +227,13 @@ func (mfs *Service) lockBook(id string) func() {
 func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint func() error) (func(), error) {
 	noop := func() {}
 	book, err := mfs.db.GetBookByID(id)
-	if err != nil || book == nil {
-		// The file steps re-read the book and report it.
+	if err != nil {
+		// Carrying on would run the file steps, which re-read the book and
+		// resolve its copy, without the copy's lock.
+		return noop, fmt.Errorf("apply file work for book %s: load book: %w", id, err)
+	}
+	if book == nil {
+		// Deleted: the file steps re-read it and report that.
 		return noop, nil
 	}
 	target, ok := mfs.existingLibraryCopy(book)
@@ -259,10 +268,21 @@ func (mfs *Service) createUsableLibraryCopy(id string, book *database.Book) (*da
 	if fresh == nil {
 		return nil, fmt.Errorf("apply file work for book %s: book vanished after creating library copy %s", id, created.ID)
 	}
-	if found, ok := mfs.existingLibraryCopy(fresh); !ok || found == nil || found.ID != created.ID {
-		return nil, fmt.Errorf("apply file work for book %s: library copy %s was created but is not usable (a file row still points into a protected tree); no audio files were written", id, created.ID)
+	found, ok := mfs.existingLibraryCopy(fresh)
+	if ok && found != nil && found.ID == created.ID {
+		return created, nil
 	}
-	return created, nil
+	// Name the cause the lookup actually tripped on. CreateOrganizedVersion
+	// only logs a failure to write the version-group link onto the original,
+	// and the steps resolve the copy through that group.
+	cause := "a file row still points into a protected tree"
+	switch {
+	case fresh.VersionGroupID == nil || created.VersionGroupID == nil || *fresh.VersionGroupID != *created.VersionGroupID:
+		cause = "the book is not linked to the copy's version group"
+	case ok && found != nil:
+		cause = fmt.Sprintf("another library copy, %s, is found first", found.ID)
+	}
+	return nil, fmt.Errorf("apply file work for book %s: library copy %s was created but is not usable (%s); no audio files were written", id, created.ID, cause)
 }
 
 // FinishApplyFileWork is the ONE file-side sequel to a metadata apply, shared by
@@ -378,8 +398,12 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
 	mfs.downloadAutoFetchCover(id, pendingCoverURL)
-	// existingCopyOnly never creates a copy, so no checkpoint and no error.
-	releaseCopy, _ := mfs.lockLibraryCopy(id, existingCopyOnly, nil)
+	// existingCopyOnly never creates a copy, so no checkpoint; the error is a
+	// failed read of the book.
+	releaseCopy, err := mfs.lockLibraryCopy(id, existingCopyOnly, nil)
+	if err != nil {
+		return fmt.Errorf("auto-fetch file work: %w", err)
+	}
 	defer releaseCopy()
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
