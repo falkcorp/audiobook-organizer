@@ -38,9 +38,11 @@
   manual apply of its library copy no longer write the same files at once.
   Two file-work jobs for the same book run one after the other: each takes a
   per-book lock before any path lock and holds it for the whole sequence. A
-  library copy the job has to create is made up front, after a stand-down
-  check, and locked with the book, so another version's apply cannot write it
-  at the same time.
+  library copy the job has to create is made in one place, after the cover
+  download (so it gets the new cover) and a stand-down check, and locked with
+  the book, so another version's apply cannot write it at the same time. A copy
+  that cannot be made, or that the file steps would not find, stops the job
+  with an error instead of a later step making it unlocked or skipping silently.
 - **A lost scan stand-down stops apply file work between steps again.** The
   single-book apply, the batch-candidates apply and the batch-apply-cached op
   re-check the scan stand-down

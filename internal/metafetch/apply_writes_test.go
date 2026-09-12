@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -810,6 +810,13 @@ type copyHarness struct {
 	mu    sync.Mutex
 	books map[string]database.Book
 	made  int
+	// failFirst makes the first copy attempt fail, as OrganizeOneBook or
+	// CreateOrganizedVersion can.
+	failFirst bool
+	// protectedRow gives copy S a present file row left in the iTunes tree.
+	protectedRow bool
+	// coverAtCopy is the cover_url of the book handed to the copy maker.
+	coverAtCopy string
 }
 
 func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
@@ -849,13 +856,31 @@ func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 		},
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
 			b, _ := get(id)
-			return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(b.FilePath, "01.m4b")}}, nil
+			files := []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(b.FilePath, "01.m4b")}}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if id == "s" && h.protectedRow {
+				files = append(files, database.BookFile{ID: "f-s-left", BookID: "s", FilePath: filepath.Join(itunes, "left.m4b")})
+			}
+			return files, nil
+		},
+		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.books[id] = *b
+			return b, nil
 		},
 	})
 	svc.libraryCopyMaker = func(b *database.Book) *database.Book {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		h.made++
+		if b.CoverURL != nil {
+			h.coverAtCopy = *b.CoverURL
+		}
+		if h.failFirst && h.made == 1 {
+			return nil
+		}
 		s := database.Book{ID: "s", Title: b.Title, FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
 		h.books["s"] = s
 		return &s
@@ -867,6 +892,10 @@ func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 // of A makes copy S. The copy used to be looked up only when the job started,
 // so A's job never held S's book lock, and an apply of C that started once S
 // existed locked S and wrote S's files alongside A's job.
+//
+// C starts only once A's job is writing, so A's job is the one that makes S.
+// Two jobs that reach the create step at the same moment are a separate race
+// that predates this test: they hold different book locks.
 func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	entered := make(chan string, 4)
@@ -895,10 +924,19 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	wg.Go(func() {
 		assert.NoError(t, svc.FinishApplyFileWork("c", "https://covers.example.test/c.jpg", true, true, nil))
 	})
-	select {
-	case got := <-entered:
-		t.Errorf("the apply of C started (%s) while the apply of A was writing the library copy it made", got)
-	case <-time.After(200 * time.Millisecond):
+	// C's cover download writes only C's own covers file, so it may run now.
+	// Nothing of C's may touch the copy's files while A's job holds them.
+	deadline := time.After(200 * time.Millisecond)
+wait:
+	for {
+		select {
+		case got := <-entered:
+			if got != "cover:c" {
+				t.Errorf("the apply of C reached %s while the apply of A was writing the library copy it made", got)
+			}
+		case <-deadline:
+			break wait
+		}
 	}
 	close(proceed)
 	wg.Wait()
@@ -906,7 +944,8 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	assert.Contains(t, locks.taken(), bookLockKey("s"), "the copy A's job made must be book-locked")
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	assert.Equal(t, 1, h.made, "one library copy, made by A's job; C's job uses it")
+	assert.Contains(t, locks.taken(), h.books["s"].FilePath, "the file steps must find the copy and write its files, not skip them")
+	assert.Equal(t, 1, h.made, "one library copy, made by A's job; C's job, started after it, uses it")
 }
 
 // Making a library copy writes rows and files, so a lost scan stand-down stops
@@ -915,12 +954,86 @@ func TestFinishApplyFileWork_NoLibraryCopyAfterStandDownLost(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	lost := errors.New("scan stand-down lost")
-	err := svc.FinishApplyFileWork("a", "", true, true, func() error { return lost })
+	// The cover download's check passes; the next one, before the copy, fails.
+	var checks int
+	err := svc.FinishApplyFileWork("a", "", true, true, func() error {
+		checks++
+		if checks == 1 {
+			return nil
+		}
+		return lost
+	})
 	require.ErrorIs(t, err, lost)
 	assert.Contains(t, err.Error(), "creating the library copy")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	assert.Zero(t, h.made, "no library copy may be made once the stand-down is lost")
+}
+
+// A library copy that cannot be made stops the job. It used to carry on under
+// the book's own lock alone, and a later step's retry made the copy with no
+// lock on it, so another version's apply could write it alongside this job.
+func TestFinishApplyFileWork_FailedLibraryCopyStopsTheJob(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	h.failFirst = true
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not create its library copy")
+	assert.Empty(t, tags, "no tags may be written when the library copy could not be made")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Equal(t, 1, h.made, "one attempt, in the lock step; no later step may retry it unlocked")
+}
+
+// A copy the file steps would not find -- a file row left in the iTunes tree --
+// is an error, not a job whose every step skips without a word.
+func TestFinishApplyFileWork_UnusableNewCopyIsAnError(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	h.protectedRow = true
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not usable")
+	assert.Empty(t, tags, "no tags may be written for a copy the steps cannot find")
+}
+
+// The file steps never make a library copy; lockLibraryCopy is the only place
+// one is made. A step that could would make it outside that lock.
+func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	config.AppConfig.AutoRenameOnApply = true
+	config.AppConfig.AutoWriteTagsOnApply = true
+	svc.tagWriter = func(string) (int, error) { return 1, nil }
+
+	_ = svc.finishFileWork("a", true, true, nil)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Zero(t, h.made, "a file step made a library copy")
+}
+
+// A library copy the job makes carries the cover the job just downloaded. The
+// copy used to be made before the download, so it kept the provider's cover
+// URL, and on a rename-only apply nothing re-synced it.
+func TestFinishApplyFileWork_NewLibraryCopyGetsTheDownloadedCover(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.coverDownload = func(coverURL, destDir, bookID string) (string, error) {
+		return filepath.Join(destDir, "covers", bookID+".jpg"), nil
+	}
+
+	require.NoError(t, svc.FinishApplyFileWork("a", "https://covers.example.test/a.jpg", true, false, nil))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	require.Equal(t, 1, h.made)
+	assert.Equal(t, "/api/v1/covers/local/a.jpg", h.coverAtCopy, "the new copy must inherit the downloaded cover")
 }
 
 // Auto-fetch never renames, and writes tags only under write_back_metadata --
