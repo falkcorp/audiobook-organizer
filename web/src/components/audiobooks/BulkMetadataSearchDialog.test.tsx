@@ -1,10 +1,10 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
 // last-edited: 2026-09-12
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BulkMetadataSearchDialog } from './BulkMetadataSearchDialog';
 import type { Audiobook } from '../../types';
@@ -51,10 +51,10 @@ const toast = vi.fn();
 const onClose = vi.fn();
 const onComplete = vi.fn();
 
-function renderDialog(books: Audiobook[]) {
-  return renderWithProviders(
+function dialog(books: Audiobook[], open = true) {
+  return (
     <BulkMetadataSearchDialog
-      open={true}
+      open={open}
       books={books}
       onClose={onClose}
       onComplete={onComplete}
@@ -62,6 +62,27 @@ function renderDialog(books: Audiobook[]) {
     />
   );
 }
+
+function renderDialog(books: Audiobook[]) {
+  return renderWithProviders(dialog(books));
+}
+
+type ApplyResult = Awaited<ReturnType<typeof applyMetadataCandidate>>;
+
+// An apply request the test settles by hand, to act while it is in flight.
+function deferredApply() {
+  let resolve!: (v: ApplyResult) => void;
+  let reject!: (e: Error) => void;
+  mockApply.mockReturnValueOnce(
+    new Promise<ApplyResult>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    })
+  );
+  return { resolve, reject };
+}
+
+const applyOk: ApplyResult = { message: 'ok', book: {} as never, source: 'openlibrary' };
 
 // The Apply button only renders once the per-book search has resolved.
 async function waitForBook(title: string) {
@@ -161,5 +182,77 @@ describe('BulkMetadataSearchDialog — applied books', () => {
       expect(screen.getAllByRole('button', { name: 'Applied' })[0]).toBeDisabled()
     );
     expect(screen.getByText('Applied', { selector: '.MuiChip-label' })).toBeInTheDocument();
+  });
+
+  it('applying the last of several books moves back to the book before it', async () => {
+    renderDialog([book('a'), book('b'), book('c')]);
+    await waitForBook('Book A');
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    fireEvent.click(await waitForBook('Book C'));
+
+    // No book after C, so the successor is the one before it, not the first
+    // book in the list and not the empty state.
+    await waitForBook('Book B');
+    expect(mockApply).toHaveBeenCalledWith('c', candidate, undefined, true);
+    expect(screen.queryByText('Book C')).not.toBeInTheDocument();
+    expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
+    expect(Number(determinateProgress())).toBeCloseTo(100 / 3, 5);
+  });
+});
+
+describe('BulkMetadataSearchDialog — closed while an apply is in flight', () => {
+  const books = [book('a'), book('b'), book('c')];
+
+  async function applyThenClose() {
+    const pending = deferredApply();
+    const view = renderDialog(books);
+    fireEvent.click(await waitForBook('Book A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    // Nothing had been applied yet when the user closed, so no refresh.
+    expect(onComplete).not.toHaveBeenCalled();
+    view.rerender(dialog(books, false));
+    return { ...pending, view };
+  }
+
+  async function reopenAndExpectFreshSession(view: ReturnType<typeof renderDialog>) {
+    view.rerender(dialog(books, true));
+    const apply = await waitForBook('Book A');
+    expect(header()).toBe('Search Metadata — Book 1 of 3');
+    expect(screen.queryByRole('button', { name: /Undo Last/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('1 applied')).not.toBeInTheDocument();
+    expect(apply).toBeEnabled();
+  }
+
+  it('a late success refreshes the list but leaks nothing into the next session', async () => {
+    const { resolve, view } = await applyThenClose();
+    await act(async () => resolve(applyOk));
+
+    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true);
+    expect(toast).not.toHaveBeenCalled();
+    // The server did change the book, so the list behind the dialog reloads.
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    await reopenAndExpectFreshSession(view);
+  });
+
+  it('a late failure shows no error toast and leaks nothing into the next session', async () => {
+    const { reject, view } = await applyThenClose();
+    await act(async () => reject(new Error('provider timed out')));
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    await reopenAndExpectFreshSession(view);
+  });
+
+  it('a request that settles after unmount neither toasts nor refreshes', async () => {
+    const pending = deferredApply();
+    const view = renderDialog(books);
+    fireEvent.click(await waitForBook('Book A'));
+    view.unmount();
+    await act(async () => pending.resolve(applyOk));
+
+    expect(toast).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
   });
 });
