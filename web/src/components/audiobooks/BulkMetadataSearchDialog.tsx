@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-12
 
@@ -154,6 +154,29 @@ export function BulkMetadataSearchDialog({
   // Stack of book ids applied in this session so the persistent Undo button
   // can revert the last apply even after navigating away / banner dismissal.
   const [appliedStack, setAppliedStack] = useState<{ id: string; title: string }[]>([]);
+  // The parent keeps this component mounted and only toggles `open`, so its
+  // state outlives a close. A request still in flight when the user closes the
+  // dialog would otherwise write into that state after handleClose reset it:
+  // a phantom "Undo Last", a stale 'applied' status that filters the book out
+  // of the next session, and a successor book from the old selection. Each
+  // async handler captures `sessionRef.current` before awaiting and drops its
+  // UI updates if handleClose (or unmount) has moved it on since.
+  const sessionRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionRef.current += 1;
+    };
+  }, []);
+  const isStale = (session: number) => session !== sessionRef.current;
+  // An apply or undo that lands after the dialog closed still changed the
+  // book on the server, and handleClose already decided whether to refresh
+  // before it landed. Refresh the list here, unless the page itself is gone.
+  const refreshAfterStaleWrite = () => {
+    if (mountedRef.current) onComplete();
+  };
 
   const handleToggleSkipApplied = (checked: boolean) => {
     setSkipApplied(checked);
@@ -187,6 +210,7 @@ export function BulkMetadataSearchDialog({
   const doSearch = useCallback(
     async (searchQuery: string, author?: string, narrator?: string, series?: string) => {
       if (!currentBook?.id) return;
+      const session = sessionRef.current;
       setLoading(true);
       setResults([]);
       setExpandedCard(null);
@@ -199,11 +223,13 @@ export function BulkMetadataSearchDialog({
           narrator || undefined,
           series || undefined
         );
+        if (session !== sessionRef.current) return;
         setResults(resp.results || []);
       } catch {
+        if (session !== sessionRef.current) return;
         setResults([]);
       } finally {
-        setLoading(false);
+        if (session === sessionRef.current) setLoading(false);
       }
     },
     [currentBook?.id]
@@ -269,18 +295,34 @@ export function BulkMetadataSearchDialog({
 
   const handleSearch = () => doSearch(query, authorQuery, narratorQuery, seriesQuery);
 
-  const handleApplyAll = async (candidate: MetadataCandidate) => {
+  // Shared by "Apply all" and "Apply selected". `fields` undefined applies the
+  // whole candidate. Every UI write after the await is dropped when the dialog
+  // was closed (or unmounted) in the meantime; see sessionRef.
+  const applyCandidate = async (
+    candidate: MetadataCandidate,
+    fields: string[] | undefined,
+    successMessage: string
+  ) => {
+    const session = sessionRef.current;
     setApplying(true);
     const bookId = currentBook.id;
     const bookTitle = currentBook.title;
     try {
-      await api.applyMetadataCandidate(bookId, candidate, undefined, writeToFiles);
-      toast(`Applied metadata to "${bookTitle}" from ${candidate.source}`, 'success', {
+      await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles);
+      if (isStale(session)) {
+        refreshAfterStaleWrite();
+        return;
+      }
+      toast(successMessage, 'success', {
         label: 'Undo',
         onClick: async () => {
           try {
             await api.undoLastApply(bookId);
             toast(`Undid metadata apply for "${bookTitle}"`, 'info');
+            if (isStale(session)) {
+              refreshAfterStaleWrite();
+              return;
+            }
             setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
             setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
           } catch {
@@ -293,44 +335,32 @@ export function BulkMetadataSearchDialog({
       // With "Skip applied" on, the book leaves the list on this render.
       advanceFrom(bookId, skipApplied);
     } catch (err) {
+      if (isStale(session)) return;
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
-      setApplying(false);
+      // handleClose resets `applying` itself, so a stale request must not
+      // clear the flag for an apply started in the next session.
+      if (!isStale(session)) setApplying(false);
     }
   };
+
+  const handleApplyAll = (candidate: MetadataCandidate) =>
+    applyCandidate(
+      candidate,
+      undefined,
+      `Applied metadata to "${currentBook.title}" from ${candidate.source}`
+    );
 
   const handleApplySelected = async (candidate: MetadataCandidate) => {
     if (selectedFields.size === 0) {
       toast('Select at least one field to apply', 'warning');
       return;
     }
-    setApplying(true);
-    const bookId = currentBook.id;
-    const bookTitle = currentBook.title;
-    try {
-      await api.applyMetadataCandidate(bookId, candidate, Array.from(selectedFields), writeToFiles);
-      toast(`Applied selected fields to "${bookTitle}"`, 'success', {
-        label: 'Undo',
-        onClick: async () => {
-          try {
-            await api.undoLastApply(bookId);
-            toast(`Undid metadata apply for "${bookTitle}"`, 'info');
-            setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
-            setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
-          } catch {
-            /* ignore */
-          }
-        },
-      });
-      setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
-      setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
-      // With "Skip applied" on, the book leaves the list on this render.
-      advanceFrom(bookId, skipApplied);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
-    } finally {
-      setApplying(false);
-    }
+    await applyCandidate(
+      candidate,
+      Array.from(selectedFields),
+      `Applied selected fields to "${currentBook.title}"`
+    );
   };
 
   // Undo the most-recently applied book in this session. Works after the
@@ -339,30 +369,44 @@ export function BulkMetadataSearchDialog({
   const handleUndoLastApplied = async () => {
     const last = appliedStack[appliedStack.length - 1];
     if (!last) return;
+    const session = sessionRef.current;
     setUndoing(true);
     try {
       await api.undoLastApply(last.id);
+      if (isStale(session)) {
+        refreshAfterStaleWrite();
+        return;
+      }
       toast(`Undid metadata apply for "${last.title}"`, 'success');
       setBookStatuses((prev) => new Map(prev).set(last.id, 'pending'));
       setAppliedStack((prev) => prev.slice(0, -1));
     } catch (err) {
+      if (isStale(session)) return;
       toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
     } finally {
-      setUndoing(false);
+      if (!isStale(session)) setUndoing(false);
     }
   };
 
   const handleUndoCurrentBook = async () => {
+    const session = sessionRef.current;
+    const bookId = currentBook.id;
+    const bookTitle = currentBook.title;
     setUndoing(true);
     try {
-      const resp = await api.undoLastApply(currentBook.id);
-      toast(`Undid ${resp.undone_fields.length} field(s) for "${currentBook.title}"`, 'success');
-      setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'pending'));
-      setAppliedStack((prev) => prev.filter((b) => b.id !== currentBook.id));
+      const resp = await api.undoLastApply(bookId);
+      if (isStale(session)) {
+        refreshAfterStaleWrite();
+        return;
+      }
+      toast(`Undid ${resp.undone_fields.length} field(s) for "${bookTitle}"`, 'success');
+      setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
+      setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
     } catch (err) {
+      if (isStale(session)) return;
       toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
     } finally {
-      setUndoing(false);
+      if (!isStale(session)) setUndoing(false);
     }
   };
 
@@ -372,11 +416,15 @@ export function BulkMetadataSearchDialog({
   };
 
   const handleMarkNoMatch = async () => {
+    const session = sessionRef.current;
+    const bookId = currentBook.id;
     try {
-      await api.markNoMatch(currentBook.id);
-      setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'skipped'));
-      advanceFrom(currentBook.id, false);
+      await api.markNoMatch(bookId);
+      if (isStale(session)) return;
+      setBookStatuses((prev) => new Map(prev).set(bookId, 'skipped'));
+      advanceFrom(bookId, false);
     } catch {
+      if (isStale(session)) return;
       toast('Failed to mark as no match', 'error');
     }
   };
@@ -410,6 +458,12 @@ export function BulkMetadataSearchDialog({
     if (appliedCount > 0) {
       onComplete();
     }
+    // Detach every request still in flight from this session (see sessionRef).
+    // Their busy flags are cleared here because they will no longer clear them.
+    sessionRef.current += 1;
+    setApplying(false);
+    setUndoing(false);
+    setLoading(false);
     setCurrentBookId(null);
     setBookStatuses(new Map());
     setAppliedStack([]);
