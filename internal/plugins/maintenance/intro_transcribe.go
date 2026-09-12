@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.27.0
+// version: 3.27.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -27,6 +27,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -182,18 +183,22 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// touched id across introTranscribePageConc concurrent pages, so resuming
 	// by position can skip the unfinished remainder of a slower page; those
 	// books still lack a transcript and are picked up by the next run.
+	//
+	// A checkpointed book that was merged or deleted since the last run
+	// resumes at its successor: ListBookIDs returns IDs in byte order on both
+	// store paths, so that is a forward seek to the first ID greater than the
+	// checkpoint, the same seek GetAllBooksFullFrom uses. This used to restart
+	// the whole library from the first book. The exact match is still looked
+	// up first so a present checkpoint resumes right after itself whatever
+	// order the store lists in.
 	startIdx := 0
 	if params.LastBookID != "" {
-		found := false
-		for i, id := range allIDs {
-			if id == params.LastBookID {
-				startIdx, found = i+1, true
-				break
-			}
-		}
-		if !found {
-			log.Warn("transcribe-book-intros: checkpointed book is no longer listed, starting from the beginning",
-				"last_book_id", params.LastBookID)
+		if i := slices.Index(allIDs, params.LastBookID); i >= 0 {
+			startIdx = i + 1
+		} else {
+			startIdx = sort.SearchStrings(allIDs, params.LastBookID)
+			log.Info("transcribe-book-intros: checkpointed book is no longer listed, resuming at the next book ID",
+				"last_book_id", logging.Sanitize(params.LastBookID))
 		}
 	}
 

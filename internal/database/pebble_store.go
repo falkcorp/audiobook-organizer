@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.152.0
+// version: 1.152.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -820,7 +820,7 @@ func (p *PebbleStore) ListBookIDs() ([]string, error) {
 	}
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("book:0"),
-		UpperBound: []byte("book:;"),
+		UpperBound: []byte("book:~"),
 	})
 	if err != nil {
 		return nil, err

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_work_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a4c2e9d-1b6f-4d38-9e5a-c0f3b8d21a76
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -514,5 +514,38 @@ func TestRunIntroTranscribe_PageTimeChangesAreCounted(t *testing.T) {
 	st := store.last
 	if st.TotalBooks != 3 || st.Deferred != 1 || st.SkippedExisting != 1 || st.Attempted != 1 {
 		t.Fatalf("stats = total %d deferred %d skipped %d attempted %d, want 3/1/1/1", st.TotalBooks, st.Deferred, st.SkippedExisting, st.Attempted)
+	}
+}
+
+// Resume with a checkpoint that is no longer listed (the book was merged or
+// deleted since the last run): the run resumes at the first ID greater than
+// the checkpoint in byte order, as GetAllBooksFullFrom does, instead of
+// restarting the whole library from the first book.
+func TestRunIntroTranscribe_ResumeAfterVanishedCheckpointSeeksToSuccessor(t *testing.T) {
+	ids := []string{"w1", "w3", "w5", "w7"} // byte order, as ListBookIDs returns
+	var (
+		mu     sync.Mutex
+		writes []string
+	)
+	mock := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return ids, nil },
+		GetBookByIDFunc: func(id string) (*database.Book, error) { return &database.Book{ID: id}, nil },
+		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			writes = append(writes, id)
+			return b, nil
+		},
+	}
+	store := &statsStore{MockStore: mock}
+	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
+	if err := p.runIntroTranscribe(context.Background(), []byte(`{"last_book_id":"w4"}`), &denomReporter{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(writes, ",") != "w5,w7" {
+		t.Errorf("attempted %v, want w5,w7 (resume after the vanished checkpoint w4)", writes)
+	}
+	if store.last == nil || store.last.TotalBooks != 2 {
+		t.Errorf("stats = %+v, want total 2", store.last)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/signals_coverage_handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9dc1c17f-e225-48b7-a3c4-79f0246d7c9c
 // last-edited: 2026-09-12
 
@@ -77,4 +77,35 @@ func TestHandleGetSignalCoverage_NilStore(t *testing.T) {
 	c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/signals/coverage", nil)
 	srv.handleGetSignalCoverage(c)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestHandleGetSignalCoverage_ConcurrentDeepScanIs409: a deep request that
+// arrives while another deep scan holds the store's slot gets 409 Conflict
+// (ErrDeepCoverageBusy), not a second multi-minute Pebble scan and not a 500.
+func TestHandleGetSignalCoverage_ConcurrentDeepScanIs409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	srv := &Server{store: store}
+
+	getDeep := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/signals/coverage?deep=true", nil)
+		srv.handleGetSignalCoverage(c)
+		return w
+	}
+
+	// Hold the slot the way an in-flight deep scan does.
+	require.True(t, store.TryAcquireDeepCoverageScan())
+	w := getDeep()
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "already running")
+
+	// With the slot free the same request succeeds, so the 409 came from the
+	// guard and the guard was not left held by the refused request.
+	store.ReleaseDeepCoverageScan()
+	w = getDeep()
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
