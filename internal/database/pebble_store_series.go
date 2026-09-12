@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 package database
 
@@ -95,16 +95,12 @@ func (p *PebbleStore) GetSeriesByName(name string, authorID *int) (*Series, erro
 		authorIDStr = strconv.Itoa(*authorID)
 	}
 
-	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(name), authorIDStr))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	// Case- and whitespace-insensitive lookup with the legacy-key fallback
+	// (pebble_store_name_index.go).
+	value, err := p.nameIndexGet(seriesNameIndexKey(authorIDStr), name)
+	if err != nil || value == nil {
 		return nil, err
 	}
-	defer closer.Close()
 
 	id, err := strconv.Atoi(string(value))
 	if err != nil {
@@ -174,9 +170,10 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 			if series.AuthorID != nil {
 				authorIDStr = strconv.Itoa(*series.AuthorID)
 			}
-			indexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), authorIDStr))
-			if err := p.db.Delete(indexKey, pebble.Sync); err != nil {
-				slog.Warn("pebble Delete series name index", "key", string(indexKey), "error", err)
+			// Ownership-checked: a series whose name collapses to the same
+			// key under the same author may own the entry.
+			if err := p.deleteNameIndexIfOwned(p.db, pebble.Sync, seriesNameIndexKey(authorIDStr), series.Name, nameIndexOwner(id)); err != nil {
+				slog.Warn("pebble Delete series name index", "series_id", id, "name", series.Name, "error", err)
 			}
 		}
 		closer.Close()
@@ -207,9 +204,8 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 	if series.AuthorID != nil {
 		oldAuthorIDStr = strconv.Itoa(*series.AuthorID)
 	}
-	oldIndexKey := []byte(fmt.Sprintf("series:name:%s:%s", util.NormalizeAuthor(series.Name), oldAuthorIDStr))
-	if err := p.db.Delete(oldIndexKey, pebble.Sync); err != nil {
-		slog.Warn("pebble Delete old series name index", "key", string(oldIndexKey), "error", err)
+	if err := p.deleteNameIndexIfOwned(p.db, pebble.Sync, seriesNameIndexKey(oldAuthorIDStr), series.Name, nameIndexOwner(id)); err != nil {
+		slog.Warn("pebble Delete old series name index", "series_id", id, "name", series.Name, "error", err)
 	}
 
 	// Update name

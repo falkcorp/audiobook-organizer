@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package database
 
@@ -145,7 +145,11 @@ func (p *PebbleStore) GetRoleByID(id string) (*Role, error) {
 }
 
 func (p *PebbleStore) GetRoleByName(name string) (*Role, error) {
-	lower := util.NormalizeAuthor(name)
+	// NormalizeString, not NormalizeAuthor: role names are not person names,
+	// and NormalizeAuthor collapses internal whitespace since 2026-09-12 while
+	// CreateRole's writer (strings.ToLower) does not. NormalizeString is the
+	// exact trim+lowercase this lookup has always used.
+	lower := util.NormalizeString(name)
 	v, closer, err := p.db.Get([]byte("idx:role:name:" + lower))
 	if err == pebble.ErrNotFound {
 		return nil, nil
@@ -254,7 +258,7 @@ func (p *PebbleStore) DeleteRole(id string) error {
 		b.Close()
 		return err
 	}
-	if err := b.Delete([]byte("idx:role:name:"+util.NormalizeAuthor(r.Name)), nil); err != nil {
+	if err := b.Delete([]byte("idx:role:name:"+util.NormalizeString(r.Name)), nil); err != nil {
 		b.Close()
 		return err
 	}
