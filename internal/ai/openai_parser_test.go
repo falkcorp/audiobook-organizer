@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -2037,6 +2037,10 @@ func TestRepeatedKeyIsAnError(t *testing.T) {
 		`{"title":"A","title":"B"}`,
 		`{"title":"A","Title":"B"}`,
 		`{"author":"X","title":"A","AUTHOR":"Y"}`,
+		// encoding/json folds U+017F (long s) to "s", so "ſeries" fills
+		// Series. The check has to match keys by the same Unicode folding,
+		// not by strings.ToLower, or this reply would be accepted.
+		`{"title":"A","ſeries":"X","series":"Y"}`,
 	} {
 		_, err := parseBatchMetadataFromJSON(`{"results": [`+obj+`]}`, 1)
 		rejected(t, "batch element "+obj, err)
