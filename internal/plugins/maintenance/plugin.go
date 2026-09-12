@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -78,6 +78,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// whether Book.FilePath is safe to trust as an identity signal at all,
 		// which any future write path touching Book.FilePath must re-check first.
 		p.filePathCollisionReportDef(),
+		// unknown-author-audit is the report-only census of books already filed
+		// under an "Unknown Author" directory -- the backlog the HasResolvedAuthor
+		// rename gate cannot reach because it only stops NEW placeholder paths.
+		p.unknownAuthorAuditDef(),
 		// mark-missing-files is the WRITER for the book_file.Missing flag that the
 		// dashboard's BrokenFiles counter now reads. missing-file-audit measures the
 		// same disk truth but is read-only; this op persists it so the counter is
