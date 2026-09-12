@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-09-12
 
@@ -9,13 +9,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	blevequery "github.com/blevesearch/bleve/v2/search/query"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // GetAudiobooks retrieves audiobooks with optional filtering.
@@ -39,7 +43,9 @@ func (svc *AudiobookService) GetAudiobooks(ctx context.Context, limit int, offse
 // A caveat worth stating rather than burying: when a search is combined with
 // post-filters, the total is exact only while the match set fits inside
 // searchPostFilterWindow. Past that it is a lower bound and a warning is
-// logged. It is not silently capped.
+// logged. It is not silently capped. A search scoped by author_id or
+// series_id is NOT windowed: it is evaluated against the scoped book set
+// itself (see searchWithinIDs), so its total is always exact.
 func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, filters ...ListFilters) ([]database.Book, int, error) {
 	if svc.store == nil {
 		return nil, 0, fmt.Errorf("database not initialized")
@@ -149,11 +155,16 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 	// junction (co-authors included, not only the denormalized Book.AuthorID),
 	// primary versions only, soft-deleted rows excluded.
 	//
-	// Setting hasPostFilters here, BEFORE the search branch runs, is what makes
-	// that branch over-fetch the whole candidate set instead of one page — see
-	// the comment above fetchLimit for why post-filtering one already-cut page
-	// breaks paging. Only the getter the request actually needs is called; a
-	// single id with no search is still served by its own base branch.
+	// With a search, the membership set is also what the search runs AGAINST
+	// (searchWithinIDs): Bleve gets the set as a doc-ID conjunction, and the
+	// substring fallbacks match only the set's books. Cutting the GLOBAL search
+	// to searchPostFilterWindow hits and then filtering by series was the first
+	// cut of this fix, and it dropped every series book ranked past the window
+	// — on a ~64k-book library a broad query inside a series does exactly that.
+	// hasPostFilters is still set so the post-filter block below applies the
+	// primary-version/tag/etc. filters and does the one and only pagination.
+	// Only the getter the request actually needs is called; a single id with
+	// no search is still served by its own base branch.
 	var idMembership map[string]struct{}
 	var memberAuthorID, memberSeriesID *int
 	if search != "" {
@@ -174,7 +185,11 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 
 	// Apply filters in order of precedence
 	if search != "" {
-		if svc.searchIndex != nil {
+		if idMembership != nil {
+			// Scoped search: every match inside the author/series set, with no
+			// window. The post-filter block below counts and paginates it.
+			books, resultTotal, err = svc.searchWithinIDs(search, idMembership, f.UserID)
+		} else if svc.searchIndex != nil {
 			// When post-filters will run below, the index must hand back the
 			// whole candidate set, NOT one page.
 			//
@@ -201,7 +216,7 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 			if hasPostFilters {
 				fetchLimit, fetchOffset = searchPostFilterWindow, 0
 			}
-			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID)
+			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID, nil)
 			if hasPostFilters && len(books) >= searchPostFilterWindow {
 				// Truncated: rows past the window were never considered, so any
 				// count derived below is a lower bound. Say so rather than
@@ -687,6 +702,83 @@ func (svc *AudiobookService) resolveIDMembership(authorID, seriesID *int) (map[s
 	return set, nil
 }
 
+// searchWithinIDs runs a search confined to the given book-ID set (the
+// author_id/series_id membership) and returns EVERY in-scope match, unpaged.
+// The caller's post-filter block applies the remaining filters, counts, and
+// paginates, so the total is exact with no window involved.
+//
+// With a Bleve index the scope is pushed into the query as a DocIDQuery
+// conjunction, so ranking and the DSL (including per-user filters) behave as
+// for an unscoped search. With no index it runs the SearchBooks substring
+// predicate over just the scoped books; see substringSearchWithin.
+func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct{}, userID string) ([]database.Book, int, error) {
+	if len(set) == 0 {
+		return []database.Book{}, 0, nil
+	}
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if svc.searchIndex == nil {
+		slog.Warn("search: search index is nil; scoped search falling back to the substring predicate",
+			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchMatches")
+		return svc.substringSearchWithin(query, ids)
+	}
+	return svc.searchWithBleve(query, len(ids), 0, userID, ids)
+}
+
+// substringSearchWithin applies the store.SearchBooks predicate
+// (database.SubstringSearchMatches — the same single copy the Pebble and memdb
+// scans call) to the given books only, returning every match in book-ID order,
+// which is the order SearchBooks' scans iterate in.
+//
+// Matching the scoped books directly, instead of calling SearchBooks and
+// filtering its output, is what removes the window: SearchBooks walks the
+// whole library, so capping it and then filtering by series drops in-scope
+// matches past the cap, while not capping it materialises every library-wide
+// match of a broad query to keep a handful. Both reads here are sized by the
+// scope. Errors fail the request rather than silently under-matching: a lost
+// author-name map would drop every author-name match with no signal.
+func (svc *AudiobookService) substringSearchWithin(query string, ids []string) ([]database.Book, int, error) {
+	candidates, err := svc.store.GetBooksByIDs(ids)
+	if err != nil {
+		return nil, 0, fmt.Errorf("scoped search: load %d books: %w", len(ids), err)
+	}
+	authorIDSet := make(map[int]struct{})
+	for i := range candidates {
+		if candidates[i].AuthorID != nil {
+			authorIDSet[*candidates[i].AuthorID] = struct{}{}
+		}
+	}
+	authorNames := make(map[int]string, len(authorIDSet))
+	if len(authorIDSet) > 0 {
+		authorIDs := make([]int, 0, len(authorIDSet))
+		for id := range authorIDSet {
+			authorIDs = append(authorIDs, id)
+		}
+		authors, aErr := svc.store.GetAuthorsByIDs(authorIDs)
+		if aErr != nil {
+			return nil, 0, fmt.Errorf("scoped search: load author names: %w", aErr)
+		}
+		for id, a := range authors {
+			if a != nil {
+				authorNames[id] = util.NormalizeAuthor(a.Name)
+			}
+		}
+	}
+	lowerQuery := strings.ToLower(query)
+	matched := make([]database.Book, 0, len(candidates))
+	for i := range candidates {
+		b := &candidates[i]
+		if database.SubstringSearchMatches(b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery) {
+			matched = append(matched, *b)
+		}
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	return matched, len(matched), nil
+}
+
 // CountAudiobooksFiltered returns the count of audiobooks matching the
 // given filters. Uses the memdb count-only pushdown (no projection
 // allocations, no full-corpus materialization) for the common filter set.
@@ -869,7 +961,11 @@ func (svc *AudiobookService) EnrichAudiobooksWithNamesAndFiles(books []database.
 // the playlist evaluator's defaultEvalPageSize precedent
 // (internal/playlist/evaluator.go) — kept as a private, package-local
 // constant rather than importing the playlist one.
-const searchPostFilterWindow = 10000
+//
+// A var rather than a const only so tests can shrink it to prove a code path
+// is (or is not) bounded by it without indexing 10,000 documents. Nothing in
+// production assigns it.
+var searchPostFilterWindow = 10000
 
 // searchWithBleve parses the query via the DSL, translates to a
 // Bleve native query, and returns the matching books. Per-user
@@ -891,7 +987,13 @@ const searchPostFilterWindow = 10000
 // caller then substituted len(page) — which is always a plausible-looking
 // number, which is why it survived so long. See searchTotalIsExact for when
 // the figure is exact and when it is a lower bound.
-func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string) ([]database.Book, int, error) {
+//
+// restrictIDs, when non-nil, confines the search to those book IDs: the
+// translated query is ANDed with a Bleve DocIDQuery (Bleve doc IDs are book
+// IDs, see BleveIndex.IndexBook), every in-scope hit is fetched rather than
+// searchPostFilterWindow of them, and the substring fallbacks match only those
+// books. Callers pass limit=len(restrictIDs), offset=0.
+func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string, restrictIDs []string) ([]database.Book, int, error) {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		// Parser failure: fall back to the substring search path so
@@ -906,6 +1008,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// reading a log line.
 		slog.Warn("search: DSL parse failed; falling back to substring SearchBooks",
 			"query", query, "err", err, "fallback", "store.SearchBooks")
+		if restrictIDs != nil {
+			return svc.substringSearchWithin(query, restrictIDs)
+		}
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		// SearchBooks exposes no match count, so the only honest figure
 		// available here is the page length. Callers must not treat this as
@@ -919,16 +1024,27 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// and the user silently gets substring results instead.
 		slog.Warn("search: query translation failed; falling back to substring SearchBooks",
 			"query", query, "err", err, "fallback", "store.SearchBooks")
+		if restrictIDs != nil {
+			return svc.substringSearchWithin(query, restrictIDs)
+		}
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		return books, len(books), sErr
 	}
 
+	window := searchPostFilterWindow
+	if restrictIDs != nil {
+		bleveQ = blevequery.NewConjunctionQuery([]blevequery.Query{bleveQ, blevequery.NewDocIDQuery(restrictIDs)})
+		// The scope bounds the hit count, so fetching len(restrictIDs) hits
+		// is every in-scope match — nothing is truncated.
+		window = len(restrictIDs)
+	}
+
 	if len(perUser) > 0 && userID != "" && !config.AppConfig.DisablePerUserSearchFilters {
-		hits, _, err := svc.searchIndex.SearchNative(bleveQ, 0, searchPostFilterWindow)
+		hits, _, err := svc.searchIndex.SearchNative(bleveQ, 0, window)
 		if err != nil {
 			return nil, 0, fmt.Errorf("bleve search: %w", err)
 		}
-		if len(hits) >= searchPostFilterWindow {
+		if restrictIDs == nil && len(hits) >= searchPostFilterWindow {
 			slog.Warn("search: post-filter window exhausted; results beyond it are truncated",
 				"window", searchPostFilterWindow)
 		}

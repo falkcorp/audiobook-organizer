@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.148.0
+// version: 1.149.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -3574,16 +3574,9 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 			continue
 		}
 
-		titleMatch := strings.Contains(strings.ToLower(book.Title), lowerQuery)
-		authorMatch := false
-		if book.AuthorID != nil {
-			if name, ok := authorNames[*book.AuthorID]; ok {
-				authorMatch = strings.Contains(name, lowerQuery)
-			}
-		}
-		narratorMatch := book.Narrator != nil && strings.Contains(strings.ToLower(*book.Narrator), lowerQuery)
-
-		if titleMatch || authorMatch || narratorMatch {
+		// Shared with the memdb scan and the scoped service fallback; see
+		// SubstringSearchMatches in memdb_search.go.
+		if SubstringSearchMatches(book.Title, book.Narrator, book.AuthorID, authorNames, lowerQuery) {
 			// Apply pagination: only collect results in the requested range.
 			// limit == 0 means "no limit" (return all matches).
 			if count >= offset && (limit == 0 || len(filtered) < limit) {
