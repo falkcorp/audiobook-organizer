@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -669,37 +669,38 @@ func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
 	// Pass 1: scan book_authors junction table (multi-author associations).
 	// Track which books have junction entries so we don't double-count.
 	bookHasJunction := make(map[string]bool)
-	jIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_authors:"),
-		UpperBound: []byte("book_authors:~"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	for jIter.First(); jIter.Valid(); jIter.Next() {
+	if err := forEachKeyInRange(p.db, []byte("book_authors:"), []byte("book_authors:~"), func(key, value []byte) error {
 		var authors []BookAuthor
-		if json.Unmarshal(jIter.Value(), &authors) != nil {
-			continue
+		if json.Unmarshal(value, &authors) != nil {
+			return nil
 		}
-		key := string(jIter.Key())
-		bookID := strings.TrimPrefix(key, "book_authors:")
-		// Look up the book to check primary/deletion flags.
-		book, _ := p.GetBookByID(bookID)
+		bookID := strings.TrimPrefix(string(key), "book_authors:")
+		// Look up the book to check primary/deletion flags. A missing book
+		// ((nil, nil): a junction row outliving its book) is skipped; any other
+		// read error fails the count. Until 2026-09-12 the error was discarded
+		// and the junction scan's own read error was never checked, so an
+		// unreadable book silently dropped out of every author's count.
+		book, err := p.GetBookByID(bookID)
+		if err != nil {
+			return fmt.Errorf("GetAllAuthorBookCounts: reading book %s: %w", bookID, err)
+		}
 		if book == nil {
-			continue
+			return nil
 		}
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(book) {
-			continue
+			return nil
 		}
 		bookHasJunction[bookID] = true
 		for _, a := range authors {
 			counts[a.AuthorID]++
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	jIter.Close()
 
 	// Pass 2: scan books for the legacy AuthorID field (for books without junction entries).
 

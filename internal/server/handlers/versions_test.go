@@ -1,11 +1,12 @@
 // file: internal/server/handlers/versions_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3a9f6d21-7c84-4e0b-bd35-9f12a7c6e840
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package handlers_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -255,4 +256,21 @@ func TestVersionsHandler_MoveSegments_GroupMismatch(t *testing.T) {
 	h.MoveSegments(c)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// An unreadable version group must fail the split. The member count names the
+// new row ("Version N"); before 2026-09-12 a read error was dropped and the new
+// row was created and numbered as if the group were empty.
+func TestVersionsHandler_SplitVersion_GroupReadError(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Book One", VersionGroupID: new("g1")}, nil)
+	store.EXPECT().GetBooksByVersionGroup("g1").Return(nil, errors.New("injected group read error"))
+	// No CreateBook / MoveBookFilesToBook expectation: the strict mock fails
+	// the test if the split goes on to create the new row.
+
+	h := handlers.NewVersionsHandler(store)
+	c, w := newVersionsCtx(http.MethodPost, "/audiobooks/b1/split-version", `{"segment_ids":["f1"]}`, gin.Params{{Key: "id", Value: "b1"}})
+	h.SplitVersion(c)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

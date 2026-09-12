@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -1040,8 +1040,8 @@ func (mfs *Service) librarySibling(book *database.Book) *database.Book {
 	if book.VersionGroupID == nil || *book.VersionGroupID == "" {
 		return nil
 	}
-	siblings, err := mfs.db.GetBooksByVersionGroup(*book.VersionGroupID)
-	if err != nil {
+	siblings, ok := mfs.versionGroupSiblings(book, "library-copy lookup")
+	if !ok {
 		return nil
 	}
 	for i := range siblings {
@@ -1057,6 +1057,22 @@ func (mfs *Service) librarySibling(book *database.Book) *database.Book {
 		return sib
 	}
 	return nil
+}
+
+// versionGroupSiblings lists book's version group for a caller that can carry
+// on without it: write-back to sibling copies skips them, and the library-copy
+// lookup returns no sibling (the apply then declines a protected book). A read
+// error is logged, not swallowed. Until 2026-09-12 both callers dropped it with
+// no trace, so an unreadable group looked exactly like a group with no
+// siblings. ok is false when the group could not be read.
+func (mfs *Service) versionGroupSiblings(book *database.Book, purpose string) ([]database.Book, bool) {
+	siblings, err := mfs.db.GetBooksByVersionGroup(*book.VersionGroupID)
+	if err != nil {
+		slog.Warn("could not read version group; continuing without its siblings",
+			"purpose", purpose, "bookID", book.ID, "versionGroupID", *book.VersionGroupID, "error", err)
+		return nil, false
+	}
+	return siblings, true
 }
 
 // firstProtectedFileRow returns the first present book_file path of bookID

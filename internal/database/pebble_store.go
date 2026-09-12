@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.155.0
+// version: 1.155.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -3734,7 +3734,16 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 			return nil
 		}
 		b, err := p.GetBookByID(bookID)
-		if err != nil || b == nil {
+		if err != nil {
+			// Only a missing row may be skipped: GetBookByID reports not-found as
+			// (nil, nil), which here means a stale index entry for a hard-deleted
+			// book. Any other error is an unreadable MEMBER, and skipping it hands
+			// the caller a short group that reads as complete (dedup, version-group
+			// operations and library-copy lookups all act on the whole group).
+			// Until 2026-09-12 every error was skipped.
+			return fmt.Errorf("GetBooksByVersionGroup %s: reading member %s: %w", groupID, bookID, err)
+		}
+		if b == nil {
 			return nil
 		}
 		if bookIsSoftDeleted(b) {
@@ -4052,19 +4061,23 @@ func (p *PebbleStore) GetBookVersion(id string) (*BookVersion, error) {
 func (p *PebbleStore) GetBookVersionsByBookID(bookID string) ([]BookVersion, error) {
 	prefix := []byte("idx:bv:book:" + bookID + ":")
 	upper := []byte("idx:bv:book:" + bookID + ":~")
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
+	// Only a missing record (the getter's (nil, nil)) is a stale index entry
+	// that may be skipped; any other read error fails the list. Until
+	// 2026-09-12 every error was skipped and the scan's own read error was
+	// never checked, so an unreadable member came back as a short list.
 	var out []BookVersion
-	for iter.First(); iter.Valid(); iter.Next() {
-		versionID := strings.TrimPrefix(string(iter.Key()), string(prefix))
+	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
+		versionID := strings.TrimPrefix(string(key), string(prefix))
 		v, err := p.GetBookVersion(versionID)
-		if err != nil || v == nil {
-			continue
+		if err != nil {
+			return fmt.Errorf("GetBookVersionsByBookID %s: reading version %s: %w", bookID, versionID, err)
 		}
-		out = append(out, *v)
+		if v != nil {
+			out = append(out, *v)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

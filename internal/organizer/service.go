@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.38.0
+// version: 1.38.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -734,19 +734,26 @@ func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, 
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 			if book.VersionGroupID != nil && *book.VersionGroupID != "" {
 				vgBooks, vgErr := orgSvc.db.GetBooksByVersionGroup(*book.VersionGroupID)
-				if vgErr == nil {
-					hasPrimary := false
-					for _, vb := range vgBooks {
-						if vb.IsPrimaryVersion != nil && *vb.IsPrimaryVersion {
-							hasPrimary = true
-							break
-						}
-					}
-					if hasPrimary {
-						continue // Has a primary version — skip this non-primary
-					}
-					// No primary exists yet — allow organize to create one
+				if vgErr != nil {
+					// Fail closed. An unreadable group is not "a group with no
+					// primary": organizing this row could add a second primary to a
+					// group that already has one. Until 2026-09-12 a read error fell
+					// through to organize. The next run retries.
+					log.Warn("Organize: skipping non-primary %s: could not read version group %s: %v",
+						book.ID, *book.VersionGroupID, vgErr)
+					continue
 				}
+				hasPrimary := false
+				for _, vb := range vgBooks {
+					if vb.IsPrimaryVersion != nil && *vb.IsPrimaryVersion {
+						hasPrimary = true
+						break
+					}
+				}
+				if hasPrimary {
+					continue // Has a primary version — skip this non-primary
+				}
+				// No primary exists yet — allow organize to create one
 			} else {
 				continue
 			}

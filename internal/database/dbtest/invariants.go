@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/invariants.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b1d2f3a4-5c6e-7a8b-9c0d-invariantsdbt1
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 // Package dbtest holds cross-package TEST-ONLY helpers for asserting
 // data-loss / store-consistency invariants against a real database.Store.
@@ -145,13 +145,23 @@ func AssertStoreInvariants(tb testing.TB, store database.Store) {
 	// (b) A LIVE book must be discoverable by its own work/version-group listing.
 	for id, b := range live {
 		if b.WorkID != nil && *b.WorkID != "" {
-			got, _ := store.GetBooksByWorkID(*b.WorkID)
+			got, err := store.GetBooksByWorkID(*b.WorkID)
+			if err != nil {
+				// A read error is not "absent from its own listing": report it as
+				// what it is, the way section (a) does.
+				tb.Fatalf("invariant (b): GetBooksByWorkID(%s): %v", *b.WorkID, err)
+			}
 			if !containsID(got, id) {
 				tb.Errorf("invariant (b): live book %s absent from its own work listing %s", id, *b.WorkID)
 			}
 		}
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-			got, _ := store.GetBooksByVersionGroup(*b.VersionGroupID)
+			got, err := store.GetBooksByVersionGroup(*b.VersionGroupID)
+			if err != nil {
+				// A read error is not "absent from its own listing": report it as
+				// what it is, the way section (a) does.
+				tb.Fatalf("invariant (b): GetBooksByVersionGroup(%s): %v", *b.VersionGroupID, err)
+			}
 			if !containsID(got, id) {
 				tb.Errorf("invariant (b): live book %s absent from its own version-group listing %s", id, *b.VersionGroupID)
 			}

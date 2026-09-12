@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 99027475-b084-4603-adf4-4061987f30b0
 // last-edited: 2026-09-12
 
@@ -696,4 +696,28 @@ func TestInPlace_UnverifiedSkip_ReevaluatedWhenFingerprintsArrive(t *testing.T) 
 	}
 	mustContent(t, src, srcAudio)
 	mustContent(t, target, occAudio)
+}
+
+// A non-primary book whose version group cannot be read is held back by the
+// organize filter. Before 2026-09-12 the read error fell through to "no primary
+// yet" and the book was organized, which can put a second primary in a group.
+func TestFilter_NonPrimaryWithUnreadableGroupSkipped(t *testing.T) {
+	_, store, root := setupInPlace(t)
+	b := addInPlaceBook(t, store, "np", "Real Title", filepath.Join(root, "in", "np.mp3"), filled(100, 3), nil, 0)
+	no, group := false, "vg-unread"
+	b.IsPrimaryVersion = &no
+	b.VersionGroupID = &group
+
+	// Baseline: the group reads (empty, so no primary) and the book is organized.
+	svc := NewService(&faultyInPlaceStore{PebbleStore: store})
+	toOrganize, _, _ := svc.filterBooksNeedingOrganization([]database.Book{*b}, &noopLogger{})
+	if len(toOrganize) != 1 {
+		t.Fatalf("baseline: want the non-primary organized when its group has no primary, got %d", len(toOrganize))
+	}
+
+	svc = NewService(&faultyInPlaceStore{PebbleStore: store, vgErr: errors.New("injected: group read failed")})
+	toOrganize, _, _ = svc.filterBooksNeedingOrganization([]database.Book{*b}, &noopLogger{})
+	if len(toOrganize) != 0 {
+		t.Fatalf("an unreadable group must hold the non-primary back, got %+v", toOrganize)
+	}
 }

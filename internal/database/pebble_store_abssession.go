@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
-// last-edited: 2026-08-24
+// last-edited: 2026-09-12
 
 package database
 
@@ -222,20 +222,23 @@ func (p *PebbleStore) GetABSSessionByRefreshHash(hash string) (*ABSSession, erro
 // sessions.
 func (p *PebbleStore) ListABSSessionsForUser(userID string) ([]ABSSession, error) {
 	prefix := []byte(absSessionUserIdxPfx + userID + ":")
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
+	// Only a missing record (the getter's (nil, nil)) is a stale index entry
+	// that may be skipped; any other read error fails the list. Until
+	// 2026-09-12 every error was skipped and the scan's own read error was
+	// never checked, so an unreadable member came back as a short list.
 	out := make([]ABSSession, 0, 4)
-	for iter.First(); iter.Valid(); iter.Next() {
-		id := strings.TrimPrefix(string(iter.Key()), string(prefix))
+	if err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
+		id := strings.TrimPrefix(string(key), string(prefix))
 		s, err := p.GetABSSession(id)
-		if err != nil || s == nil {
-			continue
+		if err != nil {
+			return fmt.Errorf("ListABSSessionsForUser %s: reading session %s: %w", userID, id, err)
 		}
-		out = append(out, *s)
+		if s != nil {
+			out = append(out, *s)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	// Newest first, matching ABS's /api/me/sessions ordering.
 	sort.SliceStable(out, func(a, b int) bool {

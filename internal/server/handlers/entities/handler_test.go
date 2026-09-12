@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-09-12
 
@@ -265,6 +265,18 @@ func TestListWork(t *testing.T) {
 	c, w := newCtx(http.MethodGet, "/work", "", nil)
 	h.ListWork(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// A work whose books cannot be read must fail the page. Before 2026-09-12 the
+// error was replaced with an empty slice and the work was listed with no books.
+func TestListWork_BookReadErrorFailsPage(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetAllWorks().Return([]database.Work{{ID: "w1", Title: "T"}}, nil)
+	d.store.EXPECT().GetAllWorkBookCounts().Return(map[string]int{"w1": 2}, nil)
+	d.store.EXPECT().GetBooksByWorkID("w1").Return(nil, assert.AnError)
+	c, w := newCtx(http.MethodGet, "/work", "", nil)
+	h.ListWork(c)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestGetWorkStats(t *testing.T) {
