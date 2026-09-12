@@ -18,8 +18,9 @@ disagree. Removed settings get their own removal message, including the
 flag-only `enable_sqlite3_i_know_the_risks`, which used to be dropped silently.
 
 The three read-only keys that GET /config adds (`env_locked`, `setting_locks`,
-`activity_db_resolved_path`) are dropped from a PUT rather than refused, so a
-GET response can be sent back unchanged.
+`activity_db_resolved_path`) are dropped from a PUT rather than refused. A raw
+GET response still cannot be sent back as-is, because it also carries the
+immutable `database_type`; the web settings import drops that key.
 
 The web Settings page stopped sending eight flat keys the server never read
 (`auto_update_*`, `maintenance_window_*`) next to their nested objects. An old

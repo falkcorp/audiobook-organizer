@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -441,6 +441,34 @@ func TestUpdateConfig_ServiceError(t *testing.T) {
 		r.PUT("/config", h.UpdateConfig)
 	})
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestUpdateConfig_UnknownKeysReachResponse pins the pass-through: the update
+// service reports refused keys as unknown_keys, and the 400 body must carry
+// them next to the standard envelope rather than dropping everything but the
+// error string.
+func TestUpdateConfig_UnknownKeysReachResponse(t *testing.T) {
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusBadRequest, map[string]any{
+		"error":        "unknown config keys: dedup.auto_merge_enabld",
+		"unknown_keys": []string{"dedup.auto_merge_enabld"},
+	})
+
+	w := run(http.MethodPut, "/config", "/config", []byte(`{"dedup":{"auto_merge_enabld":false}}`), func(r *gin.Engine) {
+		r.PUT("/config", h.UpdateConfig)
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var body struct {
+		Error       string   `json:"error"`
+		Code        string   `json:"code"`
+		Status      int      `json:"status"`
+		UnknownKeys []string `json:"unknown_keys"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, []string{"dedup.auto_merge_enabld"}, body.UnknownKeys)
+	assert.Contains(t, body.Error, "dedup.auto_merge_enabld")
+	assert.Equal(t, "CONFIG_ERROR", body.Code)
+	assert.Equal(t, http.StatusBadRequest, body.Status)
 }
 
 // --- HandleEvents ---

@@ -1,5 +1,5 @@
 // file: internal/config/unknown_keys.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
 // last-edited: 2026-09-12
 
@@ -17,8 +17,10 @@ import (
 
 // readOnlyConfigKeys are the keys GET /config adds to its response that are not
 // Config fields: withEnvLocks in internal/server/handlers/system computes them
-// per request. UpdateConfig drops them from a PUT so a client can send a GET
-// response back unchanged. Keep this list in sync with withEnvLocks.
+// per request. UpdateConfig drops them from a PUT, so they never fail one. A raw
+// GET response still cannot be PUT back as-is: it also carries database_type,
+// which immutableFieldKeys refuses whenever it is present (the web import
+// filter drops it). Keep this list in sync with withEnvLocks.
 var readOnlyConfigKeys = []string{"env_locked", "setting_locks", "activity_db_resolved_path"}
 
 var (
