@@ -1,7 +1,9 @@
 <!-- file: TODO.md -->
 <!-- version: 10.67.0 -->
+<!-- version: 10.65.0 -->
+<!-- version: 10.66.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-11 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Project TODO — live items only
 
@@ -7264,6 +7266,7 @@ Measured 2026-08-13 against the 77-book `job` test cohort on production. These a
       WRITES a book row**, since chapters go to their own `chapters:<bookID>`
       keyspace and a book-row write would not be so contained. Likely the same
       root cause as the duplicate-book-rows item below.
+      ⏩ **Counter added 2026-09-11 (#3259, TASK-068):** report-only op `maintenance.filepath-collision-report` counts and samples shared `Book.FilePath` values. It changes nothing. Run it to refresh the 1,264 figure before reusing the fallback.
 - [ ] **Stored `duration` is short of the real container by 119–186s on 7 cohort
       books.** Confirmed by ffprobe: `Mushoku Tensei … Vol. 03` stores 33582s while
       both physical copies measure 33767.759s. The chapter timelines written by the
@@ -7949,6 +7952,7 @@ step 4 propagates to the server package with no edit there.
       badly.** Owner report 2026-08-10 with a screenshot of the Library page on
       mobile (`books.jdfalk.com`, "Browse by Tag (149)"). The widget is *almost*
       right; every problem below is presentation, not tagging.
+      ⏩ **Owner points 1–3 DONE 2026-09-11 (#3253, TASK-161/162):** `dedup:*` and `metadata:source:*` chips are hidden from the widget and `metadata:*` renders prefix-stripped as `key: value`. Points 4 (verify the 3,573 abridged count) and 5 (confirm tags are per-book) are separate data questions and still open.
 
       Observed, top five chips in order:
 
@@ -8791,6 +8795,7 @@ step 4 propagates to the server package with no edit there.
       progress. Reported 2026-08-11: *"I thought we were tracking listened status
       and copying that over from iTunes... it feels like none of the stuff to
       actually make the other features that need those were done."*
+      ⏩ **Audit done 2026-09-11 (#3265, TASK-185):** `docs/audits/2026-09-11-itunes-playback-import-wiring.md`. It found that a sync reading the binary ITL file reset every stored bookmark to 0 on each run; the fix is #3269 (open). Recovering bookmarks already reset is an owner decision.
 
       Investigate and report before changing anything — this is suspected to be
       an **unwired pipeline**, the same shape as two other defects found the same
@@ -9178,6 +9183,7 @@ Whatever is chosen, (1) is non-negotiable: a queue that drops data must say how 
   the gap is only that we never *derive* it. Real ABS derives it from the User-Agent, and
   the oracle answered `"wearable"` for a request whose body carried only `clientName` and
   `deviceId`.
+  ⏩ **Harness fixed 2026-09-11 (#3264, TASK-009):** `scripts/abs_capture_fixtures.py` now records request headers. The 28 existing fixtures predate it and still have none, so a re-capture is the next step before a UA→deviceType rule can be written.
 
   **Blocked on evidence, not effort: 0 of 28 fixtures record request headers at all**, so
   the User-Agent that produced `"wearable"` is not preserved anywhere. Inferring a
@@ -9587,6 +9593,8 @@ library, so it is yours:
 A detection-only counter (report "N books have insufficient metadata to name a unique
 file" at the end of an organize run, changing nothing on disk) is safe to add ahead of
 this decision and would give a real number for option 3.
+
+⏩ **Counter added 2026-09-11 (#3261, TASK-203):** `organize_target_path_collision_total` plus one structured log line per collision, nothing on disk changed. It gives a number for option 3 once deployed and an organize run completes. The decision above is still yours.
 
 ## 🔴 `RecomputeBookAggregates` is O(N²) on one write path and never runs on the other
 
@@ -11813,7 +11821,7 @@ it does not sit in a mutual-assumption gap.
 Context: `docs/plans/2026-08-17-maintenance-jobs-to-v2-ops.md` (the dedup scoping section, which also
 records why a file-scoped grep gives a false all-clear on `auto_resolve.go`).
 
-- [ ] **Six E2E mocks point at operation URLs that no longer exist, and two
+- [x] **Six E2E mocks point at operation URLs that no longer exist, and two
       separate things were confused because of it.**
       `getOperationStatus` now polls `GET /operations/v2/:id`; it used to poll
       `GET /operations/:id/status`, retired in #2502. These mocks still target
@@ -11844,6 +11852,7 @@ records why a file-scoped grep gives a false all-clear on `auto_resolve.go`).
       while the `pull_request` run is red. Those are different triggers, so a
       green schedule history is NOT a control for a PR failure — that mistake is
       what made these look like a regression in #2502.
+      ✅ **DONE 2026-09-11:** none of the six old-shape routes is left in `web/tests/e2e/` on main (grep, 2026-09-12). The `dedup-operations`, `dedup` and both `diagnostics` mocks were retargeted to `/operations/v2/*` with v2 bodies in #3258 (TASK-170/171). The pre-existing spinner failures described below are a separate question.
 
 
 ## Update 2026-08-16: one of these was NOT pre-existing
@@ -12134,6 +12143,7 @@ Explicitly LOW priority — per-book is fine for now.
   looks more like a book that lost its junction entry than an empty author, so the
   purge op holds them back by default (`require_zero_files`). Someone has to look at
   a sample and decide before that flag is ever flipped.
+  ⏩ **Evidence step 2026-09-12 (#3263, TASK-075):** the purge-empty-authors dry run (`author_purge_empty.go`) now logs a `HeldByRefsSample` of authors held back by live references, the category the 822 fall into in prod. The decision itself is still open.
 - [ ] **Author↔narrator swap repair.** Measured lower bound: 1,052 names appear in
   BOTH the author and narrator tables; 67 of those are swap-shaped (narrates ≥5
   books, "authors" 1–2), accounting for ~96 book-author links. Ray Porter, Scott
@@ -14673,6 +14683,7 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       the Go handler happens to recognise either degrades into "fetch a lot and
       filter in JS" or silently does nothing at all. The server has the indexes,
       the memdb, and 48 cores; the browser has one thread and a network hop.
+      ⏩ **Step taken 2026-09-11 (#3254, TASK-098):** `GET /audiobooks` now returns `applied_filters`, the `{field, value}` pairs the server actually applied, so a filter the server ignored is visible to the caller. Additive only: which books are returned did not change, and unknown filters are not yet an error.
 
       **The hard constraint is browser memory.** The reporter's requirement is
       blunt and it is the thing to design against: *a single web page must not
