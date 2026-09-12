@@ -1,6 +1,7 @@
 // file: web/tests/e2e/diagnostics.spec.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: f61968fd-c902-4c58-ac4d-9b9a3511fa92
+// last-edited: 2026-09-11
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -77,20 +78,26 @@ async function setupAiResultsMocks(page: Page) {
   });
 
   let pollCount = 0;
-  await page.route('**/api/v1/operations/op-2', async (route) => {
+  await page.route('**/api/v1/operations/v2/op-2', async (route) => {
     pollCount++;
     const status = pollCount >= 2 ? 'completed' : 'running';
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        id: 'op-2',
-        type: 'diagnostics_ai',
-        status,
-        progress: status === 'completed' ? 5 : pollCount,
-        total: 5,
-        message: status === 'completed' ? 'Complete' : 'Processing...',
-        created_at: new Date().toISOString(),
+        data: {
+          operation: {
+            id: 'op-2',
+            def_id: 'diagnostics.ai-analyze',
+            status,
+            progress_current: status === 'completed' ? 5 : pollCount,
+            progress_total: 5,
+            progress_message: status === 'completed' ? 'Complete' : 'Processing...',
+            error_message: null,
+            queued_at: new Date().toISOString(),
+          },
+          logs: [],
+        },
       }),
     });
   });
@@ -258,7 +265,14 @@ test.describe('Diagnostics', () => {
     // Wait for results to appear — look for suggestion text
     await expect(
       page.getByText('Same book in mp3 and m4b')
-    ).toBeVisible({ timeout: 10000 });
+      // 15000ms, not 10000ms: the op-2 mock now actually runs its
+      // pollCount-based transition (running until the 2nd poll), and
+      // Diagnostics.tsx polls every 5000ms, so completion lands at ~10000ms
+      // -- the old 10000ms timeout left zero margin once this mock was
+      // retargeted to a URL the app actually requests (it never matched
+      // before, so a completely different single-shot fallback answered
+      // instead and this assertion's real timing was never exercised).
+    ).toBeVisible({ timeout: 15000 });
 
     // getByText is case-insensitive substring by default, so this also matched
     // the Deduplication card's blurb ("…books, orphan tracks, and missing…").
@@ -301,7 +315,14 @@ test.describe('Diagnostics', () => {
     // Wait for results
     await expect(
       page.getByText('Same book in mp3 and m4b')
-    ).toBeVisible({ timeout: 10000 });
+      // 15000ms, not 10000ms: the op-2 mock now actually runs its
+      // pollCount-based transition (running until the 2nd poll), and
+      // Diagnostics.tsx polls every 5000ms, so completion lands at ~10000ms
+      // -- the old 10000ms timeout left zero margin once this mock was
+      // retargeted to a URL the app actually requests (it never matched
+      // before, so a completely different single-shot fallback answered
+      // instead and this assertion's real timing was never exercised).
+    ).toBeVisible({ timeout: 15000 });
 
     // Check suggestion checkboxes
     const checkboxes = page.getByRole('checkbox');
@@ -349,7 +370,14 @@ test.describe('Diagnostics', () => {
     // Wait for results
     await expect(
       page.getByText('Same book in mp3 and m4b')
-    ).toBeVisible({ timeout: 10000 });
+      // 15000ms, not 10000ms: the op-2 mock now actually runs its
+      // pollCount-based transition (running until the 2nd poll), and
+      // Diagnostics.tsx polls every 5000ms, so completion lands at ~10000ms
+      // -- the old 10000ms timeout left zero margin once this mock was
+      // retargeted to a URL the app actually requests (it never matched
+      // before, so a completely different single-shot fallback answered
+      // instead and this assertion's real timing was never exercised).
+    ).toBeVisible({ timeout: 15000 });
 
     // Click View Raw toggle
     const rawToggle = page.getByText(/View Raw/i).first();

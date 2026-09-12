@@ -1,7 +1,7 @@
 // file: web/tests/e2e/dedup-operations.spec.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-2c3d4e5f6a7b
-// last-edited: 2026-08-20
+// last-edited: 2026-09-11
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -115,11 +115,25 @@ test.describe('Production Company Resolution', () => {
         }),
       });
     });
-    await page.route('**/api/v1/operations/*/status', async (route) => {
+    await page.route('**/api/v1/operations/v2/*', async (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ id: 'resolve-prod-1', status: 'completed', progress: 100, total: 100, message: 'Done' }),
+        body: JSON.stringify({
+          data: {
+            operation: {
+              id: 'resolve-prod-1',
+              def_id: 'entities.resolve-production-author',
+              status: 'completed',
+              progress_current: 100,
+              progress_total: 100,
+              progress_message: 'Done',
+              error_message: null,
+              queued_at: new Date().toISOString(),
+            },
+            logs: [],
+          },
+        }),
       });
     });
 
