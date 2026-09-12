@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.12.0
+// version: 13.13.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -565,11 +565,13 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 	}
 
 	if len(obj) == 0 || hasParsedMetadataKey(obj) {
-		var metadata ParsedMetadata
-		if err := json.Unmarshal(raw, &metadata); err != nil {
-			return nil, err
+		// decodeResultElement, not a bare Unmarshal, so a top-level
+		// {"title": null, "error": "x"} is an error here too.
+		m, _, err := decodeResultElement(raw)
+		if err != nil {
+			return nil, fmt.Errorf("the reply object %w", err)
 		}
-		return &metadata, nil
+		return m, nil
 	}
 	if len(obj) != 1 {
 		return nil, fmt.Errorf("object has %d keys and none of them is a metadata field", len(obj))
@@ -634,7 +636,14 @@ func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
 //   - {} is an empty result.
 //   - An object carrying at least one ParsedMetadata key is decoded. Presence
 //     is what counts, not value: the observed replies send every key with null
-//     or empty values for "found nothing". Extra keys next to them are ignored.
+//     or empty values for "found nothing". Keys match case-insensitively, as
+//     encoding/json matches field names. Unrelated extra keys next to them,
+//     such as "filename", are ignored.
+//   - An object carrying an "error" or "errors" key (any case) is an error
+//     report, even when metadata keys are present too:
+//     {"title": null, "error": "rate limited"} would otherwise decode to an
+//     all-empty result, and {"title": "Solo", "error": "x"} would save a
+//     title the backend itself flagged.
 //   - Anything else is an error. In particular an object whose keys are all
 //     foreign -- {"error": "x"}, {"code": 500, "message": "overloaded"} -- is
 //     not a result. encoding/json would decode it to an all-empty
@@ -661,6 +670,9 @@ func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata boo
 	}
 	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
 		return nil, false, fmt.Errorf("has %d key(s) and none of them is a metadata field", len(obj))
+	}
+	if key, ok := errorReportKey(obj); ok {
+		return nil, false, fmt.Errorf("carries an %q key, so it is an error report and not a result", sanitizeReplyText(key))
 	}
 	var metadata ParsedMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
@@ -1023,11 +1035,13 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 	}
 
 	if expected == 1 && hasParsedMetadataKey(obj) {
-		var m ParsedMetadata
-		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, err
+		// Same element rules as every other shape: a bare object that also
+		// carries "error" is an error report, not the one result.
+		m, _, err := decodeResultElement(raw)
+		if err != nil {
+			return nil, fmt.Errorf("the reply object %w", err)
 		}
-		return []*ParsedMetadata{&m}, nil
+		return []*ParsedMetadata{m}, nil
 	}
 
 	if len(obj) == 1 {
@@ -1089,13 +1103,35 @@ func isJSONArray(raw json.RawMessage) bool {
 // ParsedMetadata with no error.
 var parsedMetadataKeys = []string{"title", "author", "series", "series_number", "narrator", "publisher", "year", "confidence"}
 
+// hasParsedMetadataKey matches keys case-insensitively because encoding/json
+// does: {"Title": "Capital"} decodes into ParsedMetadata.Title, so an exact
+// match here would reject a reply the decoder reads correctly.
 func hasParsedMetadataKey(obj map[string]json.RawMessage) bool {
-	for _, k := range parsedMetadataKeys {
-		if _, ok := obj[k]; ok {
-			return true
+	for key := range obj {
+		for _, k := range parsedMetadataKeys {
+			if strings.EqualFold(key, k) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// errorReportKeys mark an object as an error report from the backend or the
+// model rather than a result, whatever else it carries.
+var errorReportKeys = []string{"error", "errors"}
+
+// errorReportKey returns the first key of obj that is "error" or "errors" in
+// any case.
+func errorReportKey(obj map[string]json.RawMessage) (string, bool) {
+	for key := range obj {
+		for _, k := range errorReportKeys {
+			if strings.EqualFold(key, k) {
+				return key, true
+			}
+		}
+	}
+	return "", false
 }
 
 // maxResponseExcerptBytes bounds how much of an unparseable LLM reply is copied

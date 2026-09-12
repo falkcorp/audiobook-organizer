@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -1857,6 +1857,17 @@ func TestParseBatchMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T
 			wantErr: "not a results wrapper"},
 		{name: "non-object element", json: `{"results": ["A"]}`, expected: 1,
 			wantErr: "result 0 is not a JSON object"},
+		// An error key next to metadata keys (PR #3330 delta review).
+		{name: "error next to a null title", json: `{"results": [{"title": null, "error": "rate limited"}]}`, expected: 1,
+			wantErr: `result 0 carries an "error" key`},
+		{name: "error next to confidence only", json: `{"results": [{"confidence":"low","error":"overloaded"}]}`, expected: 1,
+			wantErr: `result 0 carries an "error" key`},
+		{name: "bare object: error next to a null title", json: `{"error": "x", "title": null}`, expected: 1,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "bare object: error next to a real title", json: `{"title":"Solo","error":"x"}`, expected: 1,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "errors key in any case", json: `{"results": [{"title": "A", "Errors": ["x"]}]}`, expected: 1,
+			wantErr: `result 0 carries an "Errors" key`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			results, err := parseBatchMetadataFromJSON(tc.json, tc.expected)
@@ -1913,6 +1924,10 @@ func TestParseMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T) {
 			wantErr: "not a results wrapper"},
 		{name: "unknown key holding an empty array", json: `{"error": []}`,
 			wantErr: "not a results wrapper"},
+		{name: "results element with an error next to a null title", json: `{"results": [{"title": null, "error": "x"}]}`,
+			wantErr: `"results" holds an element that carries an "error" key`},
+		{name: "top-level error next to a null title", json: `{"error": "x", "title": null}`,
+			wantErr: `the reply object carries an "error" key`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, err := parseMetadataFromJSON(tc.json)
@@ -1934,6 +1949,29 @@ func TestParseMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T) {
 		m, err := parseMetadataFromJSON(ok.json)
 		if err != nil || m == nil || m.Title != ok.wantTitle {
 			t.Errorf("parseMetadataFromJSON(%s) = %+v, %v; want title %q", ok.json, m, err, ok.wantTitle)
+		}
+	}
+}
+
+// encoding/json matches field names case-insensitively, so the metadata-key
+// check must too: #3328 accepted {"Title": ...} and element validation must
+// not start rejecting it.
+func TestMetadataKeysMatchCaseInsensitively(t *testing.T) {
+	r, err := parseBatchMetadataFromJSON(`{"results": [{"Title": "Capital", "Author": "X"}]}`, 1)
+	if err != nil {
+		t.Fatalf("batch: unexpected error: %v", err)
+	}
+	if r[0] == nil || r[0].Title != "Capital" || r[0].Author != "X" {
+		t.Errorf("batch: r[0] = %+v", r[0])
+	}
+	r, err = parseBatchMetadataFromJSON(`{"TITLE": "Capital"}`, 1)
+	if err != nil || r[0] == nil || r[0].Title != "Capital" {
+		t.Errorf("batch bare object: %+v, %v", r, err)
+	}
+	for _, js := range []string{`{"results": [{"Title": "Capital"}]}`, `{"TITLE": "Capital"}`, `{"book": {"Title": "Capital"}}`} {
+		m, err := parseMetadataFromJSON(js)
+		if err != nil || m == nil || m.Title != "Capital" {
+			t.Errorf("single %s: %+v, %v", js, m, err)
 		}
 	}
 }

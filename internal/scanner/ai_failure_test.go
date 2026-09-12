@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_failure_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b3d81e0-5a29-4c74-9e18-7f2a0c46bd35
 // last-edited: 2026-09-12
 
@@ -40,6 +40,51 @@ func TestIsPermanentAIFailure_ReplyParseErrorIsNeverPermanent(t *testing.T) {
 	// Control: the same marker, written by the provider, is still permanent.
 	if !isPermanentAIFailure(errors.New(`anthropic: permission_error: this key cannot use the model`)) {
 		t.Error("a real provider permission_error is no longer permanent")
+	}
+}
+
+// TestIsPermanentAIFailure_WrappedReplyParseErrorTextIsNeverRead: callers
+// wrap errors with %w (the chain, the phase, anything added later). Every such
+// wrapper's Error() embeds the excerpt, so a check that only special-cased the
+// bare type would match the model's words again one wrap up.
+func TestIsPermanentAIFailure_WrappedReplyParseErrorTextIsNeverRead(t *testing.T) {
+	for _, marker := range permanentAIFailureMarkers {
+		replyErr := &ai.ReplyParseError{
+			Err:     errors.New("result 0 is not a JSON object"),
+			Excerpt: `{"results": ["The ` + marker + ` Chronicles"]}`,
+		}
+		for name, err := range map[string]error{
+			"one %w":                fmt.Errorf("batch 3/7: %w", replyErr),
+			"two %w":                fmt.Errorf("ai parser chain: %w", fmt.Errorf("remote rung: %w", replyErr)),
+			"multi-%w with timeout": fmt.Errorf("remote: %w; local: %w", errors.New("context deadline exceeded"), replyErr),
+			"join with timeout":     errors.Join(errors.New("dial tcp: i/o timeout"), replyErr),
+			"%w around a join":      fmt.Errorf("both rungs failed: %w", errors.Join(errors.New("connection refused"), replyErr)),
+		} {
+			if !strings.Contains(err.Error(), marker) {
+				t.Fatalf("%s: precondition: %q does not quote %q", name, err.Error(), marker)
+			}
+			if isPermanentAIFailure(err) {
+				t.Errorf("%s: model text %q was string-matched as a provider marker", name, marker)
+			}
+		}
+	}
+}
+
+// TestIsPermanentAIFailure_ReplyParseErrorDoesNotMaskAPermanentBranch: a
+// reply error next to a real permanent failure must not hide it.
+func TestIsPermanentAIFailure_ReplyParseErrorDoesNotMaskAPermanentBranch(t *testing.T) {
+	replyErr := &ai.ReplyParseError{Err: errors.New("result 0 is not a JSON object"), Excerpt: `{"results": ["x"]}`}
+	for name, err := range map[string]error{
+		"join, typed permanent":      errors.Join(&ai.PermanentError{Err: errors.New("401 Unauthorized")}, replyErr),
+		"join, typed permanent last": errors.Join(replyErr, &ai.PermanentError{Err: errors.New("403 Forbidden")}),
+		"join, provider marker text": errors.Join(errors.New(`anthropic: permission_error: key lacks access`), replyErr),
+		"multi-%w, provider marker":  fmt.Errorf("remote: %w; local: %w", errors.New(`401 {"code": "invalid_api_key"}`), replyErr),
+		"%w around a join, typed":    fmt.Errorf("rungs: %w", errors.Join(replyErr, &ai.PermanentError{Err: errors.New("quota")})),
+		"%w around a join, marker":   fmt.Errorf("rungs: %w", errors.Join(replyErr, errors.New("insufficient_quota"))),
+	} {
+		if !isPermanentAIFailure(err) {
+			t.Errorf("%s: a permanent failure next to a reply parse error was classified transient", name)
+		}
 	}
 }
 
