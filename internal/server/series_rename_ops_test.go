@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
 // last-edited: 2026-09-12
 
@@ -164,11 +164,24 @@ func TestSeriesRenameOp_UndoWhenAlreadyOldCountsRestored(t *testing.T) {
 	require.Len(t, changes, 1)
 	require.True(t, errors.Is(undo.CheckRestoreReferent(st, changes[0]), undo.ErrAlreadyRestored))
 
+	// The preflight the Activity Log shows first counts the row Safe, not as a
+	// renamed-since conflict.
+	report, err := undo.PreflightUndoConflicts(st, "op-already")
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Safe)
+	require.Empty(t, report.SeriesRenamedSince)
+
 	res, err := audiobookspkg.NewRevertService(st).RevertOperation("op-already")
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Restored)
 	require.Equal(t, 0, res.Failed)
 	require.Equal(t, "Old Name", seriesName(t, st, s.ID))
+
+	// Marked reverted, so a second revert reports "already reverted".
+	after, err := st.GetOperationChanges("op-already")
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.NotNil(t, after[0].RevertedAt)
 }
 
 // Collisions behave as the synchronous handlers did: UpdateSeriesName does
