@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -8,6 +8,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
@@ -1678,16 +1680,22 @@ func wantAllNil(t *testing.T, r []*ParsedMetadata) {
 // The error must carry the reply, truncated and log-safe, so the next failure
 // is diagnosable from the operation record.
 func TestParseBatchMetadataFromJSON_ErrorCarriesSanitizedExcerpt(t *testing.T) {
-	reply := "{\"results\": [{\"title\": \"A\"}],\n\"x\": \"" + strings.Repeat("y", 1000) + "\"}"
+	// "results" is the only key, so this reaches the count check rather than
+	// the sibling-key rejection: the count-mismatch error must carry the
+	// excerpt too.
+	reply := "{\"results\": [{\"title\": \"A\"},\n{\"title\": \"" + strings.Repeat("y", 1000) + "\"}]}"
 	_, err := parseBatchMetadataFromJSON(reply, 3)
 	if err == nil {
-		t.Fatal("expected an error for 1 result against 3 filenames")
+		t.Fatal("expected an error for 2 results against 3 filenames")
 	}
 	msg := err.Error()
+	if !strings.Contains(msg, "got 2 result(s) for 3 filename(s)") {
+		t.Errorf("error is not the count mismatch: %q", msg)
+	}
 	if strings.ContainsAny(msg, "\n\r") {
 		t.Errorf("error contains a raw line break: %q", msg)
 	}
-	if !strings.Contains(msg, `{"results": [{"title": "A"}],\n"x"`) {
+	if !strings.Contains(msg, `{"results": [{"title": "A"},\n{"title"`) {
 		t.Errorf("error does not carry the escaped reply: %q", msg)
 	}
 	if !strings.Contains(msg, fmt.Sprintf("(%d bytes total)", len(reply))) {
@@ -1711,7 +1719,7 @@ func TestParseMetadataFromJSON_Shapes(t *testing.T) {
 		{name: "results wrapper holding nothing is an empty result", json: `{"results": []}`},
 		{name: "single-key wrapper holding an object", json: `{"book": {"title": "T"}}`, wantTitle: "T"},
 		{name: "results wrapper holding two is an error", json: `{"results": [{"title": "A"}, {"title": "B"}]}`, wantErr: "holds 2 results"},
-		{name: "results wrapper holding a non-object", json: `{"results": ["T"]}`, wantErr: "non-object element"},
+		{name: "results wrapper holding a non-object", json: `{"results": ["T"]}`, wantErr: `"results" holds an element that is not a JSON object`},
 		{name: "unknown scalar key is an error, not an empty parse", json: `{"error": "boom"}`, wantErr: "not a metadata field"},
 		{name: "several unknown keys is an error", json: `{"a": 1, "b": 2}`, wantErr: "none of them is a metadata field"},
 		{name: "null is an error, not an empty parse", json: `null`, wantErr: "not a JSON object"},
@@ -1817,6 +1825,188 @@ func TestParseBatchMetadataFromJSON_ErrorWrapping(t *testing.T) {
 	errorMsg := err.Error()
 	if !strings.Contains(errorMsg, "failed to parse OpenAI response") {
 		t.Errorf("Expected error to mention 'failed to parse OpenAI response', got: %s", errorMsg)
+	}
+}
+
+// Error payloads that the wrapper shapes accepted by PR #3328 let through as
+// empty metadata with a nil error. Each must be an error: an empty parse is
+// saved as the book's AI result and stamped in the scan cache, so the book is
+// never sent to the model again.
+func TestParseBatchMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		json     string
+		expected int
+		wantErr  string
+	}{
+		{name: "results next to an error key", json: `{"results": [], "error": "context length exceeded"}`, expected: 3,
+			wantErr: `"results" is present alongside 1 other key(s)`},
+		{name: "results holding metadata next to an error key", json: `{"results": [{"title": "A"}], "error": "truncated"}`, expected: 1,
+			wantErr: `"results" is present alongside 1 other key(s)`},
+		{name: "error array under a single key", json: `{"error": [{"code":500,"message":"overloaded"}]}`, expected: 1,
+			wantErr: "result 0 has 2 key(s) and none of them is a metadata field"},
+		{name: "results holding error objects", json: `{"results": [{"error":"x"},{"error":"y"}]}`, expected: 2,
+			wantErr: "result 0 has 1 key(s) and none of them is a metadata field"},
+		{name: "error object among real results", json: `{"results": [{"title":"A"},{"message":"x"}]}`, expected: 2,
+			wantErr: "result 1 has 1 key(s) and none of them is a metadata field"},
+		{name: "bare array of error objects", json: `[{"error":"x"}]`, expected: 1,
+			wantErr: "result 0 has 1 key(s) and none of them is a metadata field"},
+		{name: "unknown key holding an empty array", json: `{"error": []}`, expected: 2,
+			wantErr: "not a results wrapper"},
+		{name: "unknown key holding only nulls", json: `{"errors": [null]}`, expected: 1,
+			wantErr: "not a results wrapper"},
+		{name: "non-object element", json: `{"results": ["A"]}`, expected: 1,
+			wantErr: "result 0 is not a JSON object"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results, err := parseBatchMetadataFromJSON(tc.json, tc.expected)
+			if err == nil {
+				t.Fatalf("got %d result(s) and no error; an error payload became metadata: %+v", len(results), results)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The controls for the test above: element validation must not reject what a
+// real reply sends for "found nothing" (null, {}), and must not reject a
+// metadata object that carries extra keys.
+func TestParseBatchMetadataFromJSON_ResultElementsStillAccepted(t *testing.T) {
+	r, err := parseBatchMetadataFromJSON(`{"results": [{}, null, {"title": "A", "filename": "x.mp3"}]}`, 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r[0] == nil || *r[0] != (ParsedMetadata{}) {
+		t.Errorf("r[0] = %+v, want an empty non-nil result for {}", r[0])
+	}
+	if r[1] != nil {
+		t.Errorf("r[1] = %+v, want nil for null", r[1])
+	}
+	if r[2] == nil || r[2].Title != "A" {
+		t.Errorf("r[2] = %+v, want title A", r[2])
+	}
+
+	r, err = parseBatchMetadataFromJSON(`{"books": [null, {"title": "B"}]}`, 2)
+	if err != nil {
+		t.Fatalf("unknown wrapper key holding metadata: unexpected error: %v", err)
+	}
+	if r[0] != nil || r[1] == nil || r[1].Title != "B" {
+		t.Errorf("results = %+v, %+v", r[0], r[1])
+	}
+}
+
+func TestParseMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		json    string
+		wantErr string
+	}{
+		{name: "error object under a single key", json: `{"error": {"message": "x"}}`,
+			wantErr: `"error" holds an object that has 1 key(s) and none of them is a metadata field`},
+		{name: "results holding one error object", json: `{"results": [{"error": "x"}]}`,
+			wantErr: `"results" holds an element that has 1 key(s) and none of them is a metadata field`},
+		{name: "unknown key holding an error array", json: `{"error": [{"code": 500, "message": "overloaded"}]}`,
+			wantErr: `"error" holds an element that has 2 key(s) and none of them is a metadata field`},
+		{name: "unknown key holding an empty object", json: `{"error": {}}`,
+			wantErr: "not a results wrapper"},
+		{name: "unknown key holding an empty array", json: `{"error": []}`,
+			wantErr: "not a results wrapper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := parseMetadataFromJSON(tc.json)
+			if err == nil {
+				t.Fatalf("got %+v and no error; an error payload became metadata", m)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	// Controls: "found nothing" and a metadata object with extra keys.
+	for _, ok := range []struct{ json, wantTitle string }{
+		{json: `{"results": [null]}`},
+		{json: `{"results": [{}]}`},
+		{json: `{"book": {"title": "T", "filename": "x.mp3"}}`, wantTitle: "T"},
+	} {
+		m, err := parseMetadataFromJSON(ok.json)
+		if err != nil || m == nil || m.Title != ok.wantTitle {
+			t.Errorf("parseMetadataFromJSON(%s) = %+v, %v; want title %q", ok.json, m, err, ok.wantTitle)
+		}
+	}
+}
+
+// Every parse failure must be a *ReplyParseError, including the count
+// mismatch, which is not a decode error: internal/scanner classifies by that
+// type and must never string-match an error that quotes the model's reply.
+func TestReplyParseError_EveryParseFailureIsTyped(t *testing.T) {
+	check := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected an error", what)
+		}
+		rpe, ok := errors.AsType[*ReplyParseError](err)
+		if !ok {
+			t.Fatalf("%s: %T %q is not a *ReplyParseError", what, err, err)
+		}
+		if rpe.Excerpt == "" || !strings.Contains(err.Error(), rpe.Excerpt) {
+			t.Errorf("%s: Error() %q does not carry the excerpt %q", what, err, rpe.Excerpt)
+		}
+	}
+	for _, tc := range []struct {
+		json     string
+		expected int
+	}{
+		{`{bad`, 1},
+		{`null`, 1},
+		{`{"results": [{"title": "A"}]}`, 2}, // count mismatch
+		{`{"results": [], "error": "x"}`, 1},
+		{`{"error": [{"code": 500}]}`, 1},
+	} {
+		_, err := parseBatchMetadataFromJSON(tc.json, tc.expected)
+		check(t, "batch "+tc.json, err)
+	}
+	for _, js := range []string{`{bad`, `null`, `{"a": 1, "b": 2}`, `{"error": {"message": "x"}}`} {
+		_, err := parseMetadataFromJSON(js)
+		check(t, "single "+js, err)
+	}
+}
+
+// logger.SanitizeLogValue escapes C0 and DEL only. Model output also must not
+// carry bidi overrides/isolates, zero-width format characters, or U+2028 and
+// U+2029 into an operation log, where they reorder or split what a reader
+// sees.
+func TestResponseExcerpt_EscapesFormatAndLineSeparatorRunes(t *testing.T) {
+	in := "A\u202aB\u202eC\u2028D\u2029E\u2066F\u2069G\u200bH\ufeffI\U000e0001J"
+	got := responseExcerpt(in)
+	want := `A\u202aB\u202eC\u2028D\u2029E\u2066F\u2069G\u200bH\ufeffI\U000e0001J`
+	if got != want {
+		t.Errorf("responseExcerpt = %q, want %q", got, want)
+	}
+	if printable := "Café – Naïve «x»"; responseExcerpt(printable) != printable {
+		t.Errorf("visible non-ASCII was altered: %q", responseExcerpt(printable))
+	}
+
+	// Truncation still lands on a UTF-8 boundary: the 3-byte U+202E starts
+	// one byte before the cut, so it is dropped whole, never split.
+	long := strings.Repeat("a", maxResponseExcerptBytes-1) + "\u202e" + strings.Repeat("b", 50)
+	got = responseExcerpt(long)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated excerpt is not valid UTF-8: %q", got)
+	}
+	if strings.ContainsRune(got, '\u202e') {
+		t.Errorf("raw U+202E survived: %q", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", maxResponseExcerptBytes-1)+"...") {
+		t.Errorf("truncation moved: %q", got)
+	}
+
+	// Through the real error path.
+	_, err := parseBatchMetadataFromJSON("{\"results\": [{\"title\": \"x\u202ey\u2028z\"}]}", 2)
+	if err == nil || strings.ContainsAny(err.Error(), "\u202e\u2028") {
+		t.Errorf("error carries a raw format or separator rune: %q", err)
 	}
 }
 

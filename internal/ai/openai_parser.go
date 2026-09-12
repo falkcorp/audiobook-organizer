@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.11.0
+// version: 13.12.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -538,13 +539,17 @@ func (p *OpenAIParser) TestConnection(ctx context.Context) error {
 //
 // Now: a metadata object is decoded as before; `{}` is still an empty result;
 // an object with none of ParsedMetadata's keys is accepted only as a wrapper
-// with exactly one key holding one object (or an array of at most one object,
-// where an empty array is an empty result, matching the batch path); anything
-// else is an error that carries a sanitized excerpt of the reply.
+// with exactly one key holding one result (an object, or an array of at most
+// one element, where an empty array is an empty result, matching the batch
+// path). What the wrapper holds goes through decodeResultElement, so an error
+// payload such as {"error": {"message": "..."}} is an error and not an empty
+// parse, and a key other than "results" must hold something metadata-shaped
+// to count as a wrapper at all. Anything else is a *ReplyParseError that
+// carries a sanitized excerpt of the reply.
 func parseMetadataFromJSON(content string) (*ParsedMetadata, error) {
 	m, err := extractSingleMetadata([]byte(content))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI response: %w; response: %s", err, responseExcerpt(content))
+		return nil, newReplyParseError(err, content)
 	}
 	return m, nil
 }
@@ -559,43 +564,109 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 		return nil, err
 	}
 
-	target := json.RawMessage(raw)
-	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
-		if len(obj) != 1 {
-			return nil, fmt.Errorf("object has %d keys and none of them is a metadata field", len(obj))
+	if len(obj) == 0 || hasParsedMetadataKey(obj) {
+		var metadata ParsedMetadata
+		if err := json.Unmarshal(raw, &metadata); err != nil {
+			return nil, err
 		}
-		for key, value := range obj {
-			inner := bytes.TrimSpace(value)
-			switch {
-			case len(inner) > 0 && inner[0] == '{':
-				target = inner
-			case len(inner) > 0 && inner[0] == '[':
-				var elems []json.RawMessage
-				if err := json.Unmarshal(inner, &elems); err != nil {
-					return nil, err
-				}
-				switch len(elems) {
-				case 0:
-					return &ParsedMetadata{}, nil
-				case 1:
-					target = bytes.TrimSpace(elems[0])
-					if len(target) == 0 || target[0] != '{' {
-						return nil, fmt.Errorf("%q holds a non-object element", logger.SanitizeLogValue(key))
-					}
-				default:
-					return nil, fmt.Errorf("%q holds %d results where one was asked for", logger.SanitizeLogValue(key), len(elems))
-				}
-			default:
-				return nil, fmt.Errorf("object's only key %q is not a metadata field", logger.SanitizeLogValue(key))
-			}
-		}
+		return &metadata, nil
+	}
+	if len(obj) != 1 {
+		return nil, fmt.Errorf("object has %d keys and none of them is a metadata field", len(obj))
 	}
 
-	var metadata ParsedMetadata
-	if err := json.Unmarshal(target, &metadata); err != nil {
-		return nil, err
+	for key, value := range obj {
+		m, isMetadata, err := unwrapSingleResult(value)
+		if err != nil {
+			return nil, fmt.Errorf("%q %w", sanitizeReplyText(key), err)
+		}
+		if key != resultsKey && !isMetadata {
+			return nil, fmt.Errorf("object's only key %q is not a metadata field and holds no metadata object, so it is not a results wrapper",
+				sanitizeReplyText(key))
+		}
+		if m == nil {
+			// {"results": []} or {"results": [null]}: the model found nothing.
+			m = &ParsedMetadata{}
+		}
+		return m, nil
 	}
-	return &metadata, nil
+	return nil, errors.New("unreachable: one-key object had no key")
+}
+
+// unwrapSingleResult decodes what a single-key wrapper holds in a
+// single-result reply: one object, or an array of at most one element. The
+// returned error is a phrase meant to follow the key in a message.
+func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
+	inner := bytes.TrimSpace(value)
+	switch {
+	case len(inner) > 0 && inner[0] == '{':
+		m, isMetadata, err := decodeResultElement(inner)
+		if err != nil {
+			return nil, false, fmt.Errorf("holds an object that %w", err)
+		}
+		return m, isMetadata, nil
+	case len(inner) > 0 && inner[0] == '[':
+		var elems []json.RawMessage
+		if err := json.Unmarshal(inner, &elems); err != nil {
+			return nil, false, fmt.Errorf("holds an invalid array: %w", err)
+		}
+		switch len(elems) {
+		case 0:
+			return nil, false, nil
+		case 1:
+			m, isMetadata, err := decodeResultElement(elems[0])
+			if err != nil {
+				return nil, false, fmt.Errorf("holds an element that %w", err)
+			}
+			return m, isMetadata, nil
+		default:
+			return nil, false, fmt.Errorf("holds %d results where one was asked for", len(elems))
+		}
+	default:
+		return nil, false, errors.New("is not a metadata field and holds neither an object nor an array")
+	}
+}
+
+// decodeResultElement decodes one result the model returned for one input.
+//
+//   - JSON null is "no result": nil, and not an error. Observed from
+//     qwen2.5:7b-instruct as a placeholder for a filename it could not parse.
+//   - {} is an empty result.
+//   - An object carrying at least one ParsedMetadata key is decoded. Presence
+//     is what counts, not value: the observed replies send every key with null
+//     or empty values for "found nothing". Extra keys next to them are ignored.
+//   - Anything else is an error. In particular an object whose keys are all
+//     foreign -- {"error": "x"}, {"code": 500, "message": "overloaded"} -- is
+//     not a result. encoding/json would decode it to an all-empty
+//     ParsedMetadata with no error, the scanner would save that as the book's
+//     AI parse and stamp it in the scan cache, and the book would never be
+//     sent to the model again.
+//
+// isMetadata reports whether the element carried a metadata key, which is the
+// only evidence that an unfamiliar wrapper key really holds results.
+//
+// The returned error is a phrase meant to follow "result N" or "holds an
+// element that" in a message.
+func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata bool, err error) {
+	raw = bytes.TrimSpace(raw)
+	if bytes.Equal(raw, []byte("null")) {
+		return nil, false, nil
+	}
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, false, errors.New("is not a JSON object")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false, fmt.Errorf("is not a valid JSON object: %w", err)
+	}
+	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
+		return nil, false, fmt.Errorf("has %d key(s) and none of them is a metadata field", len(obj))
+	}
+	var metadata ParsedMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil, false, fmt.Errorf("does not decode as metadata: %w", err)
+	}
+	return &metadata, len(obj) > 0, nil
 }
 
 // SuggestionRole represents a detected role (author, narrator, or publisher) in an AI suggestion.
@@ -857,17 +928,26 @@ The roles object fields are all optional — only include roles that are detecte
 //
 //   - {"results": [...]}                -- observed; the shape the prompt asks for.
 //     Entries may be null or have null fields (both observed from
-//     qwen2.5:7b-instruct); they decode to nil / zero values.
+//     qwen2.5:7b-instruct); they decode to nil / zero values. Accepted only
+//     when "results" is the object's ONLY key: {"results": [], "error": "..."}
+//     is an error, not zero results.
 //   - {"results": []}                   -- observed, and the cause of the
 //     2026-09-12 library.ai-parse aborts. See below.
 //   - [...]                             -- bare array; accepted since before
 //     this change.
 //   - {"<any single key>": [...]}       -- unobserved; a wrapper under a key
 //     other than "results". Accepted only when it is the object's ONLY key,
-//     so an unrelated array can never be mistaken for the results.
+//     so an unrelated array can never be mistaken for the results, and only
+//     when at least one element is a metadata object, so {"error": []} or
+//     {"error": [{"code": 500}]} is never taken for a results list.
 //   - {"title": ..., ...}               -- unobserved; a bare metadata object.
 //     Accepted only when the batch had exactly one filename, where position
 //     cannot be ambiguous.
+//
+// In every array shape each element must be null, {}, or an object carrying
+// at least one ParsedMetadata key (decodeResultElement); an element whose keys
+// are all foreign, e.g. {"error": "x"}, fails the whole reply. Every failure is
+// a *ReplyParseError.
 //
 // {"results": []} is ZERO RESULTS, not an error. qwen2.5:7b-instruct returns it
 // for inputs that carry no metadata at all ("Disc 1".."Disc 8", "Season 2");
@@ -883,7 +963,7 @@ The roles object fields are all optional — only include roles that are detecte
 func parseBatchMetadataFromJSON(content string, expected int) ([]*ParsedMetadata, error) {
 	items, err := extractBatchItems([]byte(content), expected)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI response: %w; response: %s", err, responseExcerpt(content))
+		return nil, newReplyParseError(err, content)
 	}
 
 	if len(items) == 0 {
@@ -894,8 +974,9 @@ func parseBatchMetadataFromJSON(content string, expected int) ([]*ParsedMetadata
 		// says which: results[2] could belong to filename 5. Positional
 		// assignment would silently write one book's title onto another, so
 		// this is an error and the batch's books are left for the next scan.
-		return nil, fmt.Errorf("failed to parse OpenAI response: got %d result(s) for %d filename(s), and results are matched to filenames by position; response: %s",
-			len(items), expected, responseExcerpt(content))
+		return nil, newReplyParseError(fmt.Errorf(
+			"got %d result(s) for %d filename(s), and results are matched to filenames by position",
+			len(items), expected), content)
 	}
 	return items, nil
 }
@@ -910,7 +991,8 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 
 	switch raw[0] {
 	case '[':
-		return decodeMetadataArray(raw)
+		items, _, err := decodeMetadataArray(raw)
+		return items, err
 	case '{':
 	default:
 		return nil, errors.New("response is neither a JSON object nor a JSON array")
@@ -921,13 +1003,23 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 		return nil, err
 	}
 
-	if results, ok := obj["results"]; ok {
+	if results, ok := obj[resultsKey]; ok {
+		if len(obj) != 1 {
+			// {"results": [], "error": "context length exceeded"}: the
+			// sibling says the list is not an answer. Taking the empty list
+			// as "found nothing" would save every book in the batch as
+			// parsed-and-empty and stamp it in the scan cache, so none of
+			// them would ever be sent to the model again.
+			return nil, fmt.Errorf(`"results" is present alongside %d other key(s); only a reply whose sole key is "results" is taken as the results`,
+				len(obj)-1)
+		}
 		if !isJSONArray(results) {
 			// {"results": null} and {"results": {...}} are not the shape
 			// asked for and neither has been seen; fail rather than guess.
 			return nil, errors.New(`"results" is not a JSON array`)
 		}
-		return decodeMetadataArray(results)
+		items, _, err := decodeMetadataArray(results)
+		return items, err
 	}
 
 	if expected == 1 && hasParsedMetadataKey(obj) {
@@ -940,22 +1032,49 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 
 	if len(obj) == 1 {
 		for key, value := range obj {
-			if isJSONArray(value) {
-				return decodeMetadataArray(value)
+			if !isJSONArray(value) {
+				return nil, fmt.Errorf(`object's only key %q is not a JSON array and there is no "results" key`,
+					sanitizeReplyText(key))
 			}
-			return nil, fmt.Errorf(`object's only key %q is not a JSON array and there is no "results" key`,
-				logger.SanitizeLogValue(key))
+			items, anyMetadata, err := decodeMetadataArray(value)
+			if err != nil {
+				return nil, err
+			}
+			// Only "results" is trusted to mean "results" when it holds
+			// nothing: {"error": []} or {"errors": [null]} carries no evidence
+			// that it is a results list, and taking it as one would be the
+			// same silent empty parse as an error payload.
+			if !anyMetadata {
+				return nil, fmt.Errorf(`object's only key %q holds no metadata object, so it is not a results wrapper`,
+					sanitizeReplyText(key))
+			}
+			return items, nil
 		}
 	}
 	return nil, fmt.Errorf(`object has %d keys and no "results" array`, len(obj))
 }
 
-func decodeMetadataArray(raw []byte) ([]*ParsedMetadata, error) {
-	var items []*ParsedMetadata
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, err
+// resultsKey is the wrapper key the batch prompt asks the model to use.
+const resultsKey = "results"
+
+// decodeMetadataArray decodes a JSON array of results, one per input in
+// order, validating every element with decodeResultElement. anyMetadata
+// reports whether at least one element carried a metadata key.
+func decodeMetadataArray(raw []byte) (items []*ParsedMetadata, anyMetadata bool, err error) {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		return nil, false, err
 	}
-	return items, nil
+	items = make([]*ParsedMetadata, len(elems))
+	for i, elem := range elems {
+		m, isMetadata, err := decodeResultElement(elem)
+		if err != nil {
+			return nil, false, fmt.Errorf("result %d %w", i, err)
+		}
+		items[i] = m
+		anyMetadata = anyMetadata || isMetadata
+	}
+	return items, anyMetadata, nil
 }
 
 func isJSONArray(raw json.RawMessage) bool {
@@ -986,6 +1105,38 @@ func hasParsedMetadataKey(obj map[string]json.RawMessage) bool {
 // reply.
 const maxResponseExcerptBytes = 300
 
+// ReplyParseError reports a reply from the model that could not be turned into
+// metadata: the provider answered, and what it said was not a usable result.
+//
+// It exists so that callers classify the failure by TYPE and never by text.
+// Error() includes Excerpt, up to maxResponseExcerptBytes of model-written
+// text, because the operation log needs it to diagnose the next bad reply. That
+// makes the message unsafe to string-match: a filename echoed into a malformed
+// reply can contain "permission_error" or "invalid_api_key", and
+// internal/scanner's isPermanentAIFailure used to abort the whole AI phase on
+// such a substring. A reply we could not decode is by definition not an auth
+// or quota failure from the provider, so that classifier returns false for
+// anything that unwraps to *ReplyParseError before it looks at any text.
+type ReplyParseError struct {
+	// Err says what was wrong with the reply. Its message can quote
+	// model-written JSON keys, sanitized the same way as Excerpt.
+	Err error
+	// Excerpt is a truncated, log-safe copy of the reply (responseExcerpt).
+	Excerpt string
+}
+
+func (e *ReplyParseError) Error() string {
+	return fmt.Sprintf("failed to parse OpenAI response: %v; response: %s", e.Err, e.Excerpt)
+}
+
+func (e *ReplyParseError) Unwrap() error {
+	return e.Err
+}
+
+func newReplyParseError(err error, content string) *ReplyParseError {
+	return &ReplyParseError{Err: err, Excerpt: responseExcerpt(content)}
+}
+
 // responseExcerpt returns a truncated, log-safe copy of an LLM reply for use in
 // an error message, so the next parse failure can be diagnosed from the
 // operation log instead of by reproducing it against the backend.
@@ -998,5 +1149,37 @@ func responseExcerpt(content string) string {
 		}
 		s = fmt.Sprintf("%s... (%d bytes total)", s[:cut], len(s))
 	}
-	return logger.SanitizeLogValue(s)
+	return sanitizeReplyText(s)
+}
+
+// sanitizeReplyText makes model-written text safe to put in a log line or an
+// operation record. logger.SanitizeLogValue escapes C0 controls and DEL only;
+// on top of that this escapes the characters that rearrange or break a line
+// without being C0: the Unicode format characters (category Cf, which includes
+// the bidi embeddings and overrides U+202A-U+202E and the isolates
+// U+2066-U+2069, plus zero-width characters) and the line and paragraph
+// separators U+2028 and U+2029 (categories Zl/Zp, not Cf). The shared
+// sanitizer is deliberately left alone; this is local to model output.
+func sanitizeReplyText(s string) string {
+	s = logger.SanitizeLogValue(s)
+	if !strings.ContainsFunc(s, isInvisibleReplyRune) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch {
+		case !isInvisibleReplyRune(r):
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+	}
+	return b.String()
+}
+
+func isInvisibleReplyRune(r rune) bool {
+	return unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
