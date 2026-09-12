@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_failure.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8f2c05d1-47ab-4e93-b60f-1d9a7e3c5482
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package scanner
 
@@ -45,6 +45,12 @@ import (
 // so DoWithRetry has already wrapped it in *ai.PermanentError by the time it
 // gets here.
 //
+// The text match is only safe on text the PROVIDER wrote. Errors carrying
+// model-written text -- *ai.ReplyParseError, whose message embeds an excerpt
+// of the model's reply -- are excluded by type before this list is consulted;
+// see isPermanentAIFailure. Any new error that quotes model output must be
+// typed the same way, or a book title can match a marker below.
+//
 // A miss here is not dangerous: the phase still stops after
 // maxConsecutiveFailures. This only makes the common case stop on the first
 // batch instead of the third.
@@ -76,8 +82,21 @@ var permanentAIFailureMarkers = []string{
 // from text; the marker-substring loop below is the fallback for errors that
 // never went through DoWithRetry, or that didn't come back as a structured
 // *openai.Error in the first place (see the marker-list comment above).
+//
+// An *ai.ReplyParseError is checked FIRST and is never permanent. It means the
+// provider answered and the model's reply could not be decoded, which is not
+// an auth, billing, or quota state -- and its Error() quotes up to 300 bytes of
+// model-written text, so the marker loop below would otherwise be matching
+// words the model wrote. A filename echoed into a malformed reply
+// ("...permission_error..." in a book title) used to abort the whole AI phase
+// and, in parserChain.ParseBatch, stop the fallthrough to the next backend. A
+// bad reply now counts toward the phase's ordinary failure threshold and lets
+// the chain try the next rung, like any other transient failure.
 func isPermanentAIFailure(err error) bool {
 	if err == nil {
+		return false
+	}
+	if _, ok := errors.AsType[*ai.ReplyParseError](err); ok {
 		return false
 	}
 	if _, ok := errors.AsType[*ai.PermanentError](err); ok {

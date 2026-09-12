@@ -1,17 +1,71 @@
 // file: internal/scanner/ai_failure_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b3d81e0-5a29-4c74-9e18-7f2a0c46bd35
-// last-edited: 2026-08-22
+// last-edited: 2026-09-12
 
 package scanner
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// TestIsPermanentAIFailure_ReplyParseErrorIsNeverPermanent: a reply the model
+// sent that we could not decode quotes up to 300 bytes of that reply in its
+// Error(). A book title echoed into it can contain any provider marker, and
+// the classifier used to abort the whole AI phase on that text. It must read
+// the type, not the words.
+func TestIsPermanentAIFailure_ReplyParseErrorIsNeverPermanent(t *testing.T) {
+	for _, marker := range permanentAIFailureMarkers {
+		replyErr := &ai.ReplyParseError{
+			Err:     errors.New("got 1 result(s) for 2 filename(s), and results are matched to filenames by position"),
+			Excerpt: `{"results": [{"title": "The ` + marker + ` Chronicles"}]}`,
+		}
+		if !strings.Contains(replyErr.Error(), marker) {
+			t.Fatalf("precondition: Error() %q does not quote %q", replyErr.Error(), marker)
+		}
+		if isPermanentAIFailure(replyErr) {
+			t.Errorf("a reply parse error quoting %q was classified permanent -- a book title aborted the AI phase", marker)
+		}
+		if isPermanentAIFailure(fmt.Errorf("ai parser chain: %w", replyErr)) {
+			t.Errorf("a wrapped reply parse error quoting %q was classified permanent", marker)
+		}
+	}
+
+	// Control: the same marker, written by the provider, is still permanent.
+	if !isPermanentAIFailure(errors.New(`anthropic: permission_error: this key cannot use the model`)) {
+		t.Error("a real provider permission_error is no longer permanent")
+	}
+}
+
+// TestChainFallsThroughOnAReplyParseError is the call-site half of the test
+// above: parserChain.ParseBatch stops at the first permanent error, so a reply
+// parse error quoting a marker used to stop the fallthrough to the next rung.
+func TestChainFallsThroughOnAReplyParseError(t *testing.T) {
+	replyErr := &ai.ReplyParseError{
+		Err:     errors.New("result 0 is not a JSON object"),
+		Excerpt: `{"results": ["invalid_api_key"]}`,
+	}
+	remote := &countingParser{err: replyErr}
+	local := &countingParser{result: []*ai.ParsedMetadata{{Title: "from local"}}}
+
+	c := newParserChain(logger.New("test"), rung("remote", remote), rung("local", local))
+	results, err := c.ParseBatch(t.Context(), []string{"book.m4b"})
+	if err != nil {
+		t.Fatalf("chain returned %v; the next rung should have answered", err)
+	}
+	if local.calls.Load() != 1 {
+		t.Fatalf("local rung called %d time(s), want 1", local.calls.Load())
+	}
+	if len(results) != 1 || results[0].Title != "from local" {
+		t.Errorf("results = %+v", results)
+	}
+}
 
 // prodQuotaError is the error the scanner actually received on 2026-08-16,
 // copied from the journal rather than composed here.
