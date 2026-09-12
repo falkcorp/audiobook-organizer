@@ -1,12 +1,12 @@
 // file: web/src/components/library/TagCloud.test.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4f3d2c1b-8a9e-4d7c-b6a5-2e1f9c8d7b6a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
-import { TagCloud } from './TagCloud';
+import { TagCloud, formatTagLabel } from './TagCloud';
 
 function defaultProps(overrides: Partial<Parameters<typeof TagCloud>[0]> = {}) {
   return {
@@ -149,5 +149,100 @@ describe('TagCloud', () => {
 
     renderWithProviders(<TagCloud {...defaultProps()} />);
     expect(screen.getByLabelText('Collapse tag cloud')).toBeInTheDocument();
+  });
+
+  // TASK-161: dedup:* and metadata:source:* are internal bookkeeping the
+  // owner said nobody browses by — hide them from this widget's chips.
+  it('hides dedup:* and metadata:source:* tags, but still renders genuine subject tags', () => {
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [
+            { tag: 'dedup:duration-match', count: 12 },
+            { tag: 'metadata:source:audible', count: 8 },
+            { tag: 'science fiction & fantasy', count: 3 },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText('science fiction & fantasy (3)')).toBeInTheDocument();
+    expect(screen.queryByText(/dedup:duration-match/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/metadata:source:audible/)).not.toBeInTheDocument();
+  });
+
+  // Anti-suppression twin: a SELECTED hidden-namespace tag must still expose
+  // a way to clear it, or the user is stuck with an active filter and no
+  // visible control.
+  it('still shows a selected dedup:* tag as a clearable chip even though its namespace is hidden', () => {
+    const onTagsChange = vi.fn();
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [
+            { tag: 'dedup:duration-match', count: 12 },
+            { tag: 'science fiction & fantasy', count: 3 },
+          ],
+          selectedTags: ['dedup:duration-match'],
+          onTagsChange,
+        })}
+      />
+    );
+    const selectedChip = screen.getByText('dedup:duration-match (12)');
+    expect(selectedChip).toBeInTheDocument();
+    fireEvent.click(selectedChip);
+    // Clicking the chip clears it by its original, unmodified tag string —
+    // hiding is display-only and never changes what is sent back on click.
+    expect(onTagsChange).toHaveBeenCalledWith([]);
+  });
+
+  // TASK-162: metadata:<key>:<value> tags read as "key: value", not the raw
+  // namespaced string.
+  it('reformats a visible metadata:* tag as "key: value" instead of the raw namespaced string', () => {
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [{ tag: 'metadata:language:en', count: 4 }],
+        })}
+      />
+    );
+    expect(screen.getByText('language: en (4)')).toBeInTheDocument();
+    expect(screen.queryByText(/metadata:language:en/)).not.toBeInTheDocument();
+  });
+
+  it('clicking a reformatted metadata:* chip still sends back the original raw tag string', () => {
+    const onTagsChange = vi.fn();
+    renderWithProviders(
+      <TagCloud
+        {...defaultProps({
+          availableTags: [{ tag: 'metadata:language:en', count: 4 }],
+          onTagsChange,
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText('language: en (4)'));
+    expect(onTagsChange).toHaveBeenCalledWith(['metadata:language:en']);
+  });
+});
+
+describe('formatTagLabel', () => {
+  it('strips the metadata: prefix and formats as "key: value"', () => {
+    expect(formatTagLabel('metadata:language:en')).toBe('language: en');
+  });
+
+  it('formats metadata:source:* the same way (even though this case is hidden by TagCloud itself)', () => {
+    expect(formatTagLabel('metadata:source:audible')).toBe('source: audible');
+  });
+
+  it('passes a non-metadata tag through unchanged', () => {
+    expect(formatTagLabel('science fiction & fantasy')).toBe('science fiction & fantasy');
+  });
+
+  it('falls back to the raw tag for a malformed metadata:* tag rather than throwing', () => {
+    expect(formatTagLabel('metadata:')).toBe('metadata:');
+    expect(formatTagLabel('metadata:foo')).toBe('metadata:foo');
+  });
+
+  it('keeps a colon that appears inside the value segment itself', () => {
+    expect(formatTagLabel('metadata:isbn:978:0:1234')).toBe('isbn: 978:0:1234');
   });
 });
