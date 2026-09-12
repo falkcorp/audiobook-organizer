@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -800,28 +800,55 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 // the comment in ApplyMetadataCandidate for why.
 //
 // Safe to call with an empty URL (no-op) and safe to call concurrently for
-// different books; DownloadCoverArt writes to a per-book path and skips when the
-// file already exists.
+// different books; the cover is written to a per-book path.
 func (mfs *Service) DownloadPendingCover(bookID, coverURL string) {
+	mfs.saveCover(bookID, coverURL, true)
+}
+
+// downloadAutoFetchCover is DownloadPendingCover for auto-fetch: a book that
+// already has a local cover keeps it, and the fetched cover is downloaded only
+// when there is none. That is auto-fetch's behaviour before 2026-09-12, when
+// it called metadata.DownloadCoverArt (which returns an existing file
+// untouched); the apply-writes change had briefly routed it through the
+// replace path too. Nobody picked a new cover on this path, so a provider's
+// first result must not overwrite one the user chose. An explicit apply
+// (DownloadPendingCover) still replaces.
+func (mfs *Service) downloadAutoFetchCover(bookID, coverURL string) {
+	mfs.saveCover(bookID, coverURL, false)
+}
+
+// saveCover is the body of DownloadPendingCover (replace) and
+// downloadAutoFetchCover (!replace, which keeps an existing cover file).
+func (mfs *Service) saveCover(bookID, coverURL string, replace bool) {
 	if bookID == "" || coverURL == "" || config.AppConfig.RootDir == "" {
 		return
 	}
 
-	// ReplaceCoverArt, not DownloadCoverArt: this is an explicit apply of a new
-	// cover, and DownloadCoverArt returns an existing cover file untouched, so a
-	// book that already had a cover kept the old image forever. ReplaceCoverArt
-	// writes a temp file and renames it over the old one only once the new image
-	// is complete, so a failed download leaves the old cover in place.
-	download := metadata.ReplaceCoverArt
-	if mfs.coverDownload != nil {
-		download = mfs.coverDownload
+	coverPath := ""
+	if !replace {
+		coverPath = metadata.CoverPathForBook(config.AppConfig.RootDir, bookID)
 	}
-	coverPath, err := download(coverURL, config.AppConfig.RootDir, bookID)
-	if err != nil {
-		slog.Warn("background cover art download failed", "id", bookID, "error", err)
-		return
+	if coverPath != "" {
+		slog.Info("auto-fetch: book already has a local cover; kept it", "path", coverPath, "id", bookID)
+	} else {
+		// ReplaceCoverArt, not DownloadCoverArt: on an explicit apply of a new
+		// cover, DownloadCoverArt returns an existing cover file untouched, so a
+		// book that already had a cover kept the old image forever.
+		// ReplaceCoverArt writes a temp file and renames it over the old one only
+		// once the new image is complete, so a failed download leaves the old
+		// cover in place. (On the auto-fetch path no cover exists here.)
+		download := metadata.ReplaceCoverArt
+		if mfs.coverDownload != nil {
+			download = mfs.coverDownload
+		}
+		var err error
+		coverPath, err = download(coverURL, config.AppConfig.RootDir, bookID)
+		if err != nil {
+			slog.Warn("background cover art download failed", "id", bookID, "error", err)
+			return
+		}
+		slog.Info("cover art saved to", "path", coverPath, "id", bookID)
 	}
-	slog.Info("cover art saved to", "path", coverPath, "id", bookID)
 
 	// Re-read rather than reusing the book the caller had: the apply path and the
 	// background file-IO job both write this row, and UpdateBook does a full

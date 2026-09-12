@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
 // last-edited: 2026-09-12
 
@@ -75,16 +75,29 @@ func (mfs *Service) ISBNEnrichment() *ISBNService {
 	return mfs.isbnEnrichment
 }
 
-// FileWorkScheduler runs work for bookID off the calling goroutine: through
-// the server's file-I/O pool, holding the path lock for filePath while work
-// runs. The server supplies it; metafetch cannot import the pool or the lock
-// table without an import cycle.
-type FileWorkScheduler func(bookID, filePath string, work func())
+// FileWorkScheduler runs work for bookID off the calling goroutine, through
+// the server's file-I/O pool. It takes no lock: the caller cannot know which
+// path the work writes (for a protected book it is the library copy's, and a
+// rename moves it part-way through), so the file work locks for itself
+// through the locker set by SetPathLocker. The server supplies both; metafetch
+// cannot import the pool or the lock table without an import cycle.
+type FileWorkScheduler func(bookID string, work func())
 
 // SetFileWorkScheduler routes auto-fetch's file work through the file-I/O
-// pool and the path lock, the way a manual apply already runs, so an
-// auto-fetch and a manual apply of the same book cannot rename or tag its
-// files at the same time.
+// pool, where the manual and batch applies' file work also runs.
 func (mfs *Service) SetFileWorkScheduler(s FileWorkScheduler) {
 	mfs.fileWorkScheduler = s
+}
+
+// SetPathLocker wires the server's per-path write lock into the file work
+// (FinishApplyFileWork, FinishAutoFetchFileWork). Each write takes it on the
+// path of the files it is about to touch, resolved at that moment: the
+// library copy's path for a protected book, the files' current path for the
+// cover embed and the rename, and the post-rename path for the tag write. So
+// an auto-fetch of book A (library copy B), a manual or batch apply of B, and
+// a bulk write-back of B all serialize on B's path.
+//
+// The lock is not reentrant: no caller may hold it around those calls.
+func (mfs *Service) SetPathLocker(lock func(path string) func()) {
+	mfs.pathLock = lock
 }

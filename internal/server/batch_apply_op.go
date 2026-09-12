@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-12
 //
@@ -373,8 +373,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBook(
-					svc, s.Ops(), itunes, id, p.WriteBack, writeBackPathLocks.lock)
+				out := applyCachedCandidateForBook(svc, itunes, id, p.WriteBack)
 
 				if !out.Applied {
 					switch out.Reason {

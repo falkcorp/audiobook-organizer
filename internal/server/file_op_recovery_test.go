@@ -1,5 +1,5 @@
 // file: internal/server/file_op_recovery_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8e5d17-4c6a-49f3-a0e1-7d93c5b28f46
 // last-edited: 2026-09-12
 
@@ -7,12 +7,10 @@ package server
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeApplyRecoverer counts tag writes the way FinishApplyFileWork performs
@@ -46,20 +44,18 @@ func TestRecoverApplyMetadataFileOp_WritesTagsOnce(t *testing.T) {
 	assert.Equal(t, 2, f.tagWrites)
 }
 
-// Auto-fetch's file work is queued on the pool under its own op type and runs
-// holding the path lock.
-func TestAutoFetchScheduler_RunsOnPoolUnderPathLock(t *testing.T) {
+// Auto-fetch's file work is queued on the pool under its own op type, so a
+// restart replays it with the auto-fetch rules. The scheduler takes no path
+// lock: the file work locks for itself, on the path it writes (pinned by
+// metafetch's TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath).
+func TestAutoFetchScheduler_RunsOnPool(t *testing.T) {
 	pool := NewFileIOPool(1)
 	defer pool.Stop()
 
-	var mu sync.Mutex
-	var events []string
-	record := func(e string) { mu.Lock(); events = append(events, e); mu.Unlock() }
-	lock := func(p string) func() { record("lock:" + p); return func() { record("unlock:" + p) } }
-
 	release := make(chan struct{})
-	sched := newAutoFetchScheduler(func() *FileIOPool { return pool }, lock)
-	sched("b1", "/lib/a", func() { <-release; record("work") })
+	done := make(chan struct{})
+	sched := newAutoFetchScheduler(func() *FileIOPool { return pool })
+	sched("b1", func() { <-release; close(done) })
 
 	var opTypes []string
 	for _, j := range pool.PendingJobs() {
@@ -67,7 +63,14 @@ func TestAutoFetchScheduler_RunsOnPoolUnderPathLock(t *testing.T) {
 	}
 	assert.Equal(t, []string{autoFetchFileOpType}, opTypes, "queued as auto-fetch work so a replay runs the auto-fetch rules")
 	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued auto-fetch work never ran")
+	}
 
-	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(events) == 3 }, 5*time.Second, 10*time.Millisecond)
-	assert.Equal(t, []string{"lock:/lib/a", "work", "unlock:/lib/a"}, events)
+	// No pool (test servers): the work runs inline.
+	ran := false
+	newAutoFetchScheduler(func() *FileIOPool { return nil })("b2", func() { ran = true })
+	assert.True(t, ran)
 }

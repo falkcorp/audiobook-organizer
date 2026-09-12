@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-12
 //
@@ -73,18 +73,6 @@ func (f *fakeApplySvc) FinishApplyFileWork(id, pendingCoverURL string, fileIO, w
 	return f.finishErr
 }
 
-type fakeBookReader struct {
-	book *database.Book
-	err  error
-}
-
-func (f *fakeBookReader) GetBookByID(id string) (*database.Book, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.book, nil
-}
-
 type fakeITunes struct{ ids []string }
 
 func (f *fakeITunes) Enqueue(bookID string) { f.ids = append(f.ids, bookID) }
@@ -104,10 +92,9 @@ func oneCandidate(t *testing.T) []json.RawMessage {
 // failure. It looked like success.
 func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", Title: "A Title", FilePath: "/lib/a.m4b"}}
 	itunes := &fakeITunes{}
 
-	out := applyCachedCandidateForBook(svc, store, itunes, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, itunes, "b1", true)
 
 	if !out.Applied || out.WriteBackFailed {
 		t.Fatalf("expected clean apply, got %+v", out)
@@ -132,10 +119,9 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 // write_back=false must change the database and touch NO file.
 func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 	itunes := &fakeITunes{}
 
-	out := applyCachedCandidateForBook(svc, store, itunes, "b1", false, nil)
+	out := applyCachedCandidateForBook(svc, itunes, "b1", false)
 
 	if !out.Applied {
 		t.Fatalf("expected applied, got %+v", out)
@@ -166,7 +152,7 @@ func TestApplyCachedCandidate_ReportsSkipReasons(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out := applyCachedCandidateForBook(tt.svc, &fakeBookReader{}, &fakeITunes{}, "b1", true, nil)
+			out := applyCachedCandidateForBook(tt.svc, &fakeITunes{}, "b1", true)
 			if out.Applied {
 				t.Fatalf("expected not applied, got %+v", out)
 			}
@@ -185,7 +171,7 @@ func TestApplyCachedCandidate_ReportsSkipReasons(t *testing.T) {
 func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), applyErr: errors.New("apply exploded")}
 
-	out := applyCachedCandidateForBook(svc, &fakeBookReader{}, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", true)
 
 	if out.Applied {
 		t.Fatalf("apply failed but was reported applied: %+v", out)
@@ -204,9 +190,8 @@ func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 // someone re-applying work that already succeeded.
 func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("disk full")}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 
-	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", true)
 
 	if !out.Applied {
 		t.Fatalf("write-back failure must not unset Applied: %+v", out)
@@ -226,9 +211,8 @@ func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 // WriteBackFailed must now be set, so the batch op counts and logs it.
 func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("rename files: cross-device link")}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 
-	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", true)
 
 	if !out.Applied {
 		t.Fatalf("a file-I/O failure must not unset Applied: %+v", out)
@@ -252,10 +236,9 @@ func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
 // forever. The cover must reach the core with and without write-back.
 func TestApplyCachedCandidate_DownloadsPendingCover(t *testing.T) {
 	const cover = "https://covers.example.test/new.jpg"
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 	for _, writeBack := range []bool{true, false} {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), pendingCover: cover}
-		_ = applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", writeBack, nil)
+		_ = applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", writeBack)
 		if len(svc.finishCalls) != 1 || svc.finishCalls[0].cover != cover {
 			t.Errorf("writeBack=%v: file work = %+v, want one call carrying the pending cover %q",
 				writeBack, svc.finishCalls, cover)
@@ -263,29 +246,10 @@ func TestApplyCachedCandidate_DownloadsPendingCover(t *testing.T) {
 	}
 }
 
-// TestApplyCachedCandidate_TakesPathLockOnPostApplyPath pins that the lock is
-// taken on the path read AFTER the apply, not a stale one. ApplyMetadataCandidate
-// can rewrite the book's row, and locking the pre-apply path would serialize
-// against the wrong key.
-func TestApplyCachedCandidate_TakesPathLockOnPostApplyPath(t *testing.T) {
-	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/new-location.m4b"}}
-
-	var locked []string
-	lock := func(p string) func() {
-		locked = append(locked, p)
-		return func() {}
-	}
-
-	out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, lock)
-
-	if !out.Applied {
-		t.Fatalf("expected applied, got %+v", out)
-	}
-	if len(locked) != 1 || locked[0] != "/lib/new-location.m4b" {
-		t.Errorf("locked %v, want the post-apply path", locked)
-	}
-}
+// The path lock moved into the shared core (metafetch.FinishApplyFileWork),
+// which resolves the library copy before choosing the key and re-locks on the
+// post-rename path for the tags: see
+// TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath.
 
 // TestApplyCachedCandidate_ReportsSkippedLockedFields pins that the lock keys
 // the apply refused to overwrite reach the outcome on EVERY applied return --
@@ -294,11 +258,10 @@ func TestApplyCachedCandidate_TakesPathLockOnPostApplyPath(t *testing.T) {
 // outcome that lost them would read "applied" over a silently kept title.
 func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 	locked := []string{database.FieldKeyTitle, database.FieldKeyAuthorName}
-	store := &fakeBookReader{book: &database.Book{ID: "b1", FilePath: "/lib/a.m4b"}}
 
 	t.Run("no write-back", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked}
-		out := applyCachedCandidateForBook(svc, store, nil, "b1", false, nil)
+		out := applyCachedCandidateForBook(svc, nil, "b1", false)
 		if !out.Applied {
 			t.Fatalf("expected Applied: %+v", out)
 		}
@@ -309,7 +272,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("write-back succeeds", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked}
-		out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+		out := applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", true)
 		if !out.Applied || out.WriteBackFailed {
 			t.Fatalf("expected a clean apply: %+v", out)
 		}
@@ -320,7 +283,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("write-back fails", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked, finishErr: errors.New("disk full")}
-		out := applyCachedCandidateForBook(svc, store, &fakeITunes{}, "b1", true, nil)
+		out := applyCachedCandidateForBook(svc, &fakeITunes{}, "b1", true)
 		if !out.Applied || !out.WriteBackFailed {
 			t.Fatalf("expected applied with write-back failure: %+v", out)
 		}
@@ -331,7 +294,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("nothing locked", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t)}
-		out := applyCachedCandidateForBook(svc, store, nil, "b1", false, nil)
+		out := applyCachedCandidateForBook(svc, nil, "b1", false)
 		if len(out.SkippedLocked) != 0 {
 			t.Errorf("SkippedLocked = %v, want none", out.SkippedLocked)
 		}

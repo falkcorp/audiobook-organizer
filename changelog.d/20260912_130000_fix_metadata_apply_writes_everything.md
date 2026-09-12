@@ -22,9 +22,16 @@
   compare on a path-separator boundary.
 - **Auto-fetch keeps tags in step with the database, without creating copies.**
   Auto-fetch file work (rename, tags, cover embed) now runs through the file-I/O
-  pool under the path lock, only for books that already have a library copy
-  under the library root. It never creates one. It no longer writes a series
-  position without a series name, and a failed cover download keeps the old cover.
+  pool, only for books that already have a library copy under the library root.
+  It never creates one. It no longer writes a series position without a series
+  name, a failed cover download keeps the old cover, and a book that already has
+  a local cover keeps it (an explicit apply still replaces it).
+- **Apply file work locks the files it actually writes.** Every apply's file
+  work (single-book, batch, auto-fetch and their restart replays) takes the
+  per-path write lock itself: on the library copy's path for a protected book,
+  on the files' current path for the cover embed and rename, and on the
+  post-rename path for the tag write. An auto-fetch of an iTunes book and a
+  manual apply of its library copy no longer write the same files at once.
 
 ### Removed
 
