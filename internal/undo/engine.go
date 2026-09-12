@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -165,13 +165,15 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 				})
 			default:
 				// The revert is compare-and-set: a field edited since the
-				// operation is refused, not overwritten. Fields the revert
-				// cannot restore at all keep their earlier classification.
+				// operation is refused, not overwritten. One that already
+				// holds OldValue is already restored and needs no write.
+				// Fields the revert cannot restore at all keep their earlier
+				// classification.
 				if !IsRevertableBookField(c.FieldName) {
 					report.Safe++
 				} else if current, err := CurrentBookField(book, c.FieldName); err != nil {
 					report.addReferentConflict(c, refuse(ReasonOldValueUnparsable, "%v", err))
-				} else if current != c.NewValue {
+				} else if current != c.NewValue && current != c.OldValue {
 					report.addReferentConflict(c, refuse(ReasonChangedSince,
 						"book %s %s changed since the operation", c.BookID, c.FieldName))
 				} else {

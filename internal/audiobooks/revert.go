@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -521,13 +521,20 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
 	// Compare-and-set: restore only while the field still holds what the
-	// operation wrote, so a user edit made since is never overwritten. The
-	// preflight reports the same state.
+	// operation wrote, so a user edit made since is never overwritten. A field
+	// that already holds OldValue (a rescan put library_state back, say) is
+	// already restored: nothing is written and the row is marked reverted.
+	// Anything else changed since and is refused. The preflight reports the
+	// same three states.
 	current, err := undo.CurrentBookField(book, c.FieldName)
 	if err != nil {
 		return err
 	}
-	if current != c.NewValue {
+	switch current {
+	case c.NewValue:
+	case c.OldValue:
+		return nil
+	default:
 		return driftRefusal("book %s %s changed since the operation", book.ID, c.FieldName)
 	}
 	// Exactly OldValue goes back, typed by the Book field it names; "" clears

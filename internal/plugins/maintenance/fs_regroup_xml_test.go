@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-09-12
 
@@ -1141,4 +1141,137 @@ func ids0Path(t *testing.T, s *database.PebbleStore, id string) string {
 		t.Fatalf("book %s: %v", id, err)
 	}
 	return b.FilePath
+}
+
+// F2 (round 2): the book-folder re-check sees every live book at the folder,
+// not only the one the single book:path index key names. That key belongs to
+// the last writer and UpdateBook deletes it when any book moves off the path,
+// so in both shapes below GetBookByFilePath no longer finds the live book.
+func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape func(t *testing.T, s *database.PebbleStore, base string) string // the live book left at the folder
+	}{
+		{"second book moved off the folder", func(t *testing.T, s *database.PebbleStore, base string) string {
+			x := fsSeedBook(t, s, "Cage of Souls", base)
+			y := fsSeedBook(t, s, "Cage of Souls", base)
+			yb, err := s.GetBookByID(y)
+			if err != nil || yb == nil {
+				t.Fatalf("book %s: %v", y, err)
+			}
+			yb.FilePath = base + " (moved)"
+			if _, err := s.UpdateBook(y, yb); err != nil {
+				t.Fatal(err)
+			}
+			return x
+		}},
+		{"latest book at the folder soft-deleted", func(t *testing.T, s *database.PebbleStore, base string) string {
+			x := fsSeedBook(t, s, "Cage of Souls", base)
+			y := fsSeedBook(t, s, "Cage of Souls", base)
+			if err := merge.SoftDeleteBook(s, y); err != nil {
+				t.Fatal(err)
+			}
+			return x
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			base := fsFragBase(t)
+			ids := seedFragments(t, s, base, "Cage of Souls", 3)
+			plan, _ := fsOneFragmentsGroup(t, s)
+			x := tc.shape(t, s, base)
+			if b, err := s.GetBookByFilePath(base); err == nil && b != nil && b.ID == x && !b.IsSoftDeleted() {
+				t.Fatalf("precondition: the path index still names live book %s, so this is not the index-miss case", x)
+			}
+			before := fsRowCount(t, s)
+			res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-index-miss"})
+			if err != nil || res.Skipped != 1 {
+				t.Fatalf("apply err=%v res=%s, want the group skipped (live book %s is at the folder)", err, res, x)
+			}
+			fsRequireUntouched(t, s, append(ids, x), before, "op-index-miss")
+		})
+	}
+}
+
+// F1 (round 2): the three states of a metadata_update revert. A field that
+// still holds NewValue is restored; one that already holds OldValue is already
+// restored, so the row is marked reverted and not counted as changed since;
+// anything else is refused as changed since, in the preview and the revert.
+func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		title func(oldV, newV string) string // the title to leave on the survivor before the revert
+		drift bool
+	}{
+		{"holds the new value: restored", func(_, newV string) string { return newV }, false},
+		{"holds the old value: already restored", func(oldV, _ string) string { return oldV }, false},
+		{"holds neither: refused", func(_, _ string) string { return "User Edited Title" }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := regroupStore(t)
+			seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+			plan, g := fsOneFragmentsGroup(t, s)
+			if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-states"}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			changes, err := s.GetOperationChanges("op-states")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rowID, oldV, newV string
+			for _, c := range changes {
+				if c.ChangeType == "metadata_update" && c.FieldName == "title" {
+					rowID, oldV, newV = c.ID, c.OldValue, c.NewValue
+				}
+			}
+			if rowID == "" || oldV == newV {
+				t.Fatalf("no title row with distinct old/new values (id=%q old=%q new=%q)", rowID, oldV, newV)
+			}
+			set := tc.title(oldV, newV)
+			sb, _ := s.GetBookByID(g.SurvivorID)
+			sb.Title = set
+			if _, err := s.UpdateBook(sb.ID, sb); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := undo.PreflightUndoConflicts(s, "op-states")
+			if err != nil {
+				t.Fatalf("preflight: %v", err)
+			}
+			flagged := false
+			for _, it := range report.CheckFailed {
+				flagged = flagged || (it.ChangeType == "metadata_update" && it.Reason == undo.ReasonChangedSince)
+			}
+			if flagged != tc.drift {
+				t.Errorf("preflight flags the title as changed since = %v, want %v (%+v)", flagged, tc.drift, report.CheckFailed)
+			}
+
+			res, _ := audiobooks.NewRevertService(s).RevertOperation("op-states")
+			if res == nil {
+				t.Fatal("revert returned no result")
+			}
+			wantDrift := 0
+			if tc.drift {
+				wantDrift = 1
+			}
+			if res.ChangedSince != wantDrift || res.Failed != wantDrift {
+				t.Errorf("revert failed=%d changed_since=%d, want %d and %d (%s)", res.Failed, res.ChangedSince, wantDrift, wantDrift, res.Summary())
+			}
+			wantTitle := oldV
+			if tc.drift {
+				wantTitle = set
+			}
+			if got, _ := s.GetBookByID(g.SurvivorID); got.Title != wantTitle {
+				t.Errorf("title after revert = %q, want %q", got.Title, wantTitle)
+			}
+			after, _ := s.GetOperationChanges("op-states")
+			marked := false
+			for _, c := range after {
+				marked = marked || (c.ID == rowID && c.RevertedAt != nil)
+			}
+			if marked == tc.drift {
+				t.Errorf("title row marked reverted = %v, want %v", marked, !tc.drift)
+			}
+		})
+	}
 }
