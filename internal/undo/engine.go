@@ -164,7 +164,19 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 					Reason: "book deleted",
 				})
 			default:
-				report.Safe++
+				// The revert is compare-and-set: a field edited since the
+				// operation is refused, not overwritten. Fields the revert
+				// cannot restore at all keep their earlier classification.
+				if !IsRevertableBookField(c.FieldName) {
+					report.Safe++
+				} else if current, err := CurrentBookField(book, c.FieldName); err != nil {
+					report.addReferentConflict(c, refuse(ReasonOldValueUnparsable, "%v", err))
+				} else if current != c.NewValue {
+					report.addReferentConflict(c, refuse(ReasonChangedSince,
+						"book %s %s changed since the operation", c.BookID, c.FieldName))
+				} else {
+					report.Safe++
+				}
 			}
 		case "tag_write":
 			// The revert reads the book before it touches the file.

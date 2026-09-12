@@ -196,6 +196,38 @@ func RestoreBookField(book *database.Book, field, oldValue string) error {
 	return nil
 }
 
+// CurrentBookField renders a revertable Book field the way metadata_update rows
+// record it: a string as is, a nil pointer as "", a *string as its value and an
+// *int in decimal. The revert and the preflight compare it with the row's
+// NewValue, so neither overwrites a change made since the operation.
+func CurrentBookField(book *database.Book, field string) (string, error) {
+	name, ok := revertableBookFields[field]
+	if !ok {
+		return "", fmt.Errorf("unknown metadata field: %s", field)
+	}
+	f := reflect.ValueOf(book).Elem().FieldByName(name)
+	if !f.IsValid() {
+		return "", fmt.Errorf("invalid struct field: %s", name)
+	}
+	if f.Kind() == reflect.String {
+		return f.String(), nil
+	}
+	if f.Kind() != reflect.Pointer {
+		return "", fmt.Errorf("field %s: unsupported kind %s", name, f.Kind())
+	}
+	if f.IsNil() {
+		return "", nil
+	}
+	switch e := f.Elem(); e.Kind() {
+	case reflect.String:
+		return e.String(), nil
+	case reflect.Int:
+		return strconv.FormatInt(e.Int(), 10), nil
+	default:
+		return "", fmt.Errorf("field %s: unsupported kind *%s", name, e.Kind())
+	}
+}
+
 // SeriesLookup is the series reads CheckRestoreReferent needs.
 type SeriesLookup interface {
 	GetSeriesByID(id int) (*database.Series, error)

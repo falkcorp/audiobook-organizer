@@ -140,6 +140,10 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 			"claimed by another row.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.missing-file-repoint",
+		// Declared write-set (dispatcher Gate 3b): never runs beside another op
+		// that rewrites book_file rows, e.g. maintenance.fs-regroup-xml, which
+		// looks a path up and then creates a row for it.
+		Writes: []sdk.Resource{sdk.ResBookFiles},
 		// ResumeDrop, matching missing-file-audit and missing-file-repair: this op
 		// WRITES, and an apply interrupted midway must not silently pick itself back
 		// up. Re-running is cheap and safe (a repointed row is no longer missing, so

@@ -50,9 +50,13 @@ func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.dedupe-book-file-rows",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         2 * time.Hour,
+		// Declared write-set (dispatcher Gate 3b): never runs beside another op
+		// that rewrites book_file rows, e.g. maintenance.fs-regroup-xml, which
+		// looks a path up and then creates a row for it.
+		Writes:      []sdk.Resource{sdk.ResBookFiles},
+		Cancellable: true,
+		Isolate:     false,
+		Timeout:     2 * time.Hour,
 		// The registry watchdog cancels an op that goes ProgressTimeout without an
 		// UpdateProgress stamp (default 5m — see
 		// internal/operations/registry/watchdog.go). The first full production run

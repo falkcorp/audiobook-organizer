@@ -153,6 +153,10 @@ func (p *Plugin) mergeSamePathDupesDef() sdk.OperationDef {
 			"same-directory. Default dry-run; pass {\"apply\": true} to merge.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.merge-same-path-dupes",
+		// Declared write-set (dispatcher Gate 3b): never runs beside another op
+		// that rewrites book_file rows, e.g. maintenance.fs-regroup-xml, which
+		// looks a path up and then creates a row for it.
+		Writes: []sdk.Resource{sdk.ResBookFiles},
 		// ResumeDrop: this op WRITES (soft-deletes), and an apply interrupted
 		// midway must not silently resume. Re-running is safe — a collapsed group
 		// no longer has two live records, so it is simply not selected again.
