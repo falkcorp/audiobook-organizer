@@ -1,5 +1,5 @@
 // file: internal/metafetch/isbn.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
 // last-edited: 2026-09-12
 
@@ -317,16 +317,16 @@ func (s *ISBNService) EnrichMissingISBNs(ctx context.Context, limit int, w *acti
 			return checked, updated, err
 		}
 		if len(books) == 0 {
-			// The first page came back empty. If we started from a non-empty
-			// cursor, the cursored book is either the last in the library (a
-			// legitimate end-of-library wrap) or it was deleted since we saved it
-			// (GetAllBooksFullFrom ends iteration on an unknown afterID). Both wrap
-			// to the top -- but a deleted-cursor case that recurs every run leaves
-			// the sweep permanently stuck at the front while looking healthy, so
-			// flag it distinctly rather than as an ordinary wrap.
+			// An empty page means nothing sorts after afterID: the cursor is at
+			// or past the last book, so the sweep wraps to the top. A cursored
+			// book that was deleted or merged since we saved it does NOT land
+			// here -- GetAllBooksFullFrom seeks to the first ID greater than an
+			// absent cursor, so the sweep resumes at its successor. An empty
+			// FIRST page from a non-empty cursor is therefore an ordinary
+			// end-of-library wrap, not a stuck cursor, and is logged as one.
 			if pages == 0 && startAfterID != "" {
-				logging.Warn(ctx, "ISBN enrichment cursor resolved to no books; wrapping to the start (cursored book at end-of-library or deleted)",
-					"resume_after_id", startAfterID)
+				logging.Info(ctx, "ISBN enrichment cursor is at or past the last book; wrapping to the start",
+					"resume_after_id", logging.Sanitize(startAfterID))
 			}
 			wrapped = true
 			break

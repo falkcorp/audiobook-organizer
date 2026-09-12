@@ -1,5 +1,5 @@
 // file: internal/database/pebble_books_pagination_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f2a9c14-3b6d-4e81-9a2c-0d5f1e8b4a37
 // last-edited: 2026-09-12
 
@@ -164,4 +164,58 @@ func TestGetAllBooksFullFrom_FillsPagePastVanishedRows(t *testing.T) {
 		got = append(got, b.ID)
 	}
 	require.Equal(t, []string{ids[0], ids[2], ids[3], ids[4]}, got)
+}
+
+// TestListBookIDs_MixedCaseByteOrder locks the ordering GetAllBooksFullFrom's
+// memdb cursor seek relies on: ListBookIDs returns IDs in plain byte order
+// (digits, then uppercase, then lowercase) on both store paths, and the seek
+// lands on the first ID greater than the cursor in that order. The memdb ID
+// index (memdb_schema.go) is a StringFieldIndex with Lowercase unset, so it
+// keys on the raw ID bytes. A case-folding index would interleave "01Zeta"
+// and "01alpha", and sort.SearchStrings would resume at the wrong place.
+func TestListBookIDs_MixedCaseByteOrder(t *testing.T) {
+	ids := []string{"01zeta", "01Zeta", "01ALPHA", "01alpha", "01Alpha", "0b", "0B", "9Q", "9q", "a1", "A1", "Z9", "z9"}
+	want := []string{"01ALPHA", "01Alpha", "01Zeta", "01alpha", "01zeta", "0B", "0b", "9Q", "9q", "A1", "Z9", "a1", "z9"}
+	pages := []struct {
+		cursor string
+		want   []string
+	}{
+		{"01Alpha", []string{"01Zeta", "01alpha", "01zeta"}}, // present cursor
+		{"01Beta", []string{"01Zeta", "01alpha", "01zeta"}},  // absent, between 01Alpha and 01Zeta
+		{"01Zz", []string{"01alpha", "01zeta", "0B"}},        // absent, between 01Zeta and 01alpha
+		{"0b", []string{"9Q", "9q", "A1"}},
+		{"Z9", []string{"a1", "z9"}}, // short page: the end of the table
+	}
+
+	for _, path := range []struct {
+		name     string
+		useMemDB bool
+	}{{"memdb", true}, {"pebble", false}} {
+		t.Run(path.name, func(t *testing.T) {
+			store := setupTestPebbleStore(t)
+			store.WaitForWarmup()
+			require.NotNil(t, store.mem(), "memdb must be published")
+			for i, id := range ids {
+				created, err := store.CreateBook(&Book{ID: id, Title: "Mixed " + id, FilePath: fmt.Sprintf("/tmp/mixed_%02d.m4b", i)})
+				require.NoError(t, err)
+				require.Equal(t, id, created.ID, "CreateBook must keep a caller-supplied ID")
+				store.UpsertBookToMemDB(context.Background(), created)
+			}
+			store.UseMemDB = path.useMemDB
+
+			got, err := store.ListBookIDs()
+			require.NoError(t, err)
+			require.Equal(t, want, got, "ListBookIDs must return IDs in plain byte order")
+
+			for _, p := range pages {
+				page, err := store.GetAllBooksFullFrom(p.cursor, 3)
+				require.NoError(t, err)
+				gotPage := make([]string, 0, len(page))
+				for _, b := range page {
+					gotPage = append(gotPage, b.ID)
+				}
+				require.Equal(t, p.want, gotPage, "cursor %q", p.cursor)
+			}
+		})
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
 // last-edited: 2026-09-12
 
@@ -356,11 +356,25 @@ func (p *PebbleStore) GetBookFileSignalCoverage(ctx context.Context, deep bool, 
 		}
 		return CountBookFileSignals(ctx, len(ptrs), func(i int) *BookFile { return ptrs[i] }, false, workers, "memdb")
 	}
-	if !p.deepCoverageBusy.CompareAndSwap(false, true) {
+	if !p.TryAcquireDeepCoverageScan() {
 		return nil, ErrDeepCoverageBusy
 	}
-	defer p.deepCoverageBusy.Store(false)
+	defer p.ReleaseDeepCoverageScan()
 	return p.deepBookFileSignalCoverage(ctx, workers)
+}
+
+// TryAcquireDeepCoverageScan claims this store's single deep signal-coverage
+// slot. It returns false when a deep scan already holds it; a caller that gets
+// true must call ReleaseDeepCoverageScan when its scan returns.
+// GetBookFileSignalCoverage takes the slot for every deep request, so a caller
+// holding it makes concurrent deep requests fail with ErrDeepCoverageBusy.
+func (p *PebbleStore) TryAcquireDeepCoverageScan() bool {
+	return p.deepCoverageBusy.CompareAndSwap(false, true)
+}
+
+// ReleaseDeepCoverageScan frees the slot taken by TryAcquireDeepCoverageScan.
+func (p *PebbleStore) ReleaseDeepCoverageScan() {
+	p.deepCoverageBusy.Store(false)
 }
 
 // presence decodes any JSON value to "was it non-empty" without keeping the

@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.15.0
+// version: 2.15.1
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -50,6 +50,25 @@ type BookBulkReader interface {
 	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
 	// This is an O(1) seek vs GetAllBooksCore's O(offset) skip — use for search
 	// index backfill and other full-table cursor scans.
+	//
+	// Paging callers (a dozen full-table walks) depend on two guarantees, and
+	// every implementation must keep both:
+	//
+	//   - An absent cursor resumes, it does not end the walk. If afterID no
+	//     longer exists (the book was merged or deleted between two pages), the
+	//     page starts at the first ID greater than afterID in plain byte order.
+	//     An empty page therefore means afterID is at or past the last book.
+	//   - A page shorter than limit means the end of the table. An
+	//     implementation that lists IDs and then loads rows must fill the page
+	//     past rows that vanish between the two steps rather than return a
+	//     short page, because callers stop on len(page) < limit.
+	//
+	// PebbleStore implements both on its memdb path (binary search over the
+	// byte-ordered memdb ID index, then point reads that skip vanished rows)
+	// and on its Pebble path (a key seek to "book:<afterID>\x01"). MockStore
+	// (hand-written and the generated mocks.MockStore) and the narrowed store
+	// interfaces in the consuming packages re-declare this method; the
+	// guarantees hold for whatever concrete store backs them.
 	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
 	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
 }
