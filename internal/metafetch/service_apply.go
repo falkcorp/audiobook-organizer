@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -500,6 +500,9 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	if target, ok := mfs.existingLibraryCopy(book); ok {
 		return target
+	}
+	if mfs.libraryCopyMaker != nil {
+		return mfs.libraryCopyMaker(book)
 	}
 
 	log := logger.New("metafetch-library-copy")

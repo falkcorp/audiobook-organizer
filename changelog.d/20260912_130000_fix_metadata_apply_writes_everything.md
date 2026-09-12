@@ -37,7 +37,10 @@
   post-rename path for the tag write. An auto-fetch of an iTunes book and a
   manual apply of its library copy no longer write the same files at once.
   Two file-work jobs for the same book run one after the other: each takes a
-  per-book lock before any path lock and holds it for the whole sequence.
+  per-book lock before any path lock and holds it for the whole sequence. A
+  library copy the job has to create is made up front, after a stand-down
+  check, and locked with the book, so another version's apply cannot write it
+  at the same time.
 - **A lost scan stand-down stops apply file work between steps again.** The
   single-book apply, the batch-candidates apply and the batch-apply-cached op
   re-check the scan stand-down

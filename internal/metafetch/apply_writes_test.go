@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -627,9 +627,15 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	assert.Empty(t, tags, "no library copy: auto-fetch must not touch the files")
 
 	siblings = []database.Book{*book, {ID: "lib1", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}}
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
 	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
-	// The tag write is asked for b1; writeBackForBook resolves the copy.
+	// The tag write is asked for b1; writeBackForBook resolves the copy. The
+	// locks show which files were written: lib1's, under lib1's book lock.
 	assert.Equal(t, []string{"b1"}, tags, "an existing library copy gets the file work, tagged once")
+	assert.Contains(t, locks.taken(), filepath.Join(root, "A Book"), "the file work must write the library copy's files")
+	assert.Contains(t, locks.taken(), bookLockKey("lib1"), "the library copy must be book-locked")
+	assert.NotContains(t, locks.taken(), book.FilePath, "the protected original is never written")
 }
 
 // With no pool wired (organize's per-call service) auto-fetch touches no file.
@@ -795,6 +801,126 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			assert.NotContains(t, manual.taken(), a.FilePath, "a manual apply of A must never key a lock on A's protected path")
 		})
 	}
+}
+
+// copyHarness is two protected versions of one book, A and C, with no library
+// copy yet. libraryCopyMaker stands in for the organizer: it records each call
+// and adds copy S under root_dir to the version group.
+type copyHarness struct {
+	mu    sync.Mutex
+	books map[string]database.Book
+	made  int
+}
+
+func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
+	t.Helper()
+	root, itunes := protectedSetup(t)
+	config.AppConfig.AutoRenameOnApply = false
+	config.AppConfig.AutoWriteTagsOnApply = false
+	vg := "vg1"
+	h := &copyHarness{books: map[string]database.Book{
+		"a": {ID: "a", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg},
+		"c": {ID: "c", Title: "A Book", FilePath: filepath.Join(itunes, "c.m4b"), VersionGroupID: &vg},
+	}}
+	get := func(id string) (database.Book, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		b, ok := h.books[id]
+		return b, ok
+	}
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			b, ok := get(id)
+			if !ok {
+				return nil, nil
+			}
+			return &b, nil
+		},
+		GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			var out []database.Book
+			for _, id := range []string{"a", "c", "s"} {
+				if b, ok := h.books[id]; ok {
+					out = append(out, b)
+				}
+			}
+			return out, nil
+		},
+		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+			b, _ := get(id)
+			return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(b.FilePath, "01.m4b")}}, nil
+		},
+	})
+	svc.libraryCopyMaker = func(b *database.Book) *database.Book {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.made++
+		s := database.Book{ID: "s", Title: b.Title, FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+		h.books["s"] = s
+		return &s
+	}
+	return svc, h
+}
+
+// A library copy the job itself creates is locked for the whole job. An apply
+// of A makes copy S. The copy used to be looked up only when the job started,
+// so A's job never held S's book lock, and an apply of C that started once S
+// existed locked S and wrote S's files alongside A's job.
+func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	entered := make(chan string, 4)
+	proceed := make(chan struct{})
+	svc.tagWriter = func(id string) (int, error) {
+		entered <- "tags:" + id
+		<-proceed
+		return 1, nil
+	}
+	svc.coverDownload = func(coverURL, destDir, bookID string) (string, error) {
+		entered <- "cover:" + bookID
+		return filepath.Join(destDir, "covers", bookID+".jpg"), nil
+	}
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
+
+	var wg sync.WaitGroup
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	select {
+	case got := <-entered:
+		require.Equal(t, "tags:a", got)
+	case <-time.After(5 * time.Second):
+		close(proceed)
+		t.Fatal("the apply of A never reached its tag write")
+	}
+	wg.Go(func() {
+		assert.NoError(t, svc.FinishApplyFileWork("c", "https://covers.example.test/c.jpg", true, true, nil))
+	})
+	select {
+	case got := <-entered:
+		t.Errorf("the apply of C started (%s) while the apply of A was writing the library copy it made", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(proceed)
+	wg.Wait()
+
+	assert.Contains(t, locks.taken(), bookLockKey("s"), "the copy A's job made must be book-locked")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Equal(t, 1, h.made, "one library copy, made by A's job; C's job uses it")
+}
+
+// Making a library copy writes rows and files, so a lost scan stand-down stops
+// the job before the copy is made.
+func TestFinishApplyFileWork_NoLibraryCopyAfterStandDownLost(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	lost := errors.New("scan stand-down lost")
+	err := svc.FinishApplyFileWork("a", "", true, true, func() error { return lost })
+	require.ErrorIs(t, err, lost)
+	assert.Contains(t, err.Error(), "creating the library copy")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Zero(t, h.made, "no library copy may be made once the stand-down is lost")
 }
 
 // Auto-fetch never renames, and writes tags only under write_back_metadata --
