@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-08-25
+// last-edited: 2026-09-11
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -544,6 +544,13 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		}
 	}
 
+	// applied_filters echoes, from the fully-populated filters value above,
+	// exactly what the server is about to apply — not what the caller sent.
+	// It is built here (before UserID is attached) purely because filters is
+	// complete at this point; UserID itself is never echoed since it isn't a
+	// filter value a chip would render.
+	appliedFilters := buildAppliedFilters(filters)
+
 	// Resolve caller for per-user filters; anon callers just don't
 	// get per-user filtering applied (filters.UserID stays "" and
 	// the service skips that pass).
@@ -569,10 +576,65 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		httputil.InternalError(c, "failed to list audiobooks", err)
 		return
 	}
+	// Additive: applied_filters never replaces or renames an existing key
+	// (items/count/limit/offset are untouched) and never changes which books
+	// are returned — it only reports, from ground truth, what was applied.
+	// Always present, even when empty, so the frontend can tell "no filters
+	// were applied" apart from "the server didn't say."
+	resp["applied_filters"] = appliedFilters
 	if len(filters.PerUserFilters) == 0 {
 		h.listCache.Set(cacheKey, resp)
 	}
 	httputil.RespondWithOK(c, resp)
+}
+
+// buildAppliedFilters reports, from the fully-populated ListFilters the
+// request is about to be run against, every filter the server actually
+// applied — as opposed to what the caller sent (a rejected/unknown field
+// never reaches here; see FirstEmptyFilterValue / FirstUnknownFilterField
+// above) or what the frontend assumes it sent. Each entry is a {field,
+// value} pair so the response shape matches the filters= JSON param the UI
+// already understands.
+//
+// Always returns a non-nil, possibly-empty slice: a request with no filters
+// must still echo applied_filters as [] rather than omit the key, so the
+// frontend can render "no active filters" from ground truth instead of
+// treating a missing key and an empty list the same way.
+func buildAppliedFilters(filters audiobookspkg.ListFilters) []map[string]string {
+	applied := make([]map[string]string, 0, len(filters.FieldFilters)+len(filters.PerUserFilters)+len(filters.Tags)+6)
+	for _, ff := range filters.FieldFilters {
+		applied = append(applied, map[string]string{"field": ff.Field, "value": ff.Value})
+	}
+	// PerUserFilters (read_status / progress_pct / last_played) are also
+	// something the server actually applied, not just something it parsed.
+	for _, ff := range filters.PerUserFilters {
+		applied = append(applied, map[string]string{"field": ff.Field, "value": ff.Value})
+	}
+	if filters.LibraryState != "" {
+		applied = append(applied, map[string]string{"field": "library_state", "value": filters.LibraryState})
+	}
+	if filters.Tag != "" {
+		applied = append(applied, map[string]string{"field": "tag", "value": filters.Tag})
+	}
+	for _, tag := range filters.Tags {
+		applied = append(applied, map[string]string{"field": "tags", "value": tag})
+	}
+	if filters.FingerprintStatus != "" {
+		applied = append(applied, map[string]string{"field": "fingerprint_status", "value": filters.FingerprintStatus})
+	}
+	if filters.CoveragePercentMin != nil {
+		applied = append(applied, map[string]string{"field": "coverage_percent_min", "value": strconv.Itoa(*filters.CoveragePercentMin)})
+	}
+	if filters.CoveragePercentMax != nil {
+		applied = append(applied, map[string]string{"field": "coverage_percent_max", "value": strconv.Itoa(*filters.CoveragePercentMax)})
+	}
+	if filters.SortBy != "" {
+		applied = append(applied, map[string]string{"field": "sort_by", "value": filters.SortBy})
+	}
+	if filters.SortOrder != "" {
+		applied = append(applied, map[string]string{"field": "sort_order", "value": filters.SortOrder})
+	}
+	return applied
 }
 
 // ListSoftDeletedAudiobooks handles GET /audiobooks/soft-deleted.
