@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.96.0
+// version: 2.97.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-09-12
 
@@ -596,16 +596,20 @@ type OperationLog struct {
 
 // OperationChange tracks a single destructive change made during an operation for undo support.
 type OperationChange struct {
-	ID          string     `json:"id"`
-	OperationID string     `json:"operation_id"`
-	UserID      string     `json:"user_id,omitempty"`
-	BookID      string     `json:"book_id"`
-	ChangeType  string     `json:"change_type"` // "file_move", "metadata_update", "tag_write"
-	FieldName   string     `json:"field_name"`
-	OldValue    string     `json:"old_value"`
-	NewValue    string     `json:"new_value"`
-	RevertedAt  *time.Time `json:"reverted_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          string `json:"id"`
+	OperationID string `json:"operation_id"`
+	UserID      string `json:"user_id,omitempty"`
+	BookID      string `json:"book_id"`
+	ChangeType  string `json:"change_type"` // "file_move", "metadata_update", "tag_write"
+	FieldName   string `json:"field_name"`
+	// SeriesID names the series a series-scoped row (change type
+	// "series_rename") changed. Book-scoped rows leave it nil, and rows stored
+	// before the field existed decode with it nil.
+	SeriesID   *int       `json:"series_id,omitempty"`
+	OldValue   string     `json:"old_value"`
+	NewValue   string     `json:"new_value"`
+	RevertedAt *time.Time `json:"reverted_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // SystemActivityLog represents a log entry from a housekeeping goroutine.

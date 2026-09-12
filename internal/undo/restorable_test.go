@@ -1,11 +1,12 @@
 // file: internal/undo/restorable_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
 package undo
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -129,6 +130,45 @@ func TestRestoreBookField_SeriesID(t *testing.T) {
 type seriesMap map[int]*database.Series
 
 func (m seriesMap) GetSeriesByID(id int) (*database.Series, error) { return m[id], nil }
+func (m seriesMap) GetSeriesByName(name string, _ *int) (*database.Series, error) {
+	for _, s := range m {
+		if s.Name == name {
+			return s, nil
+		}
+	}
+	return nil, nil
+}
+
+// Rows stored before OperationChange.SeriesID existed decode with it nil, and
+// the book-scoped series_name rows among them stay record-only.
+func TestOperationChange_LegacyRowsDecodeAndStayRecordOnly(t *testing.T) {
+	legacy := `{"id":"c1","operation_id":"op","book_id":"","change_type":"metadata_update",` +
+		`"field_name":"series_name","old_value":"Old","new_value":"New","created_at":"2026-08-01T00:00:00Z"}`
+	var c database.OperationChange
+	if err := json.Unmarshal([]byte(legacy), &c); err != nil {
+		t.Fatalf("decode legacy row: %v", err)
+	}
+	if c.SeriesID != nil || c.OldValue != "Old" || c.NewValue != "New" {
+		t.Fatalf("decoded %+v, want SeriesID nil and the names intact", c)
+	}
+	if got := NotRestorableLabel(&c); got != "metadata_update:series_name" {
+		t.Errorf("label = %q, want metadata_update:series_name", got)
+	}
+
+	// And the new shape round-trips its series id.
+	id := 10
+	data, err := json.Marshal(database.OperationChange{ChangeType: ChangeTypeSeriesRename, SeriesID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back database.OperationChange
+	if err := json.Unmarshal(data, &back); err != nil || back.SeriesID == nil || *back.SeriesID != 10 {
+		t.Fatalf("round trip: %+v, err %v", back, err)
+	}
+	if !IsRestorable(&back) {
+		t.Error("series_rename with a series id: want restorable")
+	}
+}
 
 func TestCheckRestoreReferent(t *testing.T) {
 	store := seriesMap{4: {ID: 4}}

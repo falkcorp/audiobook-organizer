@@ -1,5 +1,5 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-09-12
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -770,11 +771,17 @@ func MergeSeries(
 		if err := store.UpdateSeriesName(keepID, customName); err != nil {
 			return SeriesMergeResult{}, fmt.Errorf("failed to rename series to %q: %w", customName, err)
 		}
+		// Series-scoped: SeriesID names the renamed series, which is what lets
+		// the revert endpoint rename it back. The book-scoped
+		// metadata_update/series_name rows this used to write carried no
+		// series id, and those stay record-only (internal/undo/restorable.go).
+		keepSeriesID := keepID
 		_ = store.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
-			ChangeType:  "metadata_update",
+			ChangeType:  undo.ChangeTypeSeriesRename,
 			FieldName:   "series_name",
+			SeriesID:    &keepSeriesID,
 			OldValue:    oldName,
 			NewValue:    customName,
 		})
