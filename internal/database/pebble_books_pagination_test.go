@@ -1,13 +1,14 @@
 // file: internal/database/pebble_books_pagination_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7f2a9c14-3b6d-4e81-9a2c-0d5f1e8b4a37
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,21 +71,97 @@ func TestGetAllBooksFullFrom_PaginatesPastDoubleLimit(t *testing.T) {
 		total, len(seen), pageSize*2)
 }
 
-// TestGetAllBooksFullFrom_UnknownCursorEndsIteration verifies that a stale/unknown
-// cursor returns no rows (ending iteration) rather than restarting from the
-// top — which would loop forever.
-func TestGetAllBooksFullFrom_UnknownCursorEndsIteration(t *testing.T) {
-	store := setupTestPebbleStore(t)
-	store.WaitForWarmup()
-
-	for i := range 5 {
-		b := &Book{Title: fmt.Sprintf("B%d", i), FilePath: fmt.Sprintf("/tmp/b%d.m4b", i)}
+// seedMemBooks creates n books through the store and memdb write-through, and
+// returns their IDs in the order GetAllBooksFullFrom walks them.
+func seedMemBooks(t *testing.T, store *PebbleStore, n int) []string {
+	t.Helper()
+	for i := range n {
+		b := &Book{Title: fmt.Sprintf("B%03d", i), FilePath: fmt.Sprintf("/tmp/b%03d.m4b", i)}
 		created, err := store.CreateBook(b)
 		require.NoError(t, err)
 		store.UpsertBookToMemDB(context.Background(), created)
 	}
-
-	page, err := store.GetAllBooksFullFrom("zzzz-nonexistent-cursor", 10)
+	ids, err := store.mem().ListBookIDs()
 	require.NoError(t, err)
-	require.Empty(t, page, "unknown cursor must end iteration, not restart")
+	require.Len(t, ids, n)
+	require.True(t, slices.IsSorted(ids), "memdb ID index must iterate in byte order for the cursor seek")
+	return ids
+}
+
+// A cursor past the last ID has nothing after it. Seeking forward can never
+// restart from the top, so there is no loop to guard against.
+func TestGetAllBooksFullFrom_CursorPastTheEndReturnsNothing(t *testing.T) {
+	store := setupTestPebbleStore(t)
+	store.WaitForWarmup()
+	require.NotNil(t, store.mem(), "test must exercise the memdb path")
+	ids := seedMemBooks(t, store, 5)
+
+	for _, cursor := range []string{ids[len(ids)-1], "zzzz-nonexistent-cursor"} {
+		page, err := store.GetAllBooksFullFrom(cursor, 10)
+		require.NoError(t, err)
+		require.Empty(t, page, "cursor %q is at or past the last book", cursor)
+	}
+}
+
+// TestGetAllBooksFullFrom_DeletedCursorResumesAtSuccessor: a cursor book that
+// is merged or deleted between two pages must not end the walk. The memdb
+// branch used to look the cursor up by exact match and return nothing, and the
+// acoustid backfill reported that truncated walk as a complete run.
+func TestGetAllBooksFullFrom_DeletedCursorResumesAtSuccessor(t *testing.T) {
+	store := setupTestPebbleStore(t)
+	store.WaitForWarmup()
+	require.NotNil(t, store.mem(), "test must exercise the memdb path")
+	ids := seedMemBooks(t, store, 12)
+
+	first, err := store.GetAllBooksFullFrom("", 4)
+	require.NoError(t, err)
+	require.Len(t, first, 4)
+	cursor := first[len(first)-1].ID
+	require.NoError(t, store.DeleteBook(cursor))
+	store.DeleteBookFromMemDB(context.Background(), cursor)
+
+	var rest []string
+	for {
+		page, err := store.GetAllBooksFullFrom(cursor, 4)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		for _, b := range page {
+			rest = append(rest, b.ID)
+		}
+		cursor = page[len(page)-1].ID
+	}
+	require.Equal(t, ids[4:], rest, "the walk must continue after the deleted cursor book")
+
+	// A cursor that never existed but sorts mid-table resumes at its successor.
+	page, err := store.GetAllBooksFullFrom(ids[5]+"~", 3)
+	require.NoError(t, err)
+	got := make([]string, 0, len(page))
+	for _, b := range page {
+		got = append(got, b.ID)
+	}
+	require.Equal(t, ids[6:9], got)
+}
+
+// A row that memdb still lists but Pebble no longer holds is skipped, and the
+// page is filled from the rows after it: a short page must mean the end of the
+// table, because some callers stop on len(page) < limit.
+func TestGetAllBooksFullFrom_FillsPagePastVanishedRows(t *testing.T) {
+	store := setupTestPebbleStore(t)
+	store.WaitForWarmup()
+	require.NotNil(t, store.mem(), "test must exercise the memdb path")
+	ids := seedMemBooks(t, store, 10)
+
+	// Remove the record under memdb's feet, as a concurrent delete would
+	// between ListBookIDs and the point read.
+	require.NoError(t, store.db.Delete([]byte("book:"+ids[1]), nil))
+
+	page, err := store.GetAllBooksFullFrom("", 4)
+	require.NoError(t, err)
+	got := make([]string, 0, len(page))
+	for _, b := range page {
+		got = append(got, b.ID)
+	}
+	require.Equal(t, []string{ids[0], ids[2], ids[3], ids[4]}, got)
 }

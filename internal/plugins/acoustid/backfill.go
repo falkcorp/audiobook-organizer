@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
 // last-edited: 2026-09-12
 
@@ -223,6 +223,10 @@ func backfillWorkers() int {
 // measured ~80x the decode work on 2026-09-12, so a stray minus sign must not
 // turn a two-hour pass into a multi-day one. Negative values fall back to the
 // default with a warning; choosing whole-file is a code change.
+//
+// Values above maxFingerprintLengthSec are clamped to it with a warning, for
+// the same reason: a typo such as 12000 would otherwise be whole-file mode for
+// nearly every audiobook chapter.
 func fingerprintLengthSec() int {
 	n := config.AppConfig.FingerprintLengthSec
 	switch {
@@ -234,12 +238,22 @@ func fingerprintLengthSec() int {
 				"configured", n)
 		})
 		return fingerprint.DefaultAnalysisLengthSec
+	case n > maxFingerprintLengthSec:
+		oversizeLengthWarn.Do(func() {
+			slog.Warn("fingerprint_length_sec is above the cap; clamping",
+				"configured", n, "cap", maxFingerprintLengthSec)
+		})
+		return maxFingerprintLengthSec
 	default:
 		return n
 	}
 }
 
-var negativeLengthWarn sync.Once
+// maxFingerprintLengthSec caps the configurable fpcalc -length at ten minutes,
+// five times the default window.
+const maxFingerprintLengthSec = 600
+
+var negativeLengthWarn, oversizeLengthWarn sync.Once
 
 func (p *Plugin) backfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -342,14 +356,21 @@ func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state
 		if err != nil {
 			return fmt.Errorf("load books after %q: %w", cursor, err)
 		}
+		// Only an empty page ends the walk. A short page is not the end of
+		// the table: a store may return fewer rows than asked for (rows that
+		// vanished between listing and loading), and treating that as the
+		// end reported a truncated run as complete.
 		if len(page) == 0 {
-			// GetAllBooksFullFrom ends iteration on a cursor it cannot find
-			// (a book deleted since the checkpoint) rather than restarting.
-			// On the first page of a resumed run that would report success
-			// having done nothing, so start over instead: the op is
-			// idempotent, and redoing work is only slow.
-			if done == 0 && cursor != "" && !restarted {
-				logger.Warn("acoustid backfill: checkpoint cursor yields no books; restarting from the beginning",
+			if done == 0 && cursor != "" && !restarted && p.cursorIsStale(cursor) {
+				// GetAllBooksFullFrom seeks past the cursor, so a checkpoint
+				// naming a since-deleted book normally resumes at its
+				// successor and never lands here. An empty first page with a
+				// cursor that no longer exists means the store did not seek
+				// (or the book was the last one and is gone): start over
+				// rather than report success having done nothing. The op is
+				// idempotent; redoing work is only slow. A cursor that still
+				// exists is the last book, and the run is simply finished.
+				logger.Warn("acoustid backfill: checkpoint cursor yields no books and no longer exists; restarting from the beginning",
 					"cursor", cursor)
 				cursor, restarted = "", true
 				continue
@@ -369,13 +390,18 @@ func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state
 		if err := reporter.Checkpoint(BackfillParams{AfterBookID: cursor}); err != nil {
 			logger.Warn("acoustid backfill: checkpoint", "cursor", cursor, "error", err)
 		}
-		if len(page) < backfillPageSize {
-			break
-		}
 	}
 
 	prog.Done("Acoustid backfill complete: " + tally.summary())
 	return nil
+}
+
+// cursorIsStale reports whether the resume cursor names a book that no longer
+// exists. A lookup error counts as stale, so the caller restarts (redoing
+// work) instead of finishing (skipping it).
+func (p *Plugin) cursorIsStale(cursor string) bool {
+	b, err := p.store.GetBookByID(cursor)
+	return err != nil || b == nil
 }
 
 // fingerprintFileOutcome is the result of attempting to fingerprint a single book_file.
