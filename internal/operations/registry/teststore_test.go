@@ -1,5 +1,5 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
 // last-edited: 2026-09-12
 
@@ -53,6 +53,12 @@ type fakeStore struct {
 	// (disk pressure, compaction stall) so the resume paths can be checked for
 	// announcing an op as queued that never became queued (OPS-01).
 	resetForResumeErr error
+
+	// manualRetryHook, if non-nil, runs at the top of MarkOperationV2ManualRetry,
+	// before the store mutex is taken. RetryInterrupted calls that after its
+	// same-def check and before the re-queue, so a blocking hook holds a retry
+	// inside exactly the window the admission lock protects.
+	manualRetryHook func()
 }
 
 // failResetForResume makes every subsequent ResetOperationV2ForResume call
@@ -284,11 +290,18 @@ func (f *fakeStore) IncrementResumeCountV2(id string) error {
 }
 
 func (f *fakeStore) MarkOperationV2ManualRetry(id string) error {
+	// Called OUTSIDE f.mu on purpose: a hook that blocks here must hold up only
+	// the retry, not every other store call, or a race test would pass because
+	// the store mutex serialized the two paths rather than the registry's lock.
+	if f.manualRetryHook != nil {
+		f.manualRetryHook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	op, ok := f.ops[id]
 	if !ok {
-		return nil
+		// Match Pebble, which refuses a missing row rather than no-opping.
+		return fmt.Errorf("fakeStore: MarkOperationV2ManualRetry: op %s not found", id)
 	}
 	op.ManualRetryCount++
 	op.ResumeCountAtManualRetry = op.ResumeCount

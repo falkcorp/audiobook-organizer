@@ -1,5 +1,5 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
 // last-edited: 2026-09-12
 
@@ -395,5 +395,160 @@ func TestRetryInterrupted_NextBootDoesNotRerunARetriedQuiescedOp(t *testing.T) {
 	resumable, _ := store.ListResumableOperationsV2()
 	if len(resumable) != 0 {
 		t.Errorf("rows still in the boot resume set after the retry finished: %+v", resumable)
+	}
+}
+
+// A concurrent EnqueueOp of the same def must not slip a second run in between
+// RetryInterrupted's same-def check and its re-queue. manualRetryHook holds the
+// retry inside that window while an EnqueueOp of a DedupeQueuedRuns def (which
+// dedupes against any active run) is started. It must come back with the
+// retried row's id, and no second row may exist.
+//
+// Mutation check: drop the admission lock from EnqueueOp and the enqueue reads
+// the active set while the retried row is still interrupted, misses it, and
+// inserts a second row inside the hook's window.
+func TestRetryInterrupted_ConcurrentEnqueueCannotSlipASecondRunIn(t *testing.T) {
+	store := newFakeStore()
+	release := make(chan struct{})
+	def := makeValidDef("test.retry-admission")
+	def.ResumePolicy = registry.ResumeRestart
+	def.ConcurrencyKey = "retry.admission"
+	def.DedupeQueuedRuns = true
+	def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	r := startedRetryRegistry(t, store, def)
+	defer close(release)
+
+	id := insertOpV2(store, def.ID, "test", 1, "interrupted_quiesced", "{}")
+
+	type result struct {
+		id  string
+		err error
+	}
+	enqueued := make(chan result, 1)
+	var returnedInsideWindow atomic.Bool
+	store.manualRetryHook = func() {
+		go func() {
+			got, err := r.EnqueueOp(context.Background(), def.ID, nil)
+			enqueued <- result{got, err}
+		}()
+		// Ample time for the enqueue to reach its dedupe read. With the
+		// admission lock it is parked on the lock; without it, it finishes here
+		// against an active set that does not contain the retried row.
+		time.Sleep(200 * time.Millisecond)
+		select {
+		case res := <-enqueued:
+			returnedInsideWindow.Store(true)
+			enqueued <- res
+		default:
+		}
+	}
+	if err := r.RetryInterrupted(t.Context(), id, "alice"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	store.manualRetryHook = nil
+
+	var res result
+	select {
+	case res = <-enqueued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the concurrent EnqueueOp never returned")
+	}
+	if res.err != nil {
+		t.Fatalf("enqueue: %v", res.err)
+	}
+	if returnedInsideWindow.Load() {
+		t.Error("EnqueueOp finished while the retry was between its same-def check and its re-queue")
+	}
+	if res.id != id {
+		t.Errorf("EnqueueOp returned %s, want the retried row %s (deduped against it)", res.id, id)
+	}
+	if n := opCount(store); n != 1 {
+		t.Errorf("%d operation rows exist, want 1: a second run was admitted next to the retry", n)
+	}
+}
+
+// While a watchdog-abandoned Run of an op is still executing, Retry on that op
+// must be refused: re-queuing it would start a second Run of the same op id
+// next to the first. Once the runaway goroutine returns, Retry is accepted and
+// the op runs again under the same id.
+//
+// Mutation check: drop the abandonedAlive refusal in RetryInterrupted and the
+// first Retry is accepted while the first Run is still blocked.
+func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.T) {
+	ctx := t.Context()
+	store := newFakeStore()
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 30 * time.Second,
+		AbandonedCap:     10,
+		AbandonGrace:     100 * time.Millisecond,
+	})
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var calls atomic.Int32
+	def := makeValidDef("test.retry-abandoned")
+	def.Plugin = "retry-abandoned-plugin"
+	def.ResumePolicy = registry.ResumeDrop
+	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release // ignores ctx: a Run that will not die when canceled
+		}
+		return nil
+	}
+	if err := r.RegisterOp(def); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	r.Start(ctx)
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.Shutdown(sctx)
+	})
+	var releaseOnce sync.Once
+	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseRun()
+
+	id, err := r.EnqueueOp(ctx, def.ID, nil)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Run did not start")
+	}
+	_ = r.Cancel(id)
+	// The watchdog marks the run abandoned-but-alive before it writes this
+	// status, so once the status is visible the guard is armed.
+	awaitStatus(t, store, id, "interrupted_dropped", 5*time.Second)
+
+	err = r.RetryInterrupted(ctx, id, "alice")
+	if !errors.Is(err, registry.ErrOpActive) {
+		t.Fatalf("err = %v, want ErrOpActive while the abandoned Run is still executing", err)
+	}
+	if got := store.statusOf(id); got != "interrupted_dropped" {
+		t.Errorf("refused retry wrote status %q; must leave the row untouched", got)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("Run called %d times while the first was still executing, want 1", n)
+	}
+
+	releaseRun()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.AbandonedCount(def.Plugin) > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := r.RetryInterrupted(ctx, id, "alice"); err != nil {
+		t.Fatalf("retry after the abandoned Run returned: %v", err)
+	}
+	waitForRetryStatus(t, store, id, "completed")
+	if n := calls.Load(); n != 2 {
+		t.Errorf("Run called %d times in total, want 2", n)
 	}
 }
