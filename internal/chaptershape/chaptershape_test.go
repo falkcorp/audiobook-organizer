@@ -1,5 +1,5 @@
 // file: internal/chaptershape/chaptershape_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7e3d91-4c2f-4a86-9e15-6f8a2d0c7b34
 // last-edited: 2026-09-12
 
@@ -8,6 +8,17 @@ package chaptershape
 import (
 	"path/filepath"
 	"testing"
+)
+
+// Composed (NFC) and decomposed (NFD) spellings of the same names. A decomposed
+// accent or Hangul jamo is not a letter on its own, so without NFC the two forms
+// normalise differently and the prefix-in-parent guard fails.
+const (
+	cafeNFC   = "Café"
+	cafeNFD   = "Café"
+	koreaNFC  = "한국"
+	koreaNFD  = "한국"
+	chapterOf = " - 1"
 )
 
 func TestIsChapterFolderFile(t *testing.T) {
@@ -36,6 +47,11 @@ func TestIsChapterFolderFile(t *testing.T) {
 		// Non-Latin series volumes: the parent is the author, not the book.
 		{filepath.Join("lib", "Автор", "Сияние - 1", "a.mp3"), false},
 		{filepath.Join("lib", "刘慈欣", "三体 - 2", "a.mp3"), false},
+		// Book folder and chapter folder in different Unicode forms, both ways.
+		{filepath.Join("lib", cafeNFC, cafeNFD+chapterOf, "a.mp3"), true},
+		{filepath.Join("lib", cafeNFD, cafeNFC+chapterOf, "a.mp3"), true},
+		{filepath.Join("lib", koreaNFC, koreaNFD+chapterOf, "a.mp3"), true},
+		{filepath.Join("lib", koreaNFD, koreaNFC+chapterOf, "a.mp3"), true},
 	}
 	for _, c := range cases {
 		if _, _, got := IsChapterFolderFile(c.path); got != c.want {
@@ -59,6 +75,9 @@ func TestNormPrefix(t *testing.T) {
 		"三体":             "三体",
 		"--":             "",
 		"  - . ":         "",
+		cafeNFC:          "café",
+		cafeNFD:          "café",
+		koreaNFD:         koreaNFC,
 	}
 	for in, want := range cases {
 		if got := NormPrefix(in); got != want {
