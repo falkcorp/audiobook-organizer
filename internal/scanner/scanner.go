@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.87.0
+// version: 1.88.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package scanner
 
@@ -1122,6 +1122,16 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	scanLog.Info("Processing audiobook metadata (using %d workers)...", workers)
 
+	// Per-file failures are counted and surfaced into the op log, not just
+	// printed: see scan_failures.go. A run started by PerformScan carries its
+	// collector on ctx so the count spans every folder and chunk; a direct
+	// caller gets one of its own and the summary is reported here.
+	failures := fileFailuresFrom(ctx)
+	ownFailures := failures == nil
+	if ownFailures {
+		failures = &FileFailures{}
+	}
+
 	total := len(books)
 	// total is a count of grouped BOOKS (len(books)), not files; a multi-file
 	// audiobook is one unit here. The label said "files" until 2026-09-09.
@@ -1328,6 +1338,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				}
 				// Save the book and create segments
 				if err := saveBook(ctx, &books[idx]); err != nil {
+					failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
 					errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 				} else {
 					// dirPath is a directory, so the normalization branch
@@ -1401,7 +1412,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				// existing fallback + fail-count path below.
 				meta, mi, fileHash, pfErr := ProcessFileWithTimeout(ctx, filePath)
 				if pfErr != nil {
-					scanLog.Warn("ProcessFile failed for %s: %v", filePath, pfErr)
+					failures.Record(scanLog, FileFailure{Path: filePath, Stage: FileFailureStageRead, Reason: pfErr.Error()})
 					fallbackUsed = true
 					if gs := getStore(); gs != nil {
 						sum := sha256.Sum256([]byte(filePath))
@@ -1524,6 +1535,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 			// Save to database (database operations are thread-safe)
 			if err := saveBook(ctx, &books[idx]); err != nil {
+				failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
 				errChan <- fmt.Errorf("failed to save book %s: %w", books[idx].FilePath, err)
 			} else {
 				// Create segments for multi-file books grouped by album.
@@ -1613,6 +1625,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	if len(errs) > 0 {
 		scanLog.Warn("%d books failed to save", len(errs))
+	}
+	if ownFailures {
+		failures.ReportSummary(scanLog)
 	}
 
 	// Per-run store-failure summary (H5): once per run, not per file.

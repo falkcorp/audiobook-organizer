@@ -1,11 +1,61 @@
 // file: web/src/hooks/useImportFolderHandlers.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-06-23
+// last-edited: 2026-09-12
 
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import * as api from '../services/api';
 import type { ScanStatus, ScanErrorTarget } from './useSettingsHandlers';
+
+/** How often an import-path scan's operation is polled. */
+const SCAN_POLL_INTERVAL_MS = 1000;
+
+/**
+ * Log lines read back when a scan finishes. The scanner lists at most 25
+ * failed files plus a notice and a summary line, so this covers them alongside
+ * the operation's own lifecycle lines.
+ */
+const SCAN_ERROR_LOG_LIMIT = 200;
+
+/**
+ * scanErrorsFromLogs turns a scan operation's log into the per-file error list
+ * shown by "View Errors": one `path: reason` entry per failure line (attrs
+ * carry file_path / reason), plus a trailing count when the scanner's summary
+ * says more files failed than it listed.
+ */
+export function scanErrorsFromLogs(logs: api.OperationLog[]): string[] {
+  const out: string[] = [];
+  let omitted = 0;
+  for (const log of logs) {
+    const attrs = log.attrs ?? {};
+    const filePath = attrs.file_path;
+    if (typeof filePath === 'string' && filePath !== '') {
+      const reason = typeof attrs.reason === 'string' ? attrs.reason : log.message;
+      out.push(`${filePath}: ${reason}`);
+      continue;
+    }
+    const failed = attrs.files_failed;
+    const listed = attrs.files_listed;
+    if (typeof failed === 'number' && typeof listed === 'number') {
+      omitted = Math.max(0, failed - listed);
+    }
+  }
+  if (omitted > 0) {
+    out.push(`...and ${omitted} more file(s) failed (not listed)`);
+  }
+  return out;
+}
+
+async function loadScanErrors(operationId: string): Promise<string[]> {
+  try {
+    return scanErrorsFromLogs(await api.getOperationLogs(operationId, SCAN_ERROR_LOG_LIMIT));
+  } catch (error) {
+    // Reported, not swallowed: an unreadable log must not read as a clean scan.
+    console.error('Failed to load scan errors:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    return [`The scan finished, but its error list could not be loaded: ${message}`];
+  }
+}
 
 export interface UseImportFolderHandlersParams {
   setImportFolders: Dispatch<SetStateAction<api.ImportPath[]>>;
@@ -92,16 +142,17 @@ export function useImportFolderHandlers(
       },
     }));
 
-    // `total` and `errors` are seeded, not read from the trigger response.
+    // The trigger answers an operation id and nothing else: starting a scan is
+    // asynchronous. Progress, the terminal status and the per-file failures are
+    // read back off the operation itself -- GET /operations/v2/:id for the row,
+    // and its log for the failures, which the scanner writes as warn lines
+    // carrying file_path / reason attrs (a bounded sample plus a summary line
+    // with the total; see internal/scanner/scan_failures.go).
     //
-    // This used to read response.total / response.errors, which never existed:
-    // starting a scan is ASYNCHRONOUS and answers only an operation id, so both
-    // were undefined at runtime long before the type said so. The counts arrive
-    // from the operation's own progress updates, which the poller below drives.
-    // Typing the trigger honestly as { id } is what surfaced it.
-    const total = 50;
-    const errors: string[] = [];
-    let operationId: string | undefined;
+    // This replaced a timer that counted to a hard-coded total of 50 in 300ms
+    // steps and declared the scan complete after three seconds whatever the
+    // scan was doing, with `errors` seeded as a permanently empty array.
+    let operationId: string;
 
     try {
       const response = await api.startScan(folder.path);
@@ -127,34 +178,64 @@ export function useImportFolderHandlers(
       [folder.id]: {
         status: 'scanning',
         scanned: 0,
-        total,
+        total: 0,
         operationId,
-        errors,
+        errors: [],
       },
     }));
 
-    let scanned = 0;
-    const increment = Math.max(1, Math.ceil(total / 10));
     if (scanIntervalsRef.current[folder.id]) {
       window.clearInterval(scanIntervalsRef.current[folder.id]);
     }
-    const interval = window.setInterval(() => {
-      scanned += increment;
-      setScanStatuses((prev) => ({
-        ...prev,
-        [folder.id]: {
-          status: scanned >= total ? 'complete' : 'scanning',
-          scanned: Math.min(scanned, total),
-          total,
-          operationId,
-          errors,
-        },
-      }));
-      if (scanned >= total) {
-        window.clearInterval(interval);
+
+    let interval = 0;
+    let inFlight = false;
+    const stopPolling = () => {
+      window.clearInterval(interval);
+      if (scanIntervalsRef.current[folder.id] === interval) {
         delete scanIntervalsRef.current[folder.id];
       }
-    }, 300);
+    };
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const op = await api.getOperationV2(operationId);
+        const scanned = op.progress_current ?? 0;
+        const total = op.progress_total ?? 0;
+        if (!api.isOperationTerminal(op.status)) {
+          setScanStatuses((prev) => {
+            // A cancel from this page already wrote 'cancelled'; keep it.
+            if (prev[folder.id]?.status === 'cancelled') return prev;
+            return {
+              ...prev,
+              [folder.id]: { status: 'scanning', scanned, total, operationId, errors: [] },
+            };
+          });
+          return;
+        }
+        stopPolling();
+        const errors = await loadScanErrors(operationId);
+        let status: ScanStatus['status'] = 'error';
+        if (op.status === 'completed') status = 'complete';
+        else if (op.status === 'canceled') status = 'cancelled';
+        if (status === 'error') {
+          errors.unshift(op.error_message || `Scan ended with status ${op.status}.`);
+        }
+        setScanStatuses((prev) => ({
+          ...prev,
+          [folder.id]: { status, scanned, total, operationId, errors },
+        }));
+      } catch (error) {
+        // A transient read failure leaves the row scanning; the next tick retries.
+        console.error('Failed to poll scan operation:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+    interval = window.setInterval(() => {
+      void poll();
+    }, SCAN_POLL_INTERVAL_MS);
 
     scanIntervalsRef.current[folder.id] = interval;
   };

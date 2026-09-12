@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 package scanner
 
 import (
@@ -107,6 +107,18 @@ type ScanRequest struct {
 	// library.folder-auto-scan; left nil (a no-op) everywhere else, including
 	// library.import.
 	OnAIPhaseWarning func(string)
+
+	// OnFileFailures, when non-nil, is called once at the end of the run --
+	// however it ends -- if any file failed, with the total and the bounded
+	// sample (at most MaxFileFailureSamples). The per-file lines and the
+	// summary are already in the operation log; this lets the op persist
+	// them as its result too.
+	//
+	// File failures deliberately do NOT fail the scan: one unreadable file
+	// in a 40,000-file library must not mark the whole run failed, and a
+	// failed library.scan is subject to the registry's retry/resume paths,
+	// which would re-enter a scan over the same bad file.
+	OnFileFailures func(total int, sample []FileFailure)
 }
 
 // scanChunkSize bounds how many books are processed between checkpoints. It
@@ -155,6 +167,21 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 
 	if log == nil {
 		log = logger.New("scan")
+	}
+
+	// Collect per-file failures across every folder and chunk of this run and
+	// report them however the run ends: a cancelled scan's failures are as
+	// real as a completed one's. See scan_failures.go.
+	failures := fileFailuresFrom(ctx)
+	if failures == nil {
+		failures = &FileFailures{}
+		ctx = withFileFailures(ctx, failures)
+		defer func() {
+			failures.ReportSummary(log)
+			if req.OnFileFailures != nil && failures.Total() > 0 {
+				req.OnFileFailures(failures.Total(), failures.Samples())
+			}
+		}()
 	}
 	forceUpdate := req.ForceUpdate != nil && *req.ForceUpdate
 	if forceUpdate {
@@ -304,7 +331,7 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 		log.Info("scan changes: %d created, %d updated, %d skipped",
 			counters["book_create"], counters["book_update"], counters["book_skip"])
 	}
-	ss.reportCompletion(int(discoveredBooks.Load()), int(processedFiles.Load()), stats, log)
+	ss.reportCompletion(int(discoveredBooks.Load()), int(processedFiles.Load()), stats, failures.Total(), log)
 	if ss.PostScanFn != nil {
 		ss.PostScanFn()
 	}
@@ -561,7 +588,7 @@ func (ss *ScanService) updateImportPathBookCount(folderPath string, _ int, log l
 	}
 }
 
-func (ss *ScanService) reportCompletion(discoveredBooks int, finalProcessed int, stats *ScanStats, log logger.Logger) {
+func (ss *ScanService) reportCompletion(discoveredBooks int, finalProcessed int, stats *ScanStats, filesFailed int, log logger.Logger) {
 	var completionMsg string
 	if stats.LibraryBooks > 0 && stats.ImportBooks > 0 {
 		completionMsg = fmt.Sprintf("Scan completed. Library: %d books, Import: %d books (Total: %d)", stats.LibraryBooks, stats.ImportBooks, stats.TotalBooks)
@@ -577,6 +604,11 @@ func (ss *ScanService) reportCompletion(discoveredBooks int, finalProcessed int,
 	// first discovered). Report both as-is: equal on a clean run (100%), and
 	// finalProcessed < discoveredBooks when some folders errored out — which is
 	// the actual result, not a bar forced to 100% by the old max() patch.
+	// File failures do not fail the scan (see ScanRequest.OnFileFailures), so
+	// the final progress message is where a finished scan says files failed.
+	if filesFailed > 0 {
+		completionMsg += fmt.Sprintf(" -- %d file(s) failed; see the operation log", filesFailed)
+	}
 	log.UpdateProgress(finalProcessed, discoveredBooks, completionMsg)
 	log.Info("%s", completionMsg)
 }
