@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.13.0
+// version: 13.14.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -573,6 +573,12 @@ func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
 		}
 		return m, nil
 	}
+	// The one-key wrapper below never looks at the key's name, so check it
+	// here: {"error": {"title": "Solo"}} is an error report, and "Solo"
+	// must not be saved as the book's title.
+	if key, ok := errorReportKey(obj); ok {
+		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
+	}
 	if len(obj) != 1 {
 		return nil, fmt.Errorf("object has %d keys and none of them is a metadata field", len(obj))
 	}
@@ -1042,6 +1048,14 @@ func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
 			return nil, fmt.Errorf("the reply object %w", err)
 		}
 		return []*ParsedMetadata{m}, nil
+	}
+
+	// The one-key wrapper below takes any key holding metadata objects, so
+	// the key's name is checked here. JSON:API and RFC 7807 error bodies
+	// look like {"errors": [{"status": "429", "title": "Too Many Requests"}]},
+	// and that title must not be saved as a book's title.
+	if key, ok := errorReportKey(obj); ok {
+		return nil, fmt.Errorf("object carries an %q key, so it is an error report", sanitizeReplyText(key))
 	}
 
 	if len(obj) == 1 {
