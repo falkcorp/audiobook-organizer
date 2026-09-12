@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -79,6 +79,22 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 		},
 		DeleteAuthorFunc: func(_ int) error { return nil },
 	}
+	// The split relinks from the trash-inclusive getter and re-reads it before
+	// DeleteAuthor, so it must reflect the op's own junction and AuthorID writes.
+	junction := map[string][]database.BookAuthor{}
+	store.SetBookAuthorsFunc = func(bookID string, authors []database.BookAuthor) error {
+		junction[bookID] = authors
+		return nil
+	}
+	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, junction,
+		func(bookID string) (*int, bool) {
+			for i := len(written) - 1; i >= 0; i-- {
+				if written[i].ID == bookID {
+					return written[i].AuthorID, true
+				}
+			}
+			return nil, false
+		})
 
 	p := New(fakeDeps{store: store})
 	if err := p.runAuthorSplitScan(context.Background(), nil, &fakeReporter{}); err != nil {

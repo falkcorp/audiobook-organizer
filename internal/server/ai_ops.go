@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -157,10 +158,22 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 							continue
 						}
 
+						// No database.VerifyAuthorUnlinked here, unlike every other
+						// relink-then-DeleteAuthor path. reassignBooksFromAuthor
+						// rewrites only the book_authors junction and never the
+						// legacy Book.AuthorID, and the relink getter the verify
+						// step reads returns books linked by EITHER, so it would
+						// report every book whose legacy AuthorID was mergeID as
+						// still linked and refuse every such merge. The guard this
+						// path has instead is the reassignErrs check above. A
+						// leftover legacy AuthorID keeps resolving to KeepID only
+						// through the tombstone written below, so a failed
+						// CreateAuthorTombstone is logged rather than dropped.
 						if err := store.DeleteAuthor(mergeID); err != nil {
 							applyErrors = append(applyErrors, fmt.Sprintf("delete author %d: %v", mergeID, err))
-						} else {
-							_ = store.CreateAuthorTombstone(mergeID, sug.KeepID)
+						} else if err := store.CreateAuthorTombstone(mergeID, sug.KeepID); err != nil {
+							slog.Warn("ai author merge: author tombstone not written; books whose legacy AuthorID names the deleted author will not resolve to the kept one",
+								"merged_author", mergeID, "kept_author", sug.KeepID, "err", err)
 						}
 					}
 					applied++
@@ -195,10 +208,14 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 								applyErrors = append(applyErrors, fmt.Sprintf("aliased author %d NOT deleted: %d book(s) could not be reassigned", mergeID, len(reassignErrs)))
 								continue
 							}
+							// No VerifyAuthorUnlinked, for the same reason as the
+							// merge case above: the junction-only reassign leaves the
+							// legacy AuthorID, which the tombstone resolves.
 							if err := store.DeleteAuthor(mergeID); err != nil {
 								applyErrors = append(applyErrors, fmt.Sprintf("delete aliased author %d: %v", mergeID, err))
-							} else {
-								_ = store.CreateAuthorTombstone(mergeID, sug.KeepID)
+							} else if err := store.CreateAuthorTombstone(mergeID, sug.KeepID); err != nil {
+								slog.Warn("ai author alias: author tombstone not written; books whose legacy AuthorID names the deleted author will not resolve to the kept one",
+									"merged_author", mergeID, "kept_author", sug.KeepID, "err", err)
 							}
 						}
 						applied++

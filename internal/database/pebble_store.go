@@ -2700,6 +2700,13 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 	return book, nil
 }
 
+// UpdateBook replaces the stored row with book. It is a full replace, not a
+// patch: only CreatedAt and the memdb-stripped fields listed in the guard
+// below are restored from the stored row when book leaves them nil. The trash
+// state is NOT among them -- a nil MarkedForDeletion / MarkedForDeletionAt is
+// written as nil and silently restores a trashed book. Callers must pass the
+// row they fetched (GetBookByID) with their change applied, never a freshly
+// constructed Book carrying only the fields they meant to change.
 func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	// Get old book to clean up old indexes
 	oldBook, err := p.GetBookByID(id)
