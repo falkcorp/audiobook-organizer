@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -12,7 +12,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -83,6 +86,21 @@ type emptyAuthorReport struct {
 	Eligible   int
 	Deleted    int
 	Failed     int
+	// HeldLinkedDuringRun are eligible authors the apply's per-item re-check
+	// found linked to a book at delete time, although the whole-library count
+	// taken at the start of the run said zero. A running library.scan (or an
+	// import resolving an existing author by name) linked them in between.
+	// Deleting them would strand that book on a deleted author id.
+	HeldLinkedDuringRun int
+	// HeldLookupFailed are eligible authors whose per-item re-check could not be
+	// answered (the point lookup returned an error). Held rather than deleted:
+	// a missing signal is not permission. Kept apart from HeldLinkedDuringRun
+	// because "cannot tell" and "found a link" are different facts.
+	HeldLookupFailed int
+	// JournalFailed are eligible authors NOT deleted because the undo-ledger row
+	// recording them could not be written first. The author's name lives only in
+	// its row, so a delete with no ledger row is unrecoverable by construction.
+	JournalFailed int
 	// Sample names up to emptyAuthorSampleLimit authors from the ELIGIBLE
 	// (would-be-deleted) population.
 	Sample []string
@@ -124,8 +142,10 @@ type heldBackAuthor struct {
 
 func (r emptyAuthorReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d zero-book=%d held-back(still referenced)=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d",
-		r.TotalAuthors, r.ZeroBooks, r.HeldByRefs, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed)
+		"authors=%d zero-book=%d held-back(still referenced)=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d "+
+			"held(linked during run)=%d held(re-check failed)=%d held(journal failed)=%d",
+		r.TotalAuthors, r.ZeroBooks, r.HeldByRefs, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed,
+		r.HeldLinkedDuringRun, r.HeldLookupFailed, r.JournalFailed)
 }
 
 func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
@@ -271,12 +291,47 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		return nil
 	}
 
+	// THE SCAN STAND-DOWN, acquired ONCE for the whole delete phase, exactly as
+	// author_duplicate_merge.go does. refCounts above is a snapshot, and
+	// library.scan runs for days on production: while it runs it can link a
+	// book to one of these zero-book authors (an import resolving an existing
+	// author by name), and a delete after that link strands the book on a
+	// deleted author id. A dry run writes nothing and takes no gate -- parking
+	// the scanner to read would be a real cost for no reason.
+	//
+	// 🔴 THE STAND-DOWN IS NOT THE PRIMARY GUARD. It is known not to quiesce a
+	// RESUMED scan (a scan restarted from its checkpoint does not see the gate
+	// it did not start under), and it is inert when the reporter carries no op
+	// id. The per-item re-check in the loop below is what actually closes the
+	// race; the stand-down narrows the window in which that re-check can fire.
+	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "purge-empty-authors apply")
+	if sdErr != nil {
+		return fmt.Errorf("purge-empty-authors: acquire scan stand-down: %w", sdErr)
+	}
+	defer releaseStandDown()
+
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" {
+		// Same precedent as author_duplicate_merge.go and series_dedup.go: journal
+		// anyway. A ledger row with no operation id still records the name.
+		reporter.Logger().Warn("purge-empty-authors: no operation id on the reporter, undo-ledger rows will be unattributed")
+	}
+
 	// Deleted one at a time rather than in a bulk batch. DeleteAuthor already
 	// removes the author row, its name index and its aliases, and its junction
 	// sweep iterates the `book_author:` keyspace — which is EMPTY (nothing in the
 	// repo writes it; the live data is the per-book `book_authors:<id>` array), so
 	// the per-author cost is a seek that finds nothing, not a table scan. A bulk
 	// path would duplicate that cleanup for no measured gain.
+	//
+	// Deliberately SEQUENTIAL, against the repo's default preference for a
+	// worker pool: the per-item re-check -> journal -> delete sequence must run
+	// under a live stand-down lease, and the renew-then-abort contract is per
+	// item. The per-item cost is one point lookup and two small writes.
+	authorNames := make(map[int]string, len(eligible))
+	for _, a := range authors {
+		authorNames[a.ID] = a.Name
+	}
 	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Deleting %d empty authors…", len(eligible)))
 	prog := sdk.NewProgress(reporter, len(eligible))
 	prog.Start(fmt.Sprintf("Deleting %d empty authors…", len(eligible)))
@@ -288,10 +343,81 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			prog.Done("cancelled — " + report.summary())
 			return err
 		}
+		name := authorNames[id]
+
+		// The per-item half of the stand-down contract: renew the lease and treat
+		// losing it as a hard abort of the REMAINING deletes. A lapsed lease means
+		// the scanner has resumed. Inert when the gate is not held.
+		if scanStandDownLostForApply(p.deps, holderID, standDownHeld) {
+			reporter.Logger().Warn("purge-empty-authors: scan stand-down lease lost, aborting remaining deletes",
+				"deleted", report.Deleted, "remaining", len(eligible)-i)
+			prog.Done("aborted (stand-down lease lost) — " + report.summary())
+			return fmt.Errorf("purge-empty-authors: scan stand-down lease lost after %d delete(s), "+
+				"refusing to keep deleting while the scanner is running", report.Deleted)
+		}
+
+		// 🔴 THE PER-ITEM RE-CHECK -- the primary guard against the scan race.
+		// refCounts was computed once, possibly hours ago; this asks again for
+		// THIS author immediately before its delete, with a point lookup.
+		//
+		// GetBooksByAuthorIDWithRoleCore returns every version (primary and
+		// non-primary) linked through the book_authors junction or the legacy
+		// Book.AuthorID field, through memdb or -- when memdb is known to be
+		// missing rows -- the authoritative Pebble scan. It EXCLUDES soft-deleted
+		// (trashed) books on both paths. That is sufficient here, not a gap:
+		// trashed references were already counted by database.AuthorRefCounts
+		// above, and any author they hold was classified HeldByRefs and never
+		// reached this loop. What this lookup must catch is a link created AFTER
+		// that count, and a scan or import creates live book rows, not trashed
+		// ones. So a lookup covering live books closes the race.
+		//
+		// An error is "cannot answer", and the lookup is fail-closed on both
+		// paths, so it is held -- never read as "zero links".
+		linked, lerr := store.GetBooksByAuthorIDWithRoleCore(id)
+		if lerr != nil {
+			report.HeldLookupFailed++
+			reporter.Logger().Warn("purge-empty-authors: re-check lookup failed, author held (not deleted)",
+				"author_id", id, "name", name, "err", lerr)
+			continue
+		}
+		if len(linked) > 0 {
+			report.HeldLinkedDuringRun++
+			reporter.Logger().Warn("purge-empty-authors: author linked to a book during the run, held (not deleted)",
+				"author_id", id, "name", name, "linked_books", len(linked), "first_book_id", linked[0].ID)
+			continue
+		}
+
+		// THE UNDO-LEDGER ROW, written BEFORE the delete. database.Author is
+		// {ID, Name}, so "id:name" is the whole row, and the name exists nowhere
+		// else once the row is gone -- a post-delete journal failure would be
+		// exactly the loss this op must not cause. So a failed ledger write skips
+		// the delete (fail closed). Same change_type/field/format as
+		// journalAuthorMerge in author_duplicate_merge.go; like that row, the undo
+		// engine does not replay "author_delete" -- it is a durable record from
+		// which the author can be recreated, not a one-click restore.
+		//
+		// The ledger row can describe a delete that then fails. That is the right
+		// trade (a stray record of an author that still exists is harmless; a
+		// deleted author with no record is not), and it is logged below.
+		if jerr := store.CreateOperationChange(&database.OperationChange{
+			ID:          ulid.Make().String(),
+			OperationID: opID,
+			ChangeType:  "author_delete",
+			FieldName:   "author",
+			OldValue:    fmt.Sprintf("%d:%s", id, name),
+			NewValue:    "purged_empty",
+		}); jerr != nil {
+			report.JournalFailed++
+			reporter.Logger().Warn("purge-empty-authors: undo-ledger write failed, author NOT deleted",
+				"author_id", id, "name", name, "err", jerr)
+			continue
+		}
+
 		if derr := store.DeleteAuthor(id); derr != nil {
 			// One bad row must not abandon the other thousands; count it and move on.
 			report.Failed++
-			reporter.Logger().Warn("purge-empty-authors: delete failed", "author_id", id, "err", derr)
+			reporter.Logger().Warn("purge-empty-authors: delete failed (its undo-ledger row was already written and names an author that still exists)",
+				"author_id", id, "name", name, "err", derr)
 			continue
 		}
 		report.Deleted++
@@ -303,7 +429,10 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	msg := report.summary()
 	reporter.Logger().Info("purge-empty-authors complete",
 		"deleted", report.Deleted, "failed", report.Failed,
-		"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles)
+		"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles,
+		"held_linked_during_run", report.HeldLinkedDuringRun,
+		"held_recheck_failed", report.HeldLookupFailed,
+		"held_journal_failed", report.JournalFailed)
 	prog.Done(msg)
 	return nil
 }
