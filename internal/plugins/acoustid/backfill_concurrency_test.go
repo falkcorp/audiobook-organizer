@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
 // last-edited: 2026-09-12
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,8 +63,11 @@ func (r *captureReporter) saved() []BackfillParams {
 }
 
 // pagedFixture is a store whose GetAllBooksFullFrom behaves like the memdb
-// path: ID-ordered, afterID exclusive, an unknown cursor ends iteration. It
-// records every page request and how often each book's files were listed.
+// path: ID-ordered, seeking to the first ID strictly greater than afterID
+// whether or not afterID still exists. It records every page request and how
+// often each book's files were listed. beforePage runs ahead of each page
+// request (1-based call number) and maxRows can shorten a page, so tests can
+// delete books mid-run or return a short page mid-table.
 type pagedFixture struct {
 	books []database.Book
 	files map[string][]database.BookFile
@@ -72,6 +76,16 @@ type pagedFixture struct {
 	mu     sync.Mutex
 	limits []int
 	visits map[string]int
+
+	beforePage func(call int, afterID string)
+	maxRows    func(call int) int
+}
+
+// deleteBook removes a book the way a mid-run merge or delete would.
+func (fx *pagedFixture) deleteBook(id string) {
+	fx.mu.Lock()
+	defer fx.mu.Unlock()
+	fx.books = slices.DeleteFunc(fx.books, func(b database.Book) bool { return b.ID == id })
 }
 
 func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) database.BookFile) *pagedFixture {
@@ -89,20 +103,20 @@ func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) d
 		GetAllBooksFullFromFunc: func(afterID string, limit int) ([]database.Book, error) {
 			fx.mu.Lock()
 			fx.limits = append(fx.limits, limit)
+			call := len(fx.limits)
 			fx.mu.Unlock()
-			start := 0
-			if afterID != "" {
-				start = len(fx.books)
-				for i, b := range fx.books {
-					if b.ID == afterID {
-						start = i + 1
-						break
-					}
-				}
+			if fx.beforePage != nil {
+				fx.beforePage(call, afterID)
 			}
+			fx.mu.Lock()
+			defer fx.mu.Unlock()
+			start := sort.Search(len(fx.books), func(i int) bool { return fx.books[i].ID > afterID })
 			end := len(fx.books)
 			if limit > 0 && start+limit < end {
 				end = start + limit
+			}
+			if fx.maxRows != nil && start+fx.maxRows(call) < end {
+				end = start + fx.maxRows(call)
 			}
 			if start >= end {
 				return nil, nil
@@ -115,7 +129,17 @@ func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) d
 			fx.mu.Unlock()
 			return fx.files[bookID], nil
 		},
-		GetBookByIDFunc: func(id string) (*database.Book, error) { return &database.Book{ID: id}, nil },
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			fx.mu.Lock()
+			defer fx.mu.Unlock()
+			for i := range fx.books {
+				if fx.books[i].ID == id {
+					b := fx.books[i]
+					return &b, nil
+				}
+			}
+			return nil, nil
+		},
 		UpdateBookFunc:  func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
 	}
 	return fx
@@ -194,8 +218,9 @@ func TestBackfillPages_LoadsInPages(t *testing.T) {
 			t.Fatalf("page request %d asked for limit=%d; a limit of 0 loads the whole book table", i, l)
 		}
 	}
-	if got := len(fx.limits); got != 3 {
-		t.Errorf("page requests = %d, want 3 (500 + 500 + 234)", got)
+	// 500 + 500 + 234, then one empty page: only an empty page ends the walk.
+	if got := len(fx.limits); got != 4 {
+		t.Errorf("page requests = %d, want 4 (500 + 500 + 234 + the empty page that ends the walk)", got)
 	}
 	for _, b := range fx.books {
 		if fx.visits[b.ID] != 1 {
@@ -235,9 +260,10 @@ func TestBackfillPages_ResumesAfterCursor(t *testing.T) {
 	}
 }
 
-// A cursor naming a book that has since been deleted makes GetAllBooksFullFrom
-// return nothing. Without the restart the resumed run would report success
-// having fingerprinted nothing.
+// A resumed run whose first page is empty and whose cursor no longer exists
+// restarts from the top rather than reporting success having fingerprinted
+// nothing. "book-deleted" sorts after every fixture ID, so the seek returns
+// nothing and only the restart reaches the books.
 func TestBackfillPages_StaleCursorRestartsFromTheTop(t *testing.T) {
 	fx := newPagedFixture(30, 1, doneFile)
 	p := New(nil, fx.store, nil)
@@ -249,6 +275,80 @@ func TestBackfillPages_StaleCursorRestartsFromTheTop(t *testing.T) {
 	for _, b := range fx.books {
 		if fx.visits[b.ID] != 1 {
 			t.Fatalf("book %s visited %d times after a stale cursor, want 1", b.ID, fx.visits[b.ID])
+		}
+	}
+}
+
+// A resume whose cursor is the last book has nothing left to do. It must end
+// cleanly: before 2026-09-12 the empty first page sent it back to the top to
+// re-list and re-check the whole library.
+func TestBackfillPages_ResumeAtLastBookFinishesWithoutRestart(t *testing.T) {
+	fx := newPagedFixture(30, 1, doneFile)
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{AfterBookID: fx.books[29].ID}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	for _, b := range fx.books {
+		if fx.visits[b.ID] != 0 {
+			t.Fatalf("book %s visited %d times; a resume at the last book restarted from the top", b.ID, fx.visits[b.ID])
+		}
+	}
+	if got := len(fx.limits); got != 1 {
+		t.Errorf("page requests = %d, want 1 (no re-list from the beginning)", got)
+	}
+}
+
+// The cursor book is merged or deleted after its page drained. The next page
+// request names a cursor that no longer exists; the run must still cover every
+// book after it.
+func TestBackfillPages_CursorBookDeletedMidRun(t *testing.T) {
+	const n = 2*backfillPageSize + 10
+	fx := newPagedFixture(n, 1, doneFile)
+	deleted := fx.books[backfillPageSize-1].ID
+	fx.beforePage = func(call int, afterID string) {
+		if call == 2 {
+			if afterID != deleted {
+				t.Errorf("second page cursor = %q, want %q", afterID, deleted)
+			}
+			fx.deleteBook(afterID)
+		}
+	}
+	all := slices.Clone(fx.books)
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	for _, b := range all {
+		if fx.visits[b.ID] != 1 {
+			t.Fatalf("book %s visited %d times, want 1; the walk stopped at the deleted cursor", b.ID, fx.visits[b.ID])
+		}
+	}
+}
+
+// A page shorter than backfillPageSize is not the end of the table: the memdb
+// store can return fewer rows than asked for. Only an empty page ends the run.
+func TestBackfillPages_ShortPageMidTableDoesNotEndRun(t *testing.T) {
+	const n = backfillPageSize + 40
+	fx := newPagedFixture(n, 1, doneFile)
+	fx.maxRows = func(call int) int {
+		if call == 1 {
+			return 7
+		}
+		return n
+	}
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	for _, b := range fx.books {
+		if fx.visits[b.ID] != 1 {
+			t.Fatalf("book %s visited %d times, want 1; a short first page ended the run", b.ID, fx.visits[b.ID])
 		}
 	}
 }
@@ -386,7 +486,9 @@ func TestFingerprintLengthSec_DefaultReproducesStoredPrints(t *testing.T) {
 
 	// A negative value must NOT reach whole-file mode (-length 0): that is
 	// ~80x the work and an owner decision, not a config typo.
-	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, -1: fingerprint.DefaultAnalysisLengthSec} {
+	// Above the cap is clamped to it, so a typo cannot reach near-whole-file
+	// decode work either.
+	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, 600: 600, 601: 600, 12000: 600, -1: fingerprint.DefaultAnalysisLengthSec} {
 		config.AppConfig.FingerprintLengthSec = cfg
 		if got := fingerprintLengthSec(); got != want {
 			t.Errorf("fingerprint_length_sec=%d → -length %d, want %d", cfg, got, want)

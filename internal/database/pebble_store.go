@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.151.0
+// version: 1.152.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -99,6 +99,9 @@ type PebbleStore struct {
 	// stores it once it completes. Use the mem() helper to read; never
 	// touch memPtr directly outside the warmup path.
 	memPtr atomic.Pointer[MemStore]
+	// deepCoverageBusy admits one deep signal-coverage scan at a time; see
+	// GetBookFileSignalCoverage.
+	deepCoverageBusy atomic.Bool
 	// memPending buffers write-throughs that arrive while memPtr is still nil
 	// because the async warmup hasn't published yet, and replays them into the
 	// MemStore immediately before it is published. Without it those writes were
@@ -704,29 +707,39 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		if err != nil {
 			return nil, err
 		}
+		// Seek to the first ID strictly greater than afterID, the same
+		// position the Pebble branch's key seek lands on. The memdb ID index
+		// is a radix tree over the ID bytes, so ids is already in byte order
+		// and a binary search is valid.
+		//
+		// This used to look the cursor up by exact match and return nothing
+		// when it was absent. A cursor book merged or deleted between two
+		// pages then ended the caller's walk early, and every caller reports
+		// that as a complete run. A strictly-greater seek always moves
+		// forward, so an absent cursor resumes at its successor and cannot
+		// loop.
 		start := 0
 		if afterID != "" {
-			// Default to len(ids): an unknown/stale cursor ends iteration
-			// rather than restarting from the top (which would loop forever).
-			start = len(ids)
-			for i, id := range ids {
-				if id == afterID {
-					start = i + 1
-					break
-				}
+			start = sort.SearchStrings(ids, afterID)
+			if start < len(ids) && ids[start] == afterID {
+				start++
 			}
 		}
-		if start >= len(ids) {
-			return nil, nil
-		}
-		end := len(ids)
-		if limit > 0 && start+limit < end {
-			end = start + limit
-		}
-		books := make([]Book, 0, end-start)
-		for _, id := range ids[start:end] {
+		// Fill the page past rows that vanished between ListBookIDs and the
+		// point read, so a short page still means the end of the table (a
+		// caller that stops on len(page) < limit would otherwise stop early).
+		// A read error is returned rather than dropped; the Pebble branch
+		// fails the same way on a row it cannot decode.
+		var books []Book
+		for _, id := range ids[start:] {
+			if limit > 0 && len(books) >= limit {
+				break
+			}
 			b, err := p.GetBookByID(id)
-			if err != nil || b == nil {
+			if err != nil {
+				return nil, fmt.Errorf("load book %s: %w", id, err)
+			}
+			if b == nil || bookIsSoftDeleted(b) {
 				continue
 			}
 			books = append(books, *b)

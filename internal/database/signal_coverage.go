@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
 // last-edited: 2026-09-12
 
@@ -68,11 +68,19 @@ const (
 	numSignals = sigSeg0 + 7
 )
 
-// ErrMemDBNotReady is returned by the fast coverage path while the async memdb
-// warmup is still running. The caller should retry, or ask for the deep scan
-// explicitly — it must never silently turn a sub-second request into a
-// multi-minute Pebble scan.
-var ErrMemDBNotReady = errors.New("memdb warmup has not completed; retry, or pass deep=true for a Pebble scan")
+// ErrMemDBNotReady is returned by the fast coverage path when the memdb layer
+// is not serving reads: memdb is disabled on the store, or it has not been
+// published (warmup still running, or warmup failed and reads fell back to
+// Pebble). The returned error wraps it with whichever of those is true. The
+// caller should retry or ask for the deep scan explicitly — the fast path must
+// never silently turn a sub-second request into a multi-minute Pebble scan.
+var ErrMemDBNotReady = errors.New("memdb fast path unavailable")
+
+// ErrDeepCoverageBusy is returned when a deep (Pebble) coverage scan is
+// requested while another is still running on the same store. One deep scan
+// reads every book_file row; two at once only double the I/O and memory for
+// the same answer.
+var ErrDeepCoverageBusy = errors.New("a deep signal-coverage scan is already running; wait for it to finish and retry")
 
 // SignalCount is one signal's coverage split by the row's stored Missing flag.
 // "Present on disk" means the row is NOT flagged missing — the file is not
@@ -325,17 +333,22 @@ func (m *MemStore) bookFilePointers() ([]*BookFile, error) {
 // GetBookFileSignalCoverage reports per-signal coverage of every book_file.
 //
 // deep=false reads memdb row pointers (fast; fingerprint fields proxy-only) and
-// returns ErrMemDBNotReady while warmup is running rather than falling back to
-// a Pebble scan. deep=true scans Pebble and decodes only the presence of the
-// heavy fields, for exact raw / Seg0..6 / failure-reason counts.
+// returns ErrMemDBNotReady when memdb is not serving reads rather than falling
+// back to a Pebble scan. deep=true scans Pebble and decodes only the presence of
+// the heavy fields, for exact raw / Seg0..6 / failure-reason counts; one deep
+// scan runs per store at a time, and a concurrent request gets
+// ErrDeepCoverageBusy.
 func (p *PebbleStore) GetBookFileSignalCoverage(ctx context.Context, deep bool, workers int) (*BookFileSignalCoverage, error) {
 	if workers < 1 {
 		workers = runtime.NumCPU()
 	}
 	if !deep {
+		if !p.UseMemDB {
+			return nil, fmt.Errorf("%w: memdb is disabled on this store (UseMemDB=false); pass deep=true for a Pebble scan", ErrMemDBNotReady)
+		}
 		mem := p.mem()
-		if !p.UseMemDB || mem == nil {
-			return nil, ErrMemDBNotReady
+		if mem == nil {
+			return nil, fmt.Errorf("%w: memdb is not published yet (warmup still running, or it failed and reads fell back to Pebble); retry later, or pass deep=true for a Pebble scan", ErrMemDBNotReady)
 		}
 		ptrs, err := mem.bookFilePointers()
 		if err != nil {
@@ -343,6 +356,10 @@ func (p *PebbleStore) GetBookFileSignalCoverage(ctx context.Context, deep bool, 
 		}
 		return CountBookFileSignals(ctx, len(ptrs), func(i int) *BookFile { return ptrs[i] }, false, workers, "memdb")
 	}
+	if !p.deepCoverageBusy.CompareAndSwap(false, true) {
+		return nil, ErrDeepCoverageBusy
+	}
+	defer p.deepCoverageBusy.Store(false)
 	return p.deepBookFileSignalCoverage(ctx, workers)
 }
 
@@ -385,8 +402,13 @@ type bookFileSignalRow struct {
 // deepBookFileSignalCoverage streams primary book_file rows out of one Pebble
 // iterator into a bounded pool of decoders, each with a private accumulator.
 func (p *PebbleStore) deepBookFileSignalCoverage(ctx context.Context, workers int) (*BookFileSignalCoverage, error) {
-	const batchSize = 512
-	batches := make(chan [][]byte, workers*2)
+	// Each queued row is a full copied value, raw fingerprint included (KBs).
+	// At most workers+2 batches are alive at once (one per decoder, one in
+	// the channel, one being filled), so in-flight rows stay near
+	// (workers+2)*batchSize rather than the (3*workers+1)*512 the old
+	// workers*2 buffer allowed.
+	const batchSize = 128
+	batches := make(chan [][]byte, 1)
 	accs := make([]signalAcc, workers)
 
 	g, gctx := errgroup.WithContext(ctx)
