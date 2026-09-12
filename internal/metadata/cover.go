@@ -1,5 +1,5 @@
 // file: internal/metadata/cover.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
 // last-edited: 2026-09-12
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -179,10 +180,15 @@ func removeOtherCovers(coversDir, safeID, keep string) {
 		if name == keep {
 			continue
 		}
-		if p, err := pathvalidation.SecureJoin(coversDir, name); err == nil {
-			if rmErr := os.Remove(p); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-				continue
-			}
+		p, err := pathvalidation.SecureJoin(coversDir, name)
+		if err != nil {
+			continue
+		}
+		// A failed removal is the case that matters: the stale file keeps
+		// shadowing the new cover, so say so rather than swallow it.
+		if rmErr := os.Remove(p); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			slog.Warn("cover replace: could not remove the previous cover; it may still be served",
+				"path", p, "kept", keep, "error", rmErr)
 		}
 	}
 }
