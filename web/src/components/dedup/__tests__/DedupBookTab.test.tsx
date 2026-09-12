@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/DedupBookTab.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 57376ab7-3c03-4bea-92fc-da54bfa8e9ac
 // last-edited: 2026-09-12
 
@@ -56,7 +56,7 @@ function op(id: string, status: string, error_message?: string): Operation {
 }
 
 // outcomes maps keep-book id -> how that group's merge ends.
-type Outcome = 'ok' | 'reject' | 'failed' | 'canceled';
+type Outcome = 'ok' | 'reject' | 'failed' | 'canceled' | 'interrupted';
 
 function wireMerges(outcomes: Record<string, Outcome>) {
   vi.mocked(api.mergeBooks).mockImplementation(async (keepId: string) => {
@@ -72,6 +72,10 @@ function wireMerges(outcomes: Record<string, Outcome>) {
         return op(id, 'failed', `store write failed for ${keepId}`);
       case 'canceled':
         return op(id, 'canceled');
+      case 'interrupted':
+        // interrupted_quiesced is the resume-policy default among the
+        // interrupted_* terminal statuses (api.ts OperationV2Status).
+        return op(id, 'interrupted_quiesced');
       default:
         return op(id, 'completed');
     }
@@ -178,13 +182,53 @@ describe('DedupBookTab bulk merge outcome reporting', () => {
     expect(report).toHaveTextContent('Charlie Book');
   });
 
+  it('counts an operation that ends interrupted_quiesced as a failure', async () => {
+    wireMerges({ a1: 'ok', b1: 'interrupted', c1: 'ok' });
+    renderTab();
+    await clickMergeAll();
+    await waitForRefetchSettled();
+
+    const report = screen.getByTestId('bulk-merge-report');
+    expect(report).toHaveTextContent('Merged 2 of 3 group(s); 1 failed');
+    expect(report).toHaveTextContent('Bravo Book');
+    expect(report).toHaveTextContent('Merge ended with status "interrupted_quiesced"');
+    expect(screen.queryByText('Merged 3 of 3 group(s)')).not.toBeInTheDocument();
+  });
+
   it('single-group Merge shows an error, not success, when the operation is canceled', async () => {
     wireMerges({ a1: 'canceled' });
     renderTab();
     const mergeButtons = await screen.findAllByRole('button', { name: /^merge$/i });
     fireEvent.click(mergeButtons[0]);
 
-    expect(await screen.findByText('Merge ended with status "canceled"')).toBeInTheDocument();
+    const report = await screen.findByTestId('bulk-merge-report');
+    expect(report).toHaveTextContent('Merged 0 of 1 group(s); 1 failed');
+    expect(report).toHaveTextContent('Alpha Book');
+    expect(report).toHaveTextContent('Merge ended with status "canceled"');
     expect(screen.queryByText(/merged duplicates of/i)).not.toBeInTheDocument();
+  });
+
+  // Refresh runs fetchDuplicates, which clears `error` first. A single-group
+  // failure used to live in `error`, so Refresh erased it. Both failure shapes
+  // are covered: an op that ends 'failed' (onComplete) and a rejected request
+  // (runOperationWithPolling's onError).
+  it.each([
+    ['failed', 'store write failed for a1'],
+    ['reject', '409: refused for a1'],
+  ] as const)('single-group Merge failure (%s) survives a Refresh', async (outcome, reason) => {
+    wireMerges({ a1: outcome });
+    renderTab();
+    const mergeButtons = await screen.findAllByRole('button', { name: /^merge$/i });
+    fireEvent.click(mergeButtons[0]);
+    expect(await screen.findByTestId('bulk-merge-report')).toHaveTextContent(reason);
+    // A single merge does not refetch; only the initial load has run.
+    expect(api.getBookDuplicates).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitForRefetchSettled();
+
+    const report = screen.getByTestId('bulk-merge-report');
+    expect(report).toHaveTextContent('Alpha Book');
+    expect(report).toHaveTextContent(reason);
   });
 });
