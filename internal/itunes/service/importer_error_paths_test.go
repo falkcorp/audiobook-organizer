@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
 // last-edited: 2026-09-11
 
@@ -399,7 +399,7 @@ func TestBuildBookFromAlbumGroup_NoCoverArt_NoCrash(t *testing.T) {
 
 	imp := newTestImporter()
 	group := albumGroup{key: "No Cover Author|No Cover Book", tracks: []*itunes.Track{track}}
-	book, err := imp.buildBookFromAlbumGroup(group, "/fake/library.xml", itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, "/fake/library.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 
 	require.NoError(t, err)
 	assert.Equal(t, "No Cover Book", book.Title)
@@ -415,7 +415,7 @@ func TestBuildBookFromAlbumGroup_NoCoverArt_NoCrash(t *testing.T) {
 func TestBuildBookFromAlbumGroup_EmptyGroup_Error(t *testing.T) {
 	imp := newTestImporter()
 	group := albumGroup{key: "empty|group", tracks: nil}
-	_, err := imp.buildBookFromAlbumGroup(group, "/lib.xml", itunes.ImportOptions{})
+	_, err := imp.buildBookFromAlbumGroup(group, "/lib.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no tracks")
 }
@@ -434,7 +434,7 @@ func TestBuildBookFromAlbumGroup_FileNotOnDisk_Error(t *testing.T) {
 		PersistentID: "GHOST001",
 	}
 	group := albumGroup{key: "Author|Ghost Book", tracks: []*itunes.Track{track}}
-	_, err := imp.buildBookFromAlbumGroup(group, "/lib.xml", itunes.ImportOptions{})
+	_, err := imp.buildBookFromAlbumGroup(group, "/lib.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	require.Error(t, err, "missing file on disk should return an error")
 }
 

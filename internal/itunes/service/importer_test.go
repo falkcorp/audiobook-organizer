@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3e7f1a2b-8c4d-4e9a-b6f0-2d5e8c1a7f3b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package itunesservice
 
@@ -61,7 +61,7 @@ func TestBuildBookFromAlbumGroup(t *testing.T) {
 
 	imp := newTestImporter()
 	group := albumGroup{key: "Author|My Audiobook", tracks: []*itunes.Track{track}}
-	book, err := imp.buildBookFromAlbumGroup(group, libraryPath, itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, libraryPath, itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestBuildBookFromAlbumGroup_AllFields(t *testing.T) {
 	imp := newTestImporter()
 	libraryPath := "/path/to/iTunes Library.xml"
 	group := albumGroup{key: "Test Author|Test Series", tracks: []*itunes.Track{track}}
-	book, err := imp.buildBookFromAlbumGroup(group, libraryPath, itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, libraryPath, itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestBuildBookFromAlbumGroup_MinimalTrack(t *testing.T) {
 
 	imp := newTestImporter()
 	group := albumGroup{key: "|", tracks: []*itunes.Track{track}}
-	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestBuildBookFromAlbumGroup_MultiTrack(t *testing.T) {
 
 	imp := newTestImporter()
 	group := albumGroup{key: "Herman Melville|Moby Dick", tracks: tracks}
-	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}

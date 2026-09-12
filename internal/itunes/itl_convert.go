@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_convert.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-09-11
 
 package itunes
 
@@ -21,6 +22,10 @@ func ParseITLAsLibrary(path string) (*Library, error) {
 	lib := &Library{
 		Tracks:    make(map[string]*Track),
 		Playlists: make([]*Playlist, 0, len(itlLib.Playlists)),
+		// No bookmark is decoded from the ITL, so every Track.Bookmark below
+		// is 0 meaning "unknown". Declaring that stops the importer from
+		// writing it over a stored bookmark (see SourceFields).
+		Carries: ITLSourceFields(),
 	}
 
 	for _, t := range itlLib.Tracks {
