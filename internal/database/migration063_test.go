@@ -1,5 +1,5 @@
 // file: internal/database/migration063_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e059ecc0-ab71-4ae2-8d64-0f07261fabc2
 // last-edited: 2026-09-12
 
@@ -94,6 +94,49 @@ func TestMigration063StampsDamagedJunctionRows(t *testing.T) {
 	require.NoError(t, migration063Up(store))
 	require.True(t, bytes.Equal(nBefore, rawJunctionBytes(t, store, "book_narrators:"+book.ID)))
 	require.True(t, bytes.Equal(aBefore, rawJunctionBytes(t, store, "book_authors:"+book.ID)))
+}
+
+// pendingOps reads the warmup write-through buffer length under its lock.
+func pendingOps(s *PebbleStore) int {
+	s.memPending.mu.Lock()
+	defer s.memPending.mu.Unlock()
+	return len(s.memPending.ops)
+}
+
+// TestMigration063SendsNoMemdbWritesWhileWarmupBuffers covers the startup
+// path. RunMigrations runs while the async warmup is still in flight, and
+// every memSync issued then is buffered, up to memPendingOpCap. Overflowing the
+// cap abandons memdb for the process, so one buffered write per repaired key
+// could switch memdb off on a heavily damaged library. The migration must
+// repair Pebble and leave the buffer alone; warmup's own key stamping loads the
+// right rows.
+func TestMigration063SendsNoMemdbWritesWhileWarmupBuffers(t *testing.T) {
+	store := seedAuthorRefStore(t, t.TempDir())
+	book := mkAuthorRefBook(t, store, "Mig63Buffering", 0, true, false)
+	control := mkAuthorRefBook(t, store, "Mig63BufferingControl", 0, true, false)
+	narrator, err := store.CreateNarrator("Mig63 Buffering Narrator")
+	require.NoError(t, err)
+	author, err := store.CreateAuthor("Mig63 Buffering Author")
+	require.NoError(t, err)
+	writeRawJunction(t, store, "book_narrators:", book.ID, []BookNarrator{{NarratorID: narrator.ID}})
+	writeRawJunction(t, store, "book_authors:", book.ID, []BookAuthor{{AuthorID: author.ID}})
+
+	// Put the store into the state NewPebbleStore leaves it in while warmup
+	// scans. Always disarm, so Close does not wait on a warmup that never runs.
+	store.beginMemWarmupBuffering()
+	t.Cleanup(store.endMemWarmupBuffering)
+	require.Zero(t, pendingOps(store))
+
+	require.NoError(t, migration063Up(store))
+	require.Zero(t, pendingOps(store), "the migration must not queue memdb writes while warmup buffers")
+	require.Equal(t, book.ID, rawJunctionRows[BookNarrator](t, store, "book_narrators:", book.ID)[0].BookID,
+		"Pebble must still be repaired while memdb is buffering")
+	require.Equal(t, book.ID, rawJunctionRows[BookAuthor](t, store, "book_authors:", book.ID)[0].BookID)
+
+	// Control: in this state an ordinary write-through IS queued, so the zero
+	// above is not an artefact of a buffer that never fills.
+	require.NoError(t, store.SetBookNarrators(control.ID, []BookNarrator{{NarratorID: narrator.ID}}))
+	require.Equal(t, 1, pendingOps(store), "fixture must actually be in the buffering state")
 }
 
 // TestMigration063CountsWhatItRepaired pins the report: the startup log is the
