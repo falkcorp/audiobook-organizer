@@ -1,5 +1,5 @@
 // file: internal/metadata/cover.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
 // last-edited: 2026-09-12
 
@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
 )
 
@@ -140,11 +140,25 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 		return "", fmt.Errorf("unexpected content type: %s", contentType)
 	}
 
-	ext := extensionFromContentType(contentType)
-	destPath, err := pathvalidation.SecureJoin(coversDir, safeID+ext)
+	// The filename is built only from the validated id and an extension from
+	// the coverExtensions allow-list (never from the URL), and coverPathIn
+	// proves the result is a direct child of coversDir.
+	name, err := coverFileName(safeID, extensionFromContentType(contentType))
 	if err != nil {
 		return "", fmt.Errorf("invalid cover destination for book %q: %w", bookID, err)
 	}
+	destPath, err := coverPathIn(coversDir, name)
+	if err != nil {
+		return "", fmt.Errorf("invalid cover destination for book %q: %w", bookID, err)
+	}
+	// The rename and the removals below go through an os.Root on coversDir,
+	// which refuses any name that resolves outside it: "..", an absolute path,
+	// or a symlink that leaves the directory.
+	root, err := os.OpenRoot(coversDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to open covers directory: %w", err)
+	}
+	defer root.Close()
 
 	// Write to a temp file in the same directory and rename it into place only
 	// once the image is complete, so a failed or truncated download can never
@@ -160,12 +174,12 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to write cover file: %w", errors.Join(copyErr, closeErr))
 	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
+	if err := root.Rename(filepath.Base(tmpPath), name); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to move cover file into place: %w", err)
 	}
 	if replace {
-		removeOtherCovers(coversDir, safeID, filepath.Base(destPath))
+		removeOtherCovers(root, safeID, name)
 	}
 	return destPath, nil
 }
@@ -174,21 +188,20 @@ func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID 
 // the file just written is the one findExistingCover serves. Precedence there
 // is alphabetical by extension: an old "<id>.gif" would otherwise keep
 // shadowing a newly applied "<id>.jpg".
-func removeOtherCovers(coversDir, safeID, keep string) {
+//
+// root is the os.Root on the covers directory, so a removal cannot leave it.
+func removeOtherCovers(root *os.Root, safeID, keep string) {
 	for _, ext := range coverExtensions {
-		name := safeID + ext
-		if name == keep {
-			continue
-		}
-		p, err := pathvalidation.SecureJoin(coversDir, name)
-		if err != nil {
+		name, err := coverFileName(safeID, ext)
+		if err != nil || name == keep {
 			continue
 		}
 		// A failed removal is the case that matters: the stale file keeps
 		// shadowing the new cover, so say so rather than swallow it.
-		if rmErr := os.Remove(p); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		if rmErr := root.Remove(name); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 			slog.Warn("cover replace: could not remove the previous cover; it may still be served",
-				"path", p, "kept", keep, "error", rmErr)
+				"path", logger.SanitizeLogValue(filepath.Join(root.Name(), name)), "kept", logger.SanitizeLogValue(keep),
+				"error", logger.SanitizeLogValue(rmErr.Error()))
 		}
 	}
 }
@@ -288,6 +301,51 @@ func safeCoverID(bookID string) string {
 		return ""
 	}
 	return bookID
+}
+
+// coverFileName builds a stored cover's filename, "<id><ext>", from validated
+// parts only. id must pass safeCoverID. ext must be one of coverExtensions: it
+// is matched against that list and the list's own string is used, so nothing
+// from the download (URL or response) reaches the name. The name must also be
+// a single local path element with no "..": that guard is what CodeQL's
+// go/path-injection query credits, and it holds on its own if either check
+// above ever changes.
+func coverFileName(id, ext string) (string, error) {
+	safeID := safeCoverID(id)
+	if safeID == "" {
+		return "", fmt.Errorf("invalid book ID %q", id)
+	}
+	allowed := ""
+	for _, e := range coverExtensions {
+		if e == ext {
+			allowed = e
+			break
+		}
+	}
+	if allowed == "" {
+		return "", fmt.Errorf("cover extension %q is not allowed", ext)
+	}
+	name := safeID + allowed
+	if strings.Contains(name, "..") || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return "", fmt.Errorf("cover filename %q is not a plain file name", name)
+	}
+	return name, nil
+}
+
+// coverPathIn joins coversDir and a coverFileName result, and proves the
+// result is a direct child of coversDir: after Clean, filepath.Rel must give
+// back exactly name (not "..", not absolute, no separator).
+func coverPathIn(coversDir, name string) (string, error) {
+	if name == "" || name == "." || filepath.Base(name) != name {
+		return "", fmt.Errorf("cover filename %q is not a plain file name", name)
+	}
+	dir := filepath.Clean(coversDir)
+	p := filepath.Clean(filepath.Join(dir, name))
+	rel, err := filepath.Rel(dir, p)
+	if err != nil || rel != name || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("cover path for %q escapes the covers directory", name)
+	}
+	return p, nil
 }
 
 // CoverPathForBook returns the local cover file path if it exists, empty string otherwise.

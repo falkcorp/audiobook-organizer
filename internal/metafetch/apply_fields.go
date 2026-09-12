@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_fields.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3dc3bd1-0410-4e52-9d69-c900a119c5ea
 // last-edited: 2026-09-12
 
@@ -8,7 +8,9 @@ package metafetch
 import (
 	"log/slog"
 	"sort"
+	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -191,7 +193,7 @@ func FilterApplyFields(meta metadata.BookMetadata, fields []string) metadata.Boo
 		}
 		sort.Strings(unknown)
 		slog.Warn("metadata apply: ignoring unknown field names in the allowlist",
-			"unknown", unknown, "known", ApplyFieldKeys())
+			"unknown", logger.SanitizeLogValue(strings.Join(unknown, ", ")), "known", ApplyFieldKeys())
 	}
 	return meta
 }

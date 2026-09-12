@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.3.0
+// version: 4.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-12
 //
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -615,7 +616,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 					// exactly once (ApplyMetadataFileIO followed by its own
 					// write-back tagged twice under auto_write_tags_on_apply).
 					if err := mfs.FinishApplyFileWork(bid, pendingCover, true, true, hold.Checkpoint); err != nil {
-						slog.Warn("background apply file work failed", "bid", bid, "err", err)
+						slog.Warn("background apply file work failed", "bid", logger.SanitizeLogValue(bid), "err", logger.SanitizeLogValue(err.Error()))
 					}
 					if s.writeBackBatcher != nil {
 						s.writeBackBatcher.Enqueue(bid)
