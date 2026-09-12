@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package acoustid
 
@@ -10,16 +10,22 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // captureReporter is the minimum registry.Reporter (== sdk.Reporter) needed to
-// drive RunItems, recording every checkpoint so the watermark can be inspected.
+// drive RunItems, recording every checkpoint so the cursor can be inspected.
 type captureReporter struct {
 	mu          sync.Mutex
 	checkpoints []BackfillParams
@@ -55,251 +61,345 @@ func (r *captureReporter) saved() []BackfillParams {
 	return append([]BackfillParams(nil), r.checkpoints...)
 }
 
-// backfillFixture builds nBooks books of filesPerBook files each.
-//
-// Every file carries AcoustIDSeg0, so fingerprintEligibility stops at "already
-// fingerprinted" and returns skipped WITHOUT touching the filesystem or invoking
-// fpcalc — which is what lets this run in CI at all. BookSigV1 is non-nil so the
-// signature-synthesis branch stays out of the way; it is exercised elsewhere.
-func backfillFixture(nBooks, filesPerBook int) ([]database.Book, *database.MockStore) {
-	books := make([]database.Book, nBooks)
-	files := make(map[string][]database.BookFile, nBooks)
-	for i := range books {
-		id := fmt.Sprintf("book-%04d", i)
-		sig := "signature-present"
-		books[i] = database.Book{ID: id, BookSigV1: &sig}
-		bf := make([]database.BookFile, filesPerBook)
-		for j := range bf {
-			bf[j] = database.BookFile{
-				ID:           fmt.Sprintf("%s-file-%d", id, j),
-				BookID:       id,
-				FilePath:     fmt.Sprintf("/does/not/exist/%s-%d.m4b", id, j),
-				AcoustIDSeg0: "AQADtAcSRY",
-			}
-		}
-		files[id] = bf
-	}
-	store := &database.MockStore{
-		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
-			return files[bookID], nil
-		},
-	}
-	return books, store
+// pagedFixture is a store whose GetAllBooksFullFrom behaves like the memdb
+// path: ID-ordered, afterID exclusive, an unknown cursor ends iteration. It
+// records every page request and how often each book's files were listed.
+type pagedFixture struct {
+	books []database.Book
+	files map[string][]database.BookFile
+	store *database.MockStore
+
+	mu     sync.Mutex
+	limits []int
+	visits map[string]int
 }
 
-// TestBackfillTally_IsExactUnderConcurrency is the measurement that earns the
-// worker pool, in the same shape as the API-key lost-update fix: run the real
-// work concurrently and check that no outcome went missing.
-//
-// The counters are written by every worker AND read by the Label closure, which
-// run_items.go invokes inside each worker too. As plain ints that is a lost
-// update — two workers read the same value, both add one, and one file's outcome
-// vanishes from the total. Under -race it is also a reported data race.
-//
-// It runs the options built by backfillRunOptions rather than a copy of them, so
-// dropping Concurrency in production makes this test sequential and its guard
-// below fails rather than the test quietly continuing to pass.
-func TestBackfillTally_IsExactUnderConcurrency(t *testing.T) {
-	const (
-		nBooks       = 240
-		filesPerBook = 3
-	)
-	books, store := backfillFixture(nBooks, filesPerBook)
-	p := New(nil, store, nil)
+func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) database.BookFile) *pagedFixture {
+	fx := &pagedFixture{files: map[string][]database.BookFile{}, visits: map[string]int{}}
+	for i := 0; i < nBooks; i++ {
+		id := fmt.Sprintf("book-%05d", i)
+		sig := "signature-present"
+		fx.books = append(fx.books, database.Book{ID: id, BookSigV1: &sig})
+		for j := 0; j < filesPerBook; j++ {
+			fx.files[id] = append(fx.files[id], file(id, j))
+		}
+	}
+	fx.store = &database.MockStore{
+		CountAllBooksFunc: func() (int, error) { return nBooks, nil },
+		GetAllBooksFullFromFunc: func(afterID string, limit int) ([]database.Book, error) {
+			fx.mu.Lock()
+			fx.limits = append(fx.limits, limit)
+			fx.mu.Unlock()
+			start := 0
+			if afterID != "" {
+				start = len(fx.books)
+				for i, b := range fx.books {
+					if b.ID == afterID {
+						start = i + 1
+						break
+					}
+				}
+			}
+			end := len(fx.books)
+			if limit > 0 && start+limit < end {
+				end = start + limit
+			}
+			if start >= end {
+				return nil, nil
+			}
+			return slices.Clone(fx.books[start:end]), nil
+		},
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			fx.mu.Lock()
+			fx.visits[bookID]++
+			fx.mu.Unlock()
+			return fx.files[bookID], nil
+		},
+		GetBookByIDFunc: func(id string) (*database.Book, error) { return &database.Book{ID: id}, nil },
+		UpdateBookFunc:  func(_ string, b *database.Book) (*database.Book, error) { return b, nil },
+	}
+	return fx
+}
 
-	var tally backfillTally
+// doneFile carries the raw-print proxy, so eligibility stops at "already
+// fingerprinted" without touching the filesystem or fpcalc.
+func doneFile(bookID string, j int) database.BookFile {
+	return database.BookFile{
+		ID: fmt.Sprintf("%s-file-%d", bookID, j), BookID: bookID,
+		FilePath:                       fmt.Sprintf("/does/not/exist/%s-%d.m4b", bookID, j),
+		AcoustIDFingerprintDurationSec: 60,
+	}
+}
+
+// eligibleFiles returns a file factory whose rows pass every eligibility check:
+// a real .mp3 path and no fingerprint of any kind.
+func eligibleFiles(t *testing.T) func(string, int) database.BookFile {
+	dir := t.TempDir()
+	return func(bookID string, j int) database.BookFile {
+		path := filepath.Join(dir, fmt.Sprintf("%s-%d.mp3", bookID, j))
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return database.BookFile{ID: fmt.Sprintf("%s-file-%d", bookID, j), BookID: bookID, FilePath: path}
+	}
+}
+
+// inFlightFake replaces fpcalc with a sleep that records the peak number of
+// concurrent invocations.
+func inFlightFake(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var cur, peak atomic.Int64
+	orig := fingerprintFileFn
+	fingerprintFileFn = func(pluginStore, database.BookFile, bool) fingerprintFileOutcome {
+		n := cur.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		cur.Add(-1)
+		return fingerprintOutcomeFingerprinted
+	}
+	t.Cleanup(func() { fingerprintFileFn = orig })
+	return &peak
+}
+
+func setWorkers(t *testing.T, n int) {
+	t.Helper()
+	orig := config.AppConfig.FPParallelWorkers
+	config.AppConfig.FPParallelWorkers = n
+	t.Cleanup(func() { config.AppConfig.FPParallelWorkers = orig })
+}
+
+// TestBackfillPages_LoadsInPages is fix (b). The op used to call
+// GetAllBooksFullFrom("", 0) — the whole book table — which held ~862 MB in
+// production. Every request must now be a bounded page, every book must be
+// visited exactly once across pages, and the cursor must be checkpointed at the
+// last book of each drained page.
+func TestBackfillPages_LoadsInPages(t *testing.T) {
+	const n = 2*backfillPageSize + 234
+	fx := newPagedFixture(n, 1, doneFile)
+	p := New(nil, fx.store, nil)
 	rep := &captureReporter{}
-	opts := backfillRunOptions(books, 0, &tally, rep)
+	var tally backfillTally
 
-	// Without this the whole test degrades to a sequential loop and proves
-	// nothing about concurrency — the exact failure mode being guarded against.
-	if opts.Concurrency < 2 {
+	if err := p.backfillPages(context.Background(), rep, BackfillParams{}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+
+	for i, l := range fx.limits {
+		if l <= 0 || l > backfillPageSize {
+			t.Fatalf("page request %d asked for limit=%d; a limit of 0 loads the whole book table", i, l)
+		}
+	}
+	if got := len(fx.limits); got != 3 {
+		t.Errorf("page requests = %d, want 3 (500 + 500 + 234)", got)
+	}
+	for _, b := range fx.books {
+		if fx.visits[b.ID] != 1 {
+			t.Fatalf("book %s visited %d times, want exactly 1", b.ID, fx.visits[b.ID])
+		}
+	}
+	if got := tally.skipped.Load(); got != n {
+		t.Errorf("skipped = %d, want %d", got, n)
+	}
+	want := []string{fx.books[backfillPageSize-1].ID, fx.books[2*backfillPageSize-1].ID, fx.books[n-1].ID}
+	var got []string
+	for _, cp := range rep.saved() {
+		got = append(got, cp.AfterBookID)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("checkpoint cursors = %v, want %v", got, want)
+	}
+}
+
+func TestBackfillPages_ResumesAfterCursor(t *testing.T) {
+	fx := newPagedFixture(1200, 1, doneFile)
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+	state := BackfillParams{AfterBookID: fx.books[599].ID}
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, state, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	for i, b := range fx.books {
+		want := 0
+		if i >= 600 {
+			want = 1
+		}
+		if fx.visits[b.ID] != want {
+			t.Fatalf("book %d visited %d times, want %d", i, fx.visits[b.ID], want)
+		}
+	}
+}
+
+// A cursor naming a book that has since been deleted makes GetAllBooksFullFrom
+// return nothing. Without the restart the resumed run would report success
+// having fingerprinted nothing.
+func TestBackfillPages_StaleCursorRestartsFromTheTop(t *testing.T) {
+	fx := newPagedFixture(30, 1, doneFile)
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{AfterBookID: "book-deleted"}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	for _, b := range fx.books {
+		if fx.visits[b.ID] != 1 {
+			t.Fatalf("book %s visited %d times after a stale cursor, want 1", b.ID, fx.visits[b.ID])
+		}
+	}
+}
+
+// Older checkpoint formats each name a book with every earlier book done, so
+// each maps onto the cursor rather than being discarded.
+func TestResumeCursor_ReadsEveryCheckpointFormat(t *testing.T) {
+	cases := []struct {
+		state BackfillParams
+		want  string
+	}{
+		{BackfillParams{}, ""},
+		{BackfillParams{LastProcessedBookID: "legacy"}, "legacy"},
+		{BackfillParams{Watermark: 4, WatermarkBookID: "wm"}, "wm"},
+		{BackfillParams{AfterBookID: "new", WatermarkBookID: "wm", LastProcessedBookID: "legacy"}, "new"},
+	}
+	for _, c := range cases {
+		if got := resumeCursor(c.state); got != c.want {
+			t.Errorf("resumeCursor(%+v) = %q, want %q", c.state, got, c.want)
+		}
+	}
+}
+
+// TestBackfillBook_FansOutFilesOfOneBook is fix (c). Before 2026-09-12 a book's
+// files ran one after another inside a single worker, so a many-chapter book
+// ran at one fpcalc no matter how many workers were configured. One book with
+// sixteen eligible files must now keep several fpcalc calls in flight, and
+// never more than the semaphore allows.
+func TestBackfillBook_FansOutFilesOfOneBook(t *testing.T) {
+	peak := inFlightFake(t)
+	fx := newPagedFixture(1, 16, eligibleFiles(t))
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+	sem := make(chan struct{}, 8)
+
+	if err := p.backfillBook(context.Background(), fx.books[0], &tally, sem, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("backfillBook: %v", err)
+	}
+	if got := peak.Load(); got < 2 {
+		t.Errorf("peak in-flight fpcalc for one 16-file book = %d; its files ran sequentially", got)
+	}
+	if got := peak.Load(); got > 8 {
+		t.Errorf("peak in-flight = %d exceeds the semaphore of 8", got)
+	}
+	if got := tally.fingerprinted.Load(); got != 16 {
+		t.Errorf("fingerprinted = %d, want 16", got)
+	}
+}
+
+// The semaphore is shared across every book in the run, so book-level and
+// file-level parallelism together never exceed FP_PARALLEL_WORKERS.
+func TestBackfillPages_SharedSemaphoreBoundsTheWholeRun(t *testing.T) {
+	setWorkers(t, 3)
+	peak := inFlightFake(t)
+	fx := newPagedFixture(6, 6, eligibleFiles(t))
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
+	}
+	if got := peak.Load(); got > 3 {
+		t.Errorf("peak in-flight fpcalc = %d with FP_PARALLEL_WORKERS=3", got)
+	}
+	if got := tally.fingerprinted.Load(); got != 36 {
+		t.Errorf("fingerprinted = %d, want 36", got)
+	}
+}
+
+// TestBackfillTally_IsExactUnderConcurrency runs the real page options with
+// the pool on and checks no outcome went missing to a lost update.
+func TestBackfillTally_IsExactUnderConcurrency(t *testing.T) {
+	const nBooks, filesPerBook = 240, 3
+	fx := newPagedFixture(nBooks, filesPerBook, doneFile)
+	p := New(nil, fx.store, nil)
+	var tally backfillTally
+
+	if opts := backfillRunOptions(0, nBooks, &tally); opts.Concurrency < 2 {
 		t.Fatalf("backfillRunOptions produced Concurrency=%d; the op is sequential and this test is vacuous", opts.Concurrency)
 	}
-
-	err := registry.RunItems(context.Background(), rep, books, func(_ context.Context, b database.Book) error {
-		return p.backfillBook(b, &tally, rep.Logger())
-	}, opts)
-	if err != nil {
-		t.Fatalf("RunItems: %v", err)
+	if err := p.backfillPages(context.Background(), &captureReporter{}, BackfillParams{}, &tally); err != nil {
+		t.Fatalf("backfillPages: %v", err)
 	}
-
 	if got, want := tally.skipped.Load(), int64(nBooks*filesPerBook); got != want {
 		t.Errorf("skipped tally = %d, want %d — %d outcomes were lost to concurrent increments", got, want, want-got)
 	}
-	if got := tally.fingerprinted.Load(); got != 0 {
-		t.Errorf("fingerprinted = %d, want 0: the fixture is pre-fingerprinted, so nothing should have run fpcalc", got)
-	}
-	if got := tally.failed.Load(); got != 0 {
-		t.Errorf("failed = %d, want 0", got)
-	}
 }
 
-// TestBackfillCheckpoint_IsValidatableOnResume closes the loop between the two
-// halves of the resume story: whatever the run writes must be something
-// resolveResumePoint will actually accept. A watermark stored without its book
-// ID, or against the wrong index, would be silently rejected on the next run and
-// the op would restart from zero forever while appearing to checkpoint fine.
-func TestBackfillCheckpoint_IsValidatableOnResume(t *testing.T) {
-	books, store := backfillFixture(200, 1)
-	p := New(nil, store, nil)
-
+// Ineligible outcomes used to fall through backfillBook's switch uncounted.
+func TestBackfillTally_RecordsIneligibleReasons(t *testing.T) {
+	fx := newPagedFixture(1, 3, func(bookID string, j int) database.BookFile {
+		f := database.BookFile{ID: fmt.Sprintf("f%d", j), BookID: bookID, FilePath: "/x/a.mp3"}
+		switch j {
+		case 0:
+			f.Missing = true
+		case 1:
+			f.FilePath = "/x/a.pdf"
+		case 2:
+			f.AcoustIDFingerprintDurationSec = 1
+		}
+		return f
+	})
+	p := New(nil, fx.store, nil)
 	var tally backfillTally
-	rep := &captureReporter{}
-	err := registry.RunItems(context.Background(), rep, books, func(_ context.Context, b database.Book) error {
-		return p.backfillBook(b, &tally, rep.Logger())
-	}, backfillRunOptions(books, 0, &tally, rep))
-	if err != nil {
-		t.Fatalf("RunItems: %v", err)
+	if err := p.backfillBook(context.Background(), fx.books[0], &tally, make(chan struct{}, 2), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
 	}
-
-	saved := rep.saved()
-	if len(saved) == 0 {
-		t.Fatal("no checkpoint was written for a 200-book run")
+	if got := tally.ineligible.Load(); got != 2 {
+		t.Errorf("ineligible = %d, want 2", got)
 	}
-
-	for _, cp := range saved {
-		if cp.WatermarkBookID == "" {
-			t.Fatalf("checkpoint at watermark %d carries no book ID; resolveResumePoint will reject it", cp.Watermark)
-		}
-		if cp.LastProcessedBookID != "" {
-			t.Errorf("checkpoint still writes the legacy LastProcessedBookID (%q); it is read-only now", cp.LastProcessedBookID)
-		}
-		idx, reason := resolveResumePoint(books, cp)
-		if reason != "" {
-			t.Errorf("checkpoint at watermark %d was rejected on resume: %s", cp.Watermark, reason)
-		}
-		if idx != cp.Watermark {
-			t.Errorf("resume index = %d, want the stored watermark %d", idx, cp.Watermark)
-		}
+	want := map[string]int64{"marked_missing": 1, "non_audio_ext": 1}
+	if got := tally.reasonCounts(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("reasons = %v, want %v", got, want)
 	}
 }
 
-func TestResolveResumePoint_AcceptsAMatchingWatermark(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-	state := BackfillParams{Watermark: 4, WatermarkBookID: books[3].ID}
-
-	idx, reason := resolveResumePoint(books, state)
-	if reason != "" {
-		t.Fatalf("unexpected rejection: %s", reason)
-	}
-	if idx != 4 {
-		t.Errorf("resume index = %d, want 4", idx)
-	}
-}
-
-// TestResolveResumePoint_RestartsWhenTheCollectionShifted is the reason the book
-// ID is stored beside the index at all.
-//
-// GetAllBooksFullFrom is ID-ordered, so importing a book that sorts earlier
-// shifts every later position down by one. A bare index resume would then skip
-// exactly one book permanently — it would never be fingerprinted and nothing
-// would ever revisit it, because the watermark had already moved past it.
-func TestResolveResumePoint_RestartsWhenTheCollectionShifted(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-	state := BackfillParams{Watermark: 4, WatermarkBookID: books[3].ID}
-
-	// A new book sorting before every existing one, as an import would produce.
-	shifted := append([]database.Book{{ID: "book-0000-new"}}, books...)
-
-	idx, reason := resolveResumePoint(shifted, state)
-	if idx != 0 {
-		t.Errorf("resume index = %d, want 0: the stored index now points at a different book", idx)
-	}
-	if reason == "" {
-		t.Error("a discarded checkpoint must report why; silence here looks identical to a clean resume")
-	}
-}
-
-func TestResolveResumePoint_RejectsAWatermarkWithNoBookID(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-
-	idx, reason := resolveResumePoint(books, BackfillParams{Watermark: 4})
-	if idx != 0 {
-		t.Errorf("resume index = %d, want 0: an unvalidatable index must not be trusted", idx)
-	}
-	if reason == "" {
-		t.Error("expected a reason for discarding the checkpoint")
-	}
-}
-
-func TestResolveResumePoint_RejectsAWatermarkPastTheEnd(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-	state := BackfillParams{Watermark: 99, WatermarkBookID: "book-0098"}
-
-	idx, reason := resolveResumePoint(books, state)
-	if idx != 0 {
-		t.Errorf("resume index = %d, want 0", idx)
-	}
-	if reason == "" {
-		t.Error("expected a reason for discarding the checkpoint")
-	}
-}
-
-// TestResolveResumePoint_MigratesALegacyCheckpoint covers the upgrade: a
-// checkpoint written by the pre-worker-pool binary carries only the last book ID
-// and no index. Rejecting it would silently restart a nightly job that was most
-// of the way through the library.
-func TestResolveResumePoint_MigratesALegacyCheckpoint(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-	state := BackfillParams{LastProcessedBookID: books[6].ID}
-
-	idx, reason := resolveResumePoint(books, state)
-	if reason != "" {
-		t.Fatalf("a legacy checkpoint must be honoured, not discarded: %s", reason)
-	}
-	if idx != 7 {
-		t.Errorf("resume index = %d, want 7 (the book after the last completed one)", idx)
-	}
-}
-
-func TestResolveResumePoint_RestartsWhenTheLegacyBookIsGone(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-	state := BackfillParams{LastProcessedBookID: "book-deleted"}
-
-	idx, reason := resolveResumePoint(books, state)
-	if idx != 0 {
-		t.Errorf("resume index = %d, want 0", idx)
-	}
-	if reason == "" {
-		t.Error("expected a reason for discarding the checkpoint")
-	}
-}
-
-func TestResolveResumePoint_StartsAtZeroWithNoCheckpoint(t *testing.T) {
-	books, _ := backfillFixture(10, 1)
-
-	idx, reason := resolveResumePoint(books, BackfillParams{})
-	if idx != 0 || reason != "" {
-		t.Errorf("got (%d, %q), want (0, \"\") — a first run is not a discarded checkpoint", idx, reason)
-	}
-}
-
-// TestBackfillWorkers_ReadsTheSharedKnob pins the pool size to the same
-// FP_PARALLEL_WORKERS setting the rescan op uses, so an operator turning fpcalc
-// pressure down does not have to discover a second dial.
 func TestBackfillWorkers_ReadsTheSharedKnob(t *testing.T) {
-	orig := config.AppConfig.FPParallelWorkers
-	t.Cleanup(func() { config.AppConfig.FPParallelWorkers = orig })
-
-	config.AppConfig.FPParallelWorkers = 12
+	setWorkers(t, 12)
 	if got := backfillWorkers(); got != 12 {
 		t.Errorf("backfillWorkers() = %d, want 12", got)
 	}
-
-	// Out-of-range values fall back rather than being clamped to something the
-	// operator did not ask for.
 	for _, bad := range []int{0, -1, 33} {
 		config.AppConfig.FPParallelWorkers = bad
 		if got := backfillWorkers(); got != 4 {
 			t.Errorf("backfillWorkers() with FPParallelWorkers=%d = %d, want the default 4", bad, got)
 		}
 	}
+}
 
-	// The default must still be a pool. A default of 1 would make every
-	// deployment that never sets the knob sequential — the original bug.
-	config.AppConfig.FPParallelWorkers = 0
-	if got := backfillWorkers(); got < 2 {
-		t.Errorf("default worker count = %d; the op would run sequentially out of the box", got)
+// fix (e): an unconfigured deployment must keep fpcalc's 120 s window, the
+// one every stored fingerprint was made with.
+func TestFingerprintLengthSec_DefaultReproducesStoredPrints(t *testing.T) {
+	orig := config.AppConfig.FingerprintLengthSec
+	t.Cleanup(func() { config.AppConfig.FingerprintLengthSec = orig })
+
+	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, -1: fingerprint.WholeFileAnalysisLength} {
+		config.AppConfig.FingerprintLengthSec = cfg
+		if got := fingerprintLengthSec(); got != want {
+			t.Errorf("fingerprint_length_sec=%d → -length %d, want %d", cfg, got, want)
+		}
+	}
+}
+
+// fix (d): the def no longer carries the cron string nothing read, but keeps
+// the one effect it had — EnqueueOp deduping a second request on def id.
+func TestBackfillDef_NoDeadScheduleButStillDedupes(t *testing.T) {
+	def := (&Plugin{}).backfillDef()
+	if def.Schedule != nil {
+		t.Errorf("Schedule = %q; OperationDef.Schedule is never evaluated — schedule via the TaskScheduler", *def.Schedule)
+	}
+	if !def.DedupeQueuedRuns {
+		t.Error("DedupeQueuedRuns is false: dropping Schedule would also drop EnqueueOp's def-id dedupe")
 	}
 }

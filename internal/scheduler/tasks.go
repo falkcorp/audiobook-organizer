@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -548,6 +548,54 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// completely silent.
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
+	})
+
+	// acoustid_backfill is the real schedule for acoustid.backfill. The op def
+	// used to declare Schedule "0 3 * * *", which nothing reads (see the
+	// optimize_activity_db comment below), so the backfill never ran
+	// unattended. Ships DISABLED — scheduled.acoustid_backfill.enabled=false —
+	// because library-wide fingerprinting reads every un-fingerprinted file
+	// and turning that on is an owner decision. Not in maintenanceOrder for
+	// the same reason.
+	ts.registerTask(TaskDefinition{
+		Name:        "acoustid_backfill",
+		Description: "Generate raw AcoustID fingerprints for files that have none (disabled by default)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			// Same guard as library_scan: acoustid.backfill's ConcurrencyKey
+			// makes the dispatcher QUEUE a duplicate rather than reject it, so
+			// a run that outlasts the interval would otherwise stack a second
+			// full pass behind itself on every tick.
+			if prev := ts.previousRunID("acoustid_backfill"); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						slog.Info("acoustid_backfill: previous run still active, skipping this tick",
+							"op", prev, "status", row.Status, "source", source)
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "acoustid.backfill", nil)
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue acoustid.backfill: %w", enqErr)
+			}
+			ts.setPreviousRunID("acoustid_backfill", v2ID)
+			return v2ScheduledOp(v2ID, "acoustid_backfill"), nil
+		},
+		IsEnabled: func() bool { return config.AppConfig.Scheduled.AcoustIDBackfill.Enabled },
+		GetInterval: func() time.Duration {
+			mins := config.AppConfig.Scheduled.AcoustIDBackfill.Interval
+			if mins <= 0 {
+				return 0
+			}
+			return time.Duration(mins) * time.Minute
+		},
+		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AcoustIDBackfill.OnStartup },
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	// iTunes position sync is now registered via UOS plugin (UOS-10)

@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.113.0
+// version: 1.114.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-12
 
@@ -974,16 +974,21 @@ type ScheduledTasksConfig struct {
 
 	// LibraryScanFull is the weekly FULL sweep. See LibraryScanFullConfig for
 	// why it has its own type rather than joining the family above.
-	LibraryScanFull          LibraryScanFullConfig `json:"library_scan_full" mapstructure:"library_scan_full"`
-	DedupRefresh             ScheduledTaskConfig   `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
-	LabelRefinement          ScheduledTaskConfig   `json:"label_refinement"            mapstructure:"label_refinement"`
-	AuthorSplit              ScheduledTaskConfig   `json:"author_split"                mapstructure:"author_split"`
-	DbOptimize               ScheduledTaskConfig   `json:"db_optimize"                 mapstructure:"db_optimize"`
-	MetadataRefresh          ScheduledTaskConfig   `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
-	ResolveProductionAuthors ScheduledTaskConfig   `json:"resolve_production_authors"  mapstructure:"resolve_production_authors"`
-	SeriesPrune              ScheduledTaskConfig   `json:"series_prune"                mapstructure:"series_prune"`
-	AIDedupBatch             ScheduledTaskConfig   `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
-	Reconcile                ScheduledTaskConfig   `json:"reconcile"                   mapstructure:"reconcile"`
+	LibraryScanFull LibraryScanFullConfig `json:"library_scan_full" mapstructure:"library_scan_full"`
+	DedupRefresh    ScheduledTaskConfig   `json:"dedup_refresh"               mapstructure:"dedup_refresh"`
+	// AcoustIDBackfill schedules the acoustid.backfill op. Ships DISABLED:
+	// fingerprinting reads every un-fingerprinted file, and turning it on is
+	// an owner decision. Before 2026-09-12 the op declared a cron Schedule
+	// that nothing read, so it never ran unattended at all.
+	AcoustIDBackfill         ScheduledTaskConfig `json:"acoustid_backfill" mapstructure:"acoustid_backfill"`
+	LabelRefinement          ScheduledTaskConfig `json:"label_refinement"            mapstructure:"label_refinement"`
+	AuthorSplit              ScheduledTaskConfig `json:"author_split"                mapstructure:"author_split"`
+	DbOptimize               ScheduledTaskConfig `json:"db_optimize"                 mapstructure:"db_optimize"`
+	MetadataRefresh          ScheduledTaskConfig `json:"metadata_refresh"            mapstructure:"metadata_refresh"`
+	ResolveProductionAuthors ScheduledTaskConfig `json:"resolve_production_authors"  mapstructure:"resolve_production_authors"`
+	SeriesPrune              ScheduledTaskConfig `json:"series_prune"                mapstructure:"series_prune"`
+	AIDedupBatch             ScheduledTaskConfig `json:"ai_dedup_batch"              mapstructure:"ai_dedup_batch"`
+	Reconcile                ScheduledTaskConfig `json:"reconcile"                   mapstructure:"reconcile"`
 }
 
 // Config holds application configuration
@@ -1103,6 +1108,13 @@ type Config struct {
 	// acoustid.fingerprint-rescan op. Bounds-checked to [1,32] at read time;
 	// falls back to 4 outside that range. See internal/plugins/acoustid.
 	FPParallelWorkers int `json:"fp_parallel_workers" mapstructure:"fp_parallel_workers"`
+
+	// FingerprintLengthSec is how many seconds of audio fpcalc analyses per
+	// file (its -length flag). 0 or unset means 120, fpcalc's own default and
+	// what every stored fingerprint was made with; N > 0 caps at N seconds; a
+	// negative value fingerprints the WHOLE file (-length 0), which measured
+	// about 80x more decode work on 2026-09-12. See internal/fingerprint.
+	FingerprintLengthSec int `json:"fingerprint_length_sec" mapstructure:"fingerprint_length_sec"`
 
 	// WhisperClipCacheDir overrides where the intro-transcribe job caches
 	// extracted 90s WAV clips. Empty resolves to {RootDir}/.wav-cache.
@@ -2091,6 +2103,7 @@ func InitConfig() {
 	// 2026-08-20 os.Getenv-to-viper consolidation: previously ad-hoc
 	// os.Getenv() reads scattered across their respective packages.
 	viper.SetDefault("fp_parallel_workers", 4)
+	viper.SetDefault("fingerprint_length_sec", 120)
 	viper.SetDefault("whisper_clip_cache_dir", "")
 	viper.SetDefault("whisper_batch_sleep_ms", 8000)
 	viper.SetDefault("whisper_batch_size", 16)
@@ -2110,6 +2123,7 @@ func InitConfig() {
 	viper.SetDefault("audnexus_base_url", "")
 	viper.SetDefault("google_books_base_url", "")
 	viper.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
+	viper.BindEnv("fingerprint_length_sec", "FP_LENGTH_SEC")                                      //nolint:errcheck
 	viper.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
 	viper.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
 	viper.BindEnv("whisper_batch_size", "WHISPER_BATCH_SIZE")                                     //nolint:errcheck
@@ -2230,6 +2244,9 @@ func InitConfig() {
 	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
 	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
 	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
+	viper.SetDefault("scheduled.acoustid_backfill.enabled", false)
+	viper.SetDefault("scheduled.acoustid_backfill.interval", 1440)
+	viper.SetDefault("scheduled.acoustid_backfill.on_startup", false)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -2266,6 +2283,9 @@ func InitConfig() {
 	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
 	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
+	viper.BindEnv("scheduled.acoustid_backfill.enabled", "SCHEDULED_ACOUSTID_BACKFILL_ENABLED")                     //nolint:errcheck
+	viper.BindEnv("scheduled.acoustid_backfill.interval", "SCHEDULED_ACOUSTID_BACKFILL_INTERVAL")                   //nolint:errcheck
+	viper.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
@@ -2613,6 +2633,7 @@ func InitConfig() {
 			ActivityDBMoveOnChange: viper.GetBool("activity_db_move_on_change"),
 
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
+			FingerprintLengthSec:                 viper.GetInt("fingerprint_length_sec"),
 			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
 			WhisperBatchSleepMS:                  viper.GetInt("whisper_batch_sleep_ms"),
 			WhisperBatchSize:                     viper.GetInt("whisper_batch_size"),
@@ -2892,6 +2913,11 @@ func InitConfig() {
 					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
 					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
 					OnStartup: viper.GetBool("scheduled.dedup_refresh.on_startup"),
+				},
+				AcoustIDBackfill: ScheduledTaskConfig{
+					Enabled:   viper.GetBool("scheduled.acoustid_backfill.enabled"),
+					Interval:  viper.GetInt("scheduled.acoustid_backfill.interval"),
+					OnStartup: viper.GetBool("scheduled.acoustid_backfill.on_startup"),
 				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
@@ -3527,6 +3553,13 @@ func ResetToDefaults() {
 					Enabled:     true,
 					Interval:    60,
 					PeriodHours: 168,
+				},
+				// Disabled, but its Interval is carried anyway: an owner who
+				// enables it after a factory reset would otherwise get an
+				// enabled task with a zero interval and no ticker (see NOTE).
+				AcoustIDBackfill: ScheduledTaskConfig{
+					Enabled:  false,
+					Interval: 1440,
 				},
 			},
 

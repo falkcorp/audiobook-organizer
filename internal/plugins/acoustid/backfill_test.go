@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package acoustid
 
@@ -41,16 +41,58 @@ func TestFingerprintEligibility_SkipsWhenWholeFilePresent(t *testing.T) {
 	}
 }
 
-func TestFingerprintEligibility_SkipsWhenSeg0Present(t *testing.T) {
+// stubFpcalc pins fpcalcAvailable for one test so eligibility does not depend
+// on whether the test host has chromaprint installed.
+func stubFpcalc(t *testing.T, available bool) {
+	t.Helper()
+	orig := fpcalcAvailable
+	fpcalcAvailable = func() bool { return available }
+	t.Cleanup(func() { fpcalcAvailable = orig })
+}
+
+// TestFingerprintEligibility_SegOnlyRowIsNotDoneWhenFpcalcExists is the
+// 2026-09-12 eligibility fix. A legacy Seg0-only row has no raw print, so with
+// fpcalc installed the default (non-force) backfill must reach it. The old
+// check counted Seg0 as done and skipped ~81k such rows on every run.
+func TestFingerprintEligibility_SegOnlyRowIsNotDoneWhenFpcalcExists(t *testing.T) {
+	stubFpcalc(t, true)
+	path := filepath.Join(t.TempDir(), "legacy.mp3")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := makeBookFile(func(bf *database.BookFile) {
+		bf.FilePath = path
+		bf.AcoustIDSeg0 = "AQADtAcSRY"
+	})
+	got, reason, stop := fingerprintEligibility(f, false)
+	if stop {
+		t.Fatalf("Seg0-only row was not offered to fpcalc: outcome=%v reason=%q — it would never get a raw print", got, reason)
+	}
+}
+
+// With no fpcalc, the segment fallback is the best available fingerprint, so
+// a Seg0 row counts as done; otherwise every run would redo it.
+func TestFingerprintEligibility_SkipsSeg0RowWithoutFpcalc(t *testing.T) {
+	stubFpcalc(t, false)
 	f := makeBookFile(func(bf *database.BookFile) {
 		bf.AcoustIDSeg0 = "AQADtAcSRY"
 	})
 	got, _, stop := fingerprintEligibility(f, false)
-	if !stop {
-		t.Fatal("expected stop=true when seg0 already present")
+	if !stop || got != fingerprintOutcomeSkipped {
+		t.Errorf("got stop=%v outcome=%v, want skipped", stop, got)
 	}
-	if got != fingerprintOutcomeSkipped {
-		t.Errorf("expected skipped, got %v", got)
+}
+
+// The duration proxy is what memdb-sourced rows carry in place of the raw
+// bytes; it must still read as done.
+func TestFingerprintEligibility_SkipsWhenDurationProxyPresent(t *testing.T) {
+	stubFpcalc(t, true)
+	f := makeBookFile(func(bf *database.BookFile) {
+		bf.AcoustIDFingerprintDurationSec = 3600
+	})
+	got, _, stop := fingerprintEligibility(f, false)
+	if !stop || got != fingerprintOutcomeSkipped {
+		t.Errorf("got stop=%v outcome=%v, want skipped", stop, got)
 	}
 }
 
