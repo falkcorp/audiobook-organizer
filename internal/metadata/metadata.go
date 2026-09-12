@@ -1,7 +1,7 @@
 // file: internal/metadata/metadata.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-09-01
+// last-edited: 2026-09-12
 
 package metadata
 
@@ -326,13 +326,13 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 	// forms are handled by parseSlashPair.
 	metadata.TrackNumber, metadata.TrackTotal = m.Track()
 	if metadata.TrackNumber == 0 {
-		if n, total := parseSlashPair(getRawString(raw, "TRCK", "trkn", "track", "tracknumber", "TRACKNUMBER")); n != 0 {
+		if n, total := parseSlashPair(getRawString(raw, trackTagKeys...)); n != 0 {
 			metadata.TrackNumber, metadata.TrackTotal = n, total
 		}
 	}
 	metadata.DiscNumber, metadata.DiscTotal = m.Disc()
 	if metadata.DiscNumber == 0 {
-		if n, total := parseSlashPair(getRawString(raw, "TPOS", "disk", "disc", "discnumber", "DISCNUMBER")); n != 0 {
+		if n, total := parseSlashPair(getRawString(raw, discTagKeys...)); n != 0 {
 			metadata.DiscNumber, metadata.DiscTotal = n, total
 		}
 	}
@@ -581,6 +581,32 @@ func parseSlashPair(s string) (number, total int) {
 		}
 	}
 	return n, total
+}
+
+// trackTagKeys / discTagKeys are the raw-frame aliases a track or disc position
+// is read from when the parser's own accessor has nothing. Shared by the capture
+// path above and TrackDiscFromTags so the two can never disagree on which keys
+// carry a position.
+var (
+	trackTagKeys = []string{"TRCK", "trkn", "track", "tracknumber", "TRACKNUMBER"}
+	discTagKeys  = []string{"TPOS", "disk", "disc", "discnumber", "DISCNUMBER"}
+)
+
+// TrackDiscFromTags reads the track and disc position out of an already-captured
+// lossless tag map (BookFile.RawTags / Metadata.AllTags) without touching the
+// file. Keys match case-insensitively, since RawTags keys are spelled by whichever
+// extractor wrote them. A zero track means the map carries no usable track number.
+func TrackDiscFromTags(tags map[string]string) (track, trackTotal, disc, discTotal int) {
+	if len(tags) == 0 {
+		return 0, 0, 0, 0
+	}
+	raw := make(map[string]any, len(tags))
+	for k, v := range tags {
+		raw[k] = v
+	}
+	track, trackTotal = parseSlashPair(getRawString(raw, trackTagKeys...))
+	disc, discTotal = parseSlashPair(getRawString(raw, discTagKeys...))
+	return track, trackTotal, disc, discTotal
 }
 
 func getRawString(raw map[string]any, keys ...string) string {
