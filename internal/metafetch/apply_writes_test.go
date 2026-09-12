@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -1052,12 +1052,13 @@ func TestFinishApplyFileWork_ReadErrorAtTheCopyLockStopsTheJob(t *testing.T) {
 }
 
 // The file steps never make a library copy; lockLibraryCopy is the only place
-// one is made. A step that could would make it outside that lock.
+// one is made. A step that could would make it outside that lock. No tagWriter
+// stub here: writeTags returns through the stub before it reads the copy
+// policy, so a stub would hide a tag step that creates a copy.
 func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	config.AppConfig.AutoRenameOnApply = true
 	config.AppConfig.AutoWriteTagsOnApply = true
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
 
 	_ = svc.finishFileWork("a", true, true, nil)
 	h.mu.Lock()
