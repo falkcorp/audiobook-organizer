@@ -3,7 +3,8 @@
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-12
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { describeRevertResult } from '../utils/revertResult';
+import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
+import { getUndoPreflight } from '../services/versionApi';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -339,6 +340,9 @@ export default function ActivityLog() {
 
   // Revert dialog
   const [revertEntry, setRevertEntry] = useState<ActivityEntry | null>(null);
+  // The preflight-derived confirmation for revertEntry: the real restorable
+  // count and the record-only rows, never a blanket "undo all changes".
+  const [revertPlan, setRevertPlan] = useState('');
   const [reverting, setReverting] = useState(false);
 
   // Refs for intervals
@@ -828,6 +832,26 @@ export default function ActivityLog() {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch (err) {
       console.error('Failed to copy op summary', err);
+    }
+  };
+
+  // Ask the server what the revert would actually do before offering it, as
+  // OperationsIndicator does. When nothing is restorable (a purge op whose rows
+  // are all author_delete records) the reason is shown and no dialog opens, so
+  // the user is never asked to confirm an Undo the server will refuse with 409.
+  const openRevert = async (target: ActivityEntry) => {
+    if (!target.operation_id) return;
+    try {
+      const plan = describeUndoPreflight(await getUndoPreflight(target.operation_id));
+      if (!plan.canUndo) {
+        setToast(plan.message);
+        return;
+      }
+      setRevertPlan(plan.message);
+      setRevertEntry(target);
+    } catch (err) {
+      console.error('Failed to load undo preflight', err);
+      setToast(describeError(err));
     }
   };
 
@@ -2993,7 +3017,7 @@ export default function ActivityLog() {
                             (entry.type === 'organize_completed' ||
                               entry.type === 'metadata_applied') && (
                               <Tooltip title="Revert operation">
-                                <IconButton size="small" onClick={() => setRevertEntry(entry)}>
+                                <IconButton size="small" onClick={() => void openRevert(entry)}>
                                   <UndoIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
@@ -3049,9 +3073,11 @@ export default function ActivityLog() {
       <Dialog open={!!revertEntry} onClose={() => setRevertEntry(null)}>
         <DialogTitle>Revert Operation?</DialogTitle>
         <DialogContent>
-          <Typography variant="body2">
-            This will undo all tracked changes from operation{' '}
-            <strong>{revertEntry?.operation_id?.slice(0, 12)}...</strong>. This cannot be undone.
+          <Typography variant="body2" data-testid="revert-plan">
+            {revertPlan}
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Operation <strong>{revertEntry?.operation_id?.slice(0, 12)}...</strong>. This cannot be undone.
           </Typography>
         </DialogContent>
         <DialogActions>
