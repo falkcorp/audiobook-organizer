@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
 // last-edited: 2026-09-12
 
@@ -48,7 +48,11 @@ interface MergeFailure {
   reason: string;
 }
 
-interface BulkMergeReport {
+// MergeReport is the outcome of any merge action -- bulk or single-group --
+// that had at least one failure. It lives in its own state, not `error`,
+// because fetchDuplicates() clears `error` as its first act (after a bulk
+// merge, and on every Refresh), which used to erase the failure.
+interface MergeReport {
   attempted: number;
   succeeded: number;
   failures: MergeFailure[];
@@ -72,7 +76,7 @@ export function DedupBookTab() {
   const [error, setError] = useState<string | null>(null);
   const [activeOp, setActiveOp] = useState<Operation | null>(null);
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
-  const [bulkReport, setBulkReport] = useState<BulkMergeReport | null>(null);
+  const [mergeReport, setMergeReport] = useState<MergeReport | null>(null);
   const [keepSelections, setKeepSelections] = useState<Record<string, string>>({});
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -106,14 +110,20 @@ export function DedupBookTab() {
     const keepId = keepSelections[groupKey];
     if (!keepId) return;
     const mergeIds = group.filter((b) => b.id !== keepId).map((b) => b.id);
+    const title = cleanDisplayTitle(group[0]?.title || 'Unknown');
+    // Both failure shapes -- a terminal status other than 'completed', and a
+    // rejected request / throwing poll (runOperationWithPolling's onError) --
+    // go into mergeReport so a later Refresh does not erase them.
+    const reportFailure = (reason: string) =>
+      setMergeReport({ attempted: 1, succeeded: 0, failures: [{ title, reason }] });
     setMergeSuccess(null);
-    setBulkReport(null);
+    setMergeReport(null);
     await runOperationWithPolling(
       () => api.mergeBooks(keepId, mergeIds),
       setActiveOp,
       (final) => {
         if (!isMergeSuccess(final)) {
-          setError(describeMergeFailure(final));
+          reportFailure(describeMergeFailure(final));
         } else {
           setMergeSuccess(`Merged duplicates of "${group[0]?.title}"`);
           setGroups((prev) => prev.filter((_, i) => `group-${i}` !== groupKey));
@@ -124,7 +134,7 @@ export function DedupBookTab() {
           });
         }
       },
-      setError
+      reportFailure
     );
   };
 
@@ -134,7 +144,7 @@ export function DedupBookTab() {
   // status other than 'completed'. pollOperation RESOLVES on failed / canceled /
   // interrupted_* rather than throwing, so both shapes are checked here.
   //
-  // The outcome goes into bulkReport, not `error`: fetchDuplicates() clears
+  // The outcome goes into mergeReport, not `error`: fetchDuplicates() clears
   // `error` as its first act, and it runs right after this loop. Routing
   // failures through setError is how a run with failed groups used to end with
   // only a success banner on screen.
@@ -143,7 +153,7 @@ export function DedupBookTab() {
   // ConcurrencyKey, so the server would serialise them anyway.
   const runBulkMerge = async (indices: number[]) => {
     setMergeSuccess(null);
-    setBulkReport(null);
+    setMergeReport(null);
     let attempted = 0;
     let succeeded = 0;
     const failures: MergeFailure[] = [];
@@ -175,7 +185,7 @@ export function DedupBookTab() {
       if (failures.length === 0) {
         setMergeSuccess(`Merged ${succeeded} of ${attempted} group(s)`);
       } else {
-        setBulkReport({ attempted, succeeded, failures });
+        setMergeReport({ attempted, succeeded, failures });
       }
     }
     fetchDuplicates();
@@ -274,19 +284,19 @@ export function DedupBookTab() {
           {mergeSuccess}
         </Alert>
       )}
-      {bulkReport && (
+      {mergeReport && (
         <Alert
-          severity={bulkReport.succeeded === 0 ? 'error' : 'warning'}
+          severity={mergeReport.succeeded === 0 ? 'error' : 'warning'}
           sx={{ mb: 2 }}
-          onClose={() => setBulkReport(null)}
+          onClose={() => setMergeReport(null)}
           data-testid="bulk-merge-report"
         >
           <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-            Merged {bulkReport.succeeded} of {bulkReport.attempted} group(s);{' '}
-            {bulkReport.failures.length} failed:
+            Merged {mergeReport.succeeded} of {mergeReport.attempted} group(s);{' '}
+            {mergeReport.failures.length} failed:
           </Typography>
           <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-            {bulkReport.failures.map((f, i) => (
+            {mergeReport.failures.map((f, i) => (
               <li key={`${f.title}-${i}`}>
                 <Typography variant="body2" component="span">
                   <strong>{f.title}</strong> — {f.reason}
