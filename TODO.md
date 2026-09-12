@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.68.0 -->
+<!-- version: 10.69.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -35,13 +35,13 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **WEB-06** No Vitest or Playwright coverage exists for the Authors or Series pages — `web/src/pages/__tests__:0`. These are the two primary-nav pages with zero automated coverage of any kind, and they carry irreversible bulk-delete/merge actions plus the perf issue above -- a regression in either (e.g. a broken confirm dialog, a merge sending the wrong IDs) would ship undetected. Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-332-no-vitest-or-playwright-coverage-exists-for-the.md`.
 
-- [ ] **CI-03** Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses 22 — `.github/workflows/security.yml:77`. The Dependency Submission job resolves the npm graph under Node 20 while builds run under 22; engine-dependent resolution (optional/platform deps) can produce a dependency graph that does not match what ships, under- or over-reporting the supply-chain surface. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-312-node-version-drift-security-yml-pins-node-20-x-f.md`.
+- [x] **CI-03** Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses 22 — `.github/workflows/security.yml:77`. The Dependency Submission job resolves the npm graph under Node 20 while builds run under 22; engine-dependent resolution (optional/platform deps) can produce a dependency graph that does not match what ships, under- or over-reporting the supply-chain surface. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-312-node-version-drift-security-yml-pins-node-20-x-f.md`. ✅ **DONE 2026-09-12 (#3276):** security.yml on the shared Node pin; `scripts/check_toolchain_versions.py` fails CI on drift (CI itself moves to Node 26 in #3291).
 
 - [ ] **SF-01b** `ReOrganizeInPlace` stamps the same-path no-op case as organized without a stat — `internal/organizer/service.go` (~L799, grep `ReOrganizeInPlace`). Same shape as SF-01 (fixed for `OrganizeBook` in TASK-303 / PR #3180): when the row's `FilePath` already equals the computed target, the batch-organize worker records success without checking the file still exists, so a stale or edited row pointing at a deleted file is reported organized. Surfaced by the TASK-303 worker and left out of scope; needs the same `os.Stat` guard plus a regression test in `internal/organizer`.
 
 - [ ] **WEB-02** Series page fetches the entire series table on every mount, no server pagination — `web/src/services/api.ts:1827`. Same whole-table-per-visit cost as WEB-01, scaled by series count instead of author count. Frequency is the same (primary nav page, refetched after every rename/split/delete/merge). Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md`.
 
-- [ ] **CI-04** The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warns instead of failing — `.github/workflows/test-action-integration.yml:105`. A gate that can only warn is not a gate: if go.mod, ci.yml, .envrc or a Dockerfile drift on the patch version, the workflow named 'Check version consistency' reports the mismatch and then reports success. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-313-the-only-go-version-consistency-check-truncates.md`.
+- [x] **CI-04** The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warns instead of failing — `.github/workflows/test-action-integration.yml:105`. A gate that can only warn is not a gate: if go.mod, ci.yml, .envrc or a Dockerfile drift on the patch version, the workflow named 'Check version consistency' reports the mismatch and then reports success. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-313-the-only-go-version-consistency-check-truncates.md`. ✅ **DONE 2026-09-12 (#3276):** full-version check across workflows, .envrc, Makefile, Dockerfiles (per-stage digests); fails instead of warning.
 
 - [ ] **`entities.author-merge`: replace the #3223 `ResumeDrop` downgrade with a contiguous checkpoint** — `internal/server/entities_ops.go`. #3223 downgraded it to `ResumeDrop` because a re-issued merge on an already-deleted author was not proven to no-op. The review noted a cheaper correct option: the op is a sequential loop over `merge_ids` and the per-book relink is idempotent, so a contiguous watermark over `merge_ids` (persist the index of the last fully-merged id; resume from the next) is safe and about 30 lines plus a test with a seeded author fixture. Do this only with that test; a `ResumeDrop` that the user retries by hand is strictly safer than a wrong checkpoint.
 
@@ -3376,8 +3376,8 @@ the button "Applied" and disables it, but the book stays in the list. `skipAppli
 also defaults to `false` (:139), so nothing is filtered at all until the reviewer
 finds the toggle.
 
-- [ ] Make the filter session-aware (also exclude `bookStatuses.get(id) === 'applied'`).
-- [ ] Decide whether `skipApplied` should default to `true`.
+- [x] Make the filter session-aware (also exclude `bookStatuses.get(id) === 'applied'`). ✅ DONE 2026-09-12 (#3283).
+- [x] Decide whether `skipApplied` should default to `true`. ✅ DONE 2026-09-12 (#3283): defaults to true; hidden books stay reachable via the toggle and "Show all books".
 
 **Cost, stated honestly:** this is not a one-line change. `currentIndex` indexes
 into `filteredBooks`, and `advanceToNext` (:358) increments it. Removing the
@@ -6300,7 +6300,7 @@ error banner side by side, with no indication which groups actually merged.
 `fetchDuplicates()` then re-lists, so the failed groups silently reappear
 underneath the success message.
 
-- [ ] Track per-group outcomes in the loop and report "Merged N of M" (naming the
+- [x] Track per-group outcomes in the loop and report "Merged N of M" (naming the ✅ DONE 2026-09-12 (#3279): per-group outcomes, interrupted_*/canceled count as failures, report survives refresh.
       failures) instead of an unconditional success string.
 
 **Why this is worth doing now rather than later:** until #2736, `api.mergeBooks`
@@ -6821,7 +6821,7 @@ computation.
 - [ ] Once a stuck test is named: find the unbounded wait. Look for `sync.WaitGroup.Wait`,
       channel receives, and `Lock()` calls with no context/deadline in `internal/database`
       tests and helpers.
-- [ ] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in
+- [x] Consider a per-test deadline (`t.Context()` / `context.WithTimeout`) so a hang fails in ✅ DONE 2026-09-12 (#3286, TASK-177): 21 waits in internal/database bounded; `store.WaitForWarmup()` calls not yet converted.
       seconds naming itself, instead of consuming the whole package budget and reporting only
       the package name.
 - [x] Reduce the wait-bound cost while there — 200–280s for a `-short` run of one package is (done in #2810, TASK-178)
@@ -7917,7 +7917,7 @@ step 4 propagates to the server package with no edit there.
       `ResetToDefaults()`, so a factory reset silently disables chapter
       consolidation instead of restoring the intended default of 10 — ✅ DONE 2026-08-22 (PR #2729, TASK-019); (6)
       whether to delete the fully inert `--enable-sqlite3-i-know-the-risks`
-      flag now that the SQLite backend is gone; (7) whether to wire up or
+      flag now that the SQLite backend is gone — ✅ DONE 2026-09-12 (#3268, TASK-020): flag and `EnableSQLite` deleted, `PUT /config enable_sqlite` returns 400; (7) whether to wire up or
       remove the two entirely-unenforced Settings-UI subsystems (Storage
       Quotas, Memory Limits) and the ~10 other dead Settings-page toggles
       (`create_backups`, `verify_after_write`, `AutoFetchMetadata`,
@@ -9841,7 +9841,7 @@ identifies a *set* of books should be a link into the library with that filter a
       already carries `author_id` plus an `authors[]` array with `id`, `name`, `role`
       and `position` — so a book with several contributors should link each one
       separately rather than only the primary.
-- [ ] **Series name → library filtered by that series.** `series_id` is on the payload
+- [x] **Series name → library filtered by that series.** `series_id` is on the payload ✅ DONE 2026-09-12 (#3280, TASK-167): links to `/library?series_id=`; search inside it works since #3284. Ordering by series position needs a sort key (filed in todo.d).
       and `?series_id=` is supported. Worth pairing with `series_index` so the link can
       land on the right position in the series.
 - [ ] **Narrator, publisher, genre, and release year.** Same idea, but check each has a
@@ -11002,7 +11002,7 @@ audit nobody reopens:
       nonce/hash strategy is settled).
 - [x] **SEC-8 residue** — Dockerfile build-dep tarballs (`utfcpp`, `taglib`) (done in #2692, TASK-011)
       are `curl | tar` with no SHA256 verification; base images are pinned.
-- [ ] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over
+- [x] **PERF-5** — `internal/itunes/backfill.go:60-68` offset pagination over ✅ DONE 2026-09-12 (#3277): both backfill passes read one snapshot; progress reports the real total.
       a mutable snapshot (same class as the AssignOrphanVGs bug; use
       cursor/`GetAllBooksFullFrom`).
 - [ ] **TOOL-1** — `testdata` is 2.2G tracked; decide fetched-dataset split.
@@ -11552,7 +11552,7 @@ proposal's scope stays reviewable. Items marked ⚠ are agent-reported and not h
       `PebbleStore` satisfies *every* sub-interface. It asserts **36 of 40**. Missing:
       `OAuthIdentityStore`, `MetadataCacheStore`, `RejectedMetadataStore`, `ReviewStore`.
       One line each.
-- [ ] `internal/merge/service.go:34-42` — `AsExternalIDReassigner` uses a bare
+- [x] `internal/merge/service.go:34-42` — `AsExternalIDReassigner` uses a bare ✅ DONE 2026-09-12 (#3282, TASK-046): routed through `database.AsCapability`; the two other named sites were already fixed.
       `s.(ExternalIDReassigner)` instead of `database.AsCapability`. Called on `ms.db` at
       `:236` and `:377`. Latent today (registry-built `merge.Service` holds the bare store),
       but one wiring change turns it into silent skipping of iTunes-PID/ASIN reassignment on
@@ -12134,7 +12134,7 @@ Explicitly LOW priority — per-book is fine for now.
 
 ### Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`
 
-- [ ] **Narrator equivalent of the empty-author purge.** There is no
+- [ ] **Narrator equivalent of the empty-author purge.** There is no 🟡 **Store half DONE 2026-09-12 (#3288, TASK-035):** `DeleteNarrator` exists (junction + memdb cleanup); the purge op itself is still open.
   `DeleteNarrator` on the store at all — narrators live at `narrator:<id>` with no
   delete path, so the op cannot be written until that exists. Scope it alongside
   whatever decides the narrator identity question below.
