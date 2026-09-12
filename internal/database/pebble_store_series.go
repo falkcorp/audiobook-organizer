@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
 // last-edited: 2026-09-12
 
@@ -321,28 +321,26 @@ func (p *PebbleStore) GetAllSeriesBookCounts() (map[int]int, error) {
 // GetAllSeriesBookCounts_Pebble returns the number of books per series using Pebble iteration
 func (p *PebbleStore) GetAllSeriesBookCounts_Pebble() (map[int]int, error) {
 	counts := make(map[int]int)
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.SeriesID == nil || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
-			continue
+			return nil
 		}
 		// The memdb counterpart has always excluded the trash; this path did
 		// not, so a series reported more books than it has whenever it was
 		// served before memdb published. See aggregate_count_conformance_test.go.
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		counts[*b.SeriesID]++
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return counts, nil
 }
@@ -353,14 +351,10 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		return p.mem().GetAllSeriesFileCounts()
 	}
 	bookIDToSeriesID := make(map[string]int)
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		// Soft-deleted books are excluded here rather than when counting files,
 		// so their files never enter the map in the first place — matching the
@@ -368,39 +362,36 @@ func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
 		if b.SeriesID != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) && !bookIsSoftDeleted(&b) {
 			bookIDToSeriesID[b.ID] = *b.SeriesID
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	iter.Close()
 
 	// Count actual BookFile records per book.
 	bookFileCounts := make(map[string]int) // bookID → actual file count
-	fileIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	for fileIter.First(); fileIter.Valid(); fileIter.Next() {
-		key := string(fileIter.Key())
+	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(k, value []byte) error {
+		key := string(k)
 		if !strings.HasPrefix(key, "book_file:") {
-			continue
+			return nil
 		}
 		parts := strings.Split(key, ":")
 		if len(parts) < 3 {
-			continue
+			return nil
 		}
 		bookID := parts[1]
 		if _, inSeries := bookIDToSeriesID[bookID]; inSeries {
 			var f BookFile
-			if err := json.Unmarshal(fileIter.Value(), &f); err != nil {
-				continue
+			if err := json.Unmarshal(value, &f); err != nil {
+				return nil
 			}
 			if !f.Missing {
 				bookFileCounts[bookID]++
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	fileIter.Close()
 
 	// Aggregate into series counts.
 	// Books with no files count as 1 (matches SQLite behaviour).

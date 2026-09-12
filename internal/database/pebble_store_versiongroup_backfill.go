@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_versiongroup_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f3b7c21-6d84-4a5e-b0c9-2e7fa1d85b36
 // last-edited: 2026-09-12
 // PERF-VERSIONS: one-time backfill that writes the
@@ -117,12 +117,6 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 	// (book:versiongroup:..., book:organizedhash:..., etc.), which is safe
 	// because the one-colon structural filter below already discriminates
 	// primary rows from secondary indexes independent of byte range.
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		slog.Error("versiongroup-backfill: cannot open iterator", "err", err)
-		return err
-	}
-	defer iter.Close()
 
 	var (
 		batch     = p.db.NewBatch()
@@ -156,12 +150,12 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 		return nil
 	}
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+		if err := json.Unmarshal(rowValue, &book); err != nil {
 			unmarshal++
-			continue
+			return nil
 		}
 		scanned++
 		if scanned%versionGroupBackfillLogEvery == 0 {
@@ -171,7 +165,7 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 		}
 		if book.VersionGroupID == nil || *book.VersionGroupID == "" {
 			skipped++
-			continue
+			return nil
 		}
 		vgKey := []byte(fmt.Sprintf("book:versiongroup:%s:%s", *book.VersionGroupID, book.ID))
 		if err := batch.Set(vgKey, []byte(book.ID), nil); err != nil {
@@ -188,9 +182,11 @@ func (p *PebbleStore) BackfillVersionGroupIndex() error {
 				return err
 			}
 		}
-	}
-	if err := iter.Error(); err != nil {
-		slog.Error("versiongroup-backfill: iteration failed",
+		return nil
+	}); err != nil {
+		// A read error ends the scan here instead of letting the sentinel below
+		// mark a partial index as complete.
+		slog.Error("versiongroup-backfill: scan failed",
 			"scanned", scanned, "indexed", indexed, "err", err)
 		return err
 	}

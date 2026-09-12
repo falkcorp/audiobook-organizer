@@ -1,5 +1,5 @@
 // file: internal/database/series_bookref.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
 // last-edited: 2026-09-12
 
@@ -163,47 +163,29 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 // Bounds and filter are one change; do not separate them.
 func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
 	counts := make(map[int]int)
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
+		if err := json.Unmarshal(rowValue, &b); err != nil {
 			// FATAL, not skippable. A row we cannot decode may well carry a
 			// series_id; dropping it undercounts, and undercounting is
 			// fail-OPEN for every caller -- the delete proceeds and strands
 			// the very row we could not read.
-			_ = iter.Close()
-			return nil, fmt.Errorf("series ref scan: undecodable book row %q: %w", key, err)
+			return fmt.Errorf("series ref scan: undecodable book row %q: %w", key, err)
 		}
 		if b.SeriesID == nil {
-			continue
+			return nil
 		}
 		counts[*b.SeriesID]++
+		return nil
+	}); err != nil {
+		// A truncated map with a nil error would answer "nothing else references
+		// anything" (the permissive answer) to callers that delete on the strength of
+		// it. This is the counter a delete guard consults, so a read error the helper
+		// reports must reach the caller unchanged.
+		return nil, err
 	}
 
-	// The loop above exits on end-of-range OR on an iteration error, and the
-	// two are indistinguishable without this check. Returning a truncated map
-	// with a nil error would answer "nothing else references anything" -- the
-	// permissive answer -- to callers that delete on the strength of it. This
-	// is the counter a delete guard consults, so it least of all may skip it.
-	//
-	// This used to add "every other Pebble scan in this package checks
-	// iter.Error()". That was true when written and FALSE within nine days:
-	// getBooksBySeriesIDFull became a second delete-guard-consulted scan on
-	// 2026-08-24 and checked nothing. A survey of sibling code is a claim with
-	// an expiry date, and nothing re-checks it -- so the reason to be strict
-	// here is stated on its own terms above, and does not lean on what the
-	// neighbours happen to do this week.
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return nil, fmt.Errorf("series ref scan truncated, refusing to answer from a partial count: %w", err)
-	}
-	if err := iter.Close(); err != nil {
-		return nil, fmt.Errorf("series ref scan: closing iterator: %w", err)
-	}
 	return counts, nil
 }
 

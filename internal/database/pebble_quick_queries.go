@@ -1,5 +1,5 @@
 // file: internal/database/pebble_quick_queries.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-12
 
@@ -178,24 +178,18 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 		importPaths, _ = p.GetAllImportPaths()
 	}
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-
 	count := 0
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		// Primary versions only (consistent with LibraryStats).
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-			continue
+			return nil
 		}
 
 		switch id {
@@ -225,6 +219,9 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 				count++
 			}
 		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 
 	elapsed := time.Since(start).Milliseconds()
@@ -298,24 +295,18 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 		importPaths, _ = p.GetAllImportPaths()
 	}
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	var ids []string
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		// Primary versions only (consistent with LibraryStats and computeQuickQueryCount).
 		if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-			continue
+			return nil
 		}
 
 		switch id {
@@ -341,6 +332,9 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 				ids = append(ids, b.ID)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	slog.Info("quick_query id scan", "id", id, "count", len(ids), "duration_ms", time.Since(start).Milliseconds())

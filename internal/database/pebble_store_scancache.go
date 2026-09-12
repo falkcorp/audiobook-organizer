@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
 // last-edited: 2026-09-12
 
@@ -49,29 +49,23 @@ import (
 // eventual option B -- stop normalizing Book.FilePath at all -- cheap, by
 // leaving the scan/skip layer untouched by it.
 func (p *PebbleStore) GetScanCacheMap() (map[string]ScanCacheEntry, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	result := make(map[string]ScanCacheEntry)
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
 		var bf BookFile
-		if err := json.Unmarshal(iter.Value(), &bf); err != nil {
-			continue
+		if err := json.Unmarshal(value, &bf); err != nil {
+			return nil
 		}
 		if bf.FilePath == "" || bf.LastScanMtime == nil {
-			continue
+			return nil
 		}
 		result[bf.FilePath] = ScanCacheEntry{
 			Mtime:       derefInt64(bf.LastScanMtime),
 			Size:        derefInt64(bf.LastScanSize),
 			NeedsRescan: derefBool(bf.NeedsRescan),
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -161,47 +155,40 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 	// One pass over book_file rows, grouped by book, so this is O(files) rather
 	// than a GetBookFiles call per book.
 	byBook := make(map[string][]BookFile)
-	fiter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	for fiter.First(); fiter.Valid(); fiter.Next() {
+	//
+	// A truncated pass here is not just a short count: every book whose rows
+	// were not reached would look like it owns no book_file row, and the
+	// creation pass below would mint a duplicate for it.
+	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
 		var bf BookFile
-		if err := json.Unmarshal(fiter.Value(), &bf); err != nil {
-			continue
+		if err := json.Unmarshal(value, &bf); err != nil {
+			return nil
 		}
 		if bf.BookID == "" {
-			continue
+			return nil
 		}
 		byBook[bf.BookID] = append(byBook[bf.BookID], bf)
-	}
-	fiter.Close()
-
-	biter, err := newBookRowIter(p.db)
-	if err != nil {
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	defer biter.Close()
 
 	// Books that own no book_file row, collected for the concurrent creation pass.
 	var missingRow []Book
 
-	for biter.First(); biter.Valid(); biter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(biter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		if book.ID == "" {
-			continue
+			return nil
 		}
 		res.BooksScanned++
 
 		if book.FilePath == "" {
 			res.SkippedNoStamp++
-			continue
+			return nil
 		}
 
 		files := byBook[book.ID]
@@ -212,29 +199,29 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 			// Note this is deliberately NOT gated on the book having a stamp --
 			// the row should exist either way; only SEEDING it needs a stamp.
 			missingRow = append(missingRow, book)
-			continue
+			return nil
 		}
 
 		if book.LastScanMtime == nil {
 			res.SkippedNoStamp++
-			continue
+			return nil
 		}
 		if len(files) != 1 {
 			res.SkippedMulti++
-			continue
+			return nil
 		}
 		if files[0].FilePath != book.FilePath {
 			// The book's stamp does not describe this file. Cold-start it
 			// rather than assert a measurement that was never taken here.
 			res.SkippedPathMis++
-			continue
+			return nil
 		}
 		if files[0].LastScanMtime != nil {
-			continue // already seeded; idempotent
+			return nil // already seeded; idempotent
 		}
 		if dryRun {
 			res.Seeded++
-			continue
+			return nil
 		}
 		bf := files[0]
 		if err := p.stampFileScanCache(bf.BookID, bf.ID, func(row *BookFile) {
@@ -243,9 +230,12 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 			row.NeedsRescan = book.NeedsRescan
 		}); err != nil {
 			res.Errors++
-			continue
+			return nil
 		}
 		res.Seeded++
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	if err := p.createMissingSingleFileRows(missingRow, dryRun, res); err != nil {
@@ -440,27 +430,25 @@ func (p *PebbleStore) MarkNeedsRescan(bookID string) error {
 // GetDirtyBookFolders returns a deduplicated list of parent directories for all
 // books that have NeedsRescan = true.
 func (p *PebbleStore) GetDirtyBookFolders() ([]string, error) {
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	seen := make(map[string]struct{})
 	var dirs []string
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		if book.FilePath == "" || !derefBool(book.NeedsRescan) {
-			continue
+			return nil
 		}
 		dir := filepath.Dir(book.FilePath)
 		if _, ok := seen[dir]; !ok {
 			seen[dir] = struct{}{}
 			dirs = append(dirs, dir)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return dirs, nil
 }

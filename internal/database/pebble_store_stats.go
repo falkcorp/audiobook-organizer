@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8643a893-1898-4098-8e69-c312531d962c
 // last-edited: 2026-09-12
 
@@ -25,55 +25,47 @@ func (p *PebbleStore) CountFiles() (int, error) {
 	}
 	// Pass 1: collect IDs of all primary, non-deleted books (key scan + JSON decode)
 	primaryBookIDs := make(map[string]struct{})
-	bookIter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
-			return 0, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		primaryBookIDs[book.ID] = struct{}{}
-	}
-	bookIter.Close()
-
-	// Pass 2: single range scan over book_file: space — count active files per book
-	fileIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
+		return nil
+	}); err != nil {
 		return 0, err
 	}
-	defer fileIter.Close()
 
+	// Pass 2: single range scan over book_file: space — count active files per book
 	bookActiveFiles := make(map[string]int, len(primaryBookIDs))
-	for fileIter.First(); fileIter.Valid(); fileIter.Next() {
+	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(key, value []byte) error {
 		// Primary keys are book_file:<bookID>:<fileID> (3 colon-delimited segments).
 		// The upper bound book_file; already excludes secondary indexes (book_file_pid:, etc.)
 		// but SplitN guards against any edge cases.
-		parts := strings.SplitN(string(fileIter.Key()), ":", 4)
+		parts := strings.SplitN(string(key), ":", 4)
 		if len(parts) != 3 {
-			continue
+			return nil
 		}
 		bookID := parts[1]
 		if _, ok := primaryBookIDs[bookID]; !ok {
-			continue
+			return nil
 		}
 		var f BookFile
-		if err := json.Unmarshal(fileIter.Value(), &f); err != nil {
-			continue
+		if err := json.Unmarshal(value, &f); err != nil {
+			return nil
 		}
 		if !f.Missing {
 			bookActiveFiles[bookID]++
 		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 
 	total := 0
@@ -333,17 +325,13 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 
 	// Pass 1: book: range
 	primaryBookIDs := make(map[string]struct{}, 12000)
-	bookIter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(bookIter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if bookIsSoftDeleted(&b) {
-			continue
+			return nil
 		}
 		stats.TotalBooks++
 		if b.Duration != nil {
@@ -383,66 +371,68 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	bookIter.Close()
 
 	// Pass 2: book_file: range — active file count + fingerprint coverage per primary book.
 	// This path only runs as a rare fallback when memdb is unavailable (the fast-path
 	// branch at the top of this function returns early otherwise), so the added
 	// per-file JSON.Unmarshal cost (needed to call GetAcoustIDSeg0()) is acceptable —
 	// unlike before, we can no longer do a pure key-only scan here.
-	fileIter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err == nil {
-		bookActiveFiles := make(map[string]int, len(primaryBookIDs))
-		bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
-		// booksWithMissing is the set of primary books that own ≥1 book_file whose
-		// bytes are gone (Missing==true). Its size is BrokenFiles — see the Missing
-		// note on the fast path above.
-		booksWithMissing := make(map[string]struct{}, len(primaryBookIDs))
-		for fileIter.First(); fileIter.Valid(); fileIter.Next() {
-			parts := strings.SplitN(string(fileIter.Key()), ":", 4)
-			if len(parts) != 3 {
-				continue
-			}
-			bookID := parts[1]
-			if _, ok := primaryBookIDs[bookID]; !ok {
-				continue
-			}
-			bookActiveFiles[bookID]++
-			var bf BookFile
-			if err := json.Unmarshal(fileIter.Value(), &bf); err != nil {
-				continue
-			}
-			if bf.GetAcoustIDSeg0() != "" {
-				bookFingerprintedFiles[bookID]++
-			}
-			if bf.Missing {
-				booksWithMissing[bookID] = struct{}{}
-			}
+	//
+	// This pass used to be skipped silently when the iterator failed to open,
+	// and a mid-scan read error ended it quietly; either way the stats came
+	// back with file and fingerprint counts short and no error. It now fails.
+	bookActiveFiles := make(map[string]int, len(primaryBookIDs))
+	bookFingerprintedFiles := make(map[string]int, len(primaryBookIDs))
+	// booksWithMissing is the set of primary books that own ≥1 book_file whose
+	// bytes are gone (Missing==true). Its size is BrokenFiles — see the Missing
+	// note on the fast path above.
+	booksWithMissing := make(map[string]struct{}, len(primaryBookIDs))
+	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(key, value []byte) error {
+		parts := strings.SplitN(string(key), ":", 4)
+		if len(parts) != 3 {
+			return nil
 		}
-		fileIter.Close()
-		stats.BrokenFiles = len(booksWithMissing)
-		for id := range primaryBookIDs {
-			if n := bookActiveFiles[id]; n > 0 {
-				stats.TotalFiles += n
-			} else {
-				stats.TotalFiles++ // no file records → count as 1
-			}
-			// Classify fingerprint coverage: none/partial/complete, mirroring the
-			// semantics of fingerprint.ComputeFingerprintFields without importing
-			// it (that function takes a []FileWithFingerprint slice, which would
-			// mean building a throwaway slice per book for no benefit).
-			switch fp := bookFingerprintedFiles[id]; {
-			case fp == 0:
-				stats.UnfingerprintedBooks++
-			case fp == bookActiveFiles[id]:
-				stats.FingerprintedBooks++
-			default:
-				stats.PartiallyFingerprintedBooks++
-			}
+		bookID := parts[1]
+		if _, ok := primaryBookIDs[bookID]; !ok {
+			return nil
+		}
+		bookActiveFiles[bookID]++
+		var bf BookFile
+		if err := json.Unmarshal(value, &bf); err != nil {
+			return nil
+		}
+		if bf.GetAcoustIDSeg0() != "" {
+			bookFingerprintedFiles[bookID]++
+		}
+		if bf.Missing {
+			booksWithMissing[bookID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	stats.BrokenFiles = len(booksWithMissing)
+	for id := range primaryBookIDs {
+		if n := bookActiveFiles[id]; n > 0 {
+			stats.TotalFiles += n
+		} else {
+			stats.TotalFiles++ // no file records → count as 1
+		}
+		// Classify fingerprint coverage: none/partial/complete, mirroring the
+		// semantics of fingerprint.ComputeFingerprintFields without importing
+		// it (that function takes a []FileWithFingerprint slice, which would
+		// mean building a throwaway slice per book for no benefit).
+		switch fp := bookFingerprintedFiles[id]; {
+		case fp == 0:
+			stats.UnfingerprintedBooks++
+		case fp == bookActiveFiles[id]:
+			stats.FingerprintedBooks++
+		default:
+			stats.PartiallyFingerprintedBooks++
 		}
 	}
 

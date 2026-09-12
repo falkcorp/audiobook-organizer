@@ -1,5 +1,5 @@
 // file: internal/database/author_bookref.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
 // last-edited: 2026-09-12
 
@@ -254,25 +254,16 @@ func (p *PebbleStore) getAllAuthorBookRefBucketsPebble() (map[int]AuthorRefBucke
 	defer func() { _ = snap.Close() }()
 
 	// Pass 1: every book row -- its state, and its legacy AuthorID.
-	iter, err := newBookRowIter(snap)
-	if err != nil {
-		return nil, err
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
+	if err := forEachBookRow(snap, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			_ = iter.Close()
-			return nil, fmt.Errorf("author ref scan: undecodable book row %q: %w", key, err)
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return fmt.Errorf("author ref scan: undecodable book row %q: %w", key, err)
 		}
 		acc.addBook(&b, strings.TrimPrefix(key, "book:"))
-	}
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return nil, fmt.Errorf("author ref scan truncated over books, refusing to answer from a partial count: %w", err)
-	}
-	if err := iter.Close(); err != nil {
-		return nil, fmt.Errorf("author ref scan: closing book iterator: %w", err)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	// Pass 2: the book_authors junction, which is the only record of a

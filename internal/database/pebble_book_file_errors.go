@@ -1,7 +1,7 @@
 // file: internal/database/pebble_book_file_errors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-05-20
+// last-edited: 2026-09-12
 
 package database
 
@@ -110,20 +110,17 @@ func (p *PebbleStore) ListBooksWithFileErrors() ([]string, error) {
 	}
 	lower := []byte("book_file_errors_by_book:")
 	upper := prefixEnd(lower)
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
-	if err != nil {
-		return nil, fmt.Errorf("pebble NewIter: %w", err)
-	}
-	defer iter.Close()
 	books := map[string]struct{}{}
-	for iter.First(); iter.Valid(); iter.Next() {
-		k := string(iter.Key())
+	if err := forEachKeyInRange(p.db, lower, upper, func(key, _ []byte) error {
 		// key format: book_file_errors_by_book:{bookID}:{filePath}
-		r := strings.TrimPrefix(k, "book_file_errors_by_book:")
+		r := strings.TrimPrefix(string(key), "book_file_errors_by_book:")
 		parts := strings.SplitN(r, ":", 2)
 		if len(parts) >= 1 && parts[0] != "" {
 			books[parts[0]] = struct{}{}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	result := make([]string, 0, len(books))
 	for id := range books {

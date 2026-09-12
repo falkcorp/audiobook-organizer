@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -645,39 +645,35 @@ func (p *PebbleStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, er
 // so the two can never disagree about what "all books" means.
 func (p *PebbleStore) getAllBooksCoreFromPebble(limit, offset int) ([]BookCore, error) {
 	var books []BookCore
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	skipped := 0
 	count := 0
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if skipped < offset {
 			skipped++
-			continue
+			return nil
 		}
 		if limit > 0 && count >= limit {
-			break
+			return errStopScan
 		}
 		books = append(books, book.Core())
 		count++
-	}
-	// GetAllBooksCoreComplete answers the orphan book_file sweep from here, and
-	// that sweep hard-deletes every file row whose book is absent. A truncated
-	// iteration must fail, not return a short set that reads as complete.
-	if err := iter.Error(); err != nil {
-		return nil, fmt.Errorf("all books scan truncated: %w", err)
+		return nil
+	}); err != nil {
+		// GetAllBooksCoreComplete answers the orphan book_file sweep from here, and
+		// that sweep hard-deletes every file row whose book is absent. A truncated
+		// scan must fail (the helper returns its read error), not return a short set
+		// that reads as complete.
+		return nil, err
 	}
 
 	return books, nil
@@ -745,24 +741,18 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		return books, nil
 	}
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	var books []Book
 	count := 0
 	// SeekAfter lands on the first book row strictly after afterID whether or
 	// not that row still exists, so an absent cursor resumes at its successor.
 	// The iterator yields only book:<id> rows; see book_row_iter.go.
-	for iter.SeekAfter(afterID); iter.Valid(); iter.Next() {
+	if err := forEachBookRowAfter(p.db, afterID, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		// This branch decodes the row directly instead of point-getting each
 		// ID, so unlike the memdb branch above it does not inherit
@@ -772,13 +762,16 @@ func (p *PebbleStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, er
 		// scan zero pairs and report success — the same shape as the bug the
 		// getAllPrimaryBooksWithFullFields comment documents.
 		if err := p.hydrateBookSig(&book); err != nil {
-			return nil, err
+			return err
 		}
 		books = append(books, book)
 		count++
 		if limit > 0 && count >= limit {
-			break
+			return errStopScan
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return books, nil
 }
@@ -793,15 +786,10 @@ func (p *PebbleStore) ListBookIDs() ([]string, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().ListBookIDs()
 	}
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	ids := make([]string, 0, 1024)
-	for iter.First(); iter.Valid(); iter.Next() {
-		id := iter.ID()
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		id := rowID
 		// MemStore.ListBookIDs filters soft-deleted books out of this listing,
 		// so this path must too — otherwise every full-library maintenance op
 		// that enumerates through it would process trashed books during the
@@ -818,10 +806,13 @@ func (p *PebbleStore) ListBookIDs() ([]string, error) {
 		var probe struct {
 			MarkedForDeletion *bool `json:"marked_for_deletion,omitempty"`
 		}
-		if json.Unmarshal(iter.Value(), &probe) == nil && markedForDeletionFlag(probe.MarkedForDeletion) {
-			continue
+		if json.Unmarshal(rowValue, &probe) == nil && markedForDeletionFlag(probe.MarkedForDeletion) {
+			return nil
 		}
 		ids = append(ids, id)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return ids, nil
 }
@@ -1136,12 +1127,6 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 		return nil
 	}
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return err
-	}
-	defer iter.Close()
-
 	// excludeDeleted: by default marked-for-deletion rows are dropped. An
 	// explicit f.MarkedForDeletion inverts this into an equality test, so
 	// MarkedForDeletion=true returns ONLY deleted rows. The old fallback
@@ -1155,10 +1140,10 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 		requireDeleted = *f.MarkedForDeletion
 	}
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
+		if err := json.Unmarshal(rowValue, &book); err != nil {
 			return err
 		}
 
@@ -1167,19 +1152,19 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 			// memdb and the historical service behavior.
 			eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion
 			if eff != *f.IsPrimaryVersion {
-				continue
+				return nil
 			}
 		}
 		isDeleted := bookIsSoftDeleted(&book)
 		if excludeDeleted {
 			if isDeleted {
-				continue
+				return nil
 			}
 		} else if isDeleted != requireDeleted {
-			continue
+			return nil
 		}
 		if f.ExcludeQuarantined && book.QuarantinedAt != nil {
-			continue
+			return nil
 		}
 		if f.LibraryState != "" {
 			ls := ""
@@ -1187,7 +1172,7 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 				ls = *book.LibraryState
 			}
 			if ls != f.LibraryState {
-				continue
+				return nil
 			}
 		}
 		if f.ReviewStatus != "" {
@@ -1196,21 +1181,24 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 				rs = *book.MetadataReviewStatus
 			}
 			if !strings.EqualFold(rs, f.ReviewStatus) {
-				continue
+				return nil
 			}
 		}
 		if f.RestrictToIDs != nil {
 			if _, ok := f.RestrictToIDs[book.ID]; !ok {
-				continue
+				return nil
 			}
 		}
 		if f.Predicate != nil && !f.Predicate(&book) {
-			continue
+			return nil
 		}
 
 		if !visit(&book) {
-			return nil
+			return errStopScan
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1395,22 +1383,22 @@ func (p *PebbleStore) GetBookByITunesPersistentID(persistentID string) (*Book, e
 	if persistentID == "" {
 		return nil, nil
 	}
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	var found *Book
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		if book.ITunesPersistentID != nil && *book.ITunesPersistentID == persistentID {
-			return &book, nil
+			found = &book
+			return errStopScan
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	return nil, nil
+	return found, nil
 }
 
 // ListBooksByITunesPID returns books that have a non-empty iTunes persistent
@@ -1433,22 +1421,17 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().ListBooksByITunesPID(limit, offset)
 	}
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	var books []Book
 	skipped := 0
 	collected := 0
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		if book.ITunesPersistentID == nil || *book.ITunesPersistentID == "" {
-			continue
+			return nil
 		}
 		// Exclude the trash, matching the memdb fast path above. Both
 		// implementations of this method used to include soft-deleted books;
@@ -1456,17 +1439,20 @@ func (p *PebbleStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
 		// BEFORE the offset/limit accounting — filtering after would let a page
 		// come back short and terminate a paging caller early.
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if skipped < offset {
 			skipped++
-			continue
+			return nil
 		}
 		if limit > 0 && collected >= limit {
-			break
+			return errStopScan
 		}
 		books = append(books, book)
 		collected++
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return books, nil
 }
@@ -1554,20 +1540,15 @@ func (p *PebbleStore) GetDuplicateBooks() ([][]Book, error) {
 
 	// Iterate through every book row (index keys are skipped by the iterator;
 	// see book_row_iter.go) to find duplicates.
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create iterator: %w", err)
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal book: %w", err)
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return fmt.Errorf("failed to unmarshal book: %w", err)
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 
 		// Use organized_file_hash if available, otherwise file_hash
@@ -1582,10 +1563,9 @@ func (p *PebbleStore) GetDuplicateBooks() ([][]Book, error) {
 		if hash != "" {
 			hashGroups[hash] = append(hashGroups[hash], book)
 		}
-	}
-
-	if err := iter.Error(); err != nil {
-		return nil, fmt.Errorf("iterator error: %w", err)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	// Extract groups with 2+ books (actual duplicates), sorted by file_path
@@ -1607,25 +1587,23 @@ func (p *PebbleStore) GetDuplicateBooks() ([][]Book, error) {
 // and whose FilePath lives directly under dirPath (same directory, any filename).
 // Always scans Pebble — MemStore has no title+dir index.
 func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error) {
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	var results []Book
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		if util.NormalizeTitle(book.Title) != util.NormalizeTitle(normalizedTitle) {
-			continue
+			return nil
 		}
 		if filepath.Dir(book.FilePath) != dirPath {
-			continue
+			return nil
 		}
 		results = append(results, book)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -2143,37 +2121,30 @@ func (p *PebbleStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, e
 // one change and must not be separated.
 func (p *PebbleStore) getBooksBySeriesIDFull(seriesID int, primaryOnly bool) ([]Book, error) {
 	var books []Book
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = iter.Close() }()
 
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, fmt.Errorf("books by series scan: undecodable book row %q: %w", key, err)
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return fmt.Errorf("books by series scan: undecodable book row %q: %w", key, err)
 		}
 		if book.SeriesID == nil || *book.SeriesID != seriesID {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if primaryOnly && book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		books = append(books, book)
-	}
-
-	// The loop exits on end-of-range OR on an iteration error, and nothing
-	// distinguishes them without this. Returning a truncated list with a nil
-	// error tells a merge "these are all the books in the series" — the
-	// permissive answer — on the strength of a scan that stopped early.
-	if err := iter.Error(); err != nil {
-		return nil, fmt.Errorf("books by series scan truncated, refusing to answer from a partial list: %w", err)
+		return nil
+	}); err != nil {
+		// A truncated list with a nil error would tell a merge "these are all the
+		// books in the series" (the permissive answer) on the strength of a scan
+		// that stopped early, so the helper's read error is returned as-is.
+		return nil, err
 	}
 
 	// Shared with the memdb walk so the two implementations of this method
@@ -2287,30 +2258,28 @@ func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
 	}
 
 	var books []Book
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 		_, linkedViaJunction := inJunction[book.ID]
 		linkedViaLegacy := book.AuthorID != nil && *book.AuthorID == authorID
 		if !linkedViaJunction && !linkedViaLegacy {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		books = append(books, book)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return books, nil
@@ -2432,22 +2401,17 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 	// than book JSON. strings.Count(key, ":") != 1 is the structural filter the
 	// sibling fixes use, and it is required in the SAME change as the bounds.
 	var books []Book
-	bookIter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer bookIter.Close()
-	for bookIter.First(); bookIter.Valid(); bookIter.Next() {
-		key := string(bookIter.Key())
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
 		var book Book
-		if err := json.Unmarshal(bookIter.Value(), &book); err != nil {
+		if err := json.Unmarshal(rowValue, &book); err != nil {
 			// Fail closed: this row may credit the author, and a `continue`
 			// here is the short list the guard above exists to prevent,
 			// reached through the repair path. See the doc comment.
-			return nil, fmt.Errorf("books by author scan: undecodable book row %q: %w", key, err)
+			return fmt.Errorf("books by author scan: undecodable book row %q: %w", key, err)
 		}
 		if !includeTrashed && bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		if _, inJunction := bookIDSet[book.ID]; inJunction {
 			books = append(books, book)
@@ -2455,9 +2419,9 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 		} else if book.AuthorID != nil && *book.AuthorID == authorID {
 			books = append(books, book)
 		}
-	}
-	if err := bookIter.Error(); err != nil {
-		return nil, fmt.Errorf("books by author scan truncated, refusing to answer from a partial list: %w", err)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	cores := make([]BookCore, len(books))
 	for i := range books {
@@ -3501,19 +3465,14 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 	var count int
 
 	// Scan book:* index and filter during iteration
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		// Check title match first (cheapest operation)
-		value := iter.Value()
+		value := rowValue
 		var book Book
 		if err := json.Unmarshal(value, &book); err != nil {
-			continue
+			return nil
 		}
 
 		// Shared with the memdb scan and the scoped service fallback; see
@@ -3526,9 +3485,12 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 			}
 			count++
 			if limit > 0 && len(filtered) >= limit {
-				break
+				return errStopScan
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return filtered, nil
@@ -3584,25 +3546,23 @@ func (p *PebbleStore) CountPrimaryBooks() (int, error) {
 // countPrimaryBooksScan is the uncached full scan behind CountPrimaryBooks.
 func (p *PebbleStore) countPrimaryBooksScan() (int, error) {
 	count := 0
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return 0, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		// Skip non-primary versions so duplicate editions don't inflate counts
 		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-			continue
+			return nil
 		}
 		count++
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 
 	return count, nil
@@ -3620,21 +3580,19 @@ func (p *PebbleStore) CountAllBooks() (int, error) {
 		return len(all), nil
 	}
 	count := 0
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return 0, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		count++
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return count, nil
 }
@@ -3645,17 +3603,11 @@ func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.Genre != nil && *b.Genre != "" {
 			if !seen[*b.Genre] {
@@ -3663,6 +3615,9 @@ func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
 				out = append(out, *b.Genre)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.Strings(out)
 	return out, nil
@@ -3674,17 +3629,11 @@ func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.Language != nil && *b.Language != "" {
 			if !seen[*b.Language] {
@@ -3692,6 +3641,9 @@ func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
 				out = append(out, *b.Language)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.Strings(out)
 	return out, nil
@@ -3732,30 +3684,25 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 			"error", err, "lost_rows", m.LostRows())
 	}
 	var books []Book
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if book.MarkedForDeletion == nil || !*book.MarkedForDeletion {
-			continue
+			return nil
 		}
 		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
-			continue
+			return nil
 		}
 		books = append(books, book)
-	}
-	// Same reason as getAllBooksCoreFromPebble: findOrphanBookFiles unions this
-	// set in to protect restorable books, so a short answer deletes file rows.
-	if err := iter.Error(); err != nil {
-		return nil, fmt.Errorf("soft-deleted books scan truncated: %w", err)
+		return nil
+	}); err != nil {
+		// Same reason as getAllBooksCoreFromPebble: findOrphanBookFiles unions this
+		// set in to protect restorable books, so a short answer deletes file rows.
+		return nil, err
 	}
 
 	// Shared with the memdb walk so the two implementations cannot order the
@@ -3780,26 +3727,26 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	prefix := []byte(fmt.Sprintf("book:versiongroup:%s:", groupID))
 	upper := append([]byte(nil), prefix...)
 	upper[len(upper)-1] = ';' // ':' + 1
-	idxIter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return nil, err
-	}
 	var books []Book
-	for idxIter.First(); idxIter.Valid(); idxIter.Next() {
-		bookID := string(idxIter.Key()[len(prefix):])
+	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
+		bookID := string(key[len(prefix):])
 		if bookID == "" {
-			continue
+			return nil
 		}
 		b, err := p.GetBookByID(bookID)
 		if err != nil || b == nil {
-			continue
+			return nil
 		}
 		if bookIsSoftDeleted(b) {
-			continue
+			return nil
 		}
 		books = append(books, *b)
+		return nil
+	}); err != nil {
+		// Not a fall-through to the full scan below: a partial index walk would
+		// otherwise return its few members as the whole group.
+		return nil, err
 	}
-	idxIter.Close()
 
 	if len(books) > 0 {
 		sortVersions(books)
@@ -3828,26 +3775,24 @@ func (p *PebbleStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
 	// completeness signal exists that does not depend on the result being
 	// non-empty (e.g. an authoritative per-group member count).
 	books = nil // Reset for fallback scan
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 
 		if book.VersionGroupID != nil && *book.VersionGroupID == groupID {
 			books = append(books, book)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	sortVersions(books)
@@ -3882,21 +3827,16 @@ func sortVersions(books []Book) {
 // GetBooksByMetadataSourceHash returns all books with the given metadata source hash.
 func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) {
 	var books []Book
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return nil
 		}
 
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 
 		if book.MetadataSourceHash != nil && *book.MetadataSourceHash == hash {
@@ -3904,6 +3844,9 @@ func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) 
 				books = append(books, book)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return books, nil

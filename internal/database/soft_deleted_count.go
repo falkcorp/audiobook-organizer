@@ -1,5 +1,5 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
 // last-edited: 2026-09-12
 
@@ -64,25 +64,23 @@ func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 	if p.UseMemDB && p.mem() != nil {
 		return p.mem().CountSoftDeletedBooks(olderThan)
 	}
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
 
 	n := 0
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return 0, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if book.MarkedForDeletion == nil || !*book.MarkedForDeletion {
-			continue
+			return nil
 		}
 		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
-			continue
+			return nil
 		}
 		n++
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return n, nil
 }

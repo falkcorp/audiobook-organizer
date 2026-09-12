@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_itunes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f359d1ff-32ad-45c2-b58c-bd254479a552
 // last-edited: 2026-09-12
 
@@ -49,20 +49,17 @@ func (p *PebbleStore) GetITunesPurgePendingBooks() ([]Book, error) {
 	// Scan book:* index and filter by iTunes sync status without loading all books
 	var pending []Book
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "purge_pending" && b.ITunesPersistentID != nil {
 			pending = append(pending, b)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return pending, nil
 }
@@ -72,22 +69,19 @@ func (p *PebbleStore) GetITunesDirtyBooks() ([]Book, error) {
 	// Scan book:* index and filter by iTunes sync status without loading all books
 	var dirty []Book
 
-	iter, err := newBookRowIter(p.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			continue
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
 		}
 		if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "dirty" {
 			if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
 				dirty = append(dirty, b)
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return dirty, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_isbn_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-14
+// last-edited: 2026-09-12
 
 // ISBN/ASIN secondary index for PebbleStore.
 //
@@ -34,7 +34,6 @@ package database
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -184,32 +183,25 @@ func (p *PebbleStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]strin
 		prefix := []byte(fmt.Sprintf("book:%s:%s:", keyspace, value))
 		upper := prefixEnd(prefix)
 
-		iter, err := p.db.NewIter(&pebble.IterOptions{
-			LowerBound: prefix,
-			UpperBound: upper,
-		})
-		if err != nil {
-			return fmt.Errorf("pebble isbn index iter %s=%q: %w", keyspace, value, err)
-		}
-		defer func() {
-			if cerr := iter.Close(); cerr != nil {
-				slog.Warn("pebble isbn index iter close", "keyspace", keyspace, "error", cerr)
-			}
-		}()
-
-		for iter.First(); iter.Valid(); iter.Next() {
-			key := string(iter.Key())
+		// A Close error used to be logged and dropped here, and nothing checked
+		// Error(), so a failed index walk answered "no book has this ISBN".
+		err := forEachKeyInRange(p.db, prefix, upper, func(k, _ []byte) error {
+			key := string(k)
 			// key = "book:<keyspace>:<value>:<bookID>"
 			// bookID is everything after the last ':'
 			// We already know the prefix is "book:<keyspace>:<value>:", so we can
 			// strip the prefix directly.
 			if len(key) <= len(prefix) {
-				continue // malformed key — skip
+				return nil // malformed key — skip
 			}
 			bookID := key[len(prefix):]
 			if bookID != "" {
 				seen[bookID] = struct{}{}
 			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("pebble isbn index scan %s=%q: %w", keyspace, value, err)
 		}
 		return nil
 	}

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-12
 
@@ -629,22 +629,16 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // the prefix book_file:<bookID>:.
 func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
 	prefix := []byte(fmt.Sprintf("book_file:%s:", bookID))
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: append(append([]byte(nil), prefix...), 0xFF),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	var files []BookFile
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachKeyInRange(s.db, prefix, append(append([]byte(nil), prefix...), 0xFF), func(_, value []byte) error {
 		var f BookFile
-		if err := json.Unmarshal(iter.Value(), &f); err != nil {
-			return nil, err
+		if err := json.Unmarshal(value, &f); err != nil {
+			return err
 		}
 		files = append(files, f)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	// Sort: disc ASC, track ASC, file_path ASC — matches SQLite ORDER BY.
 	sort.Slice(files, func(i, j int) bool {
@@ -691,23 +685,17 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 	for _, id := range bookIDs {
 		idSet[id] = true
 	}
-	prefix := []byte("book_file:")
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachKeyInRange(s.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
 		var f BookFile
-		if err := json.Unmarshal(iter.Value(), &f); err != nil {
-			return nil, err
+		if err := json.Unmarshal(value, &f); err != nil {
+			return err
 		}
 		if idSet[f.BookID] {
 			result[f.BookID] = append(result[f.BookID], f.Core())
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -744,34 +732,28 @@ func (s *PebbleStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 }
 
 func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
-	prefix := []byte("book_file:")
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: []byte("book_file;"), // ';' is one past ':' in ASCII
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
 	var files []BookFile
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
+	// ';' is one past ':' in ASCII, so this is exactly the book_file: prefix.
+	if err := forEachKeyInRange(s.db, []byte("book_file:"), []byte("book_file;"), func(k, value []byte) error {
+		key := string(k)
 		// Skip secondary index entries (book_file_pid:, book_file_path:, book_file_acoustid:).
 		if !strings.HasPrefix(key, "book_file:") {
-			continue
+			return nil
 		}
 		// Primary keys look like book_file:<bookID>:<fileID> — must have exactly 2 colons
 		// after the prefix, meaning the full key has 3 colon-separated segments.
 		parts := strings.SplitN(key, ":", 4)
 		if len(parts) != 3 {
-			continue
+			return nil
 		}
 		var f BookFile
-		if err := json.Unmarshal(iter.Value(), &f); err != nil {
-			return nil, err
+		if err := json.Unmarshal(value, &f); err != nil {
+			return err
 		}
 		files = append(files, f)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return files, nil
 }
@@ -781,22 +763,20 @@ func (s *PebbleStore) getAllBookFilesPebbleScan() ([]BookFile, error) {
 // keys and MarkedForDeletion rows). Used by callers — like GetAcoustIDStats — that
 // must not depend on the async memdb warmup having published.
 func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
-	iter, err := newBookRowIter(s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	var books []Book
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachBookRow(s.db, func(rowID string, rowValue []byte) error {
 		var book Book
-		if err := json.Unmarshal(iter.Value(), &book); err != nil {
-			return nil, err
+		if err := json.Unmarshal(rowValue, &book); err != nil {
+			return err
 		}
 		if bookIsSoftDeleted(&book) {
-			continue
+			return nil
 		}
 		books = append(books, book)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return books, nil
 }
@@ -1011,28 +991,28 @@ func (s *PebbleStore) lookupBookFileByIDIndex(id string) *BookFile {
 // scanForBookFileByID is the pre-index fallback: a full iteration of book_file:
 // keys matching on the <fileID> suffix. O(N) over every book_file row — only
 // reached for rows written before writeBookFileSecondaryIndexes existed.
-func (s *PebbleStore) scanForBookFileByID(id string) *BookFile {
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book_file:"),
-		UpperBound: []byte("book_file;"),
-	})
-	if err != nil {
-		return nil
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
+//
+// A read error is returned, not reported as "no such row": both callers treat
+// nil as "already gone", so a scan that stopped early would turn a delete into
+// a silent no-op.
+func (s *PebbleStore) scanForBookFileByID(id string) (*BookFile, error) {
+	var found *BookFile
+	err := forEachKeyInRange(s.db, []byte("book_file:"), []byte("book_file;"), func(key, value []byte) error {
 		// Key format: book_file:<bookID>:<fileID>
-		parts := strings.SplitN(string(iter.Key()), ":", 3)
-		if len(parts) == 3 && parts[2] == id {
-			var f BookFile
-			if jsonErr := json.Unmarshal(iter.Value(), &f); jsonErr == nil {
-				return &f
-			}
+		parts := strings.SplitN(string(key), ":", 3)
+		if len(parts) != 3 || parts[2] != id {
 			return nil
 		}
+		var f BookFile
+		if jsonErr := json.Unmarshal(value, &f); jsonErr == nil {
+			found = &f
+		}
+		return errStopScan
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan for book_file %s: %w", id, err)
 	}
-	return nil
+	return found, nil
 }
 
 // DeleteBookFile removes the BookFile with the given ID (and its secondary
@@ -1064,7 +1044,10 @@ func (s *PebbleStore) scanForBookFileByID(id string) *BookFile {
 func (s *PebbleStore) DeleteBookFile(id string) error {
 	found := s.lookupBookFileByIDIndex(id)
 	if found == nil {
-		found = s.scanForBookFileByID(id)
+		var err error
+		if found, err = s.scanForBookFileByID(id); err != nil {
+			return err
+		}
 	}
 	if found == nil {
 		return nil // already gone
@@ -1264,7 +1247,10 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 
 		found := s.lookupBookFileByIDIndex(id)
 		if found == nil {
-			found = s.scanForBookFileByID(id)
+			var err error
+			if found, err = s.scanForBookFileByID(id); err != nil {
+				return fmt.Errorf("DeleteBookFilesByIDs: %w", err)
+			}
 		}
 		if found == nil {
 			unresolved = append(unresolved, id)
