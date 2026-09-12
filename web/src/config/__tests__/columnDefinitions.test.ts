@@ -1,6 +1,7 @@
 // file: web/src/config/__tests__/columnDefinitions.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
+// last-edited: 2026-09-12
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -15,6 +16,8 @@ import {
   formatDate,
   formatBoolean,
   formatNumber,
+  isSortAvailable,
+  scopeColumnSorts,
 } from '../columnDefinitions';
 import type { Audiobook } from '../../types';
 
@@ -86,9 +89,18 @@ describe('columnDefinitions', () => {
     it('should cover key Audiobook fields', () => {
       const ids = ALL_COLUMNS.map((c) => c.id);
       const expectedFields = [
-        'title', 'author', 'narrator', 'series', 'genre',
-        'duration_seconds', 'file_size_bytes', 'format',
-        'library_state', 'isbn13', 'work_id', 'created_at',
+        'title',
+        'author',
+        'narrator',
+        'series',
+        'genre',
+        'duration_seconds',
+        'file_size_bytes',
+        'format',
+        'library_state',
+        'isbn13',
+        'work_id',
+        'created_at',
       ];
       for (const field of expectedFields) {
         expect(ids).toContain(field);
@@ -245,5 +257,27 @@ describe('columnDefinitions', () => {
         expect(formatNumber(undefined)).toBe('');
       });
     });
+  });
+});
+
+describe('series_position sort scoping', () => {
+  const seriesNumber = (cols: typeof ALL_COLUMNS) => cols.find((c) => c.id === 'series_number');
+
+  it('makes the Series # column unsortable without a series filter', () => {
+    const scoped = scopeColumnSorts(ALL_COLUMNS, false);
+    expect(seriesNumber(scoped)?.sortable).toBe(false);
+    expect(scoped.find((c) => c.id === 'title')?.sortable).toBe(true);
+    // ALL_COLUMNS is shared module state and must not be mutated.
+    expect(seriesNumber(ALL_COLUMNS)?.sortable).toBe(true);
+  });
+
+  it('keeps the Series # column sortable with a series filter', () => {
+    expect(seriesNumber(scopeColumnSorts(ALL_COLUMNS, true))?.sortable).toBe(true);
+  });
+
+  it('gates only series_position', () => {
+    expect(isSortAvailable('series_position', false)).toBe(false);
+    expect(isSortAvailable('series_position', true)).toBe(true);
+    expect(isSortAvailable('title', false)).toBe(true);
   });
 });

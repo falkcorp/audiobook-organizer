@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query_series_position_sort_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1e9c3a-7d42-4f8e-a0c6-3e9d18b27f45
 // last-edited: 2026-09-12
 
@@ -151,18 +151,25 @@ func TestSeriesIDSearchWithoutSortKeepsMatchOrder(t *testing.T) {
 	}, idsInOrder(got))
 }
 
-// storeOrderFilteredStore declares the filtered-summary capability and, like
-// a real store handed a sort key it cannot carry, returns its rows in its own
-// order -- paged when asked for a page. It records every (limit, offset) it
-// was called with.
+// storeOrderFilteredStore declares the filtered-summary capability, returns
+// its rows in its own order (paged when asked for a page), and records every
+// call. An unpaged call (limit <= 0 means "every match") fails the test: on a
+// whole-library listing that is the 68K-row materialisation this guards.
 type storeOrderFilteredStore struct {
 	*mocks.MockStore
+	t         *testing.T
 	summaries []database.BookSummary
 	calls     [][2]int
+	filters   []database.BookSummaryFilter
 }
 
-func (s *storeOrderFilteredStore) GetAllBookSummariesFiltered(limit, offset int, _ database.BookSummaryFilter) ([]database.BookSummary, error) {
+func (s *storeOrderFilteredStore) GetAllBookSummariesFiltered(limit, offset int, f database.BookSummaryFilter) ([]database.BookSummary, error) {
+	s.t.Helper()
+	if limit <= 0 {
+		s.t.Errorf("unpaged GetAllBookSummariesFiltered(%d, %d) with sort_by=%q: a whole-library fetch", limit, offset, f.SortBy)
+	}
 	s.calls = append(s.calls, [2]int{limit, offset})
+	s.filters = append(s.filters, f)
 	out := append([]database.BookSummary(nil), s.summaries...)
 	if offset >= len(out) {
 		return nil, nil
@@ -176,32 +183,93 @@ func (s *storeOrderFilteredStore) GetAllBookSummariesFiltered(limit, offset int,
 
 func (s *storeOrderFilteredStore) HonorsEveryBookSummaryFilter() {}
 
-// TestSeriesPositionSortWithoutSeriesIDSortsBeforePaging: series_position is
-// not a key the store can order by, so on the whole-library path the service
-// must fetch every match and sort it itself. Asking the store for one page
-// and labelling it sorted would return store order page by page.
-func TestSeriesPositionSortWithoutSeriesIDSortsBeforePaging(t *testing.T) {
-	seq := func(n int) *int { return &n }
-	store := &storeOrderFilteredStore{
-		MockStore: mocks.NewMockStore(t),
-		summaries: []database.BookSummary{
-			{ID: "s-10", Title: "Ten", SeriesSequence: seq(10)},
-			{ID: "s-none", Title: "None"},
-			{ID: "s-2", Title: "Two", SeriesSequence: seq(2)},
-			{ID: "s-1", Title: "One", SeriesSequence: seq(1)},
-			{ID: "s-3", Title: "Three", SeriesSequence: seq(3)},
-		},
+// TestSeriesPositionSortWithoutScopeNeverFetchesUnpaged: with no author_id or
+// series_id, series_position is dropped (ScopedSort) and the listing takes the
+// store's paged path in the default order. Every page asks the store for that
+// page only, never for every match, and sort_order goes with the sort so the
+// default order is not reversed.
+//
+// Until 2026-09-12 this test asserted the opposite: {0, 0} on every page,
+// pinning a fetch-convert-sort of the whole library (about 61 MB at 68K rows)
+// on every page request for an order that was mostly "every book 1 first".
+func TestSeriesPositionSortWithoutScopeNeverFetchesUnpaged(t *testing.T) {
+	for _, order := range []string{"", "asc", "desc"} {
+		t.Run("order="+order, func(t *testing.T) {
+			seq := func(n int) *int { return &n }
+			store := &storeOrderFilteredStore{
+				MockStore: mocks.NewMockStore(t),
+				t:         t,
+				summaries: []database.BookSummary{
+					{ID: "s-10", Title: "Ten", SeriesSequence: seq(10)},
+					{ID: "s-none", Title: "None"},
+					{ID: "s-2", Title: "Two", SeriesSequence: seq(2)},
+					{ID: "s-1", Title: "One", SeriesSequence: seq(1)},
+					{ID: "s-3", Title: "Three", SeriesSequence: seq(3)},
+				},
+			}
+			svc := NewAudiobookService(store)
+
+			var got []string
+			for offset := 0; offset < len(store.summaries); offset += 2 {
+				books, _, err := svc.GetAudiobooksWithTotal(context.Background(), 2, offset, "", nil, nil,
+					ListFilters{SortBy: SortBySeriesPosition, SortOrder: order})
+				require.NoError(t, err)
+				got = append(got, idsInOrder(books)...)
+			}
+			require.Equal(t, [][2]int{{2, 0}, {2, 2}, {2, 4}}, store.calls,
+				"every page must ask the store for that page only")
+			for _, f := range store.filters {
+				require.Empty(t, f.SortBy, "series_position must not reach the store unscoped")
+				require.True(t, f.SortAscending, "sort_order must be dropped with the sort")
+			}
+			require.Equal(t, []string{"s-10", "s-none", "s-2", "s-1", "s-3"}, got,
+				"the store's default order, unsorted by the service")
+		})
 	}
-	svc := NewAudiobookService(store)
+}
+
+// TestSeriesPositionSortKeptForAuthorIDListing: an author_id narrows the set
+// the way a series_id does, and that listing already holds the whole scoped
+// set to page it, so ScopedSort keeps series_position there.
+func TestSeriesPositionSortKeptForAuthorIDListing(t *testing.T) {
+	authorID := 7
+	cores := seriesPositionCores()
+	const limit = 4
+	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetBooksByAuthorIDCore(authorID).Return(cores, nil).Times((len(cores) + limit - 1) / limit)
+	svc := NewAudiobookService(mockStore)
 
 	var got []string
-	for offset := 0; offset < len(store.summaries); offset += 2 {
-		books, _, err := svc.GetAudiobooksWithTotal(context.Background(), 2, offset, "", nil, nil,
+	for offset := 0; offset < len(cores); offset += limit {
+		books, total, err := svc.GetAudiobooksWithTotal(context.Background(), limit, offset, "", &authorID, nil,
 			ListFilters{SortBy: SortBySeriesPosition})
 		require.NoError(t, err)
+		require.Equal(t, len(cores), total)
 		got = append(got, idsInOrder(books)...)
 	}
-	require.Equal(t, []string{"s-1", "s-2", "s-3", "s-10", "s-none"}, got)
-	require.Equal(t, [][2]int{{0, 0}, {0, 0}, {0, 0}}, store.calls,
-		"every page must fetch the whole match set; a paged fetch is store order")
+	require.Equal(t, seriesPositionAsc, got)
+}
+
+// TestScopedSort pins the rule the service applies and the handler reports.
+func TestScopedSort(t *testing.T) {
+	id := 1
+	cases := []struct {
+		name             string
+		sortBy, order    string
+		authorID, series *int
+		wantBy, wantOrd  string
+	}{
+		{"unscoped series_position is dropped with its order", SortBySeriesPosition, "desc", nil, nil, "", ""},
+		{"series_id keeps it", SortBySeriesPosition, "desc", nil, &id, SortBySeriesPosition, "desc"},
+		{"author_id keeps it", SortBySeriesPosition, "asc", &id, nil, SortBySeriesPosition, "asc"},
+		{"other keys are untouched", "title", "desc", nil, nil, "title", "desc"},
+		{"no sort stays no sort", "", "", nil, nil, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			by, ord := ScopedSort(tc.sortBy, tc.order, tc.authorID, tc.series)
+			require.Equal(t, tc.wantBy, by)
+			require.Equal(t, tc.wantOrd, ord)
+		})
+	}
 }

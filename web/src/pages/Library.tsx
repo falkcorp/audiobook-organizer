@@ -1,9 +1,9 @@
 // file: web/src/pages/Library.tsx
-// version: 1.89.0
+// version: 1.90.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-09-12
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
@@ -18,7 +18,13 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CachedIcon from '@mui/icons-material/Cached';
 import { ViewMode } from '../components/audiobooks/SearchBar';
 import { useColumnConfig } from '../hooks/useColumnConfig';
-import { defaultSortField, parseSeriesIdParam, useLibraryFilters } from '../hooks/useLibraryFilters';
+import {
+  defaultSortField,
+  parseSortParam,
+  resolveSortField,
+  useLibraryFilters,
+} from '../hooks/useLibraryFilters';
+import { scopeColumnSorts } from '../config/columnDefinitions';
 import { FilterTagBar } from '../components/common/FilterTagBar';
 import { useLibraryQuery } from '../hooks/useLibraryQuery';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
@@ -137,13 +143,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const { toast } = useToast();
   const initialSearch = searchParams.get('search') ?? '';
   const initialViewMode = (searchParams.get('view') as ViewMode) || ('grid' as ViewMode);
-  const initialSortBy = ((): SortField => {
-    const value = searchParams.get('sort');
-    if (value && Object.values(SortField).includes(value as SortField)) {
-      return value as SortField;
-    }
-    return defaultSortField(parseSeriesIdParam(searchParams.get('series_id')));
-  })();
+  // The user's explicit sort, or null for "none chosen". The sort actually in
+  // effect (`sortBy`) is derived from it below, once filters and search exist.
+  const initialSortChoice = parseSortParam(searchParams.get('sort'));
   const initialSortOrder =
     searchParams.get('order') === SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending;
   const initialPage = Math.max(
@@ -186,7 +188,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
-  const [sortBy, setSortBy] = useState<SortField>(initialSortBy);
+  const [sortChoice, setSortChoice] = useState<SortField | null>(initialSortChoice);
   const [sortOrder, setSortOrder] = useState<SortOrder>(initialSortOrder);
   const [page, setPage] = useState(initialPage);
   const [itemsPerPage, setItemsPerPage] = useState(initialItemsPerPage);
@@ -219,6 +221,16 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [debouncedParsedSearch, setDebouncedParsedSearch] = useState<ParsedSearch>(() =>
     parseSearch(initialSearch)
   );
+  // The sort in effect: the explicit choice when this view can offer it,
+  // otherwise this view's default. A null choice follows the default as it
+  // changes, so a series view drops to title once a search is typed, and a
+  // series_position choice drops to title once the series chip is removed.
+  // Keyed off the DEBOUNCED free text, the same text useLibraryQuery sends, so
+  // a request's sort and its search always change together. sortDefault is
+  // also what the URL write compares against, so read and write agree.
+  const sortSearchText = debouncedParsedSearch.freeText;
+  const sortDefault = defaultSortField(filters.seriesId, sortSearchText);
+  const sortBy = resolveSortField(sortChoice, filters.seriesId, sortSearchText);
   const [bulkTagDialogOpen, setBulkTagDialogOpen] = useState(false);
   const [bulkRatingDialogOpen, setBulkRatingDialogOpen] = useState(false);
 
@@ -316,6 +328,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     resizeColumn,
     resetToDefaults: resetColumnsToDefaults,
   } = useColumnConfig(defaultPreset);
+  // The "Series #" header sorts by series_position, which needs a series filter.
+  const scopedColumnDefs = useMemo(
+    () => scopeColumnSorts(columnDefs, filters.seriesId !== undefined),
+    [columnDefs, filters.seriesId]
+  );
 
   // Import path management
   const [importPaths, setImportPaths] = useState<ImportPath[]>([]);
@@ -629,7 +646,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (searchParams.get('reset') === '1') {
       setPage(1);
       setSearchQuery('');
-      setSortBy(SortField.Title);
+      setSortChoice(null);
       setSortOrder(SortOrder.Ascending);
       setViewMode('grid');
       setItemsPerPage(DEFAULT_ITEMS_PER_PAGE);
@@ -654,9 +671,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       )
     );
     const urlSearch = searchParams.get('search') ?? '';
-    const urlSort =
-      (searchParams.get('sort') as SortField) ||
-      defaultSortField(parseSeriesIdParam(searchParams.get('series_id')));
+    const urlSortChoice = parseSortParam(searchParams.get('sort'));
     const urlOrder =
       searchParams.get('order') === SortOrder.Descending
         ? SortOrder.Descending
@@ -675,7 +690,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
     if (urlPage !== page) setPage(urlPage);
     if (urlSearch !== searchQuery) setSearchQuery(urlSearch);
-    if (urlSort !== sortBy) setSortBy(urlSort);
+    if (urlSortChoice !== sortChoice) setSortChoice(urlSortChoice);
     if (urlOrder !== sortOrder) setSortOrder(urlOrder);
     if (urlView !== viewMode) setViewMode(urlView);
     if (urlLimit !== itemsPerPage) setItemsPerPage(urlLimit);
@@ -758,7 +773,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     // Omitted only when it is this view's default, which is what the read side
     // assumes for an absent `sort`. Comparing against Title alone dropped an
     // explicit title sort from a series view, which then reloaded in series order.
-    if (sortBy !== defaultSortField(filters.seriesId)) params.set('sort', sortBy);
+    if (sortBy !== sortDefault) params.set('sort', sortBy);
     if (sortOrder !== SortOrder.Ascending) params.set('order', sortOrder);
     if (viewMode !== 'grid') params.set('view', viewMode);
     params.set('page', page.toString());
@@ -785,6 +800,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     selectedTags,
     setSearchParams,
     sortBy,
+    sortDefault,
     sortOrder,
     viewMode,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1781,14 +1797,14 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const handleFiltersChange = baseHandleFiltersChange;
 
   const handleSortChange = (newSort: SortField) => {
-    setSortBy(newSort);
+    setSortChoice(newSort);
     if (newSort === SortField.CreatedAt) {
       setSortOrder(SortOrder.Descending);
     }
   };
 
   const handleColumnSortChange = (sortKey: string, order: 'asc' | 'desc') => {
-    setSortBy(sortKey as SortField);
+    setSortChoice(sortKey as SortField);
     setSortOrder(order === 'asc' ? SortOrder.Ascending : SortOrder.Descending);
   };
 
@@ -2203,6 +2219,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           viewMode={viewMode}
           setViewMode={setViewMode}
           sortBy={sortBy}
+          seriesFilterActive={filters.seriesId !== undefined}
           handleSortChange={handleSortChange}
           sortOrder={sortOrder}
           setSortOrder={setSortOrder}
@@ -2234,7 +2251,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handleParseWithAI={handleParseWithAI}
           selectedIds={selectedIds}
           handleToggleSelect={handleToggleSelect}
-          columnDefs={columnDefs}
+          columnDefs={scopedColumnDefs}
           columnWidths={columnWidths}
           handleColumnSortChange={handleColumnSortChange}
           resizeColumn={resizeColumn}

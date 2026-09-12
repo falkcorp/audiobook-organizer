@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/applied_filters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c906f15-83b7-485f-ab8c-42b4336a6bdf
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package audiobookshandler_test
 
@@ -104,4 +104,35 @@ func TestListAudiobooks_AppliedFilters_ExistingKeysUnchanged(t *testing.T) {
 	require.Equal(t, 0, body.Data.Count)
 	require.Equal(t, 50, body.Data.Limit)
 	require.Equal(t, 0, body.Data.Offset)
+}
+
+// TestListAudiobooks_AppliedFilters_OmitsUnscopedSeriesPositionSort: without
+// an author_id or series_id the service drops series_position (and its order)
+// rather than sort the whole library, so applied_filters must not claim it was
+// applied. A sort the service does run is still reported.
+func TestListAudiobooks_AppliedFilters_OmitsUnscopedSeriesPositionSort(t *testing.T) {
+	type resp struct {
+		Data struct {
+			AppliedFilters []map[string]string `json:"applied_filters"`
+		} `json:"data"`
+	}
+	h, _ := newHandler(t)
+
+	c, w := newCtx("GET", "/audiobooks?sort_by=series_position&sort_order=desc", nil, nil)
+	h.ListAudiobooks(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var dropped resp
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &dropped))
+	for _, f := range dropped.Data.AppliedFilters {
+		require.NotContains(t, []string{"sort_by", "sort_order"}, f["field"],
+			"an unscoped series_position sort is not applied and must not be reported")
+	}
+
+	c, w = newCtx("GET", "/audiobooks?sort_by=title&sort_order=desc", nil, nil)
+	h.ListAudiobooks(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var kept resp
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &kept))
+	require.Contains(t, kept.Data.AppliedFilters, map[string]string{"field": "sort_by", "value": "title"})
+	require.Contains(t, kept.Data.AppliedFilters, map[string]string{"field": "sort_order", "value": "desc"})
 }
