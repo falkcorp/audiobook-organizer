@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-09-06
+// last-edited: 2026-09-12
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -109,7 +109,7 @@ type recoverMissingParams struct {
 	// known to have changed.
 	RequireExtMatch *bool `json:"requireExtMatch"`
 	// ReportPath overrides where the full per-row TSV lands. Empty derives a path under
-	// reports/. Written on EVERY run — a dry run whose decisions are unreadable cannot
+	// {root_dir}/.reports/. Written on EVERY run — a dry run whose decisions are unreadable cannot
 	// inform the apply it exists to inform.
 	ReportPath string `json:"reportPath,omitempty"`
 }
@@ -277,16 +277,13 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 			"row is written, so a concurrent change is skipped, not written.")
 	}
 
-	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
-
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		name := registry.ReporterOpID(reporter)
-		if name == "" {
-			name = "unknown-op"
-		}
-		reportPath = filepath.Join("reports", "recover-missing-files-"+name+".tsv")
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "recover-missing-files"))
+	if rpErr != nil {
+		return fmt.Errorf("recover-missing-files: %w", rpErr)
 	}
+	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
 	// (e.g. the scan stand-down lease lapsed after k writes) still leaves the

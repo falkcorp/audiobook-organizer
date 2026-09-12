@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -105,7 +105,7 @@ func TestDedupeBookFileRows_FailedSalvageLeavesDonorsIntact(t *testing.T) {
 	s.WaitForWarmup()
 
 	wrapped := &salvageFailingStore{Store: s, failForFileID: failKeeper}
-	p := &Plugin{deps: fakeDeps{store: wrapped}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: wrapped}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
@@ -173,7 +173,7 @@ func TestDedupeBookFileRows_BatchedDeleteStillCollapses(t *testing.T) {
 
 	bookIDs := seedDupBooks(t, s, 3, 5)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
 		t.Fatalf("runDedupeBookFileRows: %v", err)
@@ -243,7 +243,7 @@ func TestOrphanBookFilesCleanup_DeletesViaNotifyingBatchMethod(t *testing.T) {
 		},
 	}
 
-	p := &Plugin{deps: fakeDeps{store: store}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
 	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
 		t.Fatalf("runOrphanBookFilesCleanup: %v", err)
@@ -298,7 +298,7 @@ func TestOrphanBookFilesCleanup_ChunksLargeOrphanSets(t *testing.T) {
 		},
 	}
 
-	p := &Plugin{deps: fakeDeps{store: store}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
 	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
 		t.Fatalf("runOrphanBookFilesCleanup: %v", err)
@@ -370,7 +370,7 @@ func TestOrphanBookFilesCleanup_RejectedChunkFallsBackToPerRowDeletes(t *testing
 		},
 	}
 
-	p := &Plugin{deps: fakeDeps{store: store}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
 	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
 	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
 		t.Fatalf("runOrphanBookFilesCleanup returned %v; a failing chunk is recovered and "+

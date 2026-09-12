@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -35,7 +35,7 @@ type DedupeBookFileRowsParams struct {
 	// Limit caps how many BOOKS are processed (0 = all). Useful for a canary.
 	Limit int `json:"limit,omitempty"`
 	// ReportPath overrides where the per-book TSV lands. Empty means a derived
-	// path under reports/. The report is written on EVERY run, dry or apply,
+	// path under {root_dir}/.reports/. The report is written on EVERY run, dry or apply,
 	// so an operator always has the census the summary line only samples.
 	ReportPath string `json:"reportPath,omitempty"`
 }
@@ -189,6 +189,16 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
+	}
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportMode := "dryrun"
+	if params.Apply {
+		reportMode = "apply"
+	}
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, "dedupe-book-file-rows-"+reportMode+".tsv")
+	if rpErr != nil {
+		return fmt.Errorf("dedupe-book-file-rows: %w", rpErr)
 	}
 	log := reporter.Logger()
 	log.Info("dedupe-book-file-rows: starting", "apply", params.Apply, "limit", params.Limit)
@@ -578,14 +588,6 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 
 	// Per-book census. Workers finish out of order, so sort by book ID: the
 	// file has to be diffable between a dry run and the apply that follows it.
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		mode := "dryrun"
-		if params.Apply {
-			mode = "apply"
-		}
-		reportPath = filepath.Join("reports", "dedupe-book-file-rows-"+mode+".tsv")
-	}
 	sort.Slice(reportRows, func(i, j int) bool { return reportRows[i].BookID < reportRows[j].BookID })
 	// A Limit-capped run covers only the processed subset; say so, or a canary
 	// report reads as the whole census. Books whose GetBookFiles failed have no
