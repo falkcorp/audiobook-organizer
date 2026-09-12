@@ -135,7 +135,6 @@ export interface SettingsState {
   defaultUserQuotaGB: number;
   autoFetchMetadata: boolean;
   enableAIParsing: boolean;
-  metadataLLMScoringEnabled: boolean;
   openaiApiKey: string;
   metadataSources: UiMetadataSource[];
   language: string;
@@ -263,7 +262,6 @@ export function Settings() {
     // Metadata settings
     autoFetchMetadata: true,
     enableAIParsing: false,
-    metadataLLMScoringEnabled: false,
     openaiApiKey: '',
     metadataSources: [
       {
@@ -381,8 +379,6 @@ export function Settings() {
       band_high_min: 90,
       band_medium_min: 75,
       band_review_min: 60,
-      duration_boost: 0.05,
-      folder_path_boost: 0.03,
     },
   });
   const [embeddingConfig, setEmbeddingConfig] = useState<api.EmbeddingConfig>({
@@ -431,7 +427,6 @@ export function Settings() {
   const [scheduledConfig, setScheduledConfig] = useState<api.ScheduledTasksConfig | null>(null);
   const [toolsConfig, setToolsConfig] = useState<api.ToolsConfig>({
     managed_dir: '/var/lib/audiobook-organizer/tools',
-    embed_queue_debounce_ms: 500,
   });
 
   const settingsSnapshot = useMemo(() => JSON.stringify(settings), [settings]);
@@ -527,7 +522,6 @@ export function Settings() {
         // Metadata settings
         autoFetchMetadata: config.auto_fetch_metadata ?? true,
         enableAIParsing: config.enable_ai_parsing ?? false,
-        metadataLLMScoringEnabled: config.metadata_llm_scoring_enabled ?? false,
         openaiApiKey: '', // Clear field when loading, show placeholder instead
         metadataSources:
           config.metadata_sources && config.metadata_sources.length > 0
@@ -957,16 +951,6 @@ export function Settings() {
                 onChange={(e) => handleToolsChange({ managed_dir: e.target.value })}
                 fullWidth
                 helperText="Directory where managed binaries (Ollama, fpcalc) are downloaded"
-                sx={{ mb: 2 }}
-              />
-              <TextField
-                label="Embed queue debounce (ms)"
-                type="number"
-                value={toolsConfig.embed_queue_debounce_ms}
-                onChange={(e) =>
-                  handleToolsChange({ embed_queue_debounce_ms: Number(e.target.value) })
-                }
-                helperText="Milliseconds to wait before draining embed queue"
               />
             </AccordionDetails>
           </Accordion>

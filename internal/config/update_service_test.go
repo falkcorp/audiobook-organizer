@@ -1,5 +1,5 @@
 // file: internal/config/update_service_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
 // last-edited: 2026-09-12
 
@@ -221,6 +221,35 @@ func TestUnknownConfigKeys_MarshalledConfigIsClean(t *testing.T) {
 	}
 	if got := unknownConfigKeys(flat); len(got) != 0 {
 		t.Errorf("marshalled Config reported unknown keys: %v", got)
+	}
+}
+
+// TestDecodeConfigPayload_RejectsUnknownKeys pins the decoder backstop on its
+// own. UpdateConfig rejects unknown keys before it ever decodes, so no request
+// test can reach this path; without a direct test, dropping
+// DisallowUnknownFields would go unnoticed until the walker and the decoder
+// disagreed about a key in production.
+func TestDecodeConfigPayload_RejectsUnknownKeys(t *testing.T) {
+	cases := map[string]string{
+		"top level": `{"no_such_setting":true}`,
+		"nested":    `{"dedup":{"no_such_setting":true}}`,
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			var cfg Config
+			err := decodeConfigPayload([]byte(payload), &cfg)
+			if err == nil || !strings.Contains(err.Error(), "no_such_setting") {
+				t.Fatalf("decodeConfigPayload(%s) err = %v; want an unknown-field error naming the key", payload, err)
+			}
+		})
+	}
+
+	var cfg Config
+	if err := decodeConfigPayload([]byte(`{"dedup":{"auto_merge_enabled":true}}`), &cfg); err != nil {
+		t.Fatalf("decodeConfigPayload rejected a known nested key: %v", err)
+	}
+	if !cfg.Dedup.AutoMergeEnabled {
+		t.Error("decodeConfigPayload did not apply dedup.auto_merge_enabled")
 	}
 }
 

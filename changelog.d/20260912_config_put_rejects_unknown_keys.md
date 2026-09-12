@@ -26,3 +26,18 @@ The web Settings page stopped sending eight flat keys the server never read
 exported settings file that carries them has those values folded into the
 nested `auto_update` and `maintenance` objects on import. Before this change
 they were lost without a word.
+
+Four Settings controls wrote keys the server has no setting for, so they never
+did anything. They are removed, because each would now make every Settings save
+fail with a 400:
+
+- "Enable AI rerank for metadata search" on the Metadata tab sent
+  `metadata_llm_scoring_enabled`. The working switch is the one under Metadata
+  Scoring (`metadata_scoring.llm_enabled`), and it stays.
+- "Duration boost" and "Folder path boost" under Dedup sent
+  `dedup.signals.duration_boost` / `folder_path_boost`. The server uses fixed
+  constants for both.
+- "Embed queue debounce (ms)" under Tools sent `tools.embed_queue_debounce_ms`.
+
+A failed save now shows the server's reason, which names the refused key,
+instead of a generic "please try again".

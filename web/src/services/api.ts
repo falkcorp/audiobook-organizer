@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.100.0
+// version: 2.101.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -789,8 +789,6 @@ export interface DedupSignalConfig {
   band_high_min: number;
   band_medium_min: number;
   band_review_min: number;
-  duration_boost: number;
-  folder_path_boost: number;
 }
 
 export interface DedupConfig {
@@ -916,7 +914,6 @@ export interface AutoUpdateConfig {
 
 export interface ToolsConfig {
   managed_dir: string;
-  embed_queue_debounce_ms: number;
 }
 
 /** One configured mapping from a server-side root to its remote-client forms. */
@@ -994,7 +991,6 @@ export interface Config {
 
   // AI parsing
   enable_ai_parsing: boolean;
-  metadata_llm_scoring_enabled?: boolean;
   openai_api_key: string;
   // Optional acoustid.org client ID for the acoustid.lookup-online op.
   // Masked when read back from the API; the user re-enters a new value
