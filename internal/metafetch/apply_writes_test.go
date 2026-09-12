@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -560,7 +560,9 @@ func TestExistingLibraryCopy_RejectsSiblingWithProtectedFileRow(t *testing.T) {
 	got, ok = svc.existingLibraryCopy(book)
 	assert.False(t, ok)
 	assert.Nil(t, got, "a sibling with an iTunes file row is not a library copy")
-	assert.Nil(t, svc.libraryCopyFor(book, existingCopyOnly))
+	target, err := svc.fileWorkTarget(book, "")
+	require.NoError(t, err)
+	assert.Nil(t, target, "a job that locked no copy writes nothing")
 	assert.False(t, svc.autoFetchHasLibraryCopy(book))
 }
 
@@ -590,7 +592,7 @@ func TestRunApplyPipeline_NeverMovesAProtectedFileRow(t *testing.T) {
 			return append([]database.BookFile(nil), files...), nil
 		},
 	})
-	_, err := svc.runApplyPipeline("lib1", book, createLibraryCopy)
+	_, err := svc.runApplyPipeline("lib1", book, "lib1")
 
 	_, itErr := os.Stat(itFile)
 	require.NoError(t, itErr, "the iTunes file must stay where it is (pipeline err: %v)", err)
@@ -910,8 +912,8 @@ func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 // existed locked S and wrote S's files alongside A's job.
 //
 // C starts only once A's job is writing, so A's job is the one that makes S.
-// Two jobs that reach the create step at the same moment are a separate race
-// that predates this test: they hold different book locks.
+// Two jobs that reach the create step at the same moment are
+// TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy.
 func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	entered := make(chan string, 4)
@@ -1060,7 +1062,7 @@ func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	config.AppConfig.AutoRenameOnApply = true
 	config.AppConfig.AutoWriteTagsOnApply = true
 
-	_ = svc.finishFileWork("a", true, true, nil)
+	_ = svc.finishFileWork("a", "", true, true, nil)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	assert.Zero(t, h.made, "a file step made a library copy")
@@ -1196,4 +1198,154 @@ func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 	// An explicit apply replaces it.
 	require.NoError(t, svc.FinishApplyFileWork("b1", cover, false, false, nil))
 	assert.Equal(t, 1, countPrefix(*calls, "cover:"), "an explicit apply must replace the cover")
+}
+
+// Two applies on two versions of one book with no library copy make ONE copy
+// between them, and both write it. Each holds only its own book's lock, so
+// both used to find no copy and both make one: two library copies in one
+// version group. A's copy maker parks; C must not reach the maker meanwhile.
+func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
+	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	entered := make(chan string, 2)
+	proceed := make(chan struct{})
+	inner := svc.libraryCopyMaker
+	// Parks OUTSIDE h.mu. Parking inside it would serialize the second job on
+	// the harness mutex and hide a missing version-group lock.
+	svc.libraryCopyMaker = func(b *database.Book) *database.Book {
+		entered <- b.ID
+		<-proceed
+		return inner(b)
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(proceed)
+		t.Fatal("the apply of A never reached the copy maker")
+	}
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("c", "", true, true, nil)) })
+	select {
+	case id := <-entered:
+		t.Errorf("the apply of %s reached the copy maker while the apply of A was making the copy", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(proceed)
+	wg.Wait()
+
+	h.mu.Lock()
+	made, sPath := h.made, h.books["s"].FilePath
+	h.mu.Unlock()
+	assert.Equal(t, 1, made, "one library copy for the version group")
+	keys := locks.taken()
+	assert.Contains(t, keys, "vg:vg1", "the copy is made under the version-group lock")
+	assert.Equal(t, 2, countPrefix(keys, bookLockKey("s")), "both jobs lock the one copy")
+	assert.GreaterOrEqual(t, countPrefix(keys, sPath), 4, "both jobs write the one copy's files (embed and tags each)")
+}
+
+// A library copy that appears between the lock step and the file steps is not
+// written: the steps write the copy the job locked, or stop with an error.
+// They used to resolve the copy again, each on its own, and write whatever
+// they found, which could be a copy this job held no lock on.
+func TestFinishApplyFileWork_CopyChangedAfterTheLockIsAnError(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	root := config.AppConfig.RootDir
+	vg := "vg1"
+	h.mu.Lock()
+	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+	h.mu.Unlock()
+	s2 := database.Book{ID: "s2", Title: "A Book", FilePath: filepath.Join(root, "A Book 2"), VersionGroupID: &vg}
+	ms := svc.db.(*database.MockStore)
+	groupOf := ms.GetBooksByVersionGroupFunc
+	lookups := 0
+	// The lock step's lookup finds S; every lookup after it finds S2 first.
+	ms.GetBooksByVersionGroupFunc = func(g string) ([]database.Book, error) {
+		out, err := groupOf(g)
+		lookups++
+		if lookups > 1 {
+			out = append([]database.Book{s2}, out...)
+		}
+		return out, err
+	}
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.ErrorIs(t, err, errFileTargetChanged)
+	assert.Empty(t, tags, "no tags may be written once the copy is not the one the job locked")
+	keys := locks.taken()
+	assert.Contains(t, keys, bookLockKey("s"), "the job locked S")
+	assert.NotContains(t, keys, bookLockKey("s2"))
+	assert.NotContains(t, keys, s2.FilePath, "S2's files must not be written by a job that did not lock S2")
+}
+
+// WriteBackMetadataForBook and RunApplyPipelineRenameOnly take the file work's
+// locks in its order: their own book, the version group (only while a copy is
+// made), the copy, then the path of the files written. Both used to make the
+// copy with no lock at all.
+func TestWriteBackAndRenameOnly_TakeTheFileWorkLocksInOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*Service) error
+	}{
+		{"WriteBackMetadataForBook", func(s *Service) error { _, err := s.WriteBackMetadataForBook("a"); return err }},
+		{"RunApplyPipelineRenameOnly", func(s *Service) error { return s.RunApplyPipelineRenameOnly("a", &database.Book{ID: "a"}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, h := newCopyHarness(t)
+			locks := &testPathLocks{}
+			svc.SetPathLocker(locks.lock)
+			_ = tc.call(svc)
+			h.mu.Lock()
+			made, sPath := h.made, h.books["s"].FilePath
+			h.mu.Unlock()
+			require.Equal(t, 1, made)
+			keys := locks.taken()
+			require.GreaterOrEqual(t, len(keys), 4, "locks taken: %v", keys)
+			assert.Equal(t, []string{bookLockKey("a"), "vg:vg1", bookLockKey("s"), sPath}, keys[:4])
+		})
+	}
+}
+
+// Every entry point, run at once on one version group, finishes -- no lock
+// order cycle -- and the group gets one library copy. Run it under -race.
+func TestFileWork_MixedEntryPointsOnOneGroupNeverDeadlock(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	jobs := []func(){
+		func() { _ = svc.FinishApplyFileWork("a", "", true, true, nil) },
+		func() { _ = svc.FinishApplyFileWork("c", "", true, true, nil) },
+		func() { _ = svc.ApplyMetadataFileIO("c") },
+		func() { _ = svc.FinishAutoFetchFileWork("a", "", true) },
+		func() { _, _ = svc.WriteBackMetadataForBook("a") },
+		func() { _, _ = svc.WriteBackMetadataForBook("c") },
+		func() { _ = svc.RunApplyPipelineRenameOnly("c", nil) },
+		func() { _ = svc.FinishApplyFileWork("s", "", true, true, nil) },
+	}
+	done := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for range 5 {
+			for _, job := range jobs {
+				wg.Go(job)
+			}
+		}
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("file work on one version group deadlocked")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Equal(t, 1, h.made, "one library copy for the version group")
 }

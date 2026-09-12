@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.23.2
+// version: 1.24.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-12
 //
@@ -982,14 +982,18 @@ func (s *Server) runBulkWriteBack(
 		}
 		defer releaseFileWrite()
 
-		// Rename FIRST, then re-read, then lock. Order matters: the rename moves
-		// the file, so a lock taken on the pre-rename path would guard a path
-		// nothing is about to be written to. The rename itself is guarded on the
-		// OLD path so two workers cannot move the same file at once.
+		// Rename FIRST, then write. Both calls lock for themselves, in the order
+		// every apply takes (metafetch's lockBook): the book's lock, its library
+		// copy's, then the path lock -- from writeBackPathLocks, which metafetch
+		// shares through SetPathLocker -- on the files each is about to touch,
+		// resolved under the book lock so a rename cannot leave the key stale.
+		// Until 2026-09-12 this loop held a path lock from that table around
+		// each call. With the book lock inside them that is path-then-book, the
+		// reverse of an apply's order, and it deadlocks against an apply of the
+		// same book; the table is not reentrant either, so the path lock inside
+		// would wait on the one held here.
 		if doRename {
-			releaseOld := writeBackPathLocks.lock(book.FilePath)
 			renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book)
-			releaseOld()
 			if renameErr != nil {
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed: %v", bookID, renameErr), nil)
 			}
@@ -998,12 +1002,11 @@ func (s *Server) runBulkWriteBack(
 			}
 		}
 
-		// Serialize on the destination path. See path_locks.go for the three
-		// hazards this closes (version-group siblings, protected-path redirect,
-		// and the one-second-granularity .bak- backup name).
-		release := writeBackPathLocks.lock(book.FilePath)
+		// WriteBackMetadataForBook serializes on the destination path itself
+		// (above). See path_locks.go for the three hazards that closes
+		// (version-group siblings, protected-path redirect, and the
+		// one-second-granularity .bak- backup name).
 		count, writeErr := mfs.WriteBackMetadataForBook(bookID)
-		release()
 
 		if writeErr != nil {
 			failed.Add(1)
