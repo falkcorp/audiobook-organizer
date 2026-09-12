@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_compat.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234560020
-// last-edited: 2026-08-18
+// last-edited: 2026-09-12
 //
 // Type aliases and function variables that let the rest of internal/server/
 // continue using the old unqualified names after the seven service files
@@ -140,6 +140,8 @@ var NewOrganizePreviewService = audiobookspkg.NewOrganizePreviewService
 type (
 	// RevertService is re-exported from the audiobooks package.
 	RevertService = audiobookspkg.RevertService
+	// RevertResult is re-exported from the audiobooks package.
+	RevertResult = audiobookspkg.RevertResult
 )
 
 // NewRevertService is the audiobooks constructor under its pre-move name.

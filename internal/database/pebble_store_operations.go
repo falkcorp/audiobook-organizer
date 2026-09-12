@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -608,14 +608,26 @@ func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) 
 	return changes, iter.Error()
 }
 
-// RevertOperationChanges marks all changes for an operation as reverted.
-func (p *PebbleStore) RevertOperationChanges(operationID string) error {
+// MarkOperationChangesReverted marks the listed changes of an operation as
+// reverted. IDs that are not changes of this operation are ignored; rows not
+// listed are left untouched.
+func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	if len(changeIDs) == 0 {
+		return nil
+	}
+	want := make(map[string]struct{}, len(changeIDs))
+	for _, id := range changeIDs {
+		want[id] = struct{}{}
+	}
 	changes, err := p.GetOperationChanges(operationID)
 	if err != nil {
 		return err
 	}
 	now := time.Now()
 	for _, c := range changes {
+		if _, ok := want[c.ID]; !ok {
+			continue
+		}
 		if c.RevertedAt == nil {
 			c.RevertedAt = &now
 			data, err := json.Marshal(c)

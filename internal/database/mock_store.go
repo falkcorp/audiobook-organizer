@@ -255,11 +255,11 @@ type MockStore struct {
 	// operation writes. CreateOperationChange returned a bare nil with no hook,
 	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
 	// and the two disagreeing, silently, is itself a defect class here.
-	CreateOperationChangeFunc   func(change *OperationChange) error
-	GetOperationChangesFunc     func(operationID string) ([]*OperationChange, error)
-	GetBookChangesFunc          func(bookID string) ([]*OperationChange, error)
-	RevertOperationChangesFunc  func(operationID string) error
-	PruneSystemActivityLogsFunc func(olderThan time.Time) (int, error)
+	CreateOperationChangeFunc        func(change *OperationChange) error
+	GetOperationChangesFunc          func(operationID string) ([]*OperationChange, error)
+	GetBookChangesFunc               func(bookID string) ([]*OperationChange, error)
+	MarkOperationChangesRevertedFunc func(operationID string, changeIDs []string) error
+	PruneSystemActivityLogsFunc      func(olderThan time.Time) (int, error)
 
 	// AI jobs
 	CreateAIJobFunc        func(job AIJob, payloadJSON []byte) error
@@ -2481,9 +2481,9 @@ func (m *MockStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
 	return nil, nil
 }
 
-func (m *MockStore) RevertOperationChanges(operationID string) error {
-	if m.RevertOperationChangesFunc != nil {
-		return m.RevertOperationChangesFunc(operationID)
+func (m *MockStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	if m.MarkOperationChangesRevertedFunc != nil {
+		return m.MarkOperationChangesRevertedFunc(operationID, changeIDs)
 	}
 	return nil
 }

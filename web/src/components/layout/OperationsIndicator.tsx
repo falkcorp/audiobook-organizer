@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.11.0
+// version: 4.12.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +37,7 @@ import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
+import { describeRevertResult } from '../../utils/revertResult';
 
 function formatETA(op: ActiveOperation): string | null {
   if (!op.startedAt || op.progress <= 0 || op.total <= 0) return null;
@@ -724,8 +725,8 @@ export function OperationsIndicator() {
                                     ? `${preflight.safe} changes can be undone. ${conflicts} conflict(s) detected. Proceed?`
                                     : `Undo ${preflight.safe} change(s) from this operation?`;
                                 if (confirm(msg)) {
-                                  await revertOp(op.id);
-                                  alert('Operation reverted successfully');
+                                  const result = await revertOp(op.id);
+                                  alert(describeRevertResult(result));
                                 }
                               } catch (err: unknown) {
                                 const msg = (err as { message?: string })?.message || 'Undo failed';

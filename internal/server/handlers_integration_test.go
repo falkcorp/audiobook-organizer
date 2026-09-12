@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package server
 
@@ -47,7 +47,7 @@ func newOperationsHandler(s *Server) *operations.Handler {
 		func(id string) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
-		func(id string) error {
+		func(id string) (*RevertResult, error) {
 			return NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)

@@ -1283,6 +1283,63 @@ func (_c *MockOperationStore_ListOperations_Call) RunAndReturn(run func(limit in
 	return _c
 }
 
+// MarkOperationChangesReverted provides a mock function for the type MockOperationStore
+func (_mock *MockOperationStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	ret := _mock.Called(operationID, changeIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkOperationChangesReverted")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) error); ok {
+		r0 = returnFunc(operationID, changeIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationStore_MarkOperationChangesReverted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkOperationChangesReverted'
+type MockOperationStore_MarkOperationChangesReverted_Call struct {
+	*mock.Call
+}
+
+// MarkOperationChangesReverted is a helper method to define mock.On call
+//   - operationID string
+//   - changeIDs []string
+func (_e *MockOperationStore_Expecter) MarkOperationChangesReverted(operationID any, changeIDs any) *MockOperationStore_MarkOperationChangesReverted_Call {
+	return &MockOperationStore_MarkOperationChangesReverted_Call{Call: _e.mock.On("MarkOperationChangesReverted", operationID, changeIDs)}
+}
+
+func (_c *MockOperationStore_MarkOperationChangesReverted_Call) Run(run func(operationID string, changeIDs []string)) *MockOperationStore_MarkOperationChangesReverted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationStore_MarkOperationChangesReverted_Call) Return(err error) *MockOperationStore_MarkOperationChangesReverted_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationStore_MarkOperationChangesReverted_Call) RunAndReturn(run func(operationID string, changeIDs []string) error) *MockOperationStore_MarkOperationChangesReverted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PruneOperationChanges provides a mock function for the type MockOperationStore
 func (_mock *MockOperationStore) PruneOperationChanges(olderThan time.Time) (int, error) {
 	ret := _mock.Called(olderThan)
@@ -1399,57 +1456,6 @@ func (_c *MockOperationStore_PruneOperationLogs_Call) Return(n int, err error) *
 }
 
 func (_c *MockOperationStore_PruneOperationLogs_Call) RunAndReturn(run func(olderThan time.Time) (int, error)) *MockOperationStore_PruneOperationLogs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RevertOperationChanges provides a mock function for the type MockOperationStore
-func (_mock *MockOperationStore) RevertOperationChanges(operationID string) error {
-	ret := _mock.Called(operationID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RevertOperationChanges")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(operationID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockOperationStore_RevertOperationChanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RevertOperationChanges'
-type MockOperationStore_RevertOperationChanges_Call struct {
-	*mock.Call
-}
-
-// RevertOperationChanges is a helper method to define mock.On call
-//   - operationID string
-func (_e *MockOperationStore_Expecter) RevertOperationChanges(operationID any) *MockOperationStore_RevertOperationChanges_Call {
-	return &MockOperationStore_RevertOperationChanges_Call{Call: _e.mock.On("RevertOperationChanges", operationID)}
-}
-
-func (_c *MockOperationStore_RevertOperationChanges_Call) Run(run func(operationID string)) *MockOperationStore_RevertOperationChanges_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockOperationStore_RevertOperationChanges_Call) Return(err error) *MockOperationStore_RevertOperationChanges_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockOperationStore_RevertOperationChanges_Call) RunAndReturn(run func(operationID string) error) *MockOperationStore_RevertOperationChanges_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -23730,6 +23736,63 @@ func (_c *MockStore_MarkNeedsRescan_Call) RunAndReturn(run func(bookID string) e
 	return _c
 }
 
+// MarkOperationChangesReverted provides a mock function for the type MockStore
+func (_mock *MockStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	ret := _mock.Called(operationID, changeIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkOperationChangesReverted")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) error); ok {
+		r0 = returnFunc(operationID, changeIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_MarkOperationChangesReverted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkOperationChangesReverted'
+type MockStore_MarkOperationChangesReverted_Call struct {
+	*mock.Call
+}
+
+// MarkOperationChangesReverted is a helper method to define mock.On call
+//   - operationID string
+//   - changeIDs []string
+func (_e *MockStore_Expecter) MarkOperationChangesReverted(operationID any, changeIDs any) *MockStore_MarkOperationChangesReverted_Call {
+	return &MockStore_MarkOperationChangesReverted_Call{Call: _e.mock.On("MarkOperationChangesReverted", operationID, changeIDs)}
+}
+
+func (_c *MockStore_MarkOperationChangesReverted_Call) Run(run func(operationID string, changeIDs []string)) *MockStore_MarkOperationChangesReverted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_MarkOperationChangesReverted_Call) Return(err error) *MockStore_MarkOperationChangesReverted_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_MarkOperationChangesReverted_Call) RunAndReturn(run func(operationID string, changeIDs []string) error) *MockStore_MarkOperationChangesReverted_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MergeBookSegments provides a mock function for the type MockStore
 func (_mock *MockStore) MergeBookSegments(bookNumericID int, newSegment *database.BookSegment, supersedeIDs []string) error {
 	ret := _mock.Called(bookNumericID, newSegment, supersedeIDs)
@@ -25621,57 +25684,6 @@ func (_c *MockStore_RevertBookToVersion_Call) Return(book *database.Book, err er
 }
 
 func (_c *MockStore_RevertBookToVersion_Call) RunAndReturn(run func(id string, ts time.Time) (*database.Book, error)) *MockStore_RevertBookToVersion_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RevertOperationChanges provides a mock function for the type MockStore
-func (_mock *MockStore) RevertOperationChanges(operationID string) error {
-	ret := _mock.Called(operationID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RevertOperationChanges")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(operationID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_RevertOperationChanges_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RevertOperationChanges'
-type MockStore_RevertOperationChanges_Call struct {
-	*mock.Call
-}
-
-// RevertOperationChanges is a helper method to define mock.On call
-//   - operationID string
-func (_e *MockStore_Expecter) RevertOperationChanges(operationID any) *MockStore_RevertOperationChanges_Call {
-	return &MockStore_RevertOperationChanges_Call{Call: _e.mock.On("RevertOperationChanges", operationID)}
-}
-
-func (_c *MockStore_RevertOperationChanges_Call) Run(run func(operationID string)) *MockStore_RevertOperationChanges_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_RevertOperationChanges_Call) Return(err error) *MockStore_RevertOperationChanges_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_RevertOperationChanges_Call) RunAndReturn(run func(operationID string) error) *MockStore_RevertOperationChanges_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -2425,13 +2425,32 @@ export async function getOperationChanges(operationId: string): Promise<Operatio
   return data.changes || [];
 }
 
-export async function revertOperation(operationId: string): Promise<void> {
+/**
+ * Body of a successful POST /operations/:id/revert. `partial` is true when
+ * some change rows were left un-reverted: `failed` restores, or
+ * `not_restorable` record-only rows (author_delete, narrator_delete). An op
+ * with no restorable row at all is refused with a 409 instead.
+ */
+export interface RevertOperationResult {
+  message: string;
+  partial: boolean;
+  operation_id?: string;
+  total?: number;
+  restored?: number;
+  failed?: number;
+  not_restorable?: number;
+  not_restorable_types?: Record<string, number>;
+}
+
+export async function revertOperation(operationId: string): Promise<RevertOperationResult> {
   const response = await apiFetch(`${API_BASE}/operations/${operationId}/revert`, {
     method: 'POST',
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to revert operation');
   }
+  const body = await response.json().catch(() => ({}));
+  return (body?.data ?? body) as RevertOperationResult;
 }
 
 export async function getBookChanges(bookId: string): Promise<OperationChange[]> {
