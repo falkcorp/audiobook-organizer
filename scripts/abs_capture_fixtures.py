@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/abs_capture_fixtures.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 2a9c6e04-8d71-4f36-b920-5e83c1740af6
-# last-edited: 2026-07-29
+# last-edited: 2026-09-11
 """Capture golden API fixtures from the reference Audiobookshelf oracle.
 
 The published ABS API docs are stale, so the running server is the only
@@ -37,6 +37,27 @@ FIXTURE_DIR = pathlib.Path(__file__).resolve().parent.parent / "testdata" / "abs
 # Response headers worth preserving: these drive client caching and seeking.
 KEPT_HEADERS = ("content-type", "accept-ranges", "etag", "cache-control", "content-range")
 
+# Request headers worth preserving: the client-identifying signal ABS derives
+# fields such as deviceInfo.deviceType from (the User-Agent), plus what shapes how
+# the body is parsed. A strict allowlist, like KEPT_HEADERS, never "all headers":
+# after login the session sends `Authorization: Bearer <token>` on every request,
+# so capturing everything would commit live credentials to a public repo.
+REQUEST_HEADERS_TO_KEEP = ("user-agent", "accept", "content-type")
+
+# Credential-bearing (or credential-requesting) request headers. None of these may
+# appear in REQUEST_HEADERS_TO_KEEP; if one is ever added there by mistake, its
+# value is still written as REDACTED rather than verbatim.
+CREDENTIAL_HEADERS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-api-key",
+        "x-refresh-token",
+        "x-return-tokens",
+    }
+)
+
 # Keys whose values are credentials. Fixtures are committed to a public repo, and
 # conformance only needs a field's TYPE and PRESENCE -- the normalizer canonicalizes
 # these values at compare time anyway -- so redacting on disk costs nothing and
@@ -57,6 +78,20 @@ def redact(value):
     if isinstance(value, list):
         return [redact(v) for v in value]
     return value
+
+
+def kept_request_headers(headers) -> dict:
+    """Filter request headers through REQUEST_HEADERS_TO_KEEP, lowercasing keys.
+
+    Credential headers are redacted even if the allowlist is ever widened to
+    include one. Missing or empty headers yield {}, which is still written.
+    """
+    kept = {}
+    for k, v in (headers or {}).items():
+        key = k.lower()
+        if key in REQUEST_HEADERS_TO_KEEP:
+            kept[key] = REDACTED if key in CREDENTIAL_HEADERS else v
+    return kept
 
 
 def slugify(method: str, path: str) -> str:
@@ -82,8 +117,15 @@ def write_fixture(method: str, path: str, body, resp) -> None:
     except ValueError:
         parsed = {"__non_json_body__": resp.text[:2000]}
 
+    # resp.request is the PreparedRequest that actually went on the wire: session
+    # defaults (including the Bearer token) merged with any per-call headers.
     fixture = {
-        "request": {"method": method, "path": path, "body": redact(body)},
+        "request": {
+            "method": method,
+            "path": path,
+            "headers": kept_request_headers(resp.request.headers),
+            "body": redact(body),
+        },
         "response": {
             "status": resp.status_code,
             "headers": {
