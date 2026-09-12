@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package metrics
 
@@ -77,6 +77,17 @@ var (
 		Name:      "op_activity_mirror_dropped_total",
 		Help:      "Operation log lines not copied to the Activity Log because the mirror queue was full or stopped (process lifetime); op_logs_v2 retains them",
 	})
+	// sortByRequestedTotal counts library-list requests by the sort_by they
+	// asked for (TASK-095). It exists to replace guesswork about which of the
+	// indexed sort fields to enable (database.enabled_sort_indexes) with what
+	// clients actually request. The label is BOUNDED by the caller: a known
+	// sort field, "default" for no sort_by, or "other". A raw client string
+	// never becomes a label value.
+	sortByRequestedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "sort_by_requested_total",
+		Help:      "Library list requests by requested sort_by field (known field, \"default\" when omitted, \"other\" when unrecognised)",
+	}, []string{"field"})
 	// searchIndexDirtyBacklogGauge is the size of that dirty set, sampled at
 	// each reconcile tick, so a backlog that is not draining is visible.
 	searchIndexDirtyBacklogGauge = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -217,7 +228,7 @@ func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
 			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, foldersGauge, memoryAllocGauge, goroutinesGauge,
-			opActivityMirrorDroppedTotal,
+			opActivityMirrorDroppedTotal, sortByRequestedTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
 			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
@@ -274,6 +285,11 @@ func IncSearchIndexDropped() { searchIndexDroppedTotal.Inc() }
 // IncOpActivityMirrorDropped counts one operation log line the registry's
 // Activity Log mirror discarded rather than block the op.
 func IncOpActivityMirrorDropped() { opActivityMirrorDroppedTotal.Inc() }
+
+// IncSortByRequested counts one library-list request under a sort_by label.
+// field MUST already be bounded by the caller (see sortByRequestedTotal);
+// passing a raw query-string value would let clients mint unbounded series.
+func IncSortByRequested(field string) { sortByRequestedTotal.WithLabelValues(field).Inc() }
 
 // SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
 func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }
