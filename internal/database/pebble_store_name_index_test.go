@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_name_index_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f51fb8d5-ac26-4268-85ee-c4bdb523de0b
 // last-edited: 2026-09-12
 
 package database
 
 import (
+	"encoding/json"
 	"strconv"
 	"testing"
 
@@ -218,4 +219,60 @@ func TestNameIndex_RoleAndPlaylistLookupsKeepTheirOwnKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, gotP, "double-spaced playlist name became unfindable")
 	require.Equal(t, pl.ID, gotP.ID)
+}
+
+// CreateRole wrote its index key with strings.ToLower and no trim, while
+// GetRoleByName and DeleteRole trim. A padded name was unfindable by any
+// spelling and DeleteRole left its entry behind.
+func TestNameIndex_PaddedRoleNameIsFindableAndDeletable(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	role, err := p.CreateRole(&Role{Name: " Editor ", Permissions: []string{}})
+	require.NoError(t, err)
+	require.True(t, keyExists(t, p, "idx:role:name:editor"), "padded role must be indexed under the trimmed key")
+
+	for _, spelling := range []string{"editor", " Editor "} {
+		got, err := p.GetRoleByName(spelling)
+		require.NoError(t, err)
+		require.NotNil(t, got, "GetRoleByName(%q) did not find the padded role", spelling)
+		require.Equal(t, role.ID, got.ID)
+	}
+
+	_, err = p.CreateRole(&Role{Name: "editor", Permissions: []string{}})
+	require.Error(t, err, "a second role differing only by padding must be refused")
+
+	require.NoError(t, p.DeleteRole(role.ID))
+	require.False(t, keyExists(t, p, "idx:role:name:editor"), "role delete must remove its index entry")
+	gone, err := p.GetRoleByName("editor")
+	require.NoError(t, err)
+	require.Nil(t, gone)
+
+	_, err = p.CreateRole(&Role{Name: "   ", Permissions: []string{}})
+	require.Error(t, err, "a whitespace-only role name must be refused")
+	require.False(t, keyExists(t, p, "idx:role:name:"), "no role may claim the empty key")
+}
+
+// A role written before the fix with a padded name sits under an untrimmed
+// key. Deleting it must not remove the entry of the role that owns the
+// trimmed key.
+func TestNameIndex_DeleteRoleDoesNotRemoveAnotherRolesEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	canonical, err := p.CreateRole(&Role{Name: "Curator", Permissions: []string{}})
+	require.NoError(t, err)
+
+	legacy := &Role{ID: "legacy-curator", Name: " Curator ", Permissions: []string{}, Version: 1}
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, p.db.Set([]byte("role:"+legacy.ID), data, pebble.Sync))
+	// Byte-for-byte what the pre-fix CreateRole wrote: lowercased, untrimmed.
+	require.NoError(t, p.db.Set([]byte("idx:role:name: curator "), []byte(legacy.ID), pebble.Sync))
+
+	require.NoError(t, p.DeleteRole(legacy.ID))
+
+	got, err := p.GetRoleByName("curator")
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the padded legacy role removed the canonical role's index entry")
+	require.Equal(t, canonical.ID, got.ID)
+	gone, err := p.GetRoleByID(legacy.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone, "the legacy role record itself must be deleted")
 }
