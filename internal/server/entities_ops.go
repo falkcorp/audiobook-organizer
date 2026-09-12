@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -97,7 +97,10 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 				if mergeID == keepID {
 					continue
 				}
-				books, err := store.GetBooksByAuthorIDWithRoleCore(mergeID)
+				// ForRelink includes the trash: DeleteAuthor below sweeps the
+				// merged author out of trashed books' junction rows too, so a
+				// trashed book skipped here lost its credit for good.
+				books, err := store.GetBooksByAuthorIDForRelinkCore(mergeID)
 				if err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for author %d: %v", mergeID, err))
 					continue
@@ -166,7 +169,11 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 					}
 				}
 
-				if err := store.DeleteAuthor(mergeID); err != nil {
+				// The loop above skips a book on any read or write failure, so
+				// re-check before the delete erases whatever it could not move.
+				if err := database.VerifyAuthorUnlinked(store, mergeID); err != nil {
+					mergeErrors = append(mergeErrors, fmt.Sprintf("author %d NOT deleted: %v", mergeID, err))
+				} else if err := store.DeleteAuthor(mergeID); err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete author %d: %v", mergeID, err))
 				} else {
 					_ = store.CreateAuthorTombstone(mergeID, keepID)

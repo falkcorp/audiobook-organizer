@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -84,6 +84,7 @@ func newConjRepairPlugin(
 			return b, nil
 		},
 	}
+	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
 	return New(&fakeDeps{store: store})
 }
 
@@ -136,6 +137,7 @@ func newConjRepairPluginWithDeps(
 		},
 	}
 	deps.fakeDeps = fakeDeps{store: store}
+	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
 	return New(deps)
 }
 

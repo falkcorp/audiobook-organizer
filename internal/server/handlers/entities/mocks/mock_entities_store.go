@@ -1165,6 +1165,68 @@ func (_c *MockEntitiesStore_GetBooksByAuthorIDCore_Call) RunAndReturn(run func(a
 	return _c
 }
 
+// GetBooksByAuthorIDForRelinkCore provides a mock function for the type MockEntitiesStore
+func (_mock *MockEntitiesStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error) {
+	ret := _mock.Called(authorID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBooksByAuthorIDForRelinkCore")
+	}
+
+	var r0 []database.BookCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
+		return returnFunc(authorID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
+		r0 = returnFunc(authorID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(authorID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBooksByAuthorIDForRelinkCore'
+type MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call struct {
+	*mock.Call
+}
+
+// GetBooksByAuthorIDForRelinkCore is a helper method to define mock.On call
+//   - authorID int
+func (_e *MockEntitiesStore_Expecter) GetBooksByAuthorIDForRelinkCore(authorID any) *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call {
+	return &MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call{Call: _e.mock.On("GetBooksByAuthorIDForRelinkCore", authorID)}
+}
+
+func (_c *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call) Run(run func(authorID int)) *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call) Return(bookCores []database.BookCore, err error) *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call {
+	_c.Call.Return(bookCores, err)
+	return _c
+}
+
+func (_c *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call) RunAndReturn(run func(authorID int) ([]database.BookCore, error)) *MockEntitiesStore_GetBooksByAuthorIDForRelinkCore_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBooksByAuthorIDWithRoleCore provides a mock function for the type MockEntitiesStore
 func (_mock *MockEntitiesStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
 	ret := _mock.Called(authorID)

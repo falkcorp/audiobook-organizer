@@ -60,6 +60,7 @@ type MockStore struct {
 	GetBooksBySeriesIDAllVersionsFunc func(seriesID int) ([]BookCore, error)
 	GetBooksByAuthorIDCoreFunc        func(authorID int) ([]BookCore, error)
 	GetBooksByAuthorIDWithRoleFunc    func(authorID int) ([]BookCore, error)
+	GetBooksByAuthorIDForRelinkFunc   func(authorID int) ([]BookCore, error)
 	GetBookByITunesPersistentIDFunc   func(persistentID string) (*Book, error)
 	ListBooksByITunesPIDFunc          func(limit, offset int) ([]Book, error)
 	GetBookByFileHashFunc             func(hash string) (*Book, error)
@@ -179,6 +180,11 @@ type MockStore struct {
 	// does not care about reference counting still lets deletes through. Tests
 	// that assert an author must survive have to say so explicitly.
 	GetAllAuthorBookRefCountsFunc func() (map[int]int, error)
+	// GetAllAuthorBookRefBucketsFunc backs AuthorBookRefBucketStore. When nil,
+	// the bucketed answer is derived from GetAllAuthorBookRefCountsFunc with
+	// every reference counted as Live -- the conservative reading, since a live
+	// reference is the one kind that holds a merge back.
+	GetAllAuthorBookRefBucketsFunc func() (map[int]AuthorRefBuckets, error)
 
 	// GetAllAuthorFileRefCountsFunc backs the AuthorFileRefStore capability
 	// (internal/database/author_file_refs.go). It deliberately does NOT follow
@@ -829,7 +835,31 @@ func (m *MockStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 	if m.GetAllAuthorBookRefCountsFunc != nil {
 		return m.GetAllAuthorBookRefCountsFunc()
 	}
+	if m.GetAllAuthorBookRefBucketsFunc != nil {
+		buckets, err := m.GetAllAuthorBookRefBucketsFunc()
+		if err != nil {
+			return nil, err
+		}
+		return sumAuthorRefBuckets(buckets), nil
+	}
 	return map[int]int{}, nil
+}
+
+// GetAllAuthorBookRefBuckets satisfies AuthorBookRefBucketStore; see the field
+// comment on GetAllAuthorBookRefBucketsFunc for the nil-func fallback.
+func (m *MockStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error) {
+	if m.GetAllAuthorBookRefBucketsFunc != nil {
+		return m.GetAllAuthorBookRefBucketsFunc()
+	}
+	counts, err := m.GetAllAuthorBookRefCounts()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]AuthorRefBuckets, len(counts))
+	for id, n := range counts {
+		out[id] = AuthorRefBuckets{Live: n}
+	}
+	return out, nil
 }
 
 // GetAllAuthorFileRefCounts satisfies AuthorFileRefStore so a MockStore can
@@ -1082,6 +1112,19 @@ func (m *MockStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
 }
 
 func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
+	if m.GetBooksByAuthorIDWithRoleFunc != nil {
+		return m.GetBooksByAuthorIDWithRoleFunc(authorID)
+	}
+	return nil, nil
+}
+
+// GetBooksByAuthorIDForRelinkCore falls back to GetBooksByAuthorIDWithRoleFunc
+// when no relink-specific fake is set, so a fixture that never modelled the
+// trash keeps answering with the same list it always did.
+func (m *MockStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error) {
+	if m.GetBooksByAuthorIDForRelinkFunc != nil {
+		return m.GetBooksByAuthorIDForRelinkFunc(authorID)
+	}
 	if m.GetBooksByAuthorIDWithRoleFunc != nil {
 		return m.GetBooksByAuthorIDWithRoleFunc(authorID)
 	}

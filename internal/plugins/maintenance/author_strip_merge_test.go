@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-09-04
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -156,6 +156,12 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 			return nil
 		},
 	}
+	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, calls.setAuthors, func(id string) (*int, bool) {
+		if b, ok := calls.updated[id]; ok {
+			return b.AuthorID, true
+		}
+		return nil, false
+	})
 	return &Plugin{deps: &fakeDeps{store: store}}
 }
 

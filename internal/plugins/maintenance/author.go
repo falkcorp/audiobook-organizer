@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -174,8 +174,10 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 			continue
 		}
 
-		// Re-link books from composite to individual authors
-		books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
+		// Re-link books from composite to individual authors. ForRelink
+		// includes the trash: DeleteAuthor below sweeps trashed books' junction
+		// rows too, so a trashed book skipped here would lose its credit.
+		books, err := store.GetBooksByAuthorIDForRelinkCore(author.ID)
 		if err != nil {
 			errCount++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", author.Name, err))
@@ -254,7 +256,12 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 			booksUpdated++
 		}
 
-		if err := store.DeleteAuthor(author.ID); err != nil {
+		// Every per-book failure above is logged and skipped, so the composite
+		// may still be credited. Deleting it then would erase that credit.
+		if err := database.VerifyAuthorUnlinked(store, author.ID); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Composite author %q NOT deleted: %v", author.Name, err))
+			errCount++
+		} else if err := store.DeleteAuthor(author.ID); err != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to delete composite author %q: %v", author.Name, err))
 			errCount++
 		} else {

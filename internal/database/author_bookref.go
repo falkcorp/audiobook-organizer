@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -111,61 +111,53 @@ type authorRefKey struct {
 // bookIsSoftDeleted on both passes and scans only the memIdxIsPrimaryVersion
 // index.
 func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
-	// BOTH tables, because both passes below feed the same answer. The series
-	// twin names only memTableBooks; this one would be fail-open if it did the
-	// same, since a lost book_authors row is a co-author credit that exists
-	// nowhere THIS COUNTER READS -- the legacy Book.AuthorID field holds one
-	// author, so pass 2 cannot recover a co-author the way it can recover a
-	// primary credit. (Book.Authors on the book row can also carry the full list
-	// for iTunes-imported books, but neither pass reads it, so it is not a
-	// recovery path here. Do not weaken this guard on the strength of it without
-	// first checking every writer populates it.)
-	if err := m.requireTablesComplete("author reference count", memTableBookAuthors, memTableBooks); err != nil {
+	buckets, err := m.GetAllAuthorBookRefBuckets()
+	if err != nil {
+		return nil, err
+	}
+	return sumAuthorRefBuckets(buckets), nil
+}
+
+// GetAllAuthorBookRefBuckets is GetAllAuthorBookRefCounts split by the state of
+// the referencing book: live, trashed (soft-deleted), or dangling (a junction
+// row whose book row no longer exists). The three buckets always sum to the
+// flat count, because the flat count is now computed from them.
+//
+// Books are read FIRST so each junction pair can be classified as it is seen.
+// The (book, author) pair dedup spans both passes exactly as it always has.
+//
+// It keeps the table-completeness refusal of the flat count, and that refusal
+// matters more here than there: this method classifies a junction pair whose
+// book row is absent as DANGLING, and the dup-merge guard does not hold an
+// author back for dangling refs. A memdb that silently lost book rows would
+// otherwise turn live references into dangling ones and switch the guard off.
+func (m *MemStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error) {
+	if err := m.requireTablesComplete("author reference count (live/trashed/dangling)", memTableBookAuthors, memTableBooks); err != nil {
 		return nil, err
 	}
 
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
-	out := make(map[int]int)
-	seen := make(map[authorRefKey]bool)
+	acc := newAuthorRefBucketAccumulator()
 
-	// Pass 1: every junction row, in any book state. No lookup of the book row
-	// at all — the row's flags are exactly what must NOT influence this.
+	bIter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb books scan: %w", err)
+	}
+	for obj := bIter.Next(); obj != nil; obj = bIter.Next() {
+		acc.addBook(obj.(*Book), "")
+	}
+
 	baIter, err := txn.Get(memTableBookAuthors, memIdxID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb book_authors scan: %w", err)
 	}
 	for obj := baIter.Next(); obj != nil; obj = baIter.Next() {
 		ba := obj.(*BookAuthor)
-		k := authorRefKey{bookID: ba.BookID, authorID: ba.AuthorID}
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out[ba.AuthorID]++
+		acc.addJunction(ba.BookID, ba.AuthorID)
 	}
-
-	// Pass 2: ALL books (memIdxID, not memIdxIsPrimaryVersion), counting the
-	// legacy AuthorID for any (book, author) pair the junction did not already
-	// account for.
-	bIter, err := txn.Get(memTableBooks, memIdxID)
-	if err != nil {
-		return nil, fmt.Errorf("memdb books scan: %w", err)
-	}
-	for obj := bIter.Next(); obj != nil; obj = bIter.Next() {
-		b := obj.(*Book)
-		if b.AuthorID == nil {
-			continue
-		}
-		k := authorRefKey{bookID: b.ID, authorID: *b.AuthorID}
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out[*b.AuthorID]++
-	}
-	return out, nil
+	return acc.finish(), nil
 }
 
 // GetAllAuthorBookRefCounts prefers the memdb when it is warm — which in
@@ -199,66 +191,100 @@ func (m *MemStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 // Any other error is propagated unchanged — falling back to a full scan on an
 // unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
-	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it twice
-	// could report a refusal from one MemStore next to the (empty) loss map of
-	// its freshly-reset replacement -- a log line contradicting itself.
+	buckets, err := p.GetAllAuthorBookRefBuckets()
+	if err != nil {
+		return nil, err
+	}
+	return sumAuthorRefBuckets(buckets), nil
+}
+
+// GetAllAuthorBookRefBuckets is the bucketed form of GetAllAuthorBookRefCounts,
+// with the same memdb-first, fail-closed fallthrough: ErrMemdbIncomplete drops
+// to the authoritative Pebble scan, any other memdb error propagates.
+func (p *PebbleStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error) {
 	if m := p.mem(); p.UseMemDB && m != nil {
-		counts, err := m.GetAllAuthorBookRefCounts()
+		buckets, err := m.GetAllAuthorBookRefBuckets()
 		if err == nil {
-			return counts, nil
+			return buckets, nil
 		}
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return nil, err
 		}
-		// Error, not Warn: this does not clear without a restart, and until then
-		// every OTHER memdb reader (listings, dedup scans, the filtered counters)
-		// is being served from the same known-short projection with no guard at
-		// all. This counter is the only reader that notices.
-		slog.Error("author ref count: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+		slog.Error("author ref buckets: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
 			"error", err, "lost_rows", m.LostRows())
 	}
-	return p.getAllAuthorBookRefCountsPebble()
+	return p.getAllAuthorBookRefBucketsPebble()
 }
 
 // getAllAuthorBookRefCountsPebble mirrors GetAllAuthorBookCounts's key ranges
 // and row-shape guards, minus every IsPrimaryVersion / soft-delete filter, and
 // dedups per (book, author) pair rather than per book.
 func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
-	counts := make(map[int]int)
-	seen := make(map[authorRefKey]bool)
+	buckets, err := p.getAllAuthorBookRefBucketsPebble()
+	if err != nil {
+		return nil, err
+	}
+	return sumAuthorRefBuckets(buckets), nil
+}
 
-	// Pass 1: the book_authors junction table. Each key holds the whole credit
-	// list for one book as a JSON array.
-	// UpperBound comes from prefixUpperBound, NOT a hand-written "book_authors:~".
-	// bookID is an opaque caller-suppliable string (CreateBook only mints a ULID
-	// when book.ID == "", so importers and restore paths supply their own), and a
-	// literal '~' (0x7E) excludes every id whose first byte sorts above it --
-	// which is every non-ASCII id, since UTF-8 continuation bytes start at 0xC2.
-	// Those books' credit lists would silently fall outside the scan, and an
-	// author credited only there would count 0 and be deletable. That is the same
-	// fail-open this file exists to close, arriving through the key range instead
-	// of the decoder. pebble_store_authors.go:221-227 warns against exactly this
-	// for exactly this keyspace.
-	//
-	// ONE SNAPSHOT FEEDS BOTH PASSES. Two independent NewIter calls each pin
-	// their own LSM version, so pass 1 and pass 2 would read different points in
-	// time. One direction of that skew is fail-OPEN: a book CREATED between the
-	// passes has its book_authors key missed by pass 1 and its book row seen by
-	// pass 2, so its junction-only co-authors count 0 and become deletable while
-	// the credit list references them. The author-split op creates exactly that
-	// shape -- brand-new authors attached only through the junction -- and it can
-	// run while purge-empty-authors is scanning.
-	//
-	// (The other direction, a book deleted between passes, over-counts and is
-	// therefore harmless to a delete guard.)
-	//
-	// The series twin needs no snapshot because it scans a single table and
-	// cannot tear. This is the first two-table Pebble ref scan in the codebase,
-	// and NewSnapshot is not used anywhere else in internal/ -- it is here
-	// because a delete guard is exactly where a torn read must not happen.
+// getAllAuthorBookRefBucketsPebble is the authoritative scan behind both the
+// flat and the bucketed count. One snapshot, two passes, books FIRST so every
+// junction pair can be classified by the state of its book as it is read.
+//
+// Pass order changed on 2026-09-12 (was junction first). The pair dedup is
+// order-independent -- a (book, author) pair is counted once whichever pass
+// sees it first -- and a pair seen by both passes belongs to one book, so it
+// lands in the same bucket either way. The flat count is therefore unchanged.
+//
+// Pass 1 bounds are the true "book:" prefix range with the strings.Count(key,
+// ":") != 1 structural filter. The narrower ["book:0", "book:;") range that
+// used to be here missed caller-supplied letter- or "_"-leading book IDs and
+// lost their legacy AuthorID reference; widening the bounds admits the
+// secondary indexes (book:path:, book:hash:, book:versiongroup:), whose values
+// are bare IDs, which is why bounds and filter are one change. Same fix as
+// series_bookref.go and pebble_store_versiongroup_backfill.go.
+//
+// Both passes fail CLOSED: an undecodable row or an iterator error aborts the
+// count rather than answering short, because the callers delete on a short
+// answer.
+func (p *PebbleStore) getAllAuthorBookRefBucketsPebble() (map[int]AuthorRefBuckets, error) {
+	acc := newAuthorRefBucketAccumulator()
+
 	snap := p.db.NewSnapshot()
 	defer func() { _ = snap.Close() }()
 
+	// Pass 1: every book row -- its state, and its legacy AuthorID.
+	iter, err := snap.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("book:"),
+		UpperBound: []byte("book;"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := string(iter.Key())
+		if !strings.HasPrefix(key, "book:") || strings.Count(key, ":") != 1 {
+			continue
+		}
+		var b Book
+		if err := json.Unmarshal(iter.Value(), &b); err != nil {
+			_ = iter.Close()
+			return nil, fmt.Errorf("author ref scan: undecodable book row %q: %w", key, err)
+		}
+		acc.addBook(&b, strings.TrimPrefix(key, "book:"))
+	}
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return nil, fmt.Errorf("author ref scan truncated over books, refusing to answer from a partial count: %w", err)
+	}
+	if err := iter.Close(); err != nil {
+		return nil, fmt.Errorf("author ref scan: closing book iterator: %w", err)
+	}
+
+	// Pass 2: the book_authors junction, which is the only record of a
+	// co-author credit (Book.AuthorID holds the first author and nothing else).
+	// An undecodable junction row is FATAL: it may credit an author that would
+	// otherwise be counted as unreferenced and deleted.
 	jPrefix := []byte("book_authors:")
 	jIter, err := snap.NewIter(&pebble.IterOptions{
 		LowerBound: jPrefix,
@@ -270,33 +296,15 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	for jIter.First(); jIter.Valid(); jIter.Next() {
 		var authors []BookAuthor
 		if err := json.Unmarshal(jIter.Value(), &authors); err != nil {
-			// FATAL, not skippable. A credit list we cannot decode may hold the
-			// ONLY reference to an author -- authors 2..n of a book live here and
-			// nowhere else. Skipping it undercounts, and undercounting is
-			// fail-OPEN for every caller: the delete proceeds and strands the
-			// very row we could not read.
-			// Capture the key BEFORE closing: jIter.Key() after Close returns
-			// "", which made the abort message's only actionable field always
-			// empty ("undecodable book_authors row \"\""). The book pass below
-			// already does this correctly.
 			badKey := string(jIter.Key())
 			_ = jIter.Close()
 			return nil, fmt.Errorf("author ref scan: undecodable book_authors row %q: %w", badKey, err)
 		}
 		bookID := strings.TrimPrefix(string(jIter.Key()), "book_authors:")
 		for _, a := range authors {
-			k := authorRefKey{bookID: bookID, authorID: a.AuthorID}
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			counts[a.AuthorID]++
+			acc.addJunction(bookID, a.AuthorID)
 		}
 	}
-	// The loop exits on end-of-range OR on an iteration error, and the two are
-	// indistinguishable without this check. A truncated map with a nil error
-	// answers "nothing else references anything" -- the permissive answer -- to
-	// a caller that deletes on the strength of it.
 	if err := jIter.Error(); err != nil {
 		_ = jIter.Close()
 		return nil, fmt.Errorf("author ref scan truncated over book_authors, refusing to answer from a partial count: %w", err)
@@ -304,71 +312,134 @@ func (p *PebbleStore) getAllAuthorBookRefCountsPebble() (map[int]int, error) {
 	if cErr := jIter.Close(); cErr != nil {
 		return nil, fmt.Errorf("author ref scan: closing book_authors iterator: %w", cErr)
 	}
+	return acc.finish(), nil
+}
 
-	// Pass 2: every book row, for the legacy AuthorID field.
-	//
-	// The bounds are the true "book:" prefix range -- []byte("book:") ..
-	// []byte("book;") -- not the narrower ["book:0", "book:;") that used to be
-	// here. That narrower range admitted only '0'-'9' and ':' as the first byte
-	// after the colon, which is every ULID-minted id but NOT every id: CreateBook
-	// mints a ULID only when book.ID == "", so a caller-supplied letter-leading
-	// or "_"-leading id (an importer, migration, or restore path) sorted outside
-	// the old range and was invisible to this pass, silently losing its LEGACY
-	// AuthorID reference (pass 1 still counts its junction rows). Identical bug,
-	// identical fix, to pebble_store_versiongroup_backfill.go's v2->v3 sentinel
-	// bump and to series_bookref.go's getAllSeriesBookRefCountsPebble.
-	//
-	// Widening is safe ONLY because of the strings.Count(key, ":") != 1 filter
-	// below: the wider range also admits the secondary indexes (book:path:,
-	// book:hash:, book:versiongroup:), whose values are bare IDs rather than
-	// book JSON. Bounds and filter are one change and must not be separated.
-	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("book:"),
-		UpperBound: []byte("book;"),
-	})
-	if err != nil {
-		return nil, err
-	}
+// AuthorRefBuckets splits one author's unfiltered reference count by the state
+// of the referencing book. Live + Trashed + Dangling is exactly the value
+// AuthorRefCounts reports for that author.
+//
+//   - Live: the book row exists and is not in the trash (primary or not).
+//   - Trashed: the book row exists and is soft-deleted. A relink must move
+//     these too, or DeleteAuthor's junction sweep erases the credit.
+//   - Dangling: a book_authors row whose book row no longer exists. Nothing
+//     can relink these, and nothing needs to: DeleteAuthor's sweep removes
+//     them, so they must not hold a merge back.
+type AuthorRefBuckets struct {
+	Live     int
+	Trashed  int
+	Dangling int
+}
 
-	for iter.First(); iter.Valid(); iter.Next() {
-		key := string(iter.Key())
-		if !strings.HasPrefix(key, "book:") {
-			continue
-		}
-		// Exactly one colon: skip the secondary indexes (book:path:, book:hash:,
-		// book:versiongroup:) that share the prefix.
-		if strings.Count(key, ":") != 1 {
-			continue
-		}
-		var b Book
-		if err := json.Unmarshal(iter.Value(), &b); err != nil {
-			// FATAL for the same reason as the junction pass above: an
-			// undecodable book row may carry a legacy author_id.
-			_ = iter.Close()
-			return nil, fmt.Errorf("author ref scan: undecodable book row %q: %w", key, err)
-		}
-		if b.AuthorID == nil {
-			continue
-		}
-		bookID := b.ID
-		if bookID == "" {
-			bookID = strings.TrimPrefix(key, "book:")
-		}
-		k := authorRefKey{bookID: bookID, authorID: *b.AuthorID}
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		counts[*b.AuthorID]++
+// Total is the flat AuthorRefCounts value.
+func (b AuthorRefBuckets) Total() int { return b.Live + b.Trashed + b.Dangling }
+
+// Resolvable is the references a relink can see and must move: every
+// reference whose book row still exists, in or out of the trash.
+func (b AuthorRefBuckets) Resolvable() int { return b.Live + b.Trashed }
+
+// AuthorBookRefBucketStore is the bucketed twin of AuthorBookRefStore.
+type AuthorBookRefBucketStore interface {
+	GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error)
+}
+
+// AsAuthorBookRefBucketStore resolves the capability through the decorator
+// chain, like AsAuthorBookRefStore.
+func AsAuthorBookRefBucketStore(s any) AuthorBookRefBucketStore {
+	if s == nil {
+		return nil
 	}
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return nil, fmt.Errorf("author ref scan truncated over books, refusing to answer from a partial count: %w", err)
+	if rs, ok := AsCapability[AuthorBookRefBucketStore](s); ok {
+		return rs
 	}
-	if err := iter.Close(); err != nil {
-		return nil, fmt.Errorf("author ref scan: closing book iterator: %w", err)
+	return nil
+}
+
+// AuthorRefBucketCounts is AuthorRefCounts split into live, trashed and
+// dangling references. It fails CLOSED exactly like AuthorRefCounts: a store
+// that cannot answer is an error, never an empty map.
+func AuthorRefBucketCounts(store any) (map[int]AuthorRefBuckets, error) {
+	rs := AsAuthorBookRefBucketStore(store)
+	if rs == nil {
+		return nil, fmt.Errorf("store cannot bucket unfiltered author references (got %T); "+
+			"refusing to merge from a filtered count, which silently strands "+
+			"books whose author is trashed, non-primary, or a junction-only co-author", store)
 	}
-	return counts, nil
+	return rs.GetAllAuthorBookRefBuckets()
+}
+
+type authorBookState uint8
+
+const (
+	authorBookLive authorBookState = iota + 1
+	authorBookTrashed
+)
+
+// authorRefBucketAccumulator is the one classification rule both the memdb and
+// the Pebble scan use, so the two cannot disagree on what a bucket means.
+// Books must be added before junction rows: a junction pair whose book was
+// never added is classified as dangling.
+type authorRefBucketAccumulator struct {
+	state map[string]authorBookState
+	seen  map[authorRefKey]bool
+	out   map[int]AuthorRefBuckets
+}
+
+func newAuthorRefBucketAccumulator() *authorRefBucketAccumulator {
+	return &authorRefBucketAccumulator{
+		state: make(map[string]authorBookState),
+		seen:  make(map[authorRefKey]bool),
+		out:   make(map[int]AuthorRefBuckets),
+	}
+}
+
+// addBook records the book's state and counts its legacy AuthorID. keyID is
+// the ID taken from the storage key, used when the row's own ID is empty.
+func (a *authorRefBucketAccumulator) addBook(b *Book, keyID string) {
+	bookID := b.ID
+	if bookID == "" {
+		bookID = keyID
+	}
+	st := authorBookLive
+	if bookIsSoftDeleted(b) {
+		st = authorBookTrashed
+	}
+	a.state[bookID] = st
+	if b.AuthorID != nil {
+		a.count(bookID, *b.AuthorID)
+	}
+}
+
+func (a *authorRefBucketAccumulator) addJunction(bookID string, authorID int) {
+	a.count(bookID, authorID)
+}
+
+func (a *authorRefBucketAccumulator) count(bookID string, authorID int) {
+	k := authorRefKey{bookID: bookID, authorID: authorID}
+	if a.seen[k] {
+		return
+	}
+	a.seen[k] = true
+	b := a.out[authorID]
+	switch a.state[bookID] {
+	case authorBookLive:
+		b.Live++
+	case authorBookTrashed:
+		b.Trashed++
+	default:
+		b.Dangling++
+	}
+	a.out[authorID] = b
+}
+
+func (a *authorRefBucketAccumulator) finish() map[int]AuthorRefBuckets { return a.out }
+
+func sumAuthorRefBuckets(buckets map[int]AuthorRefBuckets) map[int]int {
+	out := make(map[int]int, len(buckets))
+	for id, b := range buckets {
+		out[id] = b.Total()
+	}
+	return out
 }
 
 // AuthorRefCounts returns, per author ID, how many books reference it in ANY

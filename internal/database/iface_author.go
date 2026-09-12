@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-07-05
+// last-edited: 2026-09-12
 
 package database
 
@@ -35,6 +35,10 @@ type AuthorBookReader interface {
 	// compiler-enforced rather than silently nil'd. See
 	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error)
+	// GetBooksByAuthorIDForRelinkCore is the WithRole getter with the trash
+	// INCLUDED. It is the relink list for every path that rewrites an author's
+	// links and then calls DeleteAuthor; listing callers must not use it.
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error)
 	// GetAuthorsByBookIDs returns a map from bookID → []Author for all given book IDs.
 	// Returns an empty map (not nil) if bookIDs is empty.
 	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Author, error)

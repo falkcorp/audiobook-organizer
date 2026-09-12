@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -193,7 +193,12 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	// author_purge_empty.go:184. It fails CLOSED: a store that cannot answer the
 	// unfiltered question aborts the op rather than falling back to the filtered
 	// count, because that fallback IS the bug.
-	refCounts, err := database.AuthorRefCounts(store)
+	//
+	// Bucketed (2026-09-12): the guard compares only the references a relink can
+	// see -- live and trashed books -- against what it will move. A junction row
+	// whose book row no longer exists (dangling) used to count too, and held
+	// authors back for a reference that DeleteAuthor's sweep removes anyway.
+	refBuckets, err := database.AuthorRefBucketCounts(store)
 	if err != nil {
 		return fmt.Errorf("author-duplicate-merge: %w", err)
 	}
@@ -295,7 +300,12 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// rows further down can both name the specific books -- which assumes
 			// the two reads agree within the run, true for a sequential op holding
 			// the scan stand-down.
-			movable, mErr := store.GetBooksByAuthorIDWithRoleCore(src.ID)
+			//
+			// Both reads use GetBooksByAuthorIDForRelinkCore, which includes the
+			// trash. They must stay the same getter: the ledger slices
+			// movable[:relinked] by position, so a guard list that differed from
+			// the primitive's list would journal the wrong books.
+			movable, mErr := store.GetBooksByAuthorIDForRelinkCore(src.ID)
 			if mErr != nil {
 				rowOutcomes[authorDupRowFailed]++
 				log.Warn("author-duplicate-merge: cannot list books for source row, not merging",
@@ -322,11 +332,15 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// invariant is the same either way: refuse when the unfiltered
 			// reference count exceeds what the merge is actually able to move,
 			// because the difference is exactly the set that would be stranded.
-			if refCounts[src.ID] > len(distinct) {
+			//
+			// Dangling refs are excluded from the comparison (see refBuckets above)
+			// but still logged, so a held-back line accounts for every reference.
+			if rb := refBuckets[src.ID]; rb.Resolvable() > len(distinct) {
 				rowOutcomes[authorDupRowHeldRefs]++
 				log.Warn("author-duplicate-merge: source row still referenced by books the merge cannot move, held back",
 					"author_id", src.ID, "name", src.Name,
-					"unfiltered_refs", refCounts[src.ID], "movable_books", len(distinct))
+					"live_refs", rb.Live, "trashed_refs", rb.Trashed, "dangling_refs", rb.Dangling,
+					"movable_books", len(distinct))
 				continue
 			}
 

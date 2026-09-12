@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
-// last-edited: 2026-07-16
+// last-edited: 2026-09-12
 
 package server
 
@@ -23,7 +23,7 @@ type fakeReassignStore struct {
 	setCalls   map[string][]database.BookAuthor
 }
 
-func (f *fakeReassignStore) GetBooksByAuthorIDWithRoleCore(int) ([]database.BookCore, error) {
+func (f *fakeReassignStore) GetBooksByAuthorIDForRelinkCore(int) ([]database.BookCore, error) {
 	return f.books, f.booksErr
 }
 

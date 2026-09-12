@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 47ea834f-d1ec-4c9f-a8c5-e26626311d2e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -122,6 +122,7 @@ func newAuthorDupPlugin(
 			return nil
 		},
 	}
+	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
 	return New(&fakeDeps{store: store})
 }
 
