@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playlists.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b93ba897-1377-4cf7-9aea-ca57f135893e
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 package database
 
@@ -217,7 +217,10 @@ func (p *PebbleStore) GetUserPlaylist(id string) (*UserPlaylist, error) {
 }
 
 func (p *PebbleStore) GetUserPlaylistByName(name string) (*UserPlaylist, error) {
-	v, closer, err := p.db.Get([]byte("idx:upl:name:" + util.NormalizeAuthor(name)))
+	// NormalizeString, matching the three writers of idx:upl:name: (create,
+	// update, delete). NormalizeAuthor collapses internal whitespace since
+	// 2026-09-12 and would miss a stored "my  list" key.
+	v, closer, err := p.db.Get([]byte("idx:upl:name:" + util.NormalizeString(name)))
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-08-23
+// last-edited: 2026-09-12
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,16 +93,13 @@ func (p *PebbleStore) GetAuthorsByIDs(ids []int) (map[int]*Author, error) {
 }
 
 func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
-	// Use lowercase for case-insensitive lookup
-	indexKey := []byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name)))
-	value, closer, err := p.db.Get(indexKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	// Case- and whitespace-insensitive lookup; falls back to the pre-2026-09-12
+	// key so entries written before NormalizeAuthor collapsed whitespace still
+	// resolve (pebble_store_name_index.go).
+	value, err := p.nameIndexGet(authorNameIndexKey, name)
+	if err != nil || value == nil {
 		return nil, err
 	}
-	defer closer.Close()
 
 	id, err := strconv.Atoi(string(value))
 	if err != nil {
@@ -208,7 +206,9 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:%d: %w", id, err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
+	// Ownership-checked: another row whose name collapses to the same key may
+	// own the entry, and deleting it would make that row unfindable by name.
+	if err := p.deleteNameIndexIfOwned(batch, nil, authorNameIndexKey, author.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
 	}
@@ -330,10 +330,20 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 	}
 
 	batch := p.db.NewBatch()
-	// Remove old name index
-	if err := batch.Delete([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(author.Name))), nil); err != nil {
+	// Remove old name index, only where it still points at this author.
+	if err := p.deleteNameIndexIfOwned(batch, nil, authorNameIndexKey, author.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
+	}
+	newIndexKey := []byte(authorNameIndexKey(util.NormalizeAuthor(name)))
+	if prev, err := p.getValueCopy(newIndexKey); err != nil {
+		batch.Close()
+		return err
+	} else if prev != nil && string(prev) != strconv.Itoa(id) {
+		// Pre-existing behavior, kept: the rename takes the key over. Logged
+		// because the other author stops resolving by name from here on.
+		slog.Warn("UpdateAuthorName: name index already held by another author; repointing it",
+			"author_id", id, "new_name", name, "previous_owner", string(prev))
 	}
 
 	// Update author record
@@ -348,7 +358,7 @@ func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
 		return err
 	}
 	// Add new name index
-	if err := batch.Set([]byte(fmt.Sprintf("author:name:%s", util.NormalizeAuthor(name))), []byte(strconv.Itoa(id)), nil); err != nil {
+	if err := batch.Set(newIndexKey, []byte(strconv.Itoa(id)), nil); err != nil {
 		batch.Close()
 		return err
 	}
@@ -425,10 +435,11 @@ func (p *PebbleStore) CreateAuthorAlias(authorID int, aliasName string, aliasTyp
 		aliasType = "alias"
 	}
 
-	// Check for duplicate
-	nameKey := fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(aliasName))
-	if _, closer, err := p.db.Get([]byte(nameKey)); err == nil {
-		closer.Close()
+	// Check for duplicate, under the current and the legacy key.
+	nameKey := aliasNameIndexKey(util.NormalizeAuthor(aliasName))
+	if existing, err := p.nameIndexGet(aliasNameIndexKey, aliasName); err != nil {
+		return nil, err
+	} else if existing != nil {
 		return nil, fmt.Errorf("alias %q already exists", aliasName)
 	}
 
@@ -490,7 +501,7 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:author index: %w", err)
 	}
-	if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
+	if err := p.deleteNameIndexIfOwned(batch, nil, aliasNameIndexKey, alias.AliasName, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 	}
@@ -502,16 +513,11 @@ func (p *PebbleStore) DeleteAuthorAlias(id int) error {
 }
 
 func (p *PebbleStore) FindAuthorByAlias(aliasName string) (*Author, error) {
-	nameKey := []byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(aliasName)))
-	value, closer, err := p.db.Get(nameKey)
-	if err == pebble.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	value, err := p.nameIndexGet(aliasNameIndexKey, aliasName)
+	if err != nil || value == nil {
 		return nil, err
 	}
 	aliasID, _ := strconv.Atoi(string(value))
-	closer.Close()
 
 	alias, err := p.getAuthorAliasByID(aliasID)
 	if err != nil || alias == nil {
@@ -558,7 +564,7 @@ func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) err
 			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:%d", aliasID)), nil); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:%d: %w", aliasID, err)
 			}
-			if err := batch.Delete([]byte(fmt.Sprintf("author_alias:name:%s", util.NormalizeAuthor(alias.AliasName))), nil); err != nil {
+			if err := p.deleteNameIndexIfOwned(batch, nil, aliasNameIndexKey, alias.AliasName, nameIndexOwner(aliasID)); err != nil {
 				return fmt.Errorf("pebble Delete author_alias:name index: %w", err)
 			}
 		}
@@ -830,7 +836,7 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 		batch.Close()
 		return nil, err
 	}
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
+	nameKey := []byte(narratorNameIndexKey(util.NormalizeAuthor(name)))
 	if err := batch.Set(nameKey, idData, nil); err != nil {
 		batch.Close()
 		return nil, fmt.Errorf("pebble Set narrator name index: %w", err)
@@ -866,15 +872,10 @@ func (p *PebbleStore) GetNarratorByID(id int) (*Narrator, error) {
 }
 
 func (p *PebbleStore) GetNarratorByName(name string) (*Narrator, error) {
-	nameKey := []byte(fmt.Sprintf("narrator_name:%s", util.NormalizeAuthor(name)))
-	val, closer, err := p.db.Get(nameKey)
-	if err != nil {
-		if err == pebble.ErrNotFound {
-			return nil, nil
-		}
+	val, err := p.nameIndexGet(narratorNameIndexKey, name)
+	if err != nil || val == nil {
 		return nil, err
 	}
-	defer closer.Close()
 
 	var id int
 	if err := json.Unmarshal(val, &id); err != nil {
