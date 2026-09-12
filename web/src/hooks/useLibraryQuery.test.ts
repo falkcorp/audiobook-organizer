@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c8d9e0f-1a2b-4c5d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-08-14
+// last-edited: 2026-09-12
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, test, expect, beforeEach } from 'vitest';
@@ -251,5 +251,46 @@ describe('useLibraryQuery 400 handling (G118)', () => {
     await waitFor(() => expect(toast).toHaveBeenCalledWith(serverMessage, 'warning'));
     // And a 4xx is not transient: no retry may be pending.
     expect(result.current.isRetrying).toBe(false);
+  });
+});
+
+// TASK-167: the Series link's `series_id` must reach the request AND the cache
+// key. The key half matters on its own: this file's hook once omitted a
+// filter from the key and served the unfiltered library from a warm cache
+// while the filter chip still showed it as applied.
+describe('useLibraryQuery series_id (TASK-167)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLibraryCache.getState().clear();
+    vi.mocked(api.getImportPaths).mockResolvedValue([]);
+    vi.mocked(api.getBooks).mockResolvedValue({ items: [makeBook('b1', 'One')], count: 1 });
+  });
+
+  test('passes filters.seriesId through to getBooks', async () => {
+    const { result } = renderHook(() =>
+      useLibraryQuery(makeBaseProps({ filters: { seriesId: 7 } }))
+    );
+    await act(async () => {
+      await result.current.loadAudiobooks();
+    });
+    expect(vi.mocked(api.getBooks).mock.calls.at(-1)?.[2]?.seriesId).toBe(7);
+  });
+
+  test('dropping seriesId refetches instead of answering from the series-filtered cache entry', async () => {
+    const { result, rerender } = renderHook((props) => useLibraryQuery(props), {
+      initialProps: makeBaseProps({ filters: { seriesId: 7 } }),
+    });
+    await act(async () => {
+      await result.current.loadAudiobooks();
+    });
+    const callsWithSeries = vi.mocked(api.getBooks).mock.calls.length;
+    expect(callsWithSeries).toBeGreaterThan(0);
+
+    rerender(makeBaseProps({ filters: {} }));
+    await act(async () => {
+      await result.current.loadAudiobooks();
+    });
+    expect(vi.mocked(api.getBooks).mock.calls.length).toBeGreaterThan(callsWithSeries);
+    expect(vi.mocked(api.getBooks).mock.calls.at(-1)?.[2]?.seriesId).toBeUndefined();
   });
 });

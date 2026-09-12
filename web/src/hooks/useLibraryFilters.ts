@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryFilters.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { useState, useEffect, useCallback } from 'react';
 import type { FilterOptions } from '../types';
@@ -12,6 +12,17 @@ import * as api from '../services/api';
 // `...prev` spread in the sync effect, so a reference compare is correct for
 // them. Used to keep a stable `filters` reference when a searchParams change
 // (like page navigation) didn't actually change any filter value.
+// parseSeriesIdParam reads the `series_id` URL param (TASK-167). Only a
+// positive integer counts: the server parses the param with ParseQueryIntPtr,
+// and an unparseable value there is treated as absent, which would list the
+// whole library under a filter chip that says otherwise. Dropping it here
+// keeps the chip and the query in agreement.
+export function parseSeriesIdParam(raw: string | null): number | undefined {
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 export function shallowEqualFilters(a: FilterOptions, b: FilterOptions): boolean {
   const keys = new Set<keyof FilterOptions>([
     ...(Object.keys(a) as (keyof FilterOptions)[]),
@@ -69,6 +80,7 @@ export function useLibraryFilters({
     duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
     versionGroupId: searchParams.get('version_group_id') || undefined,
     isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
+    seriesId: parseSeriesIdParam(searchParams.get('series_id')),
   }));
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [availableAuthors, setAvailableAuthors] = useState<string[]>([]);
@@ -169,6 +181,7 @@ export function useLibraryFilters({
         duplicatesFlagged: (searchParams.get('duplicates_flagged') === 'true') || undefined,
         versionGroupId: searchParams.get('version_group_id') || undefined,
         isPrimaryVersion: searchParams.get('is_primary_version') === 'false' ? false : undefined,
+        seriesId: parseSeriesIdParam(searchParams.get('series_id')),
       };
       return shallowEqualFilters(prev, next) ? prev : next;
     });

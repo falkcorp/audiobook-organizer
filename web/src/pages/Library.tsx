@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.87.0
+// version: 1.88.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -747,6 +747,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (filters.libraryState) params.set('state', filters.libraryState);
     if (filters.versionGroupId) params.set('version_group_id', filters.versionGroupId);
     if (filters.isPrimaryVersion === false) params.set('is_primary_version', 'false');
+    // Written back like every other URL-owned filter: this effect rebuilds the
+    // query string from state, so a param it does not write is stripped on the
+    // first page change and the series link's narrowing silently disappears.
+    if (filters.seriesId !== undefined) params.set('series_id', String(filters.seriesId));
     if (sortBy !== SortField.Title) params.set('sort', sortBy);
     if (sortOrder !== SortOrder.Ascending) params.set('order', sortOrder);
     if (viewMode !== 'grid') params.set('view', viewMode);

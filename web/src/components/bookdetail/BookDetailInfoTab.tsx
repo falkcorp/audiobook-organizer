@@ -1,10 +1,10 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -54,13 +54,14 @@ export const BookDetailInfoTab = ({
   detailedTags,
   toast,
 }: BookDetailInfoTabProps) => {
-  const navigate = useNavigate();
-
   // The Author field is a link to the author's page when — and only when — we
   // actually hold an author id. `book.authors[]` carries one per credited
   // author; the legacy `author_name` string does not, so that fallback stays
   // plain text rather than becoming a link that goes nowhere. Rendering a
   // control that looks clickable but is not is worse than rendering text.
+  //
+  // Real anchors (RouterLink), not onClick buttons: an href is what makes
+  // middle-click, open-in-new-tab and copy-link work (TASK-166).
   const authorNode: ReactNode = useMemo(() => {
     const entries = book.authors ?? [];
     const linkable = entries.filter((a) => typeof a.id === 'number' && a.id > 0);
@@ -70,20 +71,39 @@ export const BookDetailInfoTab = ({
         {linkable.map((a, i) => (
           <span key={a.id}>
             {i > 0 && ' & '}
-            <MuiLink
-              component="button"
-              type="button"
-              underline="hover"
-              sx={{ verticalAlign: 'baseline', font: 'inherit', color: 'primary.main' }}
-              onClick={() => navigate(`/authors/${a.id}`)}
-            >
+            <MuiLink component={RouterLink} to={`/authors/${a.id}`} underline="hover">
               {a.name}
             </MuiLink>
           </span>
         ))}
       </>
     );
-  }, [book.authors, navigate]);
+  }, [book.authors]);
+
+  // The Series field links to the library filtered by `series_id`, the
+  // server's dedicated exact-match param (TASK-167). Not the `series` field
+  // filter: that is a case-insensitive substring match on the series NAME
+  // (service_filtering.go fieldMatchesValue), so a link for "Dune" would also
+  // list "Dune Chronicles". No id, no link — the name stays plain text.
+  //
+  // Deliberately NOT ordered by position in the series: the list endpoint has
+  // no sort key for it (database.bookSortComparators has "series", which
+  // orders by series name and is all ties inside one series), so the view
+  // keeps the library's current sort rather than implying an order the
+  // server cannot produce.
+  const seriesNode: ReactNode = useMemo(() => {
+    const id = book.series_id;
+    if (typeof id !== 'number' || id <= 0) return null;
+    // An id with no name is a data inconsistency, not "no series": still link,
+    // labelled by the id, rather than hiding a working filter.
+    const name = book.series_name || `Series ${id}`;
+    const label = book.series_position ? `${name} #${book.series_position}` : name;
+    return (
+      <MuiLink component={RouterLink} to={`/library?series_id=${id}`} underline="hover">
+        {label}
+      </MuiLink>
+    );
+  }, [book.series_id, book.series_name, book.series_position]);
 
   const [ratingOverall, setRatingOverall] = useState<number | null>(null);
   const [ratingStory, setRatingStory] = useState<number | null>(null);
@@ -272,6 +292,7 @@ export const BookDetailInfoTab = ({
                     value: book.series_name
                       ? `${book.series_name}${book.series_position ? ` #${book.series_position}` : ''}`
                       : '',
+                    node: seriesNode,
                   },
                 ];
                 const dynamicFields: InfoField[] = [
@@ -353,9 +374,8 @@ export const BookDetailInfoTab = ({
                       </Typography>
                       {'node' in item && item.node ? (
                         // A Box, not a Typography with component="div": the field
-                        // value here contains interactive elements, and nesting a
-                        // button inside a <p> is invalid HTML that React will warn
-                        // about at runtime.
+                        // value here is a node of interactive elements (links), and
+                        // a Box keeps it out of the <p> a body1 Typography renders.
                         <Box sx={{ typography: 'body1', color: 'text.primary' }}>{item.node}</Box>
                       ) : (
                         <Typography
