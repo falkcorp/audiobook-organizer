@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package itunesservice
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/oklog/ulid/v2"
@@ -2303,11 +2304,13 @@ func remapWindowsPath(p string, opts itunes.ImportOptions) string {
 		if plainFrom == "" {
 			continue
 		}
-		if strings.HasPrefix(normalized, plainFrom) {
-			return m.To + normalized[len(plainFrom):]
+		// Separator-boundary match (case-sensitive, then case-insensitive):
+		// From "W:/lib" must not rewrite "W:/lib2/…".
+		if rest, ok := pathutil.CutPathPrefix(normalized, plainFrom); ok {
+			return m.To + rest
 		}
-		if strings.HasPrefix(strings.ToLower(normalized), strings.ToLower(plainFrom)) {
-			return m.To + normalized[len(plainFrom):]
+		if rest, ok := pathutil.CutPathPrefixFold(normalized, plainFrom); ok {
+			return m.To + rest
 		}
 	}
 	return p

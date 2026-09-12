@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // AudioFilesInDir returns the library audio files directly inside dir, sorted
@@ -550,8 +551,11 @@ func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
 // Returns an empty string if no mapping matches.
 func ComputeITunesPath(localPath string) string {
 	for _, m := range config.AppConfig.ITunes.PathMappings {
-		if m.To != "" && m.From != "" && strings.HasPrefix(localPath, m.To) {
-			remainder := localPath[len(m.To):]
+		if m.To == "" || m.From == "" {
+			continue
+		}
+		// Separator-boundary match: To "/lib" must not rewrite "/lib2/…".
+		if remainder, ok := pathutil.CutPathPrefix(localPath, m.To); ok {
 			windowsPath := m.From + remainder
 			encoded := url.PathEscape(windowsPath)
 			encoded = strings.ReplaceAll(encoded, "%2F", "/")
