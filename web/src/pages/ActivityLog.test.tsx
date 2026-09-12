@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -25,7 +25,8 @@ import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
-import { cancelOperation, discardOperation, retryOperation } from '../services/api';
+import { cancelOperation, discardOperation, retryOperation, revertOperation } from '../services/api';
+import { getUndoPreflight } from '../services/versionApi';
 // The real fold, not a stub — see the groupedOperations getter below. The store
 // module itself is mocked; this one is not.
 import { groupOperations } from '../stores/operationGrouping';
@@ -46,7 +47,13 @@ vi.mock('../services/api', () => ({
   revertOperation: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../services/versionApi', () => ({
+  getUndoPreflight: vi.fn(),
+}));
+
 const mockedCancelOperation = vi.mocked(cancelOperation);
+const mockedRevertOperation = vi.mocked(revertOperation);
+const mockedGetUndoPreflight = vi.mocked(getUndoPreflight);
 const mockedDiscardOperation = vi.mocked(discardOperation);
 const mockedRetryOperation = vi.mocked(retryOperation);
 
@@ -699,5 +706,62 @@ describe('Compact button', () => {
 
     const notice = await screen.findByTestId('compact-notice');
     expect(notice).toHaveTextContent('already running (operation op-7)');
+  });
+});
+
+describe('ActivityLog revert asks the preflight first', () => {
+  const preflightBase = {
+    total_changes: 0,
+    already_reverted: 0,
+    content_changed: [],
+    book_deleted: [],
+    re_organized: [],
+    safe: 0,
+  };
+  const organizeEntry = entry({
+    id: 'entry-rev',
+    type: 'organize_completed',
+    operation_id: 'op-purge-0001',
+    summary: 'Organize finished',
+  });
+
+  it('does not open the dialog when nothing can be restored, and says why', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockResolvedValue({
+      ...preflightBase,
+      total_changes: 1742,
+      not_restorable: 1742,
+      not_restorable_types: { author_delete: 1742 },
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    expect(await screen.findByText(/Nothing in this operation can be undone automatically/)).toBeInTheDocument();
+    expect(mockedGetUndoPreflight).toHaveBeenCalledWith('op-purge-0001');
+    expect(screen.queryByText('Revert Operation?')).not.toBeInTheDocument();
+    expect(mockedRevertOperation).not.toHaveBeenCalled();
+  });
+
+  it('states the restorable count and names the record-only rows in the dialog', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockResolvedValue({
+      ...preflightBase,
+      total_changes: 3,
+      safe: 1,
+      not_restorable: 2,
+      not_restorable_types: { author_delete: 2 },
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    const plan = await screen.findByTestId('revert-plan');
+    expect(plan).toHaveTextContent('Undo 1 change(s) from this operation?');
+    expect(plan).toHaveTextContent('2 change(s) are a record only');
+    expect(plan).toHaveTextContent('2 author_delete rows');
+    expect(screen.queryByText(/undo all tracked changes/i)).not.toBeInTheDocument();
   });
 });
