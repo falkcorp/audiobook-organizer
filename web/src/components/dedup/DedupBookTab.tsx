@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -43,6 +43,28 @@ import {
   runOperationWithPolling,
 } from './dedupHelpers';
 
+interface MergeFailure {
+  title: string;
+  reason: string;
+}
+
+interface BulkMergeReport {
+  attempted: number;
+  succeeded: number;
+  failures: MergeFailure[];
+}
+
+// isMergeSuccess: only 'completed' is a merge that happened. pollOperation
+// returns on every terminal status (failed, canceled, interrupted_*), so a
+// check for 'failed' alone reports a canceled or interrupted merge as success.
+function isMergeSuccess(final: Operation): boolean {
+  return final.status === 'completed';
+}
+
+function describeMergeFailure(final: Operation): string {
+  return final.error_message || `Merge ended with status "${final.status}"`;
+}
+
 export function DedupBookTab() {
   const [groups, setGroups] = useState<Book[][]>([]);
   const [totalDuplicates, setTotalDuplicates] = useState(0);
@@ -50,6 +72,7 @@ export function DedupBookTab() {
   const [error, setError] = useState<string | null>(null);
   const [activeOp, setActiveOp] = useState<Operation | null>(null);
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
+  const [bulkReport, setBulkReport] = useState<BulkMergeReport | null>(null);
   const [keepSelections, setKeepSelections] = useState<Record<string, string>>({});
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -84,12 +107,13 @@ export function DedupBookTab() {
     if (!keepId) return;
     const mergeIds = group.filter((b) => b.id !== keepId).map((b) => b.id);
     setMergeSuccess(null);
+    setBulkReport(null);
     await runOperationWithPolling(
       () => api.mergeBooks(keepId, mergeIds),
       setActiveOp,
       (final) => {
-        if (final.status === 'failed') {
-          setError(final.error_message || 'Merge failed');
+        if (!isMergeSuccess(final)) {
+          setError(describeMergeFailure(final));
         } else {
           setMergeSuccess(`Merged duplicates of "${group[0]?.title}"`);
           setGroups((prev) => prev.filter((_, i) => `group-${i}` !== groupKey));
@@ -104,48 +128,67 @@ export function DedupBookTab() {
     );
   };
 
-  const handleMergeSelected = async () => {
+  // runBulkMerge merges each group in turn and records every group's outcome.
+  // Each group is its own dedup.book-merge operation, so the server reports
+  // per-group results: the POST can reject, or the op can reach a terminal
+  // status other than 'completed'. pollOperation RESOLVES on failed / canceled /
+  // interrupted_* rather than throwing, so both shapes are checked here.
+  //
+  // The outcome goes into bulkReport, not `error`: fetchDuplicates() clears
+  // `error` as its first act, and it runs right after this loop. Routing
+  // failures through setError is how a run with failed groups used to end with
+  // only a success banner on screen.
+  //
+  // Groups are merged one at a time on purpose -- dedup.book-merge carries a
+  // ConcurrencyKey, so the server would serialise them anyway.
+  const runBulkMerge = async (indices: number[]) => {
     setMergeSuccess(null);
-    for (let i = 0; i < groups.length; i++) {
-      const groupKey = `group-${i}`;
-      if (!selectedGroups.has(groupKey)) continue;
+    setBulkReport(null);
+    let attempted = 0;
+    let succeeded = 0;
+    const failures: MergeFailure[] = [];
+    for (const i of indices) {
       const group = groups[i];
-      const keepId = keepSelections[groupKey];
-      if (!keepId) continue;
+      const keepId = keepSelections[`group-${i}`];
+      if (!group || !keepId) continue;
       const mergeIds = group.filter((b) => b.id !== keepId).map((b) => b.id);
+      const title = cleanDisplayTitle(group[0]?.title || 'Unknown');
+      attempted++;
       try {
         const initial = await api.mergeBooks(keepId, mergeIds);
         setActiveOp(initial);
-        await api.pollOperation(initial.id, (update) => setActiveOp(update));
+        const final = await api.pollOperation(initial.id, (update) => setActiveOp(update));
+        if (isMergeSuccess(final)) {
+          succeeded++;
+        } else {
+          failures.push({ title, reason: describeMergeFailure(final) });
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : `Failed to merge "${group[0]?.title}"`);
+        failures.push({
+          title,
+          reason: err instanceof Error ? err.message : 'Merge request failed',
+        });
       }
     }
     setActiveOp(null);
-    setMergeSuccess(`Merged ${selectedGroups.size} selected group(s)`);
+    if (attempted > 0) {
+      if (failures.length === 0) {
+        setMergeSuccess(`Merged ${succeeded} of ${attempted} group(s)`);
+      } else {
+        setBulkReport({ attempted, succeeded, failures });
+      }
+    }
     fetchDuplicates();
+  };
+
+  const handleMergeSelected = async () => {
+    const indices = groups.map((_, i) => i).filter((i) => selectedGroups.has(`group-${i}`));
+    await runBulkMerge(indices);
   };
 
   const handleMergeAll = async () => {
     setConfirmOpen(false);
-    setMergeSuccess(null);
-    for (let i = 0; i < groups.length; i++) {
-      const group = groups[i];
-      const groupKey = `group-${i}`;
-      const keepId = keepSelections[groupKey];
-      if (!keepId) continue;
-      const mergeIds = group.filter((b) => b.id !== keepId).map((b) => b.id);
-      try {
-        const initial = await api.mergeBooks(keepId, mergeIds);
-        setActiveOp(initial);
-        await api.pollOperation(initial.id, (update) => setActiveOp(update));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : `Failed to merge "${group[0]?.title}"`);
-      }
-    }
-    setActiveOp(null);
-    setMergeSuccess('Merged all duplicate books');
-    fetchDuplicates();
+    await runBulkMerge(groups.map((_, i) => i));
   };
 
   const toggleGroup = (key: string) => {
@@ -229,6 +272,28 @@ export function DedupBookTab() {
           onClose={() => setMergeSuccess(null)}
         >
           {mergeSuccess}
+        </Alert>
+      )}
+      {bulkReport && (
+        <Alert
+          severity={bulkReport.succeeded === 0 ? 'error' : 'warning'}
+          sx={{ mb: 2 }}
+          onClose={() => setBulkReport(null)}
+          data-testid="bulk-merge-report"
+        >
+          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+            Merged {bulkReport.succeeded} of {bulkReport.attempted} group(s);{' '}
+            {bulkReport.failures.length} failed:
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {bulkReport.failures.map((f, i) => (
+              <li key={`${f.title}-${i}`}>
+                <Typography variant="body2" component="span">
+                  <strong>{f.title}</strong> — {f.reason}
+                </Typography>
+              </li>
+            ))}
+          </Box>
         </Alert>
       )}
 
