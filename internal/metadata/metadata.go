@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-12
 
@@ -588,8 +588,8 @@ func parseSlashPair(s string) (number, total int) {
 // path above and TrackDiscFromTags so the two can never disagree on which keys
 // carry a position.
 var (
-	trackTagKeys = []string{"TRCK", "trkn", "track", "tracknumber", "TRACKNUMBER"}
-	discTagKeys  = []string{"TPOS", "disk", "disc", "discnumber", "DISCNUMBER"}
+	trackTagKeys = []string{"TRCK", "TRK", "trkn", "track", "tracknumber", "TRACKNUMBER"}
+	discTagKeys  = []string{"TPOS", "TPA", "disk", "disc", "discnumber", "DISCNUMBER"}
 )
 
 // TrackDiscFromTags reads the track and disc position out of an already-captured
