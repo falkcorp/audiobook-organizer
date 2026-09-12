@@ -1,7 +1,7 @@
 // file: internal/database/memdb_search.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
-// last-edited: 2026-09-08
+// last-edited: 2026-09-12
 
 package database
 
@@ -47,6 +47,28 @@ func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
 		return nil, err
 	}
 	return &book, nil
+}
+
+// SubstringSearchMatches is THE SearchBooks predicate: a whole-query substring
+// match over title, primary-author name and narrator. It is the single copy
+// shared by the Pebble disk scan, the memdb scan below, and the audiobooks
+// service's author_id/series_id-scoped fallback search, so all three decide
+// "does this book match" identically.
+//
+// authorNames maps author id to util.NormalizeAuthor(name) (lower + TrimSpace);
+// lowerQuery is strings.ToLower(query). Title and narrator compare against a
+// bare strings.ToLower. That asymmetry is pre-existing and kept on purpose —
+// see the quirk list on SearchBookIDs.
+func SubstringSearchMatches(title string, narrator *string, authorID *int, authorNames map[int]string, lowerQuery string) bool {
+	if strings.Contains(strings.ToLower(title), lowerQuery) {
+		return true
+	}
+	if authorID != nil {
+		if name, ok := authorNames[*authorID]; ok && strings.Contains(name, lowerQuery) {
+			return true
+		}
+	}
+	return narrator != nil && strings.Contains(strings.ToLower(*narrator), lowerQuery)
 }
 
 // SearchBookIDs runs the library search predicate against the in-memory book
@@ -132,16 +154,7 @@ func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, err
 			continue
 		}
 
-		titleMatch := strings.Contains(strings.ToLower(b.Title), lowerQuery)
-		authorMatch := false
-		if b.AuthorID != nil {
-			if name, ok := authorNames[*b.AuthorID]; ok {
-				authorMatch = strings.Contains(name, lowerQuery)
-			}
-		}
-		narratorMatch := b.Narrator != nil && strings.Contains(strings.ToLower(*b.Narrator), lowerQuery)
-
-		if titleMatch || authorMatch || narratorMatch {
+		if SubstringSearchMatches(b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery) {
 			// limit == 0 means "no limit" (return all matches).
 			if count >= offset && (limit == 0 || len(ids) < limit) {
 				ids = append(ids, b.ID)
