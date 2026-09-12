@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 package scanner
@@ -187,11 +187,6 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 				req.OnFileFailures(failures.Total(), failures.Samples())
 			}
 		}()
-	}
-	// The auto-organize hook records its change rows under this scan's
-	// operation ID (see WithScanOperationID).
-	if opID != "" && ScanOperationID(ctx) == "" {
-		ctx = WithScanOperationID(ctx, opID)
 	}
 	if organizeTallyFrom(ctx) == nil {
 		tally := &OrganizeTally{}

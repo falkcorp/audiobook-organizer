@@ -1,7 +1,7 @@
 // file: internal/scanner/shattered_coalesce_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c7e9a02-8d31-4b65-9f80-1a3c6d2e7b59
-// last-edited: 2026-07-01
+// last-edited: 2026-09-12
 
 package scanner
 
@@ -126,5 +126,51 @@ func TestCoalesce_PassThroughNonCandidates(t *testing.T) {
 	out := coalesceShatteredSiblings(context.Background(), in)
 	if len(out) != 2 {
 		t.Fatalf("got %d, want 2", len(out))
+	}
+}
+
+// A non-Latin book laid out one chapter per folder coalesces like a Latin one.
+// The guard's normaliser used to keep only ASCII a-z0-9, so "Сияние" became ""
+// and the chapters stayed separate books.
+func TestCoalesce_NonLatinShatteredMergesToOneBook(t *testing.T) {
+	base := "/lib/incoming/Сияние"
+	in := []Book{
+		sf(base + "/Сияние - 2/58.MP3"),
+		sf(base + "/Сияние - 1/58.MP3"),
+	}
+	out := coalesceShatteredSiblings(context.Background(), in)
+	if len(out) != 1 {
+		t.Fatalf("got %d books, want 1: %+v", len(out), out)
+	}
+	want := []string{base + "/Сияние - 1/58.MP3", base + "/Сияние - 2/58.MP3"}
+	if !reflect.DeepEqual(out[0].SegmentFiles, want) {
+		t.Errorf("segments = %v, want %v", out[0].SegmentFiles, want)
+	}
+}
+
+// Non-Latin series volumes under an author folder stay separate books. Before
+// the guard rejected empty prefixes, origin/main merged these: both sides
+// normalised to "" and strings.Contains("", "") is true.
+func TestCoalesce_NonLatinSeriesVolumesNotMerged(t *testing.T) {
+	in := []Book{
+		sf("/lib/Автор/Сияние - 1/book.m4b"),
+		sf("/lib/Автор/Сияние - 2/book.m4b"),
+	}
+	out := coalesceShatteredSiblings(context.Background(), in)
+	if len(out) != 2 {
+		t.Errorf("series volumes merged (got %d, want 2 untouched): %+v", len(out), out)
+	}
+}
+
+// A prefix with no letters or digits never passes the guard, whatever the
+// parent folder is called.
+func TestCoalesce_PunctuationPrefixNotMerged(t *testing.T) {
+	in := []Book{
+		sf("/lib/--/-- - 1/f.mp3"),
+		sf("/lib/--/-- - 2/f.mp3"),
+	}
+	out := coalesceShatteredSiblings(context.Background(), in)
+	if len(out) != 2 {
+		t.Errorf("punctuation-only prefix merged (got %d, want 2): %+v", len(out), out)
 	}
 }

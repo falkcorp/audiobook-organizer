@@ -19,6 +19,21 @@ A book laid out one chapter per folder (`<Book>/<Book> - N/file`) is never moved
 by organize: its folder name is the only place the chapter number lives, and
 moving it would have renamed chapters 2..N to `_copyN` and deleted their folders.
 Those chapters are declined as `fragment_collapse` until the layout is merged.
+The chapter-folder check treats letters and digits in any script as part of the
+title, so a Cyrillic or CJK book (`Сияние/Сияние - 1/58.MP3`) is recognised the
+same way as a Latin one. A folder name with no letters or digits at all
+(`-- - 1`) never counts as a chapter folder.
+
+This changes the scanner's shattered-book merge in two deliberate ways compared
+with the previous release. Non-Latin chapter folders under a folder named after
+the book (`Сияние/Сияние - 1`, `Сияние/Сияние - 2`) still merge into one book.
+Non-Latin series volumes under an author folder (`Автор/Сияние - 1`,
+`Автор/Сияние - 2`) are no longer merged: the old check reduced every non-Latin
+name to an empty string, and an empty string matched any parent folder, so it
+wrongly merged separate volumes into one book.
+
 Books with an empty or placeholder title are no longer organized. Organize inside
-a library scan now records its change rows under the scan's operation ID, and the
-outcome counts appear in the `library.scan` result as `organize_outcomes`.
+a tracked operation (`library.scan`, `library.import`, `library.folder-auto-scan`)
+now records its change rows under that operation's ID, read from the run context
+the operations registry sets up. The outcome counts appear in the `library.scan`
+result as `organize_outcomes`.

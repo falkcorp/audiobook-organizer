@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.49.0
+// version: 2.50.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 
@@ -1236,11 +1236,19 @@ func (server *Server) autoOrganizeScannedBooks(ctx context.Context, books []scan
 		return
 	}
 
-	// Inside library.scan the change rows go under the scan's operation ID, so
-	// a scan-path rename or adopt is recorded (and a rename revertible) like a
-	// manual organize. Outside a tracked scan the ID is "" and nothing changes.
+	// Inside a tracked op (library.scan, library.import, folder-auto-scan) the
+	// change rows go under that op's ID, so a scan-path rename or adopt is
+	// recorded (and a rename revertible) like a manual organize. The ID comes
+	// from the run context: the registry's run-context decorator
+	// (opRunContextDecorator) puts it there for every op, and ctx reaches
+	// this hook unbroken through PerformScan -> scanFolder -> AutoOrganizeFn
+	// and through folder-auto-scan's direct call. The scanner cannot read
+	// this key itself (plugins/maintenance imports scanner), which is why an
+	// earlier scanner-side key was never set in production: PerformScan passes
+	// "" for its op ID. Outside a tracked op the ID is "" and no rows are
+	// written.
 	stats, err := server.organizeService.PerformOrganizeStats(ctx,
-		&organizer.Request{BookIDs: ids, OperationID: scanner.ScanOperationID(ctx)}, l)
+		&organizer.Request{BookIDs: ids, OperationID: maintenanceplugin.OpIDFromContext(ctx)}, l)
 	if stats != nil {
 		// Organize runs as a hook inside library.scan, so its adopt / suffix /
 		// skip counts reach the operator only through the scan op's result.
