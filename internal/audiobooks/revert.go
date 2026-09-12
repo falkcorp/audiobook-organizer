@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -22,14 +22,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
-// revertServiceStore is the slice of the store this service uses, measured
-// with an empty-interface compiler probe: four direct calls plus
-// GetAllImportPaths, which is what satisfies importPathLister when the store is
-// forwarded to isProtectedPath.
+// revertServiceStore is the slice of the store this service uses: the ledger
+// and book calls, the series calls the referent checks and rename-back need,
+// and the book_file calls the fs-regroup-xml reversals need. It is split into
+// those three pieces to stay within the interfacebloat limit that
+// scripts/check-interface-width.sh ratchets. The method set is what every
+// caller and stub must provide, whatever the grouping.
 //
 // It previously embedded database.BookReader, database.BookWriter and
-// database.OperationStore wholesale to reach those four -- the comment above it
-// called that "the narrow slice", which it was only relative to database.Store.
+// database.OperationStore wholesale -- the comment above it called that "the
+// narrow slice", which it was only relative to database.Store.
 type revertServiceStore interface {
 	revertLedgerStore
 	revertSeriesStore
