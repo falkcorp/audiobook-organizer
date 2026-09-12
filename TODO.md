@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.70.0 -->
+<!-- version: 10.71.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -17267,8 +17267,10 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   makes the handler answer 5xx rather than serve a truncated list). A startup
   `slog.Warn` flags the gap until it is wired.
 
-- [ ] **ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`
-  is on.** The ABS group hangs off `s.router`, so it inherits the global
+- [x] **ABS-SYNC: exempt the ABS surface from `BasicAuth()` when `basic_auth_enabled`
+  is on.** (done in #3296, TASK-138: the 48 token-gated ABS routes skip BasicAuth; the 9
+  routes with no token check stay behind it, tracked in the todo.d fragment
+  `2026-09-12-abs-untokened-routes-basicauth.md`) The ABS group hangs off `s.router`, so it inherits the global
   `servermiddleware.BasicAuth()`. With basic auth enabled (off by default) every ABS
   client would need to send `Authorization: Basic …`, which collides with the ABS
   bearer token on the same header — the clients would be unable to connect and the
