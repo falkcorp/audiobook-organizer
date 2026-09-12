@@ -1,7 +1,7 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.2.2
+// version: 1.3.0
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 import { useMemo, useState } from 'react';
 import { Box, Button, Chip, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
@@ -24,6 +24,36 @@ const MAX_FONT_SIZE = 1.5; // rem
  * collapsed state still shows the busiest few rather than nothing at all.
  */
 const PREVIEW_COUNT = 5;
+
+/**
+ * Returns true for tags that are internal bookkeeping and should never
+ * appear as chips in the Browse by Tag cloud: `dedup:*` (pure dedup-engine
+ * bookkeeping, e.g. `dedup:duration-match`) and `metadata:source:*` (last
+ * metadata-apply provenance). This is deliberately display-only — the tag
+ * itself is untouched, so it stays selectable in FilterSidebar and any other
+ * consumer of the same `availableTags` array; only this widget's own chip
+ * list hides it.
+ */
+function isHiddenTagNamespace(tag: string): boolean {
+  return tag.startsWith('dedup:') || tag.startsWith('metadata:source:');
+}
+
+/**
+ * Formats a `metadata:<key>:<value>` tag (e.g. `metadata:language:en`) as
+ * `key: value` (`language: en`) for display. Any other tag, including a
+ * malformed `metadata:*` tag with fewer than two colons (`metadata:` or
+ * `metadata:foo`), passes through unchanged rather than throwing or
+ * rendering `undefined`. Display-only: the raw tag string is still what
+ * `onTagsChange` receives when the chip is clicked.
+ */
+export function formatTagLabel(tag: string): string {
+  if (!tag.startsWith('metadata:')) return tag;
+  const parts = tag.split(':');
+  if (parts.length < 3) return tag;
+  const key = parts[1];
+  const value = parts.slice(2).join(':');
+  return `${key}: ${value}`;
+}
 
 /**
  * Compute a font size (in rem) for a tag proportional to its count relative
@@ -65,6 +95,18 @@ function readStoredExpanded(): boolean {
 export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloudProps) {
   const [expanded, setExpanded] = useState(readStoredExpanded);
 
+  // Hide internal-bookkeeping namespaces (dedup:*, metadata:source:*) from
+  // this widget's own chip list — display-only, so `availableTags` itself is
+  // never mutated and other consumers (FilterSidebar, etc.) are unaffected.
+  // A tag that is hidden by namespace but currently SELECTED is kept in, so
+  // the existing "selected but outside the preview" logic below still gives
+  // the user a way to clear it rather than stranding an active filter with
+  // no visible control.
+  const visibleTags = useMemo(
+    () => availableTags.filter((t) => !isHiddenTagNamespace(t.tag) || selectedTags.includes(t.tag)),
+    [availableTags, selectedTags]
+  );
+
   // Sort here rather than trusting the caller. `availableTags` is passed
   // straight through from Library.tsx and is not guaranteed to arrive ordered
   // by count; until now only font size depended on `count`, where order is
@@ -72,13 +114,13 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
   // preview off an unsorted list would silently show "the first five" instead
   // of "the busiest five".
   const sortedTags = useMemo(
-    () => [...availableTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)),
-    [availableTags]
+    () => [...visibleTags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)),
+    [visibleTags]
   );
 
   const maxCount = useMemo(
-    () => availableTags.reduce((max, t) => Math.max(max, t.count), 0),
-    [availableTags]
+    () => visibleTags.reduce((max, t) => Math.max(max, t.count), 0),
+    [visibleTags]
   );
 
   // While collapsed, always include any SELECTED tag that falls outside the
@@ -93,7 +135,7 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
     return [...top, ...selectedOutside];
   }, [sortedTags, selectedTags]);
 
-  if (availableTags.length === 0) {
+  if (visibleTags.length === 0) {
     return null;
   }
 
@@ -117,7 +159,7 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
     return (
       <Chip
         key={t.tag}
-        label={`${t.tag} (${t.count})`}
+        label={`${formatTagLabel(t.tag)} (${t.count})`}
         onClick={() => handleToggleTag(t.tag)}
         color={isSelected ? 'primary' : undefined}
         variant={isSelected ? 'filled' : 'outlined'}
