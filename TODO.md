@@ -8122,6 +8122,7 @@ step 4 propagates to the server package with no edit there.
       real Smart Criteria format. It reports success on every blob and returns
       **garbage**. Measured 2026-08-10 against all 292 smart playlists in the
       owner's live `iTunes Library.xml`.
+      ⏩ **Measurement tool added 2026-09-12 (#3266, TASK-184):** `go run ./cmd/pid-census --db <copy> --itl <copy of iTunes Library.xml> --coverage` reports how many track Persistent IDs resolve at the book_file and book level, overall and for smart-playlist tracks. Read-only; not yet run on prod data. The parser defect itself is not fixed.
 
       🚨 **This is a "reporting success while meaning nothing" defect**, and it
       is worse than a parse failure would be: `ParseSmartCriteria` is documented
@@ -11271,6 +11272,7 @@ book and is most likely to go looking for another by the same author.
       construction path. Narrow them to the `ScanCanceler` / `AIScanLister`
       interfaces the handler already declares, then assert the wiring.
       Good candidate for the interface-splitting review.
+      ⏩ **Wiring asserted 2026-09-12 (#3267, TASK-134):** a server test now drives the real construction path and fails if `WithAIScanCancellation` is dropped. Still open: confirm the ops-timeline cancel button sends `DELETE /operations/v2/:id`.
 
       **Measured 2026-08-22 (#2720) — it was worse than "unverified".** The branch
       could not fire at all. `CancelOperationV2` matches an incoming **v2** op id
