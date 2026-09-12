@@ -1,7 +1,7 @@
 // file: internal/itunes/import.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4b58a17d-b2b4-4743-9b7e-3462e2ed55ac
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package itunes
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // ImportMode specifies how audiobooks should be imported from iTunes
@@ -81,7 +82,11 @@ func extractPathPrefixes(locations []string) []string {
 	return prefixes
 }
 
-// RemapPath applies all configured path mappings (first match wins).
+// RemapPath applies all configured path mappings (first match wins, in config
+// order — there is no most-specific-first sort, so a broad From listed before a
+// nested one shadows it). A mapping matches only on a path-separator boundary
+// (pathutil.CutPathPrefix): From "/lib" rewrites "/lib/a.m4b" but not
+// "/lib2/a.m4b".
 func (o *ImportOptions) RemapPath(p string) string {
 	if len(o.PathMappings) == 0 {
 		return p
@@ -114,14 +119,15 @@ func (o *ImportOptions) RemapPath(p string) string {
 		}
 
 		// Try matching against the stripped (no prefix, decoded) path
-		if strings.HasPrefix(stripped, from) {
-			return m.To + stripped[len(from):]
+		if rest, ok := pathutil.CutPathPrefix(stripped, from); ok {
+			return m.To + rest
 		}
 
-		// Also try matching the full normalized path (for mappings that include file://)
-		fromNorm := strings.ReplaceAll(from, "\\", "/")
-		if strings.HasPrefix(normalized, fromNorm) {
-			return m.To + normalized[len(fromNorm):]
+		// Also try matching the full normalized path (for mappings that include
+		// file://). This operand is still URL-encoded; from was already
+		// backslash-normalised above.
+		if rest, ok := pathutil.CutPathPrefix(normalized, from); ok {
+			return m.To + rest
 		}
 	}
 
@@ -150,12 +156,12 @@ func (o *ImportOptions) RemapPath(p string) string {
 			if plainFrom == "" {
 				continue
 			}
-			if strings.HasPrefix(normalized, plainFrom) {
-				return m.To + normalized[len(plainFrom):]
+			if rest, ok := pathutil.CutPathPrefix(normalized, plainFrom); ok {
+				return m.To + rest
 			}
-			// Case-insensitive fallback.
-			if strings.HasPrefix(strings.ToLower(normalized), strings.ToLower(plainFrom)) {
-				return m.To + normalized[len(plainFrom):]
+			// Case-insensitive fallback, still on a separator boundary.
+			if rest, ok := pathutil.CutPathPrefixFold(normalized, plainFrom); ok {
+				return m.To + rest
 			}
 		}
 	}
@@ -174,8 +180,11 @@ func ReverseRemapPath(localPath string, mappings []PathMapping) string {
 	normalized := strings.ReplaceAll(localPath, "\\", "/")
 	for _, m := range mappings {
 		to := strings.ReplaceAll(m.To, "\\", "/")
-		if to != "" && m.From != "" && strings.HasPrefix(normalized, to) {
-			return m.From + normalized[len(to):]
+		if to == "" || m.From == "" {
+			continue
+		}
+		if rest, ok := pathutil.CutPathPrefix(normalized, to); ok {
+			return m.From + rest
 		}
 	}
 	return localPath

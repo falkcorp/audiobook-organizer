@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package reconcile
 
@@ -126,7 +126,8 @@ func ParseITunesXML(xmlPath string) ([]iTunesTrack, error) {
 // TranslateITunesPath converts a file://localhost/W:/... URL to its Linux path.
 //
 // Translation priority:
-//  1. PathMappings from config (first match wins, From is the Windows path prefix).
+//  1. PathMappings from config (first match wins in config order, From is the
+//     Windows path prefix, matched only on a path-separator boundary).
 //  2. Hardcoded W:\ → /mnt/bigdata/books/ (production constant; W:\ IS the NAS root).
 //
 // Returns the original location unchanged if no translation applies.
@@ -144,11 +145,18 @@ func TranslateITunesPath(location string, mappings []config.ITunesPathMap) strin
 			continue
 		}
 		from = strings.TrimPrefix(from, "/")
-		if strings.HasPrefix(stripped, from) {
-			return m.To + stripped[len(from):]
+		if from == "" {
+			// A From of "/" trims to "" and has always mapped every location.
+			return m.To + stripped
+		}
+		// Separator-boundary match: From "W:/lib" must not rewrite "W:/lib2/…".
+		if rest, ok := pathutil.CutPathPrefix(stripped, from); ok {
+			return m.To + rest
 		}
 	}
 
+	// The literal ends in a separator, so a bare HasPrefix is already
+	// boundary-safe here.
 	if strings.HasPrefix(stripped, "W:/") {
 		return "/mnt/bigdata/books/" + stripped[3:]
 	}
