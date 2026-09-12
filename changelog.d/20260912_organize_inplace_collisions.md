@@ -22,7 +22,9 @@ Those chapters are declined as `fragment_collapse` until the layout is merged.
 The chapter-folder check treats letters and digits in any script as part of the
 title, so a Cyrillic or CJK book (`Сияние/Сияние - 1/58.MP3`) is recognised the
 same way as a Latin one. A folder name with no letters or digits at all
-(`-- - 1`) never counts as a chapter folder.
+(`-- - 1`) never counts as a chapter folder. Both folder names are compared in
+Unicode NFC form, so a book folder with a composed `é` and a chapter folder with
+a decomposed one (as some copy tools and macOS file systems produce) still match.
 
 This changes the scanner's shattered-book merge in two deliberate ways compared
 with the previous release. Non-Latin chapter folders under a folder named after

@@ -1,5 +1,5 @@
 // file: internal/chaptershape/chaptershape.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d1f7c2a-8e43-4b69-a0d5-2c9e61b4f873
 // last-edited: 2026-09-12
 
@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // dirRe matches a chapter folder basename "<prefix> - <number>". Mirrors
@@ -60,9 +62,14 @@ func Parts(fp string) (parent, prefix string, num int, ok bool) {
 // and the scanner stopped coalescing its chapters. Unicode letters and digits
 // keep the guard's meaning (the book folder is named after the book) for every
 // script. A prefix with no letters or digits at all still normalises to "".
+//
+// The string is put in NFC first. A decomposed accent (U+0301) is not a letter,
+// so without it "Café" in one folder and "Café" in the other normalise to
+// "café" and "cafe", and the guard fails. macOS file systems and some copy tools
+// hand back decomposed names, so the two folder names can differ in form.
 func NormPrefix(s string) string {
 	var b strings.Builder
-	for _, r := range s {
+	for _, r := range norm.NFC.String(s) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(unicode.ToLower(r))
 		}
