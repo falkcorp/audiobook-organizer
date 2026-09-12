@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -95,6 +95,10 @@ type Handler struct {
 	// snapshot, typed-nil guarded by the controller so the in-method
 	// `== nil` guard (mirroring `s.opRegistry == nil`) holds.
 	opRegistry OperationsRegistry
+
+	// scanGate refuses inline metadata writes while a library scan runs (409).
+	// Nil = ungated. Set by SetScanStandDownGate.
+	scanGate opsregistry.ScanStandDownTryGate
 
 	// fileIOPool backs applyAudiobookMetadata's background file-IO submission.
 	// Interface snapshot, typed-nil guarded by the controller so the in-method
@@ -254,6 +258,11 @@ type batchSaveOpParams struct {
 
 // batchUpdateMetadata handles batch metadata updates with validation
 func (h *Handler) batchUpdateMetadataImpl(c *gin.Context) {
+	release, ok := h.holdScanStandDown(c, "batch-update-metadata")
+	if !ok {
+		return
+	}
+	defer release()
 	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
@@ -422,6 +431,11 @@ func (h *Handler) searchMetadataImpl(c *gin.Context) {
 
 // fetchAudiobookMetadata fetches and applies metadata to an audiobook
 func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
+	release, ok := h.holdScanStandDown(c, "fetch-metadata")
+	if !ok {
+		return
+	}
+	defer release()
 	id := c.Param("id")
 
 	store := h.store
@@ -595,6 +609,19 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
 	}
+	// Metadata is never applied during a library scan: 409 at once, no wait.
+	// The gate is held until the background file-IO job below finishes, since
+	// that job writes tags and renames files; releaseInline covers every other exit.
+	release, ok := h.holdScanStandDown(c, "apply-metadata")
+	if !ok {
+		return
+	}
+	releaseInline := true
+	defer func() {
+		if releaseInline {
+			release()
+		}
+	}()
 	resp, err := h.metadataFetchService.ApplyMetadataCandidate(id, body.Candidate, body.Fields)
 	if err != nil {
 		httputil.InternalError(c, "failed to apply metadata", err)
@@ -624,7 +651,9 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		bookID := id
 		mfs := h.metadataFetchService
 		pendingCover := resp.PendingCoverURL
+		releaseInline = false
 		pool.Submit(bookID, func() {
+			defer release()
 			// Cover download runs FIRST and in the background. It used to run
 			// inline in ApplyMetadataCandidate, where it was ~4s of a measured
 			// 6.44s request. It has to precede the file I/O below because
@@ -788,6 +817,11 @@ func (h *Handler) pruneBookCOWVersionsImpl(c *gin.Context) {
 // writeBackAudiobookMetadata handles POST /api/v1/audiobooks/:id/write-back.
 // It writes current DB metadata to audio files AND renames files if AutoRenameOnApply is enabled.
 func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
+	release, ok := h.holdScanStandDown(c, "write-back")
+	if !ok {
+		return
+	}
+	defer release()
 	id := c.Param("id")
 	if id == "" {
 		httputil.RespondWithBadRequest(c, "book id is required")
@@ -858,6 +892,11 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 // bulkFetchMetadata fetches external metadata for multiple audiobooks and applies
 // fields only when they are missing and not manually overridden or locked.
 func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
+	release, ok := h.holdScanStandDown(c, "bulk-fetch-metadata")
+	if !ok {
+		return
+	}
+	defer release()
 	store := h.store
 	if store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")

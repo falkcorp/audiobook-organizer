@@ -1,11 +1,12 @@
 // file: internal/organizer/backup_progress_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f80a3d5-71c6-4e0b-9a48-c5d2b6e91473
-// last-edited: 2026-08-11
+// last-edited: 2026-09-12
 
 package organizer
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -66,7 +67,7 @@ func TestBackupProgressReporter_IsNotATicker(t *testing.T) {
 	log := &recordingLogger{}
 	// Interval far shorter than the wait, so a timer-based implementation
 	// would have fired many times over by the time we assert.
-	_ = backupProgressReporter(log, 1*time.Millisecond)
+	_ = backupProgressReporter(context.Background(), log, 1*time.Millisecond)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -81,7 +82,7 @@ func TestBackupProgressReporter_IsNotATicker(t *testing.T) {
 // the backup phase is the one that resets the watchdog's clock.
 func TestBackupProgressReporter_ForwardsFirstReportImmediately(t *testing.T) {
 	log := &recordingLogger{}
-	report := backupProgressReporter(log, 1*time.Hour)
+	report := backupProgressReporter(context.Background(), log, 1*time.Hour)
 
 	report(backup.PhaseArchive, 1, 2048)
 
@@ -102,7 +103,7 @@ func TestBackupProgressReporter_ForwardsFirstReportImmediately(t *testing.T) {
 // reporting from becoming a measurable share of the backup's own cost.
 func TestBackupProgressReporter_ThrottlesBurstsWithinInterval(t *testing.T) {
 	log := &recordingLogger{}
-	report := backupProgressReporter(log, 1*time.Hour)
+	report := backupProgressReporter(context.Background(), log, 1*time.Hour)
 
 	for i := 1; i <= 500; i++ {
 		report(backup.PhaseArchive, i, int64(i)*1024)
@@ -118,7 +119,7 @@ func TestBackupProgressReporter_ThrottlesBurstsWithinInterval(t *testing.T) {
 // would reintroduce the silence this whole change exists to remove.
 func TestBackupProgressReporter_ForwardsAgainAfterInterval(t *testing.T) {
 	log := &recordingLogger{}
-	report := backupProgressReporter(log, 10*time.Millisecond)
+	report := backupProgressReporter(context.Background(), log, 10*time.Millisecond)
 
 	report(backup.PhaseArchive, 1, 1024)
 	report(backup.PhaseArchive, 2, 2048) // suppressed
@@ -146,7 +147,7 @@ func TestBackupProgressReporter_NamesEachPhase(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.phase, func(t *testing.T) {
 			log := &recordingLogger{}
-			backupProgressReporter(log, 1*time.Hour)(tc.phase, 1, 1024)
+			backupProgressReporter(context.Background(), log, 1*time.Hour)(tc.phase, 1, 1024)
 			msgs := log.messages()
 			if len(msgs) != 1 {
 				t.Fatalf("expected 1 update, got %v", msgs)

@@ -1,11 +1,12 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package organizer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +79,7 @@ func TestAutoBackup_UsesCheckpointThroughADecorator(t *testing.T) {
 	}
 
 	svc := NewService(wrapped)
-	got := svc.autoBackup(logger.New("test"))
+	got := svc.autoBackup(context.Background(), logger.New("test"))
 
 	if got != backupCheckpoint {
 		t.Fatalf("autoBackup took the %q path, want %q — the checkpoint capability "+
@@ -105,7 +106,7 @@ func TestAutoBackup_SkipsWhenARecentBackupExists(t *testing.T) {
 	}
 
 	svc := NewService(pebbleStore)
-	if got := svc.autoBackup(logger.New("test")); got != backupSkippedRecent {
+	if got := svc.autoBackup(context.Background(), logger.New("test")); got != backupSkippedRecent {
 		t.Fatalf("autoBackup took the %q path, want %q — a fresh backup already "+
 			"existed, so re-archiving 14 GB before every organize is pure delay",
 			got, backupSkippedRecent)
@@ -136,7 +137,7 @@ func TestAutoBackup_StillBacksUpWhenTheOnlyBackupIsStale(t *testing.T) {
 	}
 
 	svc := NewService(pebbleStore)
-	if got := svc.autoBackup(logger.New("test")); got == backupSkippedRecent {
+	if got := svc.autoBackup(context.Background(), logger.New("test")); got == backupSkippedRecent {
 		t.Fatalf("autoBackup skipped on a backup %s old; the %s freshness window "+
 			"must not suppress backups indefinitely", 2*autoBackupMinInterval, autoBackupMinInterval)
 	}
@@ -192,7 +193,7 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 	}
 
 	svc := NewService(pebbleStore)
-	if got := svc.autoBackup(logger.New("test")); got == backupSkippedRecent {
+	if got := svc.autoBackup(context.Background(), logger.New("test")); got == backupSkippedRecent {
 		t.Fatalf("autoBackup skipped; retention never ran so this test asserts nothing (got %q)", got)
 	}
 
@@ -259,7 +260,7 @@ func TestAutoBackup_FreshnessUsesTheNewestArchiveNotTheOldest(t *testing.T) {
 	seed("audiobooks_pebble_20260802_000000.tar.gz", 20*24*time.Hour) // ancient
 
 	svc := NewService(pebbleStore)
-	if got := svc.autoBackup(logger.New("test")); got != backupSkippedRecent {
+	if got := svc.autoBackup(context.Background(), logger.New("test")); got != backupSkippedRecent {
 		t.Fatalf("autoBackup took the %q path, want %q -- a one-minute-old archive exists, so the freshness check must have read an OLDER archive's timestamp and concluded the backup was stale", got, backupSkippedRecent)
 	}
 }

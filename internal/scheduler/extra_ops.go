@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-09-12
 
@@ -53,6 +53,10 @@ type ExtraOpsDeps struct {
 	MetadataFetchService *metafetch.Service
 	OLService            *metafetch.OpenLibraryService
 	AudiobookService     *audiobookspkg.AudiobookService
+	// ScanStandDown is the scan stand-down gate the metadata refresh/upgrade ops
+	// hold while they apply (metadata is never applied during a library scan).
+	// Nil = ungated (tests).
+	ScanStandDown opsregistry.ScanStandDownGate
 }
 
 // ExtraOpsStore is everything the 13 scheduler OperationDefs need from the
@@ -244,7 +248,16 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 		ConcurrencyKey:  "scheduler.metadata-upgrade",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
+			// Metadata is never applied during a library scan: hold the scan stand-down
+			// before the first write (fails the op if the scan does not park).
+			hold, sdErr := opsregistry.HoldScanStandDown(ctx, r.Deps.ScanStandDown, reporter, "scheduler.metadata-upgrade apply")
+			if sdErr != nil {
+				return sdErr
+			}
+			defer func() { retErr = hold.Finish(retErr) }()
+			ctx, reporter = hold.Context(), hold.Reporter()
+
 			progress := extraOpsProgressAdapter{r: reporter}
 			p := sdk.NewProgress(reporter, 0)
 			p.Start("Scanning for books with upgradeable metadata sources...")
@@ -868,7 +881,16 @@ func (r *ExtraOpsRegistrar) RegisterMetadataRefreshOp(reg *opsregistry.Registry)
 		ConcurrencyKey:  "scheduler.metadata-refresh",
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkOpenAI},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
+			// Metadata is never applied during a library scan: hold the scan stand-down
+			// before the first write (fails the op if the scan does not park).
+			hold, sdErr := opsregistry.HoldScanStandDown(ctx, r.Deps.ScanStandDown, reporter, "scheduler.metadata-refresh apply")
+			if sdErr != nil {
+				return sdErr
+			}
+			defer func() { retErr = hold.Finish(retErr) }()
+			ctx, reporter = hold.Context(), hold.Reporter()
+
 			progress := extraOpsProgressAdapter{r: reporter}
 			return r.runMetadataRefreshScan(ctx, progress)
 		},

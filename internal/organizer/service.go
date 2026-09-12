@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package organizer
 
@@ -249,7 +249,7 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 	}
 
 	// Auto-backup database before organizing
-	orgSvc.autoBackup(log)
+	orgSvc.autoBackup(ctx, log)
 
 	// Get books — either specific IDs or all books
 	const fetchPageSize = 1000
@@ -500,12 +500,23 @@ const backupProgressInterval = 15 * time.Second
 // report motion that did not happen. The cost of that honesty is that a single
 // file taking longer than ProgressTimeout to write would still be cancelled —
 // acceptable, because Pebble SSTs are bounded well below that.
-func backupProgressReporter(log logger.Logger, interval time.Duration) backup.BackupProgress {
+//
+// SCAN STAND-DOWN CHECKPOINT: the callback also returns ctx's error, checked on
+// EVERY call before the throttle, so the archive walk stops between files once
+// the run is canceled. autoBackup runs inside library.scan (post-scan
+// auto-organize), and the archive loop used to have no cancellation point at
+// all: a scan stood down during backup could not park, and every stand-down
+// holder failed with "scan did not park within 5m0s" -- the author duplicate
+// merge failures. This matches every other scan phase, which parks on ctx.Err().
+func backupProgressReporter(ctx context.Context, log logger.Logger, interval time.Duration) backup.BackupProgress {
 	var last time.Time
-	return func(phase string, filesDone int, bytesDone int64) {
+	return func(phase string, filesDone int, bytesDone int64) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("auto-backup stopped: %w", err)
+		}
 		now := time.Now()
 		if !last.IsZero() && now.Sub(last) < interval {
-			return
+			return nil
 		}
 		last = now
 
@@ -524,6 +535,7 @@ func backupProgressReporter(log logger.Logger, interval time.Duration) backup.Ba
 		// archive is not known until it is written, and inventing one produces
 		// a percentage that jumps backwards.
 		log.UpdateProgress(0, 1, msg)
+		return nil
 	}
 }
 
@@ -541,7 +553,7 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
+func (orgSvc *Service) autoBackup(ctx context.Context, log logger.Logger) backupMethod {
 	dbPath := config.AppConfig.DatabasePath
 	dbType := config.AppConfig.DatabaseType
 	if dbPath == "" {
@@ -574,7 +586,7 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 	// where the archive is actually going makes that reversion visible in the log
 	// instead of discoverable only after the disk fills again.
 	log.Info("Auto-backup starting: %s -> %s", dbPath, backupConfig.BackupDir)
-	backupConfig.Progress = backupProgressReporter(log, backupProgressInterval)
+	backupConfig.Progress = backupProgressReporter(ctx, log, backupProgressInterval)
 
 	var (
 		info   *backup.BackupInfo
@@ -608,6 +620,10 @@ func (orgSvc *Service) autoBackup(log logger.Logger) backupMethod {
 		info, err = backup.CreateBackup(dbPath, dbType, backupConfig)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			log.Info("Auto-backup stopped after %s: run canceled or stood down (%s); partial archive removed", time.Since(start).Truncate(time.Second), err.Error())
+			return backupFailed
+		}
 		log.Warn("Auto-backup failed after %s: %s", time.Since(start).Truncate(time.Second), err.Error())
 		return backupFailed
 	}

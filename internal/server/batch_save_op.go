@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -131,13 +131,22 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 		SummarizeQueued:   summarizeBatchSaveQueued,
 		Permissions:       []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 			var p batchSaveOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("batch-save: decode params: %w", err)
 				}
 			}
+
+			// Metadata is never applied during a library scan: hold the scan stand-down
+			// before the first write (fails the op if the scan does not park).
+			hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "metadata.batch-save apply")
+			if sdErr != nil {
+				return sdErr
+			}
+			defer func() { retErr = hold.Finish(retErr) }()
+			ctx, reporter = hold.Context(), hold.Reporter()
 
 			store := s.storeForWiring()
 			progress := registryProgressAdapter{r: reporter}

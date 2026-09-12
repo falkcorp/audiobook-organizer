@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"log/slog"
 	"time"
 
@@ -37,7 +38,15 @@ func (p *Plugin) metadataRefreshDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) (retErr error) {
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.metadata-refresh apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, reporter = hold.Context(), hold.Reporter()
 	return p.deps.RunMetadataRefreshScan(ctx, newOpsAdapter(reporter))
 }
 
@@ -65,7 +74,15 @@ func (p *Plugin) metadataUpgradeDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runMetadataUpgrade(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runMetadataUpgrade(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) (retErr error) {
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.metadata-upgrade apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, reporter = hold.Context(), hold.Reporter()
 	if !p.deps.HasMetadataFetchService() {
 		return fmt.Errorf("metadata fetch service not initialized")
 	}
@@ -125,7 +142,15 @@ func (p *Plugin) isbnEnrichmentDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runISBNEnrichment(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+func (p *Plugin) runISBNEnrichment(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) (retErr error) {
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.isbn-enrichment apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, reporter = hold.Context(), hold.Reporter()
 	if !p.deps.HasISBNEnrichment() {
 		_ = reporter.Log(slog.LevelInfo, "ISBN enrichment service is not configured, skipping")
 		return nil

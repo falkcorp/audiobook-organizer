@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-12
 //
@@ -557,13 +557,22 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 		ConcurrencyKey:  "library.bulk-metadata-fetch",
 		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 			var p bulkMetadataFetchV2Params
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("bulk_metadata_fetch: decode params: %w", err)
 				}
 			}
+			// Metadata is never applied during a library scan: hold the scan stand-down
+			// before the first write (fails the op if the scan does not park).
+			hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "library.bulk-metadata-fetch apply")
+			if sdErr != nil {
+				return sdErr
+			}
+			defer func() { retErr = hold.Finish(retErr) }()
+			ctx, reporter = hold.Context(), hold.Reporter()
+
 			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("bulk_metadata_fetch: database not initialized")
