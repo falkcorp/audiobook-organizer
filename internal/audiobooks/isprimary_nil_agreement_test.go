@@ -1,13 +1,15 @@
 // file: internal/audiobooks/isprimary_nil_agreement_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 69cb8a54-5f1e-4d77-a32a-38f6fe11cc10
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package audiobooks
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -383,6 +385,164 @@ func TestIsPrimaryVersion_SerializationAgreesOnCacheHit_NoPushdown(t *testing.T)
 	require.Equal(t, missEff, hitEff,
 		"the same request serialized is_primary_version differently on a cache hit than on a miss")
 	require.True(t, hitEff, "nil resolves to true on both cache paths")
+}
+
+// TestIsPrimaryVersion_CountAgreesWithListing pins the COUNT side of the
+// nil-counts-as-primary rule. The listing tests above never call
+// CountAudiobooksFiltered, and it decides the same question for the same
+// books at three sites of its own:
+//
+//	count site A  the store's CountBookSummariesFiltered (countingFilteredStore);
+//	count site B  countSummariesPushdownFiltered's summary fallback loop
+//	              (service_filtering.go), reached by a store that does not
+//	              conform to countingFilteredStore/filteredSummaryStore;
+//	count site C  the materialize-and-count loop at the tail of
+//	              CountAudiobooksFiltered (service_query.go), reached ONLY when
+//	              buildBookSummaryFilter returns pushdownOK=false.
+//
+// Site C is the one nothing pinned before this test (measured 2026-09-12:
+// rewriting its EffectiveIsPrimaryVersion call as `!= nil && *` left every
+// test in the package passing). A non-conforming store does NOT reach it — it
+// still gets pushdownOK=true and lands in site B. At HEAD the only
+// pushdownOK=false return is a GetBooksByTag error inside the tag loop, and
+// the site C loop then calls GetBooksByTag again and returns the error if it
+// fails a second time. So site C runs only when a tag lookup fails once and
+// then succeeds; service_query.go calls it "unreachable in practice" and keeps
+// it as a defensive fallback. flakyTagStore produces exactly that sequence and
+// counts the lookups so the subtest proves it ran site C rather than assuming it.
+//
+// Each subtest compares the count to the length of a listing for the SAME
+// filters, and also pins the listing's membership, so "both sides agree on a
+// wrong answer" (or on zero) cannot pass.
+func TestIsPrimaryVersion_CountAgreesWithListing(t *testing.T) {
+	wantSets := func(fx primaryFlagFixture, want bool) []string {
+		if want {
+			return []string{fx.ids["explicit-true"], fx.ids["nil-flag"]}
+		}
+		return []string{fx.ids["explicit-false"]}
+	}
+
+	t.Run("store count pushdown", func(t *testing.T) {
+		fx := seedPrimaryFlagFixture(t)
+		_, conforms := database.AsCapability[countingFilteredStore](fx.store)
+		require.True(t, conforms,
+			"fixture invalid: PebbleStore no longer conforms to countingFilteredStore, so this subtest is not exercising the store count pushdown")
+
+		for _, want := range []bool{true, false} {
+			filters := ListFilters{IsPrimaryVersion: &want}
+			listed, err := NewAudiobookService(fx.store).GetAudiobooks(context.Background(), 100, 0, "", nil, nil, filters)
+			require.NoError(t, err)
+			require.ElementsMatch(t, wantSets(fx, want), idsOf(listed),
+				"listing for is_primary_version=%v is not {explicit, nil-as-primary}", want)
+
+			count, err := NewAudiobookService(fx.store).CountAudiobooksFiltered(context.Background(), filters)
+			require.NoError(t, err)
+			require.Equal(t, len(listed), count,
+				"store count pushdown disagrees with the listing for is_primary_version=%v", want)
+		}
+	})
+
+	t.Run("summary fallback without pushdown", func(t *testing.T) {
+		mockStore := mocks.NewMockStore(t)
+		_, conformsCount := database.AsCapability[countingFilteredStore](mockStore)
+		_, conformsList := database.AsCapability[filteredSummaryStore](mockStore)
+		require.False(t, conformsCount || conformsList,
+			"fixture invalid: the mock pushes the filter down, so the in-Go summary fallback never runs")
+
+		summaries := []database.BookSummary{
+			{ID: "explicit-true", Title: "a", IsPrimaryVersion: new(true)},
+			{ID: "explicit-false", Title: "b", IsPrimaryVersion: new(false)},
+			{ID: "nil-flag", Title: "c", IsPrimaryVersion: nil},
+		}
+		// Listing pages with (100, 0); the count fetches everything with (0, 0).
+		// One call each per value of want.
+		mockStore.EXPECT().GetAllBookSummaries(100, 0).Return(summaries, nil).Times(2)
+		mockStore.EXPECT().GetAllBookSummaries(0, 0).Return(summaries, nil).Times(2)
+
+		for _, want := range []bool{true, false} {
+			filters := ListFilters{IsPrimaryVersion: &want}
+			listed, err := NewAudiobookService(mockStore).GetAudiobooks(context.Background(), 100, 0, "", nil, nil, filters)
+			require.NoError(t, err)
+			expected := []string{"explicit-false"}
+			if want {
+				expected = []string{"explicit-true", "nil-flag"}
+			}
+			require.ElementsMatch(t, expected, idsOf(listed))
+
+			count, err := NewAudiobookService(mockStore).CountAudiobooksFiltered(context.Background(), filters)
+			require.NoError(t, err)
+			require.Equal(t, len(listed), count,
+				"summary-fallback count disagrees with the listing for is_primary_version=%v", want)
+		}
+	})
+
+	t.Run("materialize-and-count fallback", func(t *testing.T) {
+		fx := seedPrimaryFlagFixture(t)
+		// Tag ALL three books so the tag intersection keeps every row and the
+		// count is decided by the primary rule alone.
+		const tag = "count-nil-primary"
+		for _, id := range fx.ids {
+			require.NoError(t, fx.store.AddBookTag(id, tag))
+		}
+		flaky := &flakyTagStore{PebbleStore: fx.store}
+
+		for _, want := range []bool{true, false} {
+			filters := ListFilters{IsPrimaryVersion: &want, Tag: tag}
+			// The listing runs over the plain store in its own service, so it
+			// cannot consume the armed failure meant for the count.
+			listed, err := NewAudiobookService(fx.store).GetAudiobooks(context.Background(), 100, 0, "", nil, nil, filters)
+			require.NoError(t, err)
+			require.ElementsMatch(t, wantSets(fx, want), idsOf(listed),
+				"listing for tag + is_primary_version=%v is not {explicit, nil-as-primary}", want)
+
+			flaky.armOneFailure()
+			count, err := NewAudiobookService(flaky).CountAudiobooksFiltered(context.Background(), filters)
+			require.NoError(t, err)
+			require.Equal(t, 2, flaky.tagLookups(),
+				"fixture invalid: expected one failed tag lookup (pushdownOK=false) then one successful lookup in the "+
+					"materialize-and-count fallback; any other number means that loop did not run")
+			require.Equal(t, len(listed), count,
+				"materialize-and-count fallback disagrees with the listing for is_primary_version=%v "+
+					"(nil must count as primary there too)", want)
+		}
+	})
+}
+
+var errFlakyTagLookup = errors.New("flakyTagStore: armed tag lookup failure")
+
+// flakyTagStore fails the next GetBooksByTag call after armOneFailure, then
+// delegates. The failure is armed per call rather than as a one-shot global so
+// no other request in the test can consume it.
+type flakyTagStore struct {
+	*database.PebbleStore
+	mu       sync.Mutex
+	failNext bool
+	calls    int
+}
+
+func (s *flakyTagStore) armOneFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNext = true
+	s.calls = 0
+}
+
+func (s *flakyTagStore) tagLookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *flakyTagStore) GetBooksByTag(tag string) ([]string, error) {
+	s.mu.Lock()
+	s.calls++
+	fail := s.failNext
+	s.failNext = false
+	s.mu.Unlock()
+	if fail {
+		return nil, errFlakyTagLookup
+	}
+	return s.PebbleStore.GetBooksByTag(tag)
 }
 
 // requireWentThroughPrimaryPushdown is the anti-mislabelling guard for site 1.
