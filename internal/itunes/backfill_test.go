@@ -1,5 +1,5 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
 // last-edited: 2026-09-12
 
@@ -50,6 +50,10 @@ type MockBackfillStore struct {
 	// whether any offset-paged read happened at all.
 	swapAfterFirstPage bool
 	paged              bool
+	// afterGetAllBooks, when set, runs after every GetAllBooksCore call
+	// returns — e.g. to cancel a context between the book read and the
+	// index build that walks its result.
+	afterGetAllBooks func()
 }
 
 func NewMockBackfillStore() *MockBackfillStore {
@@ -61,6 +65,9 @@ func NewMockBackfillStore() *MockBackfillStore {
 
 func (m *MockBackfillStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
 	m.getAllBooksCalls++
+	if m.afterGetAllBooks != nil {
+		defer m.afterGetAllBooks()
+	}
 	if m.hasError {
 		return nil, errMockFailure
 	}
@@ -529,5 +536,64 @@ func TestBackfillITunesTrackPIDsSnapshotSwapCannotSkipBooks(t *testing.T) {
 	}
 	if len(mockStore.externalIDMaps) != 1 || mockStore.externalIDMaps[0].BookID != targetID || mockStore.externalIDMaps[0].ExternalID != targetPID {
 		t.Fatalf("mappings = %+v, want one %s -> %s", mockStore.externalIDMaps, targetPID, targetID)
+	}
+}
+
+// TestBackfillExternalIDsProgressReportsLibraryTotal pins that the book pass
+// reports the real library size as total. The book list is one snapshot read
+// before the first chunk, so total is known; it used to be reported as 0
+// ("unknown"), a holdover from the offset-page loop. The XML pass is disabled
+// so every progress call here comes from the book pass (the streaming pass
+// legitimately reports 0).
+func TestBackfillExternalIDsProgressReportsLibraryTotal(t *testing.T) {
+	setITunesXMLPath(t, "")
+	const bookCount = backfillChunkSize + 5 // two chunks
+	mockStore := NewMockBackfillStore()
+	for i := range bookCount {
+		id := fmt.Sprintf("b%05d", i)
+		pid := fmt.Sprintf("pid-%05d", i)
+		mockStore.books[id] = database.Book{ID: id, Title: id, ITunesPersistentID: &pid}
+	}
+
+	type call struct{ processed, total int }
+	var calls []call
+	if err := BackfillExternalIDs(context.Background(), mockStore, func(processed, total int, _ string) {
+		calls = append(calls, call{processed, total})
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []call{{backfillChunkSize, bookCount}, {bookCount, bookCount}}
+	if len(calls) != len(want) {
+		t.Fatalf("progress calls = %+v, want %+v (one per chunk)", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Errorf("progress call %d = %+v, want %+v: total must be the library size, not 0", i, calls[i], want[i])
+		}
+	}
+}
+
+// TestBackfillITunesTrackPIDsCanceledDuringIndexBuild pins the ctx check in
+// the PID/title index loop: a context canceled after the book read but
+// before the index is walked returns (0, nil) -- the same convention as the
+// pre-read cancellation -- without walking the library or opening the XML.
+// The configured XML path does not exist, so reaching the stream parse (what
+// happens without the check) surfaces as an open error.
+func TestBackfillITunesTrackPIDsCanceledDuringIndexBuild(t *testing.T) {
+	setITunesXMLPath(t, filepath.Join(t.TempDir(), "never-opened.xml"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mockStore := NewMockBackfillStore()
+	pid := "0123456789ABCDEF"
+	mockStore.books["b1"] = database.Book{ID: "b1", Title: "Synthetic Album", ITunesPersistentID: &pid}
+	mockStore.afterGetAllBooks = cancel
+
+	registered, err := BackfillITunesTrackPIDs(ctx, mockStore, nil)
+	if err != nil {
+		t.Fatalf("err = %v, want nil: cancellation during the index build must stop before the XML stream is opened", err)
+	}
+	if registered != 0 || len(mockStore.externalIDMaps) != 0 {
+		t.Fatalf("registered = %d, mappings = %d; want 0/0 after cancellation", registered, len(mockStore.externalIDMaps))
 	}
 }

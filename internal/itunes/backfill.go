@@ -1,5 +1,5 @@
 // file: internal/itunes/backfill.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
 // last-edited: 2026-09-12
 
@@ -164,11 +164,13 @@ func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore,
 // crashes with "pebble: closed" if the store closes mid-iteration. The
 // caller (Server.Start's background goroutine) passes s.bgCtx.
 //
-// progress is called after every page of the book-pagination pass (total is
-// unknown ahead of a pass over a paginated store, so 0 is reported for it —
-// the message still conveys real counts) and every 10000 tracks during the
-// iTunes-XML streaming pass, so a whole-library run surfaces progress instead
-// of one log line at the end (H7). progress may be nil.
+// progress is called once per backfillChunkSize-book chunk of the book pass,
+// with the library size from the single snapshot read as total (the whole
+// book list is in memory before the first chunk, so total is known), and
+// every 10000 tracks during the iTunes-XML streaming pass, where the track
+// count is not known ahead of the stream and 0 is reported as total. A
+// whole-library run therefore surfaces progress instead of one log line at
+// the end (H7). progress may be nil.
 //
 // Persistence errors (bulk-write failures, the track-PID pass) are now
 // returned instead of silently discarded — previously the op always reported
@@ -184,12 +186,13 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 	slog.Info("Starting external ID backfill v4...")
 
 	// PERF-5: one batch read of every book_file row, reduced to the
-	// PID-bearing subset keyed by book ID, replaces the per-book
-	// GetBookFiles point read the page loop below used to make. The Core
-	// projection is memdb-slim, and only files that actually carry a PID are
-	// retained, so the resident set is bounded by the iTunes-linked file
-	// count rather than the whole table. The book pagination (pages of
-	// 10,000) is unchanged.
+	// PID-bearing subset keyed by book ID, replaces a per-book GetBookFiles
+	// point read. The Core projection is memdb-slim, and only files that
+	// actually carry a PID are retained, so the resident set is bounded by the
+	// iTunes-linked file count rather than the whole table. Books are then
+	// read in one snapshot (loadBackfillBooks) and walked in chunks that only
+	// bound each bulk write and set the progress cadence — there is no store
+	// read between chunks.
 	if err := ctx.Err(); err != nil {
 		slog.Info("external ID backfill canceled before file read", "err", err)
 		return nil
@@ -271,7 +274,7 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		}
 		booksScanned += len(books)
 		if progress != nil {
-			progress(booksScanned, 0, fmt.Sprintf("Backfilling external IDs: %d books scanned (%d mappings written)", booksScanned, backfilled))
+			progress(booksScanned, len(allBooks), fmt.Sprintf("Backfilling external IDs: %d books scanned (%d mappings written)", booksScanned, backfilled))
 		}
 	}
 
@@ -354,7 +357,16 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore,
 	}
 	// Sequential on purpose: per-book work is two map writes with no I/O,
 	// and the maps are shared, so a worker pool would only add locking.
-	for _, book := range books {
+	// ctx is checked every backfillChunkSize books, the cadence the old
+	// per-page check had, so a shutdown during the index build over a large
+	// library returns promptly instead of finishing the walk first.
+	for i, book := range books {
+		if i%backfillChunkSize == 0 {
+			if err := ctx.Err(); err != nil {
+				slog.Info("BackfillITunesTrackPIDs canceled during index build", "books_indexed", i, "err", err)
+				return 0, nil
+			}
+		}
 		if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
 			pidToBook[*book.ITunesPersistentID] = book.ID
 		}
