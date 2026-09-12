@@ -1,7 +1,7 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.182.0 -->
+<!-- version: 3.182.1 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
-<!-- last-edited: 2026-08-30 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Changelog
 
@@ -4416,7 +4416,7 @@ CollectDuration's tagStore parameter has been narrowed from the full dedup.Store
 
 #### August executive-summary roundup now covers through 2026-08-19
 
-The monthly roundup at `docs/executive-summaries/2026-08-31-august-monthly-roundup-executive-summary.md`
+The monthly roundup at `docs/executive-summaries/2026-08-executive-summary.md`
 consolidated 22 individual executive summaries dated 2026-08-10 through
 2026-08-19 that had accumulated unlinked since the roundup's last pass. Each
 gets its own short, plain-language entry grouped by theme — the dead filter
@@ -9756,7 +9756,7 @@ lever for those.
 
 #### Executive summary for the Activity-page memory outage
 
-`docs/executive-summaries/2026-08-12-the-page-nobody-was-looking-at-executive-summary.md`
+`docs/executive-summaries/2026-08-executive-summary.md`
 covers PR #2318 in plain language: the Activity page read the entire history into memory
 on every request, ignored client disconnect, and was never limited in how many copies
 could run at once — thirty were still allocating against a 30 GB cap with zero clients
@@ -9794,7 +9794,7 @@ validated method-agnostically against a query shape that does return traffic for
 
 #### Executive summary for the search pagination and count fix
 
-`docs/executive-summaries/2026-08-12-the-second-page-that-was-never-there-executive-summary.md`
+`docs/executive-summaries/2026-08-executive-summary.md`
 covers PR #2326 in plain language: search returned an empty page two for every filtered
 query, and the reported result count was the length of the page rather than the number of
 matches.
