@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.3.0
+// version: 4.4.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -1371,6 +1371,8 @@ func (s *Server) setupRoutes() {
 			protected.GET("/maintenance/book-file-hash-stats", s.perm(auth.PermSettingsManage), s.handleGetBookFileHashStats)
 			protected.GET("/maintenance/book-metadata-hash-stats", s.perm(auth.PermSettingsManage), s.handleGetBookMetadataHashStats)
 			protected.GET("/maintenance/acoustid-stats", s.perm(auth.PermSettingsManage), s.handleGetAcoustIDStats)
+			// Per-signal coverage (hash, fingerprint, duration, tags, embeddings).
+			protected.GET("/signals/coverage", s.perm(auth.PermSettingsManage), s.handleGetSignalCoverage)
 			// Unified maintenance job dispatcher
 			protected.GET("/maintenance/jobs", s.perm(auth.PermSettingsManage), s.listMaintenanceJobs)
 			// Route-level permission guard (pen-test finding MED-3). The handler
