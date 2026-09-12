@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
 // last-edited: 2026-09-12
 
@@ -13,7 +13,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -30,15 +33,20 @@ import (
 //     (database.NarratorLinkCount, a live read of the book_narrators junction).
 //     A narrator that gained a link after the bulk count is held as
 //     "linked_during_run", not deleted. THIS is the guard that matters: the
-//     scan stand-down is reported not to quiesce a scan that was resumed after
-//     a restart, and the writers that add narrator links (metadata apply, book
-//     edits, optimize-database) are not the scanner anyway.
+//     writers that add narrator links (metadata apply, book edits,
+//     optimize-database) are not the scanner, so no scan gate can stop them.
 //  2. The scan stand-down on apply, with the per-item lease check, as in
 //     author_duplicate_merge.go. A backup to (1), not a substitute for it.
+//     It does park a scan resumed after a restart: on 2026-09-12 a scan at
+//     resume_count=5 went interrupted_quiesced for the whole of a
+//     purge-empty-authors apply.
 //
-// There is NO undo journal, matching the author op, which has none either.
-// Every deleted narrator is logged with its id and name instead, so the rows
-// can be reconstructed from the op log if a deletion ever needs reversing.
+// UNDO LEDGER: each delete is preceded by an operation_changes row
+// (change_type "narrator_delete", old value "<id>:<name>"), in the same shape
+// purge-empty-authors writes "author_delete". database.Narrator is {ID, Name},
+// so the row is the whole narrator. A failed ledger write skips that delete
+// (fail closed). The undo engine does not replay these rows; they are a
+// durable record to recreate a narrator from, not a one-click restore.
 
 // emptyNarratorSampleLimit bounds each name list in the report.
 const emptyNarratorSampleLimit = 100
@@ -114,8 +122,11 @@ type emptyNarratorReport struct {
 	// linked at delete time (apply only).
 	HeldLinkedDuringRun       int                `json:"held_linked_during_run"`
 	HeldLinkedDuringRunSample []heldBackNarrator `json:"held_linked_during_run_sample,omitempty"`
-	Deleted                   int                `json:"deleted"`
-	Failed                    int                `json:"failed"`
+	// JournalFailed are eligible narrators NOT deleted because their undo-ledger
+	// row could not be written (apply only).
+	JournalFailed int `json:"held_journal_failed"`
+	Deleted       int `json:"deleted"`
+	Failed        int `json:"failed"`
 	// Aborted is set when the scan stand-down lease was lost mid-apply.
 	Aborted string `json:"aborted,omitempty"`
 }
@@ -123,9 +134,9 @@ type emptyNarratorReport struct {
 func (r emptyNarratorReport) summary() string {
 	s := fmt.Sprintf(
 		"narrators=%d referenced=%d candidates(zero links)=%d held(name in book text)=%d eligible=%d "+
-			"held(linked during run)=%d deleted=%d failed=%d",
+			"held(linked during run)=%d held(journal failed)=%d deleted=%d failed=%d",
 		r.TotalNarrators, r.Referenced, r.Candidates, r.HeldNameInText, r.Eligible,
-		r.HeldLinkedDuringRun, r.Deleted, r.Failed)
+		r.HeldLinkedDuringRun, r.JournalFailed, r.Deleted, r.Failed)
 	if r.Aborted != "" {
 		s += " ABORTED: " + r.Aborted
 	}
@@ -229,11 +240,27 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		return report, nil
 	}
 
+	// Nothing to delete: return before the stand-down, so an apply that would
+	// delete nothing does not park a running scan (the purge-empty-authors fix
+	// in #3307, applied here too).
+	if len(eligible) == 0 {
+		log.Info("purge-empty-narrators: nothing eligible, no stand-down taken")
+		_ = reporter.UpdateProgress(3, 3, "nothing to delete — "+report.summary())
+		return report, nil
+	}
+
 	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "purge-empty-narrators apply")
 	if sdErr != nil {
 		return report, fmt.Errorf("purge-empty-narrators: could not acquire scan stand-down; refusing to delete: %w", sdErr)
 	}
 	defer release()
+
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" {
+		// Journal anyway, as purge-empty-authors does: a ledger row with no
+		// operation id still records the narrator's id and name.
+		log.Warn("purge-empty-narrators: no operation id on the reporter, undo-ledger rows will be unattributed")
+	}
 
 	// The authors cache also holds the narrator contributor index (the entities
 	// handler invalidates it after SetBookNarrators). Deferred so a cancel or
@@ -297,17 +324,36 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 			continue
 		}
 
+		// THE UNDO-LEDGER ROW, written BEFORE the delete: once the row is gone
+		// the name exists nowhere else, so a post-delete journal failure would be
+		// exactly the loss this op must not cause. A failed write skips the
+		// delete. The row can describe a delete that then fails; a stray record
+		// of a narrator that still exists is harmless, the reverse is not.
+		if jerr := store.CreateOperationChange(&database.OperationChange{
+			ID:          ulid.Make().String(),
+			OperationID: opID,
+			ChangeType:  "narrator_delete",
+			FieldName:   "narrator",
+			OldValue:    fmt.Sprintf("%d:%s", n.ID, n.Name),
+			NewValue:    "purged_empty",
+		}); jerr != nil {
+			report.JournalFailed++
+			log.Warn("purge-empty-narrators: undo-ledger write failed, narrator NOT deleted",
+				"narrator_id", n.ID, "name", n.Name, "err", jerr)
+			continue
+		}
+
 		// DeleteNarrator removes the row, its ownership-checked name-index
 		// entry, and any junction entry (none, per the re-check), then brings
 		// memdb in line: DeleteNarratorFromMemDB plus a replay of every swept
 		// book's credits.
 		if derr := store.DeleteNarrator(n.ID); derr != nil {
 			report.Failed++
-			log.Warn("purge-empty-narrators: delete failed", "narrator_id", n.ID, "name", n.Name, "err", derr)
+			log.Warn("purge-empty-narrators: delete failed (its undo-ledger row was already written and names a narrator that still exists)",
+				"narrator_id", n.ID, "name", n.Name, "err", derr)
 			continue
 		}
 		report.Deleted++
-		// Per-row record in place of an undo journal.
 		log.Info("purge-empty-narrators deleted", "narrator_id", n.ID, "name", n.Name)
 		if (i+1)%50 == 0 {
 			prog.StepN(i+1, fmt.Sprintf("Deleted %d/%d…", report.Deleted, len(eligible)))
