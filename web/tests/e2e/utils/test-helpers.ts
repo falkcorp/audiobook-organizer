@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.17.0
+// version: 2.18.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { Page } from '@playwright/test';
 
@@ -36,7 +36,6 @@ export interface MockConfig {
   disk_quota_percent: number;
   enable_user_quotas: boolean;
   default_user_quota_gb: number;
-  auto_fetch_metadata: boolean;
   metadata_sources: MockMetadataSource[];
   language: string;
   enable_ai_parsing: boolean;
@@ -1881,7 +1880,6 @@ const DEFAULT_CONFIG: MockConfig = {
   disk_quota_percent: 80,
   enable_user_quotas: false,
   default_user_quota_gb: 100,
-  auto_fetch_metadata: true,
   metadata_sources: DEFAULT_METADATA_SOURCES,
   language: 'en',
   enable_ai_parsing: false,

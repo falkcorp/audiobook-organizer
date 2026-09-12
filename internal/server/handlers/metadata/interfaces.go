@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-12
 
@@ -152,18 +152,11 @@ type MetadataCandidateCacheStore interface {
 // MetadataApplier applies a chosen candidate to a book, on disk and in tags.
 type MetadataApplier interface {
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
-	ApplyMetadataFileIO(id string) error
+	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
+	// download, file I/O, and a tag write that happens exactly once.
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
 	RunApplyPipelineRenameOnly(id string, book *database.Book) error
 	ApplyMetadataSystemTags(bookID, sourceName, language string)
-}
-
-// CoverDownloader fetches cover art in the background. Inline it was ~4s of a
-// measured 6.44s apply request.
-type CoverDownloader interface {
-	// DownloadPendingCover fetches the candidate's cover art and repoints the
-	// book at the local copy. Runs in the background: it was ~4s of a measured
-	// 6.44s apply request when it ran inline.
-	DownloadPendingCover(bookID, coverURL string)
 }
 
 // MetadataWriteBacker writes metadata back to the files on disk.
@@ -198,7 +191,6 @@ type MetadataFetchService interface {
 	MetadataFetcher
 	MetadataCandidateCacheStore
 	MetadataApplier
-	CoverDownloader
 	MetadataWriteBacker
 	MetadataMatchMarker
 	MetadataHistoryRecorder

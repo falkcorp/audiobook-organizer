@@ -40,7 +40,6 @@ interface UiMetadataSource {
 
 interface MetadataSettingsTabProps {
   settings: {
-    autoFetchMetadata: boolean;
     enableAIParsing: boolean;
     openaiApiKey: string;
     metadataSources: UiMetadataSource[];
@@ -105,18 +104,6 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
           Metadata Settings
         </Typography>
         <Divider sx={{ mb: 2 }} />
-      </Grid>
-
-      <Grid size={12}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={settings.autoFetchMetadata}
-              onChange={(e) => handleChange('autoFetchMetadata', e.target.checked)}
-            />
-          }
-          label="Automatically fetch missing metadata"
-        />
       </Grid>
 
       {/* AI-Powered Parsing Section */}

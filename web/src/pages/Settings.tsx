@@ -133,7 +133,6 @@ export interface SettingsState {
   diskQuotaPercent: number;
   enableUserQuotas: boolean;
   defaultUserQuotaGB: number;
-  autoFetchMetadata: boolean;
   enableAIParsing: boolean;
   openaiApiKey: string;
   metadataSources: UiMetadataSource[];
@@ -260,7 +259,6 @@ export function Settings() {
     defaultUserQuotaGB: 100,
 
     // Metadata settings
-    autoFetchMetadata: true,
     enableAIParsing: false,
     openaiApiKey: '',
     metadataSources: [
@@ -520,7 +518,6 @@ export function Settings() {
         defaultUserQuotaGB: config.default_user_quota_gb || 100,
 
         // Metadata settings
-        autoFetchMetadata: config.auto_fetch_metadata ?? true,
         enableAIParsing: config.enable_ai_parsing ?? false,
         openaiApiKey: '', // Clear field when loading, show placeholder instead
         metadataSources:

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/interfaces.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-5678-90abcdef0123
 // last-edited: 2026-09-12
 
@@ -22,8 +22,8 @@ type EventPublisher interface {
 // NOTE: the concrete implementation wired in production is
 // *itunesservice.WriteBackBatcher — it syncs the book to the iTunes library.
 // It is NOT the audio-tag writer. Writing tags into the audio files themselves
-// goes through metafetch.Service.ApplyMetadataFileIO /
-// WriteBackMetadataForBook, scheduled off the request path via FileIOPool.
+// goes through metafetch.Service.FinishApplyFileWork (or WriteBackMetadataForBook
+// for an explicit write-back), scheduled off the request path via FileIOPool.
 // Conflating the two is what caused the Metadata Review screen to update only
 // the database and never the files (fix/review-apply-writes-tags).
 type WriteBackEnqueuer interface {

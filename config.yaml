@@ -1,4 +1,3 @@
-auto_fetch_metadata: true
 auto_organize: true
 concurrent_scans: 10
 database_path: audiobooks.pebble

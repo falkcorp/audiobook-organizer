@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.16.0
+// version: 5.17.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -203,6 +203,14 @@ type Service struct {
 	// use by libraryOrganizeService.
 	organizeOnce sync.Once
 	organizeSvc  *organizer.Service
+
+	// tagWriter replaces the audio-tag write in tests so they can count it
+	// (see writeTags). Nil in production.
+	tagWriter func(id string) (int, error)
+
+	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
+	// refuses loopback, so an httptest server cannot stand in). Nil in production.
+	coverDownload func(coverURL, destDir, bookID string) (string, error)
 }
 
 type FetchMetadataResponse struct {
@@ -231,10 +239,14 @@ type MetadataCandidate struct {
 	ISBN10         string `json:"isbn10,omitempty"`
 	ISBN13         string `json:"isbn13,omitempty"`
 	ASIN           string `json:"asin,omitempty"`
-	CoverURL       string `json:"cover_url,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Language       string `json:"language,omitempty"`
-	Source         string `json:"source"`
+	// Genre is carried so an apply can write it: ApplyMetadataToBook has always
+	// written meta.Genre, but the candidate had no field for it, so a manual or
+	// batch apply never set a genre.
+	Genre       string `json:"genre,omitempty"`
+	CoverURL    string `json:"cover_url,omitempty"`
+	Description string `json:"description,omitempty"`
+	Language    string `json:"language,omitempty"`
+	Source      string `json:"source"`
 
 	// Content-matcher SIGNAL fields carried through the candidate so the review
 	// UI and the metadata_cache sidecar (which the Phase 4 matcher reads) retain

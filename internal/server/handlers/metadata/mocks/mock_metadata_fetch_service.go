@@ -114,57 +114,6 @@ func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) RunAndReturn(run
 	return _c
 }
 
-// ApplyMetadataFileIO provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) ApplyMetadataFileIO(id string) error {
-	ret := _mock.Called(id)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ApplyMetadataFileIO")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(id)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockMetadataFetchService_ApplyMetadataFileIO_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyMetadataFileIO'
-type MockMetadataFetchService_ApplyMetadataFileIO_Call struct {
-	*mock.Call
-}
-
-// ApplyMetadataFileIO is a helper method to define mock.On call
-//   - id string
-func (_e *MockMetadataFetchService_Expecter) ApplyMetadataFileIO(id any) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	return &MockMetadataFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", id)}
-}
-
-func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) Run(run func(id string)) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) Return(err error) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockMetadataFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(id string) error) *MockMetadataFetchService_ApplyMetadataFileIO_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ApplyMetadataSystemTags provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) ApplyMetadataSystemTags(bookID string, sourceName string, language string) {
 	_mock.Called(bookID, sourceName, language)
@@ -213,52 +162,6 @@ func (_c *MockMetadataFetchService_ApplyMetadataSystemTags_Call) Return() *MockM
 }
 
 func (_c *MockMetadataFetchService_ApplyMetadataSystemTags_Call) RunAndReturn(run func(bookID string, sourceName string, language string)) *MockMetadataFetchService_ApplyMetadataSystemTags_Call {
-	_c.Run(run)
-	return _c
-}
-
-// DownloadPendingCover provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) DownloadPendingCover(bookID string, coverURL string) {
-	_mock.Called(bookID, coverURL)
-	return
-}
-
-// MockMetadataFetchService_DownloadPendingCover_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DownloadPendingCover'
-type MockMetadataFetchService_DownloadPendingCover_Call struct {
-	*mock.Call
-}
-
-// DownloadPendingCover is a helper method to define mock.On call
-//   - bookID string
-//   - coverURL string
-func (_e *MockMetadataFetchService_Expecter) DownloadPendingCover(bookID any, coverURL any) *MockMetadataFetchService_DownloadPendingCover_Call {
-	return &MockMetadataFetchService_DownloadPendingCover_Call{Call: _e.mock.On("DownloadPendingCover", bookID, coverURL)}
-}
-
-func (_c *MockMetadataFetchService_DownloadPendingCover_Call) Run(run func(bookID string, coverURL string)) *MockMetadataFetchService_DownloadPendingCover_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockMetadataFetchService_DownloadPendingCover_Call) Return() *MockMetadataFetchService_DownloadPendingCover_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *MockMetadataFetchService_DownloadPendingCover_Call) RunAndReturn(run func(bookID string, coverURL string)) *MockMetadataFetchService_DownloadPendingCover_Call {
 	_c.Run(run)
 	return _c
 }
@@ -425,6 +328,75 @@ func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) Return(fetchMetada
 }
 
 func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run func(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_FetchMetadataForBook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// FinishApplyFileWork provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) FinishApplyFileWork(id string, pendingCoverURL string, fileIO bool, writeTags bool) error {
+	ret := _mock.Called(id, pendingCoverURL, fileIO, writeTags)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FinishApplyFileWork")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, bool, bool) error); ok {
+		r0 = returnFunc(id, pendingCoverURL, fileIO, writeTags)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataFetchService_FinishApplyFileWork_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FinishApplyFileWork'
+type MockMetadataFetchService_FinishApplyFileWork_Call struct {
+	*mock.Call
+}
+
+// FinishApplyFileWork is a helper method to define mock.On call
+//   - id string
+//   - pendingCoverURL string
+//   - fileIO bool
+//   - writeTags bool
+func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(id any, pendingCoverURL any, fileIO any, writeTags any) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", id, pendingCoverURL, fileIO, writeTags)}
+}
+
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool)) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 bool
+		if args[2] != nil {
+			arg2 = args[2].(bool)
+		}
+		var arg3 bool
+		if args[3] != nil {
+			arg3 = args[3].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Return(err error) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Return(run)
 	return _c
 }

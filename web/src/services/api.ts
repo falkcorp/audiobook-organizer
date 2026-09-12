@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.101.0
+// version: 2.102.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -985,7 +985,6 @@ export interface Config {
   default_user_quota_gb: number;
 
   // Metadata
-  auto_fetch_metadata: boolean;
   metadata_sources: MetadataSource[];
   language: string;
 
@@ -3266,7 +3265,15 @@ export interface MetadataCandidate {
   year?: number;
   publisher?: string;
   isbn?: string;
+  isbn10?: string;
+  isbn13?: string;
   asin?: string;
+  genre?: string;
+  subtitle?: string;
+  abridged?: boolean;
+  page_count?: number;
+  series_secondary?: string;
+  series_secondary_position?: string;
   cover_url?: string;
   description?: string;
   duration_sec?: number;

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-09-01
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -88,10 +88,73 @@ func backupFileBeforeWrite(filePath string) {
 	slog.Debug("backup before tag write", "path", backupPath)
 }
 
+// tagWriteResult reports what runApplyPipeline did about audio tags.
+type tagWriteResult struct {
+	// handled: the pipeline owned the tag write for this run (wrote them, found
+	// them already written by an interrupted earlier attempt, or failed).
+	handled bool
+	// err is the pipeline's tag-write failure, if any.
+	err error
+}
+
+// writeTags is the one tag write every apply path goes through. tagWriter is
+// a test seam that counts it; nil in production.
+func (mfs *Service) writeTags(id string) (int, error) {
+	if mfs.tagWriter != nil {
+		return mfs.tagWriter(id)
+	}
+	return mfs.WriteBackMetadataForBook(id)
+}
+
+// FinishApplyFileWork is the ONE file-side sequel to a metadata apply, shared by
+// the single-book apply, the batch applies and auto-fetch, in this order:
+//
+//  1. download the candidate's cover (pendingCoverURL, i.e.
+//     FetchMetadataResponse.PendingCoverURL, which ApplyMetadataCandidate derives
+//     AFTER the field allowlist and the lock guard, so a deselected cover is
+//     never downloaded). It must precede step 2: the embed there would
+//     otherwise bake the previous image into the files;
+//  2. when fileIO: cover embed + rename + (under auto_write_tags_on_apply) tag
+//     write, via ApplyMetadataFileIO's pipeline;
+//  3. when writeTags: write the tags -- unless step 2 already owned the tag
+//     write, so each book's files are tagged exactly once.
+//
+// Before 2026-09-12 there was no shared sequel. The single-book handler did 1-3
+// inline and tagged twice whenever auto_write_tags_on_apply was on (step 2
+// wrote them, then its own write-back wrote them again); the batch apply did 2
+// and 3 -- tagging twice the same way -- and never 1, so a batch-applied book
+// kept its old cover forever; and auto-fetch did its own cover download and
+// wrote tags only under write_back_metadata, so its DB and its tags disagreed.
+//
+// The error is the first file-side failure: a pipeline (rename) failure, else
+// the tag-write failure. Tags are still written after a pipeline failure --
+// correct tags in a file that did not move are still correct.
+func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error {
+	mfs.DownloadPendingCover(id, pendingCoverURL)
+
+	var tags tagWriteResult
+	var fileErr error
+	if fileIO {
+		tags, fileErr = mfs.applyMetadataFileIO(id)
+	}
+	if writeTags && !tags.handled {
+		if _, err := mfs.writeTags(id); err != nil {
+			tags.err = err
+		}
+	}
+	if fileErr != nil {
+		return fileErr
+	}
+	if tags.err != nil {
+		return fmt.Errorf("apply file work: write tags for book %s: %w", id, tags.err)
+	}
+	return nil
+}
+
 // ApplyMetadataFileIO runs the slow file operations after metadata is applied:
-// cover embed, tag write-back, file rename. Cover download is done inline
-// in ApplyMetadataCandidate so the response includes the updated cover URL.
-// Designed to run in a background goroutine.
+// cover embed, file rename and, under auto_write_tags_on_apply, the tag write.
+// The cover DOWNLOAD is not here: it runs first, in FinishApplyFileWork, which
+// is what apply paths should call. Designed to run in a background goroutine.
 //
 // It returns an error when the file work did not fully land. Until 2026-08-16
 // it returned nothing and swallowed the pipeline failure into a slog.Warn, so
@@ -110,16 +173,23 @@ func backupFileBeforeWrite(filePath string) {
 // embedCoverInBookFiles reports nothing and a missing cover must not mask a
 // rename failure or block the pipeline below it.
 func (mfs *Service) ApplyMetadataFileIO(id string) error {
+	_, err := mfs.applyMetadataFileIO(id)
+	return err
+}
+
+// applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
+// pipeline did about tags, for FinishApplyFileWork's write-once guard.
+func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
-		return fmt.Errorf("apply file I/O: load book %s: %w", id, err)
+		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
 	}
 	if book == nil {
 		// Reported rather than ignored: the two recovery handlers replay file
 		// ops recorded before a restart, and a book that has since been deleted
 		// is the one case where this is expected and benign. Naming it lets the
 		// caller log which book vanished instead of silently doing nothing.
-		return fmt.Errorf("apply file I/O: book %s not found", id)
+		return tagWriteResult{}, fmt.Errorf("apply file I/O: book %s not found", id)
 	}
 
 	// Embed cover art into audio files (slow: ffmpeg)
@@ -129,11 +199,13 @@ func (mfs *Service) ApplyMetadataFileIO(id string) error {
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		if err := mfs.runApplyPipeline(id, book); err != nil {
-			return fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
+		tags, err := mfs.runApplyPipeline(id, book)
+		if err != nil {
+			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}
+		return tags, nil
 	}
-	return nil
+	return tagWriteResult{}, nil
 }
 
 // computeITunesPath converts a local file path to an iTunes file:// URL

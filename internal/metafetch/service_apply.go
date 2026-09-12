@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -196,16 +196,25 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 		if err == nil && series != nil {
 			book.SeriesID = &series.ID
 		}
-		if meta.SeriesPosition != "" {
-			// Preserve the raw position (incl. decimals like "1.5") as a SIGNAL —
-			// the served *int SeriesSequence below cannot hold it. Set
-			// unconditionally so a fractional position is captured even though the
-			// Atoi best-effort below drops it.
-			raw := meta.SeriesPosition
-			book.SeriesPositionRaw = &raw
-			if pos, err := strconv.Atoi(meta.SeriesPosition); err == nil {
-				book.SeriesSequence = &pos
-			}
+	}
+
+	// Series position. Applied with a valid series name, OR on its own when the
+	// candidate carries no series name and the book already has a series -- the
+	// "series_position" apply field selected without "series". It used to sit
+	// inside the series-name block, so a lone series_position selection wrote
+	// nothing. A garbage series name still suppresses it: a position that came
+	// with a series we refused is not trusted on its own.
+	validSeries := meta.Series != "" && !IsGarbageValue(meta.Series)
+	positionOnly := meta.Series == "" && book.SeriesID != nil
+	if meta.SeriesPosition != "" && (validSeries || positionOnly) {
+		// Preserve the raw position (incl. decimals like "1.5") as a SIGNAL —
+		// the served *int SeriesSequence below cannot hold it. Set
+		// unconditionally so a fractional position is captured even though the
+		// Atoi best-effort below drops it.
+		raw := meta.SeriesPosition
+		book.SeriesPositionRaw = &raw
+		if pos, err := strconv.Atoi(meta.SeriesPosition); err == nil {
+			book.SeriesSequence = &pos
 		}
 	}
 }
@@ -568,41 +577,14 @@ func (mfs *Service) libraryOrganizeService() *organizer.Service {
 	return mfs.organizeSvc
 }
 
+// persistFetchedMetadata records "what the provider said" as the fetched_value
+// of each field-state row. The rows come from ApplyFields, the same list the
+// apply allowlist uses, so every field an apply can write gets provenance.
+// It used to be a hand-written list of eight fields that had drifted from the
+// apply: narrator, series, description, genre, subtitle, runtime and the rest
+// were written to the book with no fetched_value recorded.
 func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMetadata) {
-	fetchedValues := map[string]any{}
-	if meta.Title != "" {
-		fetchedValues["title"] = meta.Title
-	}
-	if meta.Publisher != "" {
-		fetchedValues["publisher"] = meta.Publisher
-	}
-	if meta.Language != "" {
-		fetchedValues["language"] = meta.Language
-	}
-	if meta.PublishYear != 0 {
-		// Provenance key mirrors the routed field (see ApplyMetadataToBook).
-		if meta.PublishYearIsAudiobookRelease {
-			fetchedValues["audiobook_release_year"] = meta.PublishYear
-		} else {
-			fetchedValues["print_year"] = meta.PublishYear
-		}
-	}
-	if meta.CoverURL != "" {
-		fetchedValues["cover_url"] = meta.CoverURL
-	}
-	if meta.Author != "" {
-		fetchedValues["author_name"] = meta.Author
-	}
-	if meta.ISBN != "" {
-		if len(meta.ISBN) == 10 {
-			fetchedValues["isbn10"] = meta.ISBN
-		} else {
-			fetchedValues["isbn13"] = meta.ISBN
-		}
-	}
-	if meta.ASIN != "" {
-		fetchedValues["asin"] = meta.ASIN
-	}
+	fetchedValues := FetchedProvenance(meta)
 	if len(fetchedValues) > 0 {
 		if err := mfs.updateFetchedMetadataState(bookID, fetchedValues); err != nil {
 			slog.Error("FetchMetadataForBook failed to persist fetched metadata state", "error", err)
@@ -647,6 +629,8 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		ISBN:           candidate.ISBN,
 		ISBN10:         candidate.ISBN10,
 		ISBN13:         candidate.ISBN13,
+		ASIN:           candidate.ASIN,
+		Genre:          candidate.Genre,
 		CoverURL:       candidate.CoverURL,
 		Description:    candidate.Description,
 		Language:       candidate.Language,
@@ -664,44 +648,15 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		PublishYearIsAudiobookRelease: metadata.SourceProducesAudiobookReleaseYear(candidate.Source),
 	}
 
-	// If fields list is non-empty, zero out fields NOT in the list
-	if len(fields) > 0 {
-		allowed := map[string]bool{}
-		for _, f := range fields {
-			allowed[f] = true
-		}
-		if !allowed["title"] {
-			meta.Title = ""
-		}
-		if !allowed["author"] {
-			meta.Author = ""
-		}
-		if !allowed["narrator"] {
-			meta.Narrator = ""
-		}
-		if !allowed["series"] {
-			meta.Series = ""
-			meta.SeriesPosition = ""
-		}
-		if !allowed["year"] {
-			meta.PublishYear = 0
-		}
-		if !allowed["publisher"] {
-			meta.Publisher = ""
-		}
-		if !allowed["isbn"] {
-			meta.ISBN = ""
-		}
-		if !allowed["cover_url"] {
-			meta.CoverURL = ""
-		}
-		if !allowed["description"] {
-			meta.Description = ""
-		}
-		if !allowed["language"] {
-			meta.Language = ""
-		}
-	}
+	// If fields is non-empty, zero out every field NOT in it. The allowlist is
+	// ApplyFields (apply_fields.go) -- the same list provenance is recorded
+	// from, and the list the web apply dialogs render -- so a field the UI can
+	// deselect can never be written anyway. Until 2026-09-12 this was a
+	// hand-written block that knew ten names: "series_position" (sent by the
+	// UI) had no branch, unchecking "isbn" left ISBN10/ISBN13 to be written,
+	// and subtitle/abridged/page count/secondary series/runtime were written
+	// whatever the user selected.
+	meta = FilterApplyFields(meta, fields)
 
 	// Strip embedded "Series Name, Book N" before persisting — protects
 	// against Audible/Audnexus candidates where the book number is baked
@@ -871,7 +826,11 @@ func (mfs *Service) DownloadPendingCover(bookID, coverURL string) {
 		return
 	}
 
-	coverPath, err := metadata.DownloadCoverArt(coverURL, config.AppConfig.RootDir, bookID)
+	download := metadata.DownloadCoverArt
+	if mfs.coverDownload != nil {
+		download = mfs.coverDownload
+	}
+	coverPath, err := download(coverURL, config.AppConfig.RootDir, bookID)
 	if err != nil {
 		slog.Warn("background cover art download failed", "id", bookID, "error", err)
 		return

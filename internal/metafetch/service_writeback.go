@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -32,32 +32,6 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// writeBackMetadata writes enriched metadata back to a book's audio file(s)
-// during the fetch/apply flow.
-//
-// This used to be a ~160-line near-duplicate of WriteBackMetadataForBook whose
-// only distinct input was three fallback values from the just-fetched metadata.
-// The two copies drifted, and the duplicate was the worse of the two: it never
-// embedded covers from an already-downloaded local cover, never propagated to
-// version-group siblings, never redirected protected paths to the library copy,
-// and never stamped LastWrittenAt/MarkNeedsRescan in its multi-file branch (so
-// those books stayed invisible to any "written since it changed?" skip).
-//
-// It is now a thin wrapper over the single shared implementation, and the
-// fetch/apply path gains all of the above.
-func (mfs *Service) writeBackMetadata(book *database.Book, meta metadata.BookMetadata) {
-	if book == nil {
-		return
-	}
-	if _, err := mfs.writeBackForBook(book.ID, &writeBackOverrides{
-		Title:       meta.Title,
-		Author:      meta.Author,
-		PublishYear: meta.PublishYear,
-	}, nil); err != nil {
-		slog.Warn("write-back after fetch failed", "id", book.ID, "error", err)
-	}
 }
 
 // metadataSourceTag turns a human-readable source name from
@@ -462,7 +436,7 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
+func (mfs *Service) runApplyPipeline(id string, book *database.Book) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy instead
 	if mfs.isProtectedPath(book.FilePath) {
 		libCopy := mfs.ensureLibraryCopy(book)
@@ -471,7 +445,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 				"book_id", id, "book_title", book.Title,
 				"protected_path", book.FilePath,
 				"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
-			return nil
+			return tagWriteResult{}, nil
 		}
 		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", libCopy.ID, "bookID", id)
 		id = libCopy.ID
@@ -480,11 +454,11 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 
 	bookFiles, err := mfs.db.GetBookFiles(id)
 	if err != nil {
-		return fmt.Errorf("list book files: %w", err)
+		return tagWriteResult{}, fmt.Errorf("list book files: %w", err)
 	}
 	bookFiles = dedupeBookFilesByPath(id, bookFiles)
 	if len(bookFiles) == 0 {
-		return nil
+		return tagWriteResult{}, nil
 	}
 
 	// Plan the rename through the Organizer — same store lookups for
@@ -495,7 +469,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(book, bookFiles)
 	if err != nil {
 		// A broken naming pattern must not fall through to a rename.
-		return fmt.Errorf("compute target paths for book %s: %w", id, err)
+		return tagWriteResult{}, fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
 
 	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) &&
@@ -595,7 +569,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		// run, forever, and never advanced past phaseRename.
 		if renameErr != nil {
 			recordRenameCollisionFailure(mfs.db, id, renameResult, renameErr)
-			return fmt.Errorf("rename files: %w", renameErr)
+			return tagWriteResult{}, fmt.Errorf("rename files: %w", renameErr)
 		}
 		organizer.ClearApplyRenameFailure(mfs.db, id)
 		setCheckpoint(mfs.db, id, phaseRename)
@@ -613,15 +587,27 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 		}
 	}
 
-	// Write metadata tags to audio files
-	if config.AppConfig.AutoWriteTagsOnApply && !hasCheckpoint(mfs.db, id, phaseTags) {
-		if written, err := mfs.WriteBackMetadataForBook(id); err != nil {
-			slog.Warn("tag writing failed for book",
-				"book_id", id, "book_title", book.Title,
-				"book_path", book.FilePath, "error", err)
-		} else {
-			slog.Info("wrote metadata tags to file(s) for book", "value", written, "id", id)
-			setCheckpoint(mfs.db, id, phaseTags)
+	// Write metadata tags to audio files.
+	//
+	// tags.handled is set whenever this pipeline OWNS the tag write for the
+	// run -- it wrote them now, an interrupted earlier attempt already did
+	// (checkpoint), or the write failed. FinishApplyFileWork reads it so a
+	// caller that also asked for tags does not write them a second time; before
+	// 2026-09-12 every apply caller followed this with its own
+	// WriteBackMetadataForBook and each book's files were tagged twice.
+	var tags tagWriteResult
+	if config.AppConfig.AutoWriteTagsOnApply {
+		tags.handled = true
+		if !hasCheckpoint(mfs.db, id, phaseTags) {
+			if written, err := mfs.writeTags(id); err != nil {
+				tags.err = err
+				slog.Warn("tag writing failed for book",
+					"book_id", id, "book_title", book.Title,
+					"book_path", book.FilePath, "error", err)
+			} else {
+				slog.Info("wrote metadata tags to file(s) for book", "value", written, "id", id)
+				setCheckpoint(mfs.db, id, phaseTags)
+			}
 		}
 	}
 
@@ -636,24 +622,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) error {
 
 	// All phases complete — clear checkpoints.
 	clearCheckpoints(mfs.db, id)
-	return nil
-}
-
-// writeBackOverrides carries values from freshly-fetched metadata that may not
-// be persisted on the book record yet. They are only consulted as fallbacks when
-// the book's own fields are empty. nil means "use the DB record alone".
-//
-// This exists so the fetch/apply path can share ONE write-back implementation
-// instead of keeping its own copy. It previously had a near-identical ~160-line
-// duplicate whose only distinct input was these three values, and the two copies
-// had drifted: the duplicate never embedded covers from an already-downloaded
-// local cover, never propagated to version-group siblings, never redirected
-// protected paths to the library copy, and never stamped LastWrittenAt in its
-// multi-file branch.
-type writeBackOverrides struct {
-	Title       string
-	Author      string
-	PublishYear int
+	return tags, nil
 }
 
 // WriteBackMetadataForBook reads current DB metadata for the book, resolves authors and
@@ -664,12 +633,15 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 	if len(segmentFilter) > 0 {
 		sf = segmentFilter[0]
 	}
-	return mfs.writeBackForBook(id, nil, sf)
+	return mfs.writeBackForBook(id, sf)
 }
 
-// writeBackForBook is the single implementation behind both WriteBackMetadataForBook
-// and the fetch/apply path.
-func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentFilter []string) (int, error) {
+// writeBackForBook is the single tag-write implementation behind
+// WriteBackMetadataForBook, which every apply path (including auto-fetch)
+// reaches through FinishApplyFileWork. It used to take fallback overrides for
+// the fetch path's own wrapper; auto-fetch now writes what the DB holds, like
+// every other apply, so the tags and the row agree.
+func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return 0, fmt.Errorf("audiobook not found: %s", id)
@@ -707,9 +679,6 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 			authorNames = append(authorNames, author.Name)
 		}
 	}
-	if len(authorNames) == 0 && ov != nil && ov.Author != "" {
-		authorNames = append(authorNames, ov.Author)
-	}
 	artistStr := strings.Join(authorNames, ", ")
 
 	// --- Resolve narrator names ---
@@ -733,8 +702,6 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 		year = *originalBook.AudiobookReleaseYear
 	} else if originalBook.PrintYear != nil && *originalBook.PrintYear > 0 {
 		year = *originalBook.PrintYear
-	} else if ov != nil && ov.PublishYear > 0 {
-		year = ov.PublishYear
 	}
 
 	opConfig := fileops.OperationConfig{VerifyChecksums: true}
@@ -779,9 +746,6 @@ func (mfs *Service) writeBackForBook(id string, ov *writeBackOverrides, segmentF
 
 	// Use the original book's title for tag content (it has freshly-applied metadata)
 	bookTitle := originalBook.Title
-	if bookTitle == "" && ov != nil {
-		bookTitle = ov.Title
-	}
 	if totalTracks > 1 {
 		// Multi-file: write to each file with per-track title and numbering
 		digits := len(fmt.Sprintf("%d", totalTracks))
