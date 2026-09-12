@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.62.0 -->
+<!-- version: 10.61.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -5310,7 +5311,8 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       `cleanup_orphan_author_embeddings.go:141` → `embeddingStore.Delete` `:168`
       (embeddings are recomputable, so this degrades rather than destroys).
 
-- [ ] **MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it.**
+- [x] **✅ FIXED 2026-09-11:** both supporting defects are closed. `memdb_reads.go` now returns a book-lookup error instead of treating it as "book absent", in `GetAllAuthorBookCounts` and at the same pattern in the per-author book list. `author.go`'s `runAuthorDedupScan` now fails on a `GetAllAuthorBookCounts` error instead of discarding it with `_`. The headline correction no longer applies: the parent MEMDB-LOSSY-READERS item was closed DONE on 2026-09-10.
+- [x] **MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it.**
       `todo.d/20260823-memdb-lossy-projection-unguarded-readers.md` names
       `purge-empty-authors` (4,975 of 12,854 authors) as its worked example,
       gating deletion on two unguarded counters. At HEAD that is no longer true:
@@ -9409,7 +9411,13 @@ closed DB — not because of that guard. The field's doc comment claims a proper
 does not have. Worth correcting when the RWMutex work lands, since the same pass touches
 every method.
 
-## 🔴 An empty `FieldFilter` value silently returns the WHOLE library
+## ✅ An empty `FieldFilter` value silently returns the WHOLE library (fixed)
+
+> **Status 2026-09-11:** the empty-value case is fixed in all three layers; the details are in the section
+> "✅ An empty `FieldFilter` value matched the WHOLE LIBRARY (fixed)" below. At HEAD, `handlers/audiobooks/handler.go`
+> rejects an empty value with a 400 via `audiobooks.FirstEmptyFilterValue`, and `service_filtering.go`'s
+> `matchesFieldFilters` fails closed. The fix did not address one remainder:
+- [ ] The flat `?title=` query parameter (not a supported parameter) is silently ignored rather than rejected.
 
 Measured against production 2026-08-12 on `GET /api/v1/audiobooks?filters=…`:
 
@@ -10375,6 +10383,9 @@ own primary). Unify:
 - [ ] better: backfill explicit `true` onto the 5,702 nil rows (dry-run
       gated) so nil ceases to exist, then make nil a validation error at
       write time.
+      _Status 2026-09-11: the backfill code exists. `internal/maintenance/jobs/normalize_primary_flags.go`
+      classifies nil-ungrouped rows and writes `true`, dry-run gated, in the same op as the 41 false-ungrouped rows.
+      Still open: the production apply, which is an owner decision, and the write-time validation half._
 - [x] Fix the 41 ungrouped-false rows to true in the same op (C314). — ⏩ STALE 2026-09-10: The code fully satisfies the ask: internal/maintenance/jobs/normalize_primary_flags.go:76-78 handles the 41 false/ungrouped rows in the SAME op as the nil-ungrouped fix (`case !*b.IsPrimaryVersion && !grouped: falseUngr…
 - [ ] Re-run this census as the post-fix verification: expected end state is
       exactly two populations (true, false+VG).
