@@ -7995,7 +7995,53 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Reverted, fully or partially. Only restored rows are marked reverted; `partial` is true when any row was left un-reverted (failed or not restorable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string",
+                          "description": "One-line summary with the counts."
+                        },
+                        "partial": {
+                          "type": "boolean"
+                        },
+                        "operation_id": {
+                          "type": "string"
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "restored": {
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "type": "integer"
+                        },
+                        "not_restorable": {
+                          "type": "integer"
+                        },
+                        "already_reverted": {
+                          "type": "integer"
+                        },
+                        "not_restorable_types": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          },
+                          "description": "Not-restorable rows by label: a change type, or `metadata_update:<field>`."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad request"
@@ -8005,6 +8051,12 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "409": {
+            "description": "No row can be undone automatically (every row is record-only, e.g. author_delete); nothing was changed. The error names the counts by type."
+          },
+          "500": {
+            "description": "A restore failed (code REVERT_PARTIAL_FAILURE). The message carries the counts; failed rows are not marked reverted and can be retried."
           }
         }
       }

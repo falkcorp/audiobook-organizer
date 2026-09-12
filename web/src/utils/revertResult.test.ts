@@ -4,7 +4,7 @@
 // last-edited: 2026-09-12
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { describeRevertResult } from './revertResult';
+import { describeRevertResult, describeUndoPreflight } from './revertResult';
 import { revertOperation } from '../services/versionApi';
 
 describe('describeRevertResult', () => {
@@ -69,5 +69,45 @@ describe('versionApi.revertOperation', () => {
       }),
     );
     await expect(revertOperation('op-1')).rejects.toThrow(/cannot be undone automatically/);
+  });
+});
+
+describe('describeUndoPreflight', () => {
+  const base = { total_changes: 0, already_reverted: 0, content_changed: [], book_deleted: [], re_organized: [], safe: 0 };
+
+  it('does not offer Undo when no row can be restored', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      total_changes: 1742,
+      not_restorable: 1742,
+      not_restorable_types: { author_delete: 1742 },
+    });
+    expect(plan.canUndo).toBe(false);
+    expect(plan.message).toContain('1742 author_delete rows');
+    expect(plan.message).not.toMatch(/Undo \d/);
+  });
+
+  it('offers only the restorable count and names the record-only rows', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      total_changes: 3,
+      safe: 1,
+      not_restorable: 2,
+      not_restorable_types: { author_delete: 1, 'metadata_update:author_id': 1 },
+    });
+    expect(plan.canUndo).toBe(true);
+    expect(plan.message).toMatch(/^Undo 1 change\(s\)/);
+    expect(plan.message).toContain('2 change(s) are a record only');
+    expect(plan.message).toContain('1 metadata_update:author_id row');
+  });
+
+  it('counts conflicting rows among the rows the revert will attempt', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      safe: 2,
+      content_changed: [{ change_id: 'c', book_id: 'b', reason: 'content changed' }],
+    });
+    expect(plan.canUndo).toBe(true);
+    expect(plan.message).toMatch(/^3 change\(s\) can be undone; 1 of them have conflicts/);
   });
 });

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -21,9 +22,16 @@ type ledgerStub struct {
 	changes   []*database.OperationChange
 	marked    []string
 	markCalls int
+	// failBook makes GetBookByID fail for that book ID.
+	failBook string
 }
 
-func (s *ledgerStub) GetBookByID(string) (*database.Book, error) { return s.book, nil }
+func (s *ledgerStub) GetBookByID(id string) (*database.Book, error) {
+	if id != "" && id == s.failBook {
+		return nil, errors.New("book lookup failed")
+	}
+	return s.book, nil
+}
 func (s *ledgerStub) UpdateBook(_ string, b *database.Book) (*database.Book, error) {
 	s.book = b
 	return b, nil
@@ -127,8 +135,10 @@ func TestRevertOperation_UnknownTypeIsNotRestorable(t *testing.T) {
 // and the call returns an error alongside the result.
 func TestRevertOperation_FailedRestoreIsNotMarked(t *testing.T) {
 	s := &ledgerStub{
-		book:    &database.Book{ID: "b1", Title: "New"},
-		changes: []*database.OperationChange{titleRow("c1", "title"), titleRow("c2", "no_such_field")},
+		book:     &database.Book{ID: "b1", Title: "New"},
+		failBook: "b2",
+		changes: []*database.OperationChange{titleRow("c1", "title"),
+			{ID: "c2", OperationID: "op", BookID: "b2", ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "New"}},
 	}
 	result, err := NewRevertService(s).RevertOperation("op")
 	if err == nil {
@@ -156,5 +166,75 @@ func TestRevertOperation_AllRestored_NotPartial(t *testing.T) {
 	}
 	if len(s.marked) != 2 {
 		t.Errorf("marked = %v, want both rows", s.marked)
+	}
+}
+
+// maintenance.author-duplicate-merge journals author_delete plus one
+// metadata_update row with field author_id per moved book. author_id is not a
+// field the engine can restore, so the whole op is record-only: it must be
+// refused as NotRestorable (409), not attempted and reported as a 500 with
+// every author_id row counted Failed.
+func TestRevertOperation_UnrevertableMetadataField_IsNotRestorable(t *testing.T) {
+	s := &ledgerStub{
+		book:    &database.Book{ID: "b1", Title: "New"},
+		changes: []*database.OperationChange{titleRow("c1", "author_id"), titleRow("c2", "author_id"), deleteRow("c3", "author_delete")},
+	}
+	result, err := NewRevertService(s).RevertOperation("op")
+	var nr *NotRestorableError
+	if !errors.As(err, &nr) {
+		t.Fatalf("err = %v (result %+v), want *NotRestorableError", err, result)
+	}
+	if nr.Types["metadata_update:author_id"] != 2 || nr.Types["author_delete"] != 1 {
+		t.Errorf("Types = %v, want metadata_update:author_id:2 author_delete:1", nr.Types)
+	}
+	if s.markCalls != 0 {
+		t.Errorf("mark called %d times, want 0", s.markCalls)
+	}
+}
+
+// Rows an earlier partial revert left unmarked can be retried: rows already
+// marked are skipped one by one and only the rest are reversed and marked.
+// The previous guard refused the whole op as "already reverted" as soon as any
+// row was marked, so the leftover rows could never be retried.
+func TestRevertOperation_RetriesRowsLeftUnmarked(t *testing.T) {
+	now := time.Now()
+	done := titleRow("c1", "title")
+	done.RevertedAt = &now
+	s := &ledgerStub{
+		book:    &database.Book{ID: "b1", Title: "New"},
+		changes: []*database.OperationChange{done, titleRow("c2", "title"), deleteRow("c3", "author_delete")},
+	}
+	result, err := NewRevertService(s).RevertOperation("op")
+	if err != nil {
+		t.Fatalf("RevertOperation: %v", err)
+	}
+	if !slices.Equal(s.marked, []string{"c2"}) {
+		t.Errorf("marked = %v, want [c2] only", s.marked)
+	}
+	if result.Restored != 1 || result.AlreadyReverted != 1 || result.NotRestorable != 1 {
+		t.Errorf("result = %+v, want restored 1 / already_reverted 1 / not_restorable 1", result)
+	}
+	if !strings.Contains(result.Summary(), "1 already reverted earlier") {
+		t.Errorf("Summary() = %q, want it to count the already-reverted row", result.Summary())
+	}
+}
+
+// "Already reverted" is reported only when every restorable row is marked; a
+// record-only row alongside them does not turn it into a NotRestorableError.
+func TestRevertOperation_AllRestorableRowsReverted_SaysAlreadyReverted(t *testing.T) {
+	now := time.Now()
+	done := titleRow("c1", "title")
+	done.RevertedAt = &now
+	s := &ledgerStub{changes: []*database.OperationChange{done, deleteRow("c2", "author_delete")}}
+	_, err := NewRevertService(s).RevertOperation("op")
+	if err == nil || !strings.Contains(err.Error(), "already been reverted") {
+		t.Fatalf("err = %v, want an already-reverted error", err)
+	}
+	var nr *NotRestorableError
+	if errors.As(err, &nr) {
+		t.Errorf("err is a NotRestorableError, want already-reverted")
+	}
+	if s.markCalls != 0 {
+		t.Errorf("mark called %d times, want 0", s.markCalls)
 	}
 }

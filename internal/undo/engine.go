@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 //
 // Undo engine (spec 3.2 task 3). Reverses the destructive changes
 // recorded by a prior operation by walking its operation_changes
@@ -325,6 +325,12 @@ type UndoConflictReport struct {
 	BookDeleted     []UndoConflictItem `json:"book_deleted,omitempty"`
 	ReOrganized     []UndoConflictItem `json:"re_organized,omitempty"`
 	Safe            int                `json:"safe"`
+	// NotRestorable counts rows the revert endpoint cannot reverse (see
+	// NotRestorableLabel), by label in NotRestorableTypes. They are in no
+	// other bucket, and AlreadyReverted counts only restorable rows, so
+	// Safe plus the three conflict buckets is what the revert will attempt.
+	NotRestorable      int            `json:"not_restorable"`
+	NotRestorableTypes map[string]int `json:"not_restorable_types,omitempty"`
 }
 
 // UndoConflictItem describes one change that may conflict.
@@ -343,7 +349,9 @@ type ConflictChecker interface {
 }
 
 // PreflightUndoConflicts scans the operation's changes and reports
-// which ones can be safely undone vs which have conflicts.
+// which ones can be safely undone vs which have conflicts. It predicts what
+// POST /operations/:id/revert (audiobooks.RevertService) will do, so it
+// classifies rows with NotRestorableLabel, the classifier that endpoint uses.
 func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoConflictReport, error) {
 	changes, err := store.GetOperationChanges(operationID)
 	if err != nil {
@@ -353,6 +361,16 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	report := &UndoConflictReport{TotalChanges: len(changes)}
 
 	for _, c := range changes {
+		// Classify before the reverted check, as the revert does: a
+		// record-only row is never counted as already reverted.
+		if label := NotRestorableLabel(c); label != "" {
+			report.NotRestorable++
+			if report.NotRestorableTypes == nil {
+				report.NotRestorableTypes = map[string]int{}
+			}
+			report.NotRestorableTypes[label]++
+			continue
+		}
 		if c.RevertedAt != nil {
 			report.AlreadyReverted++
 			continue
@@ -374,7 +392,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 			} else {
 				report.Safe++
 			}
-		case "metadata_update", "db_update":
+		case "metadata_update":
 			if c.BookID != "" {
 				book, _ := store.GetBookByID(c.BookID)
 				if book == nil {

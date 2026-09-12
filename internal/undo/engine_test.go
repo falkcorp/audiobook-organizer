@@ -1,6 +1,7 @@
 // file: internal/undo/engine_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8b0e2d-4c5e-4f9g-b2d6-8e0f3g5c9d4b
+// last-edited: 2026-09-12
 
 package undo
 
@@ -283,4 +284,54 @@ func readTestFile(t *testing.T, path string) string {
 		t.Fatalf("read file: %v", err)
 	}
 	return string(data)
+}
+
+// Preflight and revert use one classifier: record-only rows (author_delete,
+// narrator_delete, a metadata_update on a field the revert engine cannot
+// restore) are counted as not restorable, never as safe. Before, every one of
+// them landed in Safe, so the UI asked "Undo 5 change(s)?" for an op whose
+// revert then refused all but one row.
+func TestPreflightUndoConflicts_RecordOnlyRowsAreNotSafe(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/b.m4b", Format: "m4b"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	rows := []*database.OperationChange{
+		{ID: "c1", OperationID: "op1", ChangeType: "author_delete", FieldName: "author", OldValue: "7:A"},
+		{ID: "c2", OperationID: "op1", ChangeType: "author_delete", FieldName: "author", OldValue: "8:B"},
+		{ID: "c3", OperationID: "op1", ChangeType: "narrator_delete", FieldName: "narrator", OldValue: "9:C"},
+		{ID: "c4", OperationID: "op1", BookID: book.ID, ChangeType: "metadata_update", FieldName: "author_id", OldValue: "7", NewValue: "9"},
+		{ID: "c5", OperationID: "op1", BookID: book.ID, ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "T"},
+	}
+	for _, r := range rows {
+		if err := store.CreateOperationChange(r); err != nil {
+			t.Fatalf("create change %s: %v", r.ID, err)
+		}
+	}
+
+	report, err := PreflightUndoConflicts(store, "op1")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if report.Safe != 1 {
+		t.Errorf("safe = %d, want 1 (only the title row is restorable)", report.Safe)
+	}
+	if report.NotRestorable != 4 {
+		t.Errorf("not_restorable = %d, want 4", report.NotRestorable)
+	}
+	want := map[string]int{"author_delete": 2, "narrator_delete": 1, "metadata_update:author_id": 1}
+	if len(report.NotRestorableTypes) != len(want) {
+		t.Errorf("not_restorable_types = %v, want %v", report.NotRestorableTypes, want)
+	}
+	for k, v := range want {
+		if report.NotRestorableTypes[k] != v {
+			t.Errorf("not_restorable_types[%s] = %d, want %d", k, report.NotRestorableTypes[k], v)
+		}
+	}
 }

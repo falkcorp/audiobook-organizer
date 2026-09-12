@@ -541,6 +541,10 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 	case err != nil:
 		httputil.InternalError(c, "failed to revert operation", err)
 		return
+	case result == nil:
+		// No error and no result would panic on result.Summary() below.
+		httputil.InternalError(c, "failed to revert operation", errors.New("revert returned no result"))
+		return
 	}
 	httputil.RespondWithOK(c, revertResponse{Message: result.Summary(), Partial: result.Partial(), RevertResult: result})
 }

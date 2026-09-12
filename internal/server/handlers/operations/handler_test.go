@@ -580,3 +580,12 @@ func TestOptimizeDatabase_NarratorSplitKeepsMemDBLive(t *testing.T) {
 	require.Equal(t, "Split Me (renamed)", cores[0].Title,
 		"memdb kept the old title: the book's memdb upsert aborted on its narrator rows")
 }
+
+// A revert that returns neither a result nor an error must answer 500, not
+// panic on result.Summary().
+func TestRevertOperation_NilResult_Returns500(t *testing.T) {
+	w := postRevert(newRevertHandler(t, nil, nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body %s)", w.Code, w.Body.String())
+	}
+}
