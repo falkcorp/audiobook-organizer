@@ -1,5 +1,7 @@
 <!-- file: TODO.md -->
 <!-- version: 10.65.0 -->
+<!-- version: 10.62.0 -->
+<!-- version: 10.63.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -13661,6 +13663,13 @@ deleted rather than rewritten, since the capabilities themselves are gone. Relat
       2. **Instrument first** — log `sort_by` values for a week, then enable only the
          fields that actually appear. This is the option that replaces a guess with
          evidence, and the instrumentation is small.
+         ✅ **Instrumentation shipped (TASK-095, 2026-09-11):**
+         `audiobook_organizer_sort_by_requested_total{field}`, counted once per
+         `GET /audiobooks`. Every field `SortBooks` understands keeps its own label,
+         an omitted `sort_by` is `default`, anything else is `other`. Once it has been
+         deployed for a week, read
+         `sum by (field) (increase(audiobook_organizer_sort_by_requested_total[7d]))`.
+         The choice among options 1–4 is still open.
       3. **Enable a chosen subset.** `created_at`/`updated_at` are the most likely to be
          worth it ("what's new" is a real browsing pattern); the numeric triage fields
          (duration/file_size/bitrate) are plausibly rare enough to leave on the slow path.

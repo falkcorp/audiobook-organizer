@@ -61,6 +61,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -341,6 +342,26 @@ func intersectIDSets(a, b map[string]struct{}) map[string]struct{} {
 	return out
 }
 
+// sortByMetricLabel bounds a client-supplied sort_by to a metric label
+// (TASK-095). Every field SortBooks understands keeps its own name, an omitted
+// sort_by is "default", and anything else collapses to "other" -- the label
+// set is fixed by database.SortableBookFields, never by what a client types.
+//
+// CanSortBooksBy, not CanPushDownSort: the question this metric answers is
+// which fields to ADD to enabled_sort_indexes, and CanPushDownSort only admits
+// fields already in that set (empty by default), so bucketing by it would
+// report every request as "other" and answer nothing.
+func sortByMetricLabel(sortBy string) string {
+	switch {
+	case sortBy == "":
+		return "default"
+	case database.CanSortBooksBy(sortBy):
+		return sortBy
+	default:
+		return "other"
+	}
+}
+
 // ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
 // has_file_errors fast-path, quick-query (missing_covers / in_import_path /
 // no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
@@ -459,6 +480,8 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	}
 
 	// Parse optional filters
+	sortBy := httputil.ParseQueryString(c, "sort_by")
+	metrics.IncSortByRequested(sortByMetricLabel(sortBy))
 	sortOrder := httputil.ParseQueryString(c, "sort_order")
 	if sortOrder != "" && sortOrder != "asc" && sortOrder != "desc" {
 		sortOrder = "asc"
@@ -486,7 +509,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		LibraryState:       httputil.ParseQueryString(c, "library_state"),
 		Tag:                httputil.ParseQueryString(c, "tag"),
 		Tags:               tags,
-		SortBy:             httputil.ParseQueryString(c, "sort_by"),
+		SortBy:             sortBy,
 		SortOrder:          sortOrder,
 		FingerprintStatus:  httputil.ParseQueryString(c, "fingerprint_status"),
 		CoveragePercentMin: coveragePercentMin,
