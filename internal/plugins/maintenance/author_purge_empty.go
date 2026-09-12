@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -83,7 +83,30 @@ type emptyAuthorReport struct {
 	Eligible   int
 	Deleted    int
 	Failed     int
-	Sample     []string
+	// Sample names up to emptyAuthorSampleLimit authors from the ELIGIBLE
+	// (would-be-deleted) population.
+	Sample []string
+	// HeldBackSample names up to emptyAuthorSampleLimit authors from the
+	// ZeroBooksWithFiles population — the one require_zero_files holds back and
+	// that still needs a human decision before that flag is ever flipped. A
+	// bare count gives a reviewer nothing to look at; this gives them who, and
+	// how many files each one holds. Report-only: nothing reads it to decide a
+	// deletion.
+	//
+	// NO SEPARATE book_authors BACK-REFERENCE CHECK IS NEEDED HERE. An author
+	// only reaches this population after the refCounts guard, and
+	// database.AuthorRefCounts already counts junction-only co-author credits
+	// (the per-book book_authors:<bookID> arrays) in every book state. So every
+	// entry is, by construction, referenced by no book_authors array anywhere.
+	HeldBackSample []heldBackAuthor
+}
+
+// heldBackAuthor is one row of emptyAuthorReport.HeldBackSample.
+type heldBackAuthor struct {
+	// AuthorID lets a reviewer look the row up; the name alone is not unique.
+	AuthorID  int
+	Name      string
+	FileCount int
 }
 
 func (r emptyAuthorReport) summary() string {
@@ -205,35 +228,20 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// Built BEFORE the dry-run branch below, so `apply=false` and `apply=true`
 	// report and delete exactly the same set. A guard applied only on the apply
 	// path would make the dry run a lie.
-	report := emptyAuthorReport{TotalAuthors: len(authors)}
-	var eligible []int
-	for _, a := range authors {
-		if bookCounts[a.ID] != 0 {
-			continue
-		}
-		report.ZeroBooks++
-		// Zero by the display counter but still referenced by something real.
-		// These are precisely the rows the old guard deleted.
-		if refCounts[a.ID] != 0 {
-			report.HeldByRefs++
-			continue
-		}
-		if params.requireZeroFiles() && fileCounts[a.ID] != 0 {
-			report.ZeroBooksWithFiles++
-			continue
-		}
-		eligible = append(eligible, a.ID)
-		if len(report.Sample) < emptyAuthorSampleLimit {
-			report.Sample = append(report.Sample, a.Name)
-		}
-	}
-	// Deterministic order so a limited run takes the same slice every time and two
-	// runs of the same report can be diffed.
-	sort.Ints(eligible)
+	report, eligible := classifyEmptyAuthors(authors, bookCounts, refCounts, fileCounts, params.requireZeroFiles())
 	if params.Limit > 0 && len(eligible) > params.Limit {
 		eligible = eligible[:params.Limit]
 	}
 	report.Eligible = len(eligible)
+
+	if report.ZeroBooksWithFiles > 0 {
+		// Its own line so the held-back population arrives with names and file
+		// counts rather than only as a number in the summary.
+		reporter.Logger().Info("purge-empty-authors held back (zero books, has files)",
+			"held_back", report.ZeroBooksWithFiles,
+			"sampled", len(report.HeldBackSample),
+			"held_back_sample", report.HeldBackSample)
+	}
 
 	if !params.Apply {
 		msg := "DRY RUN (nothing deleted) — " + report.summary()
@@ -279,4 +287,49 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles)
 	prog.Done(msg)
 	return nil
+}
+
+// classifyEmptyAuthors sorts every author into the report's buckets and returns
+// the SORTED eligible IDs (before any Limit is applied). It is pure — maps in,
+// report out — so the classification can be tested without a store or reporter,
+// and so the dry-run and apply paths are fed by the same code.
+//
+// bookCounts only picks the candidate set; refCounts is the delete guard; a nil
+// fileCounts is only valid when requireZeroFiles is false (the caller skips the
+// file pass in that case).
+func classifyEmptyAuthors(authors []database.Author, bookCounts, refCounts, fileCounts map[int]int, requireZeroFiles bool) (emptyAuthorReport, []int) {
+	report := emptyAuthorReport{TotalAuthors: len(authors)}
+	var eligible []int
+	for _, a := range authors {
+		if bookCounts[a.ID] != 0 {
+			continue
+		}
+		report.ZeroBooks++
+		// Zero by the display counter but still referenced by something real.
+		// These are precisely the rows the old guard deleted.
+		if refCounts[a.ID] != 0 {
+			report.HeldByRefs++
+			continue
+		}
+		if requireZeroFiles && fileCounts[a.ID] != 0 {
+			report.ZeroBooksWithFiles++
+			// The counter above stays uncapped; only the sample is bounded.
+			if len(report.HeldBackSample) < emptyAuthorSampleLimit {
+				report.HeldBackSample = append(report.HeldBackSample, heldBackAuthor{
+					AuthorID:  a.ID,
+					Name:      a.Name,
+					FileCount: fileCounts[a.ID],
+				})
+			}
+			continue
+		}
+		eligible = append(eligible, a.ID)
+		if len(report.Sample) < emptyAuthorSampleLimit {
+			report.Sample = append(report.Sample, a.Name)
+		}
+	}
+	// Deterministic order so a limited run takes the same slice every time and two
+	// runs of the same report can be diffed.
+	sort.Ints(eligible)
+	return report, eligible
 }
