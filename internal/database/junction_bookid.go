@@ -1,5 +1,5 @@
 // file: internal/database/junction_bookid.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 073892d4-fddf-47bf-a5aa-be1665175519
 // last-edited: 2026-09-12
 
@@ -86,7 +86,8 @@ type JunctionBookIDRepair struct {
 
 // RepairJunctionBookIDs rewrites every book_authors:<id> and
 // book_narrators:<id> value whose rows carry a book_id other than <id>,
-// stamping <id> onto them, then replays the repaired sets into memdb.
+// stamping <id> onto them, then replays the repaired sets into memdb if memdb
+// is live (see memdbAcceptsDirectWrites for why not during warmup).
 //
 // It is deterministic and lossless: the correct value is in the key, and only
 // the book_id field changes. Keys whose rows already agree are not written, so
@@ -167,9 +168,21 @@ func (p *PebbleStore) RepairJunctionBookIDs() (res JunctionBookIDRepair, err err
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return res, fmt.Errorf("commit junction book_id repair: %w", err)
 	}
-	// Pebble is now correct; bring memdb in line. During the async warmup
-	// window these are buffered by memSync and replayed after publish, so the
-	// result is the same whichever of warmup and this migration runs first.
+	// Pebble is now correct. Bring memdb in line ONLY when it is live.
+	//
+	// At startup this migration runs while the async warmup is still in
+	// flight, and memSync then BUFFERS every write-through for replay. That
+	// buffer is capped (memPendingOpCap, 50,000), and overflowing it abandons
+	// memdb for the whole process. One write per repaired key would blow that
+	// cap on a library where tens of thousands of books were damaged, so the
+	// first boot after this fix could run with memdb off. They would also be
+	// redundant: the warmup closures stamp the key's book ID themselves
+	// (memdb_warmup.go), so whether warmup's iterator saw the damaged value or
+	// the repaired one, it loads the same stamped rows. When memdb is
+	// disabled or abandoned the writes would be dropped anyway.
+	if !p.memdbAcceptsDirectWrites() {
+		return res, nil
+	}
 	for bookID, rows := range authorFixes {
 		p.ReplaceBookAuthorsInMemDB(bookID, rows)
 	}
@@ -177,6 +190,19 @@ func (p *PebbleStore) RepairJunctionBookIDs() (res JunctionBookIDRepair, err err
 		p.ReplaceBookNarratorsInMemDB(bookID, rows)
 	}
 	return res, nil
+}
+
+// memdbAcceptsDirectWrites reports whether a memSync issued now would be
+// applied straight to a published memdb: no warmup is buffering and memdb is
+// published. It reads the same state memSyncWithStore branches on; it adds
+// no flag. The answer can go stale the moment the lock is released, and both
+// ways that can happen are safe for RepairJunctionBookIDs: a warmup that
+// starts afterwards (Reset) re-scans the committed, repaired keys, and a
+// memdb that gets abandoned simply drops the writes.
+func (p *PebbleStore) memdbAcceptsDirectWrites() bool {
+	p.memPending.mu.Lock()
+	defer p.memPending.mu.Unlock()
+	return p.memPending.state == memPendingInactive && p.mem() != nil
 }
 
 // scanJunction iterates every key under prefix. For each, fix receives the

@@ -17,6 +17,8 @@ The store now owns the invariant: the key's book ID is stamped onto every row on
 write, on read (`GetBookAuthors` / `GetBookNarrators`), in the memdb replace
 helpers, and at warmup. A caller-supplied `book_id` naming a different book is
 overridden and logged. Startup migration 63 rewrites rows already on disk,
-lossless because the correct value is in the key, and replays the repaired sets
-into memdb. `TestSetBookAuthors_ExplicitBookIDIsUnchanged` asserted the old
+lossless because the correct value is in the key. It replays the repaired sets
+into memdb only when memdb is live: at startup it runs during the async warmup,
+whose write buffer is capped at 50,000 ops (overflow switches memdb off for the
+process), and warmup's own key stamping already loads the right rows. `TestSetBookAuthors_ExplicitBookIDIsUnchanged` asserted the old
 divergent behaviour and is replaced by `TestSetBookAuthors_MismatchedBookIDFollowsTheKey`.
