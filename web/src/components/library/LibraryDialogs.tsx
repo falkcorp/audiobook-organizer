@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.7.1
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-08-21
+// last-edited: 2026-09-12
 import React from 'react';
 import {
   Typography,
@@ -947,6 +947,9 @@ export const LibraryDialogs = ({
         loadAudiobooks();
         setSelectedAudiobooks([]);
       }}
+      // Late writes from a closed session: reload only. The selection may
+      // already belong to a new session and must not be cleared.
+      onLibraryChanged={() => loadAudiobooks()}
       toast={toast}
     />
 

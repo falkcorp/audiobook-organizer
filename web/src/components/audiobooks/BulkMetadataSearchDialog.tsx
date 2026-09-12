@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-12
 
@@ -47,7 +47,13 @@ interface BulkMetadataSearchDialogProps {
   open: boolean;
   books: Audiobook[];
   onClose: () => void;
+  // Session end: the user closed the wizard after applying something. The
+  // parent reloads the list and clears its selection.
   onComplete: () => void;
+  // Reload the library list and nothing else. Called when an apply or undo from
+  // a closed session lands late, by which time the selection may belong to a
+  // session reopened on other books, so it must not be touched.
+  onLibraryChanged: () => void;
   toast: (
     message: string,
     severity?: 'success' | 'error' | 'warning' | 'info',
@@ -117,6 +123,7 @@ export function BulkMetadataSearchDialog({
   books,
   onClose,
   onComplete,
+  onLibraryChanged,
   toast,
 }: BulkMetadataSearchDialogProps) {
   // The wizard's position is tracked by book id, not by list index: with
@@ -173,9 +180,13 @@ export function BulkMetadataSearchDialog({
   const isStale = (session: number) => session !== sessionRef.current;
   // An apply or undo that lands after the dialog closed still changed the
   // book on the server, and handleClose already decided whether to refresh
-  // before it landed. Refresh the list here, unless the page itself is gone.
+  // before it landed. Reload the list here, unless the page itself is gone.
+  // Never onComplete: it also clears the parent's selection, and by now the
+  // dialog may have been reopened on new books (or the late write is an Undo
+  // clicked on a toast that outlived its dialog), so clearing it would empty
+  // the new session's books mid-use.
   const refreshAfterStaleWrite = () => {
-    if (mountedRef.current) onComplete();
+    if (mountedRef.current) onLibraryChanged();
   };
 
   const handleToggleSkipApplied = (checked: boolean) => {
