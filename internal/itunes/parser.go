@@ -1,6 +1,7 @@
 // file: internal/itunes/parser.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c3d7e51-2f84-4b60-ae91-d8c72b4f36e0
+// last-edited: 2026-09-11
 
 // Package itunes provides functionality for importing audiobooks from iTunes Library.xml files
 package itunes
@@ -26,6 +27,46 @@ type Library struct {
 	MusicFolder        string   `xml:"-"`
 	Tracks             map[string]*Track
 	Playlists          []*Playlist
+	// Carries records which playback fields this library's on-disk format
+	// actually stores. Set by the format's constructor; see SourceFields.
+	Carries SourceFields `xml:"-"`
+}
+
+// SourceFields records which per-track playback fields a library source
+// format actually stores. The importer consults it before writing those
+// fields onto a book, so a format with no slot for a field cannot overwrite a
+// stored value with a zero it never read.
+//
+// The flag is per SOURCE FORMAT, not per track, on purpose. iTunes XML omits
+// the "Bookmark" key when a track has no bookmark, and the plist decoder maps
+// an absent key to 0, so on the XML path "key absent" and "bookmark is 0" are
+// the same fact: the listener finished or cleared it. That 0 is a real reset
+// and must still be written. The ITL binary parser, by contrast, decodes no
+// bookmark offset at all (ITLTrack has no Bookmark field), so its 0 means
+// "unknown", never "reset". A per-track presence bit cannot tell those two
+// apart, and a plain `if v != 0` guard would block the genuine XML reset; a
+// per-format capability gets both right.
+//
+// The zero value carries nothing (fail closed): a Library from a constructor
+// that never declares its capabilities preserves stored values instead of
+// zeroing them.
+type SourceFields struct {
+	Bookmark  bool // Track.Bookmark
+	PlayCount bool // Track.PlayCount
+	PlayDate  bool // Track.PlayDate
+}
+
+// XMLSourceFields is what an iTunes Library.xml plist carries: all three
+// playback fields. An absent key there is a real zero (see SourceFields).
+func XMLSourceFields() SourceFields {
+	return SourceFields{Bookmark: true, PlayCount: true, PlayDate: true}
+}
+
+// ITLSourceFields is what ParseITLAsLibrary fills. Play count (mhit offset 76)
+// and last-played date (offset 100) are decoded by itl_le.go / itl_be.go, but
+// no bookmark offset is, so Track.Bookmark is always 0 from this source.
+func ITLSourceFields() SourceFields {
+	return SourceFields{PlayCount: true, PlayDate: true}
 }
 
 // Track represents a single track/audiobook in the iTunes library

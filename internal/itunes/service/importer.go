@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-11
 
@@ -458,7 +458,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		processed++
 		incImportProcessed(status, processed)
 
-		book, err := imp.buildBookFromAlbumGroup(group, req.LibraryPath, importOpts)
+		book, err := imp.buildBookFromAlbumGroup(group, req.LibraryPath, importOpts, library.Carries)
 		if err != nil {
 			recordImportFailure(status, err.Error())
 			log.Error("%s", err.Error())
@@ -840,6 +840,15 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 	if err != nil {
 		return fmt.Errorf("failed to parse library: %w", err)
 	}
+	return imp.syncLibrary(ctx, library, libraryPath, pathMappings, activityFn, log)
+}
+
+// syncLibrary applies an already-parsed library to the store. It is split from
+// Sync so the update path can be exercised with a Library of either source
+// format: the ITL fixture builders live in package itunes's tests and cannot
+// be reached from here. library.Carries decides which playback fields are
+// written (see itunes.SourceFields).
+func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, libraryPath string, pathMappings []itunes.PathMapping, activityFn func(database.ActivityEntry), log logger.Logger) error {
 	trackCount := len(library.Tracks)
 	log.Info("Parsed %d tracks from iTunes library", trackCount)
 	log.UpdateProgress(0, 0, fmt.Sprintf("Grouping %d tracks by album...", trackCount))
@@ -924,7 +933,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 		}
 
 		if existing == nil {
-			if book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts); err == nil {
+			if book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts, library.Carries); err == nil {
 				if match := pathIndex[book.FilePath]; match != nil {
 					existing = match
 				}
@@ -939,10 +948,19 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 		if existing != nil {
 			changed := false
 
-			newPlayCount := new(firstTrack.PlayCount)
-			if existing.ITunesPlayCount == nil || *existing.ITunesPlayCount != *newPlayCount {
-				existing.ITunesPlayCount = newPlayCount
-				changed = true
+			// Playback fields are overwritten only when the source format
+			// carries them (itunes.SourceFields). An ITL-sourced sync has no
+			// bookmark to offer, and writing its 0 here used to wipe the
+			// stored bookmark on every such sync. A carried 0 is still
+			// written: from XML it is a genuine reset.
+			carries := library.Carries
+
+			if carries.PlayCount {
+				newPlayCount := new(firstTrack.PlayCount)
+				if existing.ITunesPlayCount == nil || *existing.ITunesPlayCount != *newPlayCount {
+					existing.ITunesPlayCount = newPlayCount
+					changed = true
+				}
 			}
 
 			newRating := new(firstTrack.Rating)
@@ -951,13 +969,15 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 				changed = true
 			}
 
-			newBookmark := new(firstTrack.Bookmark)
-			if existing.ITunesBookmark == nil || *existing.ITunesBookmark != *newBookmark {
-				existing.ITunesBookmark = newBookmark
-				changed = true
+			if carries.Bookmark {
+				newBookmark := new(firstTrack.Bookmark)
+				if existing.ITunesBookmark == nil || *existing.ITunesBookmark != *newBookmark {
+					existing.ITunesBookmark = newBookmark
+					changed = true
+				}
 			}
 
-			if firstTrack.PlayDate > 0 {
+			if carries.PlayDate && firstTrack.PlayDate > 0 {
 				lastPlayed := time.Unix(firstTrack.PlayDate, 0)
 				if existing.ITunesLastPlayed == nil || !existing.ITunesLastPlayed.Equal(lastPlayed) {
 					existing.ITunesLastPlayed = &lastPlayed
@@ -1033,7 +1053,7 @@ func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings 
 				})
 			}
 		} else {
-			book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts)
+			book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts, library.Carries)
 			if err != nil {
 				log.Warn("Failed to build book from group '%s': %v", group.key, err)
 				continue
@@ -1930,7 +1950,7 @@ func (imp *Importer) linkITunesMetadata(existing *database.Book, importBook *dat
 	}
 }
 
-func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath string, opts itunes.ImportOptions) (*database.Book, error) {
+func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath string, opts itunes.ImportOptions, carries itunes.SourceFields) (*database.Book, error) {
 	if len(group.tracks) == 0 {
 		return nil, fmt.Errorf("album group has no tracks")
 	}
@@ -2017,16 +2037,25 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 		OriginalFilename:     new(filepath.Base(filePath)),
 		AudiobookReleaseYear: releaseYear,
 		ITunesPersistentID:   persistentID,
-		ITunesPlayCount:      new(firstTrack.PlayCount),
 		ITunesRating:         new(firstTrack.Rating),
-		ITunesBookmark:       new(firstTrack.Bookmark),
 		ITunesImportSource:   new(libraryPath),
 	}
 
 	if !firstTrack.DateAdded.IsZero() {
 		book.ITunesDateAdded = &firstTrack.DateAdded
 	}
-	if firstTrack.PlayDate > 0 {
+	// Playback fields are set only when the source format carries them
+	// (itunes.SourceFields). An uncarried field stays nil ("unknown") rather
+	// than &0: linkITunesMetadata fills only nil fields, so &0 would stop a
+	// later XML import from ever supplying the real value, and position sync
+	// already treats nil and 0 alike.
+	if carries.PlayCount {
+		book.ITunesPlayCount = new(firstTrack.PlayCount)
+	}
+	if carries.Bookmark {
+		book.ITunesBookmark = new(firstTrack.Bookmark)
+	}
+	if carries.PlayDate && firstTrack.PlayDate > 0 {
 		lastPlayed := time.Unix(firstTrack.PlayDate, 0)
 		book.ITunesLastPlayed = &lastPlayed
 	}

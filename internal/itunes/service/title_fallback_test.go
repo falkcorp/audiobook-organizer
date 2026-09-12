@@ -1,7 +1,7 @@
 // file: internal/itunes/service/title_fallback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a3c1f8b-2e74-4d09-b6a1-7c8e0f2d4b69
-// last-edited: 2026-06-19
+// last-edited: 2026-09-11
 
 package itunesservice
 
@@ -46,7 +46,7 @@ func TestBuildBookFromAlbumGroup_EmptyAlbumUsesFolder(t *testing.T) {
 
 	imp := newTestImporter()
 	group := albumGroup{key: "|", tracks: tracks}
-	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBuildBookFromAlbumGroup_SingleFileEmptyAlbumKeepsTrackName(t *testing.T
 
 	imp := newTestImporter()
 	group := albumGroup{key: "|", tracks: []*itunes.Track{track}}
-	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{})
+	book, err := imp.buildBookFromAlbumGroup(group, "/library.xml", itunes.ImportOptions{}, itunes.XMLSourceFields())
 	if err != nil {
 		t.Fatalf("buildBookFromAlbumGroup error: %v", err)
 	}

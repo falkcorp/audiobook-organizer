@@ -1,7 +1,7 @@
 // file: internal/itunes/plist_parser.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: d1f3e5c7-a9b1-c3d5-e7f9-1a3b5c7d9e1f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-11
 
 package itunes
 
@@ -88,6 +88,7 @@ func parsePlist(data []byte) (*Library, error) {
 		MusicFolder:        raw.MusicFolder,
 		Tracks:             make(map[string]*Track),
 		Playlists:          make([]*Playlist, 0, len(raw.Playlists)),
+		Carries:            XMLSourceFields(),
 	}
 
 	// Convert tracks

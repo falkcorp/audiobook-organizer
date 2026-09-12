@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
-// last-edited: 2026-09-01
+// last-edited: 2026-09-11
 
 package itunesservice
 
@@ -112,7 +112,7 @@ func TestITunesImport_BuildAndSaveBooks(t *testing.T) {
 
 	var savedBooks []*database.Book
 	for _, group := range groups {
-		book, err := imp.buildBookFromAlbumGroup(group, testLibraryPath(t), opts)
+		book, err := imp.buildBookFromAlbumGroup(group, testLibraryPath(t), opts, itunes.XMLSourceFields())
 		require.NoError(t, err, "build book for group %s", group.key)
 
 		created, err := database.GetGlobalStore().CreateBook(book)
@@ -310,7 +310,7 @@ func TestITunesImport_MultiTrackBookSegments(t *testing.T) {
 		require.NoError(t, os.WriteFile(decoded, []byte("fake-audio"), 0644))
 	}
 
-	book, err := imp.buildBookFromAlbumGroup(*mobyGroup, testLibraryPath(t), opts)
+	book, err := imp.buildBookFromAlbumGroup(*mobyGroup, testLibraryPath(t), opts, itunes.XMLSourceFields())
 	require.NoError(t, err)
 
 	created, err := database.GetGlobalStore().CreateBook(book)
@@ -435,7 +435,7 @@ func TestCreateTrackBookFiles_WritesTheCanonicalHashToEveryRow(t *testing.T) {
 		require.NotEqual(t, canonical, seg, "degenerate fixture: segment hash equals the canonical digest")
 	}
 
-	book, err := imp.buildBookFromAlbumGroup(*mobyGroup, testLibraryPath(t), opts)
+	book, err := imp.buildBookFromAlbumGroup(*mobyGroup, testLibraryPath(t), opts, itunes.XMLSourceFields())
 	require.NoError(t, err)
 	created, err := database.GetGlobalStore().CreateBook(book)
 	require.NoError(t, err)

@@ -1,0 +1,3 @@
+### Fixed
+
+- **iTunes sync from an ITL file no longer wipes stored bookmarks.** The binary ITL parser decodes play count and last-played but no bookmark, so every ITL track reached the importer with `Bookmark == 0`, and the existing-book update path in `Importer.Sync` wrote that 0 over the book's `ITunesBookmark` on every ITL-sourced sync. `itunes.Library` now declares which playback fields its source format carries (`SourceFields`: XML carries all three, ITL carries play count and play date only, an undeclared Library carries none). The importer writes a field only when the source carries it, so a genuine 0 from XML is still applied as a reset. A fresh ITL insert now leaves `ITunesBookmark` nil instead of `&0`, so a later XML import can still fill it.
