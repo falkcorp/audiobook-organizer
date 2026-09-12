@@ -1,5 +1,5 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
 // last-edited: 2026-09-12
 
@@ -80,8 +80,11 @@ type scanStandDownHoldKey struct{}
 // and with no scanOpID recorded nothing would re-queue it. Refusing is cheaper than
 // stranding a scan for one request.
 //
-// No marker is persisted: there is no quiesced scan to protect across a reboot,
-// and the marker is a singleton that a concurrent blocking holder may own.
+// The acquire itself persists no marker: there is no quiesced scan to protect
+// across a reboot, and the marker is a singleton that a concurrent blocking
+// holder may own. A request hold that renews (Beat → RenewScanStandDown) does
+// write the marker with its http: holder id and whatever scanOpID is recorded;
+// that is harmless because startup acts on the marker only when ScanOpID is set.
 func (r *Registry) TryAcquireScanStandDown(holderOpID, reason string) (func(), error) {
 	if holderOpID == "" {
 		return nil, fmt.Errorf("scan stand-down: empty holder opID")
@@ -91,15 +94,14 @@ func (r *Registry) TryAcquireScanStandDown(holderOpID, reason string) (func(), e
 	r.scanGate.mu.Unlock()
 
 	if r.anyScanClaimed() {
-		r.scanGate.mu.Lock()
-		delete(r.scanGate.holders, holderOpID)
-		live := r.liveHoldersLocked()
-		r.scanGate.mu.Unlock()
-		if live == 0 {
-			// A scan enqueued in the window above was held back by Gate 3.5 on
-			// our account; wake the dispatcher so it is not left waiting.
-			r.pingDispatch()
-		}
+		// Refuse through the normal release path, never an inline delete. Our
+		// brief registration can make the worker pickup gate drop a claimed scan
+		// as interrupted_quiesced and park it on scanGate.dropped; only
+		// releaseScanStandDown drains that list, so an inline delete here would
+		// strand the scan until some later holder's last release or a restart.
+		// As the last holder out it also wakes the dispatcher for any scan Gate
+		// 3.5 held back on our account.
+		r.releaseScanStandDown(holderOpID)
 		return nil, ErrScanRunning
 	}
 
