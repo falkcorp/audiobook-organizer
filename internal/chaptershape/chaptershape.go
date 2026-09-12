@@ -1,5 +1,5 @@
 // file: internal/chaptershape/chaptershape.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d1f7c2a-8e43-4b69-a0d5-2c9e61b4f873
 // last-edited: 2026-09-12
 
@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // dirRe matches a chapter folder basename "<prefix> - <number>". Mirrors
@@ -50,13 +51,20 @@ func Parts(fp string) (parent, prefix string, num int, ok bool) {
 	return filepath.Dir(chapterDir), strings.TrimSpace(m[1]), n, true
 }
 
-// NormPrefix lowercases and strips non-alphanumerics. It matches
-// itunesservice.normTitle so the guard behaves exactly like the heal's.
+// NormPrefix lowercases and keeps only letters and digits, in any script.
+//
+// It deliberately differs from itunesservice.normTitle, which keeps only ASCII
+// a-z0-9. With the ASCII rule every non-Latin title normalises to "", so
+// PrefixInParent rejected `Сияние/Сияние - 1/58.MP3`: organize then moved each
+// chapter of that book to one shared target and renamed the rest to `_copyN`,
+// and the scanner stopped coalescing its chapters. Unicode letters and digits
+// keep the guard's meaning (the book folder is named after the book) for every
+// script. A prefix with no letters or digits at all still normalises to "".
 func NormPrefix(s string) string {
 	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
 		}
 	}
 	return b.String()

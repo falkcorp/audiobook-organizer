@@ -1,5 +1,5 @@
 // file: internal/server/organize_row_writers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f4c1a92-53d8-4a06-9c7e-1b0d2e6f84a3
 // last-edited: 2026-09-12
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
@@ -328,8 +329,11 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	params, err := json.Marshal(folderAutoScanOpParams{FolderPath: folder})
 	require.NoError(t, err)
 
+	// The op ID is placed only the way production places it: the registry's
+	// run-context decorator calls maintenanceplugin.WithOpID.
+	const autoScanOp = "op-folder-auto-scan-under-test"
 	reporter := &rowWritersReporter{}
-	require.NoError(t, def.Run(context.Background(), params, reporter))
+	require.NoError(t, def.Run(maintenanceplugin.WithOpID(context.Background(), autoScanOp), params, reporter))
 
 	// "Organizing: n/n books" is PerformOrganize's own progress line. The op's
 	// pre-2026-09-02 inline loop called OrganizeBookDirectory directly and
@@ -359,6 +363,58 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 		require.True(t, strings.HasPrefix(r.FilePath, config.AppConfig.RootDir),
 			"book_file %s still names a path outside the library: %s", r.ID, r.FilePath)
 	}
+
+	requireChangesUnderOp(t, store, autoScanOp)
+}
+
+// requireChangesUnderOp asserts organize wrote at least one change row and
+// every row it wrote carries opID.
+func requireChangesUnderOp(t *testing.T, store database.Store, opID string) {
+	t.Helper()
+	changes, err := store.GetOperationChanges(opID)
+	require.NoError(t, err)
+	require.NotEmpty(t, changes, "organize inside a tracked op must record its changes under that op's ID")
+	for _, c := range changes {
+		require.Equal(t, opID, c.OperationID)
+	}
+}
+
+// TestPerformScanOrganizeRecordsChangesUnderRunContextOpID drives the real
+// library.scan / library.import path: ScanService.PerformScan with the
+// server's hook as AutoOrganizeFn. The op ID is on ctx only via
+// maintenanceplugin.WithOpID, which is what the registry's run-context
+// decorator installs. PerformScan passes "" as its own op ID, so a hook that
+// read a scanner-side key recorded nothing in production while its unit test,
+// which set that key by hand, passed.
+func TestPerformScanOrganizeRecordsChangesUnderRunContextOpID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("scans a directory and runs the full organize pipeline")
+	}
+	store := rowWritersStore(t)
+
+	folder := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(folder, "Some Author - Some Title.m4b"),
+		[]byte("audio-bytes"), 0o644))
+
+	scanner.SetStore(store)
+	t.Cleanup(func() { scanner.SetStore(nil) })
+
+	old := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = old })
+	config.AppConfig.RootDir = t.TempDir()
+	config.AppConfig.AutoOrganize = true
+	config.AppConfig.OrganizationStrategy = "copy"
+	config.AppConfig.SupportedExtensions = []string{".m4b"}
+
+	srv := &Server{store: store, organizeService: NewOrganizeService(store)}
+	svc := scanner.NewScanService(store)
+	svc.AutoOrganizeFn = srv.autoOrganizeScannedBooks
+
+	const scanOp = "op-library-scan-under-test"
+	require.NoError(t, svc.PerformScan(maintenanceplugin.WithOpID(context.Background(), scanOp),
+		&scanner.ScanRequest{FolderPath: &folder}, logger.New("test")))
+
+	requireChangesUnderOp(t, store, scanOp)
 }
 
 // TestAutoOrganizeScannedBooksRecordsChangesUnderScanOp: organize inside
@@ -374,14 +430,9 @@ func TestAutoOrganizeScannedBooksRecordsChangesUnderScanOp(t *testing.T) {
 
 	const scanOp = "op-library-scan-under-test"
 	srv := &Server{store: store, organizeService: NewOrganizeService(store)}
-	srv.autoOrganizeScannedBooks(scanner.WithScanOperationID(context.Background(), scanOp),
+	srv.autoOrganizeScannedBooks(maintenanceplugin.WithOpID(context.Background(), scanOp),
 		[]scanner.Book{{FilePath: f.srcDir}}, logger.New("test"))
 
 	assertRowsLandedInLibrary(t, f)
-	changes, err := store.GetOperationChanges(scanOp)
-	require.NoError(t, err)
-	require.NotEmpty(t, changes, "organize inside a scan must record its changes under the scan's operation ID")
-	for _, c := range changes {
-		require.Equal(t, scanOp, c.OperationID)
-	}
+	requireChangesUnderOp(t, store, scanOp)
 }

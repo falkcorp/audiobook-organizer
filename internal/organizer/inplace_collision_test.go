@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 99027475-b084-4603-adf4-4061987f30b0
 // last-edited: 2026-09-12
 
@@ -476,9 +476,16 @@ func TestDirIsEmpty(t *testing.T) {
 // A single-file row has no track, so every chapter computes the same target.
 func chapterFolderBooks(t *testing.T, svc *Service, store *database.PebbleStore, root string) (b1, b2 *database.Book, target string) {
 	t.Helper()
-	book := filepath.Join(root, "incoming", "The Shining")
-	b1 = addInPlaceBook(t, store, "ch-1", "The Shining", filepath.Join(book, "The Shining - 1", "58.MP3"), filled(3000, 0x51), nil, 0)
-	b2 = addInPlaceBook(t, store, "ch-11", "The Shining", filepath.Join(book, "The Shining - 11", "58.MP3"), filled(3300, 0x52), nil, 0)
+	return chapterFolderBooksTitled(t, svc, store, root, "The Shining")
+}
+
+// chapterFolderBooksTitled is chapterFolderBooks for any title, so the same
+// layout can be checked for a non-Latin one.
+func chapterFolderBooksTitled(t *testing.T, svc *Service, store *database.PebbleStore, root, title string) (b1, b2 *database.Book, target string) {
+	t.Helper()
+	book := filepath.Join(root, "incoming", title)
+	b1 = addInPlaceBook(t, store, "ch-1", title, filepath.Join(book, title+" - 1", "58.MP3"), filled(3000, 0x51), nil, 0)
+	b2 = addInPlaceBook(t, store, "ch-11", title, filepath.Join(book, title+" - 11", "58.MP3"), filled(3300, 0x52), nil, 0)
 	target = targetFor(t, svc, b1)
 	if other := targetFor(t, svc, b2); other != target {
 		t.Fatalf("fixture: chapters should compute one target, got %s and %s", target, other)
@@ -538,6 +545,35 @@ func TestInPlace_ChapterPerFolder_BatchSplit(t *testing.T) {
 	assertChaptersUntouched(t, root, target, b1, b2)
 	if rec, ok := loadDurableSkip(store, OrganizeCollisionSkipPrefix, b1.ID); !ok || rec.Category != OutcomeFragmentCollapse {
 		t.Fatalf("chapter decline not recorded: %+v %v", rec, ok)
+	}
+}
+
+// A non-Latin chapter-per-folder book is declined the same way. The chapter
+// guard's normaliser kept only ASCII a-z0-9, so "Сияние" normalised to "",
+// the guard rejected it, and chapter 11 was moved to chapter 1's target as
+// `_copy1` while its folder was deleted.
+func TestInPlace_ChapterPerFolder_NonLatin_NeverMoved(t *testing.T) {
+	for _, title := range []string{"Сияние", "三体"} {
+		t.Run(title, func(t *testing.T) {
+			svc, store, root := setupInPlace(t)
+			b1, b2, target := chapterFolderBooksTitled(t, svc, store, root, title)
+
+			stats := svc.organizeBooks(context.Background(), []database.Book{*b1, *b2}, nil, &noopLogger{}, "")
+			if got := stats.Collisions[OutcomeFragmentCollapse]; got != 2 || stats.Failed != 0 {
+				t.Fatalf("want 2 fragment_collapse and no failures, got %+v", stats)
+			}
+			assertChaptersUntouched(t, root, target, b1, b2)
+
+			// Split across batches, chapter 1 meets a free target and must
+			// still stay where it is.
+			for _, b := range []*database.Book{b1, b2} {
+				stats := svc.organizeBooks(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "")
+				if got := stats.Collisions[OutcomeFragmentCollapse]; got != 1 || stats.Failed != 0 {
+					t.Fatalf("%s: want fragment_collapse, got %+v", b.ID, stats)
+				}
+			}
+			assertChaptersUntouched(t, root, target, b1, b2)
+		})
 	}
 }
 
