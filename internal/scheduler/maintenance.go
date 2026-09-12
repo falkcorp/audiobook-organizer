@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 package scheduler
 
@@ -155,6 +155,7 @@ var taskV2DefIDs = map[string]string{
 	"library_organize":           "library.organize",
 	"library_size_refresh":       "library.size-refresh",
 	"dedup_refresh":              "dedup.author-scan",
+	"acoustid_backfill":          "acoustid.backfill",
 	"dedup_llm_review":           "scheduler.dedup-llm-review",
 	"series_prune":               "dedup.series-prune",
 	"series_normalize":           "dedup.series-normalize",

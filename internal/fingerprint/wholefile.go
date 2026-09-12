@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package fingerprint
 
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -20,15 +21,33 @@ import (
 // resulting fingerprint has fewer than MinUsefulFingerprintFrames frames.
 var ErrFingerprintTooShort = errors.New("fingerprint: extracted fingerprint is too short to be useful")
 
-// WholeFile holds the result of a whole-file fingerprint extraction.
+// DefaultAnalysisLengthSec is fpcalc's own default for -length: it analyses
+// the first 120 seconds of audio and stops. Every fingerprint stored before
+// 2026-09-12 was made with it (the app never passed -length), which the
+// timing run of that date confirmed: a 21 h m4b and an 8 h mp3 both gave 948
+// frames, about 120 s. FileWholeFingerprint passes it explicitly so the
+// argument vector states what the stored data actually covers.
+const DefaultAnalysisLengthSec = 120
+
+// WholeFileAnalysisLength is the -length value that makes fpcalc decode the
+// entire file. Measured on 2026-09-12 at roughly 80x the decode work of the
+// default; choosing it for a library-wide run is an owner decision.
+const WholeFileAnalysisLength = 0
+
+// WholeFile holds the result of an fpcalc fingerprint extraction. Despite the
+// name, Raw covers only the first AnalysisLengthSec seconds of the file unless
+// AnalysisLengthSec is WholeFileAnalysisLength.
 type WholeFile struct {
 	// Raw is the chromaprint payload as a little-endian uint32 stream
-	// (4 bytes per frame, 8 frames per second). The 4-byte chromaprint
+	// (4 bytes per frame, about 8 frames per second). The 4-byte chromaprint
 	// header is NOT included — these are the comparison-ready frames.
 	Raw []byte
-	// DurationSec is the audio duration as fpcalc measured it while
-	// decoding (which is more trustworthy than container metadata).
+	// DurationSec is the duration fpcalc reports for the whole file. It is
+	// NOT the length of the fingerprinted window: with the default
+	// -length 120 a 10-hour file reports ~36000 here while Raw holds ~120 s.
 	DurationSec float64
+	// AnalysisLengthSec is the -length value passed to fpcalc (0 = whole file).
+	AnalysisLengthSec int
 }
 
 // FrameCount returns the number of chromaprint frames in the fingerprint.
@@ -39,28 +58,53 @@ func (w *WholeFile) FrameCount() int {
 	return len(w.Raw) / 4
 }
 
-// FileWholeFingerprint extracts a whole-file chromaprint for the audio file
-// at path. Unlike FileSegments it does not seek into the file or cap the
-// analysed length — fpcalc decodes from offset 0 to EOF, so this works on
-// any playable file regardless of whether the container's duration metadata
-// is correct.
+// FileWholeFingerprint fingerprints the audio file at path with fpcalc's
+// default analysis window: the FIRST DefaultAnalysisLengthSec (120) seconds,
+// decoded from offset 0. It does not decode to EOF. The "whole file" in the
+// name distinguishes it from FileSegments' seek-to-offset mode, nothing more;
+// two copies of a book that differ only after minute two fingerprint
+// identically. Use FileFingerprintLength to choose another window.
 //
 // Returns ErrNotAvailable if fpcalc is not on PATH (this path intentionally
 // does not fall back to the ffmpeg chromaprint muxer; the muxer's output
-// alignment varies by ffmpeg version and the call sites that need whole-file
+// alignment varies by ffmpeg version and the call sites that need these
 // fingerprints want a single canonical encoding).
 //
 // Returns ErrFingerprintTooShort if fpcalc produced fewer than
 // MinUsefulFingerprintFrames frames (e.g. <10s of audio, or a corrupt file
 // that decoded only its header).
 func FileWholeFingerprint(path string) (*WholeFile, error) {
+	return FileFingerprintLength(path, DefaultAnalysisLengthSec)
+}
+
+// WholeFileAvailable reports whether fpcalc can be found, i.e. whether
+// FileWholeFingerprint can produce a raw print at all. Available() also counts
+// the ffmpeg segment fallback, which cannot.
+func WholeFileAvailable() bool {
+	_, err := lookupFpcalc()
+	return err == nil
+}
+
+// fpcalcArgs is the argument vector for one fingerprint. -length is always
+// passed so the analysed window is explicit rather than an fpcalc default.
+func fpcalcArgs(path string, lengthSec int) []string {
+	return []string{"-json", "-length", strconv.Itoa(lengthSec), path}
+}
+
+// FileFingerprintLength is FileWholeFingerprint with an explicit fpcalc
+// -length: lengthSec > 0 analyses the first lengthSec seconds, and
+// WholeFileAnalysisLength (0) decodes the entire file. Negative is an error.
+func FileFingerprintLength(path string, lengthSec int) (*WholeFile, error) {
+	if lengthSec < 0 {
+		return nil, fmt.Errorf("fingerprint: negative analysis length %d", lengthSec)
+	}
 	fpcalc, err := lookupFpcalc()
 	if err != nil {
 		return nil, ErrNotAvailable
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(fpcalc, "-json", path)
+	cmd := exec.Command(fpcalc, fpcalcArgs(path, lengthSec)...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -93,13 +137,15 @@ func FileWholeFingerprint(path string) (*WholeFile, error) {
 	}
 
 	return &WholeFile{
-		Raw:         raw,
-		DurationSec: r.Duration,
+		Raw:               raw,
+		DurationSec:       r.Duration,
+		AnalysisLengthSec: lengthSec,
 	}, nil
 }
 
 // DeriveSeg0 returns the canonical base64 chromaprint for the first
-// SegmentSeconds (5 minutes) of a whole-file raw fingerprint. Used to
+// SegmentSeconds (5 minutes) of a raw fingerprint — which, at the default
+// 120 s analysis window, is the whole of it. Used to
 // populate the legacy AcoustIDSeg0 field during the whole-file migration
 // so callers still reading the segment fields keep working without a
 // second fpcalc invocation.
@@ -127,6 +173,11 @@ func DeriveSeg0(raw []byte) string {
 // before comparison kills the false-positive baseline while keeping all
 // extracted data on disk so we can refine the rule later without
 // re-fingerprinting.
+//
+// Caveat: the trim is a fraction of the FINGERPRINT, not of the book. At the
+// default 120 s analysis window it strips ~12 s from each end of the first two
+// minutes, so the compared middle (~96 s) is still mostly that shared intro,
+// and a book's outro is never in the fingerprint at all.
 const EdgeSkipFraction = 0.10
 
 // MinMiddleFrames is the smallest middle slice we'll compare. Below this
