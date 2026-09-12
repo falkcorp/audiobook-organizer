@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.93.0
+// version: 2.94.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
