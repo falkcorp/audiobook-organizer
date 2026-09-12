@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
 // last-edited: 2026-09-12
 
@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
@@ -441,4 +442,41 @@ func TestRecover_SkipsAppOwnedDirsInInventory(t *testing.T) {
 		"only the row with a real in-tree match may be repointed; a report or cache file is never a target")
 	require.Equal(t, "fa", store.updates[0].ID)
 	require.Equal(t, realFile, store.updates[0].FilePath)
+}
+
+// The dot rule above does nothing for an app directory whose name has NO
+// leading dot. A database kept inside the library tree (here {root}/appdata)
+// holds files whose size can equal a missing row's recorded size; the walk
+// learns to skip it only from appdirs.Current(), which reads the process-wide
+// config. Every other app dir is pointed OUTSIDE the root so the database dir
+// is the only thing that can exclude the decoy: BackupDir would otherwise
+// resolve to {root}/appdata/backups and the activity DB, with no RootDir, to
+// {root}/appdata itself -- either would pass this test for the wrong reason.
+func TestRecover_SkipsConfiguredDatabaseDirWithoutDot(t *testing.T) {
+	saved := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = saved })
+
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	config.AppConfig.RootDir = ""
+	config.AppConfig.DatabasePath = filepath.Join(root, "appdata", "x.pebble")
+	config.AppConfig.BackupDir = filepath.Join(elsewhere, "backups")
+	config.AppConfig.ActivityDBPath = filepath.Join(elsewhere, "activity", "activity.db")
+	config.AppConfig.OpenLibraryDumpDir = ""
+	config.AppConfig.PlaylistDir = ""
+
+	writeFile(t, filepath.Join(root, "appdata", "x.pebble", "000001.sst"), 4242)
+
+	gone := filepath.Join(root, "Author", "Book", "gone.sst")
+	store := &recoverFakeStore{
+		cores: []database.BookFileCore{{ID: "f1", BookID: "b1", FilePath: gone, FileSize: 4242}},
+		full: map[string][]database.BookFile{
+			"b1": {{ID: "f1", BookID: "b1", FilePath: gone, FileSize: 4242}},
+		},
+	}
+	_, err := planRecoverMissingFiles(context.Background(), store, nil, root,
+		recoverMissingParams{Apply: true}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Empty(t, store.updates,
+		"a file inside the configured database directory must never be a recovery candidate")
 }
