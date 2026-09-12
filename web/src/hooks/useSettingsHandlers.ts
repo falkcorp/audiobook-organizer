@@ -1,5 +1,5 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-09-12
 
@@ -495,11 +495,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         log_level: settings.logLevel,
         log_format: settings.logFormat,
         enable_json_logging: settings.enableJsonLogging,
-        auto_update_enabled: settings.autoUpdateEnabled,
-        auto_update_channel: settings.autoUpdateChannel,
-        auto_update_check_minutes: settings.autoUpdateCheckMinutes,
-        auto_update_window_start: settings.autoUpdateWindowStart,
-        auto_update_window_end: settings.autoUpdateWindowEnd,
         auto_update: {
           enabled: settings.autoUpdateEnabled,
           channel: settings.autoUpdateChannel,
@@ -507,9 +502,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
           window_start: settings.autoUpdateWindowStart,
           window_end: settings.autoUpdateWindowEnd,
         },
-        maintenance_window_enabled: maintenanceConfig.enabled,
-        maintenance_window_start: maintenanceConfig.window_start,
-        maintenance_window_end: maintenanceConfig.window_end,
         maintenance: maintenanceConfig,
         embedding: embeddingConfig,
         ai_backend: aiBackendConfig,
@@ -707,9 +699,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       'concurrent_scans', 'memory_limit_type', 'cache_size', 'cache_invalidate_on_book_update',
       'metadata_fetch_cache_ttl_days', 'memory_limit_percent', 'memory_limit_mb',
       'purge_soft_deleted_after_days', 'purge_soft_deleted_delete_files', 'log_level', 'log_format',
-      'enable_json_logging', 'auto_update_enabled', 'auto_update_channel', 'auto_update_check_minutes',
-      'auto_update_window_start', 'auto_update_window_end', 'maintenance_window_enabled',
-      'maintenance_window_start', 'maintenance_window_end',
+      'enable_json_logging',
       'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
       // nested sub-struct keys (CFG-1)
       'embedding', 'dedup', 'metadata_scoring', 'itunes', 'maintenance', 'scheduled', 'auto_update', 'tools',
@@ -733,7 +723,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         case 'memory_limit_type':
         case 'log_level':
         case 'log_format':
-        case 'auto_update_channel':
         case 'protected_paths':
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (typeof val === 'string') (cleaned as any)[key] = val;
@@ -796,8 +785,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         case 'cache_invalidate_on_book_update':
         case 'purge_soft_deleted_delete_files':
         case 'enable_json_logging':
-        case 'auto_update_enabled':
-        case 'maintenance_window_enabled':
         case 'auto_rename_on_apply':
         case 'auto_write_tags_on_apply':
         case 'verify_after_write':
@@ -814,11 +801,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         case 'memory_limit_percent':
         case 'memory_limit_mb':
         case 'purge_soft_deleted_after_days':
-        case 'auto_update_check_minutes':
-        case 'auto_update_window_start':
-        case 'auto_update_window_end':
-        case 'maintenance_window_start':
-        case 'maintenance_window_end':
           if (typeof val === 'number') {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (cleaned as any)[key] = val;
@@ -846,6 +828,43 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         default:
           break;
       }
+    }
+
+    // Settings files exported before auto_update and maintenance became nested
+    // objects carry flat auto_update_* / maintenance_window_* keys. The server
+    // never read those from a PUT, and it now rejects unknown keys with a 400,
+    // so fold them into the nested objects here. A file that already has the
+    // nested object keeps it as-is.
+    const legacy = payload as Record<string, unknown>;
+    const legacyNumber = (key: string): number | undefined => {
+      const v = legacy[key];
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return Number(v);
+      return undefined;
+    };
+    const legacyBool = (key: string): boolean | undefined =>
+      key in legacy ? Boolean(legacy[key]) : undefined;
+    const pruned = <T extends object>(obj: T): T | undefined => {
+      const entries = Object.entries(obj).filter(([, v]) => v !== undefined);
+      return entries.length > 0 ? (Object.fromEntries(entries) as T) : undefined;
+    };
+    if (!cleaned.auto_update) {
+      const autoUpdate = pruned({
+        enabled: legacyBool('auto_update_enabled'),
+        channel: typeof legacy.auto_update_channel === 'string' ? legacy.auto_update_channel : undefined,
+        check_minutes: legacyNumber('auto_update_check_minutes'),
+        window_start: legacyNumber('auto_update_window_start'),
+        window_end: legacyNumber('auto_update_window_end'),
+      });
+      if (autoUpdate) cleaned.auto_update = autoUpdate as api.Config['auto_update'];
+    }
+    if (!cleaned.maintenance) {
+      const maintenance = pruned({
+        enabled: legacyBool('maintenance_window_enabled'),
+        window_start: legacyNumber('maintenance_window_start'),
+        window_end: legacyNumber('maintenance_window_end'),
+      });
+      if (maintenance) cleaned.maintenance = maintenance as api.Config['maintenance'];
     }
 
     return cleaned;

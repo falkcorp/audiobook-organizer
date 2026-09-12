@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
 // last-edited: 2026-09-12
 
@@ -20,26 +20,22 @@ const sqliteRemovedMessage = "the enable_sqlite setting (the --enable-sqlite3-i-
 type removedConfigKey struct {
 	key     string
 	message string
-	// rejectOnUpdate marks keys that PUT /api/v1/config must refuse with 400.
-	// Only keys that were ever part of the config API's JSON shape belong
-	// here; a key that was never accepted by the API (a viper/flag-only name)
-	// was always dropped by the JSON round-trip, and turning it into a 400 now
-	// would invent a rejection nobody asked for.
-	rejectOnUpdate bool
 }
 
 // removedConfigKeys lists retired settings. A slice rather than a map so the
 // first match — and therefore the error text — is deterministic.
 //
 // Two paths consume it, with opposite policies on purpose:
-//   - PUT /api/v1/config REJECTS (400) a payload carrying a rejectOnUpdate key.
-//     Before TASK-020 enable_sqlite was an immutable field and a PUT that set it
-//     got a 400; dropping it silently would tell a client its change applied.
+//   - PUT /api/v1/config REJECTS (400) a payload carrying any of them, with the
+//     key's own removal message. Dropping one silently would tell a client its
+//     change applied. This includes viper/flag-only names that were never API
+//     fields: since 2026-09-12 every key Config does not have is refused (see
+//     unknownConfigKeys), and a removed key gets the more useful message.
 //   - Startup (viper config file / environment, the config.yaml next to the
 //     database, and legacy per-key settings rows) only WARNS. A stale key in a
 //     file the operator wrote years ago must never stop the server starting.
 var removedConfigKeys = []removedConfigKey{
-	{key: "enable_sqlite", message: sqliteRemovedMessage, rejectOnUpdate: true},
+	{key: "enable_sqlite", message: sqliteRemovedMessage},
 	// The viper/env name of the removed --enable-sqlite3-i-know-the-risks flag
 	// (env: ENABLE_SQLITE3_I_KNOW_THE_RISKS under viper.AutomaticEnv).
 	{key: "enable_sqlite3_i_know_the_risks", message: sqliteRemovedMessage},
@@ -49,9 +45,6 @@ var removedConfigKeys = []removedConfigKey{
 // present in a config-update payload, or ok=false when there is none.
 func removedKeyInUpdate(payload map[string]any) (string, bool) {
 	for _, rk := range removedConfigKeys {
-		if !rk.rejectOnUpdate {
-			continue
-		}
 		if _, present := payload[rk.key]; present {
 			return rk.key + " cannot be set: " + rk.message + "; remove " + rk.key + " from the request", true
 		}

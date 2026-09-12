@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.58.0
+// version: 1.59.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -610,21 +610,18 @@ export function Settings() {
         logFormat: config.log_format || 'text',
         enableJsonLogging: config.enable_json_logging ?? false,
 
-        // Auto-update (nested key preferred, flat fallback for compat)
-        autoUpdateEnabled: config.auto_update?.enabled ?? config.auto_update_enabled ?? false,
-        autoUpdateChannel: config.auto_update?.channel ?? config.auto_update_channel ?? 'stable',
-        autoUpdateCheckMinutes:
-          config.auto_update?.check_minutes ?? config.auto_update_check_minutes ?? 60,
-        autoUpdateWindowStart:
-          config.auto_update?.window_start ?? config.auto_update_window_start ?? 1,
-        autoUpdateWindowEnd: config.auto_update?.window_end ?? config.auto_update_window_end ?? 4,
+        // Auto-update. The server has only ever emitted the nested object; the
+        // flat auto_update_* keys this used to fall back to were never sent.
+        autoUpdateEnabled: config.auto_update?.enabled ?? false,
+        autoUpdateChannel: config.auto_update?.channel ?? 'stable',
+        autoUpdateCheckMinutes: config.auto_update?.check_minutes ?? 60,
+        autoUpdateWindowStart: config.auto_update?.window_start ?? 1,
+        autoUpdateWindowEnd: config.auto_update?.window_end ?? 4,
 
-        // Maintenance window (nested key preferred, flat fallback for compat)
-        maintenanceWindowEnabled:
-          config.maintenance?.enabled ?? config.maintenance_window_enabled ?? false,
-        maintenanceWindowStart:
-          config.maintenance?.window_start ?? config.maintenance_window_start ?? 2,
-        maintenanceWindowEnd: config.maintenance?.window_end ?? config.maintenance_window_end ?? 4,
+        // Maintenance window, nested object only (same reason).
+        maintenanceWindowEnabled: config.maintenance?.enabled ?? false,
+        maintenanceWindowStart: config.maintenance?.window_start ?? 2,
+        maintenanceWindowEnd: config.maintenance?.window_end ?? 4,
 
         // Smart apply pipeline
         autoRenameOnApply: config.auto_rename_on_apply ?? true,

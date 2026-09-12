@@ -1,11 +1,12 @@
 // file: internal/config/update_service.go
-// version: 3.22.0
+// version: 3.23.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-09-12
 
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -500,6 +501,26 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	// retired generic shim never covered (owned by INIT-6/WF-3); it stays.
 	filtered = remapScheduledKeys(filtered)
 
+	// GET /config annotates its response with server-computed, read-only keys
+	// (see readOnlyConfigKeys). A client that PUTs a GET response back — the
+	// settings export/import round-trip does — carries them. They are not
+	// settings, so drop them rather than reject the request.
+	for _, k := range readOnlyConfigKeys {
+		delete(filtered, k)
+	}
+
+	// Reject any key Config does not have, at any depth, BEFORE the round-trip
+	// below. json.Unmarshal ignores unknown keys, so a misspelled or flat-form
+	// key (dedup_auto_merge_enabled instead of {"dedup":{"auto_merge_enabled":…}})
+	// used to answer 200 and change nothing. That happened on 2026-09-12: the
+	// auto-merge switch reported saved and stayed on.
+	if unknown := unknownConfigKeys(filtered); len(unknown) > 0 {
+		return http.StatusBadRequest, map[string]any{
+			"error":        unknownKeysMessage(unknown),
+			"unknown_keys": unknown,
+		}
+	}
+
 	// Apply all remaining fields via JSON round-trip.
 	// Any field in Config with a matching json tag is set automatically.
 	// WHY Mutate: json.Unmarshal writes multiple fields in sequence; without the
@@ -558,7 +579,12 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// their own mask. See restoreRoundTripSecrets.
 		priorRoundTrip := snapshotRoundTripSecrets(candidate)
 
-		if err := json.Unmarshal(payloadJSON, candidate); err != nil {
+		// DisallowUnknownFields backs up the unknownConfigKeys check above: if
+		// the walker and the decoder ever disagree about a key, the request
+		// still fails instead of silently dropping the key.
+		dec := json.NewDecoder(bytes.NewReader(payloadJSON))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(candidate); err != nil {
 			unmarshalErr = err
 			return
 		}
