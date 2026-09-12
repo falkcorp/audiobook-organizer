@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.14.0
+// version: 13.15.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-12
 
@@ -645,11 +645,12 @@ func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
 //     or empty values for "found nothing". Keys match case-insensitively, as
 //     encoding/json matches field names. Unrelated extra keys next to them,
 //     such as "filename", are ignored.
-//   - An object carrying an "error" or "errors" key (any case) is an error
-//     report, even when metadata keys are present too:
+//   - An object whose "error" or "errors" key (any case) holds a non-empty
+//     value is an error report, even when metadata keys are present too:
 //     {"title": null, "error": "rate limited"} would otherwise decode to an
 //     all-empty result, and {"title": "Solo", "error": "x"} would save a
-//     title the backend itself flagged.
+//     title the backend itself flagged. An empty value (null, [] or {}) is
+//     ignored; see errorReportKey.
 //   - Anything else is an error. In particular an object whose keys are all
 //     foreign -- {"error": "x"}, {"code": 500, "message": "overloaded"} -- is
 //     not a result. encoding/json would decode it to an all-empty
@@ -1132,20 +1133,44 @@ func hasParsedMetadataKey(obj map[string]json.RawMessage) bool {
 }
 
 // errorReportKeys mark an object as an error report from the backend or the
-// model rather than a result, whatever else it carries.
+// model rather than a result, whatever else it carries, when they hold a
+// non-empty value.
 var errorReportKeys = []string{"error", "errors"}
 
 // errorReportKey returns the first key of obj that is "error" or "errors" in
-// any case.
+// any case and holds a non-empty value. An empty value (null, [] or {}) says
+// there is no error, so {"title": "Solo", "error": null} is a result. Any
+// other value is an error report, "" included.
+//
+// An object whose only key is an empty "error" is not accepted either: it has
+// no metadata key, so it falls to the wrapper rules, which reject it.
 func errorReportKey(obj map[string]json.RawMessage) (string, bool) {
-	for key := range obj {
+	for key, value := range obj {
 		for _, k := range errorReportKeys {
-			if strings.EqualFold(key, k) {
+			if strings.EqualFold(key, k) && !errorValueIsEmpty(value) {
 				return key, true
 			}
 		}
 	}
 	return "", false
+}
+
+// errorValueIsEmpty reports whether an error key's value is null, [] or {}.
+// A value that does not decode counts as non-empty.
+func errorValueIsEmpty(value json.RawMessage) bool {
+	var v any
+	if err := json.Unmarshal(value, &v); err != nil {
+		return false
+	}
+	switch v := v.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	}
+	return false
 }
 
 // maxResponseExcerptBytes bounds how much of an unparseable LLM reply is copied

@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -1854,8 +1854,8 @@ func TestParseBatchMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T
 			wantErr: "result 1 has 1 key(s) and none of them is a metadata field"},
 		{name: "bare array of error objects", json: `[{"error":"x"}]`, expected: 1,
 			wantErr: "result 0 has 1 key(s) and none of them is a metadata field"},
-		{name: "error key holding an empty array", json: `{"error": []}`, expected: 2,
-			wantErr: `object carries an "error" key, so it is an error report`},
+		{name: "empty error array as the only key", json: `{"error": []}`, expected: 2,
+			wantErr: `object's only key "error" holds no metadata object, so it is not a results wrapper`},
 		{name: "errors key holding only nulls", json: `{"errors": [null]}`, expected: 1,
 			wantErr: `object carries an "errors" key, so it is an error report`},
 		{name: "unknown key holding an empty array", json: `{"data": []}`, expected: 2,
@@ -1882,6 +1882,24 @@ func TestParseBatchMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T
 			wantErr: `object carries an "errors" key, so it is an error report`},
 		{name: "Error key wrapping a metadata object", json: `{"Error": [{"title": "Solo"}]}`, expected: 1,
 			wantErr: `object carries an "Error" key, so it is an error report`},
+		// Only null, [] and {} count as an empty error value; anything else
+		// is an error (owner decision, PR #3330 round 5).
+		{name: "empty-string error next to a title", json: `{"results": [{"title":"Solo","error":""}]}`, expected: 1,
+			wantErr: `result 0 carries an "error" key`},
+		{name: "error object next to a title", json: `{"results": [{"title":"Solo","error":{"code":1}}]}`, expected: 1,
+			wantErr: `result 0 carries an "error" key`},
+		{name: "bool error next to a title", json: `{"results": [{"title":"Solo","error":false}]}`, expected: 1,
+			wantErr: `result 0 carries an "error" key`},
+		{name: "bare object: empty-string error", json: `{"title":"Solo","error":""}`, expected: 1,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "bare object: error object", json: `{"title":"Solo","error":{"code":1}}`, expected: 1,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "null error as the only key", json: `{"error": null}`, expected: 1,
+			wantErr: `object's only key "error" is not a JSON array`},
+		{name: "empty errors array as the only key", json: `{"errors": []}`, expected: 1,
+			wantErr: `object's only key "errors" holds no metadata object, so it is not a results wrapper`},
+		{name: "null error next to results", json: `{"results": [{"title":"Solo"}], "error": null}`, expected: 1,
+			wantErr: `"results" is present alongside 1 other key(s)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			results, err := parseBatchMetadataFromJSON(tc.json, tc.expected)
@@ -1890,6 +1908,47 @@ func TestParseBatchMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error %q does not contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// An error key whose value is null, [] or {} says there is no error, so the
+// result is accepted (owner decision, PR #3330 round 5). Non-empty values are
+// rejected; those cases are in the ErrorPayloadsAreNotEmptyResults tables.
+func TestErrorKeyWithAnEmptyValueIsIgnored(t *testing.T) {
+	for _, obj := range []string{
+		`{"title":"Solo","error":null}`,
+		`{"title":"Solo","errors":[]}`,
+		`{"title":"Solo","error":{}}`,
+		`{"title":"Solo","Errors":null}`,
+	} {
+		t.Run(obj, func(t *testing.T) {
+			for shape, js := range map[string]string{
+				"batch element":            `{"results": [` + obj + `]}`,
+				"bare one-filename object": obj,
+			} {
+				r, err := parseBatchMetadataFromJSON(js, 1)
+				if err != nil {
+					t.Errorf("batch %s: unexpected error: %v", shape, err)
+					continue
+				}
+				if len(r) != 1 || r[0] == nil || r[0].Title != "Solo" {
+					t.Errorf("batch %s: results = %+v, want one result titled Solo", shape, r)
+				}
+			}
+			for shape, js := range map[string]string{
+				"top-level object":        obj,
+				"results wrapper element": `{"results": [` + obj + `]}`,
+			} {
+				m, err := parseMetadataFromJSON(js)
+				if err != nil {
+					t.Errorf("single-book %s: unexpected error: %v", shape, err)
+					continue
+				}
+				if m == nil || m.Title != "Solo" {
+					t.Errorf("single-book %s: got %+v, want title Solo", shape, m)
+				}
 			}
 		})
 	}
@@ -1938,10 +1997,20 @@ func TestParseMetadataFromJSON_ErrorPayloadsAreNotEmptyResults(t *testing.T) {
 			wantErr: `object carries an "error" key, so it is an error report`},
 		{name: "unknown key holding an error-shaped array", json: `{"data": [{"code": 500, "message": "overloaded"}]}`,
 			wantErr: `"data" holds an element that has 2 key(s) and none of them is a metadata field`},
-		{name: "error key holding an empty object", json: `{"error": {}}`,
-			wantErr: `object carries an "error" key, so it is an error report`},
-		{name: "error key holding an empty array", json: `{"error": []}`,
-			wantErr: `object carries an "error" key, so it is an error report`},
+		{name: "empty error object as the only key", json: `{"error": {}}`,
+			wantErr: `object's only key "error" is not a metadata field and holds no metadata object, so it is not a results wrapper`},
+		{name: "empty error array as the only key", json: `{"error": []}`,
+			wantErr: `object's only key "error" is not a metadata field and holds no metadata object, so it is not a results wrapper`},
+		{name: "null error as the only key", json: `{"error": null}`,
+			wantErr: `"error" is not a metadata field and holds neither an object nor an array`},
+		{name: "empty errors array as the only key (plural)", json: `{"errors": []}`,
+			wantErr: `object's only key "errors" is not a metadata field and holds no metadata object`},
+		{name: "empty-string error next to a title", json: `{"title":"Solo","error":""}`,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "error object next to a title", json: `{"title":"Solo","error":{"code":1}}`,
+			wantErr: `the reply object carries an "error" key`},
+		{name: "number error inside results", json: `{"results": [{"title":"Solo","error":1}]}`,
+			wantErr: `"results" holds an element that carries an "error" key`},
 		{name: "unknown key holding an empty object", json: `{"data": {}}`,
 			wantErr: "not a results wrapper"},
 		{name: "unknown key holding an empty array", json: `{"data": []}`,

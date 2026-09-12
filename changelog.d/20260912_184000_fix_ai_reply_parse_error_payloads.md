@@ -6,12 +6,15 @@
   found", so every book in the batch was stamped as attempted and never
   AI-parsed again. `results` is now accepted only as the reply's only key, and
   every unwrapped object must be `null`, `{}` or a metadata object. An object
-  that carries an `error` or `errors` key is an error even when it also has
-  metadata keys, so `{"title": null, "error": "rate limited"}` no longer reads
-  as "nothing found" and `{"title": "Solo", "error": "x"}` no longer saves the
-  title. This applies to every result, including a bare object in a
-  one-filename batch and the single-book parser's top-level object.
-  Unrelated extra keys such as `filename` are still accepted.
+  whose `error` or `errors` key holds a value is an error even when it also
+  has metadata keys, so `{"title": null, "error": "rate limited"}` no longer
+  reads as "nothing found" and `{"title": "Solo", "error": "x"}` no longer
+  saves the title. An empty `error` or `errors` value (`null`, `[]` or `{}`)
+  is ignored, so `{"title": "Solo", "error": null}` is a normal result; any
+  other value, `""` included, is an error. This applies to every result,
+  including a bare object in a one-filename batch and the single-book
+  parser's top-level object. Unrelated extra keys such as `filename` are
+  still accepted.
 - Metadata keys are matched without regard to case, as the JSON decoder does,
   so a reply using `"Title"` or `"Author"` is accepted again.
 - **Model-written text can no longer abort the AI phase.** A reply the parser
