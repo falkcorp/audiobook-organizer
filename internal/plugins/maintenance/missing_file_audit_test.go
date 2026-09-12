@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8e2a17-96d4-4b3f-a70e-1d92f4c6b085
-// last-edited: 2026-08-18
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -190,6 +190,53 @@ func TestMissingFileAudit_SampleNamesMissingPathsOnly(t *testing.T) {
 	for _, s := range got.Sample {
 		if present[s] {
 			t.Errorf("Sample names %q, which EXISTS — the sample must list missing paths", s)
+		}
+	}
+}
+
+// 🔴 "PRESENT BUT EMPTY" IS NOT "HEALTHY".
+//
+// A zero-byte file on disk is a truncated/corrupt row, not a working one -- and it
+// is not "missing" or "unreadable" either, since os.Stat succeeds and the path
+// resolves. Folding it into Present would hide a corrupt file behind a healthy
+// count; folding it into Missing or Unreadable would misreport a present-but-empty
+// row as one of those structurally different findings. This is DEC-13's fourth
+// bucket, and the reason it must never merge with Present: report.ZeroSize is
+// what protects a future repair decision from treating a truncated file as fine.
+func TestMissingFileAudit_SeparatesZeroSizeFromPresent(t *testing.T) {
+	dir := t.TempDir()
+	nonZeroPath := filepath.Join(dir, "present.m4b")
+	if err := os.WriteFile(nonZeroPath, []byte("some audio bytes"), 0o600); err != nil {
+		t.Fatalf("write present fixture: %v", err)
+	}
+	zeroPath := filepath.Join(dir, "truncated.m4b")
+	if err := os.WriteFile(zeroPath, nil, 0o600); err != nil {
+		t.Fatalf("write zero-size fixture: %v", err)
+	}
+	missingPath := filepath.Join(dir, "gone.m4b")
+
+	rows := []database.BookFileCore{
+		{ID: "f1", BookID: "b-present", FilePath: nonZeroPath},
+		{ID: "f2", BookID: "b-zero", FilePath: zeroPath},
+		{ID: "f3", BookID: "b-missing", FilePath: missingPath},
+	}
+	got := runAudit(t, rows, missingFileAuditParams{})
+
+	if got.Present != 1 {
+		t.Errorf("Present = %d, want 1 — a healthy non-empty file must still count as present", got.Present)
+	}
+	if got.ZeroSize != 1 {
+		t.Errorf("ZeroSize = %d, want 1 — the truncated file must be counted in its own bucket", got.ZeroSize)
+	}
+	if got.Missing != 1 {
+		t.Errorf("Missing = %d, want 1", got.Missing)
+	}
+	if len(got.ZeroSizeSample) != 1 || got.ZeroSizeSample[0] != zeroPath {
+		t.Errorf("ZeroSizeSample = %v, want [%q]", got.ZeroSizeSample, zeroPath)
+	}
+	for _, s := range got.Sample {
+		if s == zeroPath {
+			t.Errorf("Sample (missing-paths) names the zero-size path %q — it must not be folded into Missing", s)
 		}
 	}
 }
