@@ -22,9 +22,9 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **DB-04** Digest compaction swallows the delete error for the pre-existing digest row, risking a duplicate digest entry on I/O failure (dead-code backend, low impact) — `internal/database/nuts_activity_store.go:614`. Two digest rows for the same date would double-count that day's digest in any UI/summary that sums per-day digests. In practice this is low-impact: grep confirms `NewNutsActivityStore` has zero production call sites in this tree (only referenced in comments and `dual_write_activity_store.go`, which  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-334-digest-compaction-swallows-the-delete-error-for.md`.
 
-- [ ] **CI-02** frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow — `.github/workflows/frontend-ci.yml:20`. Runs on push to main/develop and same-repo PRs. `actions: write`, `packages: write`, `id-token: write` handed to code the workflow doesn't control is more privilege than lint/build/test needs and breaks the least-privilege discipline used everywhere else in the repo. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-307-frontend-ci-yml-grants-an-unjustified-broad-perm.md`.
+- [x] **CI-02** frontend-ci.yml grants an unjustified, broad permission ceiling to an external reusable workflow — `.github/workflows/frontend-ci.yml:20`. Runs on push to main/develop and same-repo PRs. `actions: write`, `packages: write`, `id-token: write` handed to code the workflow doesn't control is more privilege than lint/build/test needs and breaks the least-privilege discipline used everywhere else in the repo. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-307-frontend-ci-yml-grants-an-unjustified-broad-perm.md`. ✅ **DONE 2026-09-12 (#3274):** frontend-ci.yml now declares `contents: read` only.
 
-- [ ] **CI-06** frontend job gate is a computed `if:` that can silently skip a required-looking check — `.github/workflows/frontend-ci.yml:54`. A skipped job reports as passing to required-status checks; a misbehaving config-detection step would let a PR merge with zero frontend build/test coverage while showing green. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md`.
+- [x] **CI-06** frontend job gate is a computed `if:` that can silently skip a required-looking check — `.github/workflows/frontend-ci.yml:54`. A skipped job reports as passing to required-status checks; a misbehaving config-detection step would let a PR merge with zero frontend build/test coverage while showing green. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-320-frontend-job-gate-is-a-computed-if-that-can-sile.md`. ✅ **DONE 2026-09-12 (#3274):** a non-skippable gate job now fails when the frontend job is skipped unexpectedly.
 
 - [x] **DA-04** isBatchable's Tier gate silently routes only tier=debug high-volume entries through the batcher; a caller that emits the same Type at tier=change (e.g. after the writer.go tier-upgrade rule for warn/error) falls back to one full ActivityEntry per line instead of being coalesced — `internal/activity/writer.go:176`. This is a narrow, low-blast-radius gap (it only matters for warn/error-level lines from these five Types during a large op), and only degrades to the pre-batching behavior (still durable, just less coalesced and noisier in the channel-full warning path) rather than losing data -- worth a look during Brief: `docs/agent-tasks/todo-completion-2026-09/activity/TASK-333-isbatchable-s-tier-gate-silently-routes-only-tie.md`. — ✅ DONE 2026-09-11: DA-04: gate kept, rationale now documented at isBatchable (warn/error stay individually visible)
 
@@ -10316,7 +10316,7 @@ matches `&` only, and these three are left visibly wrong on purpose.
       before accepting a comma split, or refusing to split when the source
       string also carries title-ish punctuation.
 - [ ] Check how many other author rows are title fragments without the `and`
-      giveaway — the 57 rows beginning with `-` are the next place to look.
+      giveaway — the 57 rows beginning with `-` are the next place to look. 🟡 **Instrument shipped 2026-09-12 (#3271, TASK-071):** report-only `maintenance` op lists title-fragment author rows; the count needs a prod run of that report (owner's call), so this stays open.
 
 ## Author table: misspelling shared by both rows of a duplicate pair
 
@@ -11884,7 +11884,7 @@ Identical failure sets. The remaining 23 (17 here + 6 in
 the sets with `comm`, per spec, or a regression hides inside an unchanged-looking
 total.
 
-- [ ] **Add an `{edition_suffix}` folder-pattern token.** Two editions of the same
+- [x] **Add an `{edition_suffix}` folder-pattern token.** Two editions of the same ✅ **DONE 2026-09-12 (#3275, TASK-122):** token resolves in `internal/organizer/pathbuild.go`, collapses to empty when edition is blank; Settings preview updated.
       title sharing a `{print_year}` compute the same target path under the
       current default (`{author}/{series}/{title} ({print_year})`). They do not
       clobber — `OrganizeBook` stats the target, finds a different file owned by a
