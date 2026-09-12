@@ -5311,8 +5311,13 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       `cleanup_orphan_author_embeddings.go:141` → `embeddingStore.Delete` `:168`
       (embeddings are recomputable, so this degrades rather than destroys).
 
-- [x] **✅ FIXED 2026-09-11:** both supporting defects are closed. `memdb_reads.go` now returns a book-lookup error instead of treating it as "book absent", in `GetAllAuthorBookCounts` and at the same pattern in the per-author book list. `author.go`'s `runAuthorDedupScan` now fails on a `GetAllAuthorBookCounts` error instead of discarding it with `_`. The headline correction no longer applies: the parent MEMDB-LOSSY-READERS item was closed DONE on 2026-09-10.
 - [x] **MEMDB-LOSSY-READERS headline is STALE — correct it before acting on it.**
+      ✅ **FIXED 2026-09-11:** both supporting defects are closed. `memdb_reads.go` now
+      returns a book-lookup error instead of treating it as "book absent", in
+      `GetAllAuthorBookCounts` and at the same pattern in the per-author book list.
+      `author.go`'s `runAuthorDedupScan` now fails on a `GetAllAuthorBookCounts` error
+      instead of discarding it with `_`. The headline correction no longer applies: the
+      parent MEMDB-LOSSY-READERS item was closed DONE on 2026-09-10. Original report:
       `todo.d/20260823-memdb-lossy-projection-unguarded-readers.md` names
       `purge-empty-authors` (4,975 of 12,854 authors) as its worked example,
       gating deletion on two unguarded counters. At HEAD that is no longer true:
