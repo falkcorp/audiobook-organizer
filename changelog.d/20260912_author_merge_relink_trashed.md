@@ -23,6 +23,11 @@ from the trash produced a book with no author.
   except the AI apply: an author still credited by any book after the relink
   is kept and the failure reported (409 from the two handlers). This also
   closes the paths that logged a failed book and deleted anyway.
+- The AI apply is exempt because its reassign rewrites only the junction and
+  leaves the legacy `AuthorID`, which the verify step would read as still
+  linked. That leftover id resolves to the kept author only through the
+  tombstone the apply writes after the delete; a failed `CreateAuthorTombstone`
+  there was silently ignored and is now logged at Warn (merge and alias).
 - `AuthorRefCounts` is now computed from live / trashed / dangling buckets
   (`AuthorRefBucketCounts`). author-duplicate-merge holds a row back only when
   live + trashed references exceed what it can move, so junction rows whose

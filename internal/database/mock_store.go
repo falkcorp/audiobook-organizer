@@ -1118,17 +1118,19 @@ func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, er
 	return nil, nil
 }
 
-// GetBooksByAuthorIDForRelinkCore falls back to GetBooksByAuthorIDWithRoleFunc
-// when no relink-specific fake is set, so a fixture that never modelled the
-// trash keeps answering with the same list it always did.
+// GetBooksByAuthorIDForRelinkCore is backed by GetBooksByAuthorIDForRelinkFunc.
+// Like GetAllAuthorFileRefCounts, and unlike the permissive nil-func contract
+// most of this mock follows, an unset func is an ERROR, not "no books". The
+// getter feeds database.VerifyAuthorUnlinked, the last check before a
+// DeleteAuthor: an empty default would let that check pass in any test that
+// never stubbed it, and falling back to the WithRole stub would answer from a
+// list that by construction excludes the trash.
 func (m *MockStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error) {
 	if m.GetBooksByAuthorIDForRelinkFunc != nil {
 		return m.GetBooksByAuthorIDForRelinkFunc(authorID)
 	}
-	if m.GetBooksByAuthorIDWithRoleFunc != nil {
-		return m.GetBooksByAuthorIDWithRoleFunc(authorID)
-	}
-	return nil, nil
+	return nil, fmt.Errorf("MockStore.GetBooksByAuthorIDForRelinkFunc is not set: "+
+		"a test reaching a relink-then-DeleteAuthor path must say which books still credit author %d", authorID)
 }
 
 func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {
