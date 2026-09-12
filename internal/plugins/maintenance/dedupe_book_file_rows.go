@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -32,6 +34,10 @@ type DedupeBookFileRowsParams struct {
 	Apply bool `json:"apply"`
 	// Limit caps how many BOOKS are processed (0 = all). Useful for a canary.
 	Limit int `json:"limit,omitempty"`
+	// ReportPath overrides where the per-book TSV lands. Empty means a derived
+	// path under reports/. The report is written on EVERY run, dry or apply,
+	// so an operator always has the census the summary line only samples.
+	ReportPath string `json:"reportPath,omitempty"`
 }
 
 func (p *Plugin) dedupeBookFileRowsDef() sdk.OperationDef {
@@ -80,6 +86,16 @@ type dupGroup struct {
 	bookID   string
 	filePath string
 	rowIDs   []string // every row for this path, keeper first after ranking
+}
+
+// dupeReportRow is one affected book's line in the per-book TSV.
+type dupeReportRow struct {
+	BookID   string
+	Title    string
+	Rows     int  // book_file rows with a non-empty path
+	Distinct int  // distinct file paths among them
+	DupRows  int  // Rows - Distinct: what a full apply would remove
+	DupHasFP bool // at least one REDUNDANT row carries an AcoustID fingerprint
 }
 
 // rankKeeper orders rows so the BEST-EVIDENCED row sorts first and therefore
@@ -264,6 +280,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	var mu sync.Mutex
 	var deleted, wouldDelete, failed, recomputed, salvaged int
 	var examples []string
+	var reportRows []dupeReportRow // appended by every worker: always under mu
 
 	// PASS 2 — per affected book only, so the expensive full-fidelity read is paid
 	// for the handful of books that need it rather than the whole library.
@@ -318,6 +335,12 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			}
 			byPath[f.FilePath] = append(byPath[f.FilePath], f)
 		}
+		totalRows := 0
+		for _, rs := range byPath {
+			totalRows += len(rs)
+		}
+		distinct := len(byPath)
+		dupHasFP := false
 
 		changedThisBook := false
 		// Redundant row IDs accumulate here and are deleted in ONE batch call after
@@ -354,6 +377,11 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			}
 			ranked := rankKeeper(rows)
 			keeper, redundant := ranked[0], ranked[1:]
+			// Read BEFORE mergeMissingFields, which may copy a twin's fingerprint
+			// onto the keeper: the report column is about the rows being removed.
+			for ri := 0; ri < len(redundant) && !dupHasFP; ri++ {
+				dupHasFP = len(redundant[ri].AcoustIDFingerprint) > 0
+			}
 
 			// 🔴 MERGE, DON'T JUST PICK. Ranking alone chooses a whole ROW, so a
 			// keeper that carries a fingerprint but no duration silently loses the
@@ -415,6 +443,24 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				pendingDeletes = append(pendingDeletes, redundant[ri].ID)
 				pendingRows = append(pendingRows, redundant[ri])
 			}
+		}
+
+		// Report row for this book, built from the Pebble read above so it
+		// describes the same rows the keeper decision saw. Recorded in dry runs and
+		// applies alike, before any delete, so an apply's report says what it
+		// FOUND, not what survived. A failed title lookup leaves the title empty:
+		// the report is diagnostic and must never abort a book.
+		if totalRows > distinct {
+			title := ""
+			if b, berr := store.GetBookByID(bookID); berr == nil && b != nil {
+				title = b.Title
+			}
+			mu.Lock()
+			reportRows = append(reportRows, dupeReportRow{
+				BookID: bookID, Title: title, Rows: totalRows, Distinct: distinct,
+				DupRows: totalRows - distinct, DupHasFP: dupHasFP,
+			})
+			mu.Unlock()
 		}
 
 		// One batched delete for the whole book. DeleteBookFilesByIDs is fail-closed
@@ -530,6 +576,33 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		log.Warn("dedupe-book-file-rows: some books failed", "err", runErr)
 	}
 
+	// Per-book census. Workers finish out of order, so sort by book ID: the
+	// file has to be diffable between a dry run and the apply that follows it.
+	reportPath := params.ReportPath
+	if reportPath == "" {
+		mode := "dryrun"
+		if params.Apply {
+			mode = "apply"
+		}
+		reportPath = filepath.Join("reports", "dedupe-book-file-rows-"+mode+".tsv")
+	}
+	sort.Slice(reportRows, func(i, j int) bool { return reportRows[i].BookID < reportRows[j].BookID })
+	// A Limit-capped run covers only the processed subset; say so, or a canary
+	// report reads as the whole census. Books whose GetBookFiles failed have no
+	// row either, so report rows and books_affected can legitimately differ.
+	limited := len(bookIDs) < len(affected)
+	reportNote := fmt.Sprintf("report: %s (%d books)", reportPath, len(reportRows))
+	if werr := writeDupeRowsReport(reportPath, reportRows); werr != nil {
+		log.Warn("dedupe-book-file-rows: could not write report", "path", reportPath, "err", werr, "rows", len(reportRows))
+		reportNote = "report: FAILED to write " + reportPath
+	} else {
+		log.Info("dedupe-book-file-rows: wrote report", "path", reportPath, "rows", len(reportRows),
+			"books_processed", len(bookIDs), "books_affected", len(affected), "limited", limited)
+	}
+	if limited {
+		reportNote += fmt.Sprintf(", limit %d of %d affected books", len(bookIDs), len(affected))
+	}
+
 	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)
 	if params.Apply {
 		verb = fmt.Sprintf("deleted %d (salvaged fields on %d keepers, recomputed %d books)",
@@ -542,11 +615,33 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// the next operator concludes the op did nothing.
 	summary := fmt.Sprintf(
 		"dedupe-book-file-rows: %d rows scanned, %d books affected, %d redundant rows, %s, failed %d "+
-			"| NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
-		len(cores), len(affected), dupRows, verb, failed, strings.Join(examples, "; "))
+			"| %s | NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
+		len(cores), len(affected), dupRows, verb, failed, reportNote, strings.Join(examples, "; "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
 	return nil
+}
+
+// writeDupeRowsReport dumps EVERY affected book and its duplication shape as a
+// TSV. Written on dry runs as well as applies: the dry run is the artifact an
+// owner approves an apply from, and a log line capped at ten examples is not
+// that. Zero rows still writes the header, so "ran and found nothing" is
+// distinguishable from "did not run". Shaped after writeReapReport.
+func writeDupeRowsReport(path string, rows []dupeReportRow) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o775); err != nil {
+			return err
+		}
+	}
+	// Titles are user data; a tab or newline would silently shift columns.
+	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
+	var b strings.Builder
+	b.WriteString("book_id\ttitle\trows\tdistinct\tdup_rows\thas_fingerprint_on_dupe\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%s\t%s\t%d\t%d\t%d\t%t\n",
+			clean(r.BookID), clean(r.Title), r.Rows, r.Distinct, r.DupRows, r.DupHasFP)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o664)
 }
 
 // shortPath trims a long path to its last two segments for log readability.
