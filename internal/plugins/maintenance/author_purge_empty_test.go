@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -600,5 +601,214 @@ func TestPurgeEmptyAuthors_HeldBackSample_DryRunStillInert(t *testing.T) {
 	runPurge(t, `{"apply":false}`, &deleted)
 	if len(deleted) != 0 {
 		t.Fatalf("dry run deleted %v", deleted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scan-race guards on the apply path: scan stand-down, per-item re-check, and
+// the undo-ledger row written before each delete.
+//
+// library.scan runs for days on production. refCounts is a snapshot taken at
+// the start of the run, so a book linked to a zero-book author after that
+// snapshot must stop that author's delete, or the book is left pointing at a
+// deleted author id whose name existed nowhere else.
+// ---------------------------------------------------------------------------
+
+// purgeScanDeps is fakeDeps with a steerable scan controller. Its own
+// AcquireScanStandDown/RenewScanStandDown (depth 0) shadow fakeDeps' always-OK
+// ones. renewAllowed < 0 means every renew succeeds; otherwise renews beyond
+// that many report the lease as lost.
+type purgeScanDeps struct {
+	fakeDeps
+	mu           sync.Mutex
+	acquires     int
+	releases     int
+	renews       int
+	renewAllowed int
+}
+
+func (d *purgeScanDeps) AcquireScanStandDown(_ context.Context, _, _ string) (func(), error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.acquires++
+	return func() {
+		d.mu.Lock()
+		d.releases++
+		d.mu.Unlock()
+	}, nil
+}
+
+func (d *purgeScanDeps) RenewScanStandDown(_ string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.renews++
+	return d.renewAllowed < 0 || d.renews <= d.renewAllowed
+}
+
+// guardedPurgeStore is purgeFixture's library (authors 2 and 3 eligible) with
+// every delete and ledger write recorded in one ordered event log, so a test
+// can assert on ORDER (journal before delete) as well as on membership.
+func guardedPurgeStore(events *[]string) *database.MockStore {
+	authors, books, files := purgeFixture()
+	return &database.MockStore{
+		GetAllAuthorsFunc:             func() ([]database.Author, error) { return authors, nil },
+		GetAllAuthorBookCountsFunc:    func() (map[int]int, error) { return books, nil },
+		GetAllAuthorFileCountsFunc:    func() (map[int]int, error) { return files, nil },
+		GetAllAuthorFileRefCountsFunc: func() (map[int]int, error) { return files, nil },
+		GetAllAuthorBookRefCountsFunc: func() (map[int]int, error) { return map[int]int{1: 12}, nil },
+		CreateOperationChangeFunc: func(c *database.OperationChange) error {
+			*events = append(*events, "journal:"+c.ChangeType+":"+c.OldValue)
+			return nil
+		},
+		DeleteAuthorFunc: func(id int) error {
+			*events = append(*events, fmt.Sprintf("delete:%d", id))
+			return nil
+		},
+	}
+}
+
+func deletesIn(events []string) []string {
+	var out []string
+	for _, e := range events {
+		if len(e) > 7 && e[:7] == "delete:" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// A dry run writes nothing, so it must not park the scanner.
+func TestPurgeEmptyAuthors_DryRunTakesNoStandDown(t *testing.T) {
+	var events []string
+	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: -1}
+	p := &Plugin{deps: deps}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":false}`), &opIDReporter{id: "op-dry"}); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if deps.acquires != 0 || deps.renews != 0 {
+		t.Fatalf("dry run touched the stand-down: acquires=%d renews=%d, want 0/0", deps.acquires, deps.renews)
+	}
+	if len(events) != 0 {
+		t.Fatalf("dry run wrote %v", events)
+	}
+}
+
+// Apply takes the stand-down exactly once, renews it per item, and releases it.
+func TestPurgeEmptyAuthors_ApplyHoldsStandDownAndRenewsPerItem(t *testing.T) {
+	var events []string
+	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: -1}
+	p := &Plugin{deps: deps}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-apply"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if deps.acquires != 1 || deps.releases != 1 {
+		t.Fatalf("acquires=%d releases=%d, want 1/1", deps.acquires, deps.releases)
+	}
+	if deps.renews < 2 {
+		t.Fatalf("renews=%d, want at least one per eligible author (2)", deps.renews)
+	}
+	if got := deletesIn(events); len(got) != 2 {
+		t.Fatalf("deleted %v, want authors 2 and 3", got)
+	}
+}
+
+// 🔴 THE RACE. Author 2 has zero links when the whole-library count runs; a
+// scan links a book to it afterwards. The per-item re-check must see that link
+// and hold the author rather than delete it.
+func TestPurgeEmptyAuthors_ApplyHoldsAuthorLinkedAfterCount(t *testing.T) {
+	var events []string
+	store := guardedPurgeStore(&events)
+	counted := false
+	store.GetAllAuthorBookRefCountsFunc = func() (map[int]int, error) {
+		counted = true // everything after this point is "during the run"
+		return map[int]int{1: 12}, nil
+	}
+	store.GetBooksByAuthorIDWithRoleFunc = func(authorID int) ([]database.BookCore, error) {
+		if counted && authorID == 2 {
+			return []database.BookCore{{ID: "book-linked-by-scan"}}, nil
+		}
+		return nil, nil
+	}
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	got := deletesIn(events)
+	if len(got) != 1 || got[0] != "delete:3" {
+		t.Fatalf("deleted %v, want only author 3 — author 2 was linked after the count and must be held", got)
+	}
+	for _, e := range events {
+		if e == "journal:author_delete:2:- Edgedancer" {
+			t.Fatalf("journaled a delete of held author 2: %v", events)
+		}
+	}
+}
+
+// A re-check that cannot be answered is not "zero links".
+func TestPurgeEmptyAuthors_ApplyHoldsAuthorWhenReCheckFails(t *testing.T) {
+	var events []string
+	store := guardedPurgeStore(&events)
+	store.GetBooksByAuthorIDWithRoleFunc = func(authorID int) ([]database.BookCore, error) {
+		if authorID == 2 {
+			return nil, database.ErrMemdbIncomplete
+		}
+		return nil, nil
+	}
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := deletesIn(events); len(got) != 1 || got[0] != "delete:3" {
+		t.Fatalf("deleted %v, want only author 3 — a failed re-check must hold author 2", got)
+	}
+}
+
+// Losing the lease after the first delete aborts every remaining delete.
+func TestPurgeEmptyAuthors_ApplyAbortsWhenStandDownLeaseLost(t *testing.T) {
+	var events []string
+	deps := &purgeScanDeps{fakeDeps: fakeDeps{store: guardedPurgeStore(&events)}, renewAllowed: 1}
+	p := &Plugin{deps: deps}
+	err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-lease"})
+	if err == nil {
+		t.Fatal("a lost stand-down lease did not abort the apply")
+	}
+	if got := deletesIn(events); len(got) != 1 || got[0] != "delete:2" {
+		t.Fatalf("deleted %v, want only author 2 (before the lease was lost)", got)
+	}
+	if deps.releases != 1 {
+		t.Fatalf("releases=%d, want the gate released on the abort path", deps.releases)
+	}
+}
+
+// Every delete is preceded by an undo-ledger row naming the author, and a
+// failed ledger write means no delete.
+func TestPurgeEmptyAuthors_ApplyJournalsBeforeEachDelete(t *testing.T) {
+	var events []string
+	store := guardedPurgeStore(&events)
+	p := &Plugin{deps: &fakeDeps{store: store}}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-j"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	want := []string{
+		"journal:author_delete:2:- Edgedancer", "delete:2",
+		"journal:author_delete:3:04 - Heir to the Jedi", "delete:3",
+	}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("events %v, want %v", events, want)
+	}
+
+	events = nil
+	store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		if c.OldValue == "2:- Edgedancer" {
+			return errors.New("ledger unavailable")
+		}
+		events = append(events, "journal:"+c.ChangeType+":"+c.OldValue)
+		return nil
+	}
+	if err := p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &opIDReporter{id: "op-j2"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := deletesIn(events); len(got) != 1 || got[0] != "delete:3" {
+		t.Fatalf("deleted %v, want only author 3 — author 2's ledger write failed, so it must not be deleted", got)
 	}
 }
