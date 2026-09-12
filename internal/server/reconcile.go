@@ -1,6 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
+// last-edited: 2026-09-11
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -8,6 +9,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -93,13 +95,19 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 	op := ops[0]
 	if op.Status == "completed" && op.ResultData != nil {
 		var preview reconcile.ReconcilePreviewResult
-		if err := json.Unmarshal([]byte(*op.ResultData), &preview); err == nil {
+		err := json.Unmarshal([]byte(*op.ResultData), &preview)
+		if err == nil {
 			httputil.RespondWithOK(c, gin.H{
 				"operation": op,
 				"preview":   preview,
 			})
 			return
 		}
+		// The response still says preview:nil (what it answers is an open API
+		// decision, see the NOTE above), but the reason must not vanish: from
+		// the outside, an unreadable result and "no scan has run" look alike.
+		slog.Warn("reconcile: latest scan's result could not be decoded; answering with no preview",
+			"op_id", op.ID, "error", err)
 	}
 	httputil.RespondWithOK(c, gin.H{
 		"operation": op,

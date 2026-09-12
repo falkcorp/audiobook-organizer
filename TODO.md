@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.59.0 -->
+<!-- version: 10.62.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -3863,7 +3863,7 @@ operations that can never be reached is not.
 
 - [ ] Decide which contract `/reconcile/latest-scan` should honour
 - [ ] If falling through: name the source op in the response so a stale preview is identifiable
-- [ ] Either way, stop discarding the `json.Unmarshal` error without a log line
+- [x] Either way, stop discarding the `json.Unmarshal` error without a log line. _Done 2026-09-11: `latestReconcileScan` now logs a WARN with the op id and the decode error. The response is unchanged pending the contract decision above._
 
 ## Finish the LLM fallback chain — stages 2 through 4
 
