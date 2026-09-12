@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -445,15 +445,16 @@ func TestFinishApplyFileWork_StopsWhereStandDownIsLost(t *testing.T) {
 	}
 }
 
-// Auto-fetch writes tags through the shared core. It used to write them only
-// under write_back_metadata (off in production), so the DB took the fetched
-// metadata while the files kept the old tags.
+// Auto-fetch writes tags only under write_back_metadata (off by default), and
+// auto_write_tags_on_apply -- a setting for explicit applies, on by default --
+// has no say. Routing auto-fetch through the apply pipeline once made the
+// Fetch button retag (and rename) a library book under default config.
 func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 	tests := []struct {
 		writeBackMetadata, autoTags bool
 		want                        int
 	}{
-		{writeBackMetadata: false, autoTags: true, want: 1},
+		{writeBackMetadata: false, autoTags: true, want: 0},
 		{writeBackMetadata: true, autoTags: true, want: 1},
 		{writeBackMetadata: true, autoTags: false, want: 1},
 		{writeBackMetadata: false, autoTags: false, want: 0},
@@ -627,7 +628,8 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 
 	siblings = []database.Book{*book, {ID: "lib1", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}}
 	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
-	assert.Equal(t, []string{"lib1"}, tags, "an existing library copy gets the file work, tagged once")
+	// The tag write is asked for b1; writeBackForBook resolves the copy.
+	assert.Equal(t, []string{"b1"}, tags, "an existing library copy gets the file work, tagged once")
 }
 
 // With no pool wired (organize's per-call service) auto-fetch touches no file.
@@ -781,8 +783,103 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			keys := locks.taken()
 			assert.Contains(t, keys, b.FilePath, "the file work must lock the library copy's path")
 			assert.NotContains(t, keys, a.FilePath, "A's protected path is never written; a lock on it guards nothing")
+
+			// A manual apply of A itself writes B's files too (through the rename
+			// pipeline when auto_write_tags_on_apply is on), so its path locks
+			// must name B's path and never A's.
+			svc.tagWriter = func(string) (int, error) { return 1, nil }
+			manual := &testPathLocks{}
+			svc.SetPathLocker(manual.lock)
+			require.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil))
+			assert.Contains(t, manual.taken(), b.FilePath, "a manual apply of A must lock its library copy's path")
+			assert.NotContains(t, manual.taken(), a.FilePath, "a manual apply of A must never key a lock on A's protected path")
 		})
 	}
+}
+
+// Auto-fetch never renames, and writes tags only under write_back_metadata --
+// with the explicit-apply switches at their shipped defaults (both on). It used
+// to run the apply rename pipeline, so the Fetch button moved a library book's
+// files to the naming-pattern path and retagged them under default config.
+func TestFinishAutoFetchFileWork_NeverRenamesAndTagsOnlyUnderWriteBack(t *testing.T) {
+	for _, writeBack := range []bool{false, true} {
+		t.Run(fmt.Sprintf("write_back_metadata=%v", writeBack), func(t *testing.T) {
+			root, _ := protectedSetup(t)
+			config.AppConfig.AutoRenameOnApply = true
+			config.AppConfig.AutoWriteTagsOnApply = true
+			bookDir := filepath.Join(root, "Old Place")
+			libFile := filepath.Join(bookDir, "01.m4b")
+			writeFile(t, libFile, "library audio")
+			book := &database.Book{ID: "lib1", Title: "A Book", FilePath: bookDir}
+			svc := NewService(&database.MockStore{
+				GetBookByIDFunc: func(string) (*database.Book, error) { b := *book; return &b, nil },
+				GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+					return []database.BookFile{{ID: "f1", BookID: "lib1", FilePath: libFile}}, nil
+				},
+			})
+			var tags []string
+			svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+			require.NoError(t, svc.FinishAutoFetchFileWork("lib1", "", writeBack))
+
+			got, err := os.ReadFile(libFile)
+			require.NoError(t, err, "auto-fetch moved the book's file")
+			assert.Equal(t, "library audio", string(got))
+			if writeBack {
+				assert.Equal(t, []string{"lib1"}, tags, "write_back_metadata on: the tags are written once")
+			} else {
+				assert.Empty(t, tags, "write_back_metadata off: auto-fetch must not write tags")
+			}
+		})
+	}
+}
+
+// Two file-work jobs for the same book run one after the other. The second
+// used to start while the first was still writing, keyed on a path it had read
+// before the first job's rename moved the files.
+func TestFinishApplyFileWork_SameBookJobsSerialize(t *testing.T) {
+	svc, _, _ := fileWorkHarness(t, t.TempDir(), false, false, nil)
+	entered := make(chan string, 4)
+	proceed := make(chan struct{})
+	svc.tagWriter = func(id string) (int, error) {
+		entered <- "tags"
+		<-proceed
+		return 1, nil
+	}
+	svc.coverDownload = func(coverURL, destDir, bookID string) (string, error) {
+		entered <- "cover:" + coverURL
+		return filepath.Join(destDir, "covers", bookID+".jpg"), nil
+	}
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
+	next := func() string {
+		select {
+		case got := <-entered:
+			return got
+		case <-time.After(5 * time.Second):
+			close(proceed)
+			t.Fatal("the first job stalled")
+			return ""
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		assert.NoError(t, svc.FinishApplyFileWork("b1", "https://covers.example.test/x.jpg", false, true, nil))
+	})
+	require.Equal(t, "cover:https://covers.example.test/x.jpg", next())
+	require.Equal(t, "tags", next())
+	wg.Go(func() {
+		assert.NoError(t, svc.FinishApplyFileWork("b1", "https://covers.example.test/y.jpg", false, true, nil))
+	})
+	select {
+	case got := <-entered:
+		t.Errorf("a second job on the same book started (%s) while the first was writing its tags", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(proceed)
+	wg.Wait()
+	assert.Contains(t, locks.taken(), bookLockKey("b1"))
 }
 
 // Auto-fetch keeps a cover the book already has; only an explicit apply
