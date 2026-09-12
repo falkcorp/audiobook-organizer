@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-09-06
+// last-edited: 2026-09-12
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -67,7 +67,7 @@ type markMissingParams struct {
 	// cleanly.
 	Max int `json:"max"`
 	// ReportPath overrides where the full per-row TSV lands. Empty derives a
-	// path under reports/. Written on EVERY run — a dry run whose decisions are
+	// path under {root_dir}/.reports/. Written on EVERY run — a dry run whose decisions are
 	// unreadable cannot inform the apply it exists to inform.
 	ReportPath string `json:"reportPath,omitempty"`
 }
@@ -192,6 +192,12 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 			"for the write phase and each row is re-stat'd before writing.")
 	}
 
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "mark-missing-files"))
+	if rpErr != nil {
+		return fmt.Errorf("mark-missing-files: %w", rpErr)
+	}
 	plan, err := planMarkMissingFiles(ctx, store, p.deps, params, reporter)
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
@@ -200,14 +206,6 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 	// planning phase populates plan.all in full regardless of how the write phase
 	// ends; skip the write only for an early error that produced no decisions.
 	if err == nil || len(plan.all) > 0 {
-		reportPath := params.ReportPath
-		if reportPath == "" {
-			name := registry.ReporterOpID(reporter)
-			if name == "" {
-				name = "unknown-op"
-			}
-			reportPath = filepath.Join("reports", "mark-missing-files-"+name+".tsv")
-		}
 		if wErr := writeMarkMissingReport(reportPath, plan.all); wErr != nil {
 			log.Error("mark-missing-files: FAILED to write the per-row report",
 				"path", reportPath, "err", wErr, "rows", len(plan.all))

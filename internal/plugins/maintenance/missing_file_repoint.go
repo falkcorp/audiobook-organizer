@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-09-06
+// last-edited: 2026-09-12
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -63,7 +63,7 @@ type missingFileRepointParams struct {
 	// aspiration. Set false only to recover rows whose size was never recorded.
 	RequireSizeMatch *bool `json:"requireSizeMatch"`
 	// ReportPath overrides where the full per-row TSV lands. Empty means a
-	// derived path under reports/ -- the report is written on EVERY run, because
+	// derived path under {root_dir}/.reports/ -- the report is written on EVERY run, because
 	// a dry run whose decisions are not readable cannot inform the decision it
 	// exists to inform.
 	ReportPath string `json:"reportPath,omitempty"`
@@ -174,17 +174,14 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "missing-file-repoint"))
+	if rpErr != nil {
+		return fmt.Errorf("missing-file-repoint: %w", rpErr)
+	}
 	plan, err := planMissingFileRepoint(ctx, store, p.deps, params, reporter)
 	log := reporter.Logger()
-
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		name := registry.ReporterOpID(reporter)
-		if name == "" {
-			name = "unknown-op"
-		}
-		reportPath = filepath.Join("reports", "missing-file-repoint-"+name+".tsv")
-	}
 
 	// Write the full per-row report BEFORE returning any error, so a run that
 	// aborts mid-apply (e.g. the scan stand-down lease lapsed after k writes) still

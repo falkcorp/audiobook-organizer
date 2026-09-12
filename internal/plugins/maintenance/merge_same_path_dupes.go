@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-09-05
+// last-edited: 2026-09-12
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -178,13 +178,11 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 	}
 	log := reporter.Logger()
 
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		name := registry.ReporterOpID(reporter)
-		if name == "" {
-			name = "unknown-op"
-		}
-		reportPath = filepath.Join("reports", "merge-same-path-dupes-"+name+".tsv")
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "merge-same-path-dupes"))
+	if rpErr != nil {
+		return fmt.Errorf("merge-same-path-dupes: %w", rpErr)
 	}
 
 	// The report is the ONLY complete record of which losers were soft-deleted

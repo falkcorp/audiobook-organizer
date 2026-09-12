@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f21c6ad-95be-4c30-8d02-5b3a1e6f4c99
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -120,7 +120,7 @@ func TestDedupeBookFileRows_ParallelApplyCollapsesEveryBook(t *testing.T) {
 
 	bookIDs := seedDupBooks(t, s, books, copies)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 	rep := &concurrentReporter{}
 
@@ -172,7 +172,7 @@ func TestDedupeBookFileRows_ParallelDryRunDeletesNothing(t *testing.T) {
 
 	bookIDs := seedDupBooks(t, s, books, copies)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: false})
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
 		t.Fatalf("runDedupeBookFileRows (dry run): %v", err)
@@ -315,7 +315,7 @@ func TestDedupeBookFileRows_ApplyJournalsEveryDeletedRow(t *testing.T) {
 		pre[id] = files
 	}
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 	rep := &dedupeOpIDReporter{concurrentReporter: &concurrentReporter{}, opID: "op-dedupe-journal"}
 
@@ -418,7 +418,7 @@ func TestDedupeBookFileRows_JournalFailureLeavesRowsIntact(t *testing.T) {
 
 	s, bookIDs := newDupStore(t, books, copies)
 
-	p := &Plugin{deps: fakeDeps{store: &journalFailStore{PebbleStore: s}}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: &journalFailStore{PebbleStore: s}}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 
 	// It DEGRADES, it does not abort: one unwritable ledger row must not turn
@@ -456,7 +456,7 @@ func TestDedupeBookFileRows_ApplyRefusesWhileLibraryScanRunning(t *testing.T) {
 	s, bookIDs := newDupStore(t, books, copies)
 	seedActiveOp(t, s, "scan-1", "library.scan", "running")
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 
 	err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{})
@@ -480,7 +480,7 @@ func TestDedupeBookFileRows_ApplyRefusesWhileLibraryScanQueued(t *testing.T) {
 	s, bookIDs := newDupStore(t, books, copies)
 	seedActiveOp(t, s, "scan-q", "library.scan", "queued")
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 
 	err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{})
@@ -505,7 +505,7 @@ func TestDedupeBookFileRows_ApplyProceedsWhenOnlyAnUnrelatedOpIsActive(t *testin
 	s, bookIDs := newDupStore(t, books, copies)
 	seedActiveOp(t, s, "title-1", "maintenance.title-repair", "running")
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
@@ -525,7 +525,7 @@ func TestDedupeBookFileRows_DryRunIsAllowedDuringALibraryScan(t *testing.T) {
 	s, bookIDs := newDupStore(t, books, copies)
 	seedActiveOp(t, s, "scan-2", "library.scan", "running")
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: false})
 
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
@@ -545,7 +545,7 @@ func TestDedupeBookFileRows_DryRunAfterApplyReportsZeroPending(t *testing.T) {
 
 	s, bookIDs := newDupStore(t, books, copies)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
 	applyRaw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
 	if err := p.runDedupeBookFileRows(context.Background(), applyRaw, &concurrentReporter{}); err != nil {
 		t.Fatalf("apply: %v", err)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-08-20
+// last-edited: 2026-09-12
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -202,6 +202,12 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 	if books == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "metadata-cache-reap"))
+	if rpErr != nil {
+		return fmt.Errorf("metadata-cache-reap: %w", rpErr)
+	}
 
 	plan, err := planMetadataCacheReap(ctx, cache, books, params, reporter)
 	if err != nil {
@@ -214,14 +220,6 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 	// report is not a convenience: it is the only record of what was destroyed,
 	// and the only way to regenerate the reaped rows is to know which books they
 	// belonged to.
-	reportPath := params.ReportPath
-	if reportPath == "" {
-		name := registry.ReporterOpID(reporter)
-		if name == "" {
-			name = "unknown-op"
-		}
-		reportPath = filepath.Join("reports", "metadata-cache-reap-"+name+".tsv")
-	}
 	if wErr := writeReapReport(reportPath, plan.all); wErr != nil {
 		log.Error("metadata-cache-reap: FAILED to write the per-row report",
 			"path", reportPath, "err", wErr, "rows", len(plan.all))
