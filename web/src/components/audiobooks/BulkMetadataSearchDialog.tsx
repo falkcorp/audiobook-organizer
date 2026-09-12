@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -119,7 +119,11 @@ export function BulkMetadataSearchDialog({
   onComplete,
   toast,
 }: BulkMetadataSearchDialogProps) {
-  const [currentIndex, setCurrentIndex] = useState(0);
+  // The wizard's position is tracked by book id, not by list index: with
+  // "Skip applied" on, applying a book removes it from filteredBooks, which
+  // shifts every later index down by one. An index would then silently skip
+  // the next book on every apply. null means "the first book in the list".
+  const [currentBookId, setCurrentBookId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [authorQuery, setAuthorQuery] = useState('');
   const [narratorQuery, setNarratorQuery] = useState('');
@@ -136,7 +140,10 @@ export function BulkMetadataSearchDialog({
   const [bookStatuses, setBookStatuses] = useState<Map<string, BookStatus>>(new Map());
   const [writeToFiles, setWriteToFiles] = useState(true);
   const [undoing, setUndoing] = useState(false);
-  const [skipApplied, setSkipApplied] = useState(false);
+  // On by default: the wizard is a queue of books still needing metadata, so
+  // books already matched (on the server, or applied in this session) are
+  // hidden. Turning it off shows every selected book, applied ones marked.
+  const [skipApplied, setSkipApplied] = useState(true);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [sortResults, setSortResults] = useState<'score' | 'source'>('score');
   // Files list for the current book — always shown so the user can confirm
@@ -150,17 +157,31 @@ export function BulkMetadataSearchDialog({
 
   const handleToggleSkipApplied = (checked: boolean) => {
     setSkipApplied(checked);
-    setCurrentIndex(0); // Reset to first book when filter changes
+    setCurrentBookId(null); // Reset to first book when filter changes
   };
 
-  // Filter books based on skipApplied toggle
-  const filteredBooks = skipApplied
-    ? books.filter((b) => b.metadata_review_status !== 'matched')
-    : books;
+  const isSessionApplied = (id: string) => bookStatuses.get(id) === 'applied';
+  // The session's work set. With "Skip applied" on, books the server already
+  // reports as matched are excluded up front. The `books` prop is never
+  // refreshed while the dialog is open, so this alone cannot see applies made
+  // in this session.
+  const pool = skipApplied ? books.filter((b) => b.metadata_review_status !== 'matched') : books;
+  // Session-aware: a book applied in this dialog leaves the list as well.
+  const filteredBooks = skipApplied ? pool.filter((b) => !isSessionApplied(b.id)) : pool;
+  const foundIndex =
+    currentBookId === null ? -1 : filteredBooks.findIndex((b) => b.id === currentBookId);
+  const currentIndex = foundIndex >= 0 ? foundIndex : 0;
   const currentBook = filteredBooks[currentIndex];
   const appliedCount = [...bookStatuses.values()].filter((s) => s === 'applied').length;
   const skippedCount = [...bookStatuses.values()].filter((s) => s === 'skipped').length;
-  const alreadyAppliedCount = books.filter((b) => b.metadata_review_status === 'matched').length;
+  // Books handled so far out of the work set. Measured against `pool`, not the
+  // shrinking filteredBooks, so progress cannot run past 100%.
+  const poolDoneCount = pool.filter(
+    (b) => bookStatuses.has(b.id) && bookStatuses.get(b.id) !== 'pending'
+  ).length;
+  const alreadyAppliedCount = books.filter(
+    (b) => b.metadata_review_status === 'matched' || isSessionApplied(b.id)
+  ).length;
 
   // Search when the current book changes
   const doSearch = useCallback(
@@ -203,7 +224,10 @@ export function BulkMetadataSearchDialog({
       // Search with author + narrator (series can over-constrain results)
       doSearch(q, a, n);
     }
-  }, [open, currentIndex, currentBook, doSearch]);
+    // Keyed on the book itself, not its index: an undo that re-admits an
+    // earlier book shifts the index without changing the book, and must not
+    // wipe what the user has typed into the search fields.
+  }, [open, currentBook, doSearch]);
 
   // Eager-load the current book's files so the "N File(s)" control shows the
   // real count without a click. One request per navigation — cheap because the
@@ -266,7 +290,8 @@ export function BulkMetadataSearchDialog({
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
       setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
-      advanceToNext();
+      // With "Skip applied" on, the book leaves the list on this render.
+      advanceFrom(bookId, skipApplied);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
@@ -299,7 +324,8 @@ export function BulkMetadataSearchDialog({
       });
       setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
       setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
-      advanceToNext();
+      // With "Skip applied" on, the book leaves the list on this render.
+      advanceFrom(bookId, skipApplied);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
@@ -342,31 +368,49 @@ export function BulkMetadataSearchDialog({
 
   const handleSkip = () => {
     setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'skipped'));
-    advanceToNext();
+    advanceFrom(currentBook.id, false);
   };
 
   const handleMarkNoMatch = async () => {
     try {
       await api.markNoMatch(currentBook.id);
       setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'skipped'));
-      advanceToNext();
+      advanceFrom(currentBook.id, false);
     } catch {
       toast('Failed to mark as no match', 'error');
     }
   };
 
-  const advanceToNext = () => {
-    if (currentIndex < filteredBooks.length - 1) {
-      setCurrentIndex((i) => i + 1);
-      setSourceFilter(null); // reset filter for next book
-    }
+  // Move the wizard off `bookId` after it was applied / skipped. `leavesList`
+  // says the book is about to drop out of filteredBooks; then the successor is
+  // the book after it or, if it was last, the one before it. The successor is
+  // taken from the list as it stood when the action started, which is the
+  // list the user was looking at. If the user navigated elsewhere while the
+  // request was in flight (Previous/Next stay enabled), their position wins.
+  const advanceFrom = (bookId: string, leavesList: boolean) => {
+    const idx = filteredBooks.findIndex((b) => b.id === bookId);
+    if (idx < 0) return;
+    const next = filteredBooks[idx + 1] ?? (leavesList ? filteredBooks[idx - 1] : undefined);
+    if (!next) return; // last book and it stays: remain on it
+    setCurrentBookId((prev) => {
+      const shown = filteredBooks.some((b) => b.id === prev)
+        ? prev
+        : (filteredBooks[0]?.id ?? null);
+      return shown === bookId ? next.id : prev;
+    });
+    setSourceFilter(null); // reset filter for next book
+  };
+
+  const goToIndex = (index: number) => {
+    const target = filteredBooks[index];
+    if (target) setCurrentBookId(target.id);
   };
 
   const handleClose = () => {
     if (appliedCount > 0) {
       onComplete();
     }
-    setCurrentIndex(0);
+    setCurrentBookId(null);
     setBookStatuses(new Map());
     setAppliedStack([]);
     onClose();
@@ -407,7 +451,7 @@ export function BulkMetadataSearchDialog({
               textAlign: 'center',
             }}
           >
-            All {books.length} book(s) already have metadata applied.
+            All {books.length} book(s) have metadata applied.
             <br />
             <Button size="small" onClick={() => handleToggleSkipApplied(false)} sx={{ mt: 1 }}>
               Show all books
@@ -415,6 +459,20 @@ export function BulkMetadataSearchDialog({
           </Typography>
         </DialogContent>
         <DialogActions>
+          {/* Reachable by applying the last remaining book, so the session's
+              undo must stay available here. Undoing re-admits the book. */}
+          {appliedStack.length > 0 && (
+            <Button
+              color="warning"
+              startIcon={<UndoIcon />}
+              onClick={handleUndoLastApplied}
+              disabled={undoing}
+              size="small"
+              variant="contained"
+            >
+              {undoing ? 'Undoing…' : `Undo Last (${appliedStack.length})`}
+            </Button>
+          )}
           <Button onClick={handleClose} variant="outlined">
             Close
           </Button>
@@ -423,7 +481,7 @@ export function BulkMetadataSearchDialog({
     );
   }
 
-  const progress = ((appliedCount + skippedCount) / filteredBooks.length) * 100;
+  const progress = pool.length > 0 ? Math.min(100, (poolDoneCount / pool.length) * 100) : 0;
   const status = bookStatuses.get(currentBook?.id);
 
   return (
@@ -1057,7 +1115,7 @@ export function BulkMetadataSearchDialog({
         </Stack>
         <Stack direction="row" spacing={1}>
           <Button
-            onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
+            onClick={() => goToIndex(currentIndex - 1)}
             disabled={currentIndex === 0}
             startIcon={<NavigateBeforeIcon />}
             size="small"
@@ -1065,7 +1123,7 @@ export function BulkMetadataSearchDialog({
             Previous
           </Button>
           <Button
-            onClick={() => setCurrentIndex((i) => Math.min(filteredBooks.length - 1, i + 1))}
+            onClick={() => goToIndex(currentIndex + 1)}
             disabled={currentIndex >= filteredBooks.length - 1}
             endIcon={<NavigateNextIcon />}
             size="small"
@@ -1073,7 +1131,7 @@ export function BulkMetadataSearchDialog({
             Next
           </Button>
           <Button onClick={handleClose} variant="outlined">
-            {appliedCount + skippedCount >= filteredBooks.length ? 'Done' : 'Close'}
+            {poolDoneCount >= pool.length ? 'Done' : 'Close'}
           </Button>
         </Stack>
       </DialogActions>
