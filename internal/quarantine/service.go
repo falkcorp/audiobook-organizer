@@ -1,5 +1,5 @@
 // file: internal/quarantine/service.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-12
 
@@ -37,20 +37,44 @@ const (
 	changeUnquarantineFile = "unquarantine_file"
 )
 
-// Store is the narrow database interface required by QuarantineService.
-type Store interface {
+// BookRows reads and writes the book rows quarantine moves.
+type BookRows interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetITunesPurgePendingBooks() ([]database.Book, error)
+}
+
+// FileRows reads and repoints a book's book_file rows as its files move.
+type FileRows interface {
 	// GetBookFiles returns the FULL book_file records. Quarantine repoints each
 	// row with UpdateBookFile, which replaces the whole record, so a slim
 	// projection here would blank every field it omits (fingerprints included).
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// PathHistory journals path changes so unquarantine can reverse them.
+type PathHistory interface {
 	RecordPathChange(change *database.BookPathChange) error
 	GetBookPathHistory(bookID string) ([]database.BookPathChange, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+}
+
+// ScanFailCounts reads the per-file scan-fail counter behind auto-quarantine.
+type ScanFailCounts interface {
 	GetScanFailCount(pathHash string) (int, error)
-	GetITunesPurgePendingBooks() ([]database.Book, error)
+}
+
+// Store is the narrow database interface required by QuarantineService.
+//
+// Split into the 4 interfaces above on 2026-09-12. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
+type Store interface {
+	BookRows
+	FileRows
+	PathHistory
+	ScanFailCounts
 }
 
 // WriteBackEnqueuer is the narrow interface for queuing iTunes track removals.
