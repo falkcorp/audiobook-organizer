@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.69.0 -->
+<!-- version: 10.68.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -7918,6 +7919,10 @@ step 4 propagates to the server package with no edit there.
       consolidation instead of restoring the intended default of 10 — ✅ DONE 2026-08-22 (PR #2729, TASK-019); (6)
       whether to delete the fully inert `--enable-sqlite3-i-know-the-risks`
       flag now that the SQLite backend is gone — ✅ DONE 2026-09-12 (#3268, TASK-020): flag and `EnableSQLite` deleted, `PUT /config enable_sqlite` returns 400; (7) whether to wire up or
+      flag now that the SQLite backend is gone — ✅ DONE 2026-09-12 (PR #3268
+      deleted the flag and `EnableSQLite`, TASK-020; PR #3294 re-registered the
+      flag as a hidden, deprecated no-op so off-repo command lines keep
+      starting); (7) whether to wire up or
       remove the two entirely-unenforced Settings-UI subsystems (Storage
       Quotas, Memory Limits) and the ~10 other dead Settings-page toggles
       (`create_backups`, `verify_after_write`, `AutoFetchMetadata`,
