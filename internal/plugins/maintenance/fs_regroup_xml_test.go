@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-09-12
 
@@ -14,12 +14,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // itoa is shared with regroup_shattered_ai_test.go.
@@ -138,6 +141,9 @@ func seedFragments(t *testing.T, s *database.PebbleStore, base, prefix string, n
 	var ids []string
 	for i := 1; i <= n; i++ {
 		p := fmt.Sprintf("%s/%s - %d/%d.mp3", base, prefix, i, n)
+		if !fsRegroupProtectedPath(p) { // never write into a protected tree, even a fake one
+			fsWriteFile(t, p)
+		}
 		id := fsSeedBook(t, s, "", p)
 		if i == 1 {
 			fsSeedRow(t, s, id, p)
@@ -147,13 +153,54 @@ func seedFragments(t *testing.T, s *database.PebbleStore, base, prefix string, n
 	return ids
 }
 
-const fsFragBase = "/lib/Adrian Tchaikovsky/Cage of Souls - Cage of Souls"
+// fsFragBases gives each test (and subtest) its own real book folder, so the
+// chapter files the op stats before creating a row exist on disk.
+var fsFragBases sync.Map // *testing.T -> string
+
+func fsFragBase(t *testing.T) string {
+	t.Helper()
+	if v, ok := fsFragBases.Load(t); ok {
+		return v.(string)
+	}
+	base := filepath.Join(t.TempDir(), "Adrian Tchaikovsky", "Cage of Souls - Cage of Souls")
+	fsFragBases.Store(t, base)
+	t.Cleanup(func() { fsFragBases.Delete(t) })
+	return base
+}
+
+// fsWriteFile creates a stand-in audio file at p.
+func fsWriteFile(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fsForce relabels every group, to drive the apply's own re-checks on a group
+// the planner already refused.
+func fsForce(plan *fsRepairPlan, cat string) {
+	for i := range plan.Groups {
+		plan.Groups[i].Category = cat
+	}
+}
+
+func fsPrimary(t *testing.T, s *database.PebbleStore, id string) bool {
+	t.Helper()
+	b, err := s.GetBookByID(id)
+	if err != nil || b == nil {
+		t.Fatalf("book %s is gone (err=%v)", id, err)
+	}
+	return b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
+}
 
 // Category 1, dry run: the default run reports the group and its plan line
 // and writes nothing.
 func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 	before := fsRowCount(t, s)
 
 	p := &Plugin{deps: &fakeDeps{store: s}}
@@ -165,7 +212,7 @@ func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 	if !strings.Contains(sum, "fragments: groups=1 rows=3") {
 		t.Errorf("summary = %q, want fragments groups=1 rows=3", sum)
 	}
-	if !strings.Contains(strings.Join(rep.logs, "\n"), "PLAN fragments folder=\""+fsFragBase+"\"") {
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "PLAN fragments folder=\""+fsFragBase(t)+"\"") {
 		t.Errorf("no per-group plan line in %v", rep.logs)
 	}
 	for _, id := range ids {
@@ -186,7 +233,7 @@ func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 // change is journaled under the op id.
 func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 	if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "PID-X", BookID: ids[2]}); err != nil {
 		t.Fatalf("seed ext-id: %v", err)
 	}
@@ -233,7 +280,7 @@ func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 		t.Errorf("book_file rows decreased %d → %d", before, after)
 	}
 	sb, _ := s.GetBookByID(survivor)
-	if sb.Title != "Cage of Souls" || sb.FilePath != fsFragBase {
+	if sb.Title != "Cage of Souls" || sb.FilePath != fsFragBase(t) {
 		t.Errorf("survivor = %q @ %q", sb.Title, sb.FilePath)
 	}
 	if id, _ := s.GetBookByExternalID("itunes", "PID-X"); id != survivor {
@@ -243,8 +290,12 @@ func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 	if led[fsChangeSoftDelete] != shells {
 		t.Errorf("book_soft_delete rows = %d, want %d", led[fsChangeSoftDelete], shells)
 	}
-	if led[fsChangeFileReassign]+led[fsChangeFileCreate] != 2 || res.RowsMoved+res.RowsCreated != 2 {
-		t.Errorf("reassign+create rows = %d+%d (res %s), want 2 total", led[fsChangeFileReassign], led[fsChangeFileCreate], res)
+	// Two members had no row: each gets one on itself, then the shells' rows move.
+	if led[fsChangeFileCreate] != 2 || led[fsChangeFileReassign] != 2 || res.RowsCreated != 2 || res.RowsMoved != 2 {
+		t.Errorf("create/reassign rows = %d/%d (res %s), want 2/2", led[fsChangeFileCreate], led[fsChangeFileReassign], res)
+	}
+	if led[fsChangePrimaryDemote] != shells {
+		t.Errorf("book_primary_demote rows = %d, want %d", led[fsChangePrimaryDemote], shells)
 	}
 	if led["metadata_update"] != 1 || led[fsChangePathUpdate] != 1 {
 		t.Errorf("metadata_update/book_path_update rows = %d/%d, want 1/1 (title, path)",
@@ -430,7 +481,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
-			ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+			ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 			before := fsRowCount(t, s)
 			plan := fsPlan(t, s)
 			if _, err := applyFSRepairPlan(context.Background(), s, tc.scan, tc.queue, plan, fsRegroupParams{}, &opIDReporter{id: "op-scan"}); err == nil {
@@ -449,7 +500,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 
 	// And with a live lease the stand-down is held for the write phase.
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase, "Cage of Souls", 2)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 2)
 	c := &recordingScanController{renewOK: true}
 	if _, err := applyFSRepairPlan(context.Background(), s, c, fsQueue{}, fsPlan(t, s), fsRegroupParams{}, &opIDReporter{id: "op-held"}); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -464,7 +515,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 // op id refuses because it could not journal.
 func TestFsRegroupApply_LookupErrorSkipsGroupAndOpIDRequired(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase, "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, lookupErr: errors.New("transient")}
 	plan := fsPlan(t, g)
@@ -495,7 +546,7 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 	s := regroupStore(t)
 	var ids []string
 	for i := 1; i <= 3; i++ {
-		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", fsFragBase, i, 3)
+		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", fsFragBase(t), i, 3)
 		id := fsSeedBook(t, s, "", p)
 		fsSeedRow(t, s, id, p)
 		ids = append(ids, id)
@@ -528,9 +579,20 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 		t.Fatalf("ledger = %v, want 2 reassign, 2 soft-delete and track rows", led)
 	}
 
+	for _, id := range ids {
+		if id != survivor && fsPrimary(t, s, id) {
+			t.Errorf("retired shell %s is still primary", id)
+		}
+	}
+
 	res, err := audiobooks.NewRevertService(s).RevertOperation("op-undo")
 	if err != nil {
 		t.Fatalf("revert: %v (%+v)", err, res)
+	}
+	for _, id := range ids {
+		if !fsPrimary(t, s, id) {
+			t.Errorf("book %s still demoted after revert", id)
+		}
 	}
 	if res.Failed != 0 || res.NotRestorable != 0 || res.Restored != res.Total {
 		t.Errorf("revert result = %+v, want every row restored", res)
@@ -555,5 +617,315 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 	}
 	if got := fsRowCount(t, s); got != before {
 		t.Errorf("book_file rows %d -> %d across apply+revert", before, got)
+	}
+}
+
+// Finding: two live members at one chapter path, neither with a row. The
+// planner refuses the group, and the apply refuses it on its own too, instead
+// of creating two rows for one file.
+func TestFsRegroupFragments_SharedPathRefused(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	b2, _ := s.GetBookByID(ids[1])
+	twin := fsSeedBook(t, s, "", b2.FilePath)
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 0 {
+		t.Fatalf("members sharing a path were classified fragments: %s", plan.summary())
+	}
+	fsForce(plan, fsCatFragments)
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-share"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("rows %d -> %d: the apply created rows for a shared path", before, got)
+	}
+	for _, id := range append(ids, twin) {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("book %s soft-deleted", id)
+		}
+	}
+}
+
+// Finding: a member whose only row is at a path other than its Book.FilePath
+// would get both a moved row and a created one; it is refused instead.
+func TestFsRegroupFragments_RowPathDiffersRefused(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	b3, _ := s.GetBookByID(ids[2])
+	other := filepath.Join(filepath.Dir(b3.FilePath), "other.mp3")
+	fsWriteFile(t, other)
+	fsSeedRow(t, s, ids[2], other)
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 0 {
+		t.Fatalf("a member whose row path differs was classified fragments: %s", plan.summary())
+	}
+	fsForce(plan, fsCatFragments)
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-differs"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("rows %d -> %d", before, got)
+	}
+	for _, id := range ids {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("book %s soft-deleted", id)
+		}
+	}
+}
+
+// Findings: rows are created on the shell whose path they are, so a revert
+// leaves each member owning exactly the row at its own path; track numbers
+// come from each row's folder number with gaps kept (1, 2, 4).
+func TestFsRegroupFragments_RevertAfterCreateLeavesRowsOnTheirBooks(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	var ids []string
+	for i, n := range []int{1, 2, 4} {
+		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", base, n, n)
+		fsWriteFile(t, p)
+		id := fsSeedBook(t, s, "", p)
+		if i == 0 {
+			fsSeedRow(t, s, id, p)
+		}
+		ids = append(ids, id)
+	}
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d, want 1 (plan %s)", len(frag), plan.summary())
+	}
+	survivor := frag[0].SurvivorID
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-create"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	rows, _ := s.GetBookFiles(survivor)
+	if len(rows) != 3 {
+		t.Fatalf("survivor has %d rows, want 3", len(rows))
+	}
+	for _, f := range rows {
+		if _, n, _, ok := chapterPartsForTest(f.FilePath); !ok || f.TrackNumber != n {
+			t.Errorf("row %q track = %d, want its folder number", f.FilePath, f.TrackNumber)
+		}
+	}
+	led := fsLedgerTypes(t, s, "op-create")
+	res, err := audiobooks.NewRevertService(s).RevertOperation("op-create")
+	if err != nil {
+		t.Fatalf("revert: %v (%+v)", err, res)
+	}
+	if res.Failed != 0 || res.NotRestorable != led[fsChangeFileCreate] {
+		t.Errorf("revert = %+v, want no failures and only the %d create rows not restorable", res, led[fsChangeFileCreate])
+	}
+	for _, id := range ids {
+		b, _ := s.GetBookByID(id)
+		own, _ := s.GetBookFiles(id)
+		if len(own) != 1 || own[0].FilePath != b.FilePath {
+			t.Errorf("book %s owns %d rows after revert, want one at its own path", id, len(own))
+		}
+		if b.IsSoftDeleted() || !fsPrimary(t, s, id) {
+			t.Errorf("book %s not restored", id)
+		}
+	}
+	if got := fsRowCount(t, s); got != before+led[fsChangeFileCreate] {
+		t.Errorf("rows = %d, want %d + %d created (none deleted)", got, before, led[fsChangeFileCreate])
+	}
+	if n := len(fsGroupsOf(fsPlan(t, s), fsCatDuplicates)); n != 0 {
+		t.Errorf("after revert a re-plan finds %d duplicates groups, want 0", n)
+	}
+}
+
+// Finding: the revert is compare-and-set. A survivor path and a track number
+// edited after the apply are reported by the preflight and left alone.
+func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	var ids []string
+	for i := 1; i <= 3; i++ {
+		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", base, i, 3)
+		id := fsSeedBook(t, s, "", p)
+		fsSeedRow(t, s, id, p)
+		ids = append(ids, id)
+	}
+	plan := fsPlan(t, s)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d (plan %s)", len(frag), plan.summary())
+	}
+	survivor := frag[0].SurvivorID
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-drift"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	edited := base + "/edited"
+	sb, _ := s.GetBookByID(survivor)
+	sb.FilePath = edited
+	if _, err := s.UpdateBook(sb.ID, sb); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.GetBookFiles(survivor)
+	rows[0].TrackNumber = 99
+	if err := s.UpdateBookFile(rows[0].ID, &rows[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := undo.PreflightUndoConflicts(s, "op-drift")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	changed := 0
+	for _, it := range report.CheckFailed {
+		if it.Reason == undo.ReasonChangedSince {
+			changed++
+		}
+	}
+	if changed != 2 {
+		t.Errorf("preflight changed-since = %d (%+v), want 2 (path, track)", changed, report)
+	}
+	res, err := audiobooks.NewRevertService(s).RevertOperation("op-drift")
+	if err == nil || res == nil || res.Failed < 2 {
+		t.Fatalf("revert err=%v res=%+v, want the two edited rows refused", err, res)
+	}
+	if got, _ := s.GetBookByID(survivor); got.FilePath != edited {
+		t.Errorf("revert overwrote the edited path with %q", got.FilePath)
+	}
+	for _, id := range ids {
+		if f, _ := s.GetBookFileByID(id, rows[0].ID); f != nil && f.TrackNumber != 99 {
+			t.Errorf("revert overwrote the edited track with %d", f.TrackNumber)
+		}
+	}
+}
+
+// Finding: the apply re-reads members under the merge lock. A survivor
+// soft-deleted between the plan and the apply skips the group untouched.
+func TestFsRegroupApply_SurvivorSoftDeletedMidRunSkipsGroup(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	frag := fsGroupsOf(plan, fsCatFragments)
+	if len(frag) != 1 {
+		t.Fatalf("fragments groups = %d (plan %s)", len(frag), plan.summary())
+	}
+	survivor := frag[0].SurvivorID
+	if err := merge.SoftDeleteBook(s, survivor); err != nil {
+		t.Fatal(err)
+	}
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-mid"})
+	if err != nil || res.Skipped != 1 || res.Groups != 0 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	for _, id := range ids {
+		if id != survivor && fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s retired onto a soft-deleted survivor", id)
+		}
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("rows %d -> %d", before, got)
+	}
+	if led := fsLedgerTypes(t, s, "op-mid"); len(led) != 0 {
+		t.Errorf("ledger %v, want none", led)
+	}
+}
+
+// Finding: shells are never retired in favour of a non-primary owner, in the
+// plan or (re-checked) in the apply.
+func TestFsRegroupDuplicates_NonPrimaryOwnerRefused(t *testing.T) {
+	s := regroupStore(t)
+	owner, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
+	ob, _ := s.GetBookByID(owner)
+	notPrimary := false
+	ob.IsPrimaryVersion = &notPrimary
+	if _, err := s.UpdateBook(owner, ob); err != nil {
+		t.Fatal(err)
+	}
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatDuplicates)); n != 0 {
+		t.Fatalf("duplicates of a non-primary owner were planned: %s", plan.summary())
+	}
+	for i := range plan.Groups {
+		if plan.Groups[i].Category == fsCatMixed {
+			plan.Groups[i].Category, plan.Groups[i].OwnerID = fsCatDuplicates, owner
+		}
+	}
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nonprim"})
+	if err != nil || res.Skipped != 1 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	for _, id := range shells {
+		if fsSoftDeleted(t, s, id) {
+			t.Errorf("shell %s retired in favour of a non-primary owner", id)
+		}
+	}
+}
+
+// Finding: the op never adds a row for a file that is not on disk. The dry run
+// flags it, and the apply refuses the group on its own too.
+func TestFsRegroupFragments_MissingFileRefused(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	b3, _ := s.GetBookByID(ids[2])
+	if err := os.Remove(b3.FilePath); err != nil {
+		t.Fatal(err)
+	}
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 0 {
+		t.Fatalf("a group with a missing file was classified fragments: %s", plan.summary())
+	}
+	rep := &fakeReporter{}
+	reportFSRepairPlan(plan, true, rep)
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "not on disk") {
+		t.Errorf("dry run does not flag the missing file: %v", rep.logs)
+	}
+	fsForce(plan, fsCatFragments)
+	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-missing"}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("rows %d -> %d: a row was created for a missing file", before, got)
+	}
+}
+
+// Finding: a re-run after an earlier merge (its survivor now sits at the book
+// folder) refuses the leftover shells instead of splitting the book.
+func TestFsRegroupFragments_EarlierSurvivorRefusesRerun(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	seedFragments(t, s, base, "Cage of Souls", 3)
+	fsSeedBook(t, s, "Cage of Souls", base)
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 0 {
+		t.Fatalf("leftover shells beside an earlier survivor were classified fragments: %s", plan.summary())
+	}
+	mixed := fsGroupsOf(plan, fsCatMixed)
+	if len(mixed) != 1 || !strings.Contains(mixed[0].Reason, "earlier merge") {
+		t.Errorf("mixed = %+v, want one group naming the earlier survivor", mixed)
+	}
+}
+
+// Finding: protected paths are re-checked on the state the apply re-reads,
+// not only on the plan snapshot.
+func TestFsRegroupApply_ProtectedAfterPlanSkipsGroup(t *testing.T) {
+	s := regroupStore(t)
+	base := fsFragBase(t)
+	seedFragments(t, s, base, "Cage of Souls", 3)
+	before := fsRowCount(t, s)
+	plan := fsPlan(t, s)
+	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 1 {
+		t.Fatalf("fragments groups = %d (plan %s)", n, plan.summary())
+	}
+	old := config.AppConfig.ProtectedPaths
+	config.AppConfig.ProtectedPaths = []string{filepath.Dir(base)}
+	t.Cleanup(func() { config.AppConfig.ProtectedPaths = old })
+	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot-late"})
+	if err != nil || res.Skipped != 1 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
+	}
+	if got := fsRowCount(t, s); got != before {
+		t.Errorf("rows %d -> %d", before, got)
+	}
+	if led := fsLedgerTypes(t, s, "op-prot-late"); len(led) != 0 {
+		t.Errorf("ledger %v, want none", led)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -51,10 +51,8 @@ import (
 //     record-only rather than guessing one by name.
 //   - series_rename without a SeriesID (malformed).
 //   - book_file_create (maintenance.fs-regroup-xml): reversing it would delete
-//     a book_file row, which no repair may do.
-//   - external_id_reassign (maintenance.fs-regroup-xml): the row does not say
-//     which ids moved, and moving the target's ids back wholesale would take
-//     ids that were never the source's.
+//     a book_file row, which no repair may do. The op creates a row only on
+//     the book whose path it is, so the row left behind fills that book's gap.
 //   - any change type the revert engine has no case for (e.g. db_update,
 //     dir_create).
 //
@@ -93,8 +91,13 @@ const (
 	// ChangeTypeBookFileCreate: a book_file row was created (NewValue is its
 	// path). Record-only; see the list above.
 	ChangeTypeBookFileCreate = "book_file_create"
-	// ChangeTypeExternalIDReassign: every external id of BookID moved to the
-	// book NewValue. Record-only; see the list above.
+	// ChangeTypeBookPrimaryDemote: a retired book's is_primary_version went
+	// OldValue ("true", "false", or "" for unset) -> "false". Restorable.
+	ChangeTypeBookPrimaryDemote = "book_primary_demote"
+	// ChangeTypeExternalIDReassign: one external id, named in FieldName as
+	// "external_id:<source>/<id>", moved from the book BookID (== OldValue) to
+	// the book NewValue. Restorable: it moves back while it still names
+	// NewValue.
 	ChangeTypeExternalIDReassign = "external_id_reassign"
 )
 
@@ -102,6 +105,18 @@ const (
 func BookFileIDFromField(field string) (string, bool) {
 	id, ok := strings.CutPrefix(field, "book_file:")
 	return id, ok && id != ""
+}
+
+// ExternalIDFromField returns the source and id from an
+// "external_id:<source>/<id>" field name. The source never contains "/"; the
+// id keeps anything after the first one.
+func ExternalIDFromField(field string) (source, id string, ok bool) {
+	rest, ok := strings.CutPrefix(field, "external_id:")
+	if !ok {
+		return "", "", false
+	}
+	source, id, ok = strings.Cut(rest, "/")
+	return source, id, ok && source != "" && id != ""
 }
 
 // revertableBookFields maps a metadata_update field name to the Book struct
@@ -217,6 +232,10 @@ const (
 	ReasonBookMissing = "book missing"
 	// ReasonBookLookupFailed: the store could not read the book; fail closed.
 	ReasonBookLookupFailed = "book lookup failed"
+	// ReasonChangedSince: the field the row restores no longer holds the value
+	// the operation wrote, so restoring OldValue would overwrite a later
+	// change. The revert refuses it; the preflight files it under CheckFailed.
+	ReasonChangedSince = "changed since"
 )
 
 // ReferentError is CheckRestoreReferent's refusal: Reason is one of the
@@ -343,8 +362,13 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return c.ChangeType + ":(no book_file id)"
-	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete:
+	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote:
 		return ""
+	case ChangeTypeExternalIDReassign:
+		if _, _, ok := ExternalIDFromField(c.FieldName); ok {
+			return ""
+		}
+		return c.ChangeType + ":(no external id)"
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -63,12 +64,14 @@ type revertSeriesStore interface {
 }
 
 // revertBookFileStore is needed by the maintenance.fs-regroup-xml reversals:
-// a reassigned book_file row moves back, and a track number is restored in
-// place.
+// a reassigned book_file row moves back, a track number is restored in place,
+// and an external id moved onto the survivor moves back one at a time.
 type revertBookFileStore interface {
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
+	GetBookByExternalID(source, externalID string) (string, error)
+	ReassignExternalID(source, externalID, newBookID string) error
 }
 
 // RevertService handles reverting operations by undoing recorded changes.
@@ -277,6 +280,10 @@ func (rs *RevertService) revertChange(c *database.OperationChange) error {
 		return rs.revertBookPathUpdate(c)
 	case undo.ChangeTypeBookSoftDelete:
 		return rs.revertBookSoftDelete(c)
+	case undo.ChangeTypeBookPrimaryDemote:
+		return rs.revertBookPrimaryDemote(c)
+	case undo.ChangeTypeExternalIDReassign:
+		return rs.revertExternalIDReassign(c)
 	case "organize_failed", "organize_skipped", "organize_summary":
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
@@ -345,9 +352,18 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 	return nil
 }
 
-// revertBookFileTrack puts a book_file row's track number back. The ledger is
-// reversed newest first, so this runs while the row is still on BookID, before
-// its book_file_reassign row moves it back.
+// driftRefusal refuses a row whose field no longer holds the value the
+// operation wrote: restoring OldValue would overwrite a later change. The
+// preflight reports the same state (undo.ReasonChangedSince).
+func driftRefusal(format string, args ...any) error {
+	return &undo.ReferentError{Reason: undo.ReasonChangedSince, Detail: fmt.Sprintf(format, args...)}
+}
+
+// revertBookFileTrack puts a book_file row's track number back, but only while
+// the row still carries the number the operation set (compare-and-set under
+// merge.LockMergeRMW, the lock the apply wrote under). The ledger is reversed
+// newest first, so this runs while the row is still on BookID, before its
+// book_file_reassign row moves it back.
 func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error {
 	fileID, ok := undo.BookFileIDFromField(c.FieldName)
 	if !ok {
@@ -357,12 +373,18 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 	if err != nil {
 		return fmt.Errorf("track %q is not a number: %w", c.OldValue, err)
 	}
-	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	set, err := strconv.Atoi(c.NewValue)
 	if err != nil {
-		return fmt.Errorf("read book_file %s of %s: %w", fileID, c.BookID, err)
+		return fmt.Errorf("track %q is not a number: %w", c.NewValue, err)
 	}
-	if f == nil {
-		return fmt.Errorf("book_file %s is no longer on book %s", fileID, c.BookID)
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil || f == nil {
+		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	if f.TrackNumber != set {
+		return driftRefusal("book_file %s track is %d, not the %d the operation set", fileID, f.TrackNumber, set)
 	}
 	f.TrackNumber = old
 	if err := rs.db.UpdateBookFile(f.ID, f); err != nil {
@@ -372,11 +394,17 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 }
 
 // revertBookPathUpdate restores a book's file_path that was changed with
-// nothing moved on disk (unlike file_move, which moves the file back too).
+// nothing moved on disk (unlike file_move, which moves the file back too), but
+// only while the path is still the one the operation set.
 func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
+	}
+	if book.FilePath != c.NewValue {
+		return driftRefusal("book %s path changed since the operation", book.ID)
 	}
 	book.FilePath = c.OldValue
 	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
@@ -388,6 +416,8 @@ func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error
 // revertBookSoftDelete clears a book's deletion mark. A book purged since is
 // refused by loadBook; one already restored is left as it is.
 func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error {
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
@@ -400,6 +430,58 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error
 	book.MarkedForDeletionAt = nil
 	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
 		return fmt.Errorf("clear deletion mark on book %s: %w", book.ID, err)
+	}
+	return nil
+}
+
+// revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
+// the never-set shape) while it is still the false the operation wrote.
+func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) error {
+	var restored *bool
+	switch c.OldValue {
+	case "":
+	case "true", "false":
+		v := c.OldValue == "true"
+		restored = &v
+	default:
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: fmt.Sprintf("is_primary_version %q", c.OldValue)}
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
+		return err
+	}
+	if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
+		return driftRefusal("book %s was made primary again since the operation", book.ID)
+	}
+	book.IsPrimaryVersion = restored
+	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
+		return fmt.Errorf("restore primary flag of book %s: %w", book.ID, err)
+	}
+	return nil
+}
+
+// revertExternalIDReassign moves one external id back from the book it was
+// moved onto (NewValue) to the book it came from (OldValue), while the id
+// still names NewValue.
+func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) error {
+	source, extID, ok := undo.ExternalIDFromField(c.FieldName)
+	if !ok {
+		return fmt.Errorf("no external id in field %q", c.FieldName)
+	}
+	if _, err := rs.loadBook(c.OldValue); err != nil {
+		return err
+	}
+	owner, err := rs.db.GetBookByExternalID(source, extID)
+	if err != nil {
+		return fmt.Errorf("look up external id %s/%s: %w", source, extID, err)
+	}
+	if owner != c.NewValue {
+		return driftRefusal("external id %s/%s now names %q, not %s", source, extID, owner, c.NewValue)
+	}
+	if err := rs.db.ReassignExternalID(source, extID, c.OldValue); err != nil {
+		return fmt.Errorf("move external id %s/%s back to %s: %w", source, extID, c.OldValue, err)
 	}
 	return nil
 }
