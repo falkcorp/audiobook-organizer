@@ -1,8 +1,9 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
 // last-edited: 2026-09-12
 
+import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -50,6 +51,7 @@ function book(id: string, overrides: Partial<Audiobook> = {}): Audiobook {
 const toast = vi.fn();
 const onClose = vi.fn();
 const onComplete = vi.fn();
+const onLibraryChanged = vi.fn();
 
 function dialog(books: Audiobook[], open = true) {
   return (
@@ -58,6 +60,7 @@ function dialog(books: Audiobook[], open = true) {
       books={books}
       onClose={onClose}
       onComplete={onComplete}
+      onLibraryChanged={onLibraryChanged}
       toast={toast}
     />
   );
@@ -232,7 +235,10 @@ describe('BulkMetadataSearchDialog — closed while an apply is in flight', () =
     expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true);
     expect(toast).not.toHaveBeenCalled();
     // The server did change the book, so the list behind the dialog reloads.
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    // Only the list: onComplete also clears the selection, which by now may
+    // belong to a new session (see the "reopened on a new selection" tests).
+    expect(onLibraryChanged).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
     await reopenAndExpectFreshSession(view);
   });
 
@@ -242,6 +248,7 @@ describe('BulkMetadataSearchDialog — closed while an apply is in flight', () =
 
     expect(toast).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
+    expect(onLibraryChanged).not.toHaveBeenCalled();
     await reopenAndExpectFreshSession(view);
   });
 
@@ -254,5 +261,99 @@ describe('BulkMetadataSearchDialog — closed while an apply is in flight', () =
 
     expect(toast).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
+    expect(onLibraryChanged).not.toHaveBeenCalled();
+  });
+});
+
+// Mirrors how LibraryDialogs wires the dialog: the selection lives in the
+// parent, and onComplete clears it. A write from a closed session that lands
+// after the dialog was reopened on a new selection must not reach onComplete,
+// or it empties the new session's books mid-use.
+function Harness({ open, selection }: { open: boolean; selection: Audiobook[] }) {
+  // The selection onComplete cleared; a new `selection` prop is a new, uncleared one.
+  const [cleared, setCleared] = useState<Audiobook[] | null>(null);
+  const books = cleared === selection ? [] : selection;
+  return (
+    <BulkMetadataSearchDialog
+      open={open}
+      books={books}
+      onClose={onClose}
+      onComplete={() => {
+        onComplete();
+        setCleared(selection);
+      }}
+      onLibraryChanged={onLibraryChanged}
+      toast={toast}
+    />
+  );
+}
+
+describe('BulkMetadataSearchDialog — reopened on a new selection before a late write', () => {
+  const first = [book('a'), book('b')];
+  const second = [book('x'), book('y')];
+
+  // Close the first session, reopen on `second`, and check the new session is
+  // showing its own books. Resets the callback mocks so the caller asserts
+  // only what the late write does.
+  async function reopenOnSecond(view: ReturnType<typeof renderWithProviders>) {
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    view.rerender(<Harness open={false} selection={first} />);
+    view.rerender(<Harness open selection={second} />);
+    await waitForBook('Book X');
+    expect(header()).toBe('Search Metadata — Book 1 of 2');
+    onComplete.mockClear();
+    onLibraryChanged.mockClear();
+    toast.mockClear();
+  }
+
+  function expectSecondSessionIntact() {
+    // The new session still has its books: nothing cleared the selection.
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByText('Book X')).toBeInTheDocument();
+    expect(header()).toBe('Search Metadata — Book 1 of 2');
+    // The server did change a book, so the list behind the dialog reloads.
+    expect(onLibraryChanged).toHaveBeenCalledTimes(1);
+  }
+
+  it('a late apply reloads the list and leaves the new selection alone', async () => {
+    const pending = deferredApply();
+    const view = renderWithProviders(<Harness open selection={first} />);
+    fireEvent.click(await waitForBook('Book A'));
+    await reopenOnSecond(view);
+
+    await act(async () => pending.resolve(applyOk));
+
+    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true);
+    expectSecondSessionIntact();
+  });
+
+  it('a late "Undo Last" reloads the list and leaves the new selection alone', async () => {
+    const view = renderWithProviders(<Harness open selection={first} />);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    let resolveUndo!: (v: Awaited<ReturnType<typeof undoLastApply>>) => void;
+    mockUndo.mockReturnValueOnce(new Promise((res) => (resolveUndo = res)));
+    // The Tooltip names the button, so target its label text.
+    fireEvent.click(screen.getByText('Undo Last (1)'));
+    await reopenOnSecond(view);
+
+    await act(async () => resolveUndo({ message: 'ok', undone_fields: ['title'] }));
+
+    expect(mockUndo).toHaveBeenCalledWith('a');
+    expectSecondSessionIntact();
+  });
+
+  it('an Undo clicked on a toast that outlived its dialog leaves the new selection alone', async () => {
+    const view = renderWithProviders(<Harness open selection={first} />);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    const undoAction = toast.mock.calls.find((c) => c[2]?.label === 'Undo')?.[2];
+    expect(undoAction).toBeDefined();
+    await reopenOnSecond(view);
+
+    await act(async () => undoAction.onClick());
+
+    expect(mockUndo).toHaveBeenCalledWith('a');
+    expectSecondSessionIntact();
   });
 });
