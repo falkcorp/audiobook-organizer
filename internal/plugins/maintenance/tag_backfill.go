@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-12
 
@@ -327,6 +327,13 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		skipped := make(map[string]bool)
 		for _, f := range b.rows {
 			if err := ctx.Err(); err != nil {
+				// The book is abandoned unjudged, but the rows already found
+				// missing or unreadable were still found so: count them, or the
+				// summary after a cancel under-reports both.
+				mu.Lock()
+				missing += bMissing
+				readErr += bReadErr
+				mu.Unlock()
 				return err
 			}
 			if _, statErr := os.Stat(f.FilePath); statErr != nil {
@@ -473,14 +480,20 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		n := len(pending)
 		ferr := flushLocked()
 		writtenNow, notWrittenNow := written, notWritten
+		writeFailed := writeErr != nil
 		wmu.Unlock()
 		if runErr != nil || ferr != nil {
 			flushed := n
 			if ferr != nil {
 				flushed = 0
 			}
-			stopNote = fmt.Sprintf(" | stopped early: flushed %d pending rows of complete books; %d rows written in total, %d judged rows not written after a write error",
-				flushed, writtenNow, notWrittenNow)
+			stopNote = fmt.Sprintf(" | stopped early: flushed %d pending rows of complete books; %d rows written in total",
+				flushed, writtenNow)
+			// Only a failed write leaves judged rows unwritten. A plain cancel
+			// must not read as one.
+			if writeFailed {
+				stopNote += fmt.Sprintf(", %d judged rows not written after a write error", notWrittenNow)
+			}
 			_ = reporter.Log(slog.LevelWarn, "tag backfill stopping early:"+stopNote)
 		}
 		if runErr == nil && ferr != nil {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
 // last-edited: 2026-09-12
 
@@ -704,7 +704,10 @@ func TestTagBackfill_CancelFlushesCompleteBooks(t *testing.T) {
 		}
 	}
 	// The trigger book is last, so every done-* book is dispatched before it.
-	files = append(files, database.BookFile{ID: "trig-a", BookID: "trig", TrackNumber: 1},
+	// trig-0 has no file on disk (no tag fixture) and sorts first by ID, path
+	// and track, so it is counted missing before the cancel lands mid-book.
+	files = append(files, database.BookFile{ID: "trig-0", BookID: "trig", TrackNumber: 0},
+		database.BookFile{ID: "trig-a", BookID: "trig", TrackNumber: 1},
 		database.BookFile{ID: "trig-b", BookID: "trig", TrackNumber: 2})
 	tags["trig-a.mp3"], tags["trig-b.mp3"] = tagMeta(1, 2, 0, 0), tagMeta(2, 2, 0, 0)
 
@@ -737,7 +740,12 @@ func TestTagBackfill_CancelFlushesCompleteBooks(t *testing.T) {
 		t.Errorf("got %d batches, want 1 stop-flush", len(fx.batches))
 	}
 	joined := strings.Join(logs, "\n")
-	assertSummaryHas(t, joined, "flushed 20 pending rows of complete books; 20 rows written in total, 0 judged rows not written after a write error", "wrote 20 rows; not-written=0")
+	assertSummaryHas(t, joined, "flushed 20 pending rows of complete books; 20 rows written in total", "wrote 20 rows; not-written=0",
+		// The cancelled book is never judged, but its missing row still counts.
+		"missing-on-disk=1")
+	if strings.Contains(joined, "not written after a write error") {
+		t.Errorf("a plain cancel reported a write error:\n%s", joined)
+	}
 }
 
 // A failed batch write stops the run: nothing is written after it, every judged
@@ -843,6 +851,30 @@ func TestTagBackfill_MixedDiscTagsRefuse(t *testing.T) {
 	}
 	assertSummaryHas(t, summary, "books-refused-mixed-disc=1", "books-refused-duplicate=0", "books-refused-missing=0",
 		"read-took-tag-tracks=0", "read-rawtags-only=10", "judged-rows=10", "disc tag on only some files")
+}
+
+// The mixed-disc rule also covers a book where one side is judged from stored
+// RawTags rather than a fresh read: disc 1 is read fresh with TPOS=1, disc 2 was
+// captured earlier and its RawTags carry a track but no disc frame. Accepting it
+// would write disc 2 as disc 0, which sorts first.
+func TestTagBackfill_MixedDiscTagsRefuseWithStoredSiblings(t *testing.T) {
+	var files []database.BookFile
+	tags := map[string]metadata.Metadata{}
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("ms%02d", i)
+		files = append(files, database.BookFile{ID: id, BookID: "MS", TrackNumber: i})
+		tags[id+".mp3"] = tagMeta(i, 3, 1, 0)
+	}
+	for i := 4; i <= 6; i++ {
+		files = append(files, database.BookFile{ID: fmt.Sprintf("ms%02d", i), BookID: "MS", TrackNumber: i,
+			RawTags: map[string]string{"TRCK": strconv.Itoa(i - 3)}})
+	}
+	fx := newTagFixture(t, files, tags)
+	summary := fx.run(tagBackfillParams{})
+	for i := 1; i <= 6; i++ {
+		assertPosition(t, fx.row(fmt.Sprintf("ms%02d", i)), 0, i)
+	}
+	assertSummaryHas(t, summary, "books-refused-mixed-disc=1", "siblings-renumbered=0")
 }
 
 // With force=true a candidate missing on disk can carry stored RawTags. When its
