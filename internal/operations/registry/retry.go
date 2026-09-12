@@ -1,5 +1,5 @@
 // file: internal/operations/registry/retry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
 // last-edited: 2026-09-12
 
@@ -58,7 +58,9 @@ func IsInterruptedStatus(status string) bool {
 //     goroutine has not returned, or another queued/running run of the same
 //     def exists. The boot sweep's supersedeStaleQuiesced and the enqueue-time
 //     ConcurrencyKey dedupe never see this path, so this is the double-run
-//     guard. A def with MergeQueuedParams is exempt from the same-def check:
+//     guard; the def's admission lock (Registry.admitLocks) keeps a concurrent
+//     EnqueueOp from slipping a run in between this check and the re-queue.
+//     A def with MergeQueuedParams is exempt from the same-def check:
 //     its runs each carry their own item set, so another run is different
 //     work (the same exemption supersedeStaleQuiesced makes).
 //
@@ -96,6 +98,14 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 		return fmt.Errorf("%w: op %s's previous run was abandoned by the watchdog and has not exited yet; retry once it does",
 			ErrOpActive, opID)
 	}
+	// Hold the def's admission lock from the same-def check through the
+	// re-queue, so EnqueueOp's dedupe cannot read the active set in between
+	// and insert a second run next to this one. requeueInPlace publishes
+	// op.created while this is held; that is safe because no def enqueues
+	// itself from its own op.created.
+	admit := r.admissionLock(def.ID)
+	admit.Lock()
+	defer admit.Unlock()
 	other, err := r.activeRunOfDef(def, opID)
 	if err != nil {
 		return fmt.Errorf("registry: retry op %s: list active ops: %w", opID, err)
@@ -105,7 +115,12 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 	}
 
 	// Baseline first: if this write fails, nothing has been re-queued, so the
-	// row cannot reach checkInfiniteRestart still carrying the old count.
+	// row cannot reach checkInfiniteRestart still carrying the old count. The
+	// converse is accepted: if the re-queue below fails after this write (or
+	// after the requeue-policy checkpoint delete), the caller gets a 500 with
+	// the manual-retry counter already bumped and, for ResumeRequeue defs, the
+	// checkpoint gone. Both are harmless: the counter only moves the strike
+	// baseline, and a ResumeRequeue def reruns from zero by declaration.
 	if err := r.store.MarkOperationV2ManualRetry(opID); err != nil {
 		return fmt.Errorf("registry: retry op %s: record manual retry: %w", opID, err)
 	}

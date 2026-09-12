@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.24.0
+// version: 3.25.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-12
 
@@ -70,6 +70,13 @@ type Registry struct {
 	// interrupted row and each flip it to queued (the second flip could land
 	// after the dispatcher already moved it to running).
 	retryMu sync.Mutex
+	// admitLocks holds one *sync.Mutex per def id (see admissionLock). It
+	// serializes every "is another run of this def active?" check with the
+	// write that makes a run active: EnqueueOp's dedupe → insert, and
+	// RetryInterrupted's same-def check → re-queue. Without it a scheduled
+	// enqueue could list the active set while a retried row was still
+	// interrupted, miss it, and insert a second queued run.
+	admitLocks sync.Map
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
 	// watchdog in executeRun stops spawning replacement workers. Without
@@ -702,6 +709,15 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		}
 	}
 
+	// Admission: from the dedupe read of the active set below to the insert
+	// that adds this run to it, hold the def's admission lock, so a concurrent
+	// RetryInterrupted of the same def cannot fall between the two (and vice
+	// versa). Released right after the insert, BEFORE op.created is published:
+	// a bus subscriber that enqueues must never find this lock held.
+	releaseAdmission := sync.OnceFunc(r.admissionLock(defID).Unlock)
+	r.admissionLock(defID).Lock()
+	defer releaseAdmission()
+
 	// Dedupe: if this defID has a non-empty ConcurrencyKey, and an op for
 	// the same defID is already queued or running, return the existing op
 	// id rather than enqueueing a duplicate. ConcurrencyKey serializes
@@ -858,6 +874,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 	if err := r.store.InsertOperationV2(row); err != nil {
 		return "", fmt.Errorf("registry: insert operation_v2: %w", err)
 	}
+	releaseAdmission()
 
 	if status == "waiting_deps" {
 		r.logger.Info("registry: parked op (waiting_deps)", "op_id", opID, "def_id", defID,
@@ -941,6 +958,14 @@ func subjectsFromParams(params json.RawMessage) []Subject {
 // the next op.updated event. The "resumed" flag distinguishes startup
 // resume from a fresh enqueue so the client can render a "Resumed" badge
 // if desired (currently it just triggers loadFromServer()).
+// admissionLock returns the per-def mutex described on Registry.admitLocks,
+// creating it on first use. Lock order where both are taken: retryMu first,
+// then the admission lock.
+func (r *Registry) admissionLock(defID string) *sync.Mutex {
+	v, _ := r.admitLocks.LoadOrStore(defID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 	if r.bus == nil {
 		return
