@@ -1,7 +1,7 @@
 // file: internal/scanner/service_unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-3c4d5e6f7a8b
-// last-edited: 2026-08-24
+// last-edited: 2026-09-12
 
 package scanner
 
@@ -288,7 +288,7 @@ func TestScanService_ReportCompletion_Messages(t *testing.T) {
 			log := logger.New("test")
 
 			// reportCompletion should not panic; verify it runs without error.
-			ss.reportCompletion(tt.stats.TotalBooks, tt.stats.TotalBooks, &tt.stats, log)
+			ss.reportCompletion(tt.stats.TotalBooks, tt.stats.TotalBooks, &tt.stats, 0, log)
 		})
 	}
 }

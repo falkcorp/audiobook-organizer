@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-08-16
+// last-edited: 2026-09-12
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -190,7 +190,18 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
                 progress_message: 'Complete',
                 error_message: null,
               },
-              logs: [],
+              // The scanner writes each failed file as a warn line whose
+              // attrs carry file_path and reason; the Paths tab reads them
+              // back into 'View Errors' once the operation is terminal.
+              logs: opId.startsWith('scan')
+                ? scanErrorList.map((reason) => ({
+                    operation_id: opId,
+                    level: 'warn',
+                    message: 'scan: file failed',
+                    attrs: { file_path: '/test/corrupt/book2.m4b', stage: 'read', reason },
+                    created_at: new Date().toISOString(),
+                  }))
+                : [],
             },
           })
         );
@@ -497,22 +508,11 @@ test.describe('Scan/Import/Organize Workflow', () => {
     // Assert. The scan itself completes and the path row reports it.
     await expect(page.getByText(/Scan complete/)).toBeVisible();
 
-    // ...but the per-file error list is NOT surfaced any more, so this asserts
-    // its absence rather than pretending otherwise.
-    //
-    // This used to click 'View Errors' and assert on 'Corrupt file:
-    // book2.m4b'. That stopped being reachable when starting a scan became
-    // asynchronous: the trigger answers an operation id and nothing else, so
-    // useImportFolderHandlers.ts:103 seeds `errors` as a permanently empty
-    // array, and PathsSettingsTab.tsx:169 renders 'View Errors' only when
-    // errorCount > 0. The only way that count is ever non-zero now is when the
-    // trigger call itself throws — never for errors found DURING a scan.
-    //
-    // Asserting the absence keeps this honest and makes the test fail the
-    // moment the capability returns, which is when it should go back to
-    // asserting the error text. Tracked in
-    // todo.d/20260816-scan-errors-not-surfaced-after-async-trigger.md
-    await expect(page.getByRole('button', { name: 'View Errors' })).toHaveCount(0);
+    // ...and the per-file failure it hit is reachable from the row: the
+    // error list is read back off the operation's log (warn lines whose attrs
+    // carry file_path and reason) once the operation is terminal.
+    await page.getByRole('button', { name: 'View Errors' }).click();
+    await expect(page.getByText(/Corrupt file: book2\.m4b/)).toBeVisible();
   });
 
   test('organize operation: moves files to library root', async ({

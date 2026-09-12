@@ -477,6 +477,12 @@ export interface OperationLog {
   level: string;
   message: string;
   details?: string;
+  /**
+   * Structured attributes of a v2 log line (OpLogV2Response.attrs). The
+   * scanner's per-file failure lines carry file_path / stage / reason here,
+   * and its end-of-run summary carries files_failed / files_listed.
+   */
+  attrs?: Record<string, unknown>;
   created_at: string;
 }
 

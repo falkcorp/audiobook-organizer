@@ -1,7 +1,7 @@
 // file: internal/operations/progress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-08-16
+// last-edited: 2026-09-12
 
 // Package operations provides shared types for async operation execution.
 // This file holds ProgressReporter, OperationFunc, and LoggerFromReporter —
@@ -11,6 +11,8 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
@@ -112,3 +114,61 @@ func (l *reporterLogger) With(subsystem string) logger.Logger {
 // leaving this alone — but turning four never-exercised early-return paths on in
 // the same change that unblocks production scanning would make a bad first run
 // impossible to bisect. Tracked in todo.d/20260816-logger-iscanceled-forwarding.md.
+
+// AttrReporter is implemented by ProgressReporters that can persist structured
+// attributes on a log line. The v2 registry adapter does (registry.Reporter.Log
+// takes slog attrs); ProgressReporter.Log itself only carries a details string.
+type AttrReporter interface {
+	LogAttrs(level slog.Level, message string, attrs ...slog.Attr) error
+}
+
+// LogAttrs implements logger.AttrLogger, so a service handed this logger can
+// write a line whose attributes land in the operation's own log as fields --
+// the scanner's per-file failure lines (file_path / stage / reason) are the
+// reason it exists. Plain Warn/Error on this logger reach stdout only.
+//
+// The line is always written to stdout as well. A reporter without LogAttrs
+// gets the attributes as a JSON details payload rather than losing them, and a
+// failed write is reported on stdout, never dropped silently.
+func (l *reporterLogger) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
+	logger.LogAtLevel(l.Logger, level, "%s", msg+logger.FormatAttrs(attrs))
+	if l.reporter == nil {
+		return
+	}
+	var err error
+	if ar, ok := l.reporter.(AttrReporter); ok {
+		err = ar.LogAttrs(level, msg, attrs...)
+	} else {
+		details := attrsDetailsJSON(attrs)
+		err = l.reporter.Log(reporterLevelName(level), msg, &details)
+	}
+	if err != nil {
+		l.Logger.Warn("operation log write failed for %q: %v", msg, err)
+	}
+}
+
+// reporterLevelName maps an slog level onto ProgressReporter.Log's level names.
+func reporterLevelName(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return "error"
+	case level >= slog.LevelWarn:
+		return "warn"
+	case level >= slog.LevelInfo:
+		return "info"
+	default:
+		return "debug"
+	}
+}
+
+func attrsDetailsJSON(attrs []slog.Attr) string {
+	m := make(map[string]any, len(attrs))
+	for _, a := range attrs {
+		m[a.Key] = a.Value.Any()
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return logger.FormatAttrs(attrs)
+	}
+	return string(b)
+}

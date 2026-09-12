@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -454,6 +454,13 @@ func (a registryProgressAdapter) Log(level, message string, details *string) err
 	return a.r.Log(l, message, attrs...)
 }
 func (a registryProgressAdapter) IsCanceled() bool { return a.r.IsCanceled() }
+
+// LogAttrs implements operations.AttrReporter so structured attributes (a
+// scan's per-file failure path and reason, for one) reach the v2 op log as
+// attrs instead of being flattened into a "details" string.
+func (a registryProgressAdapter) LogAttrs(level slog.Level, message string, attrs ...slog.Attr) error {
+	return a.r.Log(level, message, attrs...)
+}
 
 // bulkMetadataFetchV2Params aliases the canonical type from internal/server/handlers.
 type bulkMetadataFetchV2Params = handlers.BulkMetadataFetchV2Params

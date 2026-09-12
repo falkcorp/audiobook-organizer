@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -161,6 +161,20 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 				// returning nil either way).
 				OnAIPhaseWarning: func(msg string) {
 					_ = reporter.Log(slog.LevelWarn, msg)
+				},
+				// Per-file failures are already in this op's log (a bounded
+				// sample plus a summary with the total). Persisting them as the
+				// result too makes a finished scan's failures machine-readable.
+				// Non-fatal for the same reason as OnAIPhaseWarning: a few
+				// unreadable files must not fail -- and so retry -- a scan.
+				OnFileFailures: func(total int, sample []scanner.FileFailure) {
+					if err := opsregistry.ReporterSetResult(reporter, map[string]any{
+						"files_failed":        total,
+						"files_failed_sample": sample,
+					}); err != nil {
+						_ = reporter.Log(slog.LevelWarn, "library.scan: could not persist the file-failure result",
+							slog.String("error", err.Error()), slog.Int("files_failed", total))
+					}
 				},
 			}
 			progress := registryProgressAdapter{r: reporter}
