@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.19.0
+// version: 5.20.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-12
 
@@ -211,6 +211,11 @@ type Service struct {
 	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
 	// refuses loopback, so an httptest server cannot stand in). Nil in production.
 	coverDownload func(coverURL, destDir, bookID string) (string, error)
+
+	// libraryCopyMaker replaces the organizer's copy creation in
+	// ensureLibraryCopy for tests, which cannot stand up a real organize (it is
+	// asked only once no usable copy exists). Nil in production.
+	libraryCopyMaker func(book *database.Book) *database.Book
 
 	// fileWorkScheduler runs auto-fetch's file work through the server's
 	// file-I/O pool (SetFileWorkScheduler). Nil means no pool is wired --
