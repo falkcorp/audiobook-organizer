@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-12
 
@@ -17,7 +17,9 @@
 // audiobook rips tag every file "1", "1/1", or repeat numbers. Tag track/disc
 // numbers therefore replace the stored ones only when they are distinct across
 // EVERY file of the book (see judgeTagPositions); otherwise the op fills RawTags
-// (and an empty Title) and leaves the order alone.
+// (and an empty Title) and leaves the order alone. When a book is accepted, EVERY
+// file of it is moved to its tag position, siblings included, so a book is never
+// left half in tag numbering and half in positional numbering.
 
 package maintenance
 
@@ -38,10 +40,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// tagBackfillWriteBatchSize is how many rows accumulate before one
-// BatchUpsertBookFiles call. A var (not a const) so tests can shrink it to
-// exercise the multi-batch path.
-var tagBackfillWriteBatchSize = 1000
+// tagBackfillWriteBatchSize is the row count at which pending rows are flushed
+// through one BatchUpsertBookFiles call. Batches end on book boundaries, so a
+// batch may exceed this by at most one book. 250, not 1000: a full row can carry
+// a ~230 KB AcoustIDFingerprint, so 1000 rows is ~230 MB in one batch. A var (not
+// a const) so tests can shrink it to exercise the multi-batch path.
+var tagBackfillWriteBatchSize = 250
 
 type tagBackfillParams struct {
 	DryRun bool `json:"dryRun"`
@@ -70,7 +74,11 @@ const (
 	tagRefuseMissing                     // some file has no known tag track number
 )
 
-type tagPosition struct{ disc, track int }
+// tagPlacement is one file's position as its tags state it. disc is 0 when the
+// tag carries no disc number.
+type tagPlacement struct{ track, trackTotal, disc, discTotal int }
+
+type tagPositionKey struct{ disc, track int }
 
 // judgeTagPositions decides whether a book's tag track/disc numbers may be
 // trusted. It looks at EVERY file of the book (full, from GetBookFiles), not just
@@ -85,28 +93,55 @@ type tagPosition struct{ disc, track int }
 // book with track 1 on each disc passes and two files both at (0, 1) do not. A
 // single-file book passes iff its tag carries a track number. Rows with no BookID
 // have no book to be ordered within and are refused as "missing".
-func judgeTagPositions(bookID string, full []database.BookFile, readings map[string]metadata.Metadata) (tagVerdict, string) {
+//
+// On accept it returns every file's placement, keyed by file ID, so the caller
+// can move the whole book — siblings included — to its tag positions.
+func judgeTagPositions(bookID string, full []database.BookFile, readings map[string]metadata.Metadata) (tagVerdict, string, map[string]tagPlacement) {
 	if bookID == "" {
-		return tagRefuseMissing, "no book id"
+		return tagRefuseMissing, "no book id", nil
 	}
-	seen := make(map[tagPosition]string, len(full))
+	placements := make(map[string]tagPlacement, len(full))
+	seen := make(map[tagPositionKey]string, len(full))
 	for i := range full {
-		var pos tagPosition
+		var p tagPlacement
 		if m, ok := readings[full[i].ID]; ok {
-			pos = tagPosition{disc: m.DiscNumber, track: m.TrackNumber}
+			p = tagPlacement{track: m.TrackNumber, trackTotal: m.TrackTotal, disc: m.DiscNumber, discTotal: m.DiscTotal}
 		} else {
-			track, _, disc, _ := metadata.TrackDiscFromTags(full[i].RawTags)
-			pos = tagPosition{disc: disc, track: track}
+			p.track, p.trackTotal, p.disc, p.discTotal = metadata.TrackDiscFromTags(full[i].RawTags)
 		}
-		if pos.track <= 0 {
-			return tagRefuseMissing, fmt.Sprintf("file %s has no tag track", full[i].ID)
+		if p.track <= 0 {
+			return tagRefuseMissing, fmt.Sprintf("file %s has no tag track", full[i].ID), nil
 		}
-		if other, dup := seen[pos]; dup {
-			return tagRefuseDuplicate, fmt.Sprintf("disc %d track %d on %s and %s", pos.disc, pos.track, other, full[i].ID)
+		key := tagPositionKey{disc: max(p.disc, 0), track: p.track}
+		if other, dup := seen[key]; dup {
+			return tagRefuseDuplicate, fmt.Sprintf("disc %d track %d on %s and %s", key.disc, key.track, other, full[i].ID), nil
 		}
-		seen[pos] = full[i].ID
+		seen[key] = full[i].ID
+		placements[full[i].ID] = p
 	}
-	return tagTakePositions, ""
+	return tagTakePositions, "", placements
+}
+
+// applyTagPlacement moves a row to its tag position and reports whether any
+// position field changed. TrackNumber and DiscNumber are set exactly as the tag
+// states them (DiscNumber 0 when the tag has no disc) so the row sorts where the
+// judgement placed it. A tag total replaces the stored count; with no disc, the
+// disc count is cleared too, since a disc count without a disc is meaningless.
+// A missing track total keeps the stored TrackCount, which does not affect order.
+func applyTagPlacement(u *database.BookFile, p tagPlacement) bool {
+	before := [4]int{u.TrackNumber, u.TrackCount, u.DiscNumber, u.DiscCount}
+	u.TrackNumber = p.track
+	if p.trackTotal > 0 {
+		u.TrackCount = p.trackTotal
+	}
+	u.DiscNumber = max(p.disc, 0)
+	switch {
+	case p.discTotal > 0:
+		u.DiscCount = p.discTotal
+	case u.DiscNumber == 0:
+		u.DiscCount = 0
+	}
+	return before != [4]int{u.TrackNumber, u.TrackCount, u.DiscNumber, u.DiscCount}
 }
 
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
@@ -117,8 +152,9 @@ func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 		DisplayName: "Backfill lossless file tags (RawTags + track/disc)",
 		Description: "Reads each BookFile's audio tags and backfills the lossless RawTags map (and an " +
 			"empty title) for rows imported before lossless capture. Tag track/disc numbers replace the " +
-			"stored ones only when they are distinct across every file of the book. Files missing on " +
-			"disk are skipped. Default dry-run previews counts; set dryRun=false to apply.",
+			"stored ones only when they are distinct across every file of the book, and then for every " +
+			"file of that book. Files missing on disk are skipped. Default dry-run previews counts; set " +
+			"dryRun=false to apply.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.tag-backfill",
@@ -189,50 +225,66 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		mu                         sync.Mutex
 		needed, missing, readErr   int
 		tookTracks, rawOnly        int
+		siblingsRenumbered         int
 		refusedDup, refusedMissing int
 		examples                   = make([]string, 0, 5)
 		refusedExamples            = make([]string, 0, 5)
 	)
 
-	// Bounded writes: rows accumulate in pending and are flushed in batches of
-	// tagBackfillWriteBatchSize as books finish, so memory holds at most one
-	// batch plus one book instead of every hydrated row in the library. wmu
-	// guards pending/written AND serializes the BatchUpsertBookFiles call, so the
-	// op never depends on that call being goroutine-safe. It is separate from mu
-	// so a batch write never stalls counter updates or progress labels.
+	// Bounded writes: each finished book's rows are appended to pending as one
+	// unit, and pending is flushed WHOLE once it reaches tagBackfillWriteBatchSize,
+	// so every batch ends on a book boundary (exceeding the size by at most one
+	// book) and memory holds about one batch instead of every hydrated row in the
+	// library. wmu guards pending/written/writeErr AND serializes the
+	// BatchUpsertBookFiles call, so the op never depends on that call being
+	// goroutine-safe. It is separate from mu so a batch write never stalls counter
+	// updates or progress labels. After the first failed write nothing more is
+	// written: later books are refused with the same error.
 	var (
-		wmu     sync.Mutex
-		pending []*database.BookFile
-		written int
+		wmu      sync.Mutex
+		pending  []*database.BookFile
+		written  int
+		writeErr error
 	)
-	flushLocked := func(all bool) error {
-		size := tagBackfillWriteBatchSize
-		if size < 1 {
-			size = 1
+	flushLocked := func() error {
+		if writeErr != nil {
+			return writeErr
 		}
-		for len(pending) >= size || (all && len(pending) > 0) {
-			n := min(size, len(pending))
+		// pending holds only whole books, so writing all of it in one call is
+		// what keeps every batch on a book boundary. (The loop runs once; it is a
+		// loop so that a chunked variant would still write every row.)
+		for len(pending) > 0 {
+			n := len(pending)
 			if err := store.BatchUpsertBookFiles(pending[:n]); err != nil {
-				return fmt.Errorf("batch write after %d rows: %w", written, err)
+				writeErr = fmt.Errorf("batch write of %d rows failed (%d rows written before it): %w", n, written, err)
+				return writeErr
 			}
 			written += n
-			pending = append([]*database.BookFile(nil), pending[n:]...)
+			pending = pending[n:]
 		}
+		pending = nil // release the flushed rows
 		return nil
 	}
 	enqueue := func(rows []*database.BookFile) error {
 		wmu.Lock()
 		defer wmu.Unlock()
+		if writeErr != nil {
+			return writeErr
+		}
 		pending = append(pending, rows...)
-		return flushLocked(false)
+		if len(pending) >= tagBackfillWriteBatchSize {
+			return flushLocked()
+		}
+		return nil
 	}
 
 	// Work is partitioned by BookID: every candidate row of a book is in exactly
 	// one tagBackfillBook, and RunItems hands each item to exactly one worker, so
-	// two workers can never judge or write the same book (or the same row).
+	// two workers can never judge or write the same book (or the same row) —
+	// including the sibling rows an accepted book renumbers.
 	// Per-book work is I/O bound (stat + tag read per file), so the pool is sized
 	// like path_repair_resolver.go: NumCPU()*4.
-	err = registry.RunItems(ctx, reporter, books, func(ctx context.Context, b tagBackfillBook) error {
+	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, b tagBackfillBook) error {
 		readings := make(map[string]metadata.Metadata, len(b.rows))
 		var bMissing, bReadErr int
 		for _, f := range b.rows {
@@ -277,32 +329,33 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			return nil
 		}
 
-		verdict, why := judgeTagPositions(b.bookID, full, readings)
+		verdict, why, placements := judgeTagPositions(b.bookID, full, readings)
 		take := verdict == tagTakePositions
 
-		updates := make([]*database.BookFile, 0, len(readings))
-		found := 0
+		updates := make([]*database.BookFile, 0, len(full))
+		found, bSiblings := 0, 0
 		for j := range full {
 			meta, ok := readings[full[j].ID]
 			if !ok {
+				// A sibling not read this run. On accept it is moved to its tag
+				// position too: leaving it on its old positional numbers while the
+				// rows read this run take tag numbers would mix two numbering
+				// schemes in one book (e.g. disc 0 tracks 1-10 next to a recovered
+				// file at disc 1 track 3) and scramble the order on a later run.
+				if take {
+					sib := full[j]
+					if applyTagPlacement(&sib, placements[sib.ID]) {
+						bSiblings++
+						updates = append(updates, &sib)
+					}
+				}
 				continue
 			}
 			found++
 			updated := full[j] // copy of the full hydrated row
 			updated.RawTags = meta.AllTags
 			if take {
-				if meta.TrackNumber > 0 {
-					updated.TrackNumber = meta.TrackNumber
-				}
-				if meta.TrackTotal > 0 {
-					updated.TrackCount = meta.TrackTotal
-				}
-				if meta.DiscNumber > 0 {
-					updated.DiscNumber = meta.DiscNumber
-				}
-				if meta.DiscTotal > 0 {
-					updated.DiscCount = meta.DiscTotal
-				}
+				applyTagPlacement(&updated, placements[updated.ID])
 			}
 			if updated.Title == "" && meta.Title != "" {
 				updated.Title = meta.Title
@@ -312,16 +365,18 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		// A candidate absent from its own book's hydrated list cannot be written
 		// safely; count it as a read error, as before.
 		bReadErr += len(readings) - found
+		bRead := len(updates) - bSiblings
 
 		mu.Lock()
 		missing += bMissing
 		readErr += bReadErr
-		needed += len(updates)
+		needed += bRead
+		siblingsRenumbered += bSiblings
 		if take {
-			tookTracks += len(updates)
+			tookTracks += bRead
 		} else {
-			rawOnly += len(updates)
-			if len(updates) > 0 {
+			rawOnly += bRead
+			if bRead > 0 {
 				if verdict == tagRefuseDuplicate {
 					refusedDup++
 				} else {
@@ -336,7 +391,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			if len(examples) >= 5 {
 				break
 			}
-			examples = append(examples, fmt.Sprintf("%s(%d tags,trk %d)", u.ID, len(u.RawTags), u.TrackNumber))
+			examples = append(examples, fmt.Sprintf("%s(%d tags,disc %d trk %d)", u.ID, len(u.RawTags), u.DiscNumber, u.TrackNumber))
 		}
 		mu.Unlock()
 
@@ -350,31 +405,53 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		Label: func(i, t int) string {
 			mu.Lock()
 			defer mu.Unlock()
-			return fmt.Sprintf("book %d/%d (%d files examined) — %d to backfill (%d tag tracks, %d RawTags-only), books refused %d dup / %d missing-number, %d missing, %d read-err",
-				i, t, examined, needed, tookTracks, rawOnly, refusedDup, refusedMissing, missing, readErr)
+			return fmt.Sprintf("book %d/%d (%d files examined) — %d to backfill (%d tag tracks, %d RawTags-only, %d siblings renumbered), books refused %d dup / %d missing-number, %d missing, %d read-err",
+				i, t, examined, needed, tookTracks, rawOnly, siblingsRenumbered, refusedDup, refusedMissing, missing, readErr)
 		},
 	})
-	if err != nil {
-		return fmt.Errorf("parallel tag backfill: %w", err)
-	}
+
+	// RunItems has returned, so every worker has finished (run_items.go waits on
+	// its WaitGroup) and pending holds only complete books. Flush them even when
+	// the run was canceled or failed: those books were judged in full, and
+	// dropping them would only force a re-read next run. After a failed write
+	// nothing more is written and the rows still pending are reported dropped.
+	stopNote := ""
 	if !params.DryRun {
 		wmu.Lock()
-		ferr := flushLocked(true)
+		n := len(pending)
+		ferr := flushLocked()
+		writtenNow := written
 		wmu.Unlock()
-		if ferr != nil {
-			return fmt.Errorf("final batch write: %w", ferr)
+		if runErr != nil || ferr != nil {
+			flushed, dropped := n, 0
+			if ferr != nil {
+				flushed, dropped = 0, n
+			}
+			stopNote = fmt.Sprintf(" | stopped early: flushed %d pending rows of complete books, dropped %d; %d rows written in total", flushed, dropped, writtenNow)
+			_ = reporter.Log(slog.LevelWarn, "tag backfill stopping early:"+stopNote)
+		}
+		if runErr == nil && ferr != nil {
+			runErr = ferr
 		}
 	}
 
+	wmu.Lock()
+	writtenTotal := written
+	wmu.Unlock()
+	mu.Lock()
 	verb := "would backfill"
 	if !params.DryRun {
-		verb = fmt.Sprintf("backfilled %d;", written)
+		verb = fmt.Sprintf("wrote %d rows;", writtenTotal)
 	}
-	summary := fmt.Sprintf("examined=%d books=%d %s needed=%d took-tag-tracks=%d rawtags-only=%d "+
-		"books-refused-duplicate=%d books-refused-missing=%d missing-on-disk=%d read-errors=%d | e.g. %s | refused e.g. %s",
-		examined, len(books), verb, needed, tookTracks, rawOnly, refusedDup, refusedMissing, missing, readErr,
-		strings.Join(examples, ", "), strings.Join(refusedExamples, ", "))
+	summary := fmt.Sprintf("examined=%d books=%d %s needed=%d took-tag-tracks=%d rawtags-only=%d siblings-renumbered=%d "+
+		"books-refused-duplicate=%d books-refused-missing=%d missing-on-disk=%d read-errors=%d | e.g. %s | refused e.g. %s%s",
+		examined, len(books), verb, needed, tookTracks, rawOnly, siblingsRenumbered, refusedDup, refusedMissing, missing, readErr,
+		strings.Join(examples, ", "), strings.Join(refusedExamples, ", "), stopNote)
+	mu.Unlock()
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(books), len(books), summary)
+	if runErr != nil {
+		return fmt.Errorf("parallel tag backfill: %w", runErr)
+	}
 	return nil
 }
