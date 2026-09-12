@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
 // last-edited: 2026-09-12
 

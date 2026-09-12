@@ -1,5 +1,5 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
 // last-edited: 2026-09-12
 import { Dispatch, SetStateAction } from 'react';

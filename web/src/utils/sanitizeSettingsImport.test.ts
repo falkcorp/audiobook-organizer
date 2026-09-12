@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-09-12
 
@@ -74,5 +74,16 @@ describe('sanitizeSettingsImport', () => {
       root_dir: '/library',
     }) as Record<string, unknown>;
     expect(cleaned).toEqual({ root_dir: '/library' });
+  });
+
+  it('drops the removed auto_fetch_metadata setting from an older export', () => {
+    // The server no longer has this setting (it is in removedConfigKeys), so
+    // an exported file that still carries it must not send it back.
+    const cleaned = load({
+      auto_fetch_metadata: true,
+      enable_ai_parsing: true,
+    }) as Record<string, unknown>;
+    expect(cleaned).not.toHaveProperty('auto_fetch_metadata');
+    expect(cleaned).toEqual({ enable_ai_parsing: true });
   });
 });
