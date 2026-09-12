@@ -9283,6 +9283,57 @@ func (_c *MockStore_DeleteMetadataRejections_Call) RunAndReturn(run func(bookID 
 	return _c
 }
 
+// DeleteNarrator provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteNarrator(id int) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteNarrator")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(int) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteNarrator_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteNarrator'
+type MockStore_DeleteNarrator_Call struct {
+	*mock.Call
+}
+
+// DeleteNarrator is a helper method to define mock.On call
+//   - id int
+func (_e *MockStore_Expecter) DeleteNarrator(id any) *MockStore_DeleteNarrator_Call {
+	return &MockStore_DeleteNarrator_Call{Call: _e.mock.On("DeleteNarrator", id)}
+}
+
+func (_c *MockStore_DeleteNarrator_Call) Run(run func(id int)) *MockStore_DeleteNarrator_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteNarrator_Call) Return(err error) *MockStore_DeleteNarrator_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteNarrator_Call) RunAndReturn(run func(id int) error) *MockStore_DeleteNarrator_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DeleteOpStateV2 provides a mock function for the type MockStore
 func (_mock *MockStore) DeleteOpStateV2(opID string) error {
 	ret := _mock.Called(opID)

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_sync.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000005
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -391,6 +391,16 @@ func (p *PebbleStore) UpsertNarratorToMemDB(n *Narrator) {
 	snapshot := *n // copy at enqueue — see the data-race rule on UpsertBookToMemDB
 	p.memSync("UpsertNarrator", func(txn memTxn) error {
 		return txn.Insert(memTableNarrators, &snapshot)
+	})
+}
+
+func (p *PebbleStore) DeleteNarratorFromMemDB(id int) {
+	p.memSync("DeleteNarrator", func(txn memTxn) error {
+		obj, err := txn.First(memTableNarrators, memIdxID, id)
+		if err == nil && obj != nil {
+			return txn.Delete(memTableNarrators, obj)
+		}
+		return nil
 	})
 }
 
