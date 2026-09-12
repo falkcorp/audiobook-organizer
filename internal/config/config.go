@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.112.0
+// version: 1.113.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package config
 
@@ -2013,6 +2013,11 @@ func ApplyEnvAuthoritativeConfig() {
 // InitConfig initializes the application configuration
 
 func InitConfig() {
+	// viper ignores unknown keys silently; a retired setting still present in
+	// the config file or environment gets a WARN here instead. Never an error:
+	// a stale key must not stop the server starting.
+	warnRemovedViperKeys()
+
 	// Set core defaults
 	viper.SetDefault("database_type", "pebble")
 	// Sort indexes for the ABS library browser.

@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.21.0
+// version: 3.22.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package config
 
@@ -461,6 +461,14 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	}
 	if payload == nil {
 		return http.StatusBadRequest, map[string]any{"error": "configuration payload is required"}
+	}
+
+	// Reject removed fields BEFORE anything is decoded or applied. enable_sqlite
+	// no longer exists on Config, so without this check the JSON round-trip
+	// below would drop it silently and answer 200 — telling the client a
+	// setting applied that does not exist. See removedConfigKeys.
+	if msg, ok := removedKeyInUpdate(payload); ok {
+		return http.StatusBadRequest, map[string]any{"error": msg}
 	}
 
 	// Reject immutable fields

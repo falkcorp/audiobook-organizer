@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,6 +98,21 @@ func TestConfigUpdateService_ApplyUpdates_ErrorCases(t *testing.T) {
 			payload:   map[string]any{"database_type": "mysql"},
 			wantErr:   true,
 			errSubstr: "database_type cannot be changed at runtime",
+		},
+		// TASK-020 removed the field; the owner decision is that a PUT carrying
+		// it keeps getting 400 (it did while it was an immutable field) rather
+		// than being silently dropped — for any value, false included.
+		{
+			name:      "enable_sqlite=true rejected as removed",
+			payload:   map[string]any{"enable_sqlite": true},
+			wantErr:   true,
+			errSubstr: "enable_sqlite cannot be set: the enable_sqlite setting (the --enable-sqlite3-i-know-the-risks flag) was removed",
+		},
+		{
+			name:      "enable_sqlite=false rejected as removed",
+			payload:   map[string]any{"enable_sqlite": false},
+			wantErr:   true,
+			errSubstr: "SQLite is no longer selectable",
 		},
 	}
 
@@ -670,6 +686,23 @@ func TestConfigUpdateService_UpdateConfig(t *testing.T) {
 			t.Errorf("expected database_type error, got %v", resp["error"])
 		}
 	})
+
+	for _, val := range []any{true, false} {
+		t.Run(fmt.Sprintf("enable_sqlite=%v rejected as removed", val), func(t *testing.T) {
+			mockStore := mocks.NewMockStore(t)
+			svc := config.NewUpdateService(mockStore)
+			status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite": val})
+			if status != 400 {
+				t.Errorf("expected 400, got %d", status)
+			}
+			msg, _ := resp["error"].(string)
+			for _, want := range []string{"enable_sqlite", "--enable-sqlite3-i-know-the-risks", "removed", "SQLite is no longer selectable"} {
+				if !contains(msg, want) {
+					t.Errorf("error %q does not mention %q", msg, want)
+				}
+			}
+		})
+	}
 }
 
 // TestConfigUpdateService_ApplyUpdates_FieldTypes tests applying different field types

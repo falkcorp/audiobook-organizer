@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.35.1
+// version: 1.36.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package config
 
@@ -52,6 +52,14 @@ func LoadConfigFromFile() error {
 	if err := yaml.Unmarshal(data, &fileConfig); err != nil {
 		slog.Warn("Failed to parse config file", "path", path, "err", err)
 		return nil
+	}
+
+	// A retired key in this file is logged and otherwise ignored — the loop
+	// below only reads the keys it names — so startup never fails over it.
+	for _, rk := range removedConfigKeys {
+		if _, present := fileConfig[rk.key]; present {
+			warnRemovedKey(rk.key, path)
+		}
 	}
 
 	// WHY Mutate: these writes race with any goroutine reading AppConfig.
@@ -774,6 +782,11 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// ABSENT keys change meaning.
 		loaded := Snapshot()
 		loaded.DatabaseType = savedDBType
+		// Retired keys in the blob (e.g. "enable_sqlite": false, which every
+		// blob saved before TASK-020 carries because the app serialised the
+		// struct field itself) are dropped by json.Unmarshal on purpose and NOT
+		// warned about: nobody set them, and the next save rewrites the blob
+		// without them. Operator-written sources warn — see removedConfigKeys.
 		if err := json.Unmarshal([]byte(blobStr), &loaded); err == nil {
 			// WHY Mutate: whole-struct assignment races with HTTP readers.
 			Mutate(func(c *Config) {
@@ -824,6 +837,10 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		for _, setting := range settings {
 			if setting.Key == "config_blob" || setting.IsSecret {
 				continue // blob already handled; secrets handled above
+			}
+			if _, removed := removedConfigKeyMessage(setting.Key); removed {
+				warnRemovedKey(setting.Key, "settings database (legacy per-key row)")
+				continue
 			}
 			if err := applySetting(setting.Key, setting.Value, setting.Type); err != nil {
 				slog.Warn("Failed to apply setting", "setting", setting.Key, "err", err)
