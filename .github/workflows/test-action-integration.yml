@@ -1,24 +1,40 @@
 # file: .github/workflows/test-action-integration.yml
-# version: 1.3.2
+# version: 1.4.0
 # guid: test-action-integration-001
-# last-edited: 2026-08-27
+# last-edited: 2026-09-12
 
 name: Test Frontend Config Action Integration
 
+# The path filters list every file scripts/check_toolchain_versions.py reads, so
+# a toolchain drift in any of them triggers the check that catches it.
 on:
   push:
     branches: [main, develop]
     paths:
       - '.github/repository-config.yml'
-      - '.github/workflows/test-action-integration.yml'
+      - '.github/workflows/*.yml'
       - 'go.mod'
+      - 'Makefile'
+      - '.envrc'
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - '.vscode/settings.json'
+      - 'scripts/check_toolchain_versions.py'
+      - 'scripts/tests/test_check_toolchain_versions.py'
       - 'web/package.json'
   pull_request:
     branches: [main, develop]
     paths:
       - '.github/repository-config.yml'
-      - '.github/workflows/test-action-integration.yml'
+      - '.github/workflows/*.yml'
       - 'go.mod'
+      - 'Makefile'
+      - '.envrc'
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - '.vscode/settings.json'
+      - 'scripts/check_toolchain_versions.py'
+      - 'scripts/tests/test_check_toolchain_versions.py'
       - 'web/package.json'
   workflow_dispatch:
 
@@ -101,33 +117,13 @@ jobs:
         id: version-check
         env:
           OUT_NODE: ${{ steps.frontend-config.outputs.node-version }}
-        run: |
-          # Go version: go.mod vs ci.yml
-          GO_MOD_VER=$(grep '^go ' go.mod | awk '{print $2}' | sed 's/\.[0-9]*$//')
-          CI_GO_VER=$(grep "go-version:" .github/workflows/ci.yml | head -1 | grep -oE "'[^']+'" | tr -d "'")
-          REPO_CFG_GO_VER=$(grep -A1 'versions:' .github/repository-config.yml | grep 'go:' | head -1 | grep -oE "'[^']+'" | tr -d "'")
-
-          echo "--- Go version check ---"
-          echo "  go.mod:              $GO_MOD_VER"
-          echo "  ci.yml:              $CI_GO_VER"
-          echo "  repository-config:   $REPO_CFG_GO_VER"
-
-          if [ -n "$CI_GO_VER" ] && [ "$GO_MOD_VER" != "$CI_GO_VER" ]; then
-            echo "::warning::Go version mismatch: go.mod=$GO_MOD_VER vs ci.yml=$CI_GO_VER"
-          fi
-
-          # Node version: repository-config.yml vs ci.yml
-          CI_NODE_VER=$(grep "node-version:" .github/workflows/ci.yml | head -1 | grep -oE "'[^']+'" | tr -d "'")
-
-          echo "--- Node version check ---"
-          echo "  ci.yml:              $CI_NODE_VER"
-          echo "  action output:       $OUT_NODE"
-
-          if [ -n "$CI_NODE_VER" ] && [ "$CI_NODE_VER" != "$OUT_NODE" ]; then
-            echo "::warning::Node version mismatch: ci.yml=$CI_NODE_VER vs action=$OUT_NODE"
-          fi
-
-          echo "Version consistency checks complete"
+        # Fails (exit 1, ::error::) on any drift between the Go pin copies
+        # (Makefile, .envrc, .vscode, Dockerfiles, go.mod, every workflow
+        # go-version, repository-config) and between every workflow
+        # node-version, repository-config versions.node and the action output.
+        # The copy list and the exact-vs-major.minor tiers are documented in
+        # the script. It replaced an inline check that only ever warned (CI-04).
+        run: python3 scripts/check_toolchain_versions.py --action-node-output "$OUT_NODE"
 
       - name: Create issue on drift
         if: failure() && github.event_name != 'pull_request'
