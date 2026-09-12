@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package dedup
 
@@ -22,6 +22,12 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 		DisplayName:     "LLM review of candidates",
 		Description:     "Runs LLM review pass over ambiguous embedding-layer candidates.",
 		ResumePolicy:    sdk.ResumeDrop,
+		// Serialize against itself like every other write-declaring dedup op.
+		// Without a key the scheduler can start a second review while the
+		// first is mid-flight, both holding CapLibraryWrite over the same
+		// candidates. runLLMReview has no internal partitioning that would
+		// make two concurrent runs disjoint.
+		ConcurrencyKey:  "dedup.llm-review",
 		DefaultPriority: sdk.PriorityLow,
 		Timeout:         120 * time.Minute,
 		Capabilities: []sdk.Capability{
