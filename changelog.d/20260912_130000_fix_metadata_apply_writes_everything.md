@@ -32,6 +32,11 @@
   on the files' current path for the cover embed and rename, and on the
   post-rename path for the tag write. An auto-fetch of an iTunes book and a
   manual apply of its library copy no longer write the same files at once.
+- **A lost scan stand-down stops apply file work between steps again.** The
+  single-book apply and the batch-candidates apply re-check the scan stand-down
+  before the cover download, the file I/O and the tag write, as they did before
+  the file-side sequel was shared. A scan that resumes mid-apply no longer runs
+  alongside the rename or the tag write.
 
 ### Removed
 

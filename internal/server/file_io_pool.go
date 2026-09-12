@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 //
@@ -423,7 +423,9 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 // or WriteBackMetadataForBook: calling those two in a row is what tagged every
 // file twice.
 type applyMetadataRecoverer interface {
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
+	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
+	// before each file-writing step; nil means the caller holds none.
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 }
 
 // recoverApplyMetadataFileOp replays an interrupted apply's file work through
@@ -435,7 +437,7 @@ type applyMetadataRecoverer interface {
 // FinishApplyFileWork takes the path lock itself, per write, so the replay is
 // locked exactly like the live job.
 func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, enqueue func(string), bookID string) {
-	if err := svc.FinishApplyFileWork(bookID, "", true, true); err != nil {
+	if err := svc.FinishApplyFileWork(bookID, "", true, true, nil); err != nil {
 		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
 	}
 	if enqueue != nil {

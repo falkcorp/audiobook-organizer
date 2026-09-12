@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -378,7 +378,7 @@ func TestFinishApplyFileWork_WritesTagsOnce(t *testing.T) {
 	}
 	for _, tt := range tests {
 		svc, calls, _ := fileWorkHarness(t, "", false, tt.autoTags, nil)
-		require.NoError(t, svc.FinishApplyFileWork("b1", "", tt.fileIO, tt.writeTags))
+		require.NoError(t, svc.FinishApplyFileWork("b1", "", tt.fileIO, tt.writeTags, nil))
 		assert.Equal(t, tt.want, countPrefix(*calls, "tags:"),
 			"auto_write_tags=%v fileIO=%v writeTags=%v: tag writes", tt.autoTags, tt.fileIO, tt.writeTags)
 	}
@@ -392,7 +392,7 @@ func TestFinishApplyFileWork_RenameFailureStillWritesTags(t *testing.T) {
 		*calls = append(*calls, "tags:"+id)
 		return 0, errors.New("downstream symptom")
 	}
-	err := svc.FinishApplyFileWork("b1", "", true, true)
+	err := svc.FinishApplyFileWork("b1", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list exploded", "the rename-side fault must win")
 	assert.Equal(t, 1, countPrefix(*calls, "tags:"))
@@ -402,10 +402,47 @@ func TestFinishApplyFileWork_RenameFailureStillWritesTags(t *testing.T) {
 func TestFinishApplyFileWork_DownloadsCoverFirst(t *testing.T) {
 	const cover = "https://covers.example.test/new.jpg"
 	svc, calls, book := fileWorkHarness(t, t.TempDir(), false, false, nil)
-	require.NoError(t, svc.FinishApplyFileWork("b1", cover, true, true))
+	require.NoError(t, svc.FinishApplyFileWork("b1", cover, true, true, nil))
 	assert.Equal(t, []string{"cover:" + cover, "tags:b1"}, *calls)
 	require.NotNil(t, book.CoverURL)
 	assert.Equal(t, "/api/v1/covers/local/b1.jpg", *book.CoverURL)
+}
+
+// The caller's scan stand-down checkpoint is re-run before each file-writing
+// step. Losing the hold stops the sequel at that step: nothing after it runs,
+// and the error names the step. The file I/O is observed through the tag write
+// the pipeline performs under auto_write_tags_on_apply.
+func TestFinishApplyFileWork_StopsWhereStandDownIsLost(t *testing.T) {
+	const cover = "https://covers.example.test/new.jpg"
+	lost := errors.New("scan stand-down lost")
+	tests := []struct {
+		name              string
+		fileIO, writeTags bool
+		failOnCall        int
+		wantCalls         []string
+		wantStep          string
+	}{
+		{"cover download", true, true, 1, nil, "the cover download"},
+		{"file I/O", true, false, 2, []string{"cover:" + cover}, "the file I/O"},
+		{"tag write", false, true, 2, []string{"cover:" + cover}, "the tag write"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, calls, _ := fileWorkHarness(t, t.TempDir(), false, true, nil)
+			n := 0
+			checkpoint := func() error {
+				n++
+				if n >= tt.failOnCall {
+					return lost
+				}
+				return nil
+			}
+			err := svc.FinishApplyFileWork("b1", cover, tt.fileIO, tt.writeTags, checkpoint)
+			require.ErrorIs(t, err, lost)
+			assert.Contains(t, err.Error(), "stopped before "+tt.wantStep)
+			assert.Equal(t, tt.wantCalls, *calls, "a step ran after the stand-down was lost")
+		})
+	}
 }
 
 // Auto-fetch writes tags through the shared core. It used to write them only
@@ -732,7 +769,7 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 				close(proceed)
 				t.Fatal("auto-fetch of A never reached its tag write")
 			}
-			wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("b", "", true, true)) })
+			wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("b", "", true, true, nil)) })
 			select {
 			case id := <-entered:
 				t.Errorf("the manual apply of B reached its tag write (id %q) while auto-fetch of A was writing B's files", id)
@@ -773,6 +810,6 @@ func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 	assert.Zero(t, countPrefix(*calls, "cover:"), "the no-pool auto-fetch path replaced an existing cover")
 
 	// An explicit apply replaces it.
-	require.NoError(t, svc.FinishApplyFileWork("b1", cover, false, false))
+	require.NoError(t, svc.FinishApplyFileWork("b1", cover, false, false, nil))
 	assert.Equal(t, 1, countPrefix(*calls, "cover:"), "an explicit apply must replace the cover")
 }

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-12
 
@@ -27,7 +27,9 @@ type cachedApplyService interface {
 	InvalidateCachedCandidates(bookID string) error
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
+	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
+	// before each file-writing step; nil means the caller holds none.
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
@@ -122,7 +124,7 @@ func applyCachedCandidateForBook(
 		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
-		if err := svc.FinishApplyFileWork(id, pendingCover, false, false); err != nil {
+		if err := svc.FinishApplyFileWork(id, pendingCover, false, false, nil); err != nil {
 			out.WriteBackFailed, out.Err = true, err
 		}
 		return out
@@ -144,7 +146,7 @@ func applyCachedCandidateForBook(
 	// WriteBackFailed is separate from !Applied. The core still writes tags
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
-	if err := svc.FinishApplyFileWork(id, pendingCover, true, true); err != nil {
+	if err := svc.FinishApplyFileWork(id, pendingCover, true, true, nil); err != nil {
 		out.WriteBackFailed, out.Err = true, err
 	}
 	return out

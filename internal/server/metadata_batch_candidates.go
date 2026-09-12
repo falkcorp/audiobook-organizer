@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-12
 //
@@ -614,7 +614,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 					// the new cover before 2026-09-12), file I/O, and the tags
 					// exactly once (ApplyMetadataFileIO followed by its own
 					// write-back tagged twice under auto_write_tags_on_apply).
-					if err := mfs.FinishApplyFileWork(bid, pendingCover, true, true); err != nil {
+					if err := mfs.FinishApplyFileWork(bid, pendingCover, true, true, hold.Checkpoint); err != nil {
 						slog.Warn("background apply file work failed", "bid", bid, "err", err)
 					}
 					if s.writeBackBatcher != nil {

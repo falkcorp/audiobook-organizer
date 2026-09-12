@@ -333,16 +333,16 @@ func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run f
 }
 
 // FinishApplyFileWork provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) FinishApplyFileWork(id string, pendingCoverURL string, fileIO bool, writeTags bool) error {
-	ret := _mock.Called(id, pendingCoverURL, fileIO, writeTags)
+func (_mock *MockMetadataFetchService) FinishApplyFileWork(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error {
+	ret := _mock.Called(id, pendingCoverURL, fileIO, writeTags, checkpoint)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FinishApplyFileWork")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, bool, bool) error); ok {
-		r0 = returnFunc(id, pendingCoverURL, fileIO, writeTags)
+	if returnFunc, ok := ret.Get(0).(func(string, string, bool, bool, func() error) error); ok {
+		r0 = returnFunc(id, pendingCoverURL, fileIO, writeTags, checkpoint)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -359,11 +359,12 @@ type MockMetadataFetchService_FinishApplyFileWork_Call struct {
 //   - pendingCoverURL string
 //   - fileIO bool
 //   - writeTags bool
-func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(id any, pendingCoverURL any, fileIO any, writeTags any) *MockMetadataFetchService_FinishApplyFileWork_Call {
-	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", id, pendingCoverURL, fileIO, writeTags)}
+//   - checkpoint func() error
+func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(id any, pendingCoverURL any, fileIO any, writeTags any, checkpoint any) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", id, pendingCoverURL, fileIO, writeTags, checkpoint)}
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool)) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error)) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -381,11 +382,16 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id str
 		if args[3] != nil {
 			arg3 = args[3].(bool)
 		}
+		var arg4 func() error
+		if args[4] != nil {
+			arg4 = args[4].(func() error)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -396,7 +402,7 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Return(err error) *
 	return _c
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Return(run)
 	return _c
 }
