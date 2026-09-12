@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package cmd
 
@@ -55,6 +55,17 @@ var persistentFlagConfigKeys = map[string]string{
 	"db-type":   "database_type",
 	"playlists": "playlist_dir",
 }
+
+// removedSQLiteFlag is the CLI flag TASK-020 (#3268) deleted. It is still
+// registered — hidden, deprecated, and bound to nothing — so that an off-repo
+// systemd unit, script or alias that passes it keeps starting instead of dying
+// on cobra's "unknown flag". See its registration in init.
+const removedSQLiteFlag = "enable-sqlite3-i-know-the-risks"
+
+// removedSQLiteFlagMessage completes pflag's
+// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>".
+const removedSQLiteFlagMessage = "it was removed and does nothing: SQLite is no longer selectable and " +
+	"PebbleDB is the only database backend; remove it from your command line"
 
 var (
 	initializeStore        = database.InitializeStore
@@ -393,6 +404,25 @@ func init() {
 
 	for flagName, configKey := range persistentFlagConfigKeys {
 		viper.BindPFlag(configKey, rootCmd.PersistentFlags().Lookup(flagName))
+	}
+
+	// The removed --enable-sqlite3-i-know-the-risks flag: accepted, ignored,
+	// and warned about, never an error. Passing it makes pflag print
+	// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>"
+	// and cobra flushes that line to stderr once the parse succeeds. Both
+	// deploy units route stderr to the journal (StandardError=journal) and the
+	// launchd plists to their .err file, so that one line is the warning;
+	// there is deliberately no second slog line.
+	//
+	// It is bound to nothing: no variable, and NOT in persistentFlagConfigKeys.
+	// A viper binding would expose enable_sqlite3_i_know_the_risks to
+	// config.warnRemovedViperKeys and log the removed-key WARN a second time.
+	rootCmd.PersistentFlags().Bool(removedSQLiteFlag, false, "removed; ignored (PebbleDB is the only database backend)")
+	if err := rootCmd.PersistentFlags().MarkDeprecated(removedSQLiteFlag, removedSQLiteFlagMessage); err != nil {
+		panic(err)
+	}
+	if err := rootCmd.PersistentFlags().MarkHidden(removedSQLiteFlag); err != nil {
+		panic(err)
 	}
 
 	rootCmd.AddCommand(scanCmd)
