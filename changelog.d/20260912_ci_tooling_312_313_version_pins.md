@@ -17,8 +17,10 @@ The "Check version consistency" step in `test-action-integration.yml` truncated
 only emitted `::warning::`, so a patch-level Go drift reported itself and then
 passed. It now runs `scripts/check_toolchain_versions.py`, which fails the job on
 any mismatch: the `Makefile` `GOTOOLCHAIN` pin must equal `.envrc`, both
-`.vscode` entries and every `FROM golang:` stage exactly (with matching image
-digests); every workflow `go-version` and `repository-config.yml` `versions.go`
+`.vscode` entries and every `FROM golang:` stage exactly, every golang stage
+must carry an `@sha256:` digest (a missing one fails at its file:line) and the
+digests must match stage by stage, across and within Dockerfiles; every
+workflow `go-version` and `repository-config.yml` `versions.go`
 must equal the pin's major.minor; `go.mod`'s `go` directive must sit on the same
 line at or below the pin, with no `toolchain` directive; and every workflow
 `node-version` plus the frontend-config action output must equal `versions.node`.
