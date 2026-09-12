@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.25.0
+// version: 3.25.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-12
 
@@ -953,11 +953,6 @@ func subjectsFromParams(params json.RawMessage) []Subject {
 	return nil
 }
 
-// publishOpCreated fans out an op.created SSE event so the UI's operations
-// bell can pick up newly enqueued OR server-resumed ops without waiting for
-// the next op.updated event. The "resumed" flag distinguishes startup
-// resume from a fresh enqueue so the client can render a "Resumed" badge
-// if desired (currently it just triggers loadFromServer()).
 // admissionLock returns the per-def mutex described on Registry.admitLocks,
 // creating it on first use. Lock order where both are taken: retryMu first,
 // then the admission lock.
@@ -966,6 +961,11 @@ func (r *Registry) admissionLock(defID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+// publishOpCreated fans out an op.created SSE event so the UI's operations
+// bell can pick up newly enqueued OR server-resumed ops without waiting for
+// the next op.updated event. The "resumed" flag distinguishes startup
+// resume from a fresh enqueue so the client can render a "Resumed" badge
+// if desired (currently it just triggers loadFromServer()).
 func (r *Registry) publishOpCreated(row database.OperationV2Row, resumed bool) {
 	if r.bus == nil {
 		return
