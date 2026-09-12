@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package handlers
 
@@ -271,7 +271,13 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	}
 
 	// 3. Count existing versions to determine suffix
-	existingVersions, _ := h.store.GetBooksByVersionGroup(versionGroupID)
+	existingVersions, err := h.store.GetBooksByVersionGroup(versionGroupID)
+	if err != nil {
+		// The member count names the new row ("Version N"). An unreadable
+		// group must fail the split, not number the row as if it were empty.
+		httputil.InternalError(c, "failed to read version group", err)
+		return
+	}
 	versionNum := len(existingVersions) + 1
 
 	// 4. Create new book entry (copy metadata from source, but NOT FilePath —

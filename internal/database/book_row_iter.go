@@ -1,5 +1,5 @@
 // file: internal/database/book_row_iter.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c032ba7-3cab-4fd8-9e0b-b08a0939dd0b
 // last-edited: 2026-09-12
 
@@ -103,7 +103,9 @@ func forEachBookRowAfter(r bareRowIterReader, afterID string, visit func(id stri
 //   - visit returning errStopScan ends the scan and forEachBareRow returns nil.
 //   - visit returning any other error ends the scan and is returned unchanged.
 //   - a read error (per-value or range-level) or a Close error is returned, so
-//     a nil result means every record row in the range was visited.
+//     a nil result means every record row in the range was visited. A Close
+//     error that follows another error is joined to it (errors.Join), so
+//     errors.Is matches either.
 func forEachBareRow(r bareRowIterReader, prefix string, visit func(id string, value []byte) error) error {
 	return scanBareRows(r, prefix, "", visit)
 }
@@ -191,8 +193,23 @@ func (c *rowCursor) err() error {
 
 func (c *rowCursor) run(start, next func() bool, visit func(key, value []byte) error, what string) (err error) {
 	defer func() {
-		if cerr := c.it.Close(); cerr != nil && err == nil {
+		cerr := c.it.Close()
+		if cerr == nil && c.fault != nil {
+			cerr = c.fault.closeErr
+		}
+		switch {
+		case cerr == nil:
+		case err == nil:
 			err = fmt.Errorf("%s: closing iterator: %w", what, cerr)
+		case errors.Is(err, cerr):
+		// Pebble's Close returns the iterator's accumulated error, which
+		// the truncation check below has already wrapped into err.
+		// Joining it again would only repeat the same failure.
+		default:
+			// A Close failure on top of an earlier error is folded in, not
+			// dropped: errors.Is still matches either one. Until 2026-09-12
+			// the Close error was discarded whenever err was already set.
+			err = errors.Join(err, fmt.Errorf("%s: closing iterator: %w", what, cerr))
 		}
 	}()
 	for ok := c.admit(start()); ok; ok = c.admit(next()) {
@@ -229,6 +246,9 @@ type rowScanFault struct {
 	lowerPrefix []byte
 	afterRows   int
 	err         error
+	// closeErr, when set, is what a faulted scan's Close reports if the real
+	// Close returned nil. See setRowScanFaultWithClose.
+	closeErr error
 }
 
 var rowScanFaults sync.Map // bareRowIterReader -> *rowScanFault
@@ -236,7 +256,16 @@ var rowScanFaults sync.Map // bareRowIterReader -> *rowScanFault
 // setRowScanFault arms a fault on r for scans whose lower bound starts with
 // lowerPrefix ("" for all) and returns the function that disarms it.
 func setRowScanFault(r bareRowIterReader, lowerPrefix string, afterRows int, err error) (clear func()) {
-	rowScanFaults.Store(r, &rowScanFault{lowerPrefix: []byte(lowerPrefix), afterRows: afterRows, err: err})
+	return setRowScanFaultWithClose(r, lowerPrefix, afterRows, err, nil)
+}
+
+// setRowScanFaultWithClose is setRowScanFault plus a Close failure: every
+// faulted scan's Close reports closeErr. It pins run's error merging, where a
+// Close error arriving on top of an earlier error must be joined, not dropped.
+// A fault with err == nil must not trip (use a large afterRows): the scan would
+// end early with no error to report.
+func setRowScanFaultWithClose(r bareRowIterReader, lowerPrefix string, afterRows int, err, closeErr error) (clear func()) {
+	rowScanFaults.Store(r, &rowScanFault{lowerPrefix: []byte(lowerPrefix), afterRows: afterRows, err: err, closeErr: closeErr})
 	return func() { rowScanFaults.Delete(r) }
 }
 

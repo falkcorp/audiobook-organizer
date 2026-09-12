@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
 // last-edited: 2026-09-12
 
@@ -181,7 +181,16 @@ func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
 			return nil
 		}
 		b, err := p.GetBookByID(bookID)
-		if err != nil || b == nil {
+		if err != nil {
+			// Only a missing row may be skipped: GetBookByID reports not-found as
+			// (nil, nil), which here means a stale index entry for a hard-deleted
+			// book. Any other error is an unreadable MEMBER, and skipping it hands
+			// the caller a short group that reads as complete (dedup, version-group
+			// operations and library-copy lookups all act on the whole group).
+			// Until 2026-09-12 every error was skipped.
+			return fmt.Errorf("GetBooksByWorkID %s: reading member %s: %w", workID, bookID, err)
+		}
+		if b == nil {
 			return nil
 		}
 		if bookIsSoftDeleted(b) {

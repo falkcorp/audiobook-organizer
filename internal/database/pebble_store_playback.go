@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 package database
 
@@ -150,28 +150,32 @@ func (p *PebbleStore) ListUserBookStatesByStatus(userID, status string, limit, o
 	}
 	prefix := []byte("idx:ubs:status:" + userID + ":" + status + ":")
 	upper := []byte("idx:ubs:status:" + userID + ":" + status + ":~")
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
+	// Only a missing record (the getter's (nil, nil)) is a stale index entry
+	// that may be skipped; any other read error fails the list. Until
+	// 2026-09-12 every error was skipped and the scan's own read error was
+	// never checked, so an unreadable member came back as a short list.
 	var out []UserBookState
 	skipped := 0
 	prefixLen := len(prefix)
-	for iter.First(); iter.Valid(); iter.Next() {
+	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
 		if limit > 0 && len(out) >= limit {
-			break
+			return errStopScan
 		}
-		bookID := string(iter.Key()[prefixLen:])
+		bookID := string(key[prefixLen:])
 		if skipped < offset {
 			skipped++
-			continue
+			return nil
 		}
 		state, err := p.GetUserBookState(userID, bookID)
-		if err != nil || state == nil {
-			continue
+		if err != nil {
+			return fmt.Errorf("ListUserBookStatesByStatus %s/%s: reading state for book %s: %w", userID, status, bookID, err)
 		}
-		out = append(out, *state)
+		if state != nil {
+			out = append(out, *state)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

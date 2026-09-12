@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-09-12
 
@@ -360,23 +360,24 @@ func (p *PebbleStore) GetAPIKeyByHash(hash string) (*APIKey, error) {
 }
 
 func (p *PebbleStore) ListAPIKeysForUser(userID string) ([]APIKey, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("idx:apikey:user:" + userID + ":"),
-		UpperBound: []byte("idx:apikey:user:" + userID + ":~"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	var out []APIKey
+	// Only a missing record (the getter's (nil, nil)) is a stale index entry
+	// that may be skipped; any other read error fails the list. Until
+	// 2026-09-12 every error was skipped and the scan's own read error was
+	// never checked, so an unreadable member came back as a short list.
 	prefix := "idx:apikey:user:" + userID + ":"
-	for iter.First(); iter.Valid(); iter.Next() {
-		keyID := strings.TrimPrefix(string(iter.Key()), prefix)
+	var out []APIKey
+	if err := forEachKeyInRange(p.db, []byte(prefix), []byte(prefix+"~"), func(key, _ []byte) error {
+		keyID := strings.TrimPrefix(string(key), prefix)
 		k, err := p.GetAPIKey(keyID)
-		if err != nil || k == nil {
-			continue
+		if err != nil {
+			return fmt.Errorf("ListAPIKeysForUser %s: reading key %s: %w", userID, keyID, err)
 		}
-		out = append(out, *k)
+		if k != nil {
+			out = append(out, *k)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

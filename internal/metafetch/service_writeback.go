@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-12
 
@@ -935,8 +935,8 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 
 	// --- Write to version-linked copies in the library folder ---
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" && config.AppConfig.RootDir != "" {
-		siblings, sibErr := mfs.db.GetBooksByVersionGroup(*book.VersionGroupID)
-		if sibErr == nil {
+		siblings, sibOK := mfs.versionGroupSiblings(book, "write-back to version-linked copies")
+		if sibOK {
 			for _, sib := range siblings {
 				if sib.ID == book.ID {
 					continue // already written above

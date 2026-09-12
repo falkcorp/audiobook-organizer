@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 8643a893-1898-4098-8e69-c312531d962c
 // last-edited: 2026-09-12
 
@@ -710,7 +710,13 @@ func (p *PebbleStore) GetAcoustIDStats() (*AcoustIDStats, error) {
 	// the "(unknown)" library bucket. Reading pebble directly keeps the grouping
 	// consistent with the authoritative store regardless of memdb state.
 	// (FLAKY-DB-TESTS-2026-06-17 root cause.)
-	allBooks, _ := p.getAllBooksPebbleScan()
+	// A failed book read must fail the call. Dropping it (as this did until
+	// 2026-09-12) left bookLib empty or partial, so every file collapsed into
+	// the "(unknown)" library bucket and the stats read as real.
+	allBooks, err := p.getAllBooksPebbleScan()
+	if err != nil {
+		return nil, fmt.Errorf("GetAcoustIDStats: reading books: %w", err)
+	}
 	bookLib := make(map[string]string, len(allBooks))
 	for _, b := range allBooks {
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {

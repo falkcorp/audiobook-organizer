@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playlists.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b93ba897-1377-4cf7-9aea-ca57f135893e
 // last-edited: 2026-09-12
 
@@ -391,23 +391,24 @@ func (p *PebbleStore) DeleteUserPlaylist(id string) error {
 }
 
 func (p *PebbleStore) ListDirtyUserPlaylists() ([]UserPlaylist, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("idx:upl:dirty:"),
-		UpperBound: []byte("idx:upl:dirty:~"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
+	// Only a missing record (the getter's (nil, nil)) is a stale index entry
+	// that may be skipped; any other read error fails the list. Until
+	// 2026-09-12 every error was skipped and the scan's own read error was
+	// never checked, so an unreadable member came back as a short list.
 	var out []UserPlaylist
 	prefix := []byte("idx:upl:dirty:")
-	for iter.First(); iter.Valid(); iter.Next() {
-		id := string(iter.Key()[len(prefix):])
+	if err := forEachKeyInRange(p.db, prefix, []byte("idx:upl:dirty:~"), func(key, _ []byte) error {
+		id := string(key[len(prefix):])
 		pl, err := p.GetUserPlaylist(id)
-		if err != nil || pl == nil {
-			continue
+		if err != nil {
+			return fmt.Errorf("ListDirtyUserPlaylists: reading playlist %s: %w", id, err)
 		}
-		out = append(out, *pl)
+		if pl != nil {
+			out = append(out, *pl)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

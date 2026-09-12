@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-09-12
 
@@ -218,7 +218,10 @@ func (h *Handler) ListWork(c *gin.Context) {
 	for _, work := range page {
 		books, err := h.store.GetBooksByWorkID(work.ID)
 		if err != nil {
-			books = []database.Book{}
+			// An unreadable work must fail the page, not be listed as a work
+			// with no books.
+			httputil.InternalError(c, "failed to list work books", err)
+			return
 		}
 
 		items = append(items, map[string]any{

@@ -1,5 +1,5 @@
 // file: internal/database/book_scan_fault_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d1f7c2e-8a4b-4e3f-9c6d-2b7a1e0f4d93
 // last-edited: 2026-09-12
 
@@ -183,6 +183,8 @@ func TestBookScans_FailOnMidScanReadError(t *testing.T) {
 		{"GetAllSeriesFileCounts/book_file_pass", 1, func() error { return err1(p.GetAllSeriesFileCounts()) }, "book_file:"},
 		{"BackfillBookFileScanCache/book_file_pass", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }, "book_file:"},
 		{"BackfillBookFileScanCache/book_pass", 1, func() error { return err1(p.BackfillBookFileScanCache(true)) }, "book:"},
+		{"GetAcoustIDStats/book_file_pass", 1, func() error { return err1(p.GetAcoustIDStats()) }, "book_file:"},
+		{"GetAcoustIDStats/book_pass", 1, func() error { return err1(p.GetAcoustIDStats()) }, "book:"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,4 +196,36 @@ func TestBookScans_FailOnMidScanReadError(t *testing.T) {
 				"a scan truncated by a read error must return that error, not a short result")
 		})
 	}
+}
+
+// TestRowScan_CloseErrorIsJoinedNotDropped pins run's error merging: a Close
+// failure that arrives on top of an earlier error (a read fault, a visit
+// error) is joined to it, so errors.Is finds both. Until 2026-09-12 the Close
+// error was dropped whenever an error was already set.
+func TestRowScan_CloseErrorIsJoinedNotDropped(t *testing.T) {
+	p := setupTestPebbleStore(t)
+	p.WaitForWarmup()
+	buildBookRowRangeFixture(t, p, false)
+	errClose := errors.New("injected close error")
+	noop := func(string, []byte) error { return nil }
+
+	clear := setRowScanFaultWithClose(p.db, "", 1, errInjectedScanFault, errClose)
+	err := forEachBookRow(p.db, noop)
+	clear()
+	require.ErrorIs(t, err, errInjectedScanFault, "the read fault must survive the close error")
+	require.ErrorIs(t, err, errClose, "a close error on top of a read error must be joined, not dropped")
+
+	sentinel := errors.New("visit failed")
+	clear = setRowScanFaultWithClose(p.db, "", 1<<30, nil, errClose)
+	err = forEachBookRow(p.db, func(string, []byte) error { return sentinel })
+	require.ErrorIs(t, err, sentinel, "a visit error must survive the close error")
+	require.ErrorIs(t, err, errClose, "a close error on top of a visit error must be joined, not dropped")
+
+	// Alone, the close error is the result; after errStopScan too.
+	err = forEachBookRow(p.db, noop)
+	require.ErrorIs(t, err, errClose)
+	err = forEachBookRow(p.db, func(string, []byte) error { return errStopScan })
+	clear()
+	require.ErrorIs(t, err, errClose)
+	require.NotErrorIs(t, err, errStopScan)
 }
