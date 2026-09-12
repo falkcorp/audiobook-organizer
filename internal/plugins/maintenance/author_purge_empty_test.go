@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -458,5 +459,111 @@ func TestPurgeEmptyAuthors_ShortMemdbFileCountAbortsRatherThanDeleting(t *testin
 	}
 	if len(deleted) != 0 {
 		t.Fatalf("deleted %v despite being unable to evaluate the file-safety gate", deleted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TASK-075: the held-back (zero books, has files) population gets a SAMPLE, not
+// just a count, so a human can look at who they are before require_zero_files
+// is ever flipped.
+//
+// 🔴 FIXTURE CAVEAT, same as fileRefPurgeStore above: refCounts is left empty
+// for the held-back authors. In production AuthorFileRefCounts attributes files
+// only through books that reference the author, so a non-zero file count
+// implies a non-zero ref count and such an author lands in HeldByRefs first.
+// These fixtures isolate the file gate's reporting; they are not a claim that
+// the state is common in a live library.
+// ---------------------------------------------------------------------------
+
+// Author 4 (zero books, 7 files) is held back and must appear in the sample
+// with its ID, name and file count; authors 2 and 3 (zero books, zero files)
+// are eligible junk and must NOT appear in it; author 1 has books.
+func TestPurgeEmptyAuthors_HeldBackSample_Populated(t *testing.T) {
+	authors, books, files := purgeFixture()
+	report, eligible := classifyEmptyAuthors(authors, books, nil, files, true)
+
+	want := []heldBackAuthor{{AuthorID: 4, Name: "Has Files But No Books", FileCount: 7}}
+	if len(report.HeldBackSample) != len(want) || report.HeldBackSample[0] != want[0] {
+		t.Fatalf("HeldBackSample = %+v, want %+v", report.HeldBackSample, want)
+	}
+	if report.ZeroBooksWithFiles != 1 {
+		t.Errorf("ZeroBooksWithFiles = %d, want 1", report.ZeroBooksWithFiles)
+	}
+	// Report-only: the eligible set and its sample are unchanged by the addition.
+	if len(eligible) != 2 || eligible[0] != 2 || eligible[1] != 3 {
+		t.Errorf("eligible = %v, want [2 3] — the sample must not change what is deleted", eligible)
+	}
+	for _, name := range report.Sample {
+		if name == "Has Files But No Books" {
+			t.Error("the held-back author leaked into the ELIGIBLE sample")
+		}
+	}
+}
+
+// Zero held-back authors leaves the sample empty; require_zero_files=false
+// means nothing is held back on file grounds, so nothing is sampled either.
+func TestPurgeEmptyAuthors_HeldBackSample_EmptyWhenNothingHeldBack(t *testing.T) {
+	authors, books, files := purgeFixture()
+	report, eligible := classifyEmptyAuthors(authors, books, nil, files, false)
+	if len(report.HeldBackSample) != 0 || report.ZeroBooksWithFiles != 0 {
+		t.Fatalf("require_zero_files=false: HeldBackSample=%+v ZeroBooksWithFiles=%d, want empty/0",
+			report.HeldBackSample, report.ZeroBooksWithFiles)
+	}
+	if len(eligible) != 3 {
+		t.Errorf("eligible = %v, want authors 2, 3 and 4", eligible)
+	}
+
+	// Still-referenced authors are HeldByRefs, not held back on files.
+	report, _ = classifyEmptyAuthors(authors, books, map[int]int{4: 1}, files, true)
+	if len(report.HeldBackSample) != 0 || report.HeldByRefs != 1 {
+		t.Fatalf("referenced author: HeldBackSample=%+v HeldByRefs=%d, want empty/1",
+			report.HeldBackSample, report.HeldByRefs)
+	}
+}
+
+// 🔴 THE CAP. More than emptyAuthorSampleLimit held-back authors must produce
+// a sample of exactly emptyAuthorSampleLimit entries while the COUNT stays
+// uncapped. Without this a refactor could drop the cap and turn a report meant
+// for eyeballing into another 822-line dump — or cap the counter too and hide
+// the size of the problem.
+func TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit(t *testing.T) {
+	const heldBack = emptyAuthorSampleLimit + 10
+	var authors []database.Author
+	books := map[int]int{}
+	files := map[int]int{}
+	for id := 1; id <= heldBack; id++ {
+		authors = append(authors, database.Author{ID: id, Name: fmt.Sprintf("held %d", id)})
+		books[id] = 0
+		files[id] = id // distinct, non-zero
+	}
+	// Plus one genuinely empty author, which must still be eligible.
+	junk := heldBack + 1
+	authors = append(authors, database.Author{ID: junk, Name: "- junk"})
+
+	report, eligible := classifyEmptyAuthors(authors, books, nil, files, true)
+	if len(report.HeldBackSample) != emptyAuthorSampleLimit {
+		t.Fatalf("len(HeldBackSample) = %d, want the cap %d", len(report.HeldBackSample), emptyAuthorSampleLimit)
+	}
+	if report.ZeroBooksWithFiles != heldBack {
+		t.Errorf("ZeroBooksWithFiles = %d, want %d — the counter must not be capped with the sample",
+			report.ZeroBooksWithFiles, heldBack)
+	}
+	for _, h := range report.HeldBackSample {
+		if h.AuthorID < 1 || h.AuthorID > heldBack || h.FileCount != files[h.AuthorID] {
+			t.Errorf("sample entry %+v is not a held-back author with its own file count", h)
+		}
+	}
+	if len(eligible) != 1 || eligible[0] != junk {
+		t.Errorf("eligible = %v, want only the junk author %d", eligible, junk)
+	}
+}
+
+// End to end through the op: the dry run still deletes nothing with a
+// held-back author present, and the new log line does not disturb the run.
+func TestPurgeEmptyAuthors_HeldBackSample_DryRunStillInert(t *testing.T) {
+	var deleted []int
+	runPurge(t, `{"apply":false}`, &deleted)
+	if len(deleted) != 0 {
+		t.Fatalf("dry run deleted %v", deleted)
 	}
 }
