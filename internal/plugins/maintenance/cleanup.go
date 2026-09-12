@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-09-10
+// last-edited: 2026-09-11
 
 package maintenance
 
@@ -215,11 +215,26 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 //
 // It is NOT done at startup. 394 s of I/O on the boot path would delay every
 // restart on a host that restarts several times a day.
+//
+// LIVENESS: NONE, WITH A 15m BUDGET. The whole run is one SQL statement that
+// cannot report progress, so the only true declaration is LivenessNone. Until
+// 2026-09-11 this def declared LivenessManual and posted a reporter.Log line
+// before the call on the belief that the line kept the watchdog satisfied. It
+// does not: reporter.Log deliberately does not stamp liveness, only
+// UpdateProgress does. So the watchdog's default 5-minute ProgressTimeout
+// killed the bootstrap every time, before the 15m Timeout above could matter.
+// Production logged "bootstrap analyze: context canceled" at 5m on 09-10 and
+// again on 09-11. The statistics were never stored, and every run was a new
+// bootstrap. ProgressTimeout equals Timeout because an op that never reports
+// has nothing to measure staleness against except wall time. A heartbeat
+// goroutine was rejected for the reason db.go's db-optimize comment gives: a
+// blind heartbeat keeps a genuinely wedged statement alive forever.
 func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
 	sched := "40 3 * * *" // 03:40 daily — after the compaction window, before the morning
 	return sdk.OperationDef{
 		ID:              "maintenance.optimize-activity-db",
-		Liveness:        sdk.LivenessManual,
+		Liveness:        sdk.LivenessNone,
+		ProgressTimeout: 15 * time.Minute, // LivenessNone requires an explicit budget; see above
 		Plugin:          "maintenance",
 		DisplayName:     "Optimize activity database",
 		Description:     "Refreshes the activity store's query-planner statistics (SQLite ANALYZE / PRAGMA optimize).",
@@ -236,11 +251,11 @@ func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runOptimizeActivityDB(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	// The bootstrap run takes minutes inside a single un-interruptible SQL
-	// statement, and this def declares LivenessManual, so the progress line is
-	// posted BEFORE the call rather than after it. Without it the op reports no
-	// progress for its entire duration, which is what a wedged op looks like to
-	// the watchdog.
+	// The bootstrap run takes minutes inside a single SQL statement, so this
+	// line is posted BEFORE the call to tell a human watching the op why it is
+	// silent. It is for people only: Log does not reset the watchdog's progress
+	// clock. The def's LivenessNone + ProgressTimeout is what keeps the
+	// watchdog off this op.
 	_ = reporter.Log(slog.LevelInfo, "Refreshing activity-store query planner statistics "+
 		"(first run on a database with no stored statistics takes several minutes)")
 
