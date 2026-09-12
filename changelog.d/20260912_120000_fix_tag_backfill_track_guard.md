@@ -14,10 +14,13 @@
   summary reports rows that took tag tracks, rows given RawTags only, sibling
   rows renumbered, and books refused for duplicate or missing numbers, with
   examples.
+  A book where only some files carry a disc tag is now refused as mixed-disc
+  instead of accepted, since the untagged files would sort as disc 0 and play
+  before disc 1.
 - **The same op no longer holds every hydrated row in memory before writing.**
   It now works one book at a time and writes in batches of about 250 rows as
   books finish, each batch ending on a book boundary, instead of collecting
   ~200k full rows (fingerprints included) for one final serial write. On cancel
   or a write error it still flushes the books it finished judging, logs how many
-  rows were flushed or dropped, and emits its summary.
+  rows were flushed or not written, and emits its summary.
 - **ID3v2.2 `TRK` / `TPA` frames are now read as track and disc positions.**
