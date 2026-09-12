@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 //
@@ -432,6 +432,8 @@ type applyMetadataRecoverer interface {
 // to call ApplyMetadataFileIO and then WriteBackMetadataForBook, and with
 // auto_write_tags_on_apply on the first had already written the tags. The
 // pending cover URL was not persisted with the job, so nothing is downloaded.
+// FinishApplyFileWork takes the path lock itself, per write, so the replay is
+// locked exactly like the live job.
 func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, enqueue func(string), bookID string) {
 	if err := svc.FinishApplyFileWork(bookID, "", true, true); err != nil {
 		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
@@ -451,7 +453,10 @@ type autoFetchRecoverer interface {
 	FinishAutoFetchFileWork(id, pendingCoverURL string, writeTags bool) error
 }
 
-// recoverAutoFetchFileOp replays interrupted auto-fetch file work.
+// recoverAutoFetchFileOp replays interrupted auto-fetch file work. It is
+// resubmitted on the pool by RecoverInterruptedFileOps and, like the live job,
+// takes no lock here: FinishAutoFetchFileWork locks each write on the path it
+// writes (the library copy's for a protected book).
 func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
 	if err := svc.FinishAutoFetchFileWork(bookID, "", config.AppConfig.WriteBackMetadata); err != nil {
 		slog.Warn("recovery auto-fetch file work failed", "bookID", bookID, "err", err)
@@ -459,22 +464,23 @@ func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
 }
 
 // newAutoFetchScheduler returns the metafetch.FileWorkScheduler the server
-// wires: the work is queued on the file-I/O pool and runs holding the path
-// lock, exactly as the batch apply does, so an auto-fetch and a manual apply
-// of the same book cannot rename or tag its files at the same time. With no
-// pool (test servers) it runs inline, still under the lock.
-func newAutoFetchScheduler(pool func() *FileIOPool, lock func(path string) func()) metafetch.FileWorkScheduler {
-	return func(bookID, filePath string, work func()) {
-		job := func() {
-			release := lock(filePath)
-			defer release()
-			work()
-		}
+// wires: the work is queued on the file-I/O pool under its own op type, so a
+// restart replays it with the auto-fetch rules. With no pool (test servers) it
+// runs inline.
+//
+// It takes no path lock. The file work locks for itself
+// (metafetch.Service.SetPathLocker, wired in server.go), on the library copy's
+// path for a protected book and on the post-rename path for the tag write.
+// Until 2026-09-12 this wrapped the whole job in a lock on the ORIGINAL
+// book's path: for a protected book nothing wrote that path, and the tag write
+// ran after the rename under the pre-rename key.
+func newAutoFetchScheduler(pool func() *FileIOPool) metafetch.FileWorkScheduler {
+	return func(bookID string, work func()) {
 		p := pool()
 		if p == nil {
-			job()
+			work()
 			return
 		}
-		p.SubmitTyped(bookID, autoFetchFileOpType, job)
+		p.SubmitTyped(bookID, autoFetchFileOpType, work)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-12
 
@@ -300,23 +300,26 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 
 			mfs.persistFetchedMetadata(id, fetched)
 
-			// File side. The cover is downloaded with the file work; the audio
-			// files are touched only for a book that ALREADY has a library copy
-			// under root_dir (auto-fetch never creates one), and only through the
-			// file-I/O pool under the path lock, like a manual apply.
+			// File side. The cover is downloaded with the file work, and only
+			// when the book has no local cover yet (downloadAutoFetchCover); the
+			// audio files are touched only for a book that ALREADY has a library
+			// copy under root_dir (auto-fetch never creates one), and only through
+			// the file-I/O pool. The file work takes the path lock itself, on the
+			// library copy's path, like every other apply (FinishAutoFetchFileWork).
 			// meta.CoverURL is post-lock-guard, so a locked cover is not fetched.
 			pendingCover := meta.CoverURL
 			writeBack := config.AppConfig.WriteBackMetadata
 			if sched := mfs.fileWorkScheduler; sched != nil {
-				sched(id, book.FilePath, func() {
+				sched(id, func() {
 					if err := mfs.FinishAutoFetchFileWork(id, pendingCover, writeBack); err != nil {
 						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", id, "error", err)
 					}
 				})
 			} else {
 				// No pool wired (organize's per-call service, tests): no audio
-				// file is touched outside the pool, so only the cover is fetched.
-				mfs.DownloadPendingCover(id, pendingCover)
+				// file is touched outside the pool, so only the cover is fetched,
+				// and only when the book has none.
+				mfs.downloadAutoFetchCover(id, pendingCover)
 				if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
 					updatedBook = fresh
 				}

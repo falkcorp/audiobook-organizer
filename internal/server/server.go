@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.51.0
+// version: 2.52.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 
@@ -964,10 +964,14 @@ func NewServer(store database.Store) *Server {
 		// Also wire into the metafetch service so cover-art embeds use the guard.
 		server.metadataFetchService.SetSafeWriteDeps(deps)
 
-		// Auto-fetch's file work goes through the file-I/O pool under the path
-		// lock, like the batch apply, so the two cannot touch one book at once.
+		// Every apply's file work (single-book, batch, auto-fetch and their
+		// restart replays) takes the process-wide path lock itself, on the path
+		// it is about to write, so none of them -- nor the bulk write-back,
+		// which shares writeBackPathLocks -- touch one set of files at once.
+		// Auto-fetch's file work also goes through the file-I/O pool.
+		server.metadataFetchService.SetPathLocker(writeBackPathLocks.lock)
 		server.metadataFetchService.SetFileWorkScheduler(newAutoFetchScheduler(
-			func() *FileIOPool { return server.fileIOPool }, writeBackPathLocks.lock))
+			func() *FileIOPool { return server.fileIOPool }))
 		slog.Info("metafetch.Service.SetSafeWriteDeps wired (cover embed guard active)")
 
 		// Register the Deluge plugin (UOS-11).

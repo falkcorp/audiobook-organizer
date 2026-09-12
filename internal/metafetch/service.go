@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.18.0
+// version: 5.19.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-12
 
@@ -213,10 +213,15 @@ type Service struct {
 	coverDownload func(coverURL, destDir, bookID string) (string, error)
 
 	// fileWorkScheduler runs auto-fetch's file work through the server's
-	// file-I/O pool under the path lock (SetFileWorkScheduler). Nil means no
-	// pool is wired -- organize's per-call service, tests -- and auto-fetch then
-	// downloads the cover only and touches no audio file.
+	// file-I/O pool (SetFileWorkScheduler). Nil means no pool is wired --
+	// organize's per-call service, tests -- and auto-fetch then downloads the
+	// cover only and touches no audio file.
 	fileWorkScheduler FileWorkScheduler
+
+	// pathLock is the server's per-path write lock (SetPathLocker). The file
+	// work takes it itself, on the path it is about to write (fileWorkTarget,
+	// lockWriteTarget). Nil means no lock: tests and organize's per-call service.
+	pathLock func(path string) func()
 }
 
 type FetchMetadataResponse struct {
@@ -361,16 +366,16 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string,
 		".ogg": true, ".flac": true,
 	}
 
-	// If book is in a protected path, get or create a library copy
-	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.libraryCopyFor(book, policy)
-		if libCopy == nil {
+	// If book is in a protected path, get or create a library copy. Same
+	// resolution the path-lock key uses (fileWorkTarget).
+	if target := mfs.fileWorkTarget(book, policy); target != book {
+		if target == nil {
 			slog.Warn("cannot embed cover: protected book has no library copy",
 				"book_id", book.ID, "book_title", book.Title,
 				"protected_path", book.FilePath)
 			return
 		}
-		book = libCopy
+		book = target
 	}
 
 	// collectFiles gathers all audio files that need cover embedding

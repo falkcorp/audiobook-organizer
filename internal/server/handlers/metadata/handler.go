@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-12
 
@@ -667,6 +667,12 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			// exactly once. This used to follow ApplyMetadataFileIO with its own
 			// WriteBackMetadataForBook, which tagged every file twice whenever
 			// auto_write_tags_on_apply was on.
+			//
+			// FinishApplyFileWork takes the per-path write lock itself, on the
+			// path each write touches (the library copy's for a protected book,
+			// the post-rename path for the tags), so this job serializes with
+			// auto-fetch and the batch apply of the same files. This handler
+			// cannot know that path and must not lock around the call.
 			//
 			// The HTTP response has already been written by the time this runs,
 			// so a failure can only be logged.

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-12
 
@@ -437,20 +437,29 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
 func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copyPolicy) (tagWriteResult, error) {
-	// If the book is in a protected path, run the pipeline on the library copy instead
-	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.libraryCopyFor(book, policy)
-		if libCopy == nil {
-			slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
-				"book_id", id, "book_title", book.Title,
-				"protected_path", book.FilePath,
-				"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
-			return tagWriteResult{}, nil
-		}
-		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", libCopy.ID, "bookID", id)
-		id = libCopy.ID
-		book = libCopy
+	// If the book is in a protected path, run the pipeline on the library copy
+	// instead. fileWorkTarget is also what picks the lock key below, so the
+	// lock and the files written cannot name different books.
+	target := mfs.fileWorkTarget(book, policy)
+	if target == nil {
+		slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
+			"book_id", id, "book_title", book.Title,
+			"protected_path", book.FilePath,
+			"hint", "book lives under a protected path (iTunes/import); rename and tag-write are skipped until a library copy is made")
+		return tagWriteResult{}, nil
 	}
+	if target != book {
+		slog.Info("runApplyPipeline using library copy for protected book", "libCopyID", target.ID, "bookID", id)
+		id = target.ID
+		book = target
+	}
+
+	// The rename runs holding the lock on the files' CURRENT path. Before the
+	// tag write the lock is swapped for one on the post-rename path (below),
+	// the order internal/server/metadata_ops.go's bulk write-back uses. One
+	// lock held across both would put the tag write under the pre-rename key.
+	release := mfs.lockPath(book.FilePath)
+	defer func() { release() }()
 
 	bookFiles, err := mfs.db.GetBookFiles(id)
 	if err != nil {
@@ -590,6 +599,15 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copy
 			}
 		}
 	}
+
+	// Swap the rename lock for one on the post-rename path: the rename may have
+	// moved the files, and the tag write must serialize against whoever writes
+	// them at their NEW location.
+	release()
+	if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
+		book = fresh
+	}
+	release = mfs.lockPath(book.FilePath)
 
 	// Write metadata tags to audio files.
 	//

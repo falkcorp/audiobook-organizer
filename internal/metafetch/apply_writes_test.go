@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -425,8 +427,8 @@ func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 		svc, calls, _ := fileWorkHarness(t, "/lib", false, tt.autoTags, nil)
 		config.AppConfig.WriteBackMetadata = tt.writeBackMetadata
 		var scheduled []string
-		svc.fileWorkScheduler = func(bookID, filePath string, work func()) {
-			scheduled = append(scheduled, bookID+"@"+filePath)
+		svc.fileWorkScheduler = func(bookID string, work func()) {
+			scheduled = append(scheduled, bookID)
 			work()
 		}
 		svc.overrideSources = []metadata.MetadataSource{fakeSource{
@@ -435,7 +437,7 @@ func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 		}}
 		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		require.NoError(t, err)
-		assert.Equal(t, []string{"b1@/lib/a/a.m4b"}, scheduled, "the file work goes through the scheduler (pool + path lock)")
+		assert.Equal(t, []string{"b1"}, scheduled, "the file work goes through the scheduler (the pool)")
 		assert.Equal(t, tt.want, countPrefix(*calls, "tags:"),
 			"write_back_metadata=%v auto_write_tags=%v: tag writes", tt.writeBackMetadata, tt.autoTags)
 	}
@@ -645,4 +647,132 @@ func TestFetchMetadataForBook_FailedCoverDownloadKeepsPreviousCover(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, book.CoverURL)
 	assert.Equal(t, prev, *book.CoverURL)
+}
+
+// testPathLocks is a keyed mutex standing in for the server's pathLocks, which
+// metafetch cannot import. It records every key taken.
+type testPathLocks struct {
+	mu   sync.Mutex
+	m    map[string]*sync.Mutex
+	keys []string
+}
+
+func (l *testPathLocks) lock(p string) func() {
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = map[string]*sync.Mutex{}
+	}
+	m, ok := l.m[p]
+	if !ok {
+		m = &sync.Mutex{}
+		l.m[p] = m
+	}
+	l.keys = append(l.keys, p)
+	l.mu.Unlock()
+	m.Lock()
+	var once sync.Once
+	return func() { once.Do(m.Unlock) }
+}
+
+func (l *testPathLocks) taken() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.keys...)
+}
+
+// An auto-fetch of book A, whose files live in its library copy B, and a
+// manual apply of B write the same files, so they must serialize on B's path.
+// Auto-fetch used to lock A's protected path (which nothing writes) around the
+// whole job while the pipeline wrote B's files, so the two ran at once. Both
+// tag-write sites are covered: the pipeline's (auto_write_tags_on_apply) and
+// the sequel's own.
+func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T) {
+	for _, autoTags := range []bool{false, true} {
+		t.Run(fmt.Sprintf("auto_write_tags=%v", autoTags), func(t *testing.T) {
+			root, itunes := protectedSetup(t)
+			config.AppConfig.AutoRenameOnApply = false
+			config.AppConfig.AutoWriteTagsOnApply = autoTags
+			vg := "vg1"
+			a := database.Book{ID: "a", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
+			b := database.Book{ID: "b", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+			books := map[string]database.Book{"a": a, "b": b}
+			svc := NewService(&database.MockStore{
+				GetBookByIDFunc: func(id string) (*database.Book, error) {
+					bk, ok := books[id]
+					if !ok {
+						return nil, nil
+					}
+					return &bk, nil
+				},
+				GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) { return []database.Book{a, b}, nil },
+				GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+					return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(books[id].FilePath, "01.m4b")}}, nil
+				},
+			})
+
+			// A's tag write parks inside the writer, holding whatever lock it
+			// took. B's job is started only then, and must not reach its own tag
+			// write until A is released: both write B's files. Deterministic in
+			// the failing direction -- no race between two sleeps decides it.
+			entered := make(chan string, 2)
+			proceed := make(chan struct{})
+			svc.tagWriter = func(id string) (int, error) {
+				entered <- id
+				<-proceed
+				return 1, nil
+			}
+			locks := &testPathLocks{}
+			svc.SetPathLocker(locks.lock)
+
+			var wg sync.WaitGroup
+			wg.Go(func() { assert.NoError(t, svc.FinishAutoFetchFileWork("a", "", true)) })
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				close(proceed)
+				t.Fatal("auto-fetch of A never reached its tag write")
+			}
+			wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("b", "", true, true)) })
+			select {
+			case id := <-entered:
+				t.Errorf("the manual apply of B reached its tag write (id %q) while auto-fetch of A was writing B's files", id)
+			case <-time.After(200 * time.Millisecond):
+			}
+			close(proceed)
+			wg.Wait()
+
+			keys := locks.taken()
+			assert.Contains(t, keys, b.FilePath, "the file work must lock the library copy's path")
+			assert.NotContains(t, keys, a.FilePath, "A's protected path is never written; a lock on it guards nothing")
+		})
+	}
+}
+
+// Auto-fetch keeps a cover the book already has; only an explicit apply
+// replaces it. Before the apply-writes change auto-fetch used DownloadCoverArt,
+// which skips an existing file, and that change had routed it through the
+// replace path.
+func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
+	const cover = "https://covers.example.test/new.jpg"
+	root := t.TempDir()
+	svc, calls, book := fileWorkHarness(t, root, false, false, nil)
+	writeFile(t, filepath.Join(root, "covers", "b1.jpg"), "hand-picked")
+
+	require.NoError(t, svc.FinishAutoFetchFileWork("b1", cover, false))
+	assert.Zero(t, countPrefix(*calls, "cover:"), "auto-fetch replaced an existing cover")
+	require.NotNil(t, book.CoverURL)
+	assert.Equal(t, "/api/v1/covers/local/b1.jpg", *book.CoverURL, "the kept cover is the one served")
+
+	// The no-pool auto-fetch path (organize's per-call service) keeps it too.
+	svc.overrideSources = []metadata.MetadataSource{fakeSource{
+		name:    "Audible",
+		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", CoverURL: cover}},
+	}}
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	require.NoError(t, err)
+	assert.Zero(t, countPrefix(*calls, "cover:"), "the no-pool auto-fetch path replaced an existing cover")
+
+	// An explicit apply replaces it.
+	require.NoError(t, svc.FinishApplyFileWork("b1", cover, false, false))
+	assert.Equal(t, 1, countPrefix(*calls, "cover:"), "an explicit apply must replace the cover")
 }

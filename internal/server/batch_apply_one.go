@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-12
 
@@ -8,7 +8,6 @@ package server
 import (
 	"encoding/json"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -29,11 +28,6 @@ type cachedApplyService interface {
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
 	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
-}
-
-// applyBookReader is the single store read the per-book path needs.
-type applyBookReader interface {
-	GetBookByID(id string) (*database.Book, error)
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
@@ -82,15 +76,19 @@ const (
 // applied metadata never reached the files and nothing logged a failure. If you
 // add file-side work to either path, add it to both.
 //
-// The caller supplies concurrency and path locking; this function does the work
-// for exactly one book and never spawns goroutines.
+// The caller supplies concurrency; this function does the work for exactly one
+// book and never spawns goroutines. It takes no path lock, and the caller must
+// not hold one around it: FinishApplyFileWork locks each write itself, on the
+// path it is about to write (the library copy's for a protected book, the
+// post-rename path for the tags), and the lock is not reentrant. Until
+// 2026-09-12 this re-read the book and locked its path around the whole
+// sequel, which for a protected book was not the path the sequel wrote, and
+// which held one key across the rename.
 func applyCachedCandidateForBook(
 	svc cachedApplyService,
-	store applyBookReader,
 	itunes itunesEnqueuer,
 	id string,
 	writeBack bool,
-	lockPath func(path string) func(),
 ) applyOutcome {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
@@ -136,18 +134,6 @@ func applyCachedCandidateForBook(
 		itunes.Enqueue(id)
 	}
 
-	// Re-read the book: ApplyMetadataCandidate just rewrote its row, and the
-	// file path we lock and write must be the post-apply one.
-	book, berr := store.GetBookByID(id)
-	if berr != nil || book == nil {
-		out.WriteBackFailed, out.Err = true, berr
-		return out
-	}
-
-	if lockPath != nil {
-		release := lockPath(book.FilePath)
-		defer release()
-	}
 	// Cover download, then the file I/O (the rename lives in there), then the
 	// tags -- once. This used to call ApplyMetadataFileIO and then
 	// WriteBackMetadataForBook, and with auto_write_tags_on_apply on the first
