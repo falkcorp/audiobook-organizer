@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.91.0
+// version: 2.92.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-11
 
@@ -1116,6 +1116,18 @@ export async function getBooks(
     fingerprintStatus?: 'complete' | 'partial' | 'none';
     coveragePercentMin?: number;
     coveragePercentMax?: number;
+    /**
+     * Overrides the primary-only default below. Every existing caller wants
+     * `is_primary_version=true` (the whole point of the flag), so this stays
+     * optional and only an explicit `false` changes behavior — omitting the
+     * param entirely so the server (service_query.go: `ParseQueryBoolPtr`
+     * returns nil when absent) applies no primary/non-primary filter at all.
+     * Needed so the "other versions of this book" link
+     * (BookDetailVersionGroup.tsx, TASK-169) can surface non-primary
+     * siblings of a version group; a link that kept the primary-only
+     * default would show at most one book, defeating its own purpose.
+     */
+    isPrimaryVersion?: boolean;
     signal?: AbortSignal;
   }
 ): Promise<BooksPage> {
@@ -1141,7 +1153,7 @@ export async function getBooks(
     params.set('coverage_percent_min', String(options.coveragePercentMin));
   if (options?.coveragePercentMax !== undefined)
     params.set('coverage_percent_max', String(options.coveragePercentMax));
-  params.set('is_primary_version', 'true');
+  if (options?.isPrimaryVersion !== false) params.set('is_primary_version', 'true');
 
   const response = await apiFetch(`${API_BASE}/audiobooks?${params}`, { signal: options?.signal });
   if (!response.ok) {

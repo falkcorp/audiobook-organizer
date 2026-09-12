@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.86.0
+// version: 1.87.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -745,6 +745,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (filters.genre) params.set('genre', filters.genre);
     if (filters.language) params.set('language', filters.language);
     if (filters.libraryState) params.set('state', filters.libraryState);
+    if (filters.versionGroupId) params.set('version_group_id', filters.versionGroupId);
+    if (filters.isPrimaryVersion === false) params.set('is_primary_version', 'false');
     if (sortBy !== SortField.Title) params.set('sort', sortBy);
     if (sortOrder !== SortOrder.Ascending) params.set('order', sortOrder);
     if (viewMode !== 'grid') params.set('view', viewMode);
@@ -811,6 +813,12 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     if (filters.genre) fieldFilters.push({ field: 'genre', value: filters.genre, negated: false });
     if (filters.language)
       fieldFilters.push({ field: 'language', value: filters.language, negated: false });
+    if (filters.versionGroupId)
+      fieldFilters.push({
+        field: 'version_group_id',
+        value: filters.versionGroupId,
+        negated: false,
+      });
     if (parsedSearch) {
       for (const ff of parsedSearch.fieldFilters) {
         if (ff.field !== 'tag')

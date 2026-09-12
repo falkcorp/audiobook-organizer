@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-08-14
+// last-edited: 2026-09-11
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -49,6 +49,7 @@ interface UseLibraryQueryFilters {
   fingerprintStatus?: 'none' | 'complete' | 'partial';
   coveragePercentMin?: number;
   coveragePercentMax?: number;
+  isPrimaryVersion?: boolean;
 }
 
 interface UseLibraryQueryParams {
@@ -226,7 +227,7 @@ export function useLibraryQuery({
       // the cache-hit return never reaches, so selecting Deleted on a warm
       // cache showed the entire unfiltered library while the Filters chip
       // said 1. It only appeared to work from a cold cache.
-      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax });
+      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax, isPrimaryVersion: filters.isPrimaryVersion });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
       const cached = useLibraryCache.getState().getCached(cacheKey);
       if (cached) {
@@ -266,6 +267,7 @@ export function useLibraryQuery({
           fingerprintStatus: filters.fingerprintStatus,
           coveragePercentMin: filters.coveragePercentMin,
           coveragePercentMax: filters.coveragePercentMax,
+          isPrimaryVersion: filters.isPrimaryVersion,
           signal: controller.signal,
         }),
         api.getImportPaths(controller.signal),

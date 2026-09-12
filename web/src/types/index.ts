@@ -1,7 +1,7 @@
 // file: web/src/types/index.ts
-// version: 1.18.0
+// version: 1.19.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-07-11
+// last-edited: 2026-09-11
 
 // Audiobook (Book) type
 export interface Audiobook {
@@ -179,6 +179,17 @@ export interface FilterOptions {
   inImportPath?: boolean;
   noIsbn?: boolean;
   duplicatesFlagged?: boolean;
+  // versionGroupId drives the "other versions of this book" link
+  // (BookDetailVersionGroup.tsx, TASK-169): a plain field-filter, not a
+  // dedicated int param like author/series.
+  versionGroupId?: string;
+  // isPrimaryVersion mirrors the wire param name (not the FilterOptions
+  // camelCase convention) because it toggles the SAME default the API layer
+  // applies unconditionally (api.ts getBooks: `is_primary_version=true`).
+  // Explicit `false` tells getBooks to omit that default so a version-group
+  // filter can surface non-primary siblings; `undefined` preserves today's
+  // primary-only behavior everywhere else.
+  isPrimaryVersion?: boolean;
 }
 
 // QuickQuery is one entry returned by GET /api/v1/library/quick-queries.

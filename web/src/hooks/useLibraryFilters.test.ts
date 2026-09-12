@@ -1,11 +1,21 @@
 // file: web/src/hooks/useLibraryFilters.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2d9f14-3a7c-4e80-9c51-2f8e0d413a6b
-// last-edited: 2026-07-02
+// last-edited: 2026-09-11
 
-import { describe, it, expect } from 'vitest';
-import { shallowEqualFilters } from './useLibraryFilters';
+import { describe, it, expect, vi } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import { shallowEqualFilters, useLibraryFilters } from './useLibraryFilters';
 import type { FilterOptions } from '../types';
+
+// useLibraryFilters fires several fetches on mount (tags/facets/authors/
+// series) unrelated to URL parsing; stub them so the hook mounts cleanly.
+vi.mock('../services/api', () => ({
+  listAllUserTags: vi.fn().mockResolvedValue([]),
+  getBookFacets: vi.fn().mockResolvedValue({ genres: [], languages: [] }),
+  getAuthors: vi.fn().mockResolvedValue([]),
+  getSeries: vi.fn().mockResolvedValue([]),
+}));
 
 // Regression coverage for the "later page bounces back to page 1" bug. The
 // filters-sync effect rebuilds `filters` on every searchParams change (page
@@ -51,5 +61,27 @@ describe('shallowEqualFilters', () => {
     const a: FilterOptions = { tags: ['fantasy'] };
     const b: FilterOptions = { tags: ['fantasy'] };
     expect(shallowEqualFilters(a, b)).toBe(false);
+  });
+});
+
+// TASK-169: the "other versions" link (BookDetailVersionGroup.tsx) targets
+// `/library?filters=[...]&is_primary_version=false`. These pin the URL-side
+// half of that contract — that useLibraryFilters actually reads both params
+// back out — since a link whose target never parses its own query string
+// would pass a component test asserting the href and still show the whole
+// (or wrong) library once clicked.
+describe('useLibraryFilters version_group_id / is_primary_version', () => {
+  it('parses version_group_id and an explicit is_primary_version=false from the URL', () => {
+    const searchParams = new URLSearchParams('version_group_id=vg-1&is_primary_version=false');
+    const { result } = renderHook(() => useLibraryFilters({ searchParams }));
+    expect(result.current.filters.versionGroupId).toBe('vg-1');
+    expect(result.current.filters.isPrimaryVersion).toBe(false);
+  });
+
+  it('leaves both undefined (preserving the primary-only default) when absent from the URL', () => {
+    const searchParams = new URLSearchParams();
+    const { result } = renderHook(() => useLibraryFilters({ searchParams }));
+    expect(result.current.filters.versionGroupId).toBeUndefined();
+    expect(result.current.filters.isPrimaryVersion).toBeUndefined();
   });
 });
