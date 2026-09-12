@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-05
+// last-edited: 2026-09-12
 
 package merge
 
@@ -32,12 +32,20 @@ type ExternalIDReassigner interface {
 }
 
 // AsExternalIDReassigner returns the ExternalIDReassigner if the given
-// store implements it, or nil otherwise.
+// store, or any store it wraps, implements it, or nil otherwise.
+//
+// It resolves through database.AsCapability rather than a bare type
+// assertion so a decorator that embeds a NARROW interface and exposes the
+// full store only through Unwrap (registry.prodSchedulerStore is one) does
+// not hide the capability. Both MergeBooks call sites treat nil as "backend
+// has no external IDs", so a bare assertion failing through such a wrapper
+// would let a merge succeed while leaving the loser's iTunes PID/ASIN
+// mappings behind. An opaque decorator (no Unwrap) still resolves to nil.
 func AsExternalIDReassigner(s any) ExternalIDReassigner {
 	if s == nil {
 		return nil
 	}
-	if eid, ok := s.(ExternalIDReassigner); ok {
+	if eid, ok := database.AsCapability[ExternalIDReassigner](s); ok {
 		return eid
 	}
 	return nil
