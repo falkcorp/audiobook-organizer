@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_name_index_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: f51fb8d5-ac26-4268-85ee-c4bdb523de0b
 // last-edited: 2026-09-12
 
@@ -8,7 +8,10 @@ package database
 import (
 	"encoding/json"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -275,4 +278,155 @@ func TestNameIndex_DeleteRoleDoesNotRemoveAnotherRolesEntry(t *testing.T) {
 	gone, err := p.GetRoleByID(legacy.ID)
 	require.NoError(t, err)
 	require.Nil(t, gone, "the legacy role record itself must be deleted")
+}
+
+// installRacingWriter makes deleteNameIndexIfOwned, the first time it has
+// matched the owner of contested and before it stages the delete, start
+// compete in another goroutine and wait for it -- up to a bound, because with
+// the family lock in place compete blocks until the delete commits. So the
+// competing write lands INSIDE the read-to-commit window when nothing guards
+// it, and strictly after the commit when the lock does. The returned channel
+// yields compete's error. Tests using this must not run in parallel: the hook
+// is a package variable.
+func installRacingWriter(t *testing.T, contested string, compete func() error) (fired *atomic.Bool, done <-chan error) {
+	t.Helper()
+	fired = &atomic.Bool{}
+	result := make(chan error, 1)
+	nameIndexTestHookAfterOwnerCheck = func(key string) {
+		if key != contested || !fired.CompareAndSwap(false, true) {
+			return
+		}
+		go func() { result <- compete() }()
+		select {
+		case err := <-result:
+			result <- err // leave it for the test to read
+		case <-time.After(300 * time.Millisecond):
+			// Blocked on the family lock, as it should be.
+		}
+	}
+	t.Cleanup(func() { nameIndexTestHookAfterOwnerCheck = nil })
+	return fired, result
+}
+
+// A delete read "author:name:x is mine", then a concurrent rename took the key
+// over before the delete's batch committed. Without nameIdx.author held
+// across the read-check-commit, the commit erased the renamed author's entry:
+// it stopped resolving by name and the next CreateAuthor minted a duplicate.
+func TestNameIndex_DeleteAuthorRacingRenameKeepsTakenOverEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	doomed, err := p.CreateAuthor("Contested Name")
+	require.NoError(t, err)
+	survivor, err := p.CreateAuthor("Survivor Before Rename")
+	require.NoError(t, err)
+
+	contested := authorNameIndexKey(util.NormalizeAuthor(doomed.Name))
+	fired, done := installRacingWriter(t, contested, func() error {
+		return p.UpdateAuthorName(survivor.ID, doomed.Name)
+	})
+
+	require.NoError(t, p.DeleteAuthor(doomed.ID))
+	require.NoError(t, <-done)
+	require.True(t, fired.Load(), "the hook never fired; the test did not exercise the window")
+
+	got, err := p.GetAuthorByName(doomed.Name)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the delete erased the index entry the concurrent rename had taken over")
+	require.Equal(t, survivor.ID, got.ID)
+
+	again, err := p.CreateAuthor(doomed.Name)
+	require.NoError(t, err)
+	require.Equal(t, survivor.ID, again.ID, "CreateAuthor minted a duplicate of the renamed author")
+}
+
+// The same window on the series path, where the delete goes straight to p.db
+// rather than through a batch.
+func TestNameIndex_DeleteSeriesRacingRenameKeepsTakenOverEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Series Race Author")
+	require.NoError(t, err)
+	doomed, err := p.CreateSeries("Contested Saga", &author.ID)
+	require.NoError(t, err)
+	survivor, err := p.CreateSeries("Survivor Saga", &author.ID)
+	require.NoError(t, err)
+
+	contested := seriesNameIndexKey(strconv.Itoa(author.ID))(util.NormalizeAuthor(doomed.Name))
+	fired, done := installRacingWriter(t, contested, func() error {
+		return p.UpdateSeriesName(survivor.ID, doomed.Name)
+	})
+
+	require.NoError(t, p.DeleteSeries(doomed.ID))
+	require.NoError(t, <-done)
+	require.True(t, fired.Load(), "the hook never fired; the test did not exercise the window")
+
+	got, err := p.GetSeriesByName(doomed.Name, &author.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the delete erased the index entry the concurrent rename had taken over")
+	require.Equal(t, survivor.ID, got.ID)
+
+	again, err := p.CreateSeries(doomed.Name, &author.ID)
+	require.NoError(t, err)
+	require.Equal(t, survivor.ID, again.ID, "CreateSeries minted a duplicate of the renamed series")
+}
+
+// CreateSeries checked the index and then committed with nothing held, so
+// concurrent creates of one name each minted a row. Same failure CreateAuthor
+// had before nameIdx.author (see its doc comment).
+func TestNameIndex_ConcurrentCreateSeriesMintsOneRow(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Concurrent Series Author")
+	require.NoError(t, err)
+
+	const n = 24
+	ids := make([]int, n)
+	errs := make([]error, n)
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start.Wait()
+			s, err := p.CreateSeries("One Series Only", &author.ID)
+			errs[i] = err
+			if s != nil {
+				ids[i] = s.ID
+			}
+		}()
+	}
+	start.Done()
+	wg.Wait()
+	for i := range n {
+		require.NoError(t, errs[i])
+		require.Equal(t, ids[0], ids[i], "concurrent CreateSeries minted more than one row")
+	}
+}
+
+// CreateAuthorAlias had the same unguarded check-then-create: concurrent
+// calls could all see the name free and all mint an alias, leaving every
+// alias but one unreachable by name.
+func TestNameIndex_ConcurrentCreateAuthorAliasAcceptsOne(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Concurrent Alias Owner")
+	require.NoError(t, err)
+
+	const n = 24
+	var ok atomic.Int32
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start.Wait()
+			if _, err := p.CreateAuthorAlias(author.ID, "One Alias Only", "pen_name"); err == nil {
+				ok.Add(1)
+			}
+		}()
+	}
+	start.Done()
+	wg.Wait()
+	require.Equal(t, int32(1), ok.Load(), "concurrent CreateAuthorAlias accepted more than one alias for one name")
+	aliases, err := p.GetAuthorAliases(author.ID)
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
 }

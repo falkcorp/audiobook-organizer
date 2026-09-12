@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
 // last-edited: 2026-09-12
 
@@ -110,9 +110,27 @@ func (p *PebbleStore) GetSeriesByName(name string, authorID *int) (*Series, erro
 	return p.GetSeriesByID(id)
 }
 
+// CreateSeries returns the series with this name under authorID, creating it
+// if absent. Same shape as CreateAuthor: an unlocked fast path for a name that
+// already resolves, then nameIdx.series and a re-check under it, so two
+// concurrent creates of one name cannot both mint a row and a create cannot
+// interleave with a rename or delete of the same series:name: key.
 func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) {
-	// Check if series already exists
+	// Fast path: an existing series needs no lock.
 	existing, err := p.GetSeriesByName(name, authorID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+
+	// Re-check under the lock: another goroutine may have created it between
+	// the fast-path miss and acquiring the lock.
+	existing, err = p.GetSeriesByName(name, authorID)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +177,10 @@ func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) 
 }
 
 func (p *PebbleStore) DeleteSeries(id int) error {
+	// Held from the row read through the last write; see nameIndexLocks.
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+
 	key := []byte(fmt.Sprintf("series:%d", id))
 
 	// Read the series first to clean up the name index
@@ -171,7 +193,9 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 				authorIDStr = strconv.Itoa(*series.AuthorID)
 			}
 			// Ownership-checked: a series whose name collapses to the same
-			// key under the same author may own the entry.
+			// key under the same author may own the entry. With p.db as the
+			// writer the delete lands inside the call; nameIdx.series keeps
+			// any other writer out of the read-to-delete window.
 			if err := p.deleteNameIndexIfOwned(p.db, pebble.Sync, seriesNameIndexKey(authorIDStr), series.Name, nameIndexOwner(id)); err != nil {
 				slog.Warn("pebble Delete series name index", "series_id", id, "name", series.Name, "error", err)
 			}
@@ -187,6 +211,11 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 }
 
 func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
+	// Held from the row read (the old name decides which key is deleted)
+	// through the new index write; see nameIndexLocks.
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+
 	key := []byte(fmt.Sprintf("series:%d", id))
 	val, closer, err := p.db.Get(key)
 	if err != nil {
