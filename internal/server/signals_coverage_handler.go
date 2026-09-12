@@ -1,5 +1,5 @@
 // file: internal/server/signals_coverage_handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ca3e529b-ef05-451d-8a67-8a643e16c176
 // last-edited: 2026-09-12
 
@@ -17,7 +17,8 @@ import (
 
 // BookSignalCoverage is the book-level half of the coverage report.
 type BookSignalCoverage struct {
-	PrimaryBooks int `json:"primary_books"`
+	PrimaryBooks      int    `json:"primary_books"`
+	PrimaryBooksError string `json:"primary_books_error,omitempty"`
 	// WithEmbedding counts stored book embedding vectors (any model). It can
 	// exceed PrimaryBooks when vectors of since-merged books were never pruned.
 	WithEmbedding  int    `json:"with_embedding"`
@@ -74,7 +75,10 @@ func (s *Server) handleGetSignalCoverage(c *gin.Context) {
 	}
 
 	resp := SignalCoverageResponse{Files: files}
-	if n, perr := store.CountPrimaryBooks(); perr == nil {
+	// A failed count is reported, not rendered as a zero denominator.
+	if n, perr := store.CountPrimaryBooks(); perr != nil {
+		resp.Books.PrimaryBooksError = perr.Error()
+	} else {
 		resp.Books.PrimaryBooks = n
 	}
 	if s.embeddingStore != nil {
