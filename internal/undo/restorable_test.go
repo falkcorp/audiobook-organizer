@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -32,6 +32,16 @@ func TestNotRestorableLabel(t *testing.T) {
 		{"narrator_delete", "narrator", "narrator_delete"},
 		// The revert endpoint has no case for db_update.
 		{"db_update", "title", "db_update"},
+		// maintenance.fs-regroup-xml rows.
+		{ChangeTypeBookFileReassign, "book_file:f1", ""},
+		{ChangeTypeBookFileReassign, "", "book_file_reassign:(no book_file id)"},
+		{ChangeTypeBookFileTrack, "book_file:f1", ""},
+		{ChangeTypeBookFileTrack, "book_file:", "book_file_track:(no book_file id)"},
+		{ChangeTypeBookPathUpdate, "file_path", ""},
+		{ChangeTypeBookSoftDelete, "marked_for_deletion", ""},
+		// Reversing these would delete a book_file row or guess at external ids.
+		{ChangeTypeBookFileCreate, "book_file:f1", "book_file_create"},
+		{ChangeTypeExternalIDReassign, "external_ids", "external_id_reassign"},
 	}
 	for _, tc := range cases {
 		c := &database.OperationChange{ChangeType: tc.changeType, FieldName: tc.field}

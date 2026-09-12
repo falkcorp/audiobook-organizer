@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_preflight_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e41b8d2a-6c07-4f95-a3e8-1d9c5b7f2a60
 // last-edited: 2026-09-12
 
@@ -180,5 +180,37 @@ func TestPreflightUndoConflicts_BookRows(t *testing.T) {
 		if item.Reason != ReasonBookLookupFailed {
 			t.Errorf("%s reason = %q, want %q", item.ChangeID, item.Reason, ReasonBookLookupFailed)
 		}
+	}
+}
+
+// The fs-regroup-xml rows are checked the way the revert reads them: a
+// reassign needs both its books, the others need their book, and a created row
+// is record-only.
+func TestPreflightUndoConflicts_FsRegroupRows(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	live, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/t"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	for _, r := range []*database.OperationChange{
+		{ID: "r1", OperationID: "op1", BookID: live.ID, ChangeType: ChangeTypeBookFileReassign, FieldName: "book_file:f1", OldValue: "gone", NewValue: live.ID},
+		{ID: "r2", OperationID: "op1", BookID: live.ID, ChangeType: ChangeTypeBookSoftDelete, FieldName: "marked_for_deletion"},
+		{ID: "r3", OperationID: "op1", BookID: "gone", ChangeType: ChangeTypeBookPathUpdate, FieldName: "file_path", OldValue: "/a", NewValue: "/b"},
+		{ID: "r4", OperationID: "op1", BookID: live.ID, ChangeType: ChangeTypeBookFileCreate, FieldName: "book_file:f2", NewValue: "/b/1.mp3"},
+	} {
+		if err := store.CreateOperationChange(r); err != nil {
+			t.Fatalf("create change %s: %v", r.ID, err)
+		}
+	}
+	report, err := PreflightUndoConflicts(store, "op1")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if report.Safe != 1 || len(report.BookMissing) != 2 || report.NotRestorable != 1 {
+		t.Fatalf("report = %+v, want safe 1 (r2), book_missing 2 (r1, r3), not_restorable 1 (r4)", report)
 	}
 }

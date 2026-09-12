@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -49,6 +50,11 @@ import (
 //     id, so there is no way to tell which series to rename back; they stay
 //     record-only rather than guessing one by name.
 //   - series_rename without a SeriesID (malformed).
+//   - book_file_create (maintenance.fs-regroup-xml): reversing it would delete
+//     a book_file row, which no repair may do.
+//   - external_id_reassign (maintenance.fs-regroup-xml): the row does not say
+//     which ids moved, and moving the target's ids back wholesale would take
+//     ids that were never the source's.
 //   - any change type the revert engine has no case for (e.g. db_update,
 //     dir_create).
 //
@@ -63,6 +69,40 @@ import (
 // ChangeTypeSeriesRename is the series-scoped change row for a Series rename:
 // SeriesID names the series, OldValue/NewValue are the names before and after.
 const ChangeTypeSeriesRename = "series_rename"
+
+// Change types maintenance.fs-regroup-xml writes when it merges chapter
+// fragments into one book. The two book_file row types name the row in
+// FieldName as "book_file:<id>" (see BookFileIDFromField).
+const (
+	// ChangeTypeBookFileReassign: one book_file row moved from the book
+	// OldValue to the book BookID (== NewValue). Restorable: the row moves
+	// back, and the store refuses when it is no longer under BookID.
+	ChangeTypeBookFileReassign = "book_file_reassign"
+	// ChangeTypeBookFileTrack: the row's track number went OldValue ->
+	// NewValue. Restorable.
+	ChangeTypeBookFileTrack = "book_file_track"
+	// ChangeTypeBookPathUpdate: the book's file_path went OldValue -> NewValue
+	// with nothing moved on disk. Restorable. It is not a metadata_update
+	// file_path row because other ops write those beside a real file move,
+	// where restoring the field alone would point the book at a file that is
+	// not there.
+	ChangeTypeBookPathUpdate = "book_path_update"
+	// ChangeTypeBookSoftDelete: the book was marked for deletion. Restorable:
+	// the mark is cleared.
+	ChangeTypeBookSoftDelete = "book_soft_delete"
+	// ChangeTypeBookFileCreate: a book_file row was created (NewValue is its
+	// path). Record-only; see the list above.
+	ChangeTypeBookFileCreate = "book_file_create"
+	// ChangeTypeExternalIDReassign: every external id of BookID moved to the
+	// book NewValue. Record-only; see the list above.
+	ChangeTypeExternalIDReassign = "external_id_reassign"
+)
+
+// BookFileIDFromField returns the row id from a "book_file:<id>" field name.
+func BookFileIDFromField(field string) (string, bool) {
+	id, ok := strings.CutPrefix(field, "book_file:")
+	return id, ok && id != ""
+}
 
 // revertableBookFields maps a metadata_update field name to the Book struct
 // field the revert engine restores it into by reflection. Every value must name
@@ -298,6 +338,13 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return ChangeTypeSeriesRename + ":(no series id)"
+	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack:
+		if _, ok := BookFileIDFromField(c.FieldName); ok {
+			return ""
+		}
+		return c.ChangeType + ":(no book_file id)"
+	case ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete:
+		return ""
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""

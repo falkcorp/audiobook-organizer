@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -173,6 +173,26 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 		case ChangeTypeSeriesRename:
 			if err := CheckRestoreReferent(store, c); err != nil {
 				report.addReferentConflict(c, err)
+			} else {
+				report.Safe++
+			}
+		case ChangeTypeBookFileReassign:
+			// The revert moves the row from BookID back to OldValue and reads
+			// both books first; either one missing fails the row.
+			_, refusal := CheckRestoreBook(store, c.BookID)
+			if refusal == nil {
+				_, refusal = CheckRestoreBook(store, c.OldValue)
+			}
+			if refusal != nil {
+				report.addReferentConflict(c, refusal)
+			} else {
+				report.Safe++
+			}
+		case ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate, ChangeTypeBookSoftDelete:
+			// Each reads the book before writing (a soft-deleted book is still
+			// there, and restoring it is the point of book_soft_delete).
+			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
+				report.addReferentConflict(c, refusal)
 			} else {
 				report.Safe++
 			}

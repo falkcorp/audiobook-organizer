@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
 // last-edited: 2026-09-12
 
@@ -312,3 +312,11 @@ func TestRevertOperation_AllRestorableRowsReverted_SaysAlreadyReverted(t *testin
 		t.Errorf("mark called %d times, want 0", s.markCalls)
 	}
 }
+
+// The fs-regroup-xml reversals are exercised against a real store in
+// internal/plugins/maintenance; these only satisfy revertServiceStore.
+func (s *ledgerStub) MoveBookFilesToBook([]string, string, string) error { return nil }
+func (s *ledgerStub) GetBookFileByID(string, string) (*database.BookFile, error) {
+	return nil, nil
+}
+func (s *ledgerStub) UpdateBookFile(string, *database.BookFile) error { return nil }
