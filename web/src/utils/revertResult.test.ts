@@ -1,5 +1,5 @@
 // file: web/src/utils/revertResult.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b1f4c2e-6d3a-4e8b-a7f0-2c5d8e1b4a63
 // last-edited: 2026-09-12
 
@@ -109,5 +109,15 @@ describe('describeUndoPreflight', () => {
     });
     expect(plan.canUndo).toBe(true);
     expect(plan.message).toMatch(/^3 change\(s\) can be undone; 1 of them have conflicts/);
+  });
+
+  it('counts series_id rows whose old series was deleted as conflicts', () => {
+    const plan = describeUndoPreflight({
+      ...base,
+      safe: 1,
+      series_deleted: [{ change_id: 'c', book_id: 'b', reason: 'series deleted' }],
+    });
+    expect(plan.canUndo).toBe(true);
+    expect(plan.message).toMatch(/^2 change\(s\) can be undone; 1 of them have conflicts/);
   });
 });

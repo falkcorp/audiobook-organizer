@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -34,6 +33,10 @@ type revertServiceStore interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	MarkOperationChangesReverted(operationID string, changeIDs []string) error
+
+	// Needed by undo.CheckRestoreReferent in revertMetadataUpdate: a series_id
+	// row is restored only while the series it names still exists.
+	GetSeriesByID(id int) (*database.Series, error)
 
 	// Needed by the embedded isProtectedPath call in revertTagWrite
 	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
@@ -276,33 +279,17 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 		return fmt.Errorf("failed to get book %s: %w", c.BookID, err)
 	}
 
-	structField, ok := undo.RevertableBookField(c.FieldName)
-	if !ok {
-		return fmt.Errorf("unknown metadata field: %s", c.FieldName)
+	// Refuse before writing anything: a series_id whose series row the same
+	// operation deleted would be restored as a dangling reference. The
+	// preflight runs the same check, so it reports this row as a conflict.
+	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
+		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
-
-	v := reflect.ValueOf(book).Elem()
-	f := v.FieldByName(structField)
-	if !f.IsValid() {
-		return fmt.Errorf("invalid struct field: %s", structField)
-	}
-
-	// Set the field to old value
-	if c.OldValue == "" {
-		// Set to nil for pointer types
-		if f.Kind() == reflect.Pointer {
-			f.Set(reflect.Zero(f.Type()))
-		} else {
-			f.SetString("")
-		}
-	} else {
-		if f.Kind() == reflect.Pointer {
-			val := reflect.New(f.Type().Elem())
-			val.Elem().SetString(c.OldValue)
-			f.Set(val)
-		} else {
-			f.SetString(c.OldValue)
-		}
+	// Exactly OldValue goes back, typed by the Book field it names; "" clears
+	// a pointer field to nil. An unparsable value is an error, not a no-op, so
+	// the row is counted Failed instead of being marked reverted.
+	if err := undo.RestoreBookField(book, c.FieldName, c.OldValue); err != nil {
+		return err
 	}
 
 	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {

@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -894,10 +894,6 @@ func MergeSeries(
 		// pass on exactly the failures it exists to catch.
 		moved := 0
 		for _, bookCore := range books {
-			oldSeriesID := ""
-			if bookCore.SeriesID != nil {
-				oldSeriesID = fmt.Sprintf("%d", *bookCore.SeriesID)
-			}
 			full, herr := store.GetBookByID(bookCore.ID)
 			if herr != nil {
 				result.Errors = append(result.Errors,
@@ -914,6 +910,15 @@ func MergeSeries(
 					fmt.Sprintf("book %s vanished between the series scan and hydration; "+
 						"series %d kept, it may still reference it", bookCore.ID, mergeID))
 				continue
+			}
+			// The before-image comes from full, the row UpdateBook overwrites,
+			// not from bookCore (the index copy, which can disagree), and it is
+			// read before the assignment below. It is load-bearing: the revert
+			// endpoint writes this OldValue back into Book.SeriesID. Mirrors
+			// DedupSeries.
+			oldSeriesID := ""
+			if full.SeriesID != nil {
+				oldSeriesID = fmt.Sprintf("%d", *full.SeriesID)
 			}
 			full.SeriesID = &keepID
 			if _, err := store.UpdateBook(full.ID, full); err != nil {
