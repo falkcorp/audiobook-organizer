@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.23.0
+// version: 3.24.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package registry
 
@@ -60,6 +60,16 @@ type Registry struct {
 	logger         *slog.Logger
 	workers        int
 	abandoned      *abandonedTracker
+	// abandonedAlive holds the op ids whose Run goroutine the watchdog abandoned
+	// (handle released, row written interrupted_*) and which has not returned
+	// yet. Guarded by mu. RetryInterrupted refuses such a row: re-queuing it
+	// would start a second Run of the same op while the first is still writing.
+	abandonedAlive map[string]struct{}
+	// retryMu serializes the runtime same-row re-queue paths —
+	// RetryInterrupted and resumeQuiescedOp — so both cannot read the same
+	// interrupted row and each flip it to queued (the second flip could land
+	// after the dispatcher already moved it to running).
+	retryMu sync.Mutex
 
 	// shuttingDown is flipped at the top of Shutdown so the abandoned-run
 	// watchdog in executeRun stops spawning replacement workers. Without
@@ -182,6 +192,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 	return &Registry{
 		defs:               make(map[string]OperationDef),
 		running:            make(map[string]*runHandle),
+		abandonedAlive:     make(map[string]struct{}),
 		pluginRunning:      make(map[string]int),
 		pluginMax:          make(map[string]int),
 		concurrencyKeys:    make(map[string]string),

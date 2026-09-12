@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.21.0
+// version: 3.22.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -566,6 +566,23 @@ func (p *PebbleStore) IncrementResumeCountV2(id string) error {
 		return err
 	}
 	row.ResumeCount++
+	return p.pebbleSetJSON(opv2OpKey(id), &row)
+}
+
+// MarkOperationV2ManualRetry records an operator-initiated same-row retry:
+// manual_retry_count++ and resume_count_at_manual_retry = resume_count, in one
+// read-modify-write under opsMu. resume_count itself is left alone — it keeps
+// counting automatic (boot / stand-down) restarts only.
+func (p *PebbleStore) MarkOperationV2ManualRetry(id string) error {
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
+
+	row, err := p.getExistingOpV2(id)
+	if err != nil {
+		return err
+	}
+	row.ManualRetryCount++
+	row.ResumeCountAtManualRetry = row.ResumeCount
 	return p.pebbleSetJSON(opv2OpKey(id), &row)
 }
 

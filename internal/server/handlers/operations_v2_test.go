@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package handlers_test
 
@@ -529,11 +529,69 @@ func TestOperationsV2Handler_RetryOperationV2_FailedRow_Returns202WithNewRun(t *
 	assert.JSONEq(t, oldParams, string(raw), "the new run must carry the finished row's params verbatim")
 }
 
-// Every interrupted_* status is a finished run from the caller's point of view
-// and may be retried — including interrupted_quiesced, the status the startup
-// sweep would otherwise resume on its own.
-func TestOperationsV2Handler_RetryOperationV2_InterruptedRows_Return202(t *testing.T) {
-	for _, status := range []string{"interrupted_quiesced", "interrupted_dropped", "interrupted_ask", "canceled", "completed"} {
+// Every status in the interrupted family — the legacy bare "interrupted"
+// included, which the old prefix check 409'd while the page offered Retry on
+// it — is re-queued IN PLACE: RetryInterrupted, never EnqueueOp (mockery fails
+// the test if EnqueueOp is reached), and the response names the SAME id.
+func TestOperationsV2Handler_RetryOperationV2_InterruptedRows_ResumeInPlace(t *testing.T) {
+	for _, status := range []string{"interrupted", "interrupted_quiesced", "interrupted_dropped", "interrupted_ask", "interrupted_restart"} {
+		t.Run(status, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{
+				ID: "op-old", DefID: "library.scan", Status: status, Params: "{}",
+			}, nil)
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+			registry.EXPECT().RetryInterrupted(mock.Anything, "op-old", mock.Anything).Return(nil).Once()
+
+			h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+			c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-old/retry", "", gin.Params{{Key: "id", Value: "op-old"}})
+			h.RetryOperationV2(c)
+
+			require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+			var resp struct {
+				Data struct {
+					ID     string `json:"id"`
+					Status string `json:"status"`
+					Mode   string `json:"mode"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, "op-old", resp.Data.ID, "an interrupted op is resumed under its own id")
+			assert.Equal(t, "resumed_in_place", resp.Data.Mode)
+			assert.Equal(t, "queued", resp.Data.Status)
+		})
+	}
+}
+
+// The registry's refusals surface as 409 with its reason, so the page can show
+// why (another run of the def is live, the old goroutine has not exited, ...).
+func TestOperationsV2Handler_RetryOperationV2_InPlaceRefusalIs409(t *testing.T) {
+	for name, regErr := range map[string]error{
+		"active":        fmt.Errorf("%w: another run of library.scan (op-x) is already queued or running", opsregistry.ErrOpActive),
+		"not retryable": fmt.Errorf("%w: definition not registered", opsregistry.ErrOpNotRetryable),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := databasemocks.NewMockOpsV2Store(t)
+			store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{
+				ID: "op-old", DefID: "library.scan", Status: "interrupted_quiesced",
+			}, nil)
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+			registry.EXPECT().RetryInterrupted(mock.Anything, "op-old", mock.Anything).Return(regErr).Once()
+
+			h := handlers.NewOperationsV2Handler(store, registry, nil, false)
+			c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-old/retry", "", gin.Params{{Key: "id", Value: "op-old"}})
+			h.RetryOperationV2(c)
+
+			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), regErr.Error())
+		})
+	}
+}
+
+// canceled and completed rows keep the new-row behavior: resetting them in
+// place would erase the error and completion time of a run that really ended.
+func TestOperationsV2Handler_RetryOperationV2_TerminalRows_RequeueAsNew(t *testing.T) {
+	for _, status := range []string{"canceled", "completed"} {
 		t.Run(status, func(t *testing.T) {
 			store := databasemocks.NewMockOpsV2Store(t)
 			store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{

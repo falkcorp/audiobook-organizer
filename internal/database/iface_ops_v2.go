@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -61,6 +61,14 @@ type OperationV2Row struct {
 	LastCheckpointAt  *time.Time
 	HighWaterProgress int
 	ResumeCount       int
+	// ManualRetryCount counts operator-initiated same-row retries of this run
+	// (Retry on an interrupted row). A manual retry never increments
+	// ResumeCount; it records ResumeCountAtManualRetry = ResumeCount instead,
+	// and the boot-loop guard (registry checkInfiniteRestart) counts only the
+	// AUTOMATIC restarts since then. Zero values on old rows keep the old
+	// predicate exactly.
+	ManualRetryCount         int
+	ResumeCountAtManualRetry int
 	// UOS dependency-scheduling fields (Task 2). Zero values on old rows are safe.
 	SubjectType    string // e.g. "book" — the entity this op acts on
 	SubjectID      string // opaque ID of the subject
@@ -176,6 +184,10 @@ type OpV2RunStore interface {
 	UpdateOperationV2Params(id string, params []byte) error
 	// IncrementResumeCountV2 atomically increments resume_count for the given op.
 	IncrementResumeCountV2(id string) error
+	// MarkOperationV2ManualRetry atomically increments manual_retry_count and
+	// sets resume_count_at_manual_retry = resume_count, so the restart-strike
+	// guard starts counting automatic restarts afresh from this retry.
+	MarkOperationV2ManualRetry(id string) error
 	// SetOperationV2Result stores an operation's final result payload.
 	//
 	// This is a first-class v2 capability rather than an optional one discovered by

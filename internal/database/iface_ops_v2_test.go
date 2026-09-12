@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b41c7de-25a8-4f6c-b0e3-71d84af52c19
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -29,6 +29,11 @@ func TestOpV2LifecycleStore_MethodSetUnchanged(t *testing.T) {
 		"GetOperationV2",
 		"IncrementResumeCountV2",
 		"InsertOperationV2",
+		// MarkOperationV2ManualRetry added 2026-09-12 for the same-row Retry of
+		// an interrupted op (Registry.RetryInterrupted): it moves the
+		// restart-strike baseline so a manual retry is not force-dropped as a
+		// boot loop. The fakes were widened deliberately.
+		"MarkOperationV2ManualRetry",
 		"RepairOpsV2MissingCompletedAt",
 		"ResetOperationV2ForResume",
 		"SetOperationV2Result",

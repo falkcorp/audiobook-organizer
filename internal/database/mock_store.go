@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.111.0
+// version: 1.112.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-12
 
@@ -290,6 +290,7 @@ type MockStore struct {
 	ListResumableOperationsV2Func     func() ([]OperationV2Row, error)
 	IncrementResumeCountV2Func        func(id string) error
 	ResetOperationV2ForResumeFunc     func(id string) error
+	MarkOperationV2ManualRetryFunc    func(id string) error
 	SetOperationV2ResultFunc          func(id string, resultData string) error
 	InsertOpStrikeV2Func              func(row OpStrikeV2Row) error
 	GetOpStateV2Func                  func(opID string) (*OpStateV2Row, error)
@@ -3388,6 +3389,12 @@ func (m *MockStore) ListResumableOperationsV2() ([]OperationV2Row, error) {
 func (m *MockStore) IncrementResumeCountV2(id string) error {
 	if m.IncrementResumeCountV2Func != nil {
 		return m.IncrementResumeCountV2Func(id)
+	}
+	return nil
+}
+func (m *MockStore) MarkOperationV2ManualRetry(id string) error {
+	if m.MarkOperationV2ManualRetryFunc != nil {
+		return m.MarkOperationV2ManualRetryFunc(id)
 	}
 	return nil
 }

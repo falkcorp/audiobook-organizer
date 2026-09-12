@@ -383,3 +383,66 @@ func (_c *MockOperationsRegistry_GetCurrentItem_Call) RunAndReturn(run func(opID
 	_c.Call.Return(run)
 	return _c
 }
+
+// RetryInterrupted provides a mock function for the type MockOperationsRegistry
+func (_mock *MockOperationsRegistry) RetryInterrupted(ctx context.Context, opID string, actor string) error {
+	ret := _mock.Called(ctx, opID, actor)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RetryInterrupted")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = returnFunc(ctx, opID, actor)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationsRegistry_RetryInterrupted_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RetryInterrupted'
+type MockOperationsRegistry_RetryInterrupted_Call struct {
+	*mock.Call
+}
+
+// RetryInterrupted is a helper method to define mock.On call
+//   - ctx context.Context
+//   - opID string
+//   - actor string
+func (_e *MockOperationsRegistry_Expecter) RetryInterrupted(ctx any, opID any, actor any) *MockOperationsRegistry_RetryInterrupted_Call {
+	return &MockOperationsRegistry_RetryInterrupted_Call{Call: _e.mock.On("RetryInterrupted", ctx, opID, actor)}
+}
+
+func (_c *MockOperationsRegistry_RetryInterrupted_Call) Run(run func(ctx context.Context, opID string, actor string)) *MockOperationsRegistry_RetryInterrupted_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsRegistry_RetryInterrupted_Call) Return(err error) *MockOperationsRegistry_RetryInterrupted_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationsRegistry_RetryInterrupted_Call) RunAndReturn(run func(ctx context.Context, opID string, actor string) error) *MockOperationsRegistry_RetryInterrupted_Call {
+	_c.Call.Return(run)
+	return _c
+}
