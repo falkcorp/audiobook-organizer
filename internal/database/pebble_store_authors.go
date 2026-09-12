@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-09-12
 
@@ -128,7 +128,10 @@ func (p *PebbleStore) GetAuthorByName(name string) (*Author, error) {
 // meets an author across several books at once mints a row per worker.
 //
 // This mirrors reviewMu, which exists in this same store for exactly this failure
-// on review items: concurrent same-key writes duplicating rows.
+// on review items: concurrent same-key writes duplicating rows. The lock is
+// nameIdx.author, which every author:name: writer holds (UpdateAuthorName and
+// DeleteAuthor too), so a create can also not interleave with a rename or a
+// delete of the same key; see nameIndexLocks for the lock order.
 func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 	// Fast path: an existing author needs no lock. This is the overwhelmingly
 	// common case -- authors are resolved once per book but created once per
@@ -141,8 +144,8 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 		return existing, nil
 	}
 
-	p.authorMu.Lock()
-	defer p.authorMu.Unlock()
+	p.nameIdx.author.Lock()
+	defer p.nameIdx.author.Unlock()
 
 	// Re-check UNDER the lock. This is the entire fix: another goroutine may have
 	// created this author between the fast-path miss above and acquiring the lock,
@@ -192,6 +195,15 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 }
 
 func (p *PebbleStore) DeleteAuthor(id int) error {
+	// Held from before the row read until after the commit, so the name read
+	// here and the ownership checks below cannot go stale: the author lock for
+	// author:name:, then the alias lock for the alias cascade's
+	// author_alias:name: deletes (lock order in nameIndexLocks).
+	p.nameIdx.author.Lock()
+	defer p.nameIdx.author.Unlock()
+	p.nameIdx.alias.Lock()
+	defer p.nameIdx.alias.Unlock()
+
 	// Get the author to find name for index cleanup
 	author, err := p.GetAuthorByID(id)
 	if err != nil {
@@ -208,6 +220,8 @@ func (p *PebbleStore) DeleteAuthor(id int) error {
 	}
 	// Ownership-checked: another row whose name collapses to the same key may
 	// own the entry, and deleting it would make that row unfindable by name.
+	// The check stays true until the commit below only because nameIdx.author
+	// is held: no rename or create can take the key over in between.
 	if err := p.deleteNameIndexIfOwned(batch, nil, authorNameIndexKey, author.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete author:name: %w", err)
@@ -321,6 +335,12 @@ func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *pebble.Batch, authorID i
 }
 
 func (p *PebbleStore) UpdateAuthorName(id int, name string) error {
+	// Held from before the row read: the old name read here decides which key
+	// the ownership-checked delete targets, so a concurrent rename or delete of
+	// this row, or a create claiming either key, must not interleave.
+	p.nameIdx.author.Lock()
+	defer p.nameIdx.author.Unlock()
+
 	author, err := p.GetAuthorByID(id)
 	if err != nil {
 		return err
@@ -435,6 +455,12 @@ func (p *PebbleStore) CreateAuthorAlias(authorID int, aliasName string, aliasTyp
 		aliasType = "alias"
 	}
 
+	// The duplicate check and the commit that claims the key are one step
+	// with respect to every other author_alias:name: writer; without the lock
+	// two concurrent calls could both see the name free and both mint an alias.
+	p.nameIdx.alias.Lock()
+	defer p.nameIdx.alias.Unlock()
+
 	// Check for duplicate, under the current and the legacy key.
 	nameKey := aliasNameIndexKey(util.NormalizeAuthor(aliasName))
 	if existing, err := p.nameIndexGet(aliasNameIndexKey, aliasName); err != nil {
@@ -484,6 +510,11 @@ func (p *PebbleStore) CreateAuthorAlias(authorID int, aliasName string, aliasTyp
 }
 
 func (p *PebbleStore) DeleteAuthorAlias(id int) error {
+	// Held across the row read, the ownership check and the commit; see
+	// nameIndexLocks.
+	p.nameIdx.alias.Lock()
+	defer p.nameIdx.alias.Unlock()
+
 	alias, err := p.getAuthorAliasByID(id)
 	if err != nil {
 		return err
@@ -545,6 +576,10 @@ func (p *PebbleStore) getAuthorAliasByID(id int) (*AuthorAlias, error) {
 }
 
 // deleteAuthorAliases removes all aliases for an author (cascade on delete).
+// The caller must hold nameIdx.alias until batch commits, because the
+// ownership checks on the author_alias:name: entries are only sound under it.
+// It does not lock itself: its one caller, DeleteAuthor, already holds
+// nameIdx.author and nameIdx.alias, and sync.Mutex is not reentrant.
 func (p *PebbleStore) deleteAuthorAliases(batch *pebble.Batch, authorID int) error {
 	prefix := []byte(fmt.Sprintf("author_alias:author:%d:", authorID))
 	upper := []byte(fmt.Sprintf("author_alias:author:%d;", authorID))
@@ -810,16 +845,21 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 		return existing, nil
 	}
 
-	// Allocation path. Serialize the counter read-modify-write plus all three
-	// writes under counterMu — the same mutex nextID uses for every other ID —
-	// so concurrent CreateNarrator calls can't allocate a duplicate/lost
-	// narrator ID, and commit record + name index + counter in a SINGLE batch so
-	// a crash can't leave a record with no name index (or an un-bumped counter).
+	// Allocation path. nameIdx.narrator makes the name check and the commit
+	// that claims narrator_name:<norm> one step with respect to every other
+	// writer of that key (DeleteNarrator included; see nameIndexLocks for the
+	// lock order). counterMu, nested inside it, serializes the narrator_counter
+	// read-modify-write -- the same mutex nextID uses for every other ID -- so
+	// concurrent CreateNarrator calls can't allocate a duplicate/lost narrator
+	// ID. Record + name index + counter commit in a SINGLE batch so a crash
+	// can't leave a record with no name index (or an un-bumped counter).
 	// NOTE: we keep the legacy narrator_counter key rather than switching to
 	// nextID("narrator"), which uses a different (uninitialized) counter:narrator
-	// key that would collide with / orphan the existing narrator numbering. The
-	// lock is held across the pebble.Sync commit, which is acceptable on this
+	// key that would collide with / orphan the existing narrator numbering. Both
+	// locks are held across the pebble.Sync commit, which is acceptable on this
 	// cold create path.
+	p.nameIdx.narrator.Lock()
+	defer p.nameIdx.narrator.Unlock()
 	p.counterMu.Lock()
 	defer p.counterMu.Unlock()
 
@@ -975,7 +1015,12 @@ func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) 
 // legacy key, each only while this row still owns it), and its entries in
 // the book_narrators junction all go in one Pebble batch, then memdb is
 // brought in line. A missing id is a no-op returning nil, as with DeleteAuthor.
+// nameIdx.narrator is held from the row read through the commit, which is what
+// keeps the ownership check true until the delete lands.
 func (p *PebbleStore) DeleteNarrator(id int) error {
+	p.nameIdx.narrator.Lock()
+	defer p.nameIdx.narrator.Unlock()
+
 	narrator, err := p.GetNarratorByID(id)
 	if err != nil {
 		return err
@@ -993,7 +1038,8 @@ func (p *PebbleStore) DeleteNarrator(id int) error {
 	// collapses to the same key may own the current entry, and deleting it
 	// would make that narrator unfindable by name (the next CreateNarrator
 	// would then mint a duplicate). This row's own legacy entry, if it has
-	// one, is removed too.
+	// one, is removed too. The check holds until the commit only because
+	// nameIdx.narrator is held.
 	if err := p.deleteNameIndexIfOwned(batch, nil, narratorNameIndexKey, narrator.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete narrator_name: %w", err)
