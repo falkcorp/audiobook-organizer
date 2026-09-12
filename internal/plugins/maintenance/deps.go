@@ -208,6 +208,15 @@ type opsNarratorStore interface {
 	DeleteNarrator(id int) error
 }
 
+// opsPeopleStore groups the two person-record families (authors, narrators) so
+// OpsStore stays at eight embedded elements: interfacebloat counts embeds, and
+// adding opsNarratorStore beside opsAuthorStore took OpsStore to nine. The
+// method set OpsStore exposes is unchanged by the grouping.
+type opsPeopleStore interface {
+	opsAuthorStore
+	opsNarratorStore
+}
+
 // OpsStore is the 57 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
@@ -216,9 +225,8 @@ type OpsStore interface {
 	opsBookWriter
 	opsFileAndPathReader
 	opsBookFileWriter
-	opsAuthorStore
+	opsPeopleStore
 	opsSeriesStore
-	opsNarratorStore
 	opsLinkStore
 	opsHousekeeping
 }
