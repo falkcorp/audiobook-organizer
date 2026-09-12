@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-12
 
@@ -145,8 +145,10 @@ type fsRepairStore interface {
 	// journaled and reversed.
 	itunesExternalIDReassigner
 	// The apply re-checks, under the merge lock, that no other book has taken
-	// the book folder since the plan.
-	GetBookByFilePath(path string) (*database.Book, error)
+	// the book folder since the plan. It needs every live book at the path, as
+	// the planner's bookAt index has: GetBookByFilePath reads one index key
+	// that the last writer owns and that a move off the path deletes.
+	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
 var _ fsRepairStore = (*database.PebbleStore)(nil)
@@ -1060,14 +1062,16 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 	// A book that took the book folder since the plan is an earlier or parallel
 	// survivor; merging onto a second one would leave two live books there.
 	if g.BookFolder != "" {
-		at, err := a.store.GetBookByFilePath(g.BookFolder)
+		at, err := a.store.LiveBookIDsAtPath(g.BookFolder)
 		if err != nil {
-			fail("look up the book at the book folder: %v", err)
+			fail("look up the books at the book folder: %v", err)
 			return
 		}
-		if at != nil && !at.IsSoftDeleted() && at.ID != g.SurvivorID {
-			skip("book %s now sits at the book folder", at.ID)
-			return
+		for _, id := range at {
+			if id != g.SurvivorID {
+				skip("book %s now sits at the book folder", id)
+				return
+			}
 		}
 	}
 
