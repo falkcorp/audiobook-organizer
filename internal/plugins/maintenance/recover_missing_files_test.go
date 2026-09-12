@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-09-06
+// last-edited: 2026-09-12
 
 package maintenance
 
@@ -404,4 +404,41 @@ func TestRecover_WriteReportRoundTrips(t *testing.T) {
 	for i, l := range lines[1:] {
 		require.Len(t, strings.Split(l, "\t"), 8, "row %d has the wrong column count: %q", i, l)
 	}
+}
+
+// App-owned folders under the library root are not library content. Before the
+// walk skipped them, a report TSV or a cached WAV clip whose size matched a
+// missing row's recorded size joined that row's candidate set: next to a real
+// match the row went ambiguous and was never recovered, and with no other match
+// (requireExtMatch off) the report itself was the single candidate and the row
+// was repointed at it.
+func TestRecover_SkipsAppOwnedDirsInInventory(t *testing.T) {
+	root := t.TempDir()
+	realFile := filepath.Join(root, "Author", "Book", "real.mp3")
+	writeFile(t, realFile, 5555)
+	writeFile(t, filepath.Join(root, ".reports", "old-run.tsv"), 5555)
+	writeFile(t, filepath.Join(root, ".wav-cache", "clip.wav"), 5555)
+	writeFile(t, filepath.Join(root, ".reports", "lonely.tsv"), 7777)
+
+	goneA := filepath.Join(root, "Author", "Book", "gone-a.mp3")
+	goneB := filepath.Join(root, "Author", "Book", "gone-b.mp3")
+	store := &recoverFakeStore{
+		cores: []database.BookFileCore{
+			{ID: "fa", BookID: "b1", FilePath: goneA, FileSize: 5555},
+			{ID: "fb", BookID: "b2", FilePath: goneB, FileSize: 7777},
+		},
+		full: map[string][]database.BookFile{
+			"b1": {{ID: "fa", BookID: "b1", FilePath: goneA, FileSize: 5555}},
+			"b2": {{ID: "fb", BookID: "b2", FilePath: goneB, FileSize: 7777}},
+		},
+	}
+	noExtMatch := false
+	_, err := planRecoverMissingFiles(context.Background(), store, nil, root,
+		recoverMissingParams{Apply: true, RequireExtMatch: &noExtMatch}, &fakeReporter{})
+	require.NoError(t, err)
+
+	require.Len(t, store.updates, 1,
+		"only the row with a real in-tree match may be repointed; a report or cache file is never a target")
+	require.Equal(t, "fa", store.updates[0].ID)
+	require.Equal(t, realFile, store.updates[0].FilePath)
 }

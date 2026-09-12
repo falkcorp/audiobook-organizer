@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-09-12
 
@@ -66,9 +66,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -262,6 +264,12 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	// Resolve the report path before any work: with no reportPath and no usable
+	// root_dir the run must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "recover-missing-files"))
+	if rpErr != nil {
+		return fmt.Errorf("recover-missing-files: %w", rpErr)
+	}
 	rootDir := p.deps.RootDir()
 	if strings.TrimSpace(rootDir) == "" {
 		return fmt.Errorf("recover-missing-files: RootDir is empty; cannot walk the library tree")
@@ -277,12 +285,6 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 			"row is written, so a concurrent change is skipped, not written.")
 	}
 
-	// Resolve the report path before any work: with no reportPath and no usable
-	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "recover-missing-files"))
-	if rpErr != nil {
-		return fmt.Errorf("recover-missing-files: %w", rpErr)
-	}
 	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
@@ -451,6 +453,12 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	unclaimedBySize := make(map[int64][]invFile)
 	seen := make(map[string]struct{}) // dedupe overlapping roots
 	var walked, walkErrs int64
+	// App-owned directories (.reports, .wav-cache, .activity, the database dir, backups)
+	// are not library content. Without this skip their files joined the size-keyed
+	// inventory, where a report TSV of exactly a missing row's size could become that
+	// row's single candidate and be written into book_file as its FilePath. Same rule as
+	// cleanup.go and file_provenance_capture.go.
+	app := appdirs.Current()
 	walkRoot := func(root string, inTree bool) error {
 		root = strings.TrimSpace(root)
 		if root == "" {
@@ -473,6 +481,9 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 				return nil
 			}
 			if d.IsDir() {
+				if pathutil.ShouldSkipDir(root, path, app) {
+					return fs.SkipDir
+				}
 				return nil
 			}
 			walked++
