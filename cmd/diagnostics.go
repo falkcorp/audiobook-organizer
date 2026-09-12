@@ -1,7 +1,7 @@
 // file: cmd/diagnostics.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
-// last-edited: 2026-08-19
+// last-edited: 2026-09-11
 
 package cmd
 
@@ -73,7 +73,6 @@ func ensureDiagnosticsStore() (diagnosticsCLIStore, func(), error) {
 	store, err := database.InitializeStore(
 		config.AppConfig.DatabaseType,
 		config.AppConfig.DatabasePath,
-		config.AppConfig.EnableSQLite,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize database: %w", err)

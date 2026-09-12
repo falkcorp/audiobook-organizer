@@ -1,7 +1,7 @@
 <!-- file: docs/configuration.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0ec741a2-f3cf-4a0e-a59f-07cd513eb86b -->
-<!-- last-edited: 2026-02-15 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Configuration Reference
 
@@ -26,7 +26,6 @@ overrides are applied again for selected keys (`root_dir`, `openai_api_key`,
 | `--dir` | Root organized-library directory | empty |
 | `--db` | Database path | `audiobooks.pebble` |
 | `--db-type` | Database backend (`pebble` or `sqlite`) | `pebble` |
-| `--enable-sqlite3-i-know-the-risks` | Enable SQLite backend | `false` |
 | `--playlists` | Playlist output directory | `playlists` |
 
 ### `serve` Flags
@@ -59,7 +58,6 @@ below):
 | `ROOT_DIR` | `root_dir` | `/srv/audiobooks` |
 | `DATABASE_PATH` | `database_path` | `/srv/data/audiobooks.pebble` |
 | `DATABASE_TYPE` | `database_type` | `pebble` |
-| `ENABLE_SQLITE3_I_KNOW_THE_RISKS` | `enable_sqlite3_i_know_the_risks` | `false` |
 | `PLAYLIST_DIR` | `playlist_dir` | `/srv/playlists` |
 | `OPENAI_API_KEY` | `openai_api_key` | `sk-...` |
 | `ENABLE_AI_PARSING` | `enable_ai_parsing` | `true` |

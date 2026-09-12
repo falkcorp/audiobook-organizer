@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.111.0
+// version: 1.112.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-11
 
@@ -993,7 +993,6 @@ type Config struct {
 	PathAliases  []PathAlias `json:"path_aliases"   mapstructure:"path_aliases"`
 	DatabasePath string      `json:"database_path"`
 	DatabaseType string      `json:"database_type"` // "pebble" (default) or "sqlite"
-	EnableSQLite bool        `json:"enable_sqlite"` // Must be true to use SQLite (safety flag)
 
 	// ActivityBackend selects the activity-log store backend, independent of the
 	// main DatabaseType. "sqlite" (default, empty ⇒ sqlite) engages the SQLite
@@ -2042,7 +2041,6 @@ func InitConfig() {
 	// Leaving it here would print an "unknown entry ignored" warning on every
 	// startup, for a value the application itself shipped.
 	viper.SetDefault("enabled_sort_indexes", []string{"year"})
-	viper.SetDefault("enable_sqlite3_i_know_the_risks", false)
 	viper.SetDefault("setup_complete", false)
 
 	// Set library organization defaults
@@ -2555,7 +2553,6 @@ func InitConfig() {
 			RootDir:       viper.GetString("root_dir"),
 			DatabasePath:  viper.GetString("database_path"),
 			DatabaseType:  viper.GetString("database_type"),
-			EnableSQLite:  viper.GetBool("enable_sqlite3_i_know_the_risks"),
 			PlaylistDir:   viper.GetString("playlist_dir"),
 			SetupComplete: viper.GetBool("setup_complete"),
 
@@ -3306,7 +3303,6 @@ func ResetToDefaults() {
 			RootDir:       cur.RootDir,
 			DatabasePath:  cur.DatabasePath,
 			DatabaseType:  "pebble",
-			EnableSQLite:  false,
 			PlaylistDir:   cur.PlaylistDir,
 			SetupComplete: false,
 

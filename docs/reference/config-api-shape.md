@@ -1,5 +1,5 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
 <!-- last-edited: 2026-09-11 -->
 
@@ -53,9 +53,10 @@ Content-Type: application/json
 
 ### Immutable fields (rejected if present)
 
-These two fields cannot be changed at runtime. The request will return `400` if they appear in the payload:
+This field cannot be changed at runtime. The request will return `400` if it appears in the payload:
 - `database_type`
-- `enable_sqlite`
+
+(`enable_sqlite` was removed with the inert `--enable-sqlite3-i-know-the-risks` flag; a payload that still carries it is ignored like any other unknown key.)
 
 ### Secret fields (accepted as flat top-level keys only)
 

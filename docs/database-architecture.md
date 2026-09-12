@@ -1,7 +1,7 @@
 <!-- file: docs/database-architecture.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a -->
-<!-- last-edited: 2026-07-03 -->
+<!-- last-edited: 2026-09-11 -->
 
 # Database Architecture
 
@@ -87,19 +87,8 @@ touching persistence. **Caveat:** The document's entity-ID convention (ULID stri
 ./audiobook-organizer scan --dir /audiobooks --db-type pebble --db audiobooks.pebble
 ```
 
-### Opt-in: SQLite3
-
-**⚠️ WARNING: SQLite3 has cross-compilation issues. Use only if you understand
-the risks.**
-
-```bash
-# Must explicitly enable with scary flag
-./audiobook-organizer scan \
-  --dir /audiobooks \
-  --db-type sqlite \
-  --db audiobooks.db \
-  --enable-sqlite3-i-know-the-risks
-```
+The SQLite3 backend has been removed. `--db-type sqlite` is rejected at startup,
+and the old `--enable-sqlite3-i-know-the-risks` flag no longer exists.
 
 ### Configuration File
 
@@ -109,10 +98,6 @@ the risks.**
 # Default: PebbleDB (recommended)
 database_type: pebble
 database_path: audiobooks.pebble
-# Legacy: SQLite3 (requires explicit enable flag)
-# database_type: sqlite
-# database_path: audiobooks.db
-# enable_sqlite3_i_know_the_risks: true
 ```
 
 ## Key Schema (PebbleDB)

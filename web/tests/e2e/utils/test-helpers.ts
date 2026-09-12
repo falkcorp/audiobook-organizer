@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.16.0
+// version: 2.17.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-08-23
+// last-edited: 2026-09-11
 
 import { Page } from '@playwright/test';
 
@@ -25,7 +25,6 @@ export interface MockConfig {
   root_dir: string;
   database_path: string;
   database_type: string;
-  enable_sqlite: boolean;
   playlist_dir: string;
   organization_strategy: string;
   scan_on_startup: boolean;
@@ -1871,7 +1870,6 @@ const DEFAULT_CONFIG: MockConfig = {
   root_dir: '/library',
   database_path: '/data/library.db',
   database_type: 'pebble',
-  enable_sqlite: false,
   playlist_dir: '/library/playlists',
   organization_strategy: 'auto',
   scan_on_startup: false,

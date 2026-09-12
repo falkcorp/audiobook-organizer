@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-09
+// last-edited: 2026-09-11
 
 package cmd
 
@@ -32,7 +32,6 @@ var cfgFile string
 var rootDir string
 var databasePath string
 var databaseType string
-var enableSQLite bool
 var playlistDir string
 var logLevel string
 var metadataInspectFile string
@@ -51,11 +50,10 @@ var metadataInspectFile string
 // tabulated on config.explicitFlags. cobra's Changed() is the only API that
 // answers the question, and only while the parse is fresh.
 var persistentFlagConfigKeys = map[string]string{
-	"dir":                             "root_dir",
-	"db":                              "database_path",
-	"db-type":                         "database_type",
-	"enable-sqlite3-i-know-the-risks": "enable_sqlite3_i_know_the_risks",
-	"playlists":                       "playlist_dir",
+	"dir":       "root_dir",
+	"db":        "database_path",
+	"db-type":   "database_type",
+	"playlists": "playlist_dir",
 }
 
 var (
@@ -104,7 +102,7 @@ var scanCmd = &cobra.Command{
 		}
 
 		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite); err != nil {
+		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
 		defer closeStore()
@@ -136,7 +134,7 @@ var playlistCmd = &cobra.Command{
 	Long:  `Generate iTunes-compatible playlists for each audiobook series.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite); err != nil {
+		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
 		defer closeStore()
@@ -161,7 +159,7 @@ var tagCmd = &cobra.Command{
 	Long:  `Update the metadata tags of audio files to include series information.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite); err != nil {
+		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
 		defer closeStore()
@@ -197,7 +195,7 @@ var organizeCmd = &cobra.Command{
 		}
 
 		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite); err != nil {
+		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
 		defer closeStore()
@@ -254,7 +252,7 @@ var serveCmd = &cobra.Command{
 
 		// Initialize database. Capture the returned Store so we can pass
 		// it explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT).
-		store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath, config.AppConfig.EnableSQLite)
+		store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
 		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
@@ -390,7 +388,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&rootDir, "dir", "", "root directory containing audiobooks")
 	rootCmd.PersistentFlags().StringVar(&databasePath, "db", "audiobooks.pebble", "path to database (default: audiobooks.pebble for PebbleDB)")
 	rootCmd.PersistentFlags().StringVar(&databaseType, "db-type", "pebble", "database type: pebble (default) or sqlite")
-	rootCmd.PersistentFlags().BoolVar(&enableSQLite, "enable-sqlite3-i-know-the-risks", false, "enable SQLite3 database (WARNING: cross-compilation issues, PebbleDB recommended)")
 	rootCmd.PersistentFlags().StringVar(&playlistDir, "playlists", "playlists", "directory to store generated playlists")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 
