@@ -1,7 +1,7 @@
 // file: internal/deluge/integration.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-ef01-345678901234
-// last-edited: 2026-08-18
+// last-edited: 2026-09-12
 //
 // Deluge integration for library centralization.
 //
@@ -150,35 +150,6 @@ func NotifyDelugeAfterOrganize(store organizeNotifyStore, bookID, newPath string
 	for _, v := range versions {
 		if v.TorrentHash != "" && v.Status == database.BookVersionStatusActive {
 			NotifyDelugeMoveStorage(v.TorrentHash, newPath)
-		}
-	}
-}
-
-// undoNotifyStore is the two methods NotifyDelugeAfterUndo calls; was 44.
-type undoNotifyStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-}
-
-// NotifyDelugeAfterUndo checks whether the reverted operation moved
-// Deluge-sourced files and updates the torrent storage path.
-//
-// oldFilePath is the path the file was restored to (the original location
-// before the organize operation ran). This is the destination Deluge needs
-// to know about — NOT book.FilePath, which may not yet be updated in the DB
-// at the point this is called from the undo engine.
-func NotifyDelugeAfterUndo(store undoNotifyStore, bookID, oldFilePath string) {
-	if oldFilePath == "" {
-		return
-	}
-	_, _ = store.GetBookByID(bookID) // ensure book exists; ignore result
-	versions, _ := store.GetBookVersionsByBookID(bookID)
-	for _, v := range versions {
-		if v.TorrentHash != "" && v.Status == database.BookVersionStatusActive {
-			// Use oldFilePath (the restored destination), not book.FilePath,
-			// because the DB FilePath may not have been updated yet when this
-			// is called immediately after the file rename-back.
-			NotifyDelugeMoveStorage(v.TorrentHash, oldFilePath)
 		}
 	}
 }

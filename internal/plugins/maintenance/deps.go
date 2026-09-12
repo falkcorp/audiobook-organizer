@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-12
 
@@ -342,8 +342,9 @@ type SeriesRunners interface {
 	// ExecuteSeriesPrune delegates to server.executeSeriesPrune.
 	ExecuteSeriesPrune(ctx context.Context, progress operations.ProgressReporter, opID string) error
 	// ExecuteSeriesNormalizeCore delegates to server.executeSeriesNormalizeCore.
-	// Returns slice of affected series IDs and any error.
-	ExecuteSeriesNormalizeCore(ctx context.Context, enqueueWB func(string)) ([]string, error)
+	// Returns slice of affected series IDs and any error. opID keys the
+	// series_rename change rows that make each rename undoable.
+	ExecuteSeriesNormalizeCore(ctx context.Context, opID string, enqueueWB func(string)) ([]string, error)
 }
 
 // MediaFileRunners runs the audio-container repair operations.

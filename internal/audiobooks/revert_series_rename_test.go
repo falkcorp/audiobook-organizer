@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_series_rename_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c7d2e91-5f3a-4b86-9e14-a8b6d3f5c227
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package audiobooks
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -136,5 +137,37 @@ func TestRevertOperation_SeriesRename_WithoutSeriesIDIsRecordOnly(t *testing.T) 
 	}
 	if len(s.renames) != 0 {
 		t.Errorf("renames = %v, want none", s.renames)
+	}
+}
+
+// RenameSeriesIf is the last word. When a CreateSeries or a rename lands after
+// CheckRestoreReferent passed, the store refuses under its name-index lock and
+// the row is Failed and left unmarked, with the reason the preflight uses.
+func TestRevertOperation_SeriesRename_StoreRefusalAtWriteIsFailed(t *testing.T) {
+	for _, tc := range []struct {
+		sentinel error
+		reason   string
+	}{
+		{database.ErrRenameSeriesNameTaken, undo.ReasonSeriesNameTaken},
+		{database.ErrRenameSeriesRenamedSince, undo.ReasonSeriesRenamedSince},
+		{database.ErrRenameSeriesNotFound, undo.ReasonSeriesDeleted},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			s := &ledgerStub{
+				changes:   []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+				series:    map[int]*database.Series{10: {ID: 10, Name: "New Name"}},
+				renameErr: fmt.Errorf("series 11 got there first: %w", tc.sentinel),
+			}
+			result, err := NewRevertService(s).RevertOperation("op")
+			if err == nil || result == nil || result.Failed != 1 || result.Restored != 0 {
+				t.Fatalf("err = %v, result = %+v, want failed 1, restored 0", err, result)
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want reason %q", err, tc.reason)
+			}
+			if s.markCalls != 0 || s.series[10].Name != "New Name" {
+				t.Errorf("mark calls = %d, series name = %q, want 0 and unchanged", s.markCalls, s.series[10].Name)
+			}
+		})
 	}
 }

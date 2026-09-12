@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-07-10-torrent-relocation.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4a413eb3-a477-4204-8ac2-a5ac66398784 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-09-12 -->
 
 # INIT-5 Torrent Hardening + Client-Agnostic Relocation — Implementation Plan
 
@@ -309,7 +309,8 @@ Priority: P2 · Effort: S · Agent: Sonnet-class · Depends on: TASK-03
 
 **Context.** The deferred bullet is "Torrent move_storage on undo"
 (`docs/archive/superpowers/plans/2026-04-15-bulk-organize-undo.md:97,100` — note: undo, NOT
-organize). Wiring already exists (`NotifyDelugeAfterUndo` via `internal/server/undo_engine.go`).
+organize). Wiring existed (`NotifyDelugeAfterUndo` via `internal/server/undo_engine.go`); both
+were deleted on 2026-09-12, since nothing in production called them.
 **Happy/skip/error coverage of the fan-out helpers ALSO already exists** —
 `TestNotifyDelugeAfterUndo_{Enabled,Disabled,NoHash,DelugeError}`,
 `TestNotifyDelugeAfterVersionSwap` (`internal/server/deluge_integration_test.go`) and

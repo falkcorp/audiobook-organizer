@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_series_rename_roundtrip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f41c6ab-2d78-4e03-b5c9-6e1a7d84f3b2
 // last-edited: 2026-09-12
 
@@ -61,6 +61,9 @@ func TestSeriesRename_RecordThenRevert_RoundTrip(t *testing.T) {
 	if byName, _ := store.GetSeriesByName("Old Name", nil); byName == nil || byName.ID != id {
 		t.Errorf("GetSeriesByName(Old Name) = %+v, want series %d", byName, id)
 	}
+	if stale, _ := store.GetSeriesByName("New Name", nil); stale != nil {
+		t.Errorf("GetSeriesByName(New Name) = %+v after revert, want nil (stale name-index key)", stale)
+	}
 }
 
 // The preflight and the revert agree on every series_rename outcome: a row the
@@ -115,5 +118,49 @@ func TestSeriesRename_PreflightMatchesRevert(t *testing.T) {
 				t.Errorf("row marked reverted = %v, want %v", marked, safe)
 			}
 		})
+	}
+}
+
+// A row whose book was hard-deleted is refused by the revert every time it
+// runs, so the preflight must not offer it: it is filed under book_missing,
+// never Safe or book_deleted (which the web counts as restorable), and the
+// revert fails it and leaves it unmarked.
+func TestHardDeletedBook_PreflightMatchesRevert(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	book, err := store.CreateBook(&database.Book{Title: "New", FilePath: "/library/b.m4b", Format: "m4b"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	if err := store.CreateOperationChange(&database.OperationChange{ID: "c1", OperationID: "op1", BookID: book.ID,
+		ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "New"}); err != nil {
+		t.Fatalf("create change: %v", err)
+	}
+	if err := store.DeleteBook(book.ID); err != nil {
+		t.Fatalf("delete book: %v", err)
+	}
+	if b, _ := store.GetBookByID(book.ID); b != nil {
+		t.Fatalf("book still readable after DeleteBook: %+v", b)
+	}
+
+	report, err := undo.PreflightUndoConflicts(store, "op1")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if report.Safe != 0 || len(report.BookDeleted) != 0 || len(report.BookMissing) != 1 ||
+		report.BookMissing[0].Reason != undo.ReasonBookMissing {
+		t.Fatalf("report = %+v, want the row only in book_missing", report)
+	}
+
+	result, err := audiobooks.NewRevertService(store).RevertOperation("op1")
+	if err == nil || result == nil || result.Failed != 1 || result.Restored != 0 {
+		t.Fatalf("RevertOperation: err %v, result %+v, want failed 1", err, result)
+	}
+	changes, _ := store.GetOperationChanges("op1")
+	if len(changes) != 1 || changes[0].RevertedAt != nil {
+		t.Errorf("changes = %+v, want the one row left unmarked", changes)
 	}
 }

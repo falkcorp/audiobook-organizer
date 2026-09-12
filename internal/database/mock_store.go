@@ -167,6 +167,7 @@ type MockStore struct {
 	CreateSeriesFunc     func(name string, authorID *int) (*Series, error)
 	DeleteSeriesFunc     func(id int) error
 	UpdateSeriesNameFunc func(id int, name string) error
+	RenameSeriesIfFunc   func(id int, expectCurrent, newName string) error
 	GetSeriesByIDsFunc   func(ids []int) (map[int]*Series, error)
 	// GetAllSeriesBookRefCountsFunc backs the SeriesBookRefStore capability.
 	// A nil func yields an empty map, i.e. "no series is referenced by
@@ -898,6 +899,13 @@ func (m *MockStore) CountNarratorBookLinks(narratorID int) (int, error) {
 func (m *MockStore) UpdateSeriesName(id int, name string) error {
 	if m.UpdateSeriesNameFunc != nil {
 		return m.UpdateSeriesNameFunc(id, name)
+	}
+	return nil
+}
+
+func (m *MockStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
+	if m.RenameSeriesIfFunc != nil {
+		return m.RenameSeriesIfFunc(id, expectCurrent, newName)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/torrent-relocation/TASK-07-undo-repoint-closure.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5e71a077-8fcd-49f0-a768-93e27b9244b4 -->
-<!-- last-edited: 2026-07-10 -->
+<!-- last-edited: 2026-09-12 -->
 
 # TASK-07 — Close the deferred undo re-point item: mode-matrix cells in the EXISTING suites (INIT-5 T7)
 
@@ -52,8 +52,10 @@ fakes and cases is exactly the twin-drift this initiative removes elsewhere.
   `TestNotifyDelugeAfterOrganize_CallsMoveStorage/_SkipsWhenDisabled/_SkipsWhenNoTorrentHash/_DelugeErrorIsBestEffort`
   (~:125-190). These stay the authority for happy/skip/error semantics — reuse their client
   fakes and config setup/teardown patterns for the new mode cells.
-- Existing wiring (do NOT re-implement, only test): undo → `deluge.NotifyDelugeAfterUndo` is
-  passed as the callback in `internal/server/undo_engine.go` (`RunUndoOperation`); organize →
+- Existing wiring (do NOT re-implement, only test): undo → `deluge.NotifyDelugeAfterUndo` was
+  passed as the callback in `internal/server/undo_engine.go` (`RunUndoOperation`). Update
+  2026-09-12: both were deleted, since nothing in production called them, along with
+  `TestNotifyDelugeAfterUndo_*`. Organize →
   `deluge.NotifyDelugeAfterOrganize` in `internal/server/handlers/organize.go`.
 - The helpers take small store interfaces (`database.BookVersionStore`, `database.BookReader`)
   — the existing tests already have in-test fakes; extend them, do not add mockery mocks

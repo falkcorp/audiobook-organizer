@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -825,7 +825,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// Organizing what was collected and THEN reporting the failure leaves
 			// the files consistent with the series rows that did change. The op
 			// still ends "failed", so the error is not swallowed.
-			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, enqueueWB)
+			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, opID, enqueueWB)
 			if opErr != nil {
 				logging.Error(ctx, "series normalization reported errors; organizing the books it did collect before failing the operation",
 					"err", opErr, "affected_books", len(affectedBookIDs))

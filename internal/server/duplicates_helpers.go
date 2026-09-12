@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -42,6 +42,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -814,9 +815,12 @@ func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, 
 // write-back for affected books, and returns the affected book IDs for the
 // caller to run organize on.
 // maintenanceStore is used because mergeSeriesGroupHelper requires it.
+// operationID keys the series_rename change rows the rename pass journals, so
+// POST /operations/:id/revert can rename each series back; "" records none.
 func executeSeriesNormalizeCore(
 	ctx context.Context,
 	store maintenanceStore,
+	operationID string,
 	enqueueWriteBack func(bookID string),
 ) (affectedBookIDs []string, err error) {
 	// Fatal, and deliberately so. An empty action list means "nothing needs
@@ -935,6 +939,25 @@ func executeSeriesNormalizeCore(
 		}
 		if rErr := store.UpdateSeriesName(a.SeriesID, a.NewName); rErr != nil {
 			errs = append(errs, fmt.Sprintf("UpdateSeriesName(%d, %q): %v", a.SeriesID, a.NewName, rErr))
+			continue
+		}
+		// The same series-scoped row dedup.MergeSeries writes, so the revert
+		// can rename the series back (undo.CheckRestoreReferent, then
+		// RenameSeriesIf). A failed write is reported: the rename stands, but
+		// it can no longer be undone.
+		if operationID != "" {
+			seriesID := a.SeriesID
+			if cErr := store.CreateOperationChange(&database.OperationChange{
+				OperationID: operationID,
+				ChangeType:  undo.ChangeTypeSeriesRename,
+				FieldName:   "series_name",
+				SeriesID:    &seriesID,
+				OldValue:    a.OldName,
+				NewValue:    a.NewName,
+			}); cErr != nil {
+				errs = append(errs, fmt.Sprintf("record series_rename for series %d (%q -> %q): %v -- the rename stands but cannot be undone",
+					a.SeriesID, a.OldName, a.NewName, cErr))
+			}
 		}
 	}
 

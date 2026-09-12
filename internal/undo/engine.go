@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-09-12
 //
@@ -29,20 +29,24 @@ type UndoConflictReport struct {
 	TotalChanges    int                `json:"total_changes"`
 	AlreadyReverted int                `json:"already_reverted"`
 	ContentChanged  []UndoConflictItem `json:"content_changed,omitempty"`
-	BookDeleted     []UndoConflictItem `json:"book_deleted,omitempty"`
-	ReOrganized     []UndoConflictItem `json:"re_organized,omitempty"`
-	// The four series buckets hold rows CheckRestoreReferent refuses. The
-	// revert refuses every one of them each time it runs, so they are NOT
-	// restorable and must never count toward offering an Undo (the web
-	// confirmation names them separately). SeriesDeleted: the series no longer
+	// BookDeleted holds rows whose book is soft-deleted (trashed). The
+	// revert still restores those, so they count as restorable conflicts.
+	BookDeleted []UndoConflictItem `json:"book_deleted,omitempty"`
+	ReOrganized []UndoConflictItem `json:"re_organized,omitempty"`
+	// The refused buckets hold rows CheckRestoreBook or CheckRestoreReferent
+	// refuses. The revert refuses every one of them each time it runs, so
+	// they are NOT restorable and must never count toward offering an Undo
+	// (the web confirmation names them separately). BookMissing: the book no
+	// longer exists (hard-deleted). SeriesDeleted: the series no longer
 	// exists. SeriesRenamedSince: a series_rename whose series was renamed
 	// again after the operation. SeriesNameTaken: a series_rename whose old
-	// name now belongs to another series. SeriesCheckFailed: the series could
-	// not be read, or the row's value is malformed (Reason says which).
+	// name now belongs to another series. CheckFailed: the book or series
+	// could not be read, or the row's value is malformed (Reason says which).
+	BookMissing        []UndoConflictItem `json:"book_missing,omitempty"`
 	SeriesDeleted      []UndoConflictItem `json:"series_deleted,omitempty"`
 	SeriesRenamedSince []UndoConflictItem `json:"series_renamed_since,omitempty"`
 	SeriesNameTaken    []UndoConflictItem `json:"series_name_taken,omitempty"`
-	SeriesCheckFailed  []UndoConflictItem `json:"series_check_failed,omitempty"`
+	CheckFailed        []UndoConflictItem `json:"check_failed,omitempty"`
 	Safe               int                `json:"safe"`
 	// NotRestorable counts rows the revert endpoint cannot reverse (see
 	// NotRestorableLabel), by label in NotRestorableTypes. They are in no
@@ -72,10 +76,11 @@ type ConflictChecker interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
-// addReferentConflict files a CheckRestoreReferent refusal under the bucket
-// matching its reason. Anything that is not deleted / renamed since / name
-// taken (a lookup failure, a malformed row, or an error without a reason) goes
-// to SeriesCheckFailed: the revert refuses it just the same.
+// addReferentConflict files a CheckRestoreBook / CheckRestoreReferent refusal
+// under the bucket matching its reason. Anything that is not book missing /
+// series deleted / renamed since / name taken (a lookup failure, a malformed
+// row, or an error without a reason) goes to CheckFailed: the revert refuses
+// it just the same.
 func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, err error) {
 	reason := RefusalReason(err)
 	if reason == "" {
@@ -83,6 +88,8 @@ func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, er
 	}
 	item := UndoConflictItem{ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType, Reason: reason}
 	switch reason {
+	case ReasonBookMissing:
+		r.BookMissing = append(r.BookMissing, item)
 	case ReasonSeriesDeleted:
 		r.SeriesDeleted = append(r.SeriesDeleted, item)
 	case ReasonSeriesRenamedSince:
@@ -90,7 +97,7 @@ func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, er
 	case ReasonSeriesNameTaken:
 		r.SeriesNameTaken = append(r.SeriesNameTaken, item)
 	default:
-		r.SeriesCheckFailed = append(r.SeriesCheckFailed, item)
+		r.CheckFailed = append(r.CheckFailed, item)
 	}
 }
 
@@ -124,38 +131,42 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 
 		switch c.ChangeType {
 		case "file_move", "organize_rename":
-			if conflict := checkFileMoveConflict(store, c); conflict != nil {
-				switch conflict.Reason {
-				case "content changed":
-					report.ContentChanged = append(report.ContentChanged, *conflict)
-				case "book deleted":
-					report.BookDeleted = append(report.BookDeleted, *conflict)
-				case "re-organized":
-					report.ReOrganized = append(report.ReOrganized, *conflict)
-				default:
-					report.ContentChanged = append(report.ContentChanged, *conflict)
-				}
-			} else {
+			conflict, refusal := checkFileMoveConflict(store, c)
+			switch {
+			case refusal != nil:
+				report.addReferentConflict(c, refusal)
+			case conflict == nil:
 				report.Safe++
+			case conflict.Reason == "book deleted":
+				report.BookDeleted = append(report.BookDeleted, *conflict)
+			case conflict.Reason == "re-organized":
+				report.ReOrganized = append(report.ReOrganized, *conflict)
+			default:
+				report.ContentChanged = append(report.ContentChanged, *conflict)
 			}
 		case "metadata_update":
-			if c.BookID != "" {
-				book, _ := store.GetBookByID(c.BookID)
-				if book == nil {
-					report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
-						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
-						Reason: "book deleted",
-					})
-				} else if book.IsSoftDeleted() {
-					report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
-						ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
-						Reason: "book deleted",
-					})
-				} else if err := CheckRestoreReferent(store, c); err != nil {
-					report.addReferentConflict(c, err)
-				} else {
-					report.Safe++
-				}
+			// The revert reads the book first (RevertService.loadBook) and
+			// then runs CheckRestoreReferent. Either refusal fails the row
+			// every time, so neither may be counted restorable here.
+			book, refusal := CheckRestoreBook(store, c.BookID)
+			if refusal == nil {
+				refusal = CheckRestoreReferent(store, c)
+			}
+			switch {
+			case refusal != nil:
+				report.addReferentConflict(c, refusal)
+			case book.IsSoftDeleted():
+				report.BookDeleted = append(report.BookDeleted, UndoConflictItem{
+					ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+					Reason: "book deleted",
+				})
+			default:
+				report.Safe++
+			}
+		case "tag_write":
+			// The revert reads the book before it touches the file.
+			if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
+				report.addReferentConflict(c, refusal)
 			} else {
 				report.Safe++
 			}
@@ -173,42 +184,48 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	return report, nil
 }
 
-func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) *UndoConflictItem {
+// checkFileMoveConflict mirrors RevertService.revertFileMove. A file no longer
+// at its new location is skipped by the revert without reading the book, so
+// it is reported as content changed (the revert still counts it restored).
+// Otherwise the revert reads the book before moving the file back and refuses
+// the row when the book is missing or unreadable: that comes back as the
+// refusal, and the row is never restorable.
+func checkFileMoveConflict(store ConflictChecker, c *database.OperationChange) (*UndoConflictItem, error) {
 	if c.NewValue == "" {
-		return nil
+		return nil, nil
 	}
 
-	// Check if the file at new location was modified after the op.
 	info, err := os.Stat(c.NewValue)
 	if os.IsNotExist(err) {
 		return &UndoConflictItem{
 			ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 			Reason: "content changed",
-		}
+		}, nil
 	}
+
+	book, refusal := CheckRestoreBook(store, c.BookID)
+	if refusal != nil {
+		return nil, refusal
+	}
+
+	// The file at the new location was modified after the op.
 	if err == nil && info.ModTime().After(c.CreatedAt) {
 		return &UndoConflictItem{
 			ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
 			Reason: "content changed",
-		}
+		}, nil
 	}
-
-	// Check if book was deleted or re-organized.
-	if c.BookID != "" {
-		book, _ := store.GetBookByID(c.BookID)
-		if book == nil || book.IsSoftDeleted() {
-			return &UndoConflictItem{
-				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
-				Reason: "book deleted",
-			}
-		}
-		if book.LastOrganizedAt != nil && book.LastOrganizedAt.After(c.CreatedAt) {
-			return &UndoConflictItem{
-				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
-				Reason: "re-organized",
-			}
-		}
+	if book.IsSoftDeleted() {
+		return &UndoConflictItem{
+			ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+			Reason: "book deleted",
+		}, nil
 	}
-
-	return nil
+	if book.LastOrganizedAt != nil && book.LastOrganizedAt.After(c.CreatedAt) {
+		return &UndoConflictItem{
+			ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType,
+			Reason: "re-organized",
+		}, nil
+	}
+	return nil, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -227,6 +228,57 @@ func (p *PebbleStore) UpdateSeriesName(id int, name string) error {
 		return err
 	}
 	closer.Close()
+	return p.renameSeriesLocked(id, &series, name)
+}
+
+// RenameSeriesIf refusals, wrapped with the specifics. Nothing is written.
+var (
+	// ErrRenameSeriesNotFound: no series has that id.
+	ErrRenameSeriesNotFound = errors.New("series not found")
+	// ErrRenameSeriesRenamedSince: the series is not named expectCurrent.
+	ErrRenameSeriesRenamedSince = errors.New("series renamed since")
+	// ErrRenameSeriesNameTaken: another series under the same author already
+	// answers to the new name.
+	ErrRenameSeriesNameTaken = errors.New("series name taken")
+)
+
+// RenameSeriesIf renames series id to newName only if it is still named
+// expectCurrent and no other series under the same author answers to newName,
+// compared the way the name index compares (case and whitespace insensitive).
+// The checks and the write all run under nameIdx.series, which CreateSeries,
+// UpdateSeriesName and DeleteSeries also hold, so a concurrent create of
+// newName or a concurrent rename cannot land between check and write -- the
+// window a GetSeriesByName check followed by UpdateSeriesName leaves open. The
+// undo revert uses it to rename a series back.
+func (p *PebbleStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+
+	series, err := p.GetSeriesByID(id)
+	if err != nil {
+		return fmt.Errorf("read series %d: %w", id, err)
+	}
+	if series == nil {
+		return fmt.Errorf("series %d: %w", id, ErrRenameSeriesNotFound)
+	}
+	if series.Name != expectCurrent {
+		return fmt.Errorf("series %d is named %q, not %q: %w", id, series.Name, expectCurrent, ErrRenameSeriesRenamedSince)
+	}
+	holder, err := p.GetSeriesByName(newName, series.AuthorID)
+	if err != nil {
+		return fmt.Errorf("look up series named %q: %w", newName, err)
+	}
+	if holder != nil && holder.ID != id {
+		return fmt.Errorf("series %d already answers to %q: %w", holder.ID, holder.Name, ErrRenameSeriesNameTaken)
+	}
+	return p.renameSeriesLocked(id, series, newName)
+}
+
+// renameSeriesLocked moves series (the stored row for id) to name: the old
+// name-index key is removed if this series owns it, the row is rewritten and
+// the new key set. The caller holds nameIdx.series.
+func (p *PebbleStore) renameSeriesLocked(id int, series *Series, name string) error {
+	key := []byte(fmt.Sprintf("series:%d", id))
 
 	// Delete old name index
 	oldAuthorIDStr := "nil"

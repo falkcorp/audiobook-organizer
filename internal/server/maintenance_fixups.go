@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -48,6 +48,9 @@ type maintenanceSeriesStore interface {
 	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
+	// The series-normalize rename pass journals a series_rename row per
+	// rename so the revert can undo it.
+	CreateOperationChange(change *database.OperationChange) error
 }
 
 // prefixWiper is the pair of raw key-space operations the /maintenance/wipe

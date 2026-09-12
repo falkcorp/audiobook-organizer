@@ -1,5 +1,5 @@
 // file: web/src/services/versionApi.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-12
 
@@ -26,17 +26,20 @@ export interface UndoConflictReport {
   total_changes: number;
   already_reverted: number;
   content_changed: Array<{ change_id: string; book_id: string; reason: string }>;
+  /** Rows whose book is soft-deleted; the revert still restores them. */
   book_deleted: Array<{ change_id: string; book_id: string; reason: string }>;
   re_organized: Array<{ change_id: string; book_id: string; reason: string }>;
-  /** The revert refuses every row in the four series_* groups; they are not restorable. */
+  // The revert refuses every row in the five groups below each time it runs; they are not restorable.
+  /** Rows whose book no longer exists (hard-deleted). */
+  book_missing?: Array<{ change_id: string; book_id: string; reason: string }>;
   /** series_id / series_rename rows whose series no longer exists. */
   series_deleted?: Array<{ change_id: string; book_id: string; reason: string }>;
   /** series_rename rows whose series was renamed again after the operation. */
   series_renamed_since?: Array<{ change_id: string; book_id: string; reason: string }>;
   /** series_rename rows whose old name now belongs to another series. */
   series_name_taken?: Array<{ change_id: string; book_id: string; reason: string }>;
-  /** Rows whose series could not be read or whose recorded value is malformed. */
-  series_check_failed?: Array<{ change_id: string; book_id: string; reason: string }>;
+  /** Rows whose book or series could not be read, or whose recorded value is malformed. */
+  check_failed?: Array<{ change_id: string; book_id: string; reason: string }>;
   safe: number;
   /** Rows the revert endpoint cannot reverse; in no other bucket. */
   not_restorable?: number;
