@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.71.1 -->
+<!-- version: 10.72.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -10614,6 +10614,11 @@ normalizing whitespace, so the dedupe that should have caught it never fires.
 
 - [ ] Normalize whitespace (and probably case) in author lookup/creation, so a
       `Raymond  L.  Weil` can never be minted alongside `Raymond L. Weil`.
+      🟡 **Report half DONE 2026-09-12 (#3297, TASK-086):** `util.NormalizeAuthor`
+      collapses internal whitespace, lookups fall back to the legacy key, index deletes
+      are ownership-checked, and the report-only op
+      `maintenance.author-whitespace-collision-report` lists the collisions. Re-keying
+      the legacy index entries and merging the existing duplicate rows are still open.
       ⚠️ Check `util.NormalizeAuthor` first — it is already used for the series
       name index (`pebble_store_series.go`), so the helper may exist and simply
       not be applied on the author path.
@@ -11503,6 +11508,13 @@ book and is most likely to go looking for another by the same author.
 
 ### Import-path scan no longer surfaces per-file scan errors
 
+✅ **DONE 2026-09-12 (#3287):** both layers below. The scan counts per-file failures,
+writes the first 25 to the operation log with `file_path`/`stage`/`reason` as
+structured attrs plus an end-of-run summary, and `useImportFolderHandlers` polls
+`GET /operations/v2/:id` and reads those lines into `ScanStatus.errors`. Not done by
+design: the op does not flip to `failed` when files fail, and tag-read fallbacks are
+not counted. The unrelated checkbox below this section stays open.
+
 The "View Errors" button on a path row in Settings → Paths is unreachable for
 errors found *during* a scan. It renders only when `errorCount > 0`
 (`web/src/components/settings/PathsSettingsTab.tsx:169`, and the same shape in
@@ -12168,7 +12180,7 @@ Explicitly LOW priority — per-book is fine for now.
 
 ### Contributor data cleanup — follow-ups to `maintenance.purge-empty-authors`
 
-- [ ] **Narrator equivalent of the empty-author purge.** There is no 🟡 **Store half DONE 2026-09-12 (#3288, TASK-035):** `DeleteNarrator` exists (junction + memdb cleanup); the purge op itself is still open.
+- [ ] **Narrator equivalent of the empty-author purge.** There is no 🟡 **Store half DONE 2026-09-12 (#3288, TASK-035):** `DeleteNarrator` exists (junction + memdb cleanup); the purge op itself is still open. Follow-ups 2026-09-12: #3299 stamps narrator/author junction rows with their key's book ID (rows stored without `book_id` were aborting every later memdb update of the book); #3300 ownership-checks `DeleteNarrator`'s name-index delete so it cannot remove another narrator's entry.
   `DeleteNarrator` on the store at all — narrators live at `narrator:<id>` with no
   delete path, so the op cannot be written until that exists. Scope it alongside
   whatever decides the narrator identity question below.
