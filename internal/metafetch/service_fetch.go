@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-12
 
@@ -275,10 +275,23 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// provenance; `meta` is what actually landed on the book, so the
 			// write-back and cover steps below never carry a refused value.
 			fetched := meta
+			// A position the provider gave WITHOUT a series name is not
+			// written: nobody selected it, and it would be pinned onto
+			// whatever series the book already has. With a series name the
+			// position lands together with that series, so they agree.
+			if strings.TrimSpace(meta.Series) == "" {
+				meta.SeriesPosition = ""
+			}
+			previousCoverURL := book.CoverURL
 			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
 			if applyErr != nil {
 				return nil, applyErr
 			}
+			// Same guard as ApplyMetadataCandidate: keep serving the previous
+			// cover until the new one is on disk. The UI cannot render the
+			// provider's remote url, so a failed or pending download used to
+			// leave a blank cover.
+			book.CoverURL = renderableCoverURL(previousCoverURL, book.CoverURL, meta.CoverURL)
 
 			updatedBook, updateErr := mfs.db.UpdateBook(id, book)
 			if updateErr != nil {
@@ -287,22 +300,26 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 
 			mfs.persistFetchedMetadata(id, fetched)
 
-			// File side through the SAME sequel every apply path uses: cover
-			// download, embed, rename/tags under auto_rename_on_apply /
-			// auto_write_tags_on_apply, and tags once more only if
-			// write_back_metadata asks and the pipeline did not already write
-			// them. Auto-fetch used to do its own cover download and write tags
-			// ONLY under write_back_metadata, so with that off (the production
-			// setting) the DB took the fetched metadata and the files kept the
-			// old tags, while a manual apply of the same candidate wrote them.
+			// File side. The cover is downloaded with the file work; the audio
+			// files are touched only for a book that ALREADY has a library copy
+			// under root_dir (auto-fetch never creates one), and only through the
+			// file-I/O pool under the path lock, like a manual apply.
 			// meta.CoverURL is post-lock-guard, so a locked cover is not fetched.
-			if err := mfs.FinishApplyFileWork(id, meta.CoverURL, true, config.AppConfig.WriteBackMetadata); err != nil {
-				slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", id, "error", err)
-			}
-			// The cover download above repoints cover_url at the local copy;
-			// return the row as it now is, not the pre-download struct.
-			if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
-				updatedBook = fresh
+			pendingCover := meta.CoverURL
+			writeBack := config.AppConfig.WriteBackMetadata
+			if sched := mfs.fileWorkScheduler; sched != nil {
+				sched(id, book.FilePath, func() {
+					if err := mfs.FinishAutoFetchFileWork(id, pendingCover, writeBack); err != nil {
+						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", id, "error", err)
+					}
+				})
+			} else {
+				// No pool wired (organize's per-call service, tests): no audio
+				// file is touched outside the pool, so only the cover is fetched.
+				mfs.DownloadPendingCover(id, pendingCover)
+				if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
+					updatedBook = fresh
+				}
 			}
 
 			// Queue background ISBN/ASIN enrichment if identifiers are missing

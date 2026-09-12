@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-12
 
@@ -436,10 +436,10 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(id string, book *database.Book) (tagWriteResult, error) {
+func (mfs *Service) runApplyPipeline(id string, book *database.Book, policy copyPolicy) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy instead
 	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.ensureLibraryCopy(book)
+		libCopy := mfs.libraryCopyFor(book, policy)
 		if libCopy == nil {
 			slog.Warn("runApplyPipeline skipping protected book: no library copy exists",
 				"book_id", id, "book_title", book.Title,
@@ -472,7 +472,11 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) (tagWriteRe
 		return tagWriteResult{}, fmt.Errorf("compute target paths for book %s: %w", id, err)
 	}
 
-	if config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) &&
+	// A version sibling's rows can still point into the iTunes tree even when
+	// its book path is under the library. Never move such a file.
+	entries = mfs.dropProtectedRenameEntries(id, entries)
+
+	if len(entries) > 0 && config.AppConfig.AutoRenameOnApply && !hasCheckpoint(mfs.db, id, phaseRename) &&
 		!organizer.ApplyRenameBlocked(mfs.db, id, targetPathsOf(entries)) {
 		renameResult, renameErr := RenameFiles(entries, applyCollisionPolicy(mfs.db, id))
 		// Even when RenameFiles returns an error, entries in
@@ -599,7 +603,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book) (tagWriteRe
 	if config.AppConfig.AutoWriteTagsOnApply {
 		tags.handled = true
 		if !hasCheckpoint(mfs.db, id, phaseTags) {
-			if written, err := mfs.writeTags(id); err != nil {
+			if written, err := mfs.writeTags(id, policy); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
 					"book_id", id, "book_title", book.Title,
@@ -633,7 +637,7 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 	if len(segmentFilter) > 0 {
 		sf = segmentFilter[0]
 	}
-	return mfs.writeBackForBook(id, sf)
+	return mfs.writeBackForBook(id, sf, createLibraryCopy)
 }
 
 // writeBackForBook is the single tag-write implementation behind
@@ -641,7 +645,7 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 // reaches through FinishApplyFileWork. It used to take fallback overrides for
 // the fetch path's own wrapper; auto-fetch now writes what the DB holds, like
 // every other apply, so the tags and the row agree.
-func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, error) {
+func (mfs *Service) writeBackForBook(id string, segmentFilter []string, policy copyPolicy) (int, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return 0, fmt.Errorf("audiobook not found: %s", id)
@@ -653,7 +657,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, er
 	originalBook := book
 	originalID := id
 	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.ensureLibraryCopy(book)
+		libCopy := mfs.libraryCopyFor(book, policy)
 		if libCopy == nil {
 			return 0, fmt.Errorf("cannot write back: no library copy for protected book %s", id)
 		}
@@ -741,7 +745,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, er
 
 	// Embed cover art via TagLib (independent of tag writes — no ordering constraint).
 	if config.AppConfig.RootDir != "" {
-		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID))
+		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID), policy)
 	}
 
 	// Use the original book's title for tag content (it has freshly-applied metadata)
@@ -882,7 +886,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, er
 				if sib.ID == book.ID {
 					continue // already written above
 				}
-				if !strings.HasPrefix(sib.FilePath, config.AppConfig.RootDir) {
+				if !pathUnderRoot(sib.FilePath, config.AppConfig.RootDir) {
 					continue // only write to library copies, leave import copies alone
 				}
 				if mfs.isProtectedPath(sib.FilePath) {
@@ -947,4 +951,23 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string) (int, er
 	}
 
 	return writtenCount, nil
+}
+
+// dropProtectedRenameEntries removes every rename entry whose source lies
+// under a protected (iTunes/import) tree, warning for each. The embed and tag
+// legs already skipped such files one path at a time; the rename leg trusted
+// the book-level check alone and handed every book_file row to RenameFiles, so
+// a library copy with one row still pointing into the iTunes tree had that
+// iTunes file moved.
+func (mfs *Service) dropProtectedRenameEntries(bookID string, entries []FileRenameEntry) []FileRenameEntry {
+	kept := make([]FileRenameEntry, 0, len(entries))
+	for _, e := range entries {
+		if mfs.isProtectedPath(e.SourcePath) {
+			slog.Warn("apply rename: leaving a file under a protected path where it is",
+				"book_id", bookID, "protected_path", e.SourcePath)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept
 }

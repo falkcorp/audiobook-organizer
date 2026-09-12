@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-05
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -767,4 +767,22 @@ func BuildMetadataProvenance(book *database.Book, state map[string]MetadataField
 	addEntry("google_books_id", NonEmpty(meta.GoogleBooksID), stringVal(book.GoogleBooksID))
 
 	return provenance
+}
+
+// pathUnderRoot reports whether p is root itself or inside it, compared on a
+// path-separator boundary after cleaning both. A bare strings.HasPrefix made
+// "/library-old/x.m4b" count as inside a root of "/library", so a book outside
+// the library could be taken for a library copy and have its files moved.
+func pathUnderRoot(p, root string) bool {
+	if p == "" || root == "" {
+		return false
+	}
+	p, root = filepath.Clean(p), filepath.Clean(root)
+	if p == root {
+		return true
+	}
+	if root == string(filepath.Separator) {
+		return filepath.IsAbs(p)
+	}
+	return strings.HasPrefix(p, root+string(filepath.Separator))
 }
