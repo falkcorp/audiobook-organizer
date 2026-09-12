@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
 // last-edited: 2026-09-12
 
@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -371,7 +373,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 		}
 	}
 	summary := reporter.logs[len(reporter.logs)-1]
-	assertSummaryHas(t, summary, "examined=51", "needed=25", "took-tag-tracks=25", "rawtags-only=0",
+	assertSummaryHas(t, summary, "examined=51", "judged-rows=25", "read-took-tag-tracks=25", "read-rawtags-only=0",
 		"siblings-renumbered=0", "missing-on-disk=6", "read-errors=4")
 }
 
@@ -398,7 +400,7 @@ func TestTagBackfill_AllTrackOneKeepsPositions(t *testing.T) {
 	if fx.row("a1").Title != "Tag Title 0-1" || fx.row("a2").Title != "Kept Title" {
 		t.Errorf("title fill wrong: a1=%q a2=%q", fx.row("a1").Title, fx.row("a2").Title)
 	}
-	assertSummaryHas(t, summary, "took-tag-tracks=0", "rawtags-only=3", "books-refused-duplicate=1", "books-refused-missing=0")
+	assertSummaryHas(t, summary, "read-took-tag-tracks=0", "read-rawtags-only=3", "books-refused-duplicate=1", "books-refused-missing=0")
 }
 
 // (b) Distinct tag tracks are taken. A sibling that already has RawTags counts
@@ -419,7 +421,7 @@ func TestTagBackfill_DistinctTagTracksAreTaken(t *testing.T) {
 			t.Errorf("%s: track = %d/%d, want %d/4", id, f.TrackNumber, f.TrackCount, want)
 		}
 	}
-	assertSummaryHas(t, summary, "took-tag-tracks=3", "rawtags-only=0", "siblings-renumbered=1", "books-refused-duplicate=0")
+	assertSummaryHas(t, summary, "judged-rows=4", "read-took-tag-tracks=3", "read-rawtags-only=0", "siblings-renumbered=1", "books-refused-duplicate=0")
 }
 
 // A sibling whose stored RawTags collide with a fresh reading refuses the book.
@@ -457,7 +459,7 @@ func TestTagBackfill_MissingTrackTagKeepsPositions(t *testing.T) {
 			t.Errorf("%s: track = %d/%d, want %d/0", id, f.TrackNumber, f.TrackCount, i+1)
 		}
 	}
-	assertSummaryHas(t, summary, "rawtags-only=3", "books-refused-missing=1")
+	assertSummaryHas(t, summary, "read-rawtags-only=3", "books-refused-missing=1")
 }
 
 // (d) Multi-disc: (disc, track) pairs judged together. Track 1 on two discs is
@@ -488,7 +490,7 @@ func TestTagBackfill_MultiDiscPairs(t *testing.T) {
 			t.Errorf("%s: refused book changed position: disc %d/%d track %d", id, f.DiscNumber, f.DiscCount, f.TrackNumber)
 		}
 	}
-	assertSummaryHas(t, summary, "took-tag-tracks=4", "rawtags-only=4", "books-refused-duplicate=1")
+	assertSummaryHas(t, summary, "read-took-tag-tracks=4", "read-rawtags-only=4", "books-refused-duplicate=1")
 }
 
 // A tag with no disc number is judged as disc 0, so an accepted book must also
@@ -538,14 +540,14 @@ func TestTagBackfill_SecondRunRenumbersSiblings(t *testing.T) {
 	if len(fx.row("t03").RawTags) != 0 {
 		t.Errorf("missing t03 should not have been written on run 1")
 	}
-	assertSummaryHas(t, s1, "rawtags-only=9", "books-refused-missing=1", "missing-on-disk=1", "siblings-renumbered=0")
+	assertSummaryHas(t, s1, "read-rawtags-only=9", "books-refused-missing=1", "missing-on-disk=1", "siblings-renumbered=0")
 
 	mustWriteFile(t, fx.path("t03"))
 	s2 := fx.run(tagBackfillParams{})
 	for id, p := range want {
 		assertPosition(t, fx.row(id), p.disc, p.track)
 	}
-	assertSummaryHas(t, s2, "needed=1", "took-tag-tracks=1", "siblings-renumbered=9")
+	assertSummaryHas(t, s2, "judged-rows=10", "read-took-tag-tracks=1", "siblings-renumbered=9")
 
 	var order []string
 	for id := range want {
@@ -577,7 +579,7 @@ func TestTagBackfill_LimitWindowRefuses(t *testing.T) {
 	if fx.writtenIDs()["L3"] {
 		t.Errorf("L3 is outside the Limit window and must not be written")
 	}
-	assertSummaryHas(t, summary, "examined=2", "rawtags-only=2", "books-refused-missing=1", "file L3 has no tag track")
+	assertSummaryHas(t, summary, "examined=2", "read-rawtags-only=2", "books-refused-missing=1", "file L3 has no tag track")
 }
 
 // A single-file book takes its "3/12" tag.
@@ -588,7 +590,7 @@ func TestTagBackfill_SingleFileBookTakesTag(t *testing.T) {
 	if f := fx.row("one"); f.TrackNumber != 3 || f.TrackCount != 12 {
 		t.Errorf("single-file book: track = %d/%d, want 3/12", f.TrackNumber, f.TrackCount)
 	}
-	assertSummaryHas(t, summary, "took-tag-tracks=1")
+	assertSummaryHas(t, summary, "read-took-tag-tracks=1")
 }
 
 // Siblings whose stored RawTags use MP4 keys (trkn/disk) are parsed: one book is
@@ -629,8 +631,8 @@ func TestTagBackfill_DryRunWritesNothingAndCounts(t *testing.T) {
 		t.Fatalf("dry run wrote %d batches", len(fx.batches))
 	}
 	assertPosition(t, fx.row("d2"), 0, 2)
-	assertSummaryHas(t, summary, "would backfill", "examined=9", "books=4", "needed=7", "took-tag-tracks=3",
-		"rawtags-only=4", "siblings-renumbered=1", "books-refused-duplicate=1", "books-refused-missing=1",
+	assertSummaryHas(t, summary, "would backfill", "examined=9", "books=4", "judged-rows=8", "read-took-tag-tracks=3",
+		"read-rawtags-only=4", "siblings-renumbered=1", "books-refused-duplicate=1", "books-refused-missing=1",
 		"missing-on-disk=1", "book A (")
 }
 
@@ -681,7 +683,7 @@ func TestTagBackfill_WritesInBoundedBatches(t *testing.T) {
 	if len(fx.batches) < 2 {
 		t.Errorf("got %d batches, want more than one", len(fx.batches))
 	}
-	assertSummaryHas(t, summary, "wrote 12 rows;", "took-tag-tracks=12")
+	assertSummaryHas(t, summary, "wrote 12 rows; not-written=0", "judged-rows=12", "read-took-tag-tracks=12")
 }
 
 // Cancel mid-run: books judged in full before the cancel are still flushed (in
@@ -735,13 +737,13 @@ func TestTagBackfill_CancelFlushesCompleteBooks(t *testing.T) {
 		t.Errorf("got %d batches, want 1 stop-flush", len(fx.batches))
 	}
 	joined := strings.Join(logs, "\n")
-	assertSummaryHas(t, joined, "flushed 20 pending rows of complete books, dropped 0", "wrote 20 rows;")
+	assertSummaryHas(t, joined, "flushed 20 pending rows of complete books; 20 rows written in total, 0 judged rows not written after a write error", "wrote 20 rows; not-written=0")
 }
 
-// A failed batch write stops the run: nothing is written after it, the rows
-// still pending are reported dropped, the error counts only rows actually
-// written, and the summary is still emitted.
-func TestTagBackfill_WriteErrorReportsDroppedAndSummary(t *testing.T) {
+// A failed batch write stops the run: nothing is written after it, every judged
+// row that did not reach the store is reported not written, the error counts only
+// rows actually written, and the summary is still emitted.
+func TestTagBackfill_WriteErrorReportsNotWrittenAndSummary(t *testing.T) {
 	old := tagBackfillWriteBatchSize
 	tagBackfillWriteBatchSize = 2
 	t.Cleanup(func() { tagBackfillWriteBatchSize = old })
@@ -772,7 +774,104 @@ func TestTagBackfill_WriteErrorReportsDroppedAndSummary(t *testing.T) {
 		t.Errorf("BatchUpsertBookFiles called %d times, want 1 (no writes after the first failure)", n)
 	}
 	joined := strings.Join(logs, "\n")
-	assertSummaryHas(t, joined, "flushed 0 pending rows of complete books, dropped 2", "wrote 0 rows;", "examined=12")
+	assertSummaryHas(t, joined, "flushed 0 pending rows of complete books; 0 rows written in total", "wrote 0 rows;", "examined=12")
+	// Every judged row is accounted for: none was written, so every one of them
+	// — the failed batch plus any book that finished judging after the failure —
+	// must be in not-written. (How many books finish before RunItems cancels the
+	// rest depends on scheduling, so the invariant is asserted, not a count.)
+	judged, notWritten := summaryInt(t, joined, "judged-rows"), summaryInt(t, joined, "not-written")
+	if judged < 2 || notWritten != judged {
+		t.Errorf("judged-rows=%d not-written=%d: want not-written == judged-rows >= 2 with 0 written", judged, notWritten)
+	}
+	assertSummaryHas(t, joined, fmt.Sprintf("%d judged rows not written after a write error", judged))
+}
+
+// A write failure at the final flush: every book was judged and pending when the
+// store failed, so all 12 rows must be reported not written — not just the rows
+// of the last batch.
+func TestTagBackfill_FinalFlushErrorCountsEveryJudgedRow(t *testing.T) {
+	old := tagBackfillWriteBatchSize
+	tagBackfillWriteBatchSize = 1000
+	t.Cleanup(func() { tagBackfillWriteBatchSize = old })
+
+	var files []database.BookFile
+	tags := map[string]metadata.Metadata{}
+	for i := range 6 {
+		for j, suffix := range []string{"a", "b"} {
+			id := fmt.Sprintf("f-%d-%s", i, suffix)
+			files = append(files, database.BookFile{ID: id, BookID: fmt.Sprintf("f-%d", i), TrackNumber: j + 1})
+			tags[id+".mp3"] = tagMeta(j+1, 2, 0, 0)
+		}
+	}
+	fx := newTagFixture(t, files, tags)
+	fx.store.BatchUpsertBookFilesFunc = func([]*database.BookFile) error { return errors.New("simulated store failure") }
+
+	logs, err := fx.runErr(context.Background(), tagBackfillParams{})
+	if err == nil || !strings.Contains(err.Error(), "batch write of 12 rows failed") {
+		t.Fatalf("err = %v, want the failed 12-row final flush", err)
+	}
+	assertSummaryHas(t, strings.Join(logs, "\n"), "wrote 0 rows; not-written=12", "judged-rows=12",
+		"flushed 0 pending rows of complete books; 0 rows written in total, 12 judged rows not written after a write error")
+}
+
+// Finding from review round 2: a two-disc book whose disc-1 files carry TPOS=1
+// (tracks 1-5) and whose disc-2 files have no disc frame (tracks 1-5). Absent
+// disc = 0 never collides with disc 1, so without the disc-presence guard every
+// (disc, track) key is distinct, the book is accepted, disc 2 is written as disc
+// 0, and disc-then-track order plays disc 2 first. The book must be refused.
+func TestTagBackfill_MixedDiscTagsRefuse(t *testing.T) {
+	var files []database.BookFile
+	tags := map[string]metadata.Metadata{}
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("md%02d", i)
+		files = append(files, database.BookFile{ID: id, BookID: "MD", TrackNumber: i, TrackCount: 10})
+		if i <= 5 {
+			tags[id+".mp3"] = tagMeta(i, 5, 1, 0) // disc 1: TPOS=1
+		} else {
+			tags[id+".mp3"] = tagMeta(i-5, 5, 0, 0) // disc 2: no disc frame
+		}
+	}
+	fx := newTagFixture(t, files, tags)
+	summary := fx.run(tagBackfillParams{})
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("md%02d", i)
+		f := fx.row(id)
+		assertPosition(t, f, 0, i)
+		if f.TrackCount != 10 || len(f.RawTags) == 0 {
+			t.Errorf("%s: want RawTags filled and positional TrackCount 10 kept, got count %d, %d tags", id, f.TrackCount, len(f.RawTags))
+		}
+	}
+	assertSummaryHas(t, summary, "books-refused-mixed-disc=1", "books-refused-duplicate=0", "books-refused-missing=0",
+		"read-took-tag-tracks=0", "read-rawtags-only=10", "judged-rows=10", "disc tag on only some files")
+}
+
+// With force=true a candidate missing on disk can carry stored RawTags. When its
+// book is accepted it is renumbered from those tags, and it must be counted once
+// — under siblings-renumbered, not also under missing-on-disk.
+func TestTagBackfill_ForceMissingCandidateCountsOnce(t *testing.T) {
+	fx := newTagFixture(t, []database.BookFile{
+		{ID: "fm1", BookID: "FM", TrackNumber: 2, RawTags: map[string]string{"TRCK": "1"}},
+		{ID: "fm2", BookID: "FM", TrackNumber: 1, RawTags: map[string]string{"TRCK": "2"}}, // no file on disk
+	}, map[string]metadata.Metadata{"fm1.mp3": tagMeta(1, 2, 0, 0)})
+	summary := fx.run(tagBackfillParams{Force: true})
+	assertPosition(t, fx.row("fm1"), 0, 1)
+	assertPosition(t, fx.row("fm2"), 0, 2)
+	assertSummaryHas(t, summary, "missing-on-disk=0", "siblings-renumbered=1", "read-took-tag-tracks=1",
+		"judged-rows=2", "wrote 2 rows; not-written=0")
+}
+
+// summaryInt reads the integer after "key=" in a summary line.
+func summaryInt(t *testing.T, summary, key string) int {
+	t.Helper()
+	m := regexp.MustCompile(`(?:^|[ ;])` + regexp.QuoteMeta(key) + `=(\d+)`).FindStringSubmatch(summary)
+	if m == nil {
+		t.Fatalf("summary has no %s=N:\n%s", key, summary)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("%s=%q: %v", key, m[1], err)
+	}
+	return n
 }
 
 func mustWriteFile(t *testing.T, path string) {
