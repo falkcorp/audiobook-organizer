@@ -1,7 +1,7 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 // Durable per-book failure records for the metadata apply pipeline's rename
 // phase.
@@ -72,17 +72,36 @@ type ApplyRenameFailure struct {
 	OccupantModUnix int64  `json:"occupant_mod_unix"`
 	Reason          string `json:"reason"`
 	RecordedAt      string `json:"recorded_at"`
+	// Category is the organize outcome category (Outcome* in
+	// inplace_collision.go). Empty for apply-pipeline records.
+	Category string `json:"category,omitempty"`
+	// SourcePath, SourceSize and SourceModUnix fingerprint the file that
+	// could not be moved. Organize records set them so a pair is retried when
+	// EITHER side changes; apply records leave them empty and are not
+	// compared on them.
+	SourcePath    string `json:"source_path,omitempty"`
+	SourceSize    int64  `json:"source_size,omitempty"`
+	SourceModUnix int64  `json:"source_mod_unix,omitempty"`
 }
 
-func applyRenameFailureKey(bookID string) string {
-	return ApplyRenameFailurePrefix + bookID
+// OrganizeCollisionSkipPrefix namespaces organize's in-place collision skips.
+// Separate from ApplyRenameFailurePrefix so an apply block never suppresses an
+// organize (or the reverse); the clear-apply-rename-failures op clears both.
+const OrganizeCollisionSkipPrefix = "organize_collision_skip:"
+
+// DurableSkipStore is the two preference methods the durable records need —
+// narrower than database.UserPreferenceStore so the organizer's own Store can
+// satisfy it without taking on the rest.
+type DurableSkipStore interface {
+	GetUserPreferenceForUser(userID, key string) (*database.UserPreferenceKV, error)
+	SetUserPreferenceForUser(userID, key, value string) error
 }
 
 // RecordApplyRenameFailure persists the durable failure for a book. Failing to
 // write it is logged and otherwise ignored: the consequence is the old
 // behaviour (retry next run), which is a regression in efficiency, not in
 // correctness.
-func RecordApplyRenameFailure(store database.UserPreferenceStore, f ApplyRenameFailure) {
+func recordDurableSkip(store DurableSkipStore, prefix string, f ApplyRenameFailure) {
 	if store == nil || strings.TrimSpace(f.BookID) == "" {
 		return
 	}
@@ -94,7 +113,7 @@ func RecordApplyRenameFailure(store database.UserPreferenceStore, f ApplyRenameF
 		slog.Warn("could not encode apply rename failure record", "book_id", logger.SanitizeLogValue(f.BookID), "error", err)
 		return
 	}
-	if err := store.SetUserPreferenceForUser("_system", applyRenameFailureKey(f.BookID), string(blob)); err != nil {
+	if err := store.SetUserPreferenceForUser("_system", prefix+f.BookID, string(blob)); err != nil {
 		slog.Warn("could not persist apply rename failure record", "book_id", logger.SanitizeLogValue(f.BookID), "error", err)
 	}
 }
@@ -104,11 +123,11 @@ func RecordApplyRenameFailure(store database.UserPreferenceStore, f ApplyRenameF
 // An EMPTY stored value means "cleared", not "corrupt": ClearCheckpoints and
 // ClearApplyRenameFailure both blank the value rather than deleting the row, so
 // the emptiness check has to come before the JSON decode.
-func LoadApplyRenameFailure(store database.UserPreferenceStore, bookID string) (*ApplyRenameFailure, bool) {
+func loadDurableSkip(store DurableSkipStore, prefix, bookID string) (*ApplyRenameFailure, bool) {
 	if store == nil || strings.TrimSpace(bookID) == "" {
 		return nil, false
 	}
-	pref, err := store.GetUserPreferenceForUser("_system", applyRenameFailureKey(bookID))
+	pref, err := store.GetUserPreferenceForUser("_system", prefix+bookID)
 	if err != nil || pref == nil || strings.TrimSpace(pref.Value) == "" {
 		return nil, false
 	}
@@ -127,11 +146,11 @@ func LoadApplyRenameFailure(store database.UserPreferenceStore, bookID string) (
 // ClearApplyRenameFailure removes the record so the book is attempted again.
 // Called on a successful rename and by the maintenance op that exists so a bad
 // classification is never permanent.
-func ClearApplyRenameFailure(store database.UserPreferenceStore, bookID string) {
+func clearDurableSkip(store DurableSkipStore, prefix, bookID string) {
 	if store == nil || strings.TrimSpace(bookID) == "" {
 		return
 	}
-	_ = store.SetUserPreferenceForUser("_system", applyRenameFailureKey(bookID), "")
+	_ = store.SetUserPreferenceForUser("_system", prefix+bookID, "")
 }
 
 // ApplyRenameBlocked reports whether a book should SKIP its rename phase this
@@ -148,8 +167,8 @@ func ClearApplyRenameFailure(store database.UserPreferenceStore, bookID string) 
 //
 // plannedTargets is the current run's target set. Passing nil means "the caller
 // has no plan to compare", and only the disk conditions are checked.
-func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plannedTargets []string) bool {
-	rec, ok := LoadApplyRenameFailure(store, bookID)
+func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTargets []string, source string) bool {
+	rec, ok := loadDurableSkip(store, prefix, bookID)
 	if !ok {
 		return false
 	}
@@ -163,9 +182,9 @@ func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plann
 			}
 		}
 		if !stillPlanned {
-			slog.Info("apply rename: durable failure cleared — the book no longer targets the blocked path",
+			slog.Info("durable skip cleared — the book no longer targets the blocked path",
 				"book_id", logger.SanitizeLogValue(bookID), "blocked_target", logger.SanitizeLogValue(rec.TargetPath))
-			ClearApplyRenameFailure(store, bookID)
+			clearDurableSkip(store, prefix, bookID)
 			return false
 		}
 	}
@@ -176,18 +195,67 @@ func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plann
 	}
 	info, err := os.Lstat(occupant)
 	if err != nil {
-		slog.Info("apply rename: durable failure cleared — the blocking file is gone",
+		slog.Info("durable skip cleared — the blocking file is gone",
 			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant))
-		ClearApplyRenameFailure(store, bookID)
+		clearDurableSkip(store, prefix, bookID)
 		return false
 	}
 	if info.Size() != rec.OccupantSize || info.ModTime().Unix() != rec.OccupantModUnix {
-		slog.Info("apply rename: durable failure cleared — the blocking file changed",
+		slog.Info("durable skip cleared — the blocking file changed",
 			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant),
 			"recorded_size", rec.OccupantSize, "now_size", info.Size())
-		ClearApplyRenameFailure(store, bookID)
+		clearDurableSkip(store, prefix, bookID)
 		return false
 	}
 
+	// Organize records also fingerprint the SOURCE: a source that moved,
+	// changed size or was rewritten is a different situation.
+	if rec.SourcePath != "" {
+		si, serr := os.Lstat(rec.SourcePath)
+		if (source != "" && source != rec.SourcePath) || serr != nil ||
+			si.Size() != rec.SourceSize || si.ModTime().Unix() != rec.SourceModUnix {
+			slog.Info("durable skip cleared — the source file moved or changed",
+				"book_id", logger.SanitizeLogValue(bookID), "source", logger.SanitizeLogValue(rec.SourcePath))
+			clearDurableSkip(store, prefix, bookID)
+			return false
+		}
+	}
+
 	return true
+}
+
+// RecordApplyRenameFailure persists an apply-pipeline durable failure. See
+// recordDurableSkip.
+func RecordApplyRenameFailure(store database.UserPreferenceStore, f ApplyRenameFailure) {
+	recordDurableSkip(store, ApplyRenameFailurePrefix, f)
+}
+
+// LoadApplyRenameFailure returns a book's apply record. See loadDurableSkip.
+func LoadApplyRenameFailure(store database.UserPreferenceStore, bookID string) (*ApplyRenameFailure, bool) {
+	return loadDurableSkip(store, ApplyRenameFailurePrefix, bookID)
+}
+
+// ClearApplyRenameFailure removes a book's apply record. See clearDurableSkip.
+func ClearApplyRenameFailure(store database.UserPreferenceStore, bookID string) {
+	clearDurableSkip(store, ApplyRenameFailurePrefix, bookID)
+}
+
+// ApplyRenameBlocked reports whether the apply rename phase should skip a
+// book. See durableSkipBlocked.
+func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plannedTargets []string) bool {
+	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "")
+}
+
+// RecordOrganizeCollisionSkip persists organize's durable skip for a declined
+// in-place destination conflict.
+func RecordOrganizeCollisionSkip(store DurableSkipStore, f ApplyRenameFailure) {
+	recordDurableSkip(store, OrganizeCollisionSkipPrefix, f)
+}
+
+// OrganizeCollisionBlocked reports whether moving bookID from source to target
+// was declined on an earlier run and nothing has changed since: same target,
+// same source path, and neither file's size nor mtime differs. Any change
+// clears the record and returns false, so the pair is retried.
+func OrganizeCollisionBlocked(store DurableSkipStore, bookID, target, source string) bool {
+	return durableSkipBlocked(store, OrganizeCollisionSkipPrefix, bookID, []string{target}, source)
 }

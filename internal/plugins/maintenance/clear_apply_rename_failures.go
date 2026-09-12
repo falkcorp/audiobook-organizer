@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
 // Clears the metadata apply pipeline's DURABLE RENAME-FAILURE records.
 //
@@ -110,8 +110,14 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 
 	res := clearApplyRenameFailuresResult{Scanned: len(prefs)}
 	for _, pref := range prefs {
-		if !strings.HasPrefix(pref.Key, organizer.ApplyRenameFailurePrefix) {
-			continue
+		prefix := organizer.ApplyRenameFailurePrefix
+		if !strings.HasPrefix(pref.Key, prefix) {
+			// Organize's in-place collision skips share the record shape under
+			// their own prefix; this op is the escape hatch for both.
+			prefix = organizer.OrganizeCollisionSkipPrefix
+			if !strings.HasPrefix(pref.Key, prefix) {
+				continue
+			}
 		}
 		// A blank value is an ALREADY-CLEARED record, not a live one: clearing
 		// writes "" rather than deleting the row (the same convention
@@ -120,7 +126,7 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 		if strings.TrimSpace(pref.Value) == "" {
 			continue
 		}
-		bookID := strings.TrimPrefix(pref.Key, organizer.ApplyRenameFailurePrefix)
+		bookID := strings.TrimPrefix(pref.Key, prefix)
 		if len(wanted) > 0 {
 			if _, ok := wanted[bookID]; !ok {
 				continue

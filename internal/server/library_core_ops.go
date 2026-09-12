@@ -1,5 +1,5 @@
 // file: internal/server/library_core_ops.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -134,6 +136,18 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 					"folder_idx", p.ResumeFolderIdx, "item_offset", p.ResumeItemOffset)
 			}
 
+			// SetResult REPLACES the result payload and two callbacks below write
+			// to it (file failures, organize outcomes), so both go through one
+			// merged map and neither erases the other.
+			var resultMu sync.Mutex
+			result := map[string]any{}
+			setResult := func(kv map[string]any) error {
+				resultMu.Lock()
+				defer resultMu.Unlock()
+				maps.Copy(result, kv)
+				return opsregistry.ReporterSetResult(reporter, maps.Clone(result))
+			}
+
 			scanReq := &scanner.ScanRequest{
 				FolderPath:       p.FolderPath,
 				ForceUpdate:      p.ForceUpdate,
@@ -168,12 +182,21 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 				// Non-fatal for the same reason as OnAIPhaseWarning: a few
 				// unreadable files must not fail -- and so retry -- a scan.
 				OnFileFailures: func(total int, sample []scanner.FileFailure) {
-					if err := opsregistry.ReporterSetResult(reporter, map[string]any{
+					if err := setResult(map[string]any{
 						"files_failed":        total,
 						"files_failed_sample": sample,
 					}); err != nil {
 						_ = reporter.Log(slog.LevelWarn, "library.scan: could not persist the file-failure result",
 							slog.String("error", err.Error()), slog.Int("files_failed", total))
+					}
+				},
+				// Post-scan auto-organize outcome counts (adopted, suffixed,
+				// fragment_collapse, ...). Organize runs as a hook inside this op,
+				// so without this they would exist only as log lines.
+				OnOrganizeTally: func(counts map[string]int) {
+					if err := setResult(map[string]any{"organize_outcomes": counts}); err != nil {
+						_ = reporter.Log(slog.LevelWarn, "library.scan: could not persist the organize outcome counts",
+							slog.String("error", err.Error()))
 					}
 				},
 			}
