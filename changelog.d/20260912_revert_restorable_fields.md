@@ -1,33 +1,27 @@
 ### Fixed
 
-#### Undo restores `series_id` changes and series renames; `version_group_id` stays record-only
+#### Undo restores `series_id` changes; `version_group_id` and `series_name` stay record-only with a stated reason
 
 `POST /operations/:id/revert` and its preflight now restore `metadata_update`
-rows on `series_id` (series dedup, `MergeSeries`). The old value is written back
-as a typed `*int`, and an empty old value clears the series to nil. A row is
-refused (Failed, left unmarked) when its old series no longer exists, because
-writing it back would leave a dangling series reference. That includes every
-series-phantom-repair row, whose old value is a dangling id by definition.
+rows on `series_id`, written by series dedup (`DedupSeries`, `MergeSeries`) and
+`maintenance.series-phantom-repair`. The old value is written back as a typed
+`*int`, and an empty old value clears the series to nil instead of writing 0.
+Before this, `RunUndoOperation` already restored these rows while the revert
+endpoint called them record-only. The old string-only reflection writer would
+also have panicked on an `*int` field if one had been added to its map.
 
-Series renames are now undoable. `MergeSeries` records a series-scoped
-`series_rename` row carrying the new `OperationChange.SeriesID` field, and the
-revert renames the series back. It refuses when the series is gone, has been
-renamed again since, or its old name now belongs to another series under the
-same author, and on any store error. The book-scoped `series_name` rows written
-before this change carry no series id and stay record-only.
+A `series_id` row is refused (counted Failed, left unmarked) when its old series
+no longer exists. Series dedup deletes the merged-from series in the same
+operation, and a phantom-repair old value is a dangling id by definition, so
+writing either back would create a dangling series reference. The preflight
+runs the same check and reports these rows in a new `series_deleted` conflict
+bucket, which the Activity Log confirmation counts as conflicts.
 
-The preflight runs the same checks. It lists refusals under `series_deleted`,
-`series_renamed_since`, `series_name_taken` and `series_check_failed`, and the
-Activity Log confirmation names them as rows that will be refused, never as
-undoable, so an operation made only of such rows offers no Undo.
+`MergeSeries` now takes the before-image for its `series_id` row from the
+hydrated book it overwrites, not the index copy, matching `DedupSeries`.
 
-A revert whose book no longer exists now fails that row instead of panicking,
-and a file move loads its book before moving the file back.
-
-The unused `undo.RunUndoOperation` walk and its server wrapper are deleted.
-Nothing outside tests called it, and it restored `series_id` without these
-checks.
-
-`version_group_id` stays record-only: the organizer records an empty old value
-even when the book was already in the group, and the same write also demotes
-the book and creates the organized copy.
+`version_group_id` stays record-only: the organizer version-copy path always
+records an empty old value, even when the book was already in that group, and
+the same write also demotes the book and creates the organized copy, none of
+which a field write can reverse. `series_name` stays record-only because it
+renames a series entity and the row does not record which series.
