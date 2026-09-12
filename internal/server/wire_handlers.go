@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.32.0
+// version: 2.32.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-12
 
@@ -631,6 +631,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.updateFetchedMetadataState,
 		s.publishEvent,
 	)
+	metadataH.SetScanStandDownGate(s)
 
 	// Tools lifecycle handler (instantiated here so wireMediaRoutes receives it).
 	toolsH := toolshandler.New(s.toolRegistry, &config.AppConfig.Tools, nil)

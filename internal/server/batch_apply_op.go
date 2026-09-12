@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -234,7 +234,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 		SummarizeQueued:       summarizeBatchApplyQueued,
 		Permissions:           []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:          []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 			var p batchApplyOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
@@ -252,6 +252,15 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			if err := applycap.Check("metadata.batch-apply-cached", len(p.BookIDs), config.AppConfig.BulkApplyMaxItems); err != nil {
 				return err
 			}
+
+			// Metadata is never applied during a library scan: hold the scan stand-down
+			// before the first write (fails the op if the scan does not park).
+			hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "metadata.batch-apply-cached apply")
+			if sdErr != nil {
+				return sdErr
+			}
+			defer func() { retErr = hold.Finish(retErr) }()
+			ctx, reporter = hold.Context(), hold.Reporter()
 
 			svc := s.metadataFetchService
 			if svc == nil {

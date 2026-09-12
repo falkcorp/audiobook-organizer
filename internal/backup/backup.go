@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package backup
 
@@ -73,7 +73,13 @@ const (
 //
 // Optional; nil disables reporting. Called synchronously on the backup's
 // goroutine, so implementations must not block — throttle inside the callback.
-type BackupProgress func(phase string, filesDone int, bytesDone int64)
+//
+// A non-nil error from the callback aborts the backup at that point -- between
+// files in the archive walk, between chunks in the checksum pass -- and the
+// partial archive is removed. The organizer uses this as its scan stand-down
+// checkpoint: a scan quiesced during auto-backup parks between files instead of
+// finishing a multi-minute archive first.
+type BackupProgress func(phase string, filesDone int, bytesDone int64) error
 
 // BackupConfig holds backup configuration
 type BackupConfig struct {
@@ -994,7 +1000,9 @@ func addToArchive(tarWriter *tar.Writer, path, dbType string, progress BackupPro
 				filesDone++
 				bytesDone += written
 				if progress != nil {
-					progress(PhaseArchive, filesDone, bytesDone)
+					if perr := progress(PhaseArchive, filesDone, bytesDone); perr != nil {
+						return perr
+					}
 				}
 			}
 
@@ -1025,7 +1033,9 @@ func addToArchive(tarWriter *tar.Writer, path, dbType string, progress BackupPro
 		filesDone++
 		bytesDone += written
 		if progress != nil {
-			progress(PhaseArchive, filesDone, bytesDone)
+			if perr := progress(PhaseArchive, filesDone, bytesDone); perr != nil {
+				return perr
+			}
 		}
 		return nil
 	}
@@ -1060,7 +1070,9 @@ func calculateFileChecksum(path string, progress BackupProgress) (string, error)
 				return "", werr
 			}
 			done += int64(n)
-			progress(PhaseChecksum, 0, done)
+			if perr := progress(PhaseChecksum, 0, done); perr != nil {
+				return "", perr
+			}
 		}
 		if readErr == io.EOF {
 			break

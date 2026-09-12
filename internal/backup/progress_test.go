@@ -1,7 +1,7 @@
 // file: internal/backup/progress_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d1f6c07-4b28-4e93-a5f0-3c71d8e0b942
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package backup
 
@@ -59,8 +59,9 @@ func TestCreateBackup_ProgressAdvancesWithFilesArchived(t *testing.T) {
 	var events []progressEvent
 	cfg := DefaultBackupConfig()
 	cfg.BackupDir = t.TempDir()
-	cfg.Progress = func(phase string, filesDone int, bytesDone int64) {
+	cfg.Progress = func(phase string, filesDone int, bytesDone int64) error {
 		events = append(events, progressEvent{phase, filesDone, bytesDone})
+		return nil
 	}
 
 	if _, err := CreateBackup(dbDir, "pebble", cfg); err != nil {
@@ -100,10 +101,11 @@ func TestCreateBackup_ProgressCoversChecksumPass(t *testing.T) {
 	var phases []string
 	cfg := DefaultBackupConfig()
 	cfg.BackupDir = t.TempDir()
-	cfg.Progress = func(phase string, _ int, _ int64) {
+	cfg.Progress = func(phase string, _ int, _ int64) error {
 		if len(phases) == 0 || phases[len(phases)-1] != phase {
 			phases = append(phases, phase)
 		}
+		return nil
 	}
 
 	if _, err := CreateBackup(dbDir, "pebble", cfg); err != nil {

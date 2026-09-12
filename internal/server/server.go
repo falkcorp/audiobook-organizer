@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.47.0
+// version: 2.47.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -249,6 +249,9 @@ type Server struct {
 	// here; the registry owns dispatch and worker pool lifecycle.
 	// No plugins are registered until their own bot-tasks wire them in.
 	opRegistry *opsregistry.Registry
+	// scanStandDownGateOverride replaces the scan stand-down gate in tests; nil
+	// in production (see scanGate in metadata_scan_standdown.go).
+	scanStandDownGateOverride metadataScanGate
 
 	// opRegistrationErrs collects failures from the op-registrar loop in
 	// NewServer. NewServer returns *Server with no error (47 call sites, most
@@ -635,6 +638,7 @@ func NewServer(store database.Store) *Server {
 		OLService:            server.olService,
 		MetadataFetchService: server.metadataFetchService,
 		AudiobookService:     server.audiobookService,
+		ScanStandDown:        server,
 	})
 
 	// UOS-12: maintenance plugin — 26 ops migrated from scheduler_tasks.go.

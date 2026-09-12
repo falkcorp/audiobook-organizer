@@ -1,7 +1,7 @@
 // file: internal/server/library_writeback_op.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package server
 
@@ -100,7 +100,7 @@ func (s *Server) RegisterBulkWriteBackOp(reg *opsregistry.Registry) error {
 // runBulkWriteBackOp is the Run body of library.bulk-write-back. It is a named
 // method rather than a closure so the resume test can drive it with a
 // recording reporter and a cancelled context.
-func (s *Server) runBulkWriteBackOp(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+func (s *Server) runBulkWriteBackOp(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 	var p bulkWriteBackOpParams
 	if len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &p); err != nil {
@@ -110,6 +110,15 @@ func (s *Server) runBulkWriteBackOp(ctx context.Context, rawParams json.RawMessa
 	if len(p.BookIDs) == 0 {
 		return nil
 	}
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "library.bulk-write-back apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, reporter = hold.Context(), hold.Reporter()
+
 	opID := ulid.Make().String()
 	progress := registryProgressAdapter{r: reporter}
 

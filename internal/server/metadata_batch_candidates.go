@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.1.0
+// version: 4.1.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -475,6 +475,13 @@ const batchApplyConcurrency = 4
 
 // handleBatchApplyCandidates applies stored metadata candidates for the selected books.
 func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
+	// Metadata is never applied during a library scan: 409 at once, no wait.
+	release, ok := s.holdScanStandDownForRequest(c, "batch-apply-candidates")
+	if !ok {
+		return
+	}
+	defer release()
+
 	// The list this feeds is memoised; a status change must not keep offering a
 	// candidate the user just acted on.
 	defer invalidateMetadataResultsCache()
