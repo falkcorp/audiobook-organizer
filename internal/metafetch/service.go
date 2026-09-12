@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.17.0
+// version: 5.18.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-12
 
@@ -211,6 +211,12 @@ type Service struct {
 	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
 	// refuses loopback, so an httptest server cannot stand in). Nil in production.
 	coverDownload func(coverURL, destDir, bookID string) (string, error)
+
+	// fileWorkScheduler runs auto-fetch's file work through the server's
+	// file-I/O pool under the path lock (SetFileWorkScheduler). Nil means no
+	// pool is wired -- organize's per-call service, tests -- and auto-fetch then
+	// downloads the cover only and touches no audio file.
+	fileWorkScheduler FileWorkScheduler
 }
 
 type FetchMetadataResponse struct {
@@ -342,7 +348,7 @@ type SearchOptions struct {
 // Always overwrites existing cover art. Before overwriting, extracts the old
 // cover and saves it as a timestamped version in covers/history/ so it can be
 // restored later via the changelog.
-func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string) {
+func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string, policy copyPolicy) {
 	if book == nil || book.FilePath == "" || coverPath == "" {
 		return
 	}
@@ -357,7 +363,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 
 	// If book is in a protected path, get or create a library copy
 	if mfs.isProtectedPath(book.FilePath) {
-		libCopy := mfs.ensureLibraryCopy(book)
+		libCopy := mfs.libraryCopyFor(book, policy)
 		if libCopy == nil {
 			slog.Warn("cannot embed cover: protected book has no library copy",
 				"book_id", book.ID, "book_title", book.Title,
@@ -653,6 +659,10 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, book *database.Book) e
 		// would be built from a half-substituted template and would relocate the
 		// library somewhere no scan expects.
 		return fmt.Errorf("compute target paths for book %s: %w", id, err)
+	}
+	entries = mfs.dropProtectedRenameEntries(id, entries)
+	if len(entries) == 0 {
+		return nil
 	}
 
 	// Same collision policy as runApplyPipeline: this is the same rename

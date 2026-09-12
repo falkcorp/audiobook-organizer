@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-05-01
+// last-edited: 2026-09-12
 
 package metafetch
 
@@ -73,4 +73,18 @@ func (mfs *Service) SetISBNEnrichment(svc *ISBNService) {
 // ISBNEnrichment returns the ISBN enrichment service (may be nil).
 func (mfs *Service) ISBNEnrichment() *ISBNService {
 	return mfs.isbnEnrichment
+}
+
+// FileWorkScheduler runs work for bookID off the calling goroutine: through
+// the server's file-I/O pool, holding the path lock for filePath while work
+// runs. The server supplies it; metafetch cannot import the pool or the lock
+// table without an import cycle.
+type FileWorkScheduler func(bookID, filePath string, work func())
+
+// SetFileWorkScheduler routes auto-fetch's file work through the file-I/O
+// pool and the path lock, the way a manual apply already runs, so an
+// auto-fetch and a manual apply of the same book cannot rename or tag its
+// files at the same time.
+func (mfs *Service) SetFileWorkScheduler(s FileWorkScheduler) {
+	mfs.fileWorkScheduler = s
 }

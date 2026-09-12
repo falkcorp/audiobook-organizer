@@ -16,6 +16,11 @@ import (
 const sqliteRemovedMessage = "the enable_sqlite setting (the --enable-sqlite3-i-know-the-risks flag) " +
 	"was removed: SQLite is no longer selectable as the database backend and PebbleDB is the only backend"
 
+// autoFetchRemovedMessage explains the removal of auto_fetch_metadata.
+const autoFetchRemovedMessage = "the auto_fetch_metadata setting was removed: nothing ever read it. " +
+	"Each auto-fetch has its own switch: organize's fetch_metadata_first, the iTunes import's fetch-metadata option, " +
+	"and the per-book Fetch button"
+
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
 	key     string
@@ -39,6 +44,10 @@ var removedConfigKeys = []removedConfigKey{
 	// The viper/env name of the removed --enable-sqlite3-i-know-the-risks flag
 	// (env: ENABLE_SQLITE3_I_KNOW_THE_RISKS under viper.AutomaticEnv).
 	{key: "enable_sqlite3_i_know_the_risks", message: sqliteRemovedMessage},
+	// Removed 2026-09-12. Listed so a config file, the environment or a legacy
+	// settings row still carrying it gets the removed-setting warning instead of
+	// being ignored in silence. The web settings page no longer sends it.
+	{key: "auto_fetch_metadata", message: autoFetchRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key

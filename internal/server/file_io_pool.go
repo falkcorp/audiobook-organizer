@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool.go
-// version: 2.6.1
+// version: 2.7.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 //
@@ -19,6 +19,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 const pendingFileOpPrefix = "pending_file_op:"
@@ -295,15 +298,11 @@ func InitFileIOPool() {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		if err := srv.metadataFetchService.ApplyMetadataFileIO(bookID); err != nil {
-			slog.Warn("recovery apply file I/O failed", "bookID", bookID, "err", err)
-		}
-		if _, err := srv.metadataFetchService.WriteBackMetadataForBook(bookID); err != nil {
-			slog.Warn("recovery write-back for", "bookID", bookID, "err", err)
-		}
+		var enqueue func(string)
 		if srv.writeBackBatcher != nil {
-			srv.writeBackBatcher.Enqueue(bookID)
+			enqueue = srv.writeBackBatcher.Enqueue
 		}
+		recoverApplyMetadataFileOp(srv.metadataFetchService, enqueue, bookID)
 	})
 }
 
@@ -416,5 +415,66 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 		if pool != nil {
 			pool.SubmitTyped(bookID, opType, func() { fn(bookID) })
 		}
+	}
+}
+
+// applyMetadataRecoverer is the slice of *metafetch.Service the apply_metadata
+// recovery replay needs. It deliberately does not include ApplyMetadataFileIO
+// or WriteBackMetadataForBook: calling those two in a row is what tagged every
+// file twice.
+type applyMetadataRecoverer interface {
+	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error
+}
+
+// recoverApplyMetadataFileOp replays an interrupted apply's file work through
+// the shared sequel, which writes the tags exactly once. Both apply_metadata
+// recovery registrations (here and in server.go) route through it; they used
+// to call ApplyMetadataFileIO and then WriteBackMetadataForBook, and with
+// auto_write_tags_on_apply on the first had already written the tags. The
+// pending cover URL was not persisted with the job, so nothing is downloaded.
+func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, enqueue func(string), bookID string) {
+	if err := svc.FinishApplyFileWork(bookID, "", true, true); err != nil {
+		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
+	}
+	if enqueue != nil {
+		enqueue(bookID)
+	}
+}
+
+// autoFetchFileOpType is the file-I/O pool op type for auto-fetch's file work.
+// It is separate from apply_metadata so a replay after a restart runs the
+// auto-fetch rules (never create a library copy), not a manual apply's.
+const autoFetchFileOpType = "auto_fetch_file_work"
+
+// autoFetchRecoverer is the slice of *metafetch.Service the auto-fetch replay needs.
+type autoFetchRecoverer interface {
+	FinishAutoFetchFileWork(id, pendingCoverURL string, writeTags bool) error
+}
+
+// recoverAutoFetchFileOp replays interrupted auto-fetch file work.
+func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
+	if err := svc.FinishAutoFetchFileWork(bookID, "", config.AppConfig.WriteBackMetadata); err != nil {
+		slog.Warn("recovery auto-fetch file work failed", "bookID", bookID, "err", err)
+	}
+}
+
+// newAutoFetchScheduler returns the metafetch.FileWorkScheduler the server
+// wires: the work is queued on the file-I/O pool and runs holding the path
+// lock, exactly as the batch apply does, so an auto-fetch and a manual apply
+// of the same book cannot rename or tag its files at the same time. With no
+// pool (test servers) it runs inline, still under the lock.
+func newAutoFetchScheduler(pool func() *FileIOPool, lock func(path string) func()) metafetch.FileWorkScheduler {
+	return func(bookID, filePath string, work func()) {
+		job := func() {
+			release := lock(filePath)
+			defer release()
+			work()
+		}
+		p := pool()
+		if p == nil {
+			job()
+			return
+		}
+		p.SubmitTyped(bookID, autoFetchFileOpType, job)
 	}
 }

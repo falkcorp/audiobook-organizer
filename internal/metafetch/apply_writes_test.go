@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -420,14 +420,22 @@ func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 		{writeBackMetadata: false, autoTags: false, want: 0},
 	}
 	for _, tt := range tests {
-		svc, calls, _ := fileWorkHarness(t, "", false, tt.autoTags, nil)
+		// Under root_dir: auto-fetch touches files only for a book that already
+		// has a library copy there.
+		svc, calls, _ := fileWorkHarness(t, "/lib", false, tt.autoTags, nil)
 		config.AppConfig.WriteBackMetadata = tt.writeBackMetadata
+		var scheduled []string
+		svc.fileWorkScheduler = func(bookID, filePath string, work func()) {
+			scheduled = append(scheduled, bookID+"@"+filePath)
+			work()
+		}
 		svc.overrideSources = []metadata.MetadataSource{fakeSource{
 			name:    "Audible",
 			results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", Genre: "Fantasy"}},
 		}}
 		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
 		require.NoError(t, err)
+		assert.Equal(t, []string{"b1@/lib/a/a.m4b"}, scheduled, "the file work goes through the scheduler (pool + path lock)")
 		assert.Equal(t, tt.want, countPrefix(*calls, "tags:"),
 			"write_back_metadata=%v auto_write_tags=%v: tag writes", tt.writeBackMetadata, tt.autoTags)
 	}
@@ -445,4 +453,196 @@ func TestApplyFieldsMatchWebList(t *testing.T) {
 		web = append(web, string(m[1]))
 	}
 	assert.Equal(t, ApplyFieldKeys(), web)
+}
+
+func TestPathUnderRoot(t *testing.T) {
+	tests := []struct {
+		p, root string
+		want    bool
+	}{
+		{"/library/a/b.m4b", "/library", true},
+		{"/library", "/library", true},
+		{"/library/a", "/library/", true},
+		{"/library-old/a.m4b", "/library", false},
+		{"/librarything", "/library", false},
+		{"", "/library", false},
+		{"/library/a", "", false},
+		{"/x/y", "/", true},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, pathUnderRoot(tt.p, tt.root), "pathUnderRoot(%q, %q)", tt.p, tt.root)
+	}
+}
+
+// protectedSetup makes a library root and an iTunes tree that isProtectedPath
+// flags, both real directories under one temp dir.
+func protectedSetup(t *testing.T) (root, itunes string) {
+	t.Helper()
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	base := t.TempDir()
+	root, itunes = filepath.Join(base, "library"), filepath.Join(base, "itunes")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.MkdirAll(itunes, 0o755))
+	config.AppConfig.RootDir = root
+	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "iTunes Library.xml")
+	config.AppConfig.ITunes.LibraryWritePath = ""
+	return root, itunes
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+// A version sibling under root_dir is not "the library copy" while one of its
+// file rows still points into the iTunes tree.
+func TestExistingLibraryCopy_RejectsSiblingWithProtectedFileRow(t *testing.T) {
+	root, itunes := protectedSetup(t)
+	vg := "vg1"
+	book := &database.Book{ID: "orig", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
+	sib := database.Book{ID: "lib1", FilePath: filepath.Join(root, "A", "a"), VersionGroupID: &vg}
+	rows := map[string][]database.BookFile{
+		"lib1": {{ID: "f1", BookID: "lib1", FilePath: filepath.Join(root, "A", "a", "01.m4b")}},
+	}
+	svc := NewService(&database.MockStore{
+		GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) { return []database.Book{*book, sib}, nil },
+		GetBookFilesFunc:           func(id string) ([]database.BookFile, error) { return rows[id], nil },
+	})
+
+	got, ok := svc.existingLibraryCopy(book)
+	require.True(t, ok)
+	require.NotNil(t, got)
+	assert.Equal(t, "lib1", got.ID, "a clean sibling is the library copy")
+
+	rows["lib1"] = append(rows["lib1"], database.BookFile{ID: "f2", BookID: "lib1", FilePath: filepath.Join(itunes, "Music", "02.m4b")})
+	got, ok = svc.existingLibraryCopy(book)
+	assert.False(t, ok)
+	assert.Nil(t, got, "a sibling with an iTunes file row is not a library copy")
+	assert.Nil(t, svc.libraryCopyFor(book, existingCopyOnly))
+	assert.False(t, svc.autoFetchHasLibraryCopy(book))
+}
+
+// The rename leg drops every entry whose source is protected. The library
+// file is renamed (so the pipeline did run); the iTunes file is never moved.
+func TestRunApplyPipeline_NeverMovesAProtectedFileRow(t *testing.T) {
+	root, itunes := protectedSetup(t)
+	config.AppConfig.AutoRenameOnApply = true
+	config.AppConfig.AutoWriteTagsOnApply = false
+	bookDir := filepath.Join(root, "Old Place")
+	libFile := filepath.Join(bookDir, "01.m4b")
+	itFile := filepath.Join(itunes, "Music", "02.m4b")
+	writeFile(t, libFile, "library audio")
+	writeFile(t, itFile, "itunes audio")
+
+	book := &database.Book{ID: "lib1", Title: "A Book", FilePath: bookDir}
+	var mu sync.Mutex
+	files := []database.BookFile{
+		{ID: "f1", BookID: "lib1", FilePath: libFile},
+		{ID: "f2", BookID: "lib1", FilePath: itFile},
+	}
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { b := *book; return &b, nil },
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]database.BookFile(nil), files...), nil
+		},
+	})
+	_, err := svc.runApplyPipeline("lib1", book, createLibraryCopy)
+
+	_, itErr := os.Stat(itFile)
+	require.NoError(t, itErr, "the iTunes file must stay where it is (pipeline err: %v)", err)
+	got, _ := os.ReadFile(itFile)
+	assert.Equal(t, "itunes audio", string(got))
+	_, libErr := os.Stat(libFile)
+	assert.True(t, os.IsNotExist(libErr), "the library file should have been renamed, proving the rename ran (pipeline err: %v)", err)
+}
+
+// Auto-fetch never creates a library copy. A protected book with none gets no
+// file work; the same book with a clean library sibling gets it, once.
+func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
+	root, itunes := protectedSetup(t)
+	config.AppConfig.AutoRenameOnApply = false
+	config.AppConfig.AutoWriteTagsOnApply = true
+	vg := "vg1"
+	book := &database.Book{ID: "b1", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
+	var siblings []database.Book
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc:            func(string) (*database.Book, error) { b := *book; return &b, nil },
+		GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) { return siblings, nil },
+		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+			return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(root, "A Book", "a.m4b")}}, nil
+		},
+		CreateBookFunc: func(*database.Book) (*database.Book, error) {
+			t.Error("auto-fetch created a book row (a library copy)")
+			return nil, errors.New("refused")
+		},
+	})
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
+	assert.Empty(t, tags, "no library copy: auto-fetch must not touch the files")
+
+	siblings = []database.Book{*book, {ID: "lib1", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}}
+	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
+	assert.Equal(t, []string{"lib1"}, tags, "an existing library copy gets the file work, tagged once")
+}
+
+// With no pool wired (organize's per-call service) auto-fetch touches no file.
+func TestFetchMetadataForBook_NoPoolTouchesNoFiles(t *testing.T) {
+	svc, calls, _ := fileWorkHarness(t, "/lib", true, true, nil)
+	config.AppConfig.WriteBackMetadata = true
+	svc.overrideSources = []metadata.MetadataSource{fakeSource{
+		name:    "Audible",
+		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author"}},
+	}}
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	require.NoError(t, err)
+	assert.Zero(t, countPrefix(*calls, "tags:"))
+}
+
+// Auto-fetch writes a series position only together with a series name.
+func TestFetchMetadataForBook_PositionNeedsASeriesName(t *testing.T) {
+	for _, tt := range []struct {
+		series  string
+		wantPos bool
+	}{{"", false}, {"The Saga", true}} {
+		svc, _, book := fileWorkHarness(t, "", false, false, nil)
+		existing := 7
+		book.SeriesID = &existing
+		ms := svc.db.(*database.MockStore)
+		ms.GetSeriesByNameFunc = func(string, *int) (*database.Series, error) { return &database.Series{ID: 9, Name: tt.series}, nil }
+		svc.overrideSources = []metadata.MetadataSource{fakeSource{
+			name:    "Audible",
+			results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", Series: tt.series, SeriesPosition: "3"}},
+		}}
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		require.NoError(t, err)
+		if tt.wantPos {
+			require.NotNil(t, book.SeriesSequence, "series %q", tt.series)
+			assert.Equal(t, 3, *book.SeriesSequence)
+		} else {
+			assert.Nil(t, book.SeriesSequence, "a position with no series name was pinned onto series %d", existing)
+		}
+	}
+}
+
+// A failed cover download leaves the previous (renderable) cover, never the
+// provider's remote url, which the UI cannot display.
+func TestFetchMetadataForBook_FailedCoverDownloadKeepsPreviousCover(t *testing.T) {
+	svc, _, book := fileWorkHarness(t, t.TempDir(), false, false, nil)
+	prev := "/api/v1/covers/local/b1.jpg"
+	book.CoverURL = &prev
+	svc.coverDownload = func(string, string, string) (string, error) { return "", errors.New("provider 503") }
+	svc.overrideSources = []metadata.MetadataSource{fakeSource{
+		name:    "Audible",
+		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", CoverURL: "https://covers.example.test/new.jpg"}},
+	}}
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	require.NoError(t, err)
+	require.NotNil(t, book.CoverURL)
+	assert.Equal(t, prev, *book.CoverURL)
 }

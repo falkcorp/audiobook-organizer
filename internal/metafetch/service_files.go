@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -99,12 +99,25 @@ type tagWriteResult struct {
 
 // writeTags is the one tag write every apply path goes through. tagWriter is
 // a test seam that counts it; nil in production.
-func (mfs *Service) writeTags(id string) (int, error) {
+func (mfs *Service) writeTags(id string, policy copyPolicy) (int, error) {
 	if mfs.tagWriter != nil {
 		return mfs.tagWriter(id)
 	}
-	return mfs.WriteBackMetadataForBook(id)
+	return mfs.writeBackForBook(id, nil, policy)
 }
+
+// copyPolicy says whether file work may create a library copy for a book that
+// lives under a protected (iTunes/import) path.
+type copyPolicy bool
+
+const (
+	// createLibraryCopy: user-initiated applies. A protected book gets a
+	// library copy made if it has none, and the file work runs on the copy.
+	createLibraryCopy copyPolicy = true
+	// existingCopyOnly: auto-fetch. File work runs on a library copy that
+	// already exists, and is skipped when there is none.
+	existingCopyOnly copyPolicy = false
+)
 
 // FinishApplyFileWork is the ONE file-side sequel to a metadata apply, shared by
 // the single-book apply, the batch applies and auto-fetch, in this order:
@@ -131,14 +144,38 @@ func (mfs *Service) writeTags(id string) (int, error) {
 // correct tags in a file that did not move are still correct.
 func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool) error {
 	mfs.DownloadPendingCover(id, pendingCoverURL)
+	return mfs.finishFileWork(id, fileIO, writeTags, createLibraryCopy)
+}
 
+// FinishAutoFetchFileWork is FinishApplyFileWork for auto-fetch (the organize
+// fetch-first pass, iTunes import enrichment, the per-book Fetch button). It
+// downloads the cover, then does the file work ONLY when the book already has
+// a library copy under root_dir, and never creates one. Callers reach it
+// through the server's file-I/O pool under the path lock (see
+// SetFileWorkScheduler), the same as a manual apply, so the two cannot race.
+func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTags bool) error {
+	mfs.DownloadPendingCover(id, pendingCoverURL)
+	book, err := mfs.db.GetBookByID(id)
+	if err != nil || book == nil {
+		return fmt.Errorf("auto-fetch file work: load book %s: %v", id, err)
+	}
+	if !mfs.autoFetchHasLibraryCopy(book) {
+		slog.Info("auto-fetch: book has no library copy under root_dir; file work skipped (auto-fetch never creates one)",
+			"book_id", id, "path", book.FilePath)
+		return nil
+	}
+	return mfs.finishFileWork(id, true, writeTags, existingCopyOnly)
+}
+
+// finishFileWork is steps 2 and 3 of FinishApplyFileWork under a copy policy.
+func (mfs *Service) finishFileWork(id string, fileIO, writeTags bool, policy copyPolicy) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
-		tags, fileErr = mfs.applyMetadataFileIO(id)
+		tags, fileErr = mfs.applyMetadataFileIO(id, policy)
 	}
 	if writeTags && !tags.handled {
-		if _, err := mfs.writeTags(id); err != nil {
+		if _, err := mfs.writeTags(id, policy); err != nil {
 			tags.err = err
 		}
 	}
@@ -173,13 +210,13 @@ func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writ
 // embedCoverInBookFiles reports nothing and a missing cover must not mask a
 // rename failure or block the pipeline below it.
 func (mfs *Service) ApplyMetadataFileIO(id string) error {
-	_, err := mfs.applyMetadataFileIO(id)
+	_, err := mfs.applyMetadataFileIO(id, createLibraryCopy)
 	return err
 }
 
 // applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
 // pipeline did about tags, for FinishApplyFileWork's write-once guard.
-func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
+func (mfs *Service) applyMetadataFileIO(id string, policy copyPolicy) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
@@ -194,12 +231,12 @@ func (mfs *Service) applyMetadataFileIO(id string) (tagWriteResult, error) {
 
 	// Embed cover art into audio files (slow: ffmpeg)
 	if config.AppConfig.RootDir != "" {
-		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
+		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, id), policy)
 	}
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		tags, err := mfs.runApplyPipeline(id, book)
+		tags, err := mfs.runApplyPipeline(id, book, policy)
 		if err != nil {
 			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}

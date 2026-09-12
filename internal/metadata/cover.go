@@ -1,11 +1,12 @@
 // file: internal/metadata/cover.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package metadata
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -39,18 +40,49 @@ func DownloadCoverArt(coverURL string, destDir string, bookID string) (string, e
 	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
 	// caller's transport rather than replacing it, so throttling is added without
 	// dropping the security control.
+	return downloadCoverArtWithClient(coverClient(), coverURL, destDir, bookID)
+}
+
+// ReplaceCoverArt is DownloadCoverArt for an explicitly applied cover. It
+// always fetches coverURL -- DownloadCoverArt returns an existing cover file
+// without fetching, so applying a new cover to a book that already had one
+// kept the old image forever. The new image is written to a temp file in the
+// covers directory and renamed over the old cover only once it is complete; on
+// any failure the existing cover is left exactly as it was.
+func ReplaceCoverArt(coverURL string, destDir string, bookID string) (string, error) {
+	return replaceCoverArtWithClient(coverClient(), coverURL, destDir, bookID)
+}
+
+// coverClient is the rate-limited, SSRF-guarded client both entry points use.
+func coverClient() *http.Client {
+	// Rate-limited, but the SSRF guard is preserved: safeCoverDialContext refuses
+	// private/reserved IPs and MUST stay on the transport. providerhttp wraps the
+	// caller's transport rather than replacing it, so throttling is added without
+	// dropping the security control.
 	client := providerhttp.ClientWithTransport("cover", safehttp.NewTransport())
 	// providerhttp wraps the transport rather than replacing it, so the address
 	// guard survives the throttling wrapper. It does not set CheckRedirect,
 	// though, so the per-hop scheme check has to be attached here — without it
 	// the scheme allowlist would only ever have run on the first URL.
 	client.CheckRedirect = safehttp.CheckRedirect
-	return downloadCoverArtWithClient(client, coverURL, destDir, bookID)
+	return client
 }
 
 // downloadCoverArtWithClient is the internal implementation — accepts a custom
 // client so tests can substitute a plain http.Client pointing to localhost.
 func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir string, bookID string) (string, error) {
+	return fetchCoverArt(client, coverURL, destDir, bookID, false)
+}
+
+// replaceCoverArtWithClient is ReplaceCoverArt with a caller-supplied client.
+func replaceCoverArtWithClient(client *http.Client, coverURL string, destDir string, bookID string) (string, error) {
+	return fetchCoverArt(client, coverURL, destDir, bookID, true)
+}
+
+// fetchCoverArt is the shared implementation. replace=false keeps the
+// long-standing short-circuit (an existing cover is returned unfetched);
+// replace=true always fetches and swaps the new image in.
+func fetchCoverArt(client *http.Client, coverURL string, destDir string, bookID string, replace bool) (string, error) {
 	if coverURL == "" {
 		return "", fmt.Errorf("empty cover URL")
 	}
@@ -76,8 +108,11 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 	// Check if cover already exists (any known extension). This is the same
 	// lookup CoverPathForBook does; see findExistingCover for why it is a stat
 	// probe rather than a glob.
-	if existing := findExistingCover(coversDir, safeID); existing != "" {
-		return existing, nil
+	// Skipped under replace: an explicitly applied new cover must be fetched.
+	if !replace {
+		if existing := findExistingCover(coversDir, safeID); existing != "" {
+			return existing, nil
+		}
 	}
 
 	// Create covers directory
@@ -110,21 +145,46 @@ func downloadCoverArtWithClient(client *http.Client, coverURL string, destDir st
 		return "", fmt.Errorf("invalid cover destination for book %q: %w", bookID, err)
 	}
 
-	// Limit to 10 MB
-	limitedReader := io.LimitReader(resp.Body, 10*1024*1024)
-
-	f, err := os.Create(destPath)
+	// Write to a temp file in the same directory and rename it into place only
+	// once the image is complete, so a failed or truncated download can never
+	// replace -- or half-overwrite -- the cover already on disk. Limit to 10 MB.
+	tmp, err := os.CreateTemp(coversDir, "."+safeID+".*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("failed to create cover file: %w", err)
 	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, limitedReader); err != nil {
-		os.Remove(destPath)
-		return "", fmt.Errorf("failed to write cover file: %w", err)
+	tmpPath := tmp.Name()
+	_, copyErr := io.Copy(tmp, io.LimitReader(resp.Body, 10*1024*1024))
+	closeErr := tmp.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to write cover file: %w", errors.Join(copyErr, closeErr))
 	}
-
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to move cover file into place: %w", err)
+	}
+	if replace {
+		removeOtherCovers(coversDir, safeID, filepath.Base(destPath))
+	}
 	return destPath, nil
+}
+
+// removeOtherCovers deletes the book's cover under every other extension, so
+// the file just written is the one findExistingCover serves. Precedence there
+// is alphabetical by extension: an old "<id>.gif" would otherwise keep
+// shadowing a newly applied "<id>.jpg".
+func removeOtherCovers(coversDir, safeID, keep string) {
+	for _, ext := range coverExtensions {
+		name := safeID + ext
+		if name == keep {
+			continue
+		}
+		if p, err := pathvalidation.SecureJoin(coversDir, name); err == nil {
+			if rmErr := os.Remove(p); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+				continue
+			}
+		}
+	}
 }
 
 // coverExtensions lists the image extensions a stored cover may carry, in the

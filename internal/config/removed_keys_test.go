@@ -229,3 +229,30 @@ func TestInitConfig_NoRemovedKeyNoWarning(t *testing.T) {
 		t.Errorf("removed-setting WARN fired with no removed key set:\n%s", out)
 	}
 }
+
+// TestRemovedAutoFetchMetadata_WarnsOnLoad: auto_fetch_metadata was removed
+// 2026-09-12. A config file still carrying it loads, with a removed-setting WARN.
+func TestRemovedAutoFetchMetadata_WarnsOnLoad(t *testing.T) {
+	restoreAppConfig(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	logs := captureRemovedKeyLogs(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("root_dir: /srv/books\nauto_fetch_metadata: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(cfgPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig: %v", err)
+	}
+	InitConfig()
+
+	if got := AppConfig.RootDir; got != "/srv/books" {
+		t.Errorf("root_dir = %q, want /srv/books", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "key=auto_fetch_metadata ") || !strings.Contains(out, "removed setting is ignored") {
+		t.Errorf("no removed-setting WARN for auto_fetch_metadata in logs:\n%s", out)
+	}
+}

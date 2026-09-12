@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.50.0
+// version: 2.51.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 
@@ -863,15 +863,18 @@ func NewServer(store database.Store) *Server {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		if err := server.metadataFetchService.ApplyMetadataFileIO(bookID); err != nil {
-			slog.Warn("recovery apply file I/O failed", "bookID", bookID, "err", err)
-		}
-		if _, err := server.metadataFetchService.WriteBackMetadataForBook(bookID); err != nil {
-			slog.Warn("recovery write-back for", "bookID", bookID, "err", err)
-		}
+		var enqueue func(string)
 		if server.writeBackBatcher != nil {
-			server.writeBackBatcher.Enqueue(bookID)
+			enqueue = server.writeBackBatcher.Enqueue
 		}
+		recoverApplyMetadataFileOp(server.metadataFetchService, enqueue, bookID)
+	})
+	RegisterFileOpRecovery(autoFetchFileOpType, func(bookID string) {
+		if server.metadataFetchService == nil {
+			slog.Warn("no server instance for auto-fetch file work recovery of book", "bookID", bookID)
+			return
+		}
+		recoverAutoFetchFileOp(server.metadataFetchService, bookID)
 	})
 
 	// Activity-service fan-out into metafetch / audiobook / scanner /
@@ -960,6 +963,11 @@ func NewServer(store database.Store) *Server {
 
 		// Also wire into the metafetch service so cover-art embeds use the guard.
 		server.metadataFetchService.SetSafeWriteDeps(deps)
+
+		// Auto-fetch's file work goes through the file-I/O pool under the path
+		// lock, like the batch apply, so the two cannot touch one book at once.
+		server.metadataFetchService.SetFileWorkScheduler(newAutoFetchScheduler(
+			func() *FileIOPool { return server.fileIOPool }, writeBackPathLocks.lock))
 		slog.Info("metafetch.Service.SetSafeWriteDeps wired (cover embed guard active)")
 
 		// Register the Deluge plugin (UOS-11).

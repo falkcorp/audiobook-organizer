@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -498,27 +498,8 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 // Genre and MetadataReviewStatus on the new copy rather than the narrower
 // field set CreateOrganizedVersion clones.
 func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
-	if config.AppConfig.RootDir == "" {
-		return book // no library configured
-	}
-	if strings.HasPrefix(book.FilePath, config.AppConfig.RootDir) {
-		return book // already in library
-	}
-	if !mfs.isProtectedPath(book.FilePath) {
-		return book // not protected, safe to modify
-	}
-
-	// Check for existing library version in the same version group
-	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		siblings, err := mfs.db.GetBooksByVersionGroup(*book.VersionGroupID)
-		if err == nil {
-			for i := range siblings {
-				if siblings[i].ID != book.ID && strings.HasPrefix(siblings[i].FilePath, config.AppConfig.RootDir) {
-					slog.Info("using existing library copy for protected book", "siblingID", siblings[i].ID, "bookID", book.ID)
-					return &siblings[i]
-				}
-			}
-		}
+	if target, ok := mfs.existingLibraryCopy(book); ok {
+		return target
 	}
 
 	log := logger.New("metafetch-library-copy")
@@ -826,7 +807,12 @@ func (mfs *Service) DownloadPendingCover(bookID, coverURL string) {
 		return
 	}
 
-	download := metadata.DownloadCoverArt
+	// ReplaceCoverArt, not DownloadCoverArt: this is an explicit apply of a new
+	// cover, and DownloadCoverArt returns an existing cover file untouched, so a
+	// book that already had a cover kept the old image forever. ReplaceCoverArt
+	// writes a temp file and renames it over the old one only once the new image
+	// is complete, so a failed download leaves the old cover in place.
+	download := metadata.ReplaceCoverArt
 	if mfs.coverDownload != nil {
 		download = mfs.coverDownload
 	}
@@ -980,4 +966,102 @@ func (mfs *Service) MarkNoMatch(id string) error {
 	book.MetadataReviewStatus = &status
 	_, err = mfs.db.UpdateBook(id, book)
 	return err
+}
+
+// existingLibraryCopy resolves the row file work may touch WITHOUT creating
+// anything. ok=false means book is protected (iTunes/import) and has no usable
+// library copy; ensureLibraryCopy then creates one, and the auto-fetch path
+// (existingCopyOnly) skips the file work instead.
+func (mfs *Service) existingLibraryCopy(book *database.Book) (*database.Book, bool) {
+	root := config.AppConfig.RootDir
+	if root == "" {
+		return book, true // no library configured
+	}
+	if pathUnderRoot(book.FilePath, root) {
+		return book, true // already in library
+	}
+	if !mfs.isProtectedPath(book.FilePath) {
+		return book, true // not protected, safe to modify
+	}
+	if sib := mfs.librarySibling(book); sib != nil {
+		slog.Info("using existing library copy for protected book", "siblingID", sib.ID, "bookID", book.ID)
+		return sib, true
+	}
+	return nil, false
+}
+
+// librarySibling returns a version-group sibling that is a real library copy:
+// its book path is under root_dir AND none of its present book_file rows point
+// into a protected tree. The second check is new. A sibling whose book path
+// was under the library while a file row still pointed into the iTunes tree
+// used to be handed back as "the library copy", and the apply pipeline then
+// renamed every one of its rows -- including the iTunes file.
+func (mfs *Service) librarySibling(book *database.Book) *database.Book {
+	if book.VersionGroupID == nil || *book.VersionGroupID == "" {
+		return nil
+	}
+	siblings, err := mfs.db.GetBooksByVersionGroup(*book.VersionGroupID)
+	if err != nil {
+		return nil
+	}
+	for i := range siblings {
+		sib := &siblings[i]
+		if sib.ID == book.ID || !pathUnderRoot(sib.FilePath, config.AppConfig.RootDir) {
+			continue
+		}
+		if p := mfs.firstProtectedFileRow(sib.ID); p != "" {
+			slog.Warn("version sibling under root_dir still has a file row under a protected path; not using it as the library copy",
+				"siblingID", sib.ID, "bookID", book.ID, "protected_path", p)
+			continue
+		}
+		return sib
+	}
+	return nil
+}
+
+// firstProtectedFileRow returns the first present book_file path of bookID
+// that lies under a protected tree, or "". A listing error returns "" (the
+// sibling stays usable): every file-touching leg re-checks each path itself
+// -- the rename leg through dropProtectedRenameEntries, the embed and tag legs
+// through their own isProtectedPath checks -- so this is the second line of
+// defence, and refusing the sibling on a transient read error would make the
+// user-initiated apply create a duplicate library copy.
+func (mfs *Service) firstProtectedFileRow(bookID string) string {
+	files, err := mfs.db.GetBookFiles(bookID)
+	if err != nil {
+		slog.Warn("could not list a version sibling's files to check for protected rows", "bookID", bookID, "error", err)
+		return ""
+	}
+	for _, bf := range files {
+		if !bf.Missing && mfs.isProtectedPath(bf.FilePath) {
+			return bf.FilePath
+		}
+	}
+	return ""
+}
+
+// libraryCopyFor is ensureLibraryCopy under a copy policy: createLibraryCopy
+// may create one, existingCopyOnly never does and returns nil instead.
+func (mfs *Service) libraryCopyFor(book *database.Book, policy copyPolicy) *database.Book {
+	if policy == existingCopyOnly {
+		target, _ := mfs.existingLibraryCopy(book)
+		return target
+	}
+	return mfs.ensureLibraryCopy(book)
+}
+
+// autoFetchHasLibraryCopy reports whether auto-fetch may do file work for
+// book: only when a library copy ALREADY exists under root_dir, either the
+// book itself or a clean version sibling of a protected book. Auto-fetch never
+// creates a library copy (owner decision, 2026-09-12): the iTunes importer and
+// the organize pass reach it for books nobody asked to copy.
+func (mfs *Service) autoFetchHasLibraryCopy(book *database.Book) bool {
+	root := config.AppConfig.RootDir
+	if root == "" {
+		return false
+	}
+	if pathUnderRoot(book.FilePath, root) {
+		return true
+	}
+	return mfs.isProtectedPath(book.FilePath) && mfs.librarySibling(book) != nil
 }
