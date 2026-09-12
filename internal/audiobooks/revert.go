@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -31,26 +31,39 @@ import (
 // database.OperationStore wholesale to reach those four -- the comment above it
 // called that "the narrow slice", which it was only relative to database.Store.
 type revertServiceStore interface {
+	revertLedgerStore
+	revertSeriesStore
+	revertBookFileStore
+}
+
+// revertLedgerStore reads the operation's ledger, marks rows reverted, and
+// reads and writes the books those rows name.
+type revertLedgerStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 
-	// Needed by undo.CheckRestoreReferent (revertMetadataUpdate,
-	// revertSeriesRename) and by the series rename-back itself.
+	// Needed by the embedded isProtectedPath call in revertTagWrite
+	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
+	GetAllImportPaths() ([]database.ImportPath, error)
+}
+
+// revertSeriesStore is needed by undo.CheckRestoreReferent
+// (revertMetadataUpdate, revertSeriesRename) and by the series rename-back.
+type revertSeriesStore interface {
 	GetSeriesByID(id int) (*database.Series, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	// RenameSeriesIf is the rename-back. It repeats CheckRestoreReferent's
 	// current-name and name-free checks under the store's series name-index
 	// lock, so nothing can land between check and write.
 	RenameSeriesIf(id int, expectCurrent, newName string) error
+}
 
-	// Needed by the embedded isProtectedPath call in revertTagWrite
-	// (SERVER-GLOBAL-STORE-AUDIT phase 6).
-	GetAllImportPaths() ([]database.ImportPath, error)
-
-	// Needed by the maintenance.fs-regroup-xml reversals: a reassigned
-	// book_file row moves back, and a track number is restored in place.
+// revertBookFileStore is needed by the maintenance.fs-regroup-xml reversals:
+// a reassigned book_file row moves back, and a track number is restored in
+// place.
+type revertBookFileStore interface {
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
