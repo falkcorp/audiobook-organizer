@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package database
 
@@ -343,30 +343,39 @@ func TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB(t *testing.T) {
 		"memdb and Pebble must not disagree about who references an author")
 }
 
-// TestSetBookAuthors_ExplicitBookIDIsUnchanged is the positive control. If the
-// backfill were wrong in the other direction -- overwriting a BookID rather
-// than filling an empty one -- the test above would still pass while credits
-// silently reattached to the wrong book.
-func TestSetBookAuthors_ExplicitBookIDIsUnchanged(t *testing.T) {
+// TestSetBookAuthors_MismatchedBookIDFollowsTheKey replaces
+// TestSetBookAuthors_ExplicitBookIDIsUnchanged, which asserted the opposite:
+// that a row passed to SetBookAuthors(other, ...) carrying keep's ID stayed
+// indexed under keep in memdb. That was the divergence itself, not a
+// safeguard -- Pebble filed the row under book_authors:<other>, so
+// GetBookAuthors(other) returned it while memdb credited keep, and the two
+// backends disagreed about which book the author was on. Since 2026-09-12 the
+// store owns BookID: the key wins, in Pebble and memdb alike, and the override
+// is logged. Every copy-shaped caller (metafetch, versions, organizer) already
+// stamps the target ID, so nothing relied on the old behaviour.
+func TestSetBookAuthors_MismatchedBookIDFollowsTheKey(t *testing.T) {
 	store := seedAuthorRefStore(t, t.TempDir())
-	keep := mkAuthorRefBook(t, store, "KeepsItsCredit", 0, true, false)
-	other := mkAuthorRefBook(t, store, "MustNotReceiveIt", 0, true, false)
+	keep := mkAuthorRefBook(t, store, "SuppliedBookID", 0, true, false)
+	other := mkAuthorRefBook(t, store, "CalledWithThisID", 0, true, false)
 	author, err := store.CreateAuthor("Explicit BookID Author")
 	require.NoError(t, err)
 
-	// Written against `keep` while the call is made through `other`, so a
-	// backfill that overwrites rather than fills would move the credit.
 	require.NoError(t, store.SetBookAuthors(other.ID, []BookAuthor{
 		{BookID: keep.ID, AuthorID: author.ID, Role: "author"},
 	}))
 
-	// Read the MEMDB row, not GetBookAuthors -- that reads Pebble directly and
-	// never sees the backfill, so asserting on it would pass no matter what the
-	// backfill did.
+	// Read the MEMDB row and the raw Pebble bytes; GetBookAuthors stamps on
+	// read and would agree with the key whatever was stored.
 	rows := memBookAuthorRows(t, store)
 	require.Len(t, rows, 1)
-	require.Equal(t, keep.ID, rows[0].BookID,
-		"an explicitly-set BookID must survive the backfill untouched")
+	require.Equal(t, other.ID, rows[0].BookID, "memdb must index the credit under the key it was written to")
+	raw := rawJunctionRows[BookAuthor](t, store, "book_authors:", other.ID)
+	require.Len(t, raw, 1)
+	require.Equal(t, other.ID, raw[0].BookID, "Pebble must store the key's book ID")
+
+	keepAuthors, err := store.GetBookAuthors(keep.ID)
+	require.NoError(t, err)
+	require.Empty(t, keepAuthors, "the supplied ID must not gain a credit it was never written under")
 }
 
 // ── The memdb fail-open (open-findings §1) ─────────────────────────────────

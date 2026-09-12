@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -309,6 +309,11 @@ func (h *Handler) OptimizeDatabase(c *gin.Context) {
 						}
 					}
 					bookNarrators = append(bookNarrators, database.BookNarrator{
+						// SetBookNarrators now stamps BookID itself; set it
+						// here anyway so the literal says what it means. Its
+						// omission stored book_id-less rows that stalled every
+						// later memdb update of the book (migration 63).
+						BookID:     book.ID,
 						NarratorID: n.ID,
 					})
 				}

@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-09-11
+// last-edited: 2026-09-12
 
 package database
 
@@ -43,6 +43,12 @@ type migrationStore interface {
 // *PebbleStore and has it.
 type hollowOpsSweeper interface {
 	SweepHollowOperationsV2() (int, error)
+}
+
+// junctionBookIDRepairer is migration063Up's one capability, asserted at run
+// time for the same reason as hollowOpsSweeper.
+type junctionBookIDRepairer interface {
+	RepairJunctionBookIDs() (JunctionBookIDRepair, error)
 }
 
 // MigrationFunc represents a migration operation.
@@ -456,6 +462,12 @@ var migrations = []Migration{
 		Version:     62,
 		Description: "Delete hollow operations-v2 rows written by an unguarded progress write after a discard",
 		Up:          migration062Up,
+		Down:        nil,
+	},
+	{
+		Version:     63,
+		Description: "Stamp book_authors/book_narrators rows with the book ID from their key (rows stored without book_id stalled memdb updates of the book)",
+		Up:          migration063Up,
 		Down:        nil,
 	},
 }
@@ -1234,5 +1246,41 @@ func migration062Up(store migrationStore) error {
 		return fmt.Errorf("migration 62: sweep hollow operations: %w", err)
 	}
 	slog.Info("migration 62: hollow operations-v2 rows removed", "removed", n)
+	return nil
+}
+
+// migration063Up stamps the book ID from each book_authors:<id> /
+// book_narrators:<id> key onto every row under it whose book_id is empty or
+// names another book. Until 2026-09-12 SetBookNarrators / SetBookAuthors
+// stored caller rows verbatim, and POST /operations/optimize-database and PUT
+// /audiobooks/:id/narrators both produced rows with no book_id. memdb rejects
+// such a row, and because UpsertBookToMemDB reloads the junction from Pebble,
+// every later update of the book aborted its whole memdb transaction -- the
+// book, its credits and its files went stale in memdb while Pebble stayed
+// right. See junction_bookid.go.
+//
+// A startup migration, not a report-first maintenance op, because the repair
+// is deterministic and lossless: the right value is in the key, and only that
+// one field changes. There is no judgement for a report to inform. The setters
+// and getters now stamp too, so this is a one-time cleanup of rows already on
+// disk. Idempotent: keys that already agree are not written.
+func migration063Up(store migrationStore) error {
+	repairer, ok := store.(junctionBookIDRepairer)
+	if !ok {
+		slog.Warn("migration 63: store cannot repair junction book_ids; nothing to do", "store", fmt.Sprintf("%T", store))
+		return nil
+	}
+	res, err := repairer.RepairJunctionBookIDs()
+	if err != nil {
+		return fmt.Errorf("migration 63: repair junction book_ids: %w", err)
+	}
+	slog.Info("migration 63: junction book_id repair finished",
+		"author_keys_scanned", res.AuthorKeysScanned,
+		"author_keys_repaired", res.AuthorKeysRepaired,
+		"author_rows_repaired", res.AuthorRowsRepaired,
+		"narrator_keys_scanned", res.NarratorKeysScanned,
+		"narrator_keys_repaired", res.NarratorKeysRepaired,
+		"narrator_rows_repaired", res.NarratorRowsRepaired,
+		"undecodable", res.Undecodable)
 	return nil
 }

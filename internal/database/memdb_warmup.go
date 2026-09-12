@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000004
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
@@ -296,6 +296,12 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 			lose(memTableBookAuthors, key, "undecodable row", err)
 			return false, nil
 		}
+		// The key names the book; stamp it onto every row so a row stored
+		// without book_id (possible before 2026-09-12) is admitted under the
+		// right book instead of rejected by the {BookID, AuthorID} index and
+		// flagging the table incomplete. Migration 63 may not have run yet:
+		// warmup is async and races the startup migrations.
+		stampBookAuthorsInPlace(strings.TrimPrefix(key, "book_authors:"), list)
 		for i := range list {
 			ba := list[i]
 			if ok, _ := safeInsert(memTableBookAuthors, &ba, key); ok {
@@ -318,6 +324,8 @@ func (m *MemStore) WarmFromPebble(ctx context.Context, p *PebbleStore) error {
 			lose(memTableBookNarrators, key, "undecodable row", err)
 			return false, nil
 		}
+		// Key-authoritative stamp, as for book_authors above.
+		stampBookNarratorsInPlace(strings.TrimPrefix(key, "book_narrators:"), list)
 		for i := range list {
 			bn := list[i]
 			if ok, _ := safeInsert(memTableBookNarrators, &bn, key); ok {
