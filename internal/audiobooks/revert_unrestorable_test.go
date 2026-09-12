@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
 // last-edited: 2026-09-12
 
@@ -28,6 +28,8 @@ type ledgerStub struct {
 	// series is what GetSeriesByID / GetSeriesByName can find.
 	series    map[int]*database.Series
 	seriesErr error
+	// nameErr fails only GetSeriesByName (the collision lookup).
+	nameErr error
 	// renames records UpdateSeriesName calls as "id:name".
 	renames []string
 }
@@ -74,6 +76,9 @@ func (s *ledgerStub) GetSeriesByID(id int) (*database.Series, error) {
 func (s *ledgerStub) GetSeriesByName(name string, authorID *int) (*database.Series, error) {
 	if s.seriesErr != nil {
 		return nil, s.seriesErr
+	}
+	if s.nameErr != nil {
+		return nil, s.nameErr
 	}
 	for _, ser := range s.series {
 		sameAuthor := (ser.AuthorID == nil) == (authorID == nil) && (authorID == nil || *ser.AuthorID == *authorID)

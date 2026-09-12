@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_series_rename_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c7d2e91-5f3a-4b86-9e14-a8b6d3f5c227
 // last-edited: 2026-09-12
 
@@ -74,6 +74,26 @@ func TestRevertOperation_SeriesRename_Refusals(t *testing.T) {
 				t.Errorf("mark called %d times, want 0", s.markCalls)
 			}
 		})
+	}
+}
+
+// The collision lookup erroring fails closed: without an answer to "does
+// another series hold the old name?" the rename back is not attempted.
+func TestRevertOperation_SeriesRename_NameLookupErrorFailsClosed(t *testing.T) {
+	s := &ledgerStub{
+		changes: []*database.OperationChange{seriesRenameRow("c1", intp(10), "Old Name", "New Name")},
+		series:  map[int]*database.Series{10: {ID: 10, Name: "New Name"}},
+		nameErr: errors.New("pebble: closed"),
+	}
+	result, err := NewRevertService(s).RevertOperation("op")
+	if err == nil || result == nil || result.Failed != 1 {
+		t.Fatalf("err = %v, result = %+v, want failed 1", err, result)
+	}
+	if !strings.Contains(err.Error(), undo.ReasonSeriesLookupFailed) {
+		t.Errorf("err = %v, want reason %q", err, undo.ReasonSeriesLookupFailed)
+	}
+	if len(s.renames) != 0 || s.markCalls != 0 {
+		t.Errorf("renames = %v, mark calls = %d, want none", s.renames, s.markCalls)
 	}
 }
 
