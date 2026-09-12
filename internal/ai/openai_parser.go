@@ -1,22 +1,26 @@
 // file: internal/ai/openai_parser.go
-// version: 13.10.0
+// version: 13.11.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 package ai
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -439,7 +443,9 @@ Set confidence based on clarity of the filename structure.`
 	}); err != nil {
 		return nil, err
 	}
-	return parseBatchMetadataFromJSON(content)
+	// Always exactly len(filenames) entries (nil where the model had nothing),
+	// or an error: the caller assigns results by position.
+	return parseBatchMetadataFromJSON(content, len(filenames))
 }
 
 // ParseCoverArt uses OpenAI vision to extract metadata from audiobook cover art.
@@ -521,11 +527,73 @@ func (p *OpenAIParser) TestConnection(ctx context.Context) error {
 	return err
 }
 
-// parseMetadataFromJSON parses a single metadata object from JSON string
+// parseMetadataFromJSON parses a single metadata object from an LLM reply.
+//
+// This used to be a bare json.Unmarshal into ParsedMetadata, which has the
+// batch path's fragility in a worse form: encoding/json ignores unknown keys,
+// so a reply wrapped the way the batch prompt asks for -- {"results": [{...}]},
+// which the local model has been seen to emit even for one item -- decoded to
+// an all-empty ParsedMetadata with NO error, a silent empty parse. `null`
+// decoded the same way.
+//
+// Now: a metadata object is decoded as before; `{}` is still an empty result;
+// an object with none of ParsedMetadata's keys is accepted only as a wrapper
+// with exactly one key holding one object (or an array of at most one object,
+// where an empty array is an empty result, matching the batch path); anything
+// else is an error that carries a sanitized excerpt of the reply.
 func parseMetadataFromJSON(content string) (*ParsedMetadata, error) {
+	m, err := extractSingleMetadata([]byte(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse OpenAI response: %w; response: %s", err, responseExcerpt(content))
+	}
+	return m, nil
+}
+
+func extractSingleMetadata(raw []byte) (*ParsedMetadata, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, errors.New("response is not a JSON object")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+
+	target := json.RawMessage(raw)
+	if len(obj) > 0 && !hasParsedMetadataKey(obj) {
+		if len(obj) != 1 {
+			return nil, fmt.Errorf("object has %d keys and none of them is a metadata field", len(obj))
+		}
+		for key, value := range obj {
+			inner := bytes.TrimSpace(value)
+			switch {
+			case len(inner) > 0 && inner[0] == '{':
+				target = inner
+			case len(inner) > 0 && inner[0] == '[':
+				var elems []json.RawMessage
+				if err := json.Unmarshal(inner, &elems); err != nil {
+					return nil, err
+				}
+				switch len(elems) {
+				case 0:
+					return &ParsedMetadata{}, nil
+				case 1:
+					target = bytes.TrimSpace(elems[0])
+					if len(target) == 0 || target[0] != '{' {
+						return nil, fmt.Errorf("%q holds a non-object element", logger.SanitizeLogValue(key))
+					}
+				default:
+					return nil, fmt.Errorf("%q holds %d results where one was asked for", logger.SanitizeLogValue(key), len(elems))
+				}
+			default:
+				return nil, fmt.Errorf("object's only key %q is not a metadata field", logger.SanitizeLogValue(key))
+			}
+		}
+	}
+
 	var metadata ParsedMetadata
-	if err := json.Unmarshal([]byte(content), &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI response: %w", err)
+	if err := json.Unmarshal(target, &metadata); err != nil {
+		return nil, err
 	}
 	return &metadata, nil
 }
@@ -776,21 +844,159 @@ The roles object fields are all optional — only include roles that are detecte
 	return suggestions, nil
 }
 
-// parseBatchMetadataFromJSON parses batch results from JSON.
-// Accepts either {"results": [...]} or a bare array [...].
-func parseBatchMetadataFromJSON(content string) ([]*ParsedMetadata, error) {
-	// Try wrapped format first (JSON Object mode returns objects)
-	var wrapped struct {
-		Results []*ParsedMetadata `json:"results"`
-	}
-	if err := json.Unmarshal([]byte(content), &wrapped); err == nil && len(wrapped.Results) > 0 {
-		return wrapped.Results, nil
+// parseBatchMetadataFromJSON parses a ParseBatch reply into exactly `expected`
+// entries, one per input filename in input order, nil where the model had
+// nothing for that filename.
+//
+// The caller (scanner.runAIBatchPhase) assigns results[i] to the i-th book, so
+// the one thing this must never do is return a list whose positions do not
+// line up with the inputs. Every accepted shape below either has exactly
+// `expected` entries or has none; anything else is an error.
+//
+// Accepted shapes, and whether each has been seen from a real backend:
+//
+//   - {"results": [...]}                -- observed; the shape the prompt asks for.
+//     Entries may be null or have null fields (both observed from
+//     qwen2.5:7b-instruct); they decode to nil / zero values.
+//   - {"results": []}                   -- observed, and the cause of the
+//     2026-09-12 library.ai-parse aborts. See below.
+//   - [...]                             -- bare array; accepted since before
+//     this change.
+//   - {"<any single key>": [...]}       -- unobserved; a wrapper under a key
+//     other than "results". Accepted only when it is the object's ONLY key,
+//     so an unrelated array can never be mistaken for the results.
+//   - {"title": ..., ...}               -- unobserved; a bare metadata object.
+//     Accepted only when the batch had exactly one filename, where position
+//     cannot be ambiguous.
+//
+// {"results": []} is ZERO RESULTS, not an error. qwen2.5:7b-instruct returns it
+// for inputs that carry no metadata at all ("Disc 1".."Disc 8", "Season 2");
+// for the identical 8-disc input it has also returned 8 entries whose fields
+// are all null, which this function has always accepted. Both mean "found
+// nothing", and both must reach the caller the same way -- each book saved
+// unchanged and stamped as attempted. Treating the empty rendering as an error
+// did not protect anything: it counted toward the phase's 3-failure abort
+// threshold, which exists to detect a dead backend, and one op aborted with
+// 74 of 106 books unparsed because three batches of folder names like these
+// "failed". An empty list also cannot misassign anything, which is the only
+// hazard the count check below exists for.
+func parseBatchMetadataFromJSON(content string, expected int) ([]*ParsedMetadata, error) {
+	items, err := extractBatchItems([]byte(content), expected)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse OpenAI response: %w; response: %s", err, responseExcerpt(content))
 	}
 
-	// Fall back to bare array
-	var results []*ParsedMetadata
-	if err := json.Unmarshal([]byte(content), &results); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAI response: %w", err)
+	if len(items) == 0 {
+		return make([]*ParsedMetadata, expected), nil
 	}
-	return results, nil
+	if len(items) != expected {
+		// A short list means the model dropped entries somewhere, and nothing
+		// says which: results[2] could belong to filename 5. Positional
+		// assignment would silently write one book's title onto another, so
+		// this is an error and the batch's books are left for the next scan.
+		return nil, fmt.Errorf("failed to parse OpenAI response: got %d result(s) for %d filename(s), and results are matched to filenames by position; response: %s",
+			len(items), expected, responseExcerpt(content))
+	}
+	return items, nil
+}
+
+// extractBatchItems finds the results array in a batch reply. See
+// parseBatchMetadataFromJSON for which shapes are accepted and why.
+func extractBatchItems(raw []byte, expected int) ([]*ParsedMetadata, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, errors.New("empty response")
+	}
+
+	switch raw[0] {
+	case '[':
+		return decodeMetadataArray(raw)
+	case '{':
+	default:
+		return nil, errors.New("response is neither a JSON object nor a JSON array")
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+
+	if results, ok := obj["results"]; ok {
+		if !isJSONArray(results) {
+			// {"results": null} and {"results": {...}} are not the shape
+			// asked for and neither has been seen; fail rather than guess.
+			return nil, errors.New(`"results" is not a JSON array`)
+		}
+		return decodeMetadataArray(results)
+	}
+
+	if expected == 1 && hasParsedMetadataKey(obj) {
+		var m ParsedMetadata
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+		return []*ParsedMetadata{&m}, nil
+	}
+
+	if len(obj) == 1 {
+		for key, value := range obj {
+			if isJSONArray(value) {
+				return decodeMetadataArray(value)
+			}
+			return nil, fmt.Errorf(`object's only key %q is not a JSON array and there is no "results" key`,
+				logger.SanitizeLogValue(key))
+		}
+	}
+	return nil, fmt.Errorf(`object has %d keys and no "results" array`, len(obj))
+}
+
+func decodeMetadataArray(raw []byte) ([]*ParsedMetadata, error) {
+	var items []*ParsedMetadata
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func isJSONArray(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '['
+}
+
+// parsedMetadataKeys are the JSON keys of ParsedMetadata. An object carrying
+// any of them is a metadata object; one carrying none of them is something
+// else (a wrapper, an error payload) and must not be decoded as metadata,
+// because encoding/json ignores unknown keys and would return an all-empty
+// ParsedMetadata with no error.
+var parsedMetadataKeys = []string{"title", "author", "series", "series_number", "narrator", "publisher", "year", "confidence"}
+
+func hasParsedMetadataKey(obj map[string]json.RawMessage) bool {
+	for _, k := range parsedMetadataKeys {
+		if _, ok := obj[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// maxResponseExcerptBytes bounds how much of an unparseable LLM reply is copied
+// into an error. The error lands in the library.ai-parse operation record
+// (AIBatchFailure.Err), and that store's growth is a measured production
+// problem, so the excerpt is enough to recognise the shape, not the whole
+// reply.
+const maxResponseExcerptBytes = 300
+
+// responseExcerpt returns a truncated, log-safe copy of an LLM reply for use in
+// an error message, so the next parse failure can be diagnosed from the
+// operation log instead of by reproducing it against the backend.
+func responseExcerpt(content string) string {
+	s := strings.TrimSpace(content)
+	if len(s) > maxResponseExcerptBytes {
+		cut := maxResponseExcerptBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = fmt.Sprintf("%s... (%d bytes total)", s[:cut], len(s))
+	}
+	return logger.SanitizeLogValue(s)
 }

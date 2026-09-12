@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-09
+// last-edited: 2026-09-12
 
 package ai
 
@@ -1454,100 +1454,341 @@ func TestParseMetadataFromJSON(t *testing.T) {
 	}
 }
 
+// Replies captured verbatim (whitespace compacted) from qwen2.5:7b-instruct via
+// the OpenAI-compatible endpoint on 2026-09-12, using ParseBatch's own system
+// prompt and JSON-object response format. The first is the reply that aborted
+// library.ai-parse ops in production.
+const (
+	// "Disc 1".."Disc 8" (8 filenames), and separately "Season 2" (1 filename).
+	observedEmptyResults = `{"results": []}`
+	// "Book 10 - The Given Sacrifice", "The Tears of the Sun ... Part 01 of 63.mp3",
+	// "Season 2", "Season 1": null placeholders for the two it could not parse.
+	observedNullEntries = `{"results":[{"title":"The Given Sacrifice","author":"Book 10","series":null,"series_number":null,"narrator":null,"publisher":null,"year":null,"confidence":"medium"},{"title":"The Tears of the Sun A Novel of the Change","author":null,"series":"The Change","series_number":1,"narrator":null,"publisher":null,"year":null,"confidence":"high"},null,null]}`
+	// "Disc 1", "Book 10 - The Given Sacrifice", "Disc 2": empty strings.
+	observedEmptyStrings = `{"results":[{"title":"","author":"","series":"","series_number":null,"narrator":"","publisher":"","year":null,"confidence":"low"},{"title":"The Given Sacrifice","author":"","series":"","series_number":10,"narrator":"","publisher":"","year":null,"confidence":"medium"},{"title":"","author":"","series":"","series_number":null,"narrator":"","publisher":"","year":null,"confidence":"low"}]}`
+)
+
+// observedAllNullFields is the reply to the SAME 8 "Disc N" filenames that
+// also produced observedEmptyResults: 8 entries, every field null.
+var observedAllNullFields = `{"results":[` + strings.TrimSuffix(strings.Repeat(
+	`{"title":null,"author":null,"series":null,"series_number":null,"narrator":null,"publisher":null,"year":null,"confidence":"low"},`, 8), ",") + `]}`
+
 func TestParseBatchMetadataFromJSON(t *testing.T) {
 	testCases := []struct {
-		name        string
-		json        string
-		expectError bool
-		expectCount int
-		checkFirst  string
+		name     string
+		json     string
+		expected int
+		wantErr  string // substring; empty means no error expected
+		check    func(t *testing.T, results []*ParsedMetadata)
 	}{
 		{
 			name: "valid batch with multiple items",
 			json: `[
-				{
-					"title": "Book One",
-					"author": "Author One",
-					"confidence": "high"
-				},
-				{
-					"title": "Book Two",
-					"author": "Author Two",
-					"series": "Test Series",
-					"series_number": 2,
-					"confidence": "medium"
-				},
-				{
-					"title": "Book Three",
-					"author": "Author Three",
-					"confidence": "low"
-				}
+				{"title": "Book One", "author": "Author One", "confidence": "high"},
+				{"title": "Book Two", "author": "Author Two", "series": "Test Series", "series_number": 2, "confidence": "medium"},
+				{"title": "Book Three", "author": "Author Three", "confidence": "low"}
 			]`,
-			expectError: false,
-			expectCount: 3,
-			checkFirst:  "Book One",
-		},
-		{
-			name: "valid batch with single item",
-			json: `[
-				{
-					"title": "Single Book",
-					"author": "Single Author",
-					"confidence": "high"
+			expected: 3,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[0].Title != "Book One" || r[1].SeriesNum != 2 || r[2].Title != "Book Three" {
+					t.Errorf("wrong results: %+v %+v %+v", r[0], r[1], r[2])
 				}
-			]`,
-			expectError: false,
-			expectCount: 1,
-			checkFirst:  "Single Book",
+			},
 		},
 		{
-			name:        "empty array",
-			json:        `[]`,
-			expectError: false,
-			expectCount: 0,
+			name:     "valid batch with single item",
+			json:     `[{"title": "Single Book", "author": "Single Author", "confidence": "high"}]`,
+			expected: 1,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[0].Title != "Single Book" {
+					t.Errorf("title = %q", r[0].Title)
+				}
+			},
 		},
 		{
-			name:        "invalid JSON",
-			json:        `[{invalid}]`,
-			expectError: true,
+			name:     "empty bare array is zero results, padded to the batch size",
+			json:     `[]`,
+			expected: 2,
+			check:    wantAllNil,
 		},
 		{
-			name:        "object instead of array",
-			json:        `{"title": "Test"}`,
-			expectError: true,
+			// THE production failure: 3 of 14 batches of op
+			// 01M2BNZAJDZ5F5HM2TS6XG1S8D, and the op aborted.
+			name:     "observed: empty results for 8 disc folders",
+			json:     observedEmptyResults,
+			expected: 8,
+			check:    wantAllNil,
 		},
 		{
-			name:        "null JSON",
-			json:        `null`,
-			expectError: false,
-			expectCount: 0,
+			name:     "observed: empty results for a single filename",
+			json:     observedEmptyResults,
+			expected: 1,
+			check:    wantAllNil,
+		},
+		{
+			name:     "observed: null placeholders keep positions",
+			json:     observedNullEntries,
+			expected: 4,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[0] == nil || r[0].Title != "The Given Sacrifice" {
+					t.Errorf("r[0] = %+v", r[0])
+				}
+				if r[1] == nil || r[1].Series != "The Change" || r[1].SeriesNum != 1 || r[1].Author != "" {
+					t.Errorf("r[1] = %+v", r[1])
+				}
+				if r[2] != nil || r[3] != nil {
+					t.Errorf("r[2], r[3] = %+v, %+v; want nil", r[2], r[3])
+				}
+			},
+		},
+		{
+			name:     "observed: all-null fields for the same 8 disc folders",
+			json:     observedAllNullFields,
+			expected: 8,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				for i, m := range r {
+					if m == nil || m.Title != "" || m.Author != "" || m.Confidence != "low" {
+						t.Errorf("r[%d] = %+v", i, m)
+					}
+				}
+			},
+		},
+		{
+			name:     "observed: empty-string fields",
+			json:     observedEmptyStrings,
+			expected: 3,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[1].Title != "The Given Sacrifice" || r[1].SeriesNum != 10 || r[0].Title != "" {
+					t.Errorf("wrong results: %+v %+v", r[0], r[1])
+				}
+			},
+		},
+		{
+			name:     "unobserved: array wrapped under a key other than results",
+			json:     `{"books": [{"title": "A"}, {"title": "B"}]}`,
+			expected: 2,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[0].Title != "A" || r[1].Title != "B" {
+					t.Errorf("wrong results: %+v %+v", r[0], r[1])
+				}
+			},
+		},
+		{
+			name:     "unobserved: bare object for a one-filename batch",
+			json:     `{"title": "Test", "author": "Author"}`,
+			expected: 1,
+			check: func(t *testing.T, r []*ParsedMetadata) {
+				if r[0].Title != "Test" || r[0].Author != "Author" {
+					t.Errorf("r[0] = %+v", r[0])
+				}
+			},
+		},
+		{
+			name:     "bare object for a multi-filename batch is an error",
+			json:     `{"title": "Test", "author": "Author"}`,
+			expected: 2,
+			wantErr:  `no "results" array`,
+		},
+		{
+			// The misassignment hazard: which of the 3 did the model drop?
+			name:     "short results list is an error, never a positional guess",
+			json:     `{"results": [{"title": "A"}, {"title": "B"}]}`,
+			expected: 3,
+			wantErr:  "got 2 result(s) for 3 filename(s)",
+		},
+		{
+			name:     "long results list is an error",
+			json:     `[{"title": "A"}, {"title": "B"}]`,
+			expected: 1,
+			wantErr:  "got 2 result(s) for 1 filename(s)",
+		},
+		{
+			name:     "results null is an error",
+			json:     `{"results": null}`,
+			expected: 2,
+			wantErr:  `"results" is not a JSON array`,
+		},
+		{
+			name:     "results as an object is an error",
+			json:     `{"results": {"title": "A"}}`,
+			expected: 1,
+			wantErr:  `"results" is not a JSON array`,
+		},
+		{
+			name:     "two unknown array keys is an error, not a guess",
+			json:     `{"a": [{"title": "A"}], "b": [{"title": "B"}]}`,
+			expected: 1,
+			wantErr:  "no \"results\" array",
+		},
+		{
+			name:     "invalid JSON",
+			json:     `[{invalid}]`,
+			expected: 1,
+			wantErr:  "failed to parse OpenAI response",
+		},
+		{
+			name:     "null JSON is an error",
+			json:     `null`,
+			expected: 1,
+			wantErr:  "neither a JSON object nor a JSON array",
+		},
+		{
+			name:     "empty reply is an error",
+			json:     "  ",
+			expected: 1,
+			wantErr:  "empty response",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			results, err := parseBatchMetadataFromJSON(tc.json)
+			results, err := parseBatchMetadataFromJSON(tc.json, tc.expected)
 
-			if tc.expectError {
+			if tc.wantErr != "" {
 				if err == nil {
-					t.Error("Expected error, got nil")
+					t.Fatalf("expected error containing %q, got results %v", tc.wantErr, results)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %q does not contain %q", err, tc.wantErr)
 				}
 				return
 			}
-
 			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
-
-			if len(results) != tc.expectCount {
-				t.Fatalf("Expected %d results, got %d", tc.expectCount, len(results))
+			if len(results) != tc.expected {
+				t.Fatalf("got %d results, want exactly %d (one per filename)", len(results), tc.expected)
 			}
+			if tc.check != nil {
+				tc.check(t, results)
+			}
+		})
+	}
+}
 
-			if tc.expectCount > 0 && tc.checkFirst != "" {
-				if results[0].Title != tc.checkFirst {
-					t.Errorf("Expected first title '%s', got '%s'", tc.checkFirst, results[0].Title)
+func wantAllNil(t *testing.T, r []*ParsedMetadata) {
+	t.Helper()
+	for i, m := range r {
+		if m != nil {
+			t.Errorf("r[%d] = %+v, want nil (no result for that filename)", i, m)
+		}
+	}
+}
+
+// The error must carry the reply, truncated and log-safe, so the next failure
+// is diagnosable from the operation record.
+func TestParseBatchMetadataFromJSON_ErrorCarriesSanitizedExcerpt(t *testing.T) {
+	reply := "{\"results\": [{\"title\": \"A\"}],\n\"x\": \"" + strings.Repeat("y", 1000) + "\"}"
+	_, err := parseBatchMetadataFromJSON(reply, 3)
+	if err == nil {
+		t.Fatal("expected an error for 1 result against 3 filenames")
+	}
+	msg := err.Error()
+	if strings.ContainsAny(msg, "\n\r") {
+		t.Errorf("error contains a raw line break: %q", msg)
+	}
+	if !strings.Contains(msg, `{"results": [{"title": "A"}],\n"x"`) {
+		t.Errorf("error does not carry the escaped reply: %q", msg)
+	}
+	if !strings.Contains(msg, fmt.Sprintf("(%d bytes total)", len(reply))) {
+		t.Errorf("error does not say the excerpt was truncated: %q", msg)
+	}
+	if len(msg) > maxResponseExcerptBytes+300 {
+		t.Errorf("error is %d bytes; the excerpt was not bounded", len(msg))
+	}
+}
+
+func TestParseMetadataFromJSON_Shapes(t *testing.T) {
+	testCases := []struct {
+		name      string
+		json      string
+		wantErr   string
+		wantTitle string
+	}{
+		{name: "metadata object", json: `{"title": "T", "author": "A"}`, wantTitle: "T"},
+		{name: "empty object is an empty result", json: `{}`},
+		{name: "results wrapper holding one object", json: `{"results": [{"title": "T"}]}`, wantTitle: "T"},
+		{name: "results wrapper holding nothing is an empty result", json: `{"results": []}`},
+		{name: "single-key wrapper holding an object", json: `{"book": {"title": "T"}}`, wantTitle: "T"},
+		{name: "results wrapper holding two is an error", json: `{"results": [{"title": "A"}, {"title": "B"}]}`, wantErr: "holds 2 results"},
+		{name: "results wrapper holding a non-object", json: `{"results": ["T"]}`, wantErr: "non-object element"},
+		{name: "unknown scalar key is an error, not an empty parse", json: `{"error": "boom"}`, wantErr: "not a metadata field"},
+		{name: "several unknown keys is an error", json: `{"a": 1, "b": 2}`, wantErr: "none of them is a metadata field"},
+		{name: "null is an error, not an empty parse", json: `null`, wantErr: "not a JSON object"},
+		{name: "array is an error", json: `[{"title": "T"}]`, wantErr: "not a JSON object"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := parseMetadataFromJSON(tc.json)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
 				}
+				if !strings.Contains(err.Error(), "response: ") {
+					t.Errorf("error does not carry the reply excerpt: %v", err)
+				}
+				return
 			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if m == nil || m.Title != tc.wantTitle {
+				t.Fatalf("metadata = %+v, want title %q", m, tc.wantTitle)
+			}
+		})
+	}
+}
+
+// End to end through ParseBatch against a fake OpenAI-compatible server: the
+// production reply must now come back as one nil per filename, not an error.
+func TestParseBatch_ObservedEmptyResultsThroughFakeServer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{name: "empty results", content: observedEmptyResults},
+		{name: "short results", content: `{"results": [{"title": "A"}]}`, wantErr: "got 1 result(s) for 2 filename(s)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"id": "chatcmpl-test", "object": "chat.completion", "model": "test",
+				"choices": []any{map[string]any{
+					"index": 0, "finish_reason": "stop",
+					"message": map[string]any{"role": "assistant", "content": tc.content},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+
+			origBaseURL := config.AppConfig.OpenAIBaseURL
+			t.Setenv("OPENAI_BASE_URL", srv.URL)
+			config.InitConfig()
+			t.Cleanup(func() {
+				config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
+			})
+
+			p := NewOpenAIParser(nil, "test-api-key", true)
+			results, err := p.ParseBatch(context.Background(), []string{"Disc 1", "Disc 2"})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseBatch: %v", err)
+			}
+			if len(results) != 2 {
+				t.Fatalf("got %d results, want 2", len(results))
+			}
+			wantAllNil(t, results)
 		})
 	}
 }
@@ -1567,7 +1808,7 @@ func TestParseMetadataFromJSON_ErrorWrapping(t *testing.T) {
 }
 
 func TestParseBatchMetadataFromJSON_ErrorWrapping(t *testing.T) {
-	_, err := parseBatchMetadataFromJSON("[{bad json}]")
+	_, err := parseBatchMetadataFromJSON("[{bad json}]", 1)
 
 	if err == nil {
 		t.Fatal("Expected error")
