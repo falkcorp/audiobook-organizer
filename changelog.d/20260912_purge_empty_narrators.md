@@ -13,5 +13,7 @@ By default it also holds back a zero-link narrator whose name still appears in
 some book's narrator text (`require_no_name_match=false` includes them). On
 apply it holds the scan stand-down and re-checks each narrator's links
 immediately before deleting it, so a narrator linked while the op runs is kept
-and reported as "linked during run". Every deleted narrator is logged with its
-id and name.
+and reported as "linked during run". Before each delete it writes an undo-ledger
+row (`narrator_delete`, `"<id>:<name>"`) to `operation_changes`, the same shape
+`purge-empty-authors` writes; if that write fails the narrator is kept. An apply
+with nothing eligible returns without taking the scan stand-down.

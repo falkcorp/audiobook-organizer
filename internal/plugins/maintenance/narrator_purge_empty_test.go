@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_purge_empty_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7912f12-2468-4645-af36-7afebc4a496b
 // last-edited: 2026-09-12
 
@@ -21,7 +21,9 @@ import (
 //   - DryRun, ApplyDeletesOnlyZeroReference, NameHold*: the bulk unfiltered count.
 //   - HoldsNarratorLinkedDuringRun, RecheckFailureAborts: the per-item re-check,
 //     the load-bearing guard while a (possibly resumed) scan is running.
-//   - StandDown*: the scan stand-down, the backup guard.
+//   - StandDown*, NothingEligibleTakesNoStandDown: the scan stand-down, the
+//     backup guard, and that it is never taken for a run that deletes nothing.
+//   - Journal*: the undo-ledger row written before each delete, fail closed.
 //   - RealPebble: the bulk count against a real store (trashed, non-primary,
 //     orphan junction rows) plus the re-check on the apply path.
 
@@ -216,6 +218,86 @@ func TestPurgeEmptyNarrators_StandDownLostAbortsBeforeAnyDelete(t *testing.T) {
 	require.NotEmpty(t, rep.Aborted)
 	require.Empty(t, m.deleted)
 	require.Empty(t, m.rechecks)
+}
+
+// THE UNDO LEDGER. Every delete must be preceded by its own narrator_delete
+// row carrying the op id and "<id>:<name>" -- the only surviving copy of the
+// name once the row is gone.
+func TestPurgeEmptyNarrators_JournalRowWrittenBeforeEachDelete(t *testing.T) {
+	narrators, refs := narratorMockFixture()
+	m := newNarratorMock(narrators, refs, nil)
+	var events []string
+	var rows []database.OperationChange
+	m.store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		events = append(events, "journal:"+c.OldValue)
+		rows = append(rows, *c)
+		return nil
+	}
+	m.store.DeleteNarratorFunc = func(id int) error {
+		m.deleted = append(m.deleted, id)
+		events = append(events, "delete:"+map[int]string{2: "2:Chapter 01", 4: "4:Track 7"}[id])
+		return nil
+	}
+
+	rep, err := m.plugin().purgeEmptyNarrators(context.Background(), purgeEmptyNarratorsParams{Apply: true}, &opIDReporter{id: "op-j"})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"journal:2:Chapter 01", "delete:2:Chapter 01",
+		"journal:4:Track 7", "delete:4:Track 7",
+	}, events, "each ledger row must be written before its delete")
+	require.Len(t, rows, 2)
+	for _, r := range rows {
+		require.Equal(t, "op-j", r.OperationID)
+		require.Equal(t, "narrator_delete", r.ChangeType)
+		require.Equal(t, "narrator", r.FieldName)
+		require.Equal(t, "purged_empty", r.NewValue)
+		require.NotEmpty(t, r.ID)
+	}
+	require.Equal(t, 2, rep.Deleted)
+	require.Zero(t, rep.JournalFailed)
+}
+
+// A ledger write that fails must skip THAT delete (fail closed) and let the
+// rest of the run continue.
+func TestPurgeEmptyNarrators_JournalFailureSkipsTheDelete(t *testing.T) {
+	narrators, refs := narratorMockFixture()
+	m := newNarratorMock(narrators, refs, nil)
+	m.store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
+		if c.OldValue == "2:Chapter 01" {
+			return errors.New("ledger unavailable")
+		}
+		return nil
+	}
+
+	rep, err := m.plugin().purgeEmptyNarrators(context.Background(), purgeEmptyNarratorsParams{Apply: true}, &opIDReporter{id: "op-j2"})
+	require.NoError(t, err)
+	require.Equal(t, []int{4}, m.deleted, "narrator 2 has no ledger row and must survive")
+	require.Equal(t, 1, rep.JournalFailed)
+	require.Equal(t, 1, rep.Deleted)
+	require.Contains(t, rep.summary(), "held(journal failed)=1")
+}
+
+// An apply with nothing eligible must not park a running scan to delete
+// nothing (the #3307 fix for purge-empty-authors, applied here).
+func TestPurgeEmptyNarrators_NothingEligibleTakesNoStandDown(t *testing.T) {
+	narrators := []database.Narrator{{ID: 1, Name: "Kate Reading"}}
+	refs := database.NarratorRefs{ByID: map[int]int{1: 3}, ByName: map[string]int{}}
+	m := newNarratorMock(narrators, refs, nil)
+	journaled := 0
+	m.store.CreateOperationChangeFunc = func(*database.OperationChange) error { journaled++; return nil }
+	scan := &recordingScanController{renewOK: true}
+	p := &Plugin{deps: narratorStandDownDeps{fakeDeps: fakeDeps{store: m.store}, scan: scan}}
+
+	rep, err := p.purgeEmptyNarrators(context.Background(), purgeEmptyNarratorsParams{Apply: true}, &opIDReporter{id: "op-empty"})
+	require.NoError(t, err)
+	acq, rel, ren := scan.counts()
+	require.Zero(t, acq, "nothing eligible: the scan must not be parked")
+	require.Zero(t, rel)
+	require.Zero(t, ren)
+	require.Zero(t, rep.Eligible)
+	require.Empty(t, m.deleted)
+	require.Empty(t, m.rechecks)
+	require.Zero(t, journaled)
 }
 
 func TestPurgeEmptyNarratorsDef_IsRegisteredAndValid(t *testing.T) {
