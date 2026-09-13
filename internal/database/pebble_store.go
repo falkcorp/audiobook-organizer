@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.157.0
+// version: 1.158.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -2435,6 +2435,11 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 }
 
 func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
+	// A caller-supplied ID is written into the key verbatim, so it must be a
+	// single key segment. See ValidateBookID (book_id.go).
+	if err := ValidateBookID(book.ID); err != nil {
+		return nil, err
+	}
 	// Generate ULID if not provided
 	if book.ID == "" {
 		id, err := newULID()
