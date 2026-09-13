@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-09
+// last-edited: 2026-09-13
 
 // batch.go implements M3: coalescing burst enqueues of a Batchable op type into
 // one OperationV2Row via a debounce timer.
@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -119,7 +120,7 @@ func (r *Registry) batchAdd(opType string, sub database.OpSubject, bw, bmw time.
 	// for callers that pass ("", nil) on batchable ops).
 	if err := r.store.AddToBatchBucket(opType, sub); err != nil {
 		r.logger.Warn("batch: AddToBatchBucket failed", "op_type", opType,
-			"subject_type", sub.Type, "subject_id", sub.ID, "error", err)
+			"subject_type", logger.SanitizeLogValue(sub.Type), "subject_id", logger.SanitizeLogValue(sub.ID), "error", err)
 	}
 
 	r.batch.mu.Lock()
