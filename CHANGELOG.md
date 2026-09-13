@@ -1,5 +1,5 @@
 <!-- file: CHANGELOG.md -->
-<!-- version: 3.182.1 -->
+<!-- version: 3.182.2 -->
 <!-- guid: 8c5a02ad-7cfe-4c6d-a4b7-3d5f92daabc1 -->
 <!-- last-edited: 2026-09-12 -->
 
@@ -1197,7 +1197,7 @@ version answers it correctly. Killing that mutant would mean writing
 and the real gap it points at — a last-first name is not used as a discriminator,
 which `origin/main` gets wrong too — is filed rather than fixed here.
 
-## Corrections, made before release
+#### Corrections, made before release
 
 Three claims above were measured on a synthetic 1,232-input corpus and do not
 survive contact with the real library. They are corrected here rather than

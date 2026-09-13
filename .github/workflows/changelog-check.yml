@@ -1,7 +1,7 @@
 # file: .github/workflows/changelog-check.yml
-# version: 1.0.1
+# version: 1.1.0
 # guid: f0377e85-bfb7-42b2-bb99-6cdd80d34a73
-# last-edited: 2026-08-27
+# last-edited: 2026-09-12
 
 name: Changelog Fragment Check
 
@@ -63,3 +63,33 @@ jobs:
           echo "(see changelog.d/README.md), or add the 'skip-changelog' label or"
           echo "'[skip changelog]' to the PR title if no changelog entry is needed."
           exit 1
+
+  # The release workflow's `scriv collect --version X` refuses to run when any
+  # entry heading in CHANGELOG.md is not a version, and a heading can reach
+  # CHANGELOG.md from a fragment one release before it becomes fatal. v0.222.0
+  # failed that way on 2026-09-12. This job runs scriv's own parser over
+  # CHANGELOG.md and simulates the collect of every pending fragment, so the
+  # break shows on the PR that causes it. Deliberately not skippable by the
+  # 'skip-changelog' label: it guards the release, not the PR's own entry.
+  scriv-collect-dry-run:
+    name: CHANGELOG collects cleanly with scriv
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Unpinned on purpose: the release workflow installs scriv unpinned, and
+      # this check must judge CHANGELOG.md with the parser the release will use.
+      - name: Install scriv
+        run: python -m pip install --disable-pip-version-check scriv
+
+      - name: Check CHANGELOG.md and pending fragments
+        run: python scripts/check_changelog_scriv.py
