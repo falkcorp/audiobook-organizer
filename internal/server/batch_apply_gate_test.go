@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
 // last-edited: 2026-09-13
 //
@@ -81,13 +81,13 @@ func TestPlanOpResultApply_GateRefuses(t *testing.T) {
 		out.Book.Title, out.Book.Author = fetchedTitle, "Ann Author"
 		return out
 	}
-	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 3", SeriesPosition: "3", Score: 0.99}, "Big Cats 1")); p.Reason != applySkipGateBlocked || p.Gate.Reason != applygate.ReasonSequenceMismatch {
+	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 3", SeriesPosition: "3", Score: 0.99}, "Big Cats 1"), nil); p.Reason != applySkipGateBlocked || p.Gate.Reason != applygate.ReasonSequenceMismatch {
 		t.Fatalf("wrong volume: reason=%q gate=%+v", p.Reason, p.Gate)
 	}
-	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.99}, "Big Cats One Old Title")); p.Reason != applySkipGateBlocked || p.Gate.Reason != applygate.ReasonIdentityStale {
+	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.99}, "Big Cats One Old Title"), nil); p.Reason != applySkipGateBlocked || p.Gate.Reason != applygate.ReasonIdentityStale {
 		t.Fatalf("title changed since fetch: reason=%q gate=%+v", p.Reason, p.Gate)
 	}
-	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours}, "Big Cats 1")); p.Reason != "" {
+	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours}, "Big Cats 1"), nil); p.Reason != "" {
 		t.Fatalf("matching volume refused: reason=%q err=%v", p.Reason, p.Err)
 	}
 }
@@ -190,7 +190,7 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 	svc := metafetch.NewService(store)
 	rows := map[string]bulkApplyPreviewRow{}
 	for id := range books {
-		rows[id] = previewBulkApplyRow(svc, id, planCachedApply(svc, store, id), true)
+		rows[id] = previewBulkApplyRow(svc, id, planCachedApply(svc, store, id, nil), true)
 	}
 
 	good := rows["good"]

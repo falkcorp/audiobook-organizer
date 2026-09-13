@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -304,6 +304,16 @@ func runBulkApplyPreview(
 		return fmt.Errorf("bulk-apply-preview: unknown source %q", source)
 	}
 
+	// The same claim index the apply builds from the same book list, so the
+	// partial_book check sees the same siblings here as in the real apply.
+	var load claimLoader
+	if source == previewSourceOpResults {
+		load = opResultClaimLoader(books, func(id string) (CandidateResult, bool) { cr, ok := opResults[id]; return cr, ok })
+	} else {
+		load = cachedClaimLoader(svc, books)
+	}
+	claims := buildClaimIndex(ctx, ids, load)
+
 	var nApply, nBlocked, nSkipped, nWriteErr atomic.Int64
 	previewOne := func(_ context.Context, id string) error {
 		var plan cachedApplyPlan
@@ -315,10 +325,10 @@ func runBulkApplyPreview(
 			case cr.Status != "matched" || cr.Candidate == nil:
 				plan = cachedApplyPlan{Reason: "status_" + cr.Status}
 			default:
-				plan = planOpResultApply(books, id, cr)
+				plan = planOpResultApply(books, id, cr, claims)
 			}
 		} else {
-			plan = planCachedApply(svc, books, id)
+			plan = planCachedApply(svc, books, id, claims)
 		}
 		row := previewBulkApplyRow(svc, id, plan, writeBack)
 		switch row.Verdict {
