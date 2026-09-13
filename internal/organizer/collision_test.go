@@ -1,13 +1,14 @@
 // file: internal/organizer/collision_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package organizer
 
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -637,12 +638,13 @@ func TestRenameFiles_UnresolvableCollisionReportsOccupantFingerprint(t *testing.
 // deliberately KEPT: undoing file 1's quarantine would move a file back to a
 // source path whose row now points at a published target.
 //
-// The phase-2 failure is produced without any injection hook, in a shape the
-// planner really emits: files 2 and 3 format to the SAME target name. At
-// pre-flight time that target is empty, so the resolver correctly ignores both
-// (intra-book collisions are planPass's job, via forceTrackSuffix) — they park
-// on distinct nonced temps, file 2 publishes, and file 3's finalizeExclusive
-// hits EEXIST against what file 2 just wrote.
+// Until 2026-09-13 the phase-2 failure came from files 2 and 3 formatting to
+// the SAME target -- "a shape the planner really emits". It was: that shape is
+// the production bug of 2026-09-13 ("<title> - 01 - 01", link EEXIST), and
+// RenameFiles now refuses such a plan before phase 1 (ErrDuplicateRenameTarget).
+// The failure is therefore injected through publishRenameTemp, as EEXIST on
+// file 3's target after file 2 has published -- the same error a concurrent
+// writer landing on that target would produce.
 func TestRenameFiles_KeepsResolvedCollisionAfterAPartialPublish(t *testing.T) {
 	root := t.TempDir()
 
@@ -650,10 +652,20 @@ func TestRenameFiles_KeepsResolvedCollisionAfterAPartialPublish(t *testing.T) {
 	src1 := writeCollisionFile(t, filepath.Join(root, "incoming", "one.m4b"), "identical-bytes")
 	dst1 := writeCollisionFile(t, filepath.Join(root, "Author", "Title - 01.m4b"), "identical-bytes")
 
-	// Files 2 and 3 both target the same free path.
+	// Files 2 and 3 target distinct free paths; file 3's publish is refused.
 	shared := filepath.Join(root, "Author", "Title - 02.m4b")
+	third := filepath.Join(root, "Author", "Title - 03.m4b")
 	src2 := writeCollisionFile(t, filepath.Join(root, "incoming", "two.m4b"), "second-file")
 	src3 := writeCollisionFile(t, filepath.Join(root, "incoming", "three.m4b"), "third-file")
+
+	orig := publishRenameTemp
+	t.Cleanup(func() { publishRenameTemp = orig })
+	publishRenameTemp = func(tmp, dst string) error {
+		if dst == third {
+			return &os.LinkError{Op: "link", Old: tmp, New: dst, Err: fs.ErrExist}
+		}
+		return orig(tmp, dst)
+	}
 
 	store := newFakeCollisionStore()
 	store.add(&database.BookFile{ID: "f1", BookID: "b1", FilePath: src1})
@@ -664,7 +676,7 @@ func TestRenameFiles_KeepsResolvedCollisionAfterAPartialPublish(t *testing.T) {
 		[]FileRenameEntry{
 			{SegmentID: "f1", SourcePath: src1, TargetPath: dst1},
 			{SegmentID: "f2", SourcePath: src2, TargetPath: shared},
-			{SegmentID: "f3", SourcePath: src3, TargetPath: shared},
+			{SegmentID: "f3", SourcePath: src3, TargetPath: third},
 		},
 		&CollisionPolicy{RootDir: root, BookID: "b1", Store: store},
 	)
@@ -705,6 +717,9 @@ func TestRenameFiles_KeepsResolvedCollisionAfterAPartialPublish(t *testing.T) {
 	// File 3 is returned to its source — never left at a .tmp-rename path.
 	if got := readCollisionFile(t, src3); got != "third-file" {
 		t.Fatalf("file 3 was not rolled back to its source: %q", got)
+	}
+	if _, statErr := os.Lstat(third); !os.IsNotExist(statErr) {
+		t.Fatalf("file 3's refused target exists (err=%v)", statErr)
 	}
 	strays, _ := filepath.Glob(filepath.Join(root, "Author", "*.tmp-rename-*"))
 	if len(strays) != 0 {

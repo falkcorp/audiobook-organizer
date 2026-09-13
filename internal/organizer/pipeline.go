@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package organizer
 
@@ -16,7 +16,18 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var pipelineLog = logger.New("organizer.pipeline")
+
+// ErrDuplicateRenameTarget reports a rename plan in which two files of one book
+// would land on the same target path. planTargetPaths returns it when no
+// numbering can tell the files apart, and RenameFiles refuses such a plan
+// before anything moves: publishing the first file and then failing link(2) on
+// the second (what happened in production on 2026-09-13) leaves the book half
+// renamed.
+var ErrDuplicateRenameTarget = errors.New("two files of one book plan the same target path")
 
 // TmpRenameSuffix is appended to the target path to form the intermediate temp
 // path used by RenameFiles' two-phase rename: `<target>.tmp-rename-<nonce>`
@@ -170,7 +181,9 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 	// whole book every time a file went missing or came back.
 	totalTracks := len(sorted)
 
-	entries, collided, err := planPass(rootDir, folderPattern, filePattern, sorted, totalTracks, vars, opts, false)
+	sorted, trackNums := uniqueTrackNumbers(sorted, vars.Title)
+
+	entries, collided, err := planPass(rootDir, folderPattern, filePattern, sorted, trackNums, totalTracks, vars, opts, false)
 	if err != nil {
 		return nil, err
 	}
@@ -191,20 +204,89 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 			"file_naming_pattern", filePattern,
 			"title", vars.Title,
 			"files", totalTracks)
-		entries, _, err = planPass(rootDir, folderPattern, filePattern, sorted, totalTracks, vars, opts, true)
+		entries, collided, err = planPass(rootDir, folderPattern, filePattern, sorted, trackNums, totalTracks, vars, opts, true)
 		if err != nil {
 			return nil, err
+		}
+		// The suffix is a track number that uniqueTrackNumbers made distinct,
+		// so a collision surviving it means the patterns expand two different
+		// numbers to one name (truncation, say). Until 2026-09-13 this second
+		// pass's result was discarded and the duplicate plan went to
+		// RenameFiles, which published the first file and failed link(2) on
+		// the second. Refuse the plan instead: nothing has moved yet.
+		if collided {
+			return nil, fmt.Errorf("plan target paths for %q (%d files, file pattern %q): %w",
+				vars.Title, totalTracks, filePattern, ErrDuplicateRenameTarget)
 		}
 	}
 
 	return entries, nil
 }
 
-// planPass builds one full set of target paths. forceTrackSuffix appends the
-// zero-padded track number to every stem; planTargetPaths turns it on for the
-// second pass when the first produced duplicate targets. It reports whether any
-// two files landed on the same target.
-func planPass(rootDir, folderPattern, filePattern string, sorted []database.BookFile, totalTracks int, vars PathVars, opts BuildOpts, forceTrackSuffix bool) ([]FileRenameEntry, bool, error) {
+// uniqueTrackNumbers returns the rows in naming order together with the track
+// number each one is named by, guaranteeing the numbers are distinct.
+//
+// The fast path keeps the old answer exactly: a row's own TrackNumber, or its
+// 1-based position when the row has none. A book whose numbers are already
+// distinct is therefore never renamed by this function.
+//
+// The numbers are NOT distinct for a multi-disc rip whose tracks restart on
+// every disc (disc 1 track 1, disc 2 track 1, ...), or when a position-derived
+// number lands on another row's explicit one. Before 2026-09-13 those rows
+// planned the same target, and the collision retry appended the same duplicated
+// number again, giving "<title> - 01 - 01" for both. For such a book every row
+// is renumbered by position in (disc, track, path) order: disc 1's tracks, then
+// disc 2's, 1..N. Renumbering the WHOLE book rather than only the clashing rows
+// keeps the numbers contiguous and in listening order.
+func uniqueTrackNumbers(sorted []database.BookFile, title string) ([]database.BookFile, []int) {
+	nums := make([]int, len(sorted))
+	seen := make(map[int]struct{}, len(sorted))
+	distinct := true
+	for i, f := range sorted {
+		nums[i] = i + 1
+		if f.TrackNumber != 0 {
+			nums[i] = f.TrackNumber
+		}
+		if _, dup := seen[nums[i]]; dup {
+			distinct = false
+		}
+		seen[nums[i]] = struct{}{}
+	}
+	if distinct {
+		return sorted, nums
+	}
+
+	byDisc := make([]database.BookFile, len(sorted))
+	copy(byDisc, sorted)
+	sort.SliceStable(byDisc, func(i, j int) bool {
+		a, b := byDisc[i], byDisc[j]
+		if a.DiscNumber != b.DiscNumber {
+			return a.DiscNumber < b.DiscNumber
+		}
+		// Within a disc, numbered rows first in track order, then unnumbered
+		// rows -- the same rule the caller's sort applies.
+		if (a.TrackNumber != 0) != (b.TrackNumber != 0) {
+			return a.TrackNumber != 0
+		}
+		if a.TrackNumber != b.TrackNumber {
+			return a.TrackNumber < b.TrackNumber
+		}
+		return a.FilePath < b.FilePath
+	})
+	for i := range nums {
+		nums[i] = i + 1
+	}
+	pipelineLog.Warn("book files repeat track numbers; numbering them by disc and position so no two share a target: title=%q files=%d",
+		logger.SanitizeLogValue(title), len(byDisc))
+	return byDisc, nums
+}
+
+// planPass builds one full set of target paths. trackNums[i] is the track
+// number sorted[i] is named by (see uniqueTrackNumbers). forceTrackSuffix
+// appends that zero-padded number to every stem; planTargetPaths turns it on
+// for the second pass when the first produced duplicate targets. It reports
+// whether any two files landed on the same target.
+func planPass(rootDir, folderPattern, filePattern string, sorted []database.BookFile, trackNums []int, totalTracks int, vars PathVars, opts BuildOpts, forceTrackSuffix bool) ([]FileRenameEntry, bool, error) {
 	// Pad to the width of the largest track number so 9/10 sort as 09/10.
 	width := max(len(fmt.Sprintf("%d", totalTracks)), 2)
 
@@ -217,10 +299,7 @@ func planPass(rootDir, folderPattern, filePattern string, sorted []database.Book
 			continue
 		}
 
-		trackNum := i + 1
-		if f.TrackNumber != 0 {
-			trackNum = f.TrackNumber
-		}
+		trackNum := trackNums[i]
 
 		ext := strings.TrimPrefix(filepath.Ext(f.FilePath), ".")
 		if ext == "" {
@@ -396,6 +475,34 @@ func renameTempPath(target string) string {
 	return target + TmpRenameSuffix + "-" + tempNonce()
 }
 
+// publishRenameTemp is RenameFiles' phase-2 publish. It is a variable only so
+// tests can fail one publish after another has landed: the partial-publish
+// rollback rules cannot otherwise be reached, since the one natural trigger --
+// two entries sharing a target -- is now refused before phase 1.
+var publishRenameTemp = finalizeExclusive
+
+// duplicateTargets lists, as "target <- src1, src2" strings, every target path
+// that more than one entry plans. Paths are compared cleaned, so "a/./b" and
+// "a/b" are one target, which is what link(2) will think too.
+func duplicateTargets(entries []FileRenameEntry) []string {
+	sources := make(map[string][]string, len(entries))
+	var order []string
+	for _, e := range entries {
+		key := filepath.Clean(e.TargetPath)
+		if _, ok := sources[key]; !ok {
+			order = append(order, key)
+		}
+		sources[key] = append(sources[key], e.SourcePath)
+	}
+	var out []string
+	for _, key := range order {
+		if srcs := sources[key]; len(srcs) > 1 {
+			out = append(out, key+" <- "+strings.Join(srcs, ", "))
+		}
+	}
+	return out
+}
+
 // strandedRenameTemps finds files a previous, interrupted RenameFiles left
 // parked for target: the legacy fixed name `target+TmpRenameSuffix` (runs
 // before 2026-09-02) and any nonce-suffixed `target+TmpRenameSuffix+"-*"`.
@@ -536,12 +643,34 @@ func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFil
 		return result, nil
 	}
 
+	// Two entries on one target can never both succeed: phase 2 publishes the
+	// first and the second's link(2) fails EEXIST on the file this very batch
+	// just put there, after the first file has moved and its row is about to
+	// be repointed. The pre-flight resolver cannot see it either -- the target
+	// is still free when it looks. Refuse the whole plan before anything moves.
+	if dup := duplicateTargets(entries); len(dup) > 0 {
+		msg := fmt.Sprintf("rename plan puts more than one file on the same target: %s", strings.Join(dup, "; "))
+		pipelineLog.Error("RenameFiles refusing a plan with duplicate targets; nothing was moved: duplicates=%d detail=%s",
+			len(dup), logger.SanitizeLogValue(msg))
+		result.Errors = append(result.Errors, msg)
+		return result, fmt.Errorf("%s: %w", msg, ErrDuplicateRenameTarget)
+	}
+
 	// Pre-filter: skip entries where source doesn't exist — unless the file
 	// was stranded at its temp path by an interrupted phase 2, in which case
 	// it re-enters phase 2 below so the rename completes.
 	var valid []FileRenameEntry
 	var temps []renameTemp
 	for _, entry := range entries {
+		// A file already at its target (a re-applied book, or one whose
+		// earlier run published it) needs no disk work at all. Parking it on a
+		// temp and linking it back is two syscalls of risk for nothing.
+		if filepath.Clean(entry.SourcePath) == filepath.Clean(entry.TargetPath) {
+			if _, err := os.Lstat(entry.SourcePath); err == nil {
+				result.Succeeded = append(result.Succeeded, entry)
+				continue
+			}
+		}
 		if _, err := os.Stat(entry.SourcePath); os.IsNotExist(err) {
 			stranded, serr := strandedRenameTemps(entry.TargetPath)
 			if serr != nil {
@@ -636,7 +765,7 @@ func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFil
 	// at the published target — an inconsistency worse than the quarantine.
 	// Past that point the resolutions stand and are reported instead.
 	for i, t := range temps {
-		if err := finalizeExclusive(t.TempPath, t.Entry.TargetPath); err != nil {
+		if err := publishRenameTemp(t.TempPath, t.Entry.TargetPath); err != nil {
 			rollbackRenameTemps(temps[i:], result)
 			if len(result.Succeeded) == 0 {
 				journal.rollback(result)
