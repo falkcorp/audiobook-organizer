@@ -1,5 +1,5 @@
 // file: internal/applygate/cast_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
 // last-edited: 2026-09-13
 
@@ -37,10 +37,32 @@ func TestCheckCastInAuthor(t *testing.T) {
 			want: ReasonCastInAuthor,
 		},
 		{
-			name: "The War Master: the performer folded into a four-name writing credit",
+			// Position in a credit list is not evidence of performing (review
+			// F3); without a cast credit in the files this row is not caught.
+			name: "The War Master: stored author is a non-first name, no cast credit",
 			book: database.Book{Title: "The War Master", Author: &database.Author{Name: "Derek Jacobi"},
 				Narrator: strp("Big Finish Productions")},
 			cand: metafetch.MetadataCandidate{Title: "The War Master", Author: "James Goss, Guy Adams, Derek Jacobi, Rob Harvey"},
+		},
+		{
+			name: "F1: co-author reads the book, stored author empty",
+			book: database.Book{Title: "Good Omens", Narrator: strp("Neil Gaiman")},
+			cand: metafetch.MetadataCandidate{Title: "Good Omens", Author: "Terry Pratchett, Neil Gaiman"},
+		},
+		{
+			name: "F2: narrator shares only a surname with the first author",
+			book: database.Book{Title: "The Talisman", Narrator: strp("Owen King")},
+			cand: metafetch.MetadataCandidate{Title: "The Talisman", Author: "Stephen King, Peter Straub"},
+		},
+		{
+			name: "F3: real co-author listed third",
+			book: database.Book{Title: "Hellhole", Author: &database.Author{Name: "Kevin J. Anderson"}},
+			cand: metafetch.MetadataCandidate{Title: "Hellhole", Author: "Frank Herbert, Brian Herbert, Kevin J. Anderson"},
+		},
+		{
+			name: "narrator repeats the first author in full-name form",
+			book: database.Book{Title: "Frostfire", Narrator: strp("Marc Platt")},
+			cand: metafetch.MetadataCandidate{Title: "Frostfire", Author: "Marc Platt, Maureen O'Brien"},
 			want: ReasonCastInAuthor,
 		},
 		{
