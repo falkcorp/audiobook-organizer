@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -23,6 +23,14 @@ import (
 // compaction. POST /api/v1/activity/compact enqueues it; the handler and the
 // UI refer to it by this constant.
 const CompactActivityLogDefID = "maintenance.compact-activity-log"
+
+// MaxCompactDays is the largest OlderThanDays the compaction accepts (100
+// years). It is enforced by the op itself, by POST /api/v1/activity/compact,
+// and mirrored as MAX_COMPACT_DAYS in web/src/components/activity/compactDays.ts.
+// Without it a huge value overflows time.Time.AddDate and wraps: 213503982334601
+// days lands at about now and math.MaxInt64 lands tomorrow, so an absurd
+// "keep everything newer than N days" silently compacted EVERYTHING.
+const MaxCompactDays = 36500
 
 // CompactActivityLogParams is the op's params payload.
 type CompactActivityLogParams struct {
@@ -97,16 +105,14 @@ func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	var params CompactActivityLogParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return fmt.Errorf("compact-activity-log: bad params: %w", err)
-		}
+	params, err := decodeCompactActivityLogParams(raw)
+	if err != nil {
+		return err
 	}
-	if params.OlderThanDays < 0 {
-		return fmt.Errorf("compact-activity-log: older_than_days must be zero or positive, got %d", params.OlderThanDays)
+	cutoff, err := compactCutoff(time.Now(), params.OlderThanDays)
+	if err != nil {
+		return err
 	}
-	cutoff := time.Now().AddDate(0, 0, -params.OlderThanDays)
 
 	startMsg := fmt.Sprintf("Compacting activity entries older than %s (%d days) on every activity database",
 		cutoff.UTC().Format(time.RFC3339), params.OlderThanDays)
@@ -178,6 +184,48 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 		return fmt.Errorf("compact-activity-log: %w", err)
 	}
 	return nil
+}
+
+// decodeCompactActivityLogParams decodes and bounds the op's params.
+//
+// older_than_days is REQUIRED: a missing or null value used to decode to 0,
+// and 0 means "compact everything up to now" — the most destructive choice
+// was the default for an empty payload. The only enqueuer is
+// POST /api/v1/activity/compact, which always sends the field (explicit 0 is
+// still valid), so requiring it here changes nothing for a real caller.
+func decodeCompactActivityLogParams(raw json.RawMessage) (CompactActivityLogParams, error) {
+	var wire struct {
+		OlderThanDays *int `json:"older_than_days"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			return CompactActivityLogParams{}, fmt.Errorf("compact-activity-log: bad params: %w", err)
+		}
+	}
+	if wire.OlderThanDays == nil {
+		return CompactActivityLogParams{}, fmt.Errorf("compact-activity-log: older_than_days is required (0 compacts everything up to now)")
+	}
+	days := *wire.OlderThanDays
+	if days < 0 {
+		return CompactActivityLogParams{}, fmt.Errorf("compact-activity-log: older_than_days must be zero or positive, got %d", days)
+	}
+	if days > MaxCompactDays {
+		return CompactActivityLogParams{}, fmt.Errorf("compact-activity-log: older_than_days must be between 0 and %d, got %d", MaxCompactDays, days)
+	}
+	return CompactActivityLogParams{OlderThanDays: days}, nil
+}
+
+// compactCutoff returns now minus days. Defensive second line behind the
+// MaxCompactDays bound: AddDate wraps silently on overflow, so a positive day
+// count whose cutoff is not strictly before now is refused rather than
+// compacting everything.
+func compactCutoff(now time.Time, days int) (time.Time, error) {
+	cutoff := now.AddDate(0, 0, -days)
+	if days > 0 && !cutoff.Before(now) {
+		return time.Time{}, fmt.Errorf("compact-activity-log: older_than_days %d overflows the cutoff (got %s, not before %s)",
+			days, cutoff.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	}
+	return cutoff, nil
 }
 
 // compactProgressToReporter adapts the compaction store's progress events to

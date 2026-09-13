@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_compact.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b5d2e8a4-7c19-4f6b-a3e0-1d8f4c7b9e26
 // last-edited: 2026-09-13
 
@@ -8,9 +8,11 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,9 +76,11 @@ type CompactStartedResponse struct {
 //     one. A different-params request while one is running is queued behind
 //     it (ConcurrencyKey serialises runs) and answered 202, because the
 //     caller asked for different work and will get it.
-//   - 400 — "older_than_days must be a whole number of days" when the value
-//     is not an integer (1.75, "3", 1e3); "must be zero or positive" when it
-//     is negative; a body-shape message when the JSON itself is malformed.
+//   - 400 — older_than_days missing or null ("is required": it used to
+//     decode to 0, which compacts everything); not an integer literal (1.75,
+//     "3", 1e3: "must be a whole number of days"); negative ("must be zero
+//     or positive"); above maintenance.MaxCompactDays or too large for an
+//     int64 ("must be between 0 and 36500"); or a malformed body.
 //   - 500 — registry unavailable or the enqueue failed.
 func (h *ActivityCompactHandler) CompactActivity(c *gin.Context) {
 	if h.enqueuer == nil {
@@ -84,25 +88,49 @@ func (h *ActivityCompactHandler) CompactActivity(c *gin.Context) {
 		return
 	}
 
-	var req maintenance.CompactActivityLogParams
+	// older_than_days is decoded raw and classified here rather than bound
+	// into an int: a missing or null field must not silently become 0, and the
+	// int decode reported 1.75 and 99999999999999999999 as the same error.
+	var req struct {
+		OlderThanDays json.RawMessage `json:"older_than_days"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// A fractional, exponent, string or out-of-range value fails to decode
-		// into the int field. Until 2026-09-13 this answered "must be zero or
-		// positive" for 1.75, which is both. Say what is actually wrong.
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) {
-			httputil.RespondWithBadRequest(c, "older_than_days must be a whole number of days")
-			return
-		}
 		httputil.RespondWithBadRequest(c, `request body must be a JSON object like {"older_than_days": N}`)
 		return
 	}
-	if req.OlderThanDays < 0 {
-		httputil.RespondWithBadRequest(c, "older_than_days must be zero or positive")
+	days, msg := parseOlderThanDays(req.OlderThanDays)
+	if msg != "" {
+		httputil.RespondWithBadRequest(c, msg)
 		return
 	}
 
-	h.enqueue(c, maintenance.CompactActivityLogDefID, "activity compaction", req)
+	h.enqueue(c, maintenance.CompactActivityLogDefID, "activity compaction", maintenance.CompactActivityLogParams{OlderThanDays: days})
+}
+
+var integerLiteral = regexp.MustCompile(`^-?[0-9]+$`)
+
+// parseOlderThanDays classifies the raw older_than_days value. It returns the
+// day count, or a non-empty 400 message.
+func parseOlderThanDays(raw json.RawMessage) (int, string) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return 0, "older_than_days is required (0 compacts everything up to now)"
+	}
+	if !integerLiteral.MatchString(s) {
+		return 0, "older_than_days must be a whole number of days"
+	}
+	rangeMsg := fmt.Sprintf("older_than_days must be between 0 and %d", maintenance.MaxCompactDays)
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, rangeMsg // integer literal outside int64
+	}
+	if n < 0 {
+		return 0, "older_than_days must be zero or positive"
+	}
+	if n > maintenance.MaxCompactDays {
+		return 0, rangeMsg
+	}
+	return int(n), ""
 }
 
 // RecompactDigests handles POST /api/v1/admin/recompact-digests.
