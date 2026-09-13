@@ -695,7 +695,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 			bw, bmw := effectiveBatchWindows(def)
 			r.batchAdd(defID, database.OpSubject{Type: sub.Type, ID: sub.ID}, bw, bmw)
 			r.logger.Debug("registry: batchable op bucketed",
-				"def_id", defID, "subject_type", logger.SanitizeLogValue(sub.Type), "subject_id", logger.SanitizeLogValue(sub.ID))
+				"def_id", logger.SanitizeLogValue(defID), "subject_type", logger.SanitizeLogValue(sub.Type), "subject_id", logger.SanitizeLogValue(sub.ID))
 			return "", nil // op ID assigned at flush time
 		}
 	}
