@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.18.0
+// version: 2.18.1
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 import { Page } from '@playwright/test';
 
@@ -727,7 +727,9 @@ export async function setupMockApiRoutes(
     }
 
     // Backup endpoints - CRITICAL for backup-restore tests
-    if (pathname === '/api/v1/backup/list') {
+    // GET only: without the method guard this branch also answered
+    // `DELETE /api/v1/backup/list` ahead of the DELETE catch-all below.
+    if (pathname === '/api/v1/backup/list' && method === 'GET') {
       const f = maybeFailStatus(mockState.failures.listBackups, 'Failed to list backups'); if (f) return f;
       return route.fulfill(
         jsonResponse({
@@ -1756,7 +1758,10 @@ export async function setupMockApiRoutes(
     }
 
     // Works endpoints
-    if (pathname.startsWith('/api/v1/works')) {
+    // Exact match for the collection plus a trailing-slash prefix for
+    // sub-resources, so a sibling path that merely shares the prefix
+    // (`/api/v1/workspaces`, `/api/v1/works-queue`) is not swallowed here.
+    if (pathname === '/api/v1/works' || pathname.startsWith('/api/v1/works/')) {
       return route.fulfill(jsonResponse({ works: [], items: [] }));
     }
 
