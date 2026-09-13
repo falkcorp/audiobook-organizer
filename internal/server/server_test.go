@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-09-03
+// last-edited: 2026-09-13
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -127,6 +127,13 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		}
 		if store != nil {
 			database.SetGlobalStore(nil)
+			// NewServer also installs the store as the SCANNER package's
+			// global (server.go, scanner.SetStore). Unset it too, or every
+			// later test in the package inherits this closed PebbleStore and
+			// any scanner path that touches it panics "pebble: closed" --
+			// which is how TestLibraryAIParseOpReportsPerBatchProgressToTheReporter
+			// failed once the AI phase started reading the give-up markers.
+			scanner.SetStore(nil)
 			store.Close()
 		}
 		_ = os.RemoveAll(tempDir)

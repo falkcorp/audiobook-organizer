@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 32147e60-f02b-47a1-8b05-cf56ca320f50
-// last-edited: 2026-09-08
+// last-edited: 2026-09-13
 
 package server
 
@@ -24,6 +24,14 @@ import (
 // the definition row, so the store cannot be nil.
 func aiParseTestReg(t *testing.T) *opsregistry.Registry {
 	t.Helper()
+	// Run the op with NO scanner store, whatever an earlier test left behind.
+	// NewServer installs its store as the scanner package's global, and a
+	// test that builds a server and closes its store without unsetting it
+	// hands this op a closed PebbleStore: the AI phase reads the give-up
+	// markers through it before the first batch, and panics "pebble: closed".
+	// With no store, the phase's store reads are no-ops.
+	scanner.SetStore(nil)
+	t.Cleanup(func() { scanner.SetStore(nil) })
 	m := dbmocks.NewMockStore(t)
 	m.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
 	return opsregistry.New(m, slog.New(slog.DiscardHandler), 1, nil)
