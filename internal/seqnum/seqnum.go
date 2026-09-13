@@ -1,5 +1,5 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
 // last-edited: 2026-09-13
 
@@ -132,6 +132,25 @@ func Parse(s string) (Number, bool) {
 		if n, ok := toNumber(m[1], "trailing"); ok {
 			return n, true
 		}
+	}
+	return Number{}, false
+}
+
+// reMidTitle is a number standing between two title segments:
+// "Empire of Man 04 - We Few", "The Legends of the First Empire - 3 - Age of
+// War". Parse does not see it (it is neither leading nor trailing), so it is
+// used only by ParseTitle.
+var reMidTitle = regexp.MustCompile(`(?:^|\s)(\d{1,3}(?:\.\d+)?)\s+(?:-|–|—|:)\s+\S`)
+
+// ParseTitle is Parse plus a number between title segments. It is for
+// asking whether a title CARRIES a volume number that another title drops;
+// CheckSequence keeps using Parse, whose rules it was validated against.
+func ParseTitle(s string) (Number, bool) {
+	if n, ok := Parse(s); ok {
+		return n, true
+	}
+	if m := reMidTitle.FindStringSubmatch(clean(s)); m != nil {
+		return toNumber(m[1], "mid-title")
 	}
 	return Number{}, false
 }

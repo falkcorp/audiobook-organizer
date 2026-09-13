@@ -107,6 +107,7 @@ func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioCon
 		checkNarrator(book, c, runtime.Outcome),
 		checkASIN(book, c),
 		checkCastInAuthor(&nameSource{author: bookAuthor(book), narrator: bookNarrator(book)}, c.Author, c.Narrator),
+		checkSeriesNumberLost(book, c, v.Overwrites),
 	)
 	audio := CheckResult{Name: "transcription", Outcome: OutcomeUnknown}
 	if audioConfirmed {
