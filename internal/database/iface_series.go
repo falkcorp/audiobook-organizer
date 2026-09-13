@@ -1,5 +1,5 @@
 // file: internal/database/iface_series.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 459a6734-95fb-437c-bb97-6baecc64aba4
 // last-edited: 2026-09-12
 
@@ -26,6 +26,11 @@ type SeriesWriter interface {
 	// and newName is free under its author, checked and written atomically;
 	// see PebbleStore.RenameSeriesIf.
 	RenameSeriesIf(id int, expectCurrent, newName string) error
+	// RenameSeriesIfCurrent renames only if the series is still named
+	// expectCurrent, checked and written atomically, and keeps
+	// UpdateSeriesName's collision behaviour; see
+	// PebbleStore.RenameSeriesIfCurrent.
+	RenameSeriesIfCurrent(id int, expectCurrent, newName string) error
 }
 
 // SeriesStore combines both halves.

@@ -1,5 +1,5 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
 // last-edited: 2026-09-12
 
@@ -9,6 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -221,4 +225,165 @@ func TestSeriesRenameOp_UnknownSeriesFails(t *testing.T) {
 	changes, err := st.GetOperationChanges("op-missing")
 	require.NoError(t, err)
 	require.Empty(t, changes)
+}
+
+// interferingSeriesStore lets a test rename the series from "another writer"
+// in the window between the op's read and its write: interfere runs right
+// after each journal row lands, with the 1-based attempt number.
+type interferingSeriesStore struct {
+	*database.PebbleStore
+	attempts  int
+	interfere func(attempt int)
+}
+
+func (w *interferingSeriesStore) CreateOperationChange(c *database.OperationChange) error {
+	if err := w.PebbleStore.CreateOperationChange(c); err != nil {
+		return err
+	}
+	w.attempts++
+	if w.interfere != nil {
+		w.interfere(w.attempts)
+	}
+	return nil
+}
+
+// Another writer renames the series between the op's read and its write. The
+// compare-and-set refuses the stale write, the op retries against the name
+// the other writer set, and the live journal row records THAT name. The
+// refused attempt's row is retired, so the undo restores the other writer's
+// name rather than the stale one.
+func TestSeriesRenameOp_ConcurrentRenameJournalsReplacedName(t *testing.T) {
+	st := newRelinkOpStore(t)
+	s, err := st.CreateSeries("Foo", nil)
+	require.NoError(t, err)
+	w := &interferingSeriesStore{PebbleStore: st, interfere: func(attempt int) {
+		if attempt == 1 {
+			require.NoError(t, st.UpdateSeriesName(s.ID, "Foo Bar"))
+		}
+	}}
+
+	changed, err := runSeriesRename(w, "op-race", s.ID, "New")
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, 2, w.attempts)
+	require.Equal(t, "New", seriesName(t, st, s.ID))
+
+	changes, err := st.GetOperationChanges("op-race")
+	require.NoError(t, err)
+	require.Len(t, changes, 2)
+	var live []*database.OperationChange
+	for _, c := range changes {
+		if c.RevertedAt == nil {
+			live = append(live, c)
+		} else {
+			require.Equal(t, "Foo", c.OldValue, "only the refused attempt's row is retired")
+		}
+	}
+	require.Len(t, live, 1)
+	require.Equal(t, "Foo Bar", live[0].OldValue)
+	require.Equal(t, "New", live[0].NewValue)
+
+	report, err := undo.PreflightUndoConflicts(st, "op-race")
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Safe)
+	require.Empty(t, report.SeriesRenamedSince)
+
+	res, err := audiobookspkg.NewRevertService(st).RevertOperation("op-race")
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Restored)
+	require.Equal(t, 0, res.Failed)
+	require.Equal(t, "Foo Bar", seriesName(t, st, s.ID))
+}
+
+// A writer that renames the series on every attempt exhausts the bounded
+// retries: the op fails, its rename never lands, and every row it journaled
+// is retired, so an undo has nothing to act on.
+func TestSeriesRenameOp_ConcurrentRenameRetriesAreBounded(t *testing.T) {
+	st := newRelinkOpStore(t)
+	s, err := st.CreateSeries("Foo", nil)
+	require.NoError(t, err)
+	w := &interferingSeriesStore{PebbleStore: st, interfere: func(attempt int) {
+		require.NoError(t, st.UpdateSeriesName(s.ID, fmt.Sprintf("Other %d", attempt)))
+	}}
+
+	changed, err := runSeriesRename(w, "op-busy", s.ID, "New")
+	require.ErrorIs(t, err, database.ErrRenameSeriesRenamedSince)
+	require.False(t, changed)
+	require.Equal(t, seriesRenameMaxAttempts, w.attempts)
+	require.Equal(t, fmt.Sprintf("Other %d", seriesRenameMaxAttempts), seriesName(t, st, s.ID))
+
+	changes, err := st.GetOperationChanges("op-busy")
+	require.NoError(t, err)
+	require.Len(t, changes, seriesRenameMaxAttempts)
+	for _, c := range changes {
+		require.NotNil(t, c.RevertedAt, "row %s (old %q) must be retired", c.ID, c.OldValue)
+	}
+}
+
+// RenameSeriesIfCurrent refuses a series that is no longer named
+// expectCurrent, and otherwise keeps UpdateSeriesName's collision behaviour.
+func TestRenameSeriesIfCurrent_ChecksNameKeepsCollisions(t *testing.T) {
+	st := newRelinkOpStore(t)
+	a, err := st.CreateSeries("Alpha", nil)
+	require.NoError(t, err)
+	b, err := st.CreateSeries("Beta", nil)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, st.RenameSeriesIfCurrent(b.ID, "Wrong", "Gamma"), database.ErrRenameSeriesRenamedSince)
+	require.Equal(t, "Beta", seriesName(t, st, b.ID))
+	require.ErrorIs(t, st.RenameSeriesIfCurrent(424242, "x", "y"), database.ErrRenameSeriesNotFound)
+
+	require.NoError(t, st.RenameSeriesIfCurrent(b.ID, "Beta", "Alpha"))
+	require.Equal(t, "Alpha", seriesName(t, st, b.ID))
+	require.Equal(t, "Alpha", seriesName(t, st, a.ID))
+}
+
+// Undo through the operations handler's revert drops the series caches, so
+// GET /series shows the restored name straight away instead of the cached
+// renamed one.
+func TestSeriesRenameOp_UndoRefreshesSeriesList(t *testing.T) {
+	st := newRelinkOpStore(t)
+	s, err := st.CreateSeries("Old Name", nil)
+	require.NoError(t, err)
+	srv := newSeriesRenameOpServer(st)
+	srv.authorSeriesService = audiobookspkg.NewAuthorSeriesService(st)
+	h := newEntitiesHandlerWithRegistry(srv, &fakeSeriesRenameRegistry{})
+	list := func() string {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/series", nil)
+		h.ListSeries(c)
+		require.Equal(t, http.StatusOK, w.Code)
+		return w.Body.String()
+	}
+
+	def := relinkOpDef(t, srv.RegisterSeriesRenameOp, seriesRenameOpID)
+	params, err := json.Marshal(seriesRenameOpParams{SeriesID: s.ID, Name: "New Name"})
+	require.NoError(t, err)
+	require.NoError(t, def.Run(context.Background(), params, &seriesRenameOpReporter{id: "op-list"}))
+
+	require.Contains(t, list(), "New Name") // primes the "all" cache entry
+
+	_, err = srv.revertOperation("op-list")
+	require.NoError(t, err)
+	body := list()
+	require.Contains(t, body, "Old Name")
+	require.NotContains(t, body, "New Name")
+}
+
+// The three ops that rename series declare the series write-set, so the
+// dispatcher's write-set gate never runs two of them at once.
+func TestSeriesWriters_DeclareSeriesWriteSet(t *testing.T) {
+	s := newSeriesRenameOpServer(newRelinkOpStore(t))
+	for _, tc := range []struct {
+		id       string
+		register func(*opsregistry.Registry) error
+	}{
+		{seriesRenameOpID, s.RegisterSeriesRenameOp},
+		{"dedup.series-merge", s.RegisterSeriesMergeOp},
+		{"dedup.series-normalize", s.RegisterSeriesNormalizeOp},
+	} {
+		def := relinkOpDef(t, tc.register, tc.id)
+		require.True(t, slices.Contains(def.Writes, opsregistry.ResSeries), "%s must declare Writes ResSeries", tc.id)
+	}
 }

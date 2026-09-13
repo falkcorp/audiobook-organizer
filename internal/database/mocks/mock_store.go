@@ -25533,6 +25533,69 @@ func (_c *MockStore_RenameSeriesIf_Call) RunAndReturn(run func(id int, expectCur
 	return _c
 }
 
+// RenameSeriesIfCurrent provides a mock function for the type MockStore
+func (_mock *MockStore) RenameSeriesIfCurrent(id int, expectCurrent string, newName string) error {
+	ret := _mock.Called(id, expectCurrent, newName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenameSeriesIfCurrent")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(int, string, string) error); ok {
+		r0 = returnFunc(id, expectCurrent, newName)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_RenameSeriesIfCurrent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenameSeriesIfCurrent'
+type MockStore_RenameSeriesIfCurrent_Call struct {
+	*mock.Call
+}
+
+// RenameSeriesIfCurrent is a helper method to define mock.On call
+//   - id int
+//   - expectCurrent string
+//   - newName string
+func (_e *MockStore_Expecter) RenameSeriesIfCurrent(id any, expectCurrent any, newName any) *MockStore_RenameSeriesIfCurrent_Call {
+	return &MockStore_RenameSeriesIfCurrent_Call{Call: _e.mock.On("RenameSeriesIfCurrent", id, expectCurrent, newName)}
+}
+
+func (_c *MockStore_RenameSeriesIfCurrent_Call) Run(run func(id int, expectCurrent string, newName string)) *MockStore_RenameSeriesIfCurrent_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_RenameSeriesIfCurrent_Call) Return(err error) *MockStore_RenameSeriesIfCurrent_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_RenameSeriesIfCurrent_Call) RunAndReturn(run func(id int, expectCurrent string, newName string) error) *MockStore_RenameSeriesIfCurrent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RepairOpsV2MissingCompletedAt provides a mock function for the type MockStore
 func (_mock *MockStore) RepairOpsV2MissingCompletedAt() (int, error) {
 	ret := _mock.Called()

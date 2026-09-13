@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
 // last-edited: 2026-09-12
 
@@ -34,7 +34,10 @@ func (p *Plugin) seriesNormalizeDef() sdk.OperationDef {
 		Timeout:         30 * time.Minute,
 		Schedule:        nil,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runSeriesNormalize,
+		// Writes: renames series, so the write-set gate serializes it against
+		// entities.series-rename and dedup.series-merge.
+		Writes: []sdk.Resource{sdk.ResSeries},
+		Run:    p.runSeriesNormalize,
 	}
 }
 

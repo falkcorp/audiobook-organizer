@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-09-12
 
@@ -655,8 +655,11 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 		Timeout:         1 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "dedup.series-merge",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
+		// Writes: renames the kept series, so the write-set gate serializes it
+		// against entities.series-rename and series-normalize.
+		Writes:       []opsregistry.Resource{opsregistry.ResSeries},
+		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesMergeParams
 			// Empty params are legitimate (four of these ops take none at
@@ -772,8 +775,11 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 		Timeout:         4 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
 		ConcurrencyKey:  "dedup.series-normalize",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
+		// Writes: renames series, so the write-set gate serializes it against
+		// entities.series-rename and dedup.series-merge.
+		Writes:       []opsregistry.Resource{opsregistry.ResSeries},
+		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p dedup.SeriesNormalizeParams
 			// Empty params are legitimate (four of these ops take none at
