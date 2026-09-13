@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-07-11
+// last-edited: 2026-09-13
 
 package server
 
@@ -73,6 +73,10 @@ func (s *Server) wireDedupRoutes(
 	protected.POST("/authors/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshDuplicateAuthors)
 	protected.POST("/audiobooks/merge", s.perm(auth.PermLibraryEditMetadata), duplicatesH.MergeBooks)
 	protected.POST("/audiobooks/combine", s.perm(auth.PermLibraryEditMetadata), duplicatesH.CombineBooks)
+	// Combine undo: every combine (manual or review-queue combine/duplicate-of)
+	// is journaled; these list the journals and reverse one.
+	protected.GET("/merge/combine-journal", s.perm(auth.PermLibraryView), duplicatesH.ListCombineJournals)
+	protected.POST("/merge/undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), duplicatesH.UndoCombine)
 	protected.GET("/series/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListSeriesDuplicates)
 	protected.POST("/series/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshSeriesDuplicates)
 	protected.POST("/series/deduplicate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DeduplicateSeriesHandler)

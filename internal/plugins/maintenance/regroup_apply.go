@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -30,7 +30,9 @@
 // "regroup.anthology and regroup.ambiguous are deliberately handler-less", i.e. no
 // ambiguous hold could ever merge anything. That is FALSE now: an `ambiguous` hold
 // whose evidence recommends `combine` (24 of 356 measured on 2026-08-06) dispatches
-// straight into ApplyMultidisc, which hard-deletes absorbed Book rows. The gate is
+// straight into ApplyMultidisc, which retires absorbed Book rows (soft-deleted and
+// journaled since 2026-09-13, so the approval can be undone via
+// POST /merge/undo/:journal_id). The gate is
 // no longer the Kind — it is the recommendation, which refuses `combine` unless a
 // strict majority of members have a KNOWN runtime and those runtimes are short.
 // (Anthology had already lost its handler-less status on 2026-07-26, when an
@@ -45,7 +47,9 @@
 //     UpdateBook-on-survivor in merge.Service is gated behind a non-nil override, so
 //     with nil the survivor row is never rewritten and its AcoustIDFingerprint /
 //     Author / Series survive. Absorbed books' FILES move by file ID (fingerprints
-//     ride along); absorbed ROWS are hard-deleted intentionally.
+//     ride along); absorbed ROWS are SOFT-deleted and journaled, with FilePath
+//     cleared (the path now belongs to a survivor-owned file row). UndoCombine
+//     reverses the whole apply, including the disc/track numbers stamped below.
 //   - AFTER the combine, applyDiscTrackNumbers stamps the merged files' play order.
 //     It re-reads the FULL BookFile rows (fingerprint retained) and writes ONLY
 //     DiscNumber/TrackNumber via UpdateBookFile (which also restores the fingerprint
@@ -176,7 +180,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 		}
 		// Retry tolerance: only combine members that still resolve. A double-approve,
 		// or a re-approve after a partial failure, must not error on already-absorbed
-		// (hard-deleted) rows.
+		// (soft-deleted) rows.
 		present, err := presentMembers(store, p.MemberBookIDs)
 		if err != nil {
 			return err
@@ -192,8 +196,8 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 			return fmt.Errorf("regroup multidisc apply: combine %q (%d books): %w", p.Folder, len(present), err)
 		}
 		slog.Info("regroup multidisc apply: collapsed folder",
-			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID,
-			"files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
+			"files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
 
 		// Stamp the merged book's files with the per-file disc/track order the classifier
 		// derived. Best-effort: the combine (the actual merge) already committed, so a
@@ -484,7 +488,7 @@ func pickPrimary(ids []string) string {
 //     is sticky — UpsertReviewItem never re-offers a non-pending hold) while the
 //     debris stayed on disk.
 //   - More than one → ambiguous. Picking one would merge a book into an arbitrary
-//     survivor and hard-delete the others' rows. Error out so the item lands in
+//     survivor and retire the others' rows. Error out so the item lands in
 //     "failed" with both IDs named, exactly as ApplyVersionGroup refuses a
 //     cross-group merge.
 //
@@ -536,7 +540,7 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 		}
 		if len(targets) > 1 {
 			return fmt.Errorf("regroup duplicate-of apply: folder %q is ambiguous — the dedup track names %d "+
-				"different books outside the folder (%v); merging would hard-delete rows on a guess. Resolve "+
+				"different books outside the folder (%v); merging would retire rows on a guess. Resolve "+
 				"the duplicate candidates first, then re-approve", p.Folder, len(targets), targets)
 		}
 
@@ -560,8 +564,8 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 				p.Folder, len(present), target, err)
 		}
 		slog.Info("regroup duplicate-of apply: merged debris into canonical book",
-			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID,
-			"debris_merged", len(present), "files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
+			"debris_merged", len(present), "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
 		return nil
 	}
 }

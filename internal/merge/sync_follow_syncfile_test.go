@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_syncfile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d74cf944-f953-4a7e-83eb-994193dbc7d1
-// last-edited: 2026-07-30
+// last-edited: 2026-09-13
 
 package merge
 
@@ -194,7 +194,7 @@ func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook_CarriesFileIno(t 
 	strayID, err := sf.MintOrGetSyncFileID(strayOwner.ID, strayFile.ID)
 	require.NoError(t, err)
 
-	n := ms.attachVirtualFile(target, target.ID)
+	_, n := ms.attachVirtualFile(target, target.ID)
 	require.Equal(t, 1, n)
 
 	gotID, ok, err := sf.GetSyncFileID(target.ID, strayFile.ID)

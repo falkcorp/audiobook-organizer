@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
-// last-edited: 2026-07-25
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -122,7 +122,8 @@ func TestApplyMultidisc_CollapsesAndPreservesData(t *testing.T) {
 		if id == primaryID {
 			require.NotNil(t, b, "survivor must remain")
 		} else {
-			assert.Nil(t, b, "absorbed book %s must be hard-deleted", id)
+			require.NotNil(t, b, "absorbed book %s must be soft-deleted, not hard-deleted", id)
+			assert.True(t, b.IsSoftDeleted(), "absorbed book %s must be soft-deleted", id)
 		}
 	}
 
@@ -430,7 +431,8 @@ func TestApplyMultidisc_SoftDeletedMembers(t *testing.T) {
 					if id == survivor {
 						assert.NotNil(t, b)
 					} else {
-						assert.Nil(t, b, "absorbed live member %s must be hard-deleted", id)
+						require.NotNil(t, b, "absorbed live member %s must be soft-deleted, not hard-deleted", id)
+						assert.True(t, b.IsSoftDeleted(), "absorbed live member %s must be soft-deleted", id)
 					}
 				}
 			} else {
@@ -766,7 +768,8 @@ func TestApplyMultidisc_AnthologyPayload_CombinesToOneBook(t *testing.T) {
 		if id == survivor {
 			require.NotNil(t, b, "anthology survivor must remain")
 		} else {
-			assert.Nil(t, b, "absorbed story book %s must be gone", id)
+			require.NotNil(t, b, "absorbed story book %s must be soft-deleted, not hard-deleted", id)
+			assert.True(t, b.IsSoftDeleted(), "absorbed story book %s must be merged away", id)
 		}
 	}
 	files, err := store.GetBookFiles(survivor)

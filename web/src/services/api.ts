@@ -1798,6 +1798,8 @@ export interface CombineBooksResult {
   primary_id: string;
   files_moved: number;
   books_deleted: number;
+  // Undo key: POST /merge/undo/:journal_id reverses this combine.
+  journal_id?: string;
   message?: string;
 }
 
@@ -1808,7 +1810,7 @@ export interface CombineOverride {
 }
 
 // combineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keepId), hard-deleting the absorbed shells. Distinct from mergeBooks,
+// survivor (keepId), soft-deleting the absorbed shells (undoable). Distinct from mergeBooks,
 // which links them as alternate versions in a version group. Synchronous.
 // override is optional: non-empty fields overwrite the survivor's metadata after
 // the combine (useful when all source books have per-chapter titles).

@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 
 // Package merge: sync-identity follow hooks.
 //
@@ -11,8 +11,10 @@
 // churns ULIDs. Every code path that retires or replaces a Book ULID must
 // therefore carry the syncID (and the per-user listening position keyed to the
 // old ULID) forward, or a device's place in a book is silently orphaned. On the
-// HARD-delete paths (dedup.MergeBooks, CombineBooks) there is no surviving row
-// to repoint afterwards, so an un-followed merge there is unrecoverable.
+// HARD-delete path (dedup.MergeBooks) there is no surviving row to repoint
+// afterwards, so an un-followed merge there is unrecoverable. CombineBooks
+// soft-deletes and journals (since 2026-09-13); UndoCombine reverses its
+// follows with ClearSyncMerge and FollowFileMove in the other direction.
 //
 // See docs/specs/2026-07-29-abs-sync-api-design.md §4.2 (model), §4.3 (test
 // bar) and §5.5 (progress on merge).
@@ -121,16 +123,16 @@ func FollowMergeWithStore(db UserProgressMerger, winnerBookID string, loserBookI
 // the underlying BookFile row(s) onto a different book -- CombineBooks
 // (MoveBookFilesToBook, and attachVirtualFile's cross-book reattach branch).
 // Call it with the EXACT list of file IDs that were just moved, still inside
-// whatever lock guards the operation's read-modify-write, and BEFORE any
-// hard delete of the source book row -- like FollowMerge, there is no
-// surviving row to repoint afterwards on that path.
+// whatever lock guards the operation's read-modify-write, and BEFORE the
+// source book row is retired. UndoCombine calls it in the reverse direction
+// (survivor -> restored book) to carry the inos back.
 //
 // Best-effort and per-file: one file's repoint failing does not stop the
 // others from being attempted. A store that does not implement
-// SyncFileStore is a silent no-op everywhere else sync_file lives, but
-// CombineBooks hard-deletes its source row, so a skipped follow here is
-// unrecoverable -- logged at Warn once for the whole call, matching
-// FollowMergeWithStore's severity for the same reason. Each individual
+// SyncFileStore is a silent no-op everywhere else sync_file lives, but a
+// skipped follow here strands every moved file's ino on a book that no longer
+// owns the file -- logged at Warn once for the whole call, matching
+// FollowMergeWithStore's severity. Each individual
 // repoint failure is logged at ERROR with both book IDs and the file ID,
 // because a silent failure here quietly breaks a user's downloaded file with
 // no trace.
