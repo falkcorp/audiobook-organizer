@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.2 -->
+<!-- version: 10.73.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-13 -->
 
@@ -6188,7 +6188,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       description as the live source of truth for the job_id enum; that
       cross-reference is currently undocumented itself.
 
-- [ ] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own "File the bug" step
+- [x] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own "File the bug" step
       (`.github/workflows/auto-revert.yml` ~L305, `gh issue create`) has no
       pre-check against an already-open issue for the same failing SHA —
       unlike the new `auto-revert-backstop.yml`, which gained a `gh issue
