@@ -1,5 +1,5 @@
 // file: internal/config/ai_endpoints_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2d4e61-0c7f-4a93-b5d8-2f1e6a9c3b74
 // last-edited: 2026-09-13
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -392,18 +393,18 @@ func TestUpdateConfig_AIEndpointsValid(t *testing.T) {
 // TestUpdateConfig_AIEndpointsRejected: every rule answers 400 and saves nothing.
 func TestUpdateConfig_AIEndpointsRejected(t *testing.T) {
 	cases := map[string]struct{ body, want string }{
-		"nested typo": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilites":["llm.filename_parse"]}]}`, "capabilites"},
-		"unknown capability": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilities":["llm.not_a_thing"]}]}`, `unknown capability "llm.not_a_thing"`},
-		"wildcard":           {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilities":["llm.*"]}]}`, "wildcard"},
+		"nested typo":              {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilites":["llm.filename_parse"]}]}`, "capabilites"},
+		"unknown capability":       {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilities":["llm.not_a_thing"]}]}`, `unknown capability "llm.not_a_thing"`},
+		"wildcard":                 {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capabilities":["llm.*"]}]}`, "wildcard"},
 		"unknown capability model": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","capability_models":{"llm.nope":"m"}}]}`, "capability_models"},
-		"duplicate id": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1"},{"id":"a","protocol":"openai_compat","url":"http://192.0.2.2/v1"}]}`, "duplicate id"},
-		"duplicate protocol+url": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1"},{"id":"b","protocol":"openai_compat","url":"HTTP://192.0.2.1/v1/"}]}`, "already used"},
-		"negative concurrency": {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","concurrency":-1}]}`, "concurrency"},
-		"unknown auth_ref":     {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","auth_ref":"hardcover_token"}]}`, "auth_ref"},
-		"credentials in url":   {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://u:p@192.0.2.1/v1"}]}`, "credentials"},
-		"unknown protocol":     {`{"ai_endpoints":[{"id":"a","protocol":"grpc","url":"http://192.0.2.1"}]}`, "unknown protocol"},
-		"missing url":          {`{"ai_endpoints":[{"id":"a","protocol":"whisper_server"}]}`, "url is required"},
-		"missing id":           {`{"ai_endpoints":[{"protocol":"local_process"}]}`, "id is required"},
+		"duplicate id":             {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1"},{"id":"a","protocol":"openai_compat","url":"http://192.0.2.2/v1"}]}`, "duplicate id"},
+		"duplicate protocol+url":   {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1"},{"id":"b","protocol":"openai_compat","url":"HTTP://192.0.2.1/v1/"}]}`, "already used"},
+		"negative concurrency":     {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","concurrency":-1}]}`, "concurrency"},
+		"unknown auth_ref":         {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://192.0.2.1/v1","auth_ref":"hardcover_token"}]}`, "auth_ref"},
+		"credentials in url":       {`{"ai_endpoints":[{"id":"a","protocol":"openai_compat","url":"http://u:p@192.0.2.1/v1"}]}`, "credentials"},
+		"unknown protocol":         {`{"ai_endpoints":[{"id":"a","protocol":"grpc","url":"http://192.0.2.1"}]}`, "unknown protocol"},
+		"missing url":              {`{"ai_endpoints":[{"id":"a","protocol":"whisper_server"}]}`, "url is required"},
+		"missing id":               {`{"ai_endpoints":[{"protocol":"local_process"}]}`, "id is required"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -481,4 +482,34 @@ func TestMaskSecrets_AIEndpointAuthRef(t *testing.T) {
 	status, resp := putJSON(t, us, string(body))
 	require.Equal(t, http.StatusOK, status, "resp %v", resp)
 	assert.Equal(t, "openai_api_key", Snapshot().AIEndpoints[0].AuthRef)
+}
+
+// TestAIEndpointsSeedForLoad covers the load-time seed: a stored key row and
+// the env whisper overrides must reach the migration, because the key is never
+// in the blob and ApplyEnvAuthoritativeConfig runs after the migration chain.
+func TestAIEndpointsSeedForLoad(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	seed := aiEndpointsSeedForLoad(map[string]*database.Setting{})
+	assert.Nil(t, seed.EnvWhisperEndpoints, "no env → no whisper override")
+	assert.Nil(t, seed.EnvWhisperRemoteURL)
+
+	viper.Set("whisper_endpoints", `[{"url":"http://192.0.2.10:19848"},{"url":"http://192.0.2.10:19849"},`+
+		`{"url":"http://192.0.2.10:19850"},{"url":"http://192.0.2.10:19851"}]`)
+	viper.Set("whisper_remote_url", "http://192.0.2.11:9000")
+	seed = aiEndpointsSeedForLoad(map[string]*database.Setting{
+		"openai_api_key": {Key: "openai_api_key", Value: "encrypted-blob", IsSecret: true},
+	})
+	assert.True(t, seed.HasOpenAIKey, "a stored key row counts even when the live config has no key")
+	require.NotNil(t, seed.EnvWhisperEndpoints)
+	assert.Len(t, *seed.EnvWhisperEndpoints, 4)
+	require.NotNil(t, seed.EnvWhisperRemoteURL)
+	assert.Equal(t, "http://192.0.2.11:9000", *seed.EnvWhisperRemoteURL)
+	require.NotNil(t, seed.Base)
+
+	seed = aiEndpointsSeedForLoad(map[string]*database.Setting{
+		"openai_api_key": {Key: "openai_api_key", Value: ""},
+	})
+	assert.Equal(t, Snapshot().OpenAIAPIKey != "", seed.HasOpenAIKey, "an empty key row does not count")
 }
