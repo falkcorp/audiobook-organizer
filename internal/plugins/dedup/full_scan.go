@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -158,7 +158,9 @@ func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sd
 	// already self-gates (it calls IsLSHIndexBuilt() internally), but we
 	// surface the skip reason here so it appears in the operation log and
 	// is visible to operators.
-	if flagStore, ok := p.store.(LSHFlagStore); ok {
+	// AsCapability, not a bare assertion: p.store is the server's
+	// search-indexing decorator, which does not carry IsLSHIndexBuilt.
+	if flagStore, ok := database.AsCapability[LSHFlagStore](p.store); ok {
 		if !flagStore.IsLSHIndexBuilt() {
 			reporter.Logger().Info(
 				"full-scan: LSH phase skipped — index not yet built",

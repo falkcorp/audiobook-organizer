@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 
 package dedup
 
@@ -113,9 +113,11 @@ func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 //     most once per logInterval to avoid flooding the log on a ~275K-file run.
 //  6. On completion, set lsh_index_v1_done so T013 can gate on it.
 func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	// Obtain the LSH-capable store via type assertion. The concrete
-	// *PebbleStore satisfies LSHIndexStore; SQLite and mock stores may not.
-	lshStore, ok := p.store.(LSHIndexStore)
+	// Obtain the LSH-capable store through the decorator chain. The concrete
+	// *PebbleStore satisfies LSHIndexStore; SQLite and mock stores may not. The
+	// registry hands this plugin the server's search-indexing decorator, so a
+	// bare p.store.(LSHIndexStore) assertion would fail on every Pebble server.
+	lshStore, ok := database.AsCapability[LSHIndexStore](p.store)
 	if !ok {
 		return fmt.Errorf("store does not implement LSHIndexStore (PebbleDB required)")
 	}
