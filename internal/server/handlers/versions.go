@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -8,6 +8,7 @@ package handlers
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -351,6 +352,13 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 
 	var req struct {
 		SegmentIDs []string `json:"segment_ids" binding:"required"`
+		// AsOneBook moves the selected files into ONE new standalone book
+		// instead of one book per file. See splitSegmentsToOneBook.
+		AsOneBook bool `json:"as_one_book"`
+		// Title names the new book when AsOneBook is set; empty means
+		// "<source title> (split)". Ignored otherwise (titles come from the
+		// file names).
+		Title string `json:"title"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
@@ -369,6 +377,11 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 	sourceBook, err := h.store.GetBookByID(id)
 	if err != nil || sourceBook == nil {
 		httputil.RespondWithNotFound(c, "audiobook", id)
+		return
+	}
+
+	if req.AsOneBook {
+		h.splitSegmentsToOneBook(c, sourceBook, req.SegmentIDs, req.Title)
 		return
 	}
 
@@ -460,6 +473,138 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		"count":         len(createdBooks),
 	})
 }
+
+// splitSegmentsToOneBook is SplitSegmentsToBooks with as_one_book: the
+// selected book_file rows move, as a set, into ONE new book. The new book is
+// standalone -- no version group, not primary -- and inherits the source's
+// author, series, narrator, language and publisher the way the per-file split
+// does. Nothing moves on disk: the rows keep their paths, and the new book's
+// FilePath is derived from them.
+//
+// The move is one MoveBookFilesToBook call, which rewrites every row under
+// the new book in one atomic batch (a row is never on both books) and
+// recomputes the aggregates -- duration, size, file count -- of BOTH books
+// once. The new book is therefore created with no Duration/FileSize and gets
+// them from that recompute rather than a hand sum here.
+//
+// Refused with 400, before anything is written: a selected ID that is not a
+// file of the source (an unknown ID must not silently shrink the split), and
+// a selection of every file (the source would be left with none -- that is a
+// rename of the book, not a split).
+func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *database.Book, segmentIDs []string, title string) {
+	allFiles, err := h.store.GetBookFiles(sourceBook.ID)
+	if err != nil {
+		httputil.InternalError(c, "failed to list book files", err)
+		return
+	}
+	fileMap := make(map[string]database.BookFile, len(allFiles))
+	for _, f := range allFiles {
+		fileMap[f.ID] = f
+	}
+
+	seen := make(map[string]bool, len(segmentIDs))
+	var ids []string
+	var selected []database.BookFile
+	var unknown []string
+	for _, fid := range segmentIDs {
+		if seen[fid] {
+			continue
+		}
+		seen[fid] = true
+		f, ok := fileMap[fid]
+		if !ok {
+			unknown = append(unknown, fid)
+			continue
+		}
+		ids = append(ids, fid)
+		selected = append(selected, f)
+	}
+	if len(unknown) > 0 {
+		httputil.RespondWithBadRequest(c, fmt.Sprintf("segment_ids not on book %s: %s", sourceBook.ID, strings.Join(unknown, ", ")))
+		return
+	}
+	if len(selected) == len(allFiles) {
+		httputil.RespondWithBadRequest(c, "segment_ids selects every file of the book; a split must leave the source at least one file")
+		return
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = sourceBook.Title + " (split)"
+	}
+	newPath := selected[0].FilePath
+	if len(selected) > 1 {
+		newPath = filesCommonDir(selected)
+	}
+	created, err := h.store.CreateBook(&database.Book{
+		Title:     title,
+		AuthorID:  sourceBook.AuthorID,
+		SeriesID:  sourceBook.SeriesID,
+		FilePath:  newPath,
+		Format:    sourceBook.Format,
+		Narrator:  sourceBook.Narrator,
+		Language:  sourceBook.Language,
+		Publisher: sourceBook.Publisher,
+	})
+	if err != nil {
+		httputil.InternalError(c, "failed to create book", err)
+		return
+	}
+
+	if authors, aErr := h.store.GetBookAuthors(sourceBook.ID); aErr != nil {
+		versionsLog.Warn("split-to-one-book: could not read authors of %s to copy onto %s: %v",
+			logger.SanitizeLogValue(sourceBook.ID), created.ID, aErr)
+	} else if len(authors) > 0 {
+		newAuthors := make([]database.BookAuthor, 0, len(authors))
+		for _, ba := range authors {
+			newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role})
+		}
+		if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
+			versionsLog.Warn("split-to-one-book: could not copy authors onto %s: %v", created.ID, sErr)
+		}
+	}
+
+	if err := h.store.MoveBookFilesToBook(ids, sourceBook.ID, created.ID); err != nil {
+		// The batch is atomic, so no row moved. The new book exists with no
+		// files; name it so it can be removed or retried against.
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+			"failed to move files into the new book; no file was moved: "+err.Error(), "split_move_failed",
+			map[string]any{"created_book_id": created.ID})
+		return
+	}
+
+	h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, selected)
+
+	// The source keeps its remaining files; point its FilePath at them.
+	// Re-read both books: the move's aggregate recompute has just written
+	// their Duration/FileSize, and writing back the rows read before it would
+	// put the old totals back.
+	if remaining, rErr := h.store.GetBookFiles(sourceBook.ID); rErr != nil {
+		versionsLog.Warn("split-to-one-book: could not list remaining files of %s: %v", logger.SanitizeLogValue(sourceBook.ID), rErr)
+	} else if len(remaining) > 0 {
+		if fresh, gErr := h.store.GetBookByID(sourceBook.ID); gErr == nil && fresh != nil {
+			if len(remaining) == 1 {
+				fresh.FilePath = remaining[0].FilePath
+			} else {
+				fresh.FilePath = filesCommonDir(remaining)
+			}
+			if _, uErr := h.store.UpdateBook(fresh.ID, fresh); uErr != nil {
+				versionsLog.Warn("split-to-one-book: could not update path of %s: %v", logger.SanitizeLogValue(fresh.ID), uErr)
+			}
+		}
+	}
+	if fresh, gErr := h.store.GetBookByID(created.ID); gErr == nil && fresh != nil {
+		created = fresh
+	}
+
+	httputil.RespondWithOK(c, gin.H{
+		"book":           created,
+		"source_book_id": sourceBook.ID,
+		"segments_moved": len(ids),
+	})
+}
+
+var versionsLog = logger.New("handlers.versions")
 
 // MoveSegments moves segments from one book to another within the same version group.
 func (h *VersionsHandler) MoveSegments(c *gin.Context) {
