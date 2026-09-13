@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -52,7 +52,7 @@ type fakeApplySvc struct {
 	preflightIDs []string
 }
 
-func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate) error {
+func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate, _ []string) error {
 	f.preflightIDs = append(f.preflightIDs, id)
 	return f.preflightErr
 }

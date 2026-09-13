@@ -629,6 +629,69 @@ func (_c *MockMetadataFetchService_RecordChangeHistory_Call) RunAndReturn(run fu
 	return _c
 }
 
+// RenamePreflight provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error {
+	ret := _mock.Called(id, candidate, fields)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenamePreflight")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) error); ok {
+		r0 = returnFunc(id, candidate, fields)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataFetchService_RenamePreflight_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenamePreflight'
+type MockMetadataFetchService_RenamePreflight_Call struct {
+	*mock.Call
+}
+
+// RenamePreflight is a helper method to define mock.On call
+//   - id string
+//   - candidate metafetch.MetadataCandidate
+//   - fields []string
+func (_e *MockMetadataFetchService_Expecter) RenamePreflight(id any, candidate any, fields any) *MockMetadataFetchService_RenamePreflight_Call {
+	return &MockMetadataFetchService_RenamePreflight_Call{Call: _e.mock.On("RenamePreflight", id, candidate, fields)}
+}
+
+func (_c *MockMetadataFetchService_RenamePreflight_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string)) *MockMetadataFetchService_RenamePreflight_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 metafetch.MetadataCandidate
+		if args[1] != nil {
+			arg1 = args[1].(metafetch.MetadataCandidate)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_RenamePreflight_Call) Return(err error) *MockMetadataFetchService_RenamePreflight_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_RenamePreflight_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string) error) *MockMetadataFetchService_RenamePreflight_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RunApplyPipelineRenameOnly provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(id string, book *database.Book) error {
 	ret := _mock.Called(id, book)

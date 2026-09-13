@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -619,6 +619,26 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		return
 	}
 	defer hold.Release()
+
+	// The apply below writes the database first; the rename runs afterwards in
+	// the background file-IO job. When that rename is known to fail, refuse
+	// here, before any write, so the book cannot end up with new metadata and
+	// its old file names (three books did on 2026-09-13; the batch apply got
+	// the same check in #3385). The same read-only preflight the batch apply
+	// runs, planned with this request's field subset.
+	//
+	// Gated on the pool, not on write_back: the background job always runs the
+	// file I/O (fileIO=true below) and write_back only decides the tag write,
+	// so a write_back=false apply still renames. With no pool there is no file
+	// sequel and nothing to refuse.
+	if h.fileIOPool != nil {
+		if perr := h.metadataFetchService.RenamePreflight(id, body.Candidate, body.Fields); perr != nil {
+			httputil.RespondWithErrorFields(c, http.StatusConflict, perr.Error(), "CONFLICT",
+				map[string]any{"reason": metafetch.ApplyRefusedReasonFileWorkWouldFail})
+			return
+		}
+	}
+
 	resp, err := h.metadataFetchService.ApplyMetadataCandidate(id, body.Candidate, body.Fields)
 	if err != nil {
 		httputil.InternalError(c, "failed to apply metadata", err)
