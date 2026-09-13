@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-13
 
@@ -132,10 +132,10 @@ type opsSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	// Display may filter; anything that WRITES must not. A repoint-then-delete
-	// loop that reads the Core listing getter cannot see non-primary versions,
-	// so it leaves them pointing at a series it just deleted.
-	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
+	// No per-series AllVersions getter, on purpose: series-denumber reads
+	// membership once per run via database.SeriesMembershipAllVersions
+	// (SERIES-MEMBERSHIP-RESIDUAL-LOOPS), so a per-series read inside its loops
+	// is now a compile error rather than a full "book:" scan per plan.
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 

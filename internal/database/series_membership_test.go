@@ -1,5 +1,5 @@
 // file: internal/database/series_membership_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1a6f0d38-94c2-4b7e-8d51-c3e20f7a9b16
 // last-edited: 2026-09-13
 
@@ -102,6 +102,26 @@ func TestSeriesMembershipAllVersions_FailsClosedWithoutCapability(t *testing.T) 
 	m, err := SeriesMembershipAllVersions(struct{}{}, []int{1})
 	require.Error(t, err)
 	require.Nil(t, m)
+	// An empty request still fails closed on a store with no capability.
+	m, err = SeriesMembershipAllVersions(struct{}{}, nil)
+	require.Error(t, err)
+	require.Nil(t, m)
+}
+
+// TestSeriesMembershipAllVersions_EmptyRequestSkipsTheRead: no IDs means no
+// store call. The Pebble fall-through is a full "book:" scan whatever it
+// filters for, and the normalize passes usually request nothing.
+func TestSeriesMembershipAllVersions_EmptyRequestSkipsTheRead(t *testing.T) {
+	calls := 0
+	store := &MockStore{GetBooksBySeriesIDsAllVersionsFunc: func([]int) (map[int][]BookCore, error) {
+		calls++
+		return nil, nil
+	}}
+	m, err := SeriesMembershipAllVersions(store, nil)
+	require.NoError(t, err)
+	require.NotNil(t, m, "an empty request must return an empty map, not nil")
+	require.Empty(t, m)
+	require.Zero(t, calls, "an empty request must not reach the store")
 }
 
 // TestAsSeriesMembershipStore_ResolvesThroughDecorator: prod wraps the store in

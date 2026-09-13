@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.19.2
+// version: 2.20.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-13
 
@@ -44,10 +44,12 @@ type maintenanceBookStore interface {
 type maintenanceSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	// Display may filter; anything that WRITES must not. A merge repoints the
-	// rows it is handed and then deletes the series, so a row the Core listing
-	// getter hides is a row left pointing at a series that no longer exists.
-	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
+	// No per-series AllVersions getter, on purpose. Every AllVersions reader
+	// behind this interface (the normalize positions loop and the merge pass)
+	// loads membership once via database.SeriesMembershipAllVersions
+	// (SERIES-MERGE-PERSERIES-SCAN-COST, SERIES-MEMBERSHIP-RESIDUAL-LOOPS), so
+	// a per-series read in those loops is a compile error, not a full "book:"
+	// scan per series.
 	UpdateSeriesName(id int, name string) error
 	DeleteSeries(id int) error
 	// The series-normalize rename pass journals a series_rename row per
