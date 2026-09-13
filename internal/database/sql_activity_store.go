@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -37,8 +37,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -816,57 +818,121 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 //
 // On error or cancellation the returned CompactResult reports what was actually
 // committed — never a projection — so a caller can log real progress.
+//
+// NO SILENT STRETCH LONGER THAN ONE BOUNDED STEP. The op that drives this has a
+// 20-minute ProgressTimeout, and on 2026-09-13 it was cancelled as stuck after
+// the Pebble tier finished and before this store emitted anything: the error
+// was "compact range: context canceled". Everything that runs before the first
+// chunk is therefore bounded and either stamps progress or is a single index
+// seek:
+//
+//   - The gate is taken ctx-aware (acquireBackfillGateWrite), not with a raw
+//     Lock that could park the op silently and uncancellably behind a stalled
+//     backfill batch.
+//   - The range query is a lone MIN(ts), which SQLite answers with one seek on
+//     idx_act_ts. It used to be MIN(ts), MAX(ts) in one statement: two
+//     aggregates defeat SQLite's min/max optimization, so it walked EVERY row
+//     below the cutoff through idx_act_ts with a table lookup per row to test
+//     tier (idx_act_ts does not cover it). Measured 1.00s vs 0.01s on a
+//     1.5M-row fixture; production has ~5.9M such rows in a ~20 GB file. MAX
+//     was never read. The query is also re-issued per day from the end of the
+//     previous day, so runs of empty days cost nothing instead of one write
+//     transaction each.
+//   - The digest item sample is taken on the reader before the day's first
+//     chunk, as a keyset walk in windows of sqlActSampleWindow rows with a
+//     heartbeat per window (sampleDayItems). It used to be one unbounded
+//     statement run inside the first chunk's write transaction.
+//
+// After that, every committed chunk emits a progress event with the day and the
+// running totals.
 func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
-	s.backfillGate.Lock()
-	defer s.backfillGate.Unlock()
 	var result CompactResult
+	release, err := s.acquireBackfillGateWrite(ctx, "compact")
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	cutoff := olderThan.UnixNano()
 
-	// Bound the calendar-day loop by the actual data range, not the wall clock.
-	var minNS, maxNS sql.NullInt64
-	if err := s.reader.QueryRowContext(ctx, s.dialect.rebind(
-		`SELECT MIN(ts), MAX(ts) FROM activity WHERE tier <> 'digest' AND ts < ?`), cutoff).
-		Scan(&minNS, &maxNS); err != nil {
-		return result, fmt.Errorf("sql_activity: compact range: %w", err)
-	}
-	if !minNS.Valid {
-		return result, nil // nothing older than cutoff
-	}
-
-	firstDay := time.Unix(0, minNS.Int64).UTC().Truncate(24 * time.Hour)
-	for day := firstDay; day.UnixNano() < cutoff; day = day.Add(24 * time.Hour) {
+	for from := int64(math.MinInt64); ; {
+		firstNS, ok, err := s.nextCompactableTS(ctx, from, cutoff)
+		if err != nil {
+			return result, err
+		}
+		if !ok {
+			return result, nil // nothing left older than cutoff
+		}
+		day := time.Unix(0, firstNS).UTC().Truncate(24 * time.Hour)
 		lo := day.UnixNano()
 		hi := min(day.Add(24*time.Hour).UnixNano(), cutoff)
+		from = hi
+
+		// The sample is only needed by the chunk that CREATES the day's
+		// digest; a day already digested (late arrivals, or a resumed run)
+		// skips the scan entirely.
+		sample, err := s.daySampleIfUndigested(ctx, day, lo, hi, func() {
+			reportCompactHeartbeat(ctx, "sqlite", day, result)
+		})
+		if err != nil {
+			return result, err
+		}
 
 		dayRows := 0
 		for {
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			default:
+			if err := ctx.Err(); err != nil {
+				return result, err
 			}
-			n, err := s.compactDayChunk(ctx, day, lo, hi)
+			n, err := s.compactDayChunk(ctx, day, lo, hi, sample)
 			if err != nil {
 				return result, err
 			}
 			if n == 0 {
 				break
 			}
+			sample = nil // the digest exists now; later chunks merge into it
 			dayRows += n
 			result.EntriesDeleted += n
 			// Per chunk, not per day: a single heavy day is many chunks and
 			// each one is progress the op watchdog must hear about
 			// (activity_compact_progress.go).
-			reportCompactProgress(ctx, "sqlite", result)
+			reportCompactProgress(ctx, "sqlite", day, result)
 		}
 		if dayRows > 0 {
 			// Keep the WAL bounded across a long compaction spanning many days.
 			_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 			result.DaysCompacted++
 		}
-		reportCompactProgress(ctx, "sqlite", result)
+		reportCompactProgress(ctx, "sqlite", day, result)
 	}
-	return result, nil
+}
+
+// nextCompactableTS returns the earliest non-digest timestamp in [from, cutoff).
+// A lone MIN over an indexed column is a single seek on idx_act_ts; see the
+// CompactByDay comment for why it must not be paired with MAX.
+func (s *SQLActivityStore) nextCompactableTS(ctx context.Context, from, cutoff int64) (int64, bool, error) {
+	var minNS sql.NullInt64
+	if err := s.reader.QueryRowContext(ctx, s.dialect.rebind(
+		`SELECT MIN(ts) FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ?`), from, cutoff).
+		Scan(&minNS); err != nil {
+		return 0, false, fmt.Errorf("sql_activity: compact range: %w", err)
+	}
+	return minNS.Int64, minNS.Valid, nil
+}
+
+// daySampleIfUndigested returns the digest item sample for day, or nil when the
+// day already has a digest (whose items were sampled when it was created).
+func (s *SQLActivityStore) daySampleIfUndigested(ctx context.Context, day time.Time, lo, hi int64, beat func()) ([]DigestItem, error) {
+	var one int
+	err := s.reader.QueryRowContext(ctx, s.dialect.rebind(
+		`SELECT 1 FROM activity WHERE tier = 'digest' AND type = 'daily_digest' AND ts = ? LIMIT 1`),
+		day.UnixNano()).Scan(&one)
+	switch {
+	case err == nil:
+		return nil, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("sql_activity: compact check digest: %w", err)
+	}
+	return s.sampleDayItems(ctx, lo, hi, beat)
 }
 
 // compactDayChunk folds at most sqlActDeleteChunk of the day's remaining rows
@@ -877,7 +943,13 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 // transaction, not a repeat of the SELECT's predicate. That is what makes
 // "counted" and "deleted" the same set by construction rather than by an
 // argument about whether the window can change underneath us.
-func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, lo, hi int64) (int, error) {
+//
+// sample becomes the digest's Items when this chunk creates the digest; it is
+// ignored when the digest already exists. The caller takes it on the reader
+// BEFORE this transaction (sampleDayItems) so the write transaction — which
+// holds SQLite's only writer connection and so blocks every live Record — never
+// contains a day-wide scan.
+func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, lo, hi int64, sample []DigestItem) (int, error) {
 	dayStartNS := day.UnixNano()
 
 	tx, err := s.writer.BeginTx(ctx, nil)
@@ -953,11 +1025,7 @@ func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, l
 	//    capped at maxDigestItems and keeps the audit → error/warn → normal
 	//    precedence the Pebble store uses.
 	if !haveExisting {
-		items, ierr := s.sampleDayItems(ctx, tx, lo, hi)
-		if ierr != nil {
-			return 0, ierr
-		}
-		dd.Items = items
+		dd.Items = sample
 	}
 
 	// 4. Fold this chunk's counts in. Additive is correct HERE, and only here,
@@ -1031,50 +1099,146 @@ func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, l
 // [lo,hi) window, filling audit rows first, then error/warn, then the rest.
 // Each category is its own bounded LIMIT query, so the number of rows decoded is
 // capped at maxDigestItems regardless of how large the day is.
-func (s *SQLActivityStore) sampleDayItems(ctx context.Context, tx *sql.Tx, lo, hi int64) ([]DigestItem, error) {
-	remaining := maxDigestItems
-	var items []DigestItem
-	appendCat := func(whereExtra string) error {
-		if remaining <= 0 {
-			return nil
-		}
-		q := "SELECT " + sqlActCols + " FROM activity WHERE tier <> 'digest' AND ts >= ? AND ts < ? AND " +
-			whereExtra + " ORDER BY ts ASC LIMIT ?"
-		r, qerr := tx.QueryContext(ctx, s.dialect.rebind(q), lo, hi, remaining)
-		if qerr != nil {
-			return qerr
-		}
-		entries, serr := scanEntries(r)
-		if serr != nil {
-			return serr
-		}
-		for _, e := range entries {
-			item := DigestItem{
-				Type:        e.Type,
-				Tier:        e.Tier,
-				Book:        extractBookName(e),
-				BookID:      e.BookID,
-				OperationID: e.OperationID,
-				Summary:     extractItemSummary(e),
-				Timestamp:   e.Timestamp,
-				Tags:        e.Tags,
-			}
-			if e.Tier != "audit" && (e.Level == "error" || e.Level == "warn") {
-				item.Details = extractErrorDetails(e)
-			}
-			items = append(items, item)
-		}
-		remaining -= len(entries)
-		return nil
-	}
-	if err := appendCat("tier = 'audit'"); err != nil {
+func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, beat func()) ([]DigestItem, error) {
+	// Audit rows: idx_act_tier_ts serves tier = 'audit' AND ts range directly,
+	// so this is a bounded seek that stops after maxDigestItems rows.
+	items, err := s.digestItemsWhere(ctx,
+		`tier = 'audit' AND ts >= ? AND ts < ? ORDER BY ts ASC, id ASC LIMIT ?`, lo, hi, maxDigestItems)
+	if err != nil {
 		return nil, fmt.Errorf("sql_activity: compact audit items: %w", err)
 	}
-	if err := appendCat("tier <> 'audit' AND level IN ('error','warn')"); err != nil {
-		return nil, fmt.Errorf("sql_activity: compact err items: %w", err)
+	remaining := maxDigestItems - len(items)
+	if remaining <= 0 {
+		return items, nil
 	}
-	if err := appendCat("tier <> 'audit' AND level NOT IN ('error','warn')"); err != nil {
-		return nil, fmt.Errorf("sql_activity: compact normal items: %w", err)
+
+	// error/warn rows, then normal rows. No index covers level, so finding the
+	// earliest error/warn rows of a 4.8M-row day means walking the day. That
+	// walk used to be ONE statement (`level IN ('error','warn') ORDER BY ts
+	// LIMIT n`) — unbounded when errors are rare, silent, and run inside the
+	// first chunk's write transaction. It is now a keyset walk over idx_act_ts
+	// in windows of sqlActSampleWindow rows, reading only id/ts/tier/level,
+	// with a heartbeat after each window; it stops as soon as error/warn rows
+	// alone fill the sample. The chosen rows are identical to the old query's
+	// (earliest-first within each category, audit → error/warn → normal).
+	//
+	// The keyset predicate is `ts >= lastTS AND (ts > lastTS OR id > lastID)`,
+	// NOT the row value `(ts, id) > (lastTS, lastID)`: SQLite does not use a row
+	// value as the index range start, so that form re-walks the day from lo on
+	// every window (0.49s vs 0.04s per window measured at 900k rows in).
+	errIDs := make([]int64, 0, remaining)
+	normalIDs := make([]int64, 0, remaining)
+	lastTS, lastID := lo, int64(math.MinInt64)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, err := s.sampleWindow(ctx, lastTS, lastID, hi, func(id, ts int64, tier, level string) {
+			lastTS, lastID = ts, id
+			switch {
+			case tier == "digest" || tier == "audit":
+			case level == "error" || level == "warn":
+				if len(errIDs) < remaining {
+					errIDs = append(errIDs, id)
+				}
+			default:
+				if len(normalIDs) < remaining {
+					normalIDs = append(normalIDs, id)
+				}
+			}
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sql_activity: compact sample scan: %w", err)
+		}
+		if beat != nil {
+			beat()
+		}
+		if n < sqlActSampleWindow || len(errIDs) >= remaining {
+			break
+		}
+	}
+	normalIDs = normalIDs[:min(len(normalIDs), remaining-len(errIDs))]
+
+	for _, ids := range [][]int64{errIDs, normalIDs} {
+		got, err := s.digestItemsByID(ctx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("sql_activity: compact sample items: %w", err)
+		}
+		items = append(items, got...)
+	}
+	return items, nil
+}
+
+// sqlActSampleWindow is how many rows one step of sampleDayItems' keyset walk
+// reads. Same size as a compaction chunk's claim, which reads the same columns'
+// row pages, so one window costs no more than one chunk.
+const sqlActSampleWindow = sqlActDeleteChunk
+
+// sampleWindow reads the next sqlActSampleWindow rows after (lastTS, lastID) in
+// (ts, id) order below hi, calling visit for each, and returns how many it read.
+func (s *SQLActivityStore) sampleWindow(ctx context.Context, lastTS, lastID, hi int64, visit func(id, ts int64, tier, level string)) (int, error) {
+	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(
+		`SELECT id, ts, tier, level FROM activity
+		 WHERE ts >= ? AND ts < ? AND (ts > ? OR id > ?)
+		 ORDER BY ts ASC, id ASC LIMIT ?`), lastTS, hi, lastTS, lastID, sqlActSampleWindow)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var id, ts int64
+		var tier, level string
+		if err := rows.Scan(&id, &ts, &tier, &level); err != nil {
+			return n, err
+		}
+		n++
+		visit(id, ts, tier, level)
+	}
+	return n, rows.Err()
+}
+
+// digestItemsByID loads the full rows for ids (at most maxDigestItems) as
+// digest items in (ts, id) order.
+func (s *SQLActivityStore) digestItemsByID(ctx context.Context, ids []int64) ([]DigestItem, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return s.digestItemsWhere(ctx,
+		"id IN (?"+strings.Repeat(",?", len(ids)-1)+") ORDER BY ts ASC, id ASC", args...)
+}
+
+// digestItemsWhere reads full rows matching where (which must carry its own
+// ORDER BY/LIMIT) on the reader and converts them to digest items.
+func (s *SQLActivityStore) digestItemsWhere(ctx context.Context, where string, args ...any) ([]DigestItem, error) {
+	r, err := s.reader.QueryContext(ctx, s.dialect.rebind("SELECT "+sqlActCols+" FROM activity WHERE "+where), args...)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := scanEntries(r)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]DigestItem, 0, len(entries))
+	for _, e := range entries {
+		item := DigestItem{
+			Type:        e.Type,
+			Tier:        e.Tier,
+			Book:        extractBookName(e),
+			BookID:      e.BookID,
+			OperationID: e.OperationID,
+			Summary:     extractItemSummary(e),
+			Timestamp:   e.Timestamp,
+			Tags:        e.Tags,
+		}
+		if e.Tier != "audit" && (e.Level == "error" || e.Level == "warn") {
+			item.Details = extractErrorDetails(e)
+		}
+		items = append(items, item)
 	}
 	return items, nil
 }

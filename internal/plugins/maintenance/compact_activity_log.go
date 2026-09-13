@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-09-13
 
@@ -231,16 +231,61 @@ func compactCutoff(now time.Time, days int) (time.Time, error) {
 // compactProgressToReporter adapts the compaction store's progress events to
 // reporter.UpdateProgress. Total is unknown up front (the store bounds its
 // loop by the data, not by a pre-count), so it is reported as 0 and the UI
-// shows an indeterminate bar with the running count. Done events are skipped:
-// the caller logs those with the backend's final numbers.
+// shows an indeterminate bar with the running count.
+//
+// Three things it must get right, each learned from a production failure:
+//
+//   - Done events ARE forwarded. Skipping them (the behaviour until
+//     2026-09-13) left no stamp at the moment one backend finished and the
+//     next backend's pre-chunk setup began. On 2026-09-13 the Pebble tier
+//     finished at 14:15:03 UTC and the next stamp never came: the SQLite tier
+//     was cancelled as stuck 20m15s later, still inside its range query. The
+//     caller still logs the Done event with the backend's final numbers.
+//   - The progress COUNTER is cumulative across backends. ev.Result is per
+//     backend, so forwarding it raw made the bar jump backwards when the
+//     second backend started — the same bug maintenanceProgressToReporter
+//     below already fixed for the other passes.
+//   - Heartbeat events stamp liveness only (registry.TouchLiveness, the
+//     mechanism tag-backfill uses for the same problem): the store finished a
+//     bounded unit of work that removed nothing, so there is no new numerator
+//     to report and no reason to write the op row.
+//
+// The map is guarded because the hook rides a context and nothing promises the
+// fan-out stays single-goroutine.
 func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
+	var (
+		mu     sync.Mutex
+		latest = map[string]int{}
+	)
 	return func(ev database.CompactProgressEvent) {
-		if ev.Done {
+		if ev.Heartbeat {
+			opsregistry.TouchLiveness(reporter)
 			return
 		}
-		_ = reporter.UpdateProgress(ev.Result.EntriesDeleted, 0,
-			fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
-				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted))
+		mu.Lock()
+		latest[ev.Backend] = ev.Result.EntriesDeleted
+		total := 0
+		for _, n := range latest {
+			total += n
+		}
+		mu.Unlock()
+
+		var msg string
+		switch {
+		case ev.Done && ev.Err != nil:
+			msg = fmt.Sprintf("%s: FAILED after %d days compacted, %d entries removed: %v",
+				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted, ev.Err)
+		case ev.Done:
+			msg = fmt.Sprintf("%s: finished, %d days compacted, %d entries removed",
+				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
+		default:
+			msg = fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
+				ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
+			if !ev.Day.IsZero() {
+				msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
+			}
+		}
+		_ = reporter.UpdateProgress(total, 0, msg)
 	}
 }
 

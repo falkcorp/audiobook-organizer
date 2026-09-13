@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -1607,12 +1607,12 @@ func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.T
 			// Per chunk, not per day: a single heavy day is many chunks and
 			// each one is progress the op watchdog must hear about
 			// (activity_compact_progress.go).
-			reportCompactProgress(ctx, "pebble", result)
+			reportCompactProgress(ctx, "pebble", day, result)
 		}
 		if dayRows > 0 {
 			result.DaysCompacted++
 		}
-		reportCompactProgress(ctx, "pebble", result)
+		reportCompactProgress(ctx, "pebble", day, result)
 	}
 	return result, nil
 }
