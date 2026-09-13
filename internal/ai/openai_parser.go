@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.19.0
+// version: 13.20.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-13
 
@@ -15,7 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -67,16 +67,26 @@ type numericCoercion struct {
 // that failed every book in the batch ("result 0 does not decode as
 // metadata: ... ParsedMetadata.year of type int"). So:
 //
-//   - a JSON integer, or an integral JSON number such as 3.0, is the value;
-//   - a string that, trimmed, is such a number ("2015", " 3 ", "3.0") is the
-//     value, recorded as coerced;
+//   - a JSON number token that is digits, optionally followed by "." and one
+//     or more zeros (2015, 3.0), is the value; 3.0 is recorded as coerced;
+//   - a JSON string that is optional surrounding whitespace, then an optional
+//     "+", then digits, optionally followed by "." and one or more zeros
+//     ("2015", " 3 ", "+3", "03", "3.0"), is the value, recorded as coerced;
 //   - null is zero, not recorded (the observed "found nothing" placeholder);
-//   - anything else -- non-numeric text, "", a fractional number such as
-//     "3.5" or 3.5, a number out of int range, a bool, object or array -- is
-//     zero for THIS FIELD ONLY, recorded as dropped.
+//   - anything else is zero for THIS FIELD ONLY, recorded as dropped:
+//     non-numeric text, "", a fraction ("3.5", 3.5), any exponent form
+//     ("1e3" and bare 1e3 alike -- a year or series position is never
+//     written that way, so it is more likely noise than a value), hex, "NaN",
+//     "Inf", a sign other than a leading "+" in a string, a number out of int
+//     range, a bool, object or array;
+//   - a value below 1 (0, or a negative number) is dropped as well. Neither a
+//     year nor a series position of 0 or less means anything, and every
+//     consumer already requires > 0 (runAIBatchPhase copies SeriesNum only
+//     when > 0; the ParseAudiobook handler uses Year and SeriesNum only when
+//     > 0); the decoder states that rather than relying on it.
 //
-// Zero is the "no value" the save path already skips: runAIBatchPhase copies
-// SeriesNum only when > 0, and Year is not carried to the save at all.
+// So a decoded value is either >= 1 or 0, and 0 is the "no value" the save
+// path skips.
 type lenientInt struct {
 	value   int
 	raw     string
@@ -111,51 +121,70 @@ func (l *lenientInt) UnmarshalJSON(b []byte) error {
 			return nil
 		}
 		text = strings.TrimSpace(s)
-	} else if len(t) == 0 || (t[0] != '-' && (t[0] < '0' || t[0] > '9')) {
-		// true/false, an object or an array.
-		l.dropped = true
-		return nil
 	}
 
-	v, ok := integralNumber(text)
+	v, ok := cleanPositiveInt(text, isString)
 	if !ok {
 		l.dropped = true
 		return nil
 	}
 	l.value = v
-	// A JSON integer literal is the normal case and is not recorded; a
-	// string, or a number written as 3.0, is.
-	if _, err := strconv.Atoi(text); isString || err != nil {
-		l.coerced = true
-	}
+	// A plain JSON integer is the normal case and is not recorded; a string,
+	// or a number written as 3.0, is.
+	l.coerced = isString || strings.Contains(text, ".")
 	return nil
 }
 
-// integralNumber parses s as a decimal number with no fractional part that
-// fits in an int. "3.0" is 3; "3.5", "", "NaN", "Inf" and "0x1F" are rejected.
-func integralNumber(s string) (int, bool) {
-	if s == "" {
+// Numeric grammars for lenientInt. Group 1 is the integer part. Anchored, so
+// exponents, hex, "NaN", "Inf", signs (other than a quoted leading "+") and
+// fractions other than ".0+" never match.
+var (
+	quotedIntPattern = regexp.MustCompile(`^\+?([0-9]+)(?:\.0+)?$`)
+	bareIntPattern   = regexp.MustCompile(`^([0-9]+)(?:\.0+)?$`)
+)
+
+// cleanPositiveInt parses text (already unquoted and trimmed when quoted) by
+// the grammar documented on lenientInt and returns it when it fits in an int
+// and is at least 1.
+func cleanPositiveInt(text string, quoted bool) (int, bool) {
+	re := bareIntPattern
+	if quoted {
+		re = quotedIntPattern
+	}
+	m := re.FindStringSubmatch(text)
+	if m == nil {
 		return 0, false
 	}
-	if v, err := strconv.Atoi(s); err == nil {
-		return v, true
+	v, err := strconv.Atoi(m[1])
+	if err != nil || v < 1 {
+		return 0, false
 	}
-	// ParseFloat accepts spellings JSON numbers do not ("Inf", "NaN", hex,
-	// underscores); require a plain decimal first.
-	for _, r := range s {
-		if !(r >= '0' && r <= '9') && r != '.' && r != '-' && r != '+' && r != 'e' && r != 'E' {
-			return 0, false
+	return v, true
+}
+
+// carriesUsableMetadataKey reports whether obj has at least one ParsedMetadata
+// key (matched case-insensitively, as encoding/json does) whose value was not
+// a dropped numeric value. An element such as {"year": "not available"} is
+// still decoded as an empty result for its slot, but it is no evidence that
+// an unfamiliar wrapper key holds results: {"data": [{"series_number": {}}]}
+// must stay rejected, as it was when that value failed the decode outright.
+func carriesUsableMetadataKey(obj map[string]json.RawMessage, notes *[]numericCoercion) bool {
+	dropped := map[string]bool{}
+	if notes != nil {
+		for _, c := range *notes {
+			if c.Dropped {
+				dropped[c.Field] = true
+			}
 		}
 	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
-		return 0, false
+	for key := range obj {
+		for _, k := range parsedMetadataKeys {
+			if strings.EqualFold(key, k) && !dropped[k] {
+				return true
+			}
+		}
 	}
-	// float64(math.MaxInt) rounds UP to 2^63, which int cannot hold, hence >=.
-	if f >= float64(math.MaxInt) || f < float64(math.MinInt) {
-		return 0, false
-	}
-	return int(f), true
+	return false
 }
 
 // plainParsedMetadata has ParsedMetadata's fields and none of its methods,
@@ -852,6 +881,11 @@ func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
 //     or empty values for "found nothing". Keys match case-insensitively, as
 //     encoding/json matches field names. Unrelated extra keys next to them,
 //     such as "filename", are ignored.
+//   - The numeric fields decode leniently (lenientInt): a value that is not a
+//     clean positive integer zeroes that field only instead of failing the
+//     element. An object whose ONLY metadata keys hold such dropped values,
+//     e.g. {"year": "not available"}, is still an empty result for its slot,
+//     but isMetadata is false for it (see below).
 //   - An object whose "error" or "errors" key (any case) holds a non-empty
 //     value is an error report, even when metadata keys are present too:
 //     {"title": null, "error": "rate limited"} would otherwise decode to an
@@ -867,8 +901,12 @@ func unwrapSingleResult(value json.RawMessage) (*ParsedMetadata, bool, error) {
 //     AI parse and stamp it in the scan cache, and the book would never be
 //     sent to the model again.
 //
-// isMetadata reports whether the element carried a metadata key, which is the
-// only evidence that an unfamiliar wrapper key really holds results.
+// isMetadata reports whether the element carried a metadata key whose value
+// was not a dropped numeric value, which is the only evidence that an
+// unfamiliar wrapper key really holds results. A dropped value is not
+// evidence: before lenient decoding, {"data": [{"series_number": {}}]} failed
+// the decode and was rejected, and it must not become an accepted wrapper
+// just because the bad value now zeroes instead of failing.
 //
 // The returned error is a phrase meant to follow "result N" or "holds an
 // element that" in a message.
@@ -901,7 +939,7 @@ func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata boo
 	if err != nil {
 		return nil, false, fmt.Errorf("does not decode as metadata: %w", err)
 	}
-	return metadata, len(obj) > 0, nil
+	return metadata, carriesUsableMetadataKey(obj, metadata.numericCoercions), nil
 }
 
 // SuggestionRole represents a detected role (author, narrator, or publisher) in an AI suggestion.
