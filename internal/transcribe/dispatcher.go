@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package transcribe
 
@@ -13,7 +13,8 @@ import (
 	"maps"
 	"sort"
 	"sync"
-	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
 
 // Endpoint describes one Whisper server in the dispatch pool.
@@ -58,54 +59,24 @@ type Endpoint struct {
 	Capabilities []string
 }
 
-// Cooldown policy: an endpoint that fails a batch is benched for
-// cooldownBase × consecutive-failures, capped at cooldownMax, so a dead box
-// is retried occasionally without being hammered on every page.
-const (
-	cooldownBase = 30 * time.Second
-	cooldownMax  = 5 * time.Minute
-)
-
-// endpointHealth tracks per-URL consecutive failures and the cooldown window.
-// It is package-level (keyed by URL) so the bench persists across
-// TranscribeBatch calls within one process.
-type endpointHealth struct {
-	consecFails   int
-	cooldownUntil time.Time
-}
-
-var (
-	poolHealthMu sync.Mutex
-	poolHealth   = map[string]*endpointHealth{}
-)
+// Cooldown policy moved to internal/aidispatch (Health), keyed by endpoint ID:
+// an endpoint that fails a batch is benched for aidispatch.CooldownBase ×
+// consecutive-failures, capped at aidispatch.CooldownMax, so a dead box is
+// retried occasionally without being hammered on every page. The process-wide
+// tracker persists the bench across TranscribeBatch calls. These wrappers keep
+// the URL-keyed call sites below unchanged, via the same URL→ID shim as the
+// in-flight slots.
 
 func markEndpointFailure(url string) {
-	poolHealthMu.Lock()
-	defer poolHealthMu.Unlock()
-	h := poolHealth[url]
-	if h == nil {
-		h = &endpointHealth{}
-		poolHealth[url] = h
-	}
-	h.consecFails++
-	d := min(time.Duration(h.consecFails)*cooldownBase, cooldownMax)
-	h.cooldownUntil = time.Now().Add(d)
+	aidispatch.DefaultHealth().MarkFailure(endpointIDForURL(url))
 }
 
 func markEndpointSuccess(url string) {
-	poolHealthMu.Lock()
-	defer poolHealthMu.Unlock()
-	if h := poolHealth[url]; h != nil {
-		h.consecFails = 0
-		h.cooldownUntil = time.Time{}
-	}
+	aidispatch.DefaultHealth().MarkSuccess(endpointIDForURL(url))
 }
 
 func endpointInCooldown(url string) bool {
-	poolHealthMu.Lock()
-	defer poolHealthMu.Unlock()
-	h := poolHealth[url]
-	return h != nil && time.Now().Before(h.cooldownUntil)
+	return aidispatch.DefaultHealth().InCooldown(endpointIDForURL(url))
 }
 
 // transcribePool distributes jobs across the endpoint pool.
