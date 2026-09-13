@@ -1,7 +1,7 @@
 # file: .github/workflows/auto-revert.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
-# last-edited: 2026-08-27
+# last-edited: 2026-09-13
 
 # Restore main to its last known-good commit when the CI gate goes red.
 #
@@ -302,6 +302,22 @@ jobs:
               --description "CI went red on main and could not be auto-reverted" \
               --force --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
             args+=(--label "$EXTRA_LABEL")
+          fi
+
+          # Dedupe: workflow_run can fire more than once for one commit, and a
+          # revert that does not fix the build re-triggers this job. If an OPEN
+          # issue already covers this SHA, add this run's details to it as a
+          # comment instead of filing a second issue. --state open is
+          # load-bearing: a CLOSED incident with the same SHA prefix must not
+          # suppress a genuinely new one. Same search as auto-revert-backstop.yml.
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label ci --label automation --state open \
+            --search "CI red on main at ${FAILING:0:8} in:title" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::open issue #${EXISTING} already covers ${FAILING:0:8}; commenting instead of filing a duplicate."
+            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue.md
+            exit 0
           fi
 
           gh issue create "${args[@]}"
