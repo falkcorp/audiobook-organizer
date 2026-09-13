@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-13
 //
@@ -214,9 +214,19 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// - change history recording
 	// - metadata field application
 	// - provenance tagging (metadata:source:*, metadata:language:*)
-	// - cache invalidation
 	// - ISBN enrichment queueing
-	// - file I/O queueing (cover embed, tag write, rename)
+	//
+	// It does NOT queue any file I/O. This comment said it queued "cover embed,
+	// tag write, rename" until 2026-09-13; it never has. The file sequel
+	// (FinishApplyFileWork: cover download, rename, tags) is queued by each
+	// caller that wants one, and this op queues none, so no rename follows
+	// this write. That is why there is no RenamePreflight here, unlike the
+	// apply paths that do queue a rename (batch_apply_one.go, the single-book
+	// apply, batch-apply-candidates): the preflight predicts whether the
+	// post-apply rename fails, and a refusal here would guard a rename that
+	// never runs. The files keep their names until a later write-back or
+	// organize, which runs its own rename. If this op ever queues file work,
+	// add the preflight, gated the same way, before this call.
 	_, applyErr := s.Fetcher.ApplyMetadataCandidate(bookID, *bestCandidate, nil)
 	if applyErr != nil {
 		return false, fmt.Errorf("apply failed: %w", applyErr)

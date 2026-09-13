@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.5.1
+// version: 4.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-13
 //
@@ -43,6 +43,8 @@ type batchFetchRequest = metabatch.BatchFetchRequest
 
 // batchApplyRequest is the JSON body for handleBatchApplyCandidates.
 type batchApplyRequest = metabatch.BatchApplyRequest
+
+var batchApplyCandidatesLog = logger.New("server.batch-apply-candidates")
 
 // handleBatchFetchCandidates creates a background operation that spawns parallel
 // workers to fetch metadata candidates for the given book IDs.
@@ -602,6 +604,30 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			}
 
 			candidate := *plan.Candidate
+
+			// The apply below writes the database first; the rename runs
+			// afterwards in the file-IO job queued further down. That is the
+			// order in which three books got new metadata and old file names on
+			// 2026-09-13. When the rename is known to fail, refuse here, before
+			// any write -- no apply, no "applied" op-result row, no file job --
+			// with the same read-only preflight the cached batch apply (#3385)
+			// and the single-book apply (#3389) run.
+			//
+			// Gated exactly as the file job is: it runs whenever there is a pool
+			// and always does the file I/O (fileIO=true below), so a pool means
+			// a rename follows. With no pool there is no file sequel to fail.
+			// Reported as blocked, not as an error: nothing failed and nothing
+			// was written, so the book is left for review rather than a retry.
+			if s.fileIOPool != nil {
+				if perr := mfs.RenamePreflight(bookID, candidate, nil); perr != nil {
+					batchApplyCandidatesLog.Warn("batch-apply-candidates: refused %s before any write: %s",
+						logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(perr.Error()))
+					outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %s: %v",
+						bookID, metafetch.ApplyRefusedReasonFileWorkWouldFail, perr)}
+					return nil
+				}
+			}
+
 			resp, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil)
 			if err != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
@@ -686,8 +712,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	httputil.RespondWithOK(c, struct {
 		Applied int `json:"applied"`
 		Skipped int `json:"skipped"`
-		// Blocked lists books the certainty gate refused, with the reason. Not
-		// errors: nothing failed, the match was not certain enough to apply.
+		// Blocked lists books refused before any write, with the reason: the
+		// certainty gate (the match was not certain enough to apply), or
+		// file_work_would_fail (the rename after the apply is known to fail).
+		// Not errors: nothing failed and nothing was written.
 		Blocked      []string `json:"blocked"`
 		BlockedCount int      `json:"blocked_count"`
 		Errors       []string `json:"errors"`

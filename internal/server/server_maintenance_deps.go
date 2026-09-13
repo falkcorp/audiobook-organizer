@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-13
 
@@ -753,6 +753,18 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	//
 	// Widening this is a deliberate decision, not a default — add a field here
 	// only once something actually gates on it.
+	//
+	// No RenamePreflight here, and deliberately so: no rename follows this
+	// write. ApplyMetadataCandidate writes the database only; the file sequel
+	// (FinishApplyFileWork: cover download, rename, tags) is queued by the
+	// caller, and neither this method nor its only caller
+	// (maintenance.auto-match-transcribed) queues one. The preflight predicts
+	// whether the post-apply rename fails, so it has nothing to guard here.
+	// Note it is NOT the two-field allowlist that makes this safe: title and
+	// author are exactly the fields that move the rename target. If file work
+	// is ever queued after this apply, add
+	// RenamePreflight(bookID, cand, transcriptionApplyFields) before this call,
+	// gated the way that file work is.
 	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, transcriptionApplyFields)
 	return err
 }
