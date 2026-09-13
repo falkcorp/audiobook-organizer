@@ -1,16 +1,23 @@
 // file: internal/ai/openai_parser_numeric_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f0c2e7a-8d41-4b6e-9a3c-2e7d1b4f6a90
 // last-edited: 2026-09-13
 
 package ai
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 )
 
 // numericFieldGetters maps each numeric ParsedMetadata JSON key to its value.
@@ -43,7 +50,17 @@ func TestDecodeResultElement_LenientNumericFields(t *testing.T) {
 		{`3.0`, 3, coerced},
 		{`"3.0"`, 3, coerced},
 		{`" 3 "`, 3, coerced},
-		{`-2`, -2, plain},
+		{`"+3"`, 3, coerced},
+		{`"03"`, 3, coerced},
+		{`"3.00"`, 3, coerced},
+		{`"3."`, 0, dropped},
+		{`".5e1"`, 0, dropped},
+		{`"1e3"`, 0, dropped},
+		{`1e3`, 0, dropped},
+		{`"-1"`, 0, dropped},
+		{`-2`, 0, dropped},
+		{`0`, 0, dropped},
+		{`"0"`, 0, dropped},
 		{`true`, 0, dropped},
 		{`{}`, 0, dropped},
 		{`[1]`, 0, dropped},
@@ -190,5 +207,188 @@ func TestParsedMetadata_PlainUnmarshalStillStrict(t *testing.T) {
 	var m ParsedMetadata
 	if err := json.Unmarshal([]byte(`{"year": "2015"}`), &m); err == nil {
 		t.Fatal("plain Unmarshal of a string year should still fail")
+	}
+}
+
+func TestLenientInt_RawTruncatedAtRuneBoundary(t *testing.T) {
+	// Byte 80 falls inside the two-byte "é" (bytes 79-80), so the cut must
+	// back up to byte 79 and the result must stay valid UTF-8.
+	val := `"` + strings.Repeat("a", 78) + "é" + strings.Repeat("b", 20) + `"`
+	var l lenientInt
+	if err := l.UnmarshalJSON([]byte(val)); err != nil {
+		t.Fatalf("UnmarshalJSON must never fail: %v", err)
+	}
+	if !l.dropped || l.value != 0 {
+		t.Fatalf("want dropped zero, got %+v", l)
+	}
+	if !utf8.ValidString(l.raw) {
+		t.Fatalf("truncated raw is not valid UTF-8: %q", l.raw)
+	}
+	if want := val[:79] + "..."; l.raw != want {
+		t.Errorf("raw = %q, want %q", l.raw, want)
+	}
+}
+
+func TestDecodeResultElement_DroppedOnlyElementIsNotMetadataEvidence(t *testing.T) {
+	cases := []struct {
+		raw        string
+		isMetadata bool
+	}{
+		{`{"year": "not available"}`, false},
+		{`{"series_number": {}, "year": 0}`, false},
+		{`{"YEAR": "n/a", "filename": "x.m4b"}`, false},
+		{`{"title": "T", "year": "not available"}`, true},
+		{`{"year": "2015"}`, true},
+		{`{"year": null}`, true}, // null is "found nothing", not a dropped value
+	}
+	for _, tc := range cases {
+		m, isMetadata, err := decodeResultElement(json.RawMessage(tc.raw))
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", tc.raw, err)
+			continue
+		}
+		if m == nil {
+			t.Errorf("%s: want an (empty) result for the slot, got nil", tc.raw)
+		}
+		if isMetadata != tc.isMetadata {
+			t.Errorf("%s: isMetadata = %v, want %v", tc.raw, isMetadata, tc.isMetadata)
+		}
+	}
+}
+
+func TestWrapper_NotAcceptedOnDroppedNumericValuesAlone(t *testing.T) {
+	// Counts match the element counts exactly, so a rejection here can only
+	// come from the wrapper rule, not from the count check.
+	for _, tc := range []struct {
+		content  string
+		expected int
+	}{
+		{`{"data": [{"series_number": {}}]}`, 1},
+		{`{"data": [{"year": "not available"}, {"series_number": "n/a"}]}`, 2},
+	} {
+		_, err := parseBatchMetadataFromJSON(tc.content, tc.expected)
+		if err == nil {
+			t.Errorf("batch %s: a one-key wrapper holding only dropped numeric values must be rejected", tc.content)
+		} else if !strings.Contains(err.Error(), "not a results wrapper") {
+			t.Errorf("batch %s: rejected for the wrong reason: %v", tc.content, err)
+		}
+	}
+	if _, err := parseMetadataFromJSON(`{"data": {"series_number": {}}}`); err == nil {
+		t.Error(`single {"data": {"series_number": {}}} must be rejected`)
+	}
+
+	// Still accepted: the "results" key needs no evidence, and a foreign key
+	// is accepted once any element carries a usable metadata key.
+	for _, content := range []string{
+		`{"results": [{"year": "not available"}, {"title": "B"}]}`,
+		`{"data": [{"year": "not available"}, {"title": "B"}]}`,
+	} {
+		got, err := parseBatchMetadataFromJSON(content, 2)
+		if err != nil {
+			t.Fatalf("%s: %v", content, err)
+		}
+		if got[0] == nil || got[0].Year != 0 || got[1] == nil || got[1].Title != "B" {
+			t.Errorf("%s: got %+v, %+v", content, got[0], got[1])
+		}
+	}
+}
+
+// captureSlog routes the default slog logger into a buffer at Debug level for
+// the rest of the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestLogNumericCoercions_LogsFieldFileAndOutcome(t *testing.T) {
+	buf := captureSlog(t)
+	m, _, err := decodeResultElement(json.RawMessage(`{"title": "T", "year": "not available", "series_number": "3"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logNumericCoercions("dir/Book One.m4b", m)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 log lines, got %d:\n%s", len(lines), buf.String())
+	}
+	var sawDropped, sawAccepted bool
+	for _, line := range lines {
+		if !strings.Contains(line, `file="dir/Book One.m4b"`) {
+			t.Errorf("line lacks the filename: %s", line)
+		}
+		switch {
+		case strings.Contains(line, "field=year"):
+			sawDropped = strings.Contains(line, "level=INFO") && strings.Contains(line, "dropped") &&
+				strings.Contains(line, `not available`)
+		case strings.Contains(line, "field=series_number"):
+			sawAccepted = strings.Contains(line, "level=DEBUG") && strings.Contains(line, "accepted") &&
+				strings.Contains(line, `raw="\"3\""`)
+		}
+	}
+	if !sawDropped {
+		t.Errorf("no Info 'dropped' line for year:\n%s", buf.String())
+	}
+	if !sawAccepted {
+		t.Errorf("no Debug 'accepted' line for series_number:\n%s", buf.String())
+	}
+	if m.numericCoercions != nil {
+		t.Error("record not cleared after logging")
+	}
+
+	buf.Reset()
+	logNumericCoercions("dir/Book One.m4b", m)
+	if buf.Len() != 0 {
+		t.Errorf("second log of the same result logged again: %s", buf.String())
+	}
+}
+
+func TestParseFilename_CoercedResultIsCachedWithRecordClearedAndLogsOnce(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":0,"model":"m",` +
+			`"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant",` +
+			`"content":"{\"title\":\"T\",\"author\":\"A\",\"year\":\"2015\",\"series_number\":\"n/a\"}"}}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAIParserWithBaseURL(nil, "test-key", srv.URL+"/v1", "test-model", true)
+	buf := captureSlog(t)
+	filename := "numeric-cache-test/Unique Title 2015.m4b"
+
+	first, err := p.ParseFilename(context.Background(), filename)
+	if err != nil {
+		t.Fatalf("first ParseFilename: %v", err)
+	}
+	if first.Year != 2015 || first.SeriesNum != 0 || first.Title != "T" {
+		t.Fatalf("first = %+v", first)
+	}
+	if first.numericCoercions != nil {
+		t.Error("the result handed back and cached still carries its coercion record")
+	}
+	firstLog := buf.String()
+	if strings.Count(firstLog, "field=year") != 1 || strings.Count(firstLog, "field=series_number") != 1 {
+		t.Fatalf("want one line per coerced field on the fresh parse, got:\n%s", firstLog)
+	}
+
+	buf.Reset()
+	second, err := p.ParseFilename(context.Background(), filename)
+	if err != nil {
+		t.Fatalf("second ParseFilename: %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("backend hit %d times; the second call should come from the cache", hits.Load())
+	}
+	if second.Year != 2015 {
+		t.Errorf("cached year = %d", second.Year)
+	}
+	if strings.Contains(buf.String(), "AI parse:") {
+		t.Errorf("cache hit logged coercions again:\n%s", buf.String())
 	}
 }
