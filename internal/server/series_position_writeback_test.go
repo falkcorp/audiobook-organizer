@@ -1,12 +1,13 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -335,4 +336,126 @@ func TestExecuteSeriesNormalize_ALockOnAnotherFieldDoesNotBlockThePosition(t *te
 	if got == nil || *got != 5 {
 		t.Fatalf("series_sequence = %v, want 5: a narrator lock must not block the position write-back", got)
 	}
+}
+
+// positionsFixture is the library the SERIES-MEMBERSHIP-RESIDUAL-LOOPS tests
+// share: a renamed numbered series with a non-primary version behind it, and a
+// second positioned series.
+func positionsFixture(t *testing.T) *normalizeFixture {
+	t.Helper()
+	authorID := 1
+	return newNormalizeFixture(t,
+		[]database.Series{
+			{ID: 1, Name: "Discworld 05", AuthorID: &authorID},
+			{ID: 2, Name: "Nameless Sovereign #5", AuthorID: &authorID},
+		},
+		map[string]*database.Book{
+			"book-1":  {ID: "book-1", Title: "Wyrd Sisters", SeriesID: seriesID(1)},
+			"book-1b": {ID: "book-1b", Title: "Wyrd Sisters (unabridged)", SeriesID: seriesID(1), IsPrimaryVersion: boolPtr(false)},
+			"book-2":  {ID: "book-2", Title: "The Fifth", SeriesID: seriesID(2)},
+		})
+}
+
+// hoistMembership stubs the bulk read from the fixture's live rows, and makes
+// the per-series AllVersions getter error and count. It returns the counters.
+func (f *normalizeFixture) hoistMembership() (perSeries, bulk *int) {
+	perSeries, bulk = new(int), new(int)
+	f.store.GetBooksBySeriesIDAllVersionsFunc = func(int) ([]database.BookCore, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		*perSeries++
+		return nil, errors.New("per-series membership read inside the normalize positions loop")
+	}
+	f.store.GetBooksBySeriesIDsAllVersionsFunc = func(ids []int) (map[int][]database.BookCore, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		*bulk++
+		out := make(map[int][]database.BookCore, len(ids))
+		for _, id := range ids {
+			out[id] = []database.BookCore{}
+		}
+		for _, b := range f.books {
+			if b.SeriesID == nil {
+				continue
+			}
+			if _, want := out[*b.SeriesID]; want {
+				out[*b.SeriesID] = append(out[*b.SeriesID], database.BookCore{ID: b.ID})
+			}
+		}
+		return out, nil
+	}
+	return perSeries, bulk
+}
+
+// TestExecuteSeriesNormalize_HoistedPositionsMatchPerSeries: the positions the
+// hoisted pass writes are exactly the ones the per-series pass wrote, and the
+// per-series getter is never called. The reference run leaves the bulk method
+// unstubbed, so MockStore answers it one series at a time through the
+// per-series getter: the old per-action result.
+func TestExecuteSeriesNormalize_HoistedPositionsMatchPerSeries(t *testing.T) {
+	ref := positionsFixture(t)
+	ref.run(t)
+
+	hoisted := positionsFixture(t)
+	perSeries, bulk := hoisted.hoistMembership()
+	hoisted.run(t)
+
+	if *perSeries != 0 {
+		t.Errorf("per-series AllVersions getter called %d times; the positions loop must be hoisted", *perSeries)
+	}
+	if *bulk != 1 {
+		t.Errorf("bulk membership read %d times, want exactly 1 (no merges in this fixture)", *bulk)
+	}
+
+	wrote := 0
+	for id := range ref.books {
+		want, got := ref.seq(t, id), hoisted.seq(t, id)
+		if (want == nil) != (got == nil) || (want != nil && *want != *got) {
+			t.Errorf("%s: hoisted series_sequence %v, per-series %v", id, fmtSeq(got), fmtSeq(want))
+		}
+		if want != nil {
+			wrote++
+		}
+	}
+	if wrote != 3 {
+		t.Fatalf("reference run wrote %d sequences, want 3: the fixture no longer exercises the positions loop", wrote)
+	}
+	for _, sid := range []int{1, 2} {
+		if ref.renamedTo(sid) != hoisted.renamedTo(sid) {
+			t.Errorf("series %d: hoisted rename %q, per-series %q", sid, hoisted.renamedTo(sid), ref.renamedTo(sid))
+		}
+	}
+}
+
+// TestExecuteSeriesNormalize_FailsClosedBeforeRenaming: with no membership,
+// nothing is renamed. The old per-action read logged the failure and renamed
+// anyway, deleting a position it had not recorded.
+func TestExecuteSeriesNormalize_FailsClosedBeforeRenaming(t *testing.T) {
+	f := positionsFixture(t)
+	f.hoistMembership()
+	f.store.GetBooksBySeriesIDsAllVersionsFunc = func([]int) (map[int][]database.BookCore, error) {
+		return nil, errors.New("scan failed")
+	}
+
+	_, err := executeSeriesNormalizeCore(context.Background(), f.store, "", func(string) {})
+	if err == nil {
+		t.Fatal("executeSeriesNormalizeCore succeeded without series membership; it must fail closed")
+	}
+	for _, sid := range []int{1, 2} {
+		if got := f.renamedTo(sid); got != "" {
+			t.Errorf("series %d renamed to %q before the membership failure aborted the pass", sid, got)
+		}
+	}
+	for _, id := range []string{"book-1", "book-1b", "book-2"} {
+		if s := f.seq(t, id); s != nil {
+			t.Errorf("%s: series_sequence written (%d) on a pass that should have aborted", id, *s)
+		}
+	}
+}
+
+func fmtSeq(p *int) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprint(*p)
 }

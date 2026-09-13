@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -240,6 +240,32 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		return fmt.Errorf("series-denumber: refusing to run without unfiltered series reference counts: %w", rcErr)
 	}
 
+	// Membership of every plan's source series, read ONCE for the whole run
+	// (SERIES-MEMBERSHIP-RESIDUAL-LOOPS), and read here -- before the dry-run
+	// branch -- for the same reason as refCounts: the preview and the apply
+	// must see the same answer. Each per-series AllVersions call is a full
+	// "book:" Pebble scan once the memdb is tainted, so a per-plan read made
+	// both loops O(plans x books).
+	//
+	// Known IntoIDs are loaded too so their buckets stay truthful. Targets that
+	// are created or resolved by name mid-loop are absent until a Move adds
+	// them, which is all a later read of them needs.
+	//
+	// Fails CLOSED: a store that cannot answer, or a failed scan, aborts the
+	// run (dry or apply) before anything is written. An empty map would read
+	// as "every series is empty" and the apply loop deletes on that.
+	memberIDs := make([]int, 0, 2*len(plans))
+	for _, pl := range plans {
+		memberIDs = append(memberIDs, pl.FromID)
+		if pl.IntoID != 0 {
+			memberIDs = append(memberIDs, pl.IntoID)
+		}
+	}
+	members, mErr := database.SeriesMembershipAllVersions(store, memberIDs)
+	if mErr != nil {
+		return fmt.Errorf("series-denumber: refusing to run without series membership: %w", mErr)
+	}
+
 	if !params.Apply {
 		reasons := make([]string, 0, len(byReason))
 		for r, n := range byReason {
@@ -248,20 +274,15 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		sort.Strings(reasons)
 
 		// Preview which of the eligible plans the apply loop below would
-		// merge but refuse to DELETE — read-only (GetBooksBySeriesIDAllVersions
-		// never writes), so computing it here does not turn the dry run into
-		// one that touches anything. Scoped to `plans` (the eligible set),
-		// not every candidate, to match "Would merge %d" below.
+		// merge but refuse to DELETE — read-only (it reads the hoisted
+		// membership map and writes nothing), so computing it here does not
+		// turn the dry run into one that touches anything. Scoped to `plans`
+		// (the eligible set), not every candidate, to match "Would merge %d"
+		// below.
 		var heldBackByGuard int
 		var heldBackExamples []string
 		for _, pl := range plans {
-			books, berr := store.GetBooksBySeriesIDAllVersions(pl.FromID)
-			if berr != nil {
-				// The apply loop treats this identically (counts it under
-				// failed); avoid double-reporting the same row here.
-				continue
-			}
-			if refCounts[pl.FromID] > len(books) {
+			if refCounts[pl.FromID] > len(members[pl.FromID]) {
 				heldBackByGuard++
 				if len(heldBackExamples) < 6 {
 					heldBackExamples = append(heldBackExamples, fmt.Sprintf("%q (series %d)", pl.FromName, pl.FromID))
@@ -353,12 +374,10 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		// the Core getter excluded is never iterated, never flips the flag, and
 		// the delete proceeds anyway. The guard's sample space was the filtered
 		// set the bug lives outside of.
-		books, berr := store.GetBooksBySeriesIDAllVersions(pl.FromID)
-		if berr != nil {
-			failed++
-			log.Warn("series-denumber: GetBooksBySeriesIDAllVersions failed", "series", pl.FromID, "err", berr)
-			continue
-		}
+		//
+		// Read from the hoisted AllVersions map, which the Move below keeps
+		// equal to what a fresh per-series read would return.
+		books := members[pl.FromID]
 
 		// safeToDelete is the fix: whether DeleteSeries below is safe does NOT
 		// depend on movedAll alone. movedAll only tracks the rows THIS loop
@@ -400,6 +419,16 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 				log.Warn("series-denumber: UpdateBook failed", "book", full.ID, "err", uerr)
 				continue
 			}
+			// 🔑 LOAD-BEARING, not a safeguard. A target can be a LATER plan's
+			// FromID: candidates sort by IntoName byte-wise (case-sensitive),
+			// while GetSeriesByName matches case-insensitively. "Alpha 05 07"
+			// (IntoName "Alpha 05") sorts before "alpha 05" (IntoName "alpha"),
+			// resolves its target to series "alpha 05", and moves books INTO it
+			// before that series' own plan reads it. Without this Move the later
+			// read misses those books, leaves them behind, and deletes the series
+			// under them. Pinned by
+			// TestRunSeriesDenumber_HoistedMembershipFollowsBooksIntoALaterSource.
+			members.Move(full.ID, pl.FromID, &sid)
 			movedBooks++
 		}
 

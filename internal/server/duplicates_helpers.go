@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-09-13
 //
@@ -938,6 +938,23 @@ func executeSeriesNormalizeCore(
 	// EVERY version points at, primary or not, so a non-primary version left out
 	// here has the number deleted from its name and recorded nowhere -- which is
 	// the exact loss this pass exists to prevent.
+	//
+	// Membership is read ONCE for every positioned series
+	// (SERIES-MEMBERSHIP-RESIDUAL-LOOPS): a per-action AllVersions call is a
+	// full "book:" Pebble scan once the memdb is tainted. No Move is needed:
+	// this loop runs before the rename and merge passes, so nothing has moved
+	// yet. The map is not reused after them either; the merge pass loads its
+	// own (mergeMembers) under its own fail-closed contract.
+	//
+	// Fails CLOSED, and before any write. The old per-action read logged the
+	// failure and renamed the series anyway, deleting a position it had not
+	// recorded, which is the loss this pass exists to prevent. With no
+	// membership, nothing is renamed.
+	type positioned struct {
+		seriesID int
+		pos      int
+	}
+	var positionedActions []positioned
 	for _, a := range actions {
 		if a.Action == "flag" || a.NewPosition == "" {
 			continue
@@ -946,15 +963,20 @@ func executeSeriesNormalizeCore(
 		if cErr != nil || pos <= 0 {
 			continue
 		}
-		books, bErr := store.GetBooksBySeriesIDAllVersions(a.SeriesID)
-		if bErr != nil {
-			errs = append(errs, fmt.Sprintf(
-				"GetBooksBySeriesIDAllVersions(%d): %v -- the position %d is about to be "+
-					"removed from series %q and will NOT be recorded on its books",
-				a.SeriesID, bErr, pos, a.OldName))
-			continue
-		}
-		for _, b := range books {
+		positionedActions = append(positionedActions, positioned{seriesID: a.SeriesID, pos: pos})
+	}
+	positionIDs := make([]int, len(positionedActions))
+	for i, pa := range positionedActions {
+		positionIDs[i] = pa.seriesID
+	}
+	positionMembers, pmErr := database.SeriesMembershipAllVersions(store, positionIDs)
+	if pmErr != nil {
+		return affectedBookIDs, fmt.Errorf("series normalize: refusing to rename or merge without "+
+			"series membership, so no series position is lost unrecorded: %w", pmErr)
+	}
+	for _, pa := range positionedActions {
+		pos := pa.pos
+		for _, b := range positionMembers[pa.seriesID] {
 			if _, dup := positionByBook[b.ID]; !dup {
 				positionByBook[b.ID] = pos
 			}

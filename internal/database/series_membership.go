@@ -1,5 +1,5 @@
 // file: internal/database/series_membership.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5d0f3b8e-2a71-4c96-b4e3-8f1a6c29d7b0
 // last-edited: 2026-09-13
 
@@ -75,6 +75,14 @@ func SeriesMembershipAllVersions(store any, seriesIDs []int) (SeriesBooksMap, er
 	if ms == nil {
 		return nil, fmt.Errorf("store cannot load bulk series membership (got %T); "+
 			"refusing to run a series merge without it", store)
+	}
+	// Nothing requested, nothing to read. Checked AFTER the capability, so a
+	// store that could never answer still fails closed. Checked BEFORE the
+	// read because the Pebble fall-through is a full "book:" scan regardless
+	// of how many IDs it filters for, and most runs of the normalize merge and
+	// positions passes request none.
+	if len(seriesIDs) == 0 {
+		return SeriesBooksMap{}, nil
 	}
 	m, err := ms.GetBooksBySeriesIDsAllVersions(seriesIDs)
 	if err != nil {
