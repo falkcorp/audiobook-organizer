@@ -1,5 +1,5 @@
 // file: internal/quarantine/service.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-12
 
@@ -632,6 +632,23 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 				return rl, nil
 			}
 			rl.moves = append(rl.moves, diskMove{from: sp.from, to: sp.to})
+		case stAtDest:
+			// Adopting a folder this pass did not move. The history entry says
+			// the book went there; every row the folder holds must also match
+			// before the book path follows it, or the book would be pointed at
+			// someone else's folder.
+			for i := range rows {
+				rel, ok := relUnder(sp.from, rows[i].FilePath)
+				if !ok {
+					continue
+				}
+				p := filepath.Join(sp.to, rel)
+				if _, err := os.Lstat(p); err == nil && p != rows[i].FilePath && !sameFile(rows[i], p) {
+					rl.block(sp.from, fmt.Sprintf("%s does not match row %s's size or hash; not adopting %s",
+						p, rows[i].FilePath, sp.to))
+					return rl, nil
+				}
+			}
 		}
 		rl.bookAtDest = true
 		for i := range rows {
@@ -654,10 +671,9 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 				rl.note(row.FilePath, "missing before this pass, left in place")
 				continue
 			}
-			if !sameFile(row, newPath) {
-				rl.block(row.FilePath, fmt.Sprintf("%s does not match this row's size or hash", newPath))
-				continue
-			}
+			// No size/hash check here: a folder this pass renamed carries the
+			// row's own file (even one edited since the scan), and an adopted
+			// folder was already checked above.
 			if err := qs.repointRow(rl, row, newPath); err != nil {
 				rl.block(row.FilePath, "repoint row: "+err.Error())
 			}
