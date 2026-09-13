@@ -1,5 +1,5 @@
 // file: internal/organizer/pipeline.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-13
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 var pipelineLog = logger.New("organizer.pipeline")
@@ -181,8 +182,54 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 	// whole book every time a file went missing or came back.
 	totalTracks := len(sorted)
 
-	sorted, trackNums := uniqueTrackNumbers(sorted, vars.Title)
+	// First, the plan every book has always had: each row named by its own
+	// TrackNumber, or its position when it has none (legacyTrackNumbers). A
+	// book whose planned targets are distinct under that numbering keeps it
+	// EXACTLY -- the decision is made on the targets, after the extension and
+	// with Missing rows skipped, never on the raw numbers. Two rows on track 1
+	// as "01.mp3" and "01.m4a" differ by extension, and a Missing row plans
+	// no target at all, so neither is a reason to rename a healthy book.
+	entries, err := planWithSuffixRetry(rootDir, folderPattern, filePattern, sorted, legacyTrackNumbers(sorted), totalTracks, vars, opts)
+	if err == nil {
+		return entries, nil
+	}
+	if !errors.Is(err, errPlanCollided) {
+		return nil, err
+	}
 
+	// Two present files still share a target with the suffix on: the numbers
+	// themselves repeat. Until 2026-09-13 this plan went to RenameFiles, which
+	// published the first file and failed link(2) on the second ("<title> -
+	// 01 - 01"). Renumber the book in listening order if that order can be
+	// read off the files; otherwise refuse, with nothing moved.
+	ordered, nums, rerr := renumberInListeningOrder(sorted)
+	if rerr != nil {
+		return nil, fmt.Errorf("plan target paths for %q (%d files): %v: %w",
+			vars.Title, totalTracks, rerr, ErrDuplicateRenameTarget)
+	}
+	pipelineLog.Warn("book files repeat track numbers; numbering them in folder, disc and track order so no two share a target: title=%q files=%d",
+		logger.SanitizeLogValue(vars.Title), len(ordered))
+	entries, err = planWithSuffixRetry(rootDir, folderPattern, filePattern, ordered, nums, totalTracks, vars, opts)
+	if errors.Is(err, errPlanCollided) {
+		// The numbers are now 1..N, so the patterns expand two different
+		// numbers to one name (truncation, say).
+		return nil, fmt.Errorf("plan target paths for %q (%d files, file pattern %q): %w",
+			vars.Title, totalTracks, filePattern, ErrDuplicateRenameTarget)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// errPlanCollided is planWithSuffixRetry's "two present files share a target
+// even with the track suffix". Internal: planTargetPaths turns it into a
+// renumbering or ErrDuplicateRenameTarget.
+var errPlanCollided = errors.New("planned targets collide")
+
+// planWithSuffixRetry plans the book with the given numbering, retrying with
+// the track suffix forced on when the pattern alone collides.
+func planWithSuffixRetry(rootDir, folderPattern, filePattern string, sorted []database.BookFile, trackNums []int, totalTracks int, vars PathVars, opts BuildOpts) ([]FileRenameEntry, error) {
 	entries, collided, err := planPass(rootDir, folderPattern, filePattern, sorted, trackNums, totalTracks, vars, opts, false)
 	if err != nil {
 		return nil, err
@@ -208,81 +255,120 @@ func planTargetPaths(rootDir, folderPattern, filePattern string, files []databas
 		if err != nil {
 			return nil, err
 		}
-		// The suffix is a track number that uniqueTrackNumbers made distinct,
-		// so a collision surviving it means the patterns expand two different
-		// numbers to one name (truncation, say). Until 2026-09-13 this second
-		// pass's result was discarded and the duplicate plan went to
-		// RenameFiles, which published the first file and failed link(2) on
-		// the second. Refuse the plan instead: nothing has moved yet.
+		// Until 2026-09-13 this second pass's collision result was discarded
+		// and the duplicate plan went on to RenameFiles. Report it instead.
 		if collided {
-			return nil, fmt.Errorf("plan target paths for %q (%d files, file pattern %q): %w",
-				vars.Title, totalTracks, filePattern, ErrDuplicateRenameTarget)
+			return nil, errPlanCollided
 		}
 	}
 
 	return entries, nil
 }
 
-// uniqueTrackNumbers returns the rows in naming order together with the track
-// number each one is named by, guaranteeing the numbers are distinct.
-//
-// The fast path keeps the old answer exactly: a row's own TrackNumber, or its
-// 1-based position when the row has none. A book whose numbers are already
-// distinct is therefore never renamed by this function.
-//
-// The numbers are NOT distinct for a multi-disc rip whose tracks restart on
-// every disc (disc 1 track 1, disc 2 track 1, ...), or when a position-derived
-// number lands on another row's explicit one. Before 2026-09-13 those rows
-// planned the same target, and the collision retry appended the same duplicated
-// number again, giving "<title> - 01 - 01" for both. For such a book every row
-// is renumbered by position in (disc, track, path) order: disc 1's tracks, then
-// disc 2's, 1..N. Renumbering the WHOLE book rather than only the clashing rows
-// keeps the numbers contiguous and in listening order.
-func uniqueTrackNumbers(sorted []database.BookFile, title string) ([]database.BookFile, []int) {
+// legacyTrackNumbers is the numbering every book was named by before
+// 2026-09-13: a row's own TrackNumber, or its 1-based position in the sorted
+// rows when it has none. planTargetPaths keeps it whenever it plans distinct
+// targets, so no healthy book is renamed by the duplicate-target fix.
+func legacyTrackNumbers(sorted []database.BookFile) []int {
 	nums := make([]int, len(sorted))
-	seen := make(map[int]struct{}, len(sorted))
-	distinct := true
 	for i, f := range sorted {
 		nums[i] = i + 1
 		if f.TrackNumber != 0 {
 			nums[i] = f.TrackNumber
 		}
-		if _, dup := seen[nums[i]]; dup {
-			distinct = false
-		}
-		seen[nums[i]] = struct{}{}
 	}
-	if distinct {
-		return sorted, nums
+	return nums
+}
+
+// renumberInListeningOrder orders a book whose track numbers repeat and names
+// its rows 1..N in that order, or reports that no order can be read off the
+// files.
+//
+// The repeat is almost always a multi-disc rip whose tracks restart on every
+// disc. DiscNumber cannot be relied on to separate the discs: only the
+// importer writes it, so for most rows it is 0 and "sort by disc" silently
+// becomes "sort by track", interleaving the discs (CD1/01, CD2/01, CD1/02...).
+// The folder is what separates them on disk, so the order is:
+//
+//  1. directory, in natural order ("CD2" before "CD10");
+//  2. disc, but only within a directory where EVERY row carries a disc
+//     number -- a flat folder of disc-tagged files. A directory mixing disc 0
+//     and disc N has no trustworthy disc order, and a disc-0 row must not be
+//     sorted ahead of its neighbours just because 0 < 1;
+//  3. numbered rows before unnumbered ones, in track order (the caller's rule);
+//  4. file name, in natural order, for unnumbered rows.
+//
+// If two PRESENT rows in one (directory, disc) group still share a track
+// number, nothing on disk says which comes first; the book is refused rather
+// than numbered by a guess, and the caller reports ErrDuplicateRenameTarget.
+//
+// Missing rows keep a slot in the numbering, for the reason totalTracks counts
+// them: a book with a file missing is still that many tracks long, and giving
+// the gap to the missing file means the survivors do not shift when it comes
+// back. Missing rows are left out of the ambiguity check -- they plan no
+// target, so they cannot collide.
+func renumberInListeningOrder(sorted []database.BookFile) ([]database.BookFile, []int, error) {
+	discTrusted := make(map[string]bool)
+	for _, f := range sorted {
+		dir := filepath.Dir(f.FilePath)
+		trusted, seen := discTrusted[dir]
+		if !seen {
+			trusted = true
+		}
+		discTrusted[dir] = trusted && f.DiscNumber != 0
+	}
+	disc := func(f database.BookFile) int {
+		if discTrusted[filepath.Dir(f.FilePath)] {
+			return f.DiscNumber
+		}
+		return 0
 	}
 
-	byDisc := make([]database.BookFile, len(sorted))
-	copy(byDisc, sorted)
-	sort.SliceStable(byDisc, func(i, j int) bool {
-		a, b := byDisc[i], byDisc[j]
-		if a.DiscNumber != b.DiscNumber {
-			return a.DiscNumber < b.DiscNumber
+	type slot struct {
+		dir         string
+		disc, track int
+	}
+	firstAt := make(map[slot]string)
+	for _, f := range sorted {
+		if f.Missing || f.TrackNumber == 0 {
+			continue
 		}
-		// Within a disc, numbered rows first in track order, then unnumbered
-		// rows -- the same rule the caller's sort applies.
+		k := slot{filepath.Dir(f.FilePath), disc(f), f.TrackNumber}
+		if prev, dup := firstAt[k]; dup {
+			return nil, nil, fmt.Errorf("%q and %q are both track %d of the same folder and disc, so their order is unknown",
+				filepath.Base(prev), filepath.Base(f.FilePath), f.TrackNumber)
+		}
+		firstAt[k] = f.FilePath
+	}
+
+	ordered := make([]database.BookFile, len(sorted))
+	copy(ordered, sorted)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if c := util.CompareNatural(filepath.Dir(a.FilePath), filepath.Dir(b.FilePath)); c != 0 {
+			return c < 0
+		}
+		if da, db := disc(a), disc(b); da != db {
+			return da < db
+		}
 		if (a.TrackNumber != 0) != (b.TrackNumber != 0) {
 			return a.TrackNumber != 0
 		}
 		if a.TrackNumber != b.TrackNumber {
 			return a.TrackNumber < b.TrackNumber
 		}
-		return a.FilePath < b.FilePath
+		return util.CompareNatural(filepath.Base(a.FilePath), filepath.Base(b.FilePath)) < 0
 	})
+	nums := make([]int, len(ordered))
 	for i := range nums {
 		nums[i] = i + 1
 	}
-	pipelineLog.Warn("book files repeat track numbers; numbering them by disc and position so no two share a target: title=%q files=%d",
-		logger.SanitizeLogValue(title), len(byDisc))
-	return byDisc, nums
+	return ordered, nums, nil
 }
 
 // planPass builds one full set of target paths. trackNums[i] is the track
-// number sorted[i] is named by (see uniqueTrackNumbers). forceTrackSuffix
+// number sorted[i] is named by (legacyTrackNumbers, or
+// renumberInListeningOrder when those repeat). forceTrackSuffix
 // appends that zero-padded number to every stem; planTargetPaths turns it on
 // for the second pass when the first produced duplicate targets. It reports
 // whether any two files landed on the same target.

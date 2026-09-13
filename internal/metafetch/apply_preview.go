@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
 // last-edited: 2026-09-13
 //
@@ -299,7 +299,10 @@ func (mfs *Service) previewFields(book *database.Book, meta metadata.BookMetadat
 
 // previewRename mirrors the rename leg of runApplyPipeline: library copy for a
 // protected book, the organizer's target paths, protected entries dropped, the
-// rename checkpoint and the recorded-failure block. All of those are reads.
+// rename checkpoint and the recorded-failure block. All of those are reads:
+// the recorded-failure check is ApplyRenameBlockedReadOnly, which reports a
+// stale record as not blocking without clearing it (ApplyRenameBlocked would
+// clear it -- a write, and on behalf of an apply that may yet be refused).
 func (mfs *Service) previewRename(book *database.Book, after previewAfter, writeBack bool) RenamePreview {
 	switch {
 	case !writeBack:
@@ -355,7 +358,7 @@ func (mfs *Service) previewRename(book *database.Book, after previewAfter, write
 		return RenamePreview{TargetBookID: target.ID, Reason: "files already at their target paths"}
 	case hasCheckpoint(mfs.db, target.ID, phaseRename):
 		return RenamePreview{TargetBookID: target.ID, Reason: "rename checkpoint already set for this book", Moves: moves}
-	case organizer.ApplyRenameBlocked(mfs.db, target.ID, targetPathsOf(entries)):
+	case organizer.ApplyRenameBlockedReadOnly(mfs.db, target.ID, targetPathsOf(entries)):
 		// A different file holds a planned target under a collision the
 		// resolver could not settle, and it has not changed since. The rename
 		// would be skipped after the DB apply, so the names would never match.
