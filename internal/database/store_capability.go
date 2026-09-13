@@ -1,7 +1,7 @@
 // file: internal/database/store_capability.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a41c7e0-58b2-4c33-8f6d-1b0e9d2a7c45
-// last-edited: 2026-07-31
+// last-edited: 2026-09-13
 
 package database
 
@@ -13,7 +13,8 @@ package database
 // that nobody edits store.go, so each new capability lives in its own file with
 // its own interface, discovered at runtime by a type assertion.
 //
-// internal/server.indexedStore decorates the store during Server.Start() by
+// internal/server.indexedStore decorates the store in NewServer (before the
+// service registry is built; it was Server.Start() until 2026-09-13) by
 // EMBEDDING the Store interface:
 //
 //	type indexedStore struct { database.Store; server *Server }
@@ -44,11 +45,14 @@ package database
 // way for weeks — see AsPebbleStore. Resolve concrete stores through this file
 // too, never with a bare assertion on a value obtained from Server.Store().
 //
-// Rule of thumb for which values are affected: anything bound during NewServer
-// (the service-registry container via Override("store", ...), plugin.Deps, every
-// handler constructor) holds the BARE store and is unaffected. Anything that calls
-// Server.Store() at request time, op-run time, or inside a lazily-built service
-// gets the WRAPPED store and must resolve capabilities through this file.
+// Which values are affected: ALL of them. Since 2026-09-13 NewServer wraps the
+// store before anything captures it, so the service-registry container
+// (Override("store", ...)), plugin.Deps, every handler constructor and
+// Server.Store() all hold the SAME decorated value, whether or not the search
+// index opens. (Until then anything bound during NewServer held the bare store,
+// which is why several registry-built services type-asserted capabilities
+// directly and got away with it -- and why their book writes were never
+// re-indexed.) Resolve every capability outside database.Store through this file.
 
 // maxUnwrapDepth bounds the walk so a decorator that accidentally returns itself
 // — or a cycle built from two decorators pointing at each other — cannot hang a

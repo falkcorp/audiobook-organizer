@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.6.1
+// version: 4.7.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-13
 
@@ -64,6 +64,41 @@ func (s *Server) opRegistrationGate() error {
 		len(s.opRegistrationErrs), errors.Join(s.opRegistrationErrs...))
 }
 
+// startSearchIndexing switches the indexedStore decorator live once the Bleve
+// index is open (s.searchIndex non-nil): it creates the queue enqueueIndex
+// feeds, starts the worker and the dirty-set reconciler, and installs the
+// server's store as the global store.
+//
+// It does NOT wrap the store. NewServer installed the one indexedStore before
+// the service registry was built, so s.store, every registry service and the
+// global store installed here are all the same object; wrapping again would
+// enqueue every write twice.
+//
+// The queue is assigned under indexQueueMu because, unlike when the wrap lived
+// here, other goroutines can already be writing through the decorator (anything
+// NewServer spawned), and enqueueIndex reads s.indexQueue under the read lock.
+func (s *Server) startSearchIndexing() {
+	s.indexQueueMu.Lock()
+	s.indexQueue = make(chan indexRequest, 1024)
+	s.indexQueueMu.Unlock()
+	database.SetGlobalStore(s.storeForWiring())
+	// Reconciler for events the bounded queue had to drop. Enrolled in
+	// bgWG and gated on bgCtx like every other background loop, so
+	// Shutdown drains it before Pebble closes. Started before the worker
+	// so a backlog left by the previous process starts draining even if
+	// the worker is immediately saturated.
+	s.bgWG.Go("search-reconciler", func() {
+		s.runSearchReconciler()
+	})
+	s.bgWG.Go("index-worker", func() {
+		s.runIndexWorker()
+	})
+	// Route the /audiobooks?search= path through Bleve.
+	if s.audiobookService != nil {
+		s.audiobookService.SetSearchIndex(s.searchIndex)
+	}
+}
+
 func (s *Server) Start(cfg ServerConfig) error {
 	// Refuse to serve with a hole in the operations registry, before touching
 	// anything else -- nothing below this line should run on a server that is
@@ -90,12 +125,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	// Pull the now-open Bleve index out of the searchindex service
-	// (opened above by Container.Start) and install the indexedStore
-	// decorator BEFORE any background goroutines or HTTP handlers
-	// start using s.store. Doing the wrap first eliminates the race
-	// between bg goroutines (stripMovementAtoms / remuxMalformedM4BFiles
-	// / backfills) reading s.store and the indexedStore install — pre-PR
-	// #903 this happened later and was timing-dependent.
+	// (opened above by Container.Start) and switch the indexedStore
+	// decorator live BEFORE any background goroutines or HTTP handlers
+	// start writing through s.store, so no write made after Start can
+	// miss the queue (pre-PR #903 this happened later and was
+	// timing-dependent).
 	//
 	// Bleve open failures are already logged inside IndexService.Start;
 	// when Index() returns nil the server runs without search.
@@ -105,26 +139,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 	if s.searchIndex != nil {
-		s.indexQueue = make(chan indexRequest, 1024)
-		inner := s.storeForWiring()
-		wrapped := &indexedStore{Store: inner, server: s}
-		s.store = wrapped
-		database.SetGlobalStore(wrapped)
-		// Reconciler for events the bounded queue had to drop. Enrolled in
-		// bgWG and gated on bgCtx like every other background loop, so
-		// Shutdown drains it before Pebble closes. Started before the worker
-		// so a backlog left by the previous process starts draining even if
-		// the worker is immediately saturated.
-		s.bgWG.Go("search-reconciler", func() {
-			s.runSearchReconciler()
-		})
-		s.bgWG.Go("index-worker", func() {
-			s.runIndexWorker()
-		})
-		// Route the /audiobooks?search= path through Bleve.
-		if s.audiobookService != nil {
-			s.audiobookService.SetSearchIndex(s.searchIndex)
-		}
+		s.startSearchIndexing()
 	}
 
 	// HNSW snapshot is now loaded earlier, in NewServer (between Build and PostInit),
