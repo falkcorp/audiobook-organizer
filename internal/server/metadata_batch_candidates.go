@@ -550,6 +550,20 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	}
 	outcomes := make([]applyOutcome, len(req.BookIDs))
 
+	// Claim index for the gate's partial_book check, built before any apply
+	// the same way the preview builds it (buildClaimIndex).
+	claims := buildClaimIndex(c.Request.Context(), req.BookIDs, opResultClaimLoader(s.store, func(id string) (CandidateResult, bool) {
+		r, ok := resultsByBook[id]
+		if !ok {
+			return CandidateResult{}, false
+		}
+		var cr CandidateResult
+		if json.Unmarshal([]byte(r.ResultJSON), &cr) != nil {
+			return CandidateResult{}, false
+		}
+		return cr, true
+	}))
+
 	g, gctx := errgroup.WithContext(c.Request.Context())
 	// Deliberately NOT writeBackWorkers(): this handler does not write back.
 	// The per-book work left on the request path is DB-bound
@@ -593,7 +607,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			// Certainty gate: score floor, fetch-time identity, and the
 			// sequence-number guard. The "matched" status above is only "the
 			// top non-rejected candidate", with no floor behind it.
-			plan := planOpResultApply(s.store, bookID, cr)
+			plan := planOpResultApply(s.store, bookID, cr, claims)
 			if plan.Reason == applySkipGateBlocked {
 				outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, plan.Err)}
 				return nil

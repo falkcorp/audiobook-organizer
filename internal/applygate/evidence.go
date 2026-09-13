@@ -91,6 +91,12 @@ var titleStop = map[string]bool{
 // CheckEvidence runs every evidence check. audioConfirmed is the score leg's
 // transcription result, counted as one agreement.
 func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
+	return CheckEvidenceInBatch(book, c, audioConfirmed, nil)
+}
+
+// CheckEvidenceInBatch is CheckEvidence with the batch's ClaimIndex, which
+// the partial_book check reads to see sibling parts. nil skips that test.
+func CheckEvidenceInBatch(book *database.Book, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
 	var v EvidenceVerdict
 	if book == nil || c == nil {
 		v.Reason, v.Detail = ReasonInsufficientEvidence, "no book or candidate"
@@ -108,6 +114,7 @@ func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioCon
 		checkASIN(book, c),
 		checkCastInAuthor(&nameSource{author: bookAuthor(book), narrator: bookNarrator(book)}, c.Author, c.Narrator),
 		checkSeriesNumberLost(book, c, v.Overwrites),
+		checkPartialBook(book, c, runtime.Outcome, claims),
 	)
 	audio := CheckResult{Name: "transcription", Outcome: OutcomeUnknown}
 	if audioConfirmed {

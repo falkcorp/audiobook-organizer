@@ -116,7 +116,8 @@ type cachedApplyPlan struct {
 // planCachedApply picks the top cached candidate and runs the certainty gate
 // on it. It reads only. A refused top candidate does NOT fall through to the
 // second one: choosing among candidates is what manual review is for.
-func planCachedApply(svc cachedApplyService, books bookReader, id string) cachedApplyPlan {
+// claims is the batch's buildClaimIndex result (nil = no batch context).
+func planCachedApply(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex) cachedApplyPlan {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
 		return cachedApplyPlan{Reason: applySkipNoCachedCandidates, Err: err}
@@ -132,7 +133,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string) cached
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
-	v := applygate.Evaluate(book, &cand, svc.ValidateCachedIdentityForBook(entry, book))
+	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
@@ -148,7 +149,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string) cached
 // title and author NOW must still be the ones the candidate was fetched for
 // (CandidateResult.Book, recorded at fetch time). A rename or re-author since
 // the fetch means the candidate answers a question the book no longer asks.
-func planOpResultApply(books bookReader, id string, cr CandidateResult) cachedApplyPlan {
+func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *applygate.ClaimIndex) cachedApplyPlan {
 	if cr.Candidate == nil {
 		return cachedApplyPlan{Reason: applySkipNoCachedCandidates}
 	}
@@ -160,7 +161,7 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult) cachedAp
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
-	v := applygate.Evaluate(book, &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book))
+	v := applygate.EvaluateInBatch(book, &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
@@ -218,7 +219,7 @@ func applyCachedCandidateForBook(
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
-	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings())
+	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil)
 }
 
 // applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
@@ -233,9 +234,10 @@ func applyCachedCandidateForBookTimed(
 	writeBack bool,
 	checkpoint func() error,
 	pt *metafetch.ApplyPhaseTimings,
+	claims *applygate.ClaimIndex,
 ) applyOutcome {
 	applyStart := time.Now()
-	plan := planCachedApply(svc, books, id)
+	plan := planCachedApply(svc, books, id, claims)
 	if plan.Reason != "" {
 		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate}
 	}
