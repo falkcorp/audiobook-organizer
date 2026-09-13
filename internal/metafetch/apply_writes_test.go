@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,
@@ -592,7 +592,7 @@ func TestRunApplyPipeline_NeverMovesAProtectedFileRow(t *testing.T) {
 			return append([]database.BookFile(nil), files...), nil
 		},
 	})
-	_, err := svc.runApplyPipeline("lib1", book, "lib1")
+	_, err := svc.runApplyPipeline("lib1", book, "lib1", nil)
 
 	_, itErr := os.Stat(itFile)
 	require.NoError(t, itErr, "the iTunes file must stay where it is (pipeline err: %v)", err)
@@ -1072,7 +1072,7 @@ func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	config.AppConfig.AutoRenameOnApply = true
 	config.AppConfig.AutoWriteTagsOnApply = true
 
-	_ = svc.finishFileWork("a", "", true, true, nil)
+	_ = svc.finishFileWork("a", "", true, true, nil, nil)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	assert.Zero(t, h.made, "a file step made a library copy")

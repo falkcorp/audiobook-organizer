@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.13.2
+// version: 1.14.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-13
 
@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -438,7 +439,7 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID string) (tagWriteResult, error) {
+func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy
 	// instead: targetID, the one its job locked (lockLibraryCopy). A book that
 	// now resolves to anything else is an error, not a switch to a copy the job
@@ -465,7 +466,10 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 	// tag write the lock is swapped for one on the post-rename path (below),
 	// the order internal/server/metadata_ops.go's bulk write-back uses. One
 	// lock held across both would put the tag write under the pre-rename key.
+	lockStart := time.Now()
 	release := mfs.lockPath(book.FilePath)
+	pt.Since(PhaseLockWait, lockStart)
+	renameStart := time.Now()
 	defer func() { release() }()
 
 	bookFiles, err := mfs.db.GetBookFiles(id)
@@ -610,11 +614,14 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 	// Swap the rename lock for one on the post-rename path: the rename may have
 	// moved the files, and the tag write must serialize against whoever writes
 	// them at their NEW location.
+	pt.Since(PhaseRename, renameStart)
 	release()
 	if fresh, ferr := mfs.db.GetBookByID(id); ferr == nil && fresh != nil {
 		book = fresh
 	}
+	lockStart = time.Now()
 	release = mfs.lockPath(book.FilePath)
+	pt.Since(PhaseLockWait, lockStart)
 
 	// Write metadata tags to audio files.
 	//
@@ -629,7 +636,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 		tags.handled = true
 		if !hasCheckpoint(mfs.db, id, phaseTags) {
 			// id is the target's own id here, and targetID names that book.
-			if written, err := mfs.writeTags(id, targetID); err != nil {
+			if written, err := mfs.writeTags(id, targetID, pt); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
 					"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
@@ -645,6 +652,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 	// (if the file was renamed) and metadata changes. The apply
 	// handler also enqueues after this returns; the batcher dedupes
 	// on book ID so the duplicate is harmless.
+	postStart := time.Now()
 	if mfs.writeBackBatcher != nil && !hasCheckpoint(mfs.db, id, phaseITunes) {
 		mfs.writeBackBatcher.Enqueue(id)
 		setCheckpoint(mfs.db, id, phaseITunes)
@@ -652,6 +660,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 
 	// All phases complete — clear checkpoints.
 	clearCheckpoints(mfs.db, id)
+	pt.Since(PhaseDBPost, postStart)
 	return tags, nil
 }
 
@@ -687,7 +696,7 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 		return 0, err
 	}
 	defer releasePath()
-	return mfs.writeBackForBook(id, sf, targetID)
+	return mfs.writeBackForBook(id, sf, targetID, nil)
 }
 
 // writeBackForBook is the single tag-write implementation behind
@@ -698,7 +707,8 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 //
 // targetID is the book its caller locked (lockLibraryCopy); the files written
 // are that book's, and a book that now resolves elsewhere is an error.
-func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID string) (int, error) {
+func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID string, pt *ApplyPhaseTimings) (int, error) {
+	prepStart := time.Now()
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return 0, fmt.Errorf("audiobook not found: %s", id)
@@ -796,21 +806,35 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 	}
 
 	totalTracks := len(activeFiles)
-	writtenCount := 0
-	skippedProtected := 0
+	// Counted from several writers at once (runFileWrites); read back into the
+	// plain ints below once every writer has returned.
+	var writtenN, skippedN atomic.Int64
 
 	// Embed cover art via TagLib (independent of tag writes — no ordering constraint).
+	pt.Since(PhaseTagPrep, prepStart)
+	embedStart := time.Now()
 	if config.AppConfig.RootDir != "" {
 		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID))
 	}
+	pt.Since(PhaseEmbed, embedStart)
 
+	// PER-FILE WRITES RUN CONCURRENTLY (runFileWrites): the first writer is the
+	// one the caller's gate slot already covers, extra writers only take free
+	// slots of the process-wide write-back gate and never wait for one. Each
+	// file is written by exactly one writer. Until 2026-09-13 this was a plain
+	// loop: a 58-file book spent ~15s writing one file after another while the
+	// rest of the gate sat idle. Every file is distinct, so the per-path lock
+	// held around this whole write (by the caller) still covers each of them.
+	tagsStart := time.Now()
 	// Use the original book's title for tag content (it has freshly-applied metadata)
 	bookTitle := originalBook.Title
 	if totalTracks > 1 {
 		// Multi-file: write to each file with per-track title and numbering
 		digits := len(fmt.Sprintf("%d", totalTracks))
 		trackFmt := fmt.Sprintf("%%0%dd", digits)
-		for i, bf := range activeFiles {
+		pt.AddFiles(len(activeFiles))
+		mfs.runFileWrites(len(activeFiles), func(i int) {
+			bf := activeFiles[i]
 			trackNum := i + 1
 			generated := fmt.Sprintf(trackFmt+" - %s", trackNum, bookTitle)
 			trackStr := fmt.Sprintf("%d/%d", trackNum, totalTracks)
@@ -835,17 +859,15 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 			// curErr != nil keeps the historical safe fallback: write everything.
 			if len(tagMap) == 0 {
 				slog.Debug("write-back file tags already match, skipping", "path", bf.FilePath)
-				continue
+				return
 			}
 			if mfs.isProtectedPath(bf.FilePath) {
 				slog.Debug("skipping write-back for protected file", "path", bf.FilePath)
-				skippedProtected++
-				continue
+				skippedN.Add(1)
+				return
 			}
-			backupFileBeforeWrite(bf.FilePath)
-			if _, _, err := fileops.WriteTagsSafe(bf.FilePath, func(tmpPath string) error {
-				return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
-			}, fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}); err != nil {
+			if err := mfs.writeFileTagsSafe(bf.FilePath, tagMap,
+				fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}, opConfig); err != nil {
 				slog.Warn("write-back failed for file",
 					"path", bf.FilePath, "error", err,
 					"book_id", book.ID, "book_title", book.Title,
@@ -858,16 +880,16 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				// failures for multi-file books and it was impossible to tell a
 				// working write path from one that never ran at all.
 				slog.Info("wrote metadata back to", "path", bf.FilePath)
-				writtenCount++
+				writtenN.Add(1)
 			}
-		}
+		})
 	} else {
 		// Single-file or no files: write to book.FilePath.
 		// If book.FilePath is a directory (multi-file book with no file records),
-		// glob for audio files inside and write to each one individually.
+		// list the audio files inside and write to each one individually.
 		if mfs.isProtectedPath(book.FilePath) {
 			slog.Debug("skipping write-back for protected path", "path", book.FilePath)
-			skippedProtected++
+			skippedN.Add(1)
 		} else {
 			fullTagMap := mfs.BuildFullTagMap(book, bookTitle, bookTitle, artistStr, narratorStr, year, "")
 			// Filter out tags whose current on-disk value already
@@ -877,63 +899,56 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 			// composer (both narrator-sourced in our convention),
 			// so the filter correctly no-ops on unchanged books
 			// instead of always-writing because of those keys.
+			// FilterUnchangedTags only READS fullTagMap and returns a new map
+			// (filterTagsAgainst), so the concurrent writers below can share it.
 			dirFiles := AudioFilesInDir(book.FilePath)
 			if len(dirFiles) > 0 {
 				// book.FilePath is a directory — write to each audio file found inside.
 				slog.Info("write-back is a directory; writing to audio file(s) inside", "path", book.FilePath, "file", len(dirFiles))
-				for _, f := range dirFiles {
+				pt.AddFiles(len(dirFiles))
+				mfs.runFileWrites(len(dirFiles), func(i int) {
+					f := dirFiles[i]
 					if mfs.isProtectedPath(f) {
 						slog.Debug("skipping write-back for protected file", "value", f)
-						skippedProtected++
-						continue
+						skippedN.Add(1)
+						return
 					}
 					fm := FilterUnchangedTags(f, fullTagMap)
 					if len(fm) == 0 {
 						slog.Debug("write-back all tags match, skipping", "value", f)
-						continue
+						return
 					}
-					backupFileBeforeWrite(f)
-					var wtsOpts fileops.WriteTagsSafeOptions
-					if bff, bfferr := mfs.db.GetBookFileByPath(f); bfferr == nil && bff != nil {
-						wtsOpts = fileops.WriteTagsSafeOptions{BookFileID: bff.ID, Store: mfs.db}
-					}
-					if _, _, err := fileops.WriteTagsSafe(f, func(tmpPath string) error {
-						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
-					}, wtsOpts); err != nil {
+					if err := mfs.writeFileTagsSafe(f, fm, mfs.bookFileWriteOpts(f), opConfig); err != nil {
 						slog.Warn("write-back failed for file",
 							"path", f, "error", err,
 							"book_id", book.ID, "book_title", book.Title,
 							"tag_keys", sortedKeys(fm))
 					} else {
 						slog.Info("wrote metadata back to", "path", f)
-						writtenCount++
+						writtenN.Add(1)
 					}
-				}
+				})
 			} else {
+				pt.AddFiles(1)
 				fm := FilterUnchangedTags(book.FilePath, fullTagMap)
 				if len(fm) == 0 {
 					slog.Debug("write-back all tags match, skipping", "path", book.FilePath)
+				} else if err := mfs.writeFileTagsSafe(book.FilePath, fm, mfs.bookFileWriteOpts(book.FilePath), opConfig); err != nil {
+					slog.Warn("write-back failed for file",
+						"path", book.FilePath, "error", err,
+						"book_id", book.ID, "book_title", book.Title,
+						"tag_keys", sortedKeys(fm))
 				} else {
-					backupFileBeforeWrite(book.FilePath)
-					var wtsOpts fileops.WriteTagsSafeOptions
-					if bff, bfferr := mfs.db.GetBookFileByPath(book.FilePath); bfferr == nil && bff != nil {
-						wtsOpts = fileops.WriteTagsSafeOptions{BookFileID: bff.ID, Store: mfs.db}
-					}
-					if _, _, err := fileops.WriteTagsSafe(book.FilePath, func(tmpPath string) error {
-						return metadata.WriteMetadataToFileInPlace(tmpPath, fm, opConfig)
-					}, wtsOpts); err != nil {
-						slog.Warn("write-back failed for file",
-							"path", book.FilePath, "error", err,
-							"book_id", book.ID, "book_title", book.Title,
-							"tag_keys", sortedKeys(fm))
-					} else {
-						writtenCount++
-					}
+					writtenN.Add(1)
 				}
 			}
 		}
 	}
+	pt.Since(PhaseTags, tagsStart)
+	writtenCount := int(writtenN.Load())
+	skippedProtected := int(skippedN.Load())
 
+	dbPostStart := time.Now()
 	// --- Write to version-linked copies in the library folder ---
 	if book.VersionGroupID != nil && *book.VersionGroupID != "" && config.AppConfig.RootDir != "" {
 		siblings, sibOK := mfs.versionGroupSiblings(book, "write-back to version-linked copies")
@@ -1006,6 +1021,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 		slog.Info("write-back for book wrote file(s), skipped protected path(s)", "id", book.ID, "count", writtenCount-skippedProtected, "value", skippedProtected)
 	}
 
+	pt.Since(PhaseDBPost, dbPostStart)
 	return writtenCount, nil
 }
 

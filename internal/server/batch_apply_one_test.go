@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -92,6 +92,10 @@ func (f *fakeApplySvc) FinishApplyFileWork(id, pendingCoverURL string, fileIO, w
 	f.finishCalls = append(f.finishCalls, finishCall{id: id, cover: pendingCoverURL, fileIO: fileIO, writeTags: writeTags})
 	f.checkpoints = append(f.checkpoints, checkpoint)
 	return f.finishErr
+}
+
+func (f *fakeApplySvc) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, _ *metafetch.ApplyPhaseTimings) error {
+	return f.FinishApplyFileWork(id, pendingCoverURL, fileIO, writeTags, checkpoint)
 }
 
 // The metadata.batch-apply-cached op holds a scan stand-down, and its check

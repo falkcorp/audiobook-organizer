@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -343,8 +344,14 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// batchApplyConcurrency=4, because this loop now does the file I/O
 			// rather than delegating it.
 			runOne := func(ctx context.Context, id string) error {
+				// One timer per book, from before the gate wait to the end of
+				// its file work; FinishApplyFileWorkTimed logs it as the
+				// "apply phase durations" line.
+				pt := metafetch.NewApplyPhaseTimings()
 				if p.WriteBack {
+					gateStart := time.Now()
 					releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
+					pt.Since(metafetch.PhaseGateWait, gateStart)
 					if gateErr != nil {
 						// ctx here is the PER-ITEM context (PerItemTimeout: 3m),
 						// not the run context, so gateErr is DeadlineExceeded
@@ -373,8 +380,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBook(svc, s.store, itunes, id, p.WriteBack,
-					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) })
+				out := applyCachedCandidateForBookTimed(svc, s.store, itunes, id, p.WriteBack,
+					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt)
 
 				if !out.Applied {
 					switch out.Reason {

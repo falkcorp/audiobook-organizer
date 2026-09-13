@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.158.0
+// version: 1.159.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -3896,6 +3896,15 @@ func sortVersions(books []Book) {
 
 // GetBooksByMetadataSourceHash returns all books with the given metadata source hash.
 func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) {
+	// Fast path: memdb's metadata_source_hash index. The scan below decodes
+	// every book row and runs on every metadata apply (MATCH-4). A memdb that
+	// has lost book rows returns an error and the scan runs instead.
+	if m := p.mem(); p.UseMemDB && m != nil {
+		if books, err := m.GetBooksByMetadataSourceHash(hash); err == nil {
+			return books, nil
+		}
+	}
+
 	var books []Book
 
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {

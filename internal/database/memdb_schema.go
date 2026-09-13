@@ -1,6 +1,7 @@
 // file: internal/database/memdb_schema.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000002
+// last-edited: 2026-09-13
 
 package database
 
@@ -35,12 +36,16 @@ const (
 	memIdxMarkedForDeletion = "marked_for_deletion"
 	memIdxVersionGroupID    = "version_group_id"
 	memIdxITunesPID         = "itunes_persistent_id"
-	memIdxTitle             = "title"
-	memIdxPath              = "path"
-	memIdxEnabled           = "enabled"
-	memIdxAliasName         = "alias_name"
-	memIdxHash              = "hash"
-	memIdxDelugeHash        = "deluge_hash"
+	// memIdxMetadataSourceHash backs GetBooksByMetadataSourceHash, which every
+	// metadata apply calls (MATCH-4 duplicate check). Without it that lookup
+	// decoded every book row in Pebble on each apply.
+	memIdxMetadataSourceHash = "metadata_source_hash"
+	memIdxTitle              = "title"
+	memIdxPath               = "path"
+	memIdxEnabled            = "enabled"
+	memIdxAliasName          = "alias_name"
+	memIdxHash               = "hash"
+	memIdxDelugeHash         = "deluge_hash"
 
 	// Sorted secondary indexes for the library list. Each turns a
 	// materialise-the-whole-filtered-set-and-sort into an ordered streaming
@@ -177,6 +182,13 @@ func baseMemdbSchema() *memdb.DBSchema {
 						Name:         memIdxVersionGroupID,
 						AllowMissing: true,
 						Indexer:      &nullableStringFieldIndex{Field: "VersionGroupID"},
+					},
+					memIdxMetadataSourceHash: {
+						// Skips rows whose hash is nil or empty, like the
+						// iTunes PID index: only books with a hash are indexed.
+						Name:         memIdxMetadataSourceHash,
+						AllowMissing: true,
+						Indexer:      &nullableStringFieldIndex{Field: "MetadataSourceHash"},
 					},
 					memIdxITunesPID: {
 						// nullableStringFieldIndex skips rows where the *string

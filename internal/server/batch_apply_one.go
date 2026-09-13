@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -38,6 +39,9 @@ type cachedApplyService interface {
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
 	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	// FinishApplyFileWorkTimed is FinishApplyFileWork recording its phases
+	// into pt and logging the per-book "apply phase durations" line.
+	FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
 }
 
 // bookReader reads the book the gate judges the candidate against.
@@ -205,6 +209,23 @@ func applyCachedCandidateForBook(
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
+	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings())
+}
+
+// applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
+// its phases into pt (which the caller may already have started, e.g. with the
+// write-back gate wait). The file-side sequel logs the one per-book
+// "apply phase durations" line; a book that is not applied logs none.
+func applyCachedCandidateForBookTimed(
+	svc cachedApplyService,
+	books bookReader,
+	itunes itunesEnqueuer,
+	id string,
+	writeBack bool,
+	checkpoint func() error,
+	pt *metafetch.ApplyPhaseTimings,
+) applyOutcome {
+	applyStart := time.Now()
 	plan := planCachedApply(svc, books, id)
 	if plan.Reason != "" {
 		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate}
@@ -215,6 +236,7 @@ func applyCachedCandidateForBook(
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate}
 	}
 	_ = svc.InvalidateCachedCandidates(id)
+	pt.Since(metafetch.PhaseApplyDB, applyStart)
 
 	// Every later return is an applied outcome; carry the skipped locks on all
 	// of them. resp is non-nil on a nil error (ApplyMetadataCandidate's
@@ -232,7 +254,7 @@ func applyCachedCandidateForBook(
 		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
-		if err := svc.FinishApplyFileWork(id, pendingCover, false, false, checkpoint); err != nil {
+		if err := svc.FinishApplyFileWorkTimed(id, pendingCover, false, false, checkpoint, pt); err != nil {
 			out.WriteBackFailed, out.Err = true, err
 		}
 		return out
@@ -254,7 +276,7 @@ func applyCachedCandidateForBook(
 	// WriteBackFailed is separate from !Applied. The core still writes tags
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
-	if err := svc.FinishApplyFileWork(id, pendingCover, true, true, checkpoint); err != nil {
+	if err := svc.FinishApplyFileWorkTimed(id, pendingCover, true, true, checkpoint, pt); err != nil {
 		out.WriteBackFailed, out.Err = true, err
 	}
 	return out

@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.53.0
+// version: 2.54.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
@@ -970,6 +970,10 @@ func NewServer(store database.Store) *Server {
 		// which shares writeBackPathLocks -- touch one set of files at once.
 		// Auto-fetch's file work also goes through the file-I/O pool.
 		server.metadataFetchService.SetPathLocker(writeBackPathLocks.lock)
+		// Extra per-file tag writers within one book take free slots of the
+		// same process-wide gate every write-back op acquires, non-blocking,
+		// so overlapping ops never exceed maxWriteBackWorkers writers.
+		server.metadataFetchService.SetFileWriteGate(writeBackFileGate.tryAcquire)
 		// Organize's version creation holds the version-group key from the
 		// same table, the key metafetch looks library copies up and makes them
 		// under, so neither finds or makes a copy while the other is making one.
