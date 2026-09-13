@@ -1,5 +1,5 @@
 // file: internal/applygate/booknum.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4f2c83-6a1e-4b57-8c09-e3b7a5d16f42
 // last-edited: 2026-09-13
 
@@ -7,6 +7,7 @@ package applygate
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -15,32 +16,38 @@ import (
 )
 
 // ReasonSeriesNumberLost: the apply replaces a title that carries a volume
-// number with one that drops it. On the 2026-09-13 prod preview
-// "Empire of Man 04 - We Few" -> "We Few", "Into the Void: Sentenced to War,
-// Book 14" -> "Into the Void" and "00.5 Tin Man" -> "Tin Man" all passed.
+// number with one that drops it, and the result keeps that number nowhere,
+// neither in the new title nor as the series position. On the 2026-09-13
+// prod preview "The Legends of the First Empire - 3 - Age of War" ->
+// "Age of War" passed with no series.
 const ReasonSeriesNumberLost = "series_number_lost"
 
-// KeepNumberViaSeries, when true, lets a title lose its number if the result
-// still files the book under a series whose name matches the words the number
-// was given with, at the same position ("Dungeon Crawler Carl Book 4 - The
-// Gate of the Feral Gods" -> "The Gate of the Feral Gods", series "Dungeon
-// Crawler Carl" #4).
-//
-// It is OFF. Measured on the 2026-09-13 preview (2,637 passing rows, 35 the
-// owner flagged): without the exception the check catches 8 of the 35 and
-// newly blocks 298 others; with it, 1 of 35 and 2 others. The exception
-// cannot tell the owner's examples from the rows it would spare:
-// "Into the Void: Sentenced to War, Book 14" -> series "Sentenced to War" #14
-// has exactly the shape of "Candy Bomb: Starship for Sale, Book 4" ->
-// "Starship for Sale" #4. Every one of the 298 is a row whose stored title is
-// REPLACED (the check runs only then), so they go to manual review rather
-// than being written. Flip this to spare them; that is the owner's call.
-const KeepNumberViaSeries = false
+// ReasonSeriesRenamed: the number survives as the series position, but under
+// a series whose name does not match the words the title gave it with:
+// "Empire of Man 04 - We Few" -> "We Few", series "Prince Roger" #4.
+const ReasonSeriesRenamed = "series_renamed"
 
 // checkSeriesNumberLost runs only when the apply replaces the title (title in
-// overwrites). It blocks when the stored title carries a volume number and
-// neither the candidate title nor title+subtitle carries the same number.
-// It returns only block or neutral, never agree.
+// overwrites) and the stored title carries a volume number. Then:
+//
+//   - the candidate title, or title plus subtitle, carries the same number:
+//     neutral, the number is kept;
+//   - the result's series position equals the number ("04" == 4, "0.5" ==
+//     .5) and the series name matches the words the title numbered (or the
+//     title gave no words beyond the new title's own): neutral, kept as the
+//     series position ("Into the Void: Sentenced to War, Book 14" ->
+//     "Into the Void", series "Sentenced to War" #14);
+//   - same position under a series of other words: block, series_renamed;
+//   - otherwise: block, series_number_lost.
+//
+// A TRAILING number ("Title - 01", "Catch-22") is often a track number in a
+// file-derived title or part of a name, not a volume. It counts only when a
+// series position, the stored one or the result's, equals it; otherwise the
+// check is neutral.
+//
+// The result series is the candidate's where it gives one, else the book's
+// own (an apply does not clear a series the candidate leaves blank). It
+// returns only block or neutral, never agree.
 func checkSeriesNumberLost(book *database.Book, c *metafetch.MetadataCandidate, overwrites []string) CheckResult {
 	r := CheckResult{Name: "series_number", Outcome: OutcomeNeutral}
 	if !contains(overwrites, "title") {
@@ -58,20 +65,36 @@ func checkSeriesNumberLost(book *database.Book, c *metafetch.MetadataCandidate, 
 		}
 	}
 	series, pos, hasPos := resultSeries(book, c)
-	if KeepNumberViaSeries && series != "" && hasPos && seqnum.Equal(pos, n) {
+	kept := hasPos && seqnum.Equal(pos, n)
+	if n.Form == "trailing" && !kept {
+		if sp, ok := storedPosition(book); !ok || !seqnum.Equal(sp, n) {
+			r.Detail = "trailing " + n.Text + " in " + quote(book.Title) + " has no series position behind it: read as a track or name number, not a volume"
+			return r
+		}
+	}
+	if kept && series != "" {
 		ctx := numberContext(book.Title, n)
 		for t := range tokens(candText, true) {
 			delete(ctx, t)
 		}
 		if seriesCovers(ctx, series) {
-			r.Detail = "title's #" + n.Text + " kept as " + series + " #" + pos.Text
+			r.Detail = "title's #" + n.Text + " kept as " + quote(series) + " #" + pos.Text
 			return r
 		}
+		r.Outcome, r.Reason = OutcomeBlock, ReasonSeriesRenamed
+		r.Detail = "title " + quote(book.Title) + " numbers " + quote(strings.Join(sortedKeys(ctx), " ")) + " #" + n.Text +
+			"; the result keeps #" + pos.Text + " but under series " + quote(series)
+		return r
 	}
 	r.Outcome, r.Reason = OutcomeBlock, ReasonSeriesNumberLost
-	r.Detail = "title " + quote(book.Title) + " carries #" + n.Text + "; candidate title " + quote(c.Title) + " drops it"
-	if series != "" && hasPos {
-		r.Detail += " (result series " + quote(series) + " #" + pos.Text + ")"
+	r.Detail = "title " + quote(book.Title) + " carries #" + n.Text + "; the candidate title " + quote(c.Title) + " drops it"
+	switch {
+	case series != "" && hasPos:
+		r.Detail += " and the result series is " + quote(series) + " #" + pos.Text
+	case series != "":
+		r.Detail += " and the result series " + quote(series) + " has no position"
+	default:
+		r.Detail += " and the result has no series"
 	}
 	return r
 }
@@ -87,15 +110,19 @@ func resultSeries(book *database.Book, c *metafetch.MetadataCandidate) (string, 
 		n, ok := seqnum.ParsePosition(c.SeriesPosition)
 		return series, n, ok
 	}
+	n, ok := storedPosition(book)
+	return series, n, ok
+}
+
+// storedPosition is the book's own series position, if it has one.
+func storedPosition(book *database.Book) (seqnum.Number, bool) {
 	if book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "" {
-		n, ok := seqnum.ParsePosition(*book.SeriesPositionRaw)
-		return series, n, ok
+		return seqnum.ParsePosition(*book.SeriesPositionRaw)
 	}
 	if book.SeriesSequence != nil && *book.SeriesSequence > 0 {
-		n, ok := seqnum.ParsePosition(itoa(*book.SeriesSequence))
-		return series, n, ok
+		return seqnum.ParsePosition(itoa(*book.SeriesSequence))
 	}
-	return series, seqnum.Number{}, false
+	return seqnum.Number{}, false
 }
 
 // numTok is a token that is a number or a number marker, not a name word.
@@ -157,6 +184,15 @@ func seriesCovers(ctx map[string]bool, series string) bool {
 		}
 	}
 	return inter > 0 && inter*2 >= min(len(cx), len(st))
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func contains(xs []string, x string) bool {
