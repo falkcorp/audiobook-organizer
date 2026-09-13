@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -232,17 +232,20 @@ func CurrentBookField(book *database.Book, field string) (string, error) {
 // way. It returns nil while the field still holds the row's NewValue (restore
 // it), ErrAlreadyRestored when it already holds OldValue (nothing to write),
 // and a ReasonChangedSince refusal for anything else, a change made since the
-// operation that a revert must not overwrite. A field it cannot render is a
-// ReasonOldValueUnparsable refusal.
+// operation that a revert must not overwrite. A row whose old and new values
+// match wrote nothing, so it is restorable (a no-op write), never
+// ErrAlreadyRestored, however the cases below are ordered; the series_rename
+// check guards the same way. A field it cannot render is a
+// ReasonFieldUnreadable refusal.
 func CheckBookFieldCurrent(book *database.Book, c *database.OperationChange) error {
 	current, err := CurrentBookField(book, c.FieldName)
 	if err != nil {
-		return refuse(ReasonOldValueUnparsable, "%v", err)
+		return refuse(ReasonFieldUnreadable, "%v", err)
 	}
-	switch current {
-	case c.NewValue:
+	switch {
+	case current == c.NewValue:
 		return nil
-	case c.OldValue:
+	case current == c.OldValue && c.OldValue != c.NewValue:
 		return ErrAlreadyRestored
 	default:
 		return refuse(ReasonChangedSince, "book %s %s changed since the operation", c.BookID, c.FieldName)
@@ -287,6 +290,11 @@ const (
 	// ReasonOldValueUnparsable: a series_id row whose old value is not an
 	// integer id.
 	ReasonOldValueUnparsable = "old value unparsable"
+	// ReasonFieldUnreadable: a metadata_update row names a Book field the
+	// compare-and-set cannot render (an unknown field or an unsupported kind),
+	// so the current value cannot be compared with the row. The preflight
+	// files it under CheckFailed and the revert counts it Failed.
+	ReasonFieldUnreadable = "field unreadable"
 	// ReasonSeriesIDMissing: a series_rename row with no SeriesID (the
 	// classifier already calls it record-only; this is defence in depth).
 	ReasonSeriesIDMissing = "series id missing"
