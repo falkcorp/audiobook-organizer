@@ -9,3 +9,5 @@
   They now share one filter that matches on a folder boundary
   (`pathutil.IsWithin`): the prefix itself and paths under it match, a trailing
   separator on the prefix is accepted, and an empty prefix still means no filter.
+  A prefix that ends partway through a name (e.g. `/lib/Author/Book - Part`)
+  no longer matches `Part01…`; only whole folders match now.

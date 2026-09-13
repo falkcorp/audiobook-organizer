@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-13
 
@@ -54,6 +54,8 @@ type missingFileRepointParams struct {
 	// Apply must be explicitly true to write. Default false = report only.
 	Apply bool `json:"apply"`
 	// PathPrefix scopes the sweep to one tree (e.g. only the organizer's tree).
+	// The match is on a folder boundary: "/lib" matches "/lib" and "/lib/…" but
+	// not "/lib2/…". Empty = no filter.
 	PathPrefix string `json:"pathPrefix"`
 	// Max bounds rewrites per run. <=0 uses missingFileRepointDefaultMax.
 	Max int `json:"max"`

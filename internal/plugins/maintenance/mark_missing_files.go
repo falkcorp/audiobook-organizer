@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-13
 
@@ -56,6 +56,8 @@ type markMissingParams struct {
 	// Apply must be explicitly true to write. Default false = report only.
 	Apply bool `json:"apply"`
 	// PathPrefix scopes the sweep to one tree (e.g. only the organizer's tree).
+	// The match is on a folder boundary: "/lib" matches "/lib" and "/lib/…" but
+	// not "/lib2/…". Empty = no filter.
 	PathPrefix string `json:"pathPrefix"`
 	// Max bounds how many rows one run will FLIP. <=0 means unbounded: unlike
 	// missing-file-repoint (which samples), a partial mark leaves the counter
