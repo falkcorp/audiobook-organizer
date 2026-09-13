@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.7.0
+// version: 4.8.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-13
 //
@@ -553,17 +553,23 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	// Claim index for the gate's partial_book check, built before any apply
 	// over EVERY row of the operation (not req.BookIDs), the same universe the
 	// preview uses, so a subset request sees the same siblings.
-	claims := buildClaimIndex(c.Request.Context(), keysOf(resultsByBook), opResultClaimLoader(s.store, func(id string) (CandidateResult, bool) {
+	// A book the index cannot read fails the request before any write: a
+	// smaller index would silently let a sibling part through.
+	claims, claimErr := buildClaimIndex(c.Request.Context(), keysOf(resultsByBook), opResultClaimLoader(s.store, func(id string) (CandidateResult, bool, error) {
 		r, ok := resultsByBook[id]
 		if !ok {
-			return CandidateResult{}, false
+			return CandidateResult{}, false, nil
 		}
 		var cr CandidateResult
-		if json.Unmarshal([]byte(r.ResultJSON), &cr) != nil {
-			return CandidateResult{}, false
+		if err := json.Unmarshal([]byte(r.ResultJSON), &cr); err != nil {
+			return CandidateResult{}, false, fmt.Errorf("decode operation result: %w", err)
 		}
-		return cr, true
+		return cr, true, nil
 	}))
+	if claimErr != nil {
+		httputil.InternalError(c, "failed to build the sibling-part index", claimErr)
+		return
+	}
 
 	g, gctx := errgroup.WithContext(c.Request.Context())
 	// Deliberately NOT writeBackWorkers(): this handler does not write back.

@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -250,7 +250,7 @@ func runBulkApplyPreview(
 		previewService
 		ListCachedSummaries(ctx context.Context) ([]metafetch.MetadataCacheSummary, error)
 	},
-	books bookReader,
+	books claimBookReader,
 	results previewResultStore,
 	opID string,
 	p bulkApplyPreviewParams,
@@ -307,12 +307,18 @@ func runBulkApplyPreview(
 	// The sibling-part index covers the whole source (every row of the
 	// operation, or every cached book), not the preview's id list: the apply
 	// builds it the same way, so both see the same siblings for any subset.
-	claims := buildClaimIndex(ctx, keysOf(opResults), opResultClaimLoader(books, func(id string) (CandidateResult, bool) { cr, ok := opResults[id]; return cr, ok }))
-	if source != previewSourceOpResults {
-		var err error
-		if claims, err = cachedClaimIndex(ctx, svc, books); err != nil {
-			return fmt.Errorf("bulk-apply-preview: %w", err)
-		}
+	var claims *applygate.ClaimIndex
+	var claimErr error
+	if source == previewSourceOpResults {
+		claims, claimErr = buildClaimIndex(ctx, keysOf(opResults), opResultClaimLoader(books, func(id string) (CandidateResult, bool, error) {
+			cr, ok := opResults[id]
+			return cr, ok, nil
+		}))
+	} else {
+		claims, claimErr = cachedClaimIndex(ctx, svc, books)
+	}
+	if claimErr != nil {
+		return fmt.Errorf("bulk-apply-preview: %w", claimErr)
 	}
 
 	var nApply, nBlocked, nSkipped, nWriteErr atomic.Int64
