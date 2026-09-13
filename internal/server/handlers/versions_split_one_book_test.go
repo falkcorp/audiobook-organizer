@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
 // last-edited: 2026-09-13
 
@@ -127,21 +127,43 @@ func TestSplitSegmentsToBooks_AsOneBookRejectsEveryFile(t *testing.T) {
 	}
 }
 
-// A failed move is reported, with the created (empty) book named so it can be
-// cleaned up; no path or aggregate write follows.
+// A failed move deletes the book the split just created, so a retry never
+// accumulates empty books; no author, path or aggregate write follows (the
+// mock fails on any call not expected here).
 func TestSplitSegmentsToBooks_AsOneBookMoveFailure(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("src").Return(splitSource(), nil)
 	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil)
 	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2/01.mp3").Return(nil, nil)
 	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "new"}, nil)
-	store.EXPECT().GetBookAuthors("src").Return(nil, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f3"}, "src", "new").Return(errors.New("file not found: f3"))
+	store.EXPECT().DeleteBook("new").Return(nil).Once()
+
+	c, w := splitReq(`{"segment_ids":["f3"],"as_one_book":true}`)
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "new book was deleted") {
+		t.Fatalf("want 500 saying the new book was deleted, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "created_book_id") {
+		t.Fatalf("a deleted book must not be named as left behind: %s", w.Body.String())
+	}
+}
+
+// When the cleanup delete fails too, the empty book is named so an operator
+// can remove it.
+func TestSplitSegmentsToBooks_AsOneBookMoveAndCleanupFailure(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	store.EXPECT().GetBookByID("src").Return(splitSource(), nil)
+	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil)
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2/01.mp3").Return(nil, nil)
+	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "new"}, nil)
+	store.EXPECT().MoveBookFilesToBook([]string{"f3"}, "src", "new").Return(errors.New("file not found: f3"))
+	store.EXPECT().DeleteBook("new").Return(errors.New("disk full"))
 
 	c, w := splitReq(`{"segment_ids":["f3"],"as_one_book":true}`)
 	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"created_book_id":"new"`) {
-		t.Fatalf("want 500 naming the created book, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("want 500 naming the leftover book, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

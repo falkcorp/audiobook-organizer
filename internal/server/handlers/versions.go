@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -63,6 +63,12 @@ type VersionBookPathChecker interface {
 	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
+// VersionBookDeleter deletes a book. The one-book split uses it to remove the
+// book it just created when moving the files into it fails.
+type VersionBookDeleter interface {
+	DeleteBook(id string) error
+}
+
 // VersionsStore is the narrow database interface VersionsHandler requires.
 // It lists only the database.Store methods the version-grouping handlers
 // actually call, including the external-ID methods used by
@@ -79,6 +85,7 @@ type VersionsStore interface {
 	VersionExternalIDStore
 	VersionRawKVDeleter
 	VersionBookPathChecker
+	VersionBookDeleter
 }
 
 // VersionsHandler handles audiobook version-group endpoints: listing, linking,
@@ -559,6 +566,27 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		return
 	}
 
+	// Create and move are two writes (CreateBook and the file-row batch are
+	// separate commits), so a failed move leaves a book with no files. Delete
+	// it before answering, so a retry never piles up empty books; the move
+	// batch is atomic, so no row points at it. Authors are copied only after
+	// the move, so the cleanup has nothing else to undo (DeleteBook removes
+	// book_authors anyway).
+	if err := h.store.MoveBookFilesToBook(ids, sourceBook.ID, created.ID); err != nil {
+		if dErr := h.store.DeleteBook(created.ID); dErr != nil {
+			versionsLog.Error("split-to-one-book: move into %s failed (%v) and deleting it failed: %v", created.ID, err, dErr)
+			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+				fmt.Sprintf("failed to move files into the new book; no file was moved, and the empty new book %s could not be deleted (%v): %v",
+					created.ID, dErr, err),
+				"split_move_failed", map[string]any{"created_book_id": created.ID})
+			return
+		}
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+			"failed to move files into the new book; no file was moved and the new book was deleted: "+err.Error(),
+			"split_move_failed", nil)
+		return
+	}
+
 	if authors, aErr := h.store.GetBookAuthors(sourceBook.ID); aErr != nil {
 		versionsLog.Warn("split-to-one-book: could not read authors of %s to copy onto %s: %v",
 			logger.SanitizeLogValue(sourceBook.ID), created.ID, aErr)
@@ -570,15 +598,6 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
 			versionsLog.Warn("split-to-one-book: could not copy authors onto %s: %v", created.ID, sErr)
 		}
-	}
-
-	if err := h.store.MoveBookFilesToBook(ids, sourceBook.ID, created.ID); err != nil {
-		// The batch is atomic, so no row moved. The new book exists with no
-		// files; name it so it can be removed or retried against.
-		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
-			"failed to move files into the new book; no file was moved: "+err.Error(), "split_move_failed",
-			map[string]any{"created_book_id": created.ID})
-		return
 	}
 
 	h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, selected)
