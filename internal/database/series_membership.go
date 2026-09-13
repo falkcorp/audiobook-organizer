@@ -1,5 +1,5 @@
 // file: internal/database/series_membership.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0f3b8e-2a71-4c96-b4e3-8f1a6c29d7b0
 // last-edited: 2026-09-13
 
@@ -48,6 +48,12 @@ type SeriesMembershipStore interface {
 	// bucket. IDs not requested are not returned.
 	GetBooksBySeriesIDsAllVersions(seriesIDs []int) (map[int][]BookCore, error)
 }
+
+// Compile-time: both concrete stores keep the bulk method's exact signature.
+var (
+	_ SeriesMembershipStore = (*MemStore)(nil)
+	_ SeriesMembershipStore = (*PebbleStore)(nil)
+)
 
 // AsSeriesMembershipStore returns s as a SeriesMembershipStore, or nil.
 func AsSeriesMembershipStore(s any) SeriesMembershipStore {

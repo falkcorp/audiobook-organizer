@@ -1,5 +1,5 @@
 // file: internal/database/series_membership_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a6f0d38-94c2-4b7e-8d51-c3e20f7a9b16
 // last-edited: 2026-09-13
 
@@ -55,6 +55,10 @@ func TestGetBooksBySeriesIDsAllVersions_MatchesPerSeriesGetter(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, seriesMembershipIDs(want), seriesMembershipIDs(bulk[id]),
 					"series %d: bulk and per-series answers differ", id)
+				if len(want) > 0 {
+					// Full-struct equality catches Core() projection drift an ID list hides.
+					require.Equal(t, want, bulk[id], "series %d: bulk rows differ from per-series rows", id)
+				}
 			}
 			got := seriesMembershipIDs(bulk[fx.seriesID])
 			require.Contains(t, got, fx.nonPrimaryBookID, "non-primary version must be included")
@@ -98,6 +102,22 @@ func TestSeriesMembershipAllVersions_FailsClosedWithoutCapability(t *testing.T) 
 	m, err := SeriesMembershipAllVersions(struct{}{}, []int{1})
 	require.Error(t, err)
 	require.Nil(t, m)
+}
+
+// TestAsSeriesMembershipStore_ResolvesThroughDecorator: prod wraps the store in
+// the Bleve indexedStore decorator, which embeds the Store INTERFACE and so does
+// not promote this capability. A bare type assertion would miss there and every
+// hoisted merge would fail closed in prod; AsCapability must see through it.
+func TestAsSeriesMembershipStore_ResolvesThroughDecorator(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	require.NotNil(t, AsSeriesMembershipStore(store))
+	require.NotNil(t, AsSeriesMembershipStore(&decoratorStore{Store: store}),
+		"capability lookup must see THROUGH the Bleve decorator")
+	require.Nil(t, AsSeriesMembershipStore(&decoratorNoUnwrap{Store: store}),
+		"a decorator without Unwrap must not be reached around")
+	_, err := SeriesMembershipAllVersions(&decoratorStore{Store: store}, []int{1})
+	require.NoError(t, err)
 }
 
 // TestSeriesBooksMap_Move covers the bookkeeping every hoisted loop relies on.
