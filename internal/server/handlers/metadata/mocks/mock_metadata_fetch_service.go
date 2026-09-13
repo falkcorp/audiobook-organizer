@@ -629,6 +629,57 @@ func (_c *MockMetadataFetchService_RecordChangeHistory_Call) RunAndReturn(run fu
 	return _c
 }
 
+// RenameOnlyPreflight provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) RenameOnlyPreflight(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenameOnlyPreflight")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataFetchService_RenameOnlyPreflight_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenameOnlyPreflight'
+type MockMetadataFetchService_RenameOnlyPreflight_Call struct {
+	*mock.Call
+}
+
+// RenameOnlyPreflight is a helper method to define mock.On call
+//   - id string
+func (_e *MockMetadataFetchService_Expecter) RenameOnlyPreflight(id any) *MockMetadataFetchService_RenameOnlyPreflight_Call {
+	return &MockMetadataFetchService_RenameOnlyPreflight_Call{Call: _e.mock.On("RenameOnlyPreflight", id)}
+}
+
+func (_c *MockMetadataFetchService_RenameOnlyPreflight_Call) Run(run func(id string)) *MockMetadataFetchService_RenameOnlyPreflight_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_RenameOnlyPreflight_Call) Return(err error) *MockMetadataFetchService_RenameOnlyPreflight_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_RenameOnlyPreflight_Call) RunAndReturn(run func(id string) error) *MockMetadataFetchService_RenameOnlyPreflight_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RenamePreflight provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error {
 	ret := _mock.Called(id, candidate, fields)

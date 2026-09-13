@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
 // last-edited: 2026-09-13
 //
@@ -360,13 +360,21 @@ func (mfs *Service) previewRename(book *database.Book, after previewAfter, write
 		planned.Series = &database.Series{Name: after.seriesName}
 	}
 
-	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(&planned, files)
+	return mfs.previewRenamePlan(target.ID, &planned, files)
+}
+
+// previewRenamePlan is the plan half of previewRename, shared with
+// RenameOnlyPreflight: the organizer's target paths for planned, protected
+// entries dropped, then the rename checkpoint and the recorded-failure block.
+// Reads only.
+func (mfs *Service) previewRenamePlan(targetID string, planned *database.Book, files []database.BookFile) RenamePreview {
+	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(planned, files)
 	if err != nil {
 		// runApplyPipeline returns this same error after the DB apply.
 		reason := "compute target paths failed: " + err.Error()
-		return RenamePreview{TargetBookID: target.ID, Reason: reason, Blocking: reason}
+		return RenamePreview{TargetBookID: targetID, Reason: reason, Blocking: reason}
 	}
-	entries = mfs.dropProtectedRenameEntries(target.ID, entries)
+	entries = mfs.dropProtectedRenameEntries(targetID, entries)
 	var moves []RenameMove
 	for _, e := range entries {
 		if e.SourcePath != e.TargetPath {
@@ -375,17 +383,17 @@ func (mfs *Service) previewRename(book *database.Book, after previewAfter, write
 	}
 	switch {
 	case len(moves) == 0:
-		return RenamePreview{TargetBookID: target.ID, Reason: "files already at their target paths"}
-	case hasCheckpoint(mfs.db, target.ID, phaseRename):
-		return RenamePreview{TargetBookID: target.ID, Reason: "rename checkpoint already set for this book", Moves: moves}
-	case organizer.ApplyRenameBlockedReadOnly(mfs.db, target.ID, targetPathsOf(entries)):
+		return RenamePreview{TargetBookID: targetID, Reason: "files already at their target paths"}
+	case hasCheckpoint(mfs.db, targetID, phaseRename):
+		return RenamePreview{TargetBookID: targetID, Reason: "rename checkpoint already set for this book", Moves: moves}
+	case organizer.ApplyRenameBlockedReadOnly(mfs.db, targetID, targetPathsOf(entries)):
 		// A different file holds a planned target under a collision the
 		// resolver could not settle, and it has not changed since. The rename
 		// would be skipped after the DB apply, so the names would never match.
 		reason := "blocked by a recorded rename failure"
-		return RenamePreview{TargetBookID: target.ID, Reason: reason, Moves: moves, Blocking: reason}
+		return RenamePreview{TargetBookID: targetID, Reason: reason, Moves: moves, Blocking: reason}
 	}
-	return RenamePreview{WouldRename: true, TargetBookID: target.ID, Moves: moves}
+	return RenamePreview{WouldRename: true, TargetBookID: targetID, Moves: moves}
 }
 
 func (mfs *Service) previewAuthorName(book *database.Book) string {

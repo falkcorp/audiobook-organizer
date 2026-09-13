@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -993,9 +993,20 @@ func (s *Server) runBulkWriteBack(
 		// same book; the table is not reentrant either, so the path lock inside
 		// would wait on the one held here.
 		if doRename {
-			renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book)
-			if renameErr != nil {
-				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed: %v", bookID, renameErr), nil)
+			// Same rule as the single-book write-back: refuse before anything
+			// moves when the rename is known to fail, and never write tags
+			// after a rename that failed part-way. Until 2026-09-13 a failed
+			// rename was logged and the book's tags were written anyway,
+			// counted as "written".
+			if pfErr := mfs.RenameOnlyPreflight(bookID); pfErr != nil {
+				failed.Add(1)
+				_ = progress.Log("warn", fmt.Sprintf("book %s: rename refused before any move, tags not written: %v", bookID, pfErr), nil)
+				return
+			}
+			if renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book); renameErr != nil {
+				failed.Add(1)
+				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed, tags not written: %v", bookID, renameErr), nil)
+				return
 			}
 			if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
 				book = fresh
