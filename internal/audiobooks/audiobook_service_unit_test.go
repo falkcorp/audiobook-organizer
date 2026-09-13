@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package audiobooks
 
@@ -923,7 +923,6 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 
 	original := &database.Book{ID: "id1", Title: "Old Title"}
-	updated := &database.Book{ID: "id1", Title: "New Title"}
 
 	mockStore.EXPECT().GetBookByID("id1").Return(original, nil)
 	// loadMetadataState: GetMetadataFieldStates returns empty → falls back to legacy path
@@ -933,7 +932,20 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	// saveMetadataState retires the pre-migration blob once the rows are
 	// authoritative (database.DeleteLegacyMetadataState).
 	mockStore.EXPECT().DeleteUserPreference(mock.Anything).Return(nil).Maybe()
-	mockStore.EXPECT().UpdateBook("id1", mock.AnythingOfType("*database.Book")).Return(updated, nil)
+	// The save is ModifyBook: the stub hands the callback a FRESH row that a
+	// concurrent writer changed (Publisher) after UpdateAudiobook's read. The
+	// merge must write this edit's Title and keep that Publisher.
+	concurrentPublisher := "set by a concurrent writer"
+	var written *database.Book
+	mockStore.EXPECT().ModifyBook("id1", mock.Anything).RunAndReturn(
+		func(id string, fn func(*database.Book) error) (*database.Book, error) {
+			fresh := &database.Book{ID: "id1", Title: "Old Title", Publisher: &concurrentPublisher}
+			if err := fn(fresh); err != nil {
+				return nil, err
+			}
+			written = fresh
+			return fresh, nil
+		})
 	mockStore.EXPECT().GetBookAuthors("id1").Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetBookNarrators("id1").Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetNarratorsByBookIDs(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
@@ -946,6 +958,10 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, "New Title", result.Title)
+	if assert.NotNil(t, written) && assert.NotNil(t, written.Publisher) {
+		assert.Equal(t, concurrentPublisher, *written.Publisher,
+			"the book-page save reverted a field a concurrent writer committed after its read")
+	}
 }
 
 // TestGetAudiobooks_DescriptionFilter_UsesFullBook verifies that a
