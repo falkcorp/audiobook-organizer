@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
 // last-edited: 2026-09-13
 
@@ -43,7 +43,7 @@ func splitReq(body string) (*gin.Context, *httptest.ResponseRecorder) {
 func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	src := splitSource()
-	store.EXPECT().GetBookByID("src").Return(src, nil)
+	store.EXPECT().GetBookByID("src").Return(src, nil).Once()
 	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil).Once()
 
 	var createdBook *database.Book
@@ -60,9 +60,19 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	store.EXPECT().MoveBookFilesToBook([]string{"f1", "f2"}, "src", "new").Return(nil).Once()
 	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil).Maybe()
 	store.EXPECT().GetBookFiles("src").Return(splitFiles()[2:], nil).Once()
+	// The second read of the source is the post-move row, whose totals the
+	// move's recompute has rewritten. The path update must write THAT row,
+	// not the one read before the move (Duration 999 here stands for the
+	// stale pre-move total).
+	staleDur := 999
+	src.Duration = &staleDur
+	freshDur := 300
+	fresh := *splitSource()
+	fresh.Duration = &freshDur
+	store.EXPECT().GetBookByID("src").Return(&fresh, nil).Once()
 	store.EXPECT().UpdateBook("src", mock.MatchedBy(func(b *database.Book) bool {
-		return b.FilePath == "/lib/Omnibus/Book 2/01.mp3"
-	})).Return(src, nil)
+		return b.FilePath == "/lib/Omnibus/Book 2/01.mp3" && b.Duration != nil && *b.Duration == 300
+	})).Return(&fresh, nil)
 	store.EXPECT().GetBookByID("new").Return(&database.Book{ID: "new", Title: "Book One"}, nil)
 
 	c, w := splitReq(`{"segment_ids":["f1","f2","f1"],"as_one_book":true,"title":"Book One"}`)
