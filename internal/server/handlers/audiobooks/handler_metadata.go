@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
 // last-edited: 2026-09-13
 
@@ -11,6 +11,7 @@ package audiobookshandler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -117,8 +118,19 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 
 	latest := records[0]
 
-	// Apply the previous value back via metadata state service
-	if latest.PreviousValue != nil {
+	// A file position edit (PatchBookFile) is reverted on the file row; the
+	// book-level override below would store it under a field nothing reads.
+	if handled, revErr := revertBookFilePosition(store, id, &latest); handled {
+		if revErr != nil {
+			if errors.Is(revErr, errBookFilePositionChangedSince) {
+				httputil.RespondWithConflict(c, revErr.Error())
+				return
+			}
+			httputil.InternalError(c, "failed to apply undo", revErr)
+			return
+		}
+	} else if latest.PreviousValue != nil {
+		// Apply the previous value back via metadata state service
 		var prevValue any
 		if err := json.Unmarshal([]byte(*latest.PreviousValue), &prevValue); err != nil {
 			prevValue = *latest.PreviousValue
@@ -219,7 +231,12 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	// Undo each field in the batch
 	undoneFields := []string{}
 	for _, rec := range batchRecords {
-		if rec.PreviousValue != nil {
+		if handled, revErr := revertBookFilePosition(store, id, rec); handled {
+			if revErr != nil {
+				slog.Warn("undo-last-apply failed to revert file position", "rec", logger.SanitizeLogValue(rec.Field), "id", logger.SanitizeLogValue(id), "err", revErr)
+				continue
+			}
+		} else if rec.PreviousValue != nil {
 			var prevValue any
 			if jsonErr := json.Unmarshal([]byte(*rec.PreviousValue), &prevValue); jsonErr != nil {
 				prevValue = *rec.PreviousValue
