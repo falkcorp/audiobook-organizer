@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"pgregory.net/rapid"
@@ -112,16 +113,16 @@ func TestBookAtPathKey_BoundsAreExact(t *testing.T) {
 	}
 }
 
-// TestUpdateBook_StaleRevertKeepsOwnEntry is the Q2 counterexample, landed
-// deterministically in UpdateBook's race window. W2 starts a title-only write
-// at /A and reads oldBook (/A). Before W2 commits, W1 moves the book to /B and
-// commits. W2 then commits its row at /A, seeing "no path change" because its
-// own oldBook read is stale. The row ends at /A, so the index must list the
-// book at /A. A Set gated on the path changing stages nothing here and leaves
-// only the /B key: a false "path is free". (A sequential stale write does NOT
-// reproduce this: UpdateBook re-reads oldBook, sees /B, and takes the
-// path-changed branch. Checked by mutation on 2026-09-12.)
-func TestUpdateBook_StaleRevertKeepsOwnEntry(t *testing.T) {
+// TestUpdateBook_CompetingWriteWaitsForStripe is the Q2 counterexample, landed
+// in what used to be UpdateBook's race window. W2 starts a title-only write at
+// /A and reads oldBook (/A). While W2 is between that read and its commit, W1
+// (a stale copy that moves the book to /B) is started on another goroutine.
+// Before 2026-09-13 W1 committed inside W2's window and W2 then committed its
+// row at /A with "no path change", which a path-change-gated Set turned into a
+// false "path is free". The book's write stripe now makes W1 wait until W2 has
+// committed, so W1 is the last write: the row ends at /B, and the index must
+// agree with the scan oracle on both paths.
+func TestUpdateBook_CompetingWriteWaitsForStripe(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 	mustBackfill(t, s)
@@ -135,33 +136,48 @@ func TestUpdateBook_StaleRevertKeepsOwnEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	w2.Title = "t2"
+	w1, err := s.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w1.FilePath = "/B"
 
+	w1Done := make(chan error, 1)
+	committedEarly := false
 	defer func() { updateBookAfterOldReadHook = nil }()
 	updateBookAfterOldReadHook = func(id string) {
 		updateBookAfterOldReadHook = nil // W1's own UpdateBook must not re-enter
-		w1, err := s.GetBookByID(id)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		w1.FilePath = "/B"
-		if _, err := s.UpdateBook(id, w1); err != nil {
-			t.Error(err)
+		go func() {
+			_, err := s.UpdateBook(id, w1)
+			w1Done <- err
+		}()
+		// W1 must still be blocked on the stripe W2 holds.
+		select {
+		case err := <-w1Done:
+			committedEarly = true
+			w1Done <- err
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 	if _, err := s.UpdateBook(b.ID, w2); err != nil {
 		t.Fatal(err)
 	}
-	row, err := s.GetBookByID(b.ID)
-	if err != nil || row.FilePath != "/A" {
-		t.Fatalf("precondition: W2's lost-update revert should leave the row at /A, got %v %v", row, err)
+	if committedEarly {
+		t.Fatal("W1 committed while W2 held the book's write stripe")
 	}
-	ids, err := s.LiveBookIDsAtPath("/A")
+	if err := <-w1Done; err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetBookByID(b.ID)
+	if err != nil || row.FilePath != "/B" {
+		t.Fatalf("W1 was the last write, want row at /B, got %v %v", row, err)
+	}
+	ids, err := s.LiveBookIDsAtPath("/B")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ids) != 1 || ids[0] != b.ID {
-		t.Fatalf("LiveBookIDsAtPath(/A) = %v, want [%s] (false free)", ids, b.ID)
+		t.Fatalf("LiveBookIDsAtPath(/B) = %v, want [%s]", ids, b.ID)
 	}
 	checkAgainstOracle(t, s, []string{"/A", "/B"})
 }

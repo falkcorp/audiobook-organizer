@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-13
 
@@ -58,6 +58,9 @@ type bookReader interface {
 // lifecycle (tombstone create/delete plus the soft-deleted listing).
 type bookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is UpdateAudiobook's save: the edit's changed fields are
+	// merged onto the row re-read under the book's write lock.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// FillBookMediaInfo is the read paths' only write (service_single.go):
 	// it fills still-empty media fields on a row re-read inside the store.
 	FillBookMediaInfo(id string, patch database.BookMediaInfoPatch) (*database.Book, error)

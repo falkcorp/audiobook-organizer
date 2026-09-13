@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.118.0
+// version: 1.119.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -96,6 +97,7 @@ type MockStore struct {
 	GetDuplicateBooksByMetadataFunc      func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                       func(book *Book) (*Book, error)
 	UpdateBookFunc                       func(id string, book *Book) (*Book, error)
+	ModifyBookFunc                       func(id string, fn func(*Book) error) (*Book, error)
 	FillBookMediaInfoFunc                func(id string, patch BookMediaInfoPatch) (*Book, error)
 	UpdateBookRatingFunc                 func(id string, req UpdateBookRatingRequest) error
 	UpdateBookRatingError                error
@@ -1294,6 +1296,26 @@ func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 		return m.UpdateBookFunc(id, book)
 	}
 	return nil, nil
+}
+
+// ModifyBook uses ModifyBookFunc when set; otherwise it composes the mock's
+// own GetBookByID and UpdateBook, so a test that stubs those two keeps working
+// against a caller converted to ModifyBook.
+func (m *MockStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
+	if m.ModifyBookFunc != nil {
+		return m.ModifyBookFunc(id, fn)
+	}
+	book, err := m.GetBookByID(id)
+	if err != nil || book == nil {
+		return nil, err
+	}
+	if err := fn(book); err != nil {
+		if errors.Is(err, ErrSkipBookWrite) {
+			return book, nil
+		}
+		return nil, err
+	}
+	return m.UpdateBook(id, book)
 }
 
 func (m *MockStore) FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error) {

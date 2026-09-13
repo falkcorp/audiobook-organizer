@@ -90,6 +90,19 @@ func (s *indexedStore) UpdateBook(id string, b *database.Book) (*database.Book, 
 	return updated, err
 }
 
+// ModifyBook schedules a re-index exactly like UpdateBook. Without this
+// override the embedded Store's ModifyBook would be promoted and every caller
+// converted from GetBookByID -> UpdateBook to ModifyBook would silently stop
+// refreshing Bleve. A nil row (book gone) or an error schedules nothing; a
+// callback that skipped the write still re-indexes, which is harmless.
+func (s *indexedStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	updated, err := s.Store.ModifyBook(id, fn)
+	if err == nil && updated != nil {
+		s.server.enqueueIndex(id, updated.IsSoftDeleted())
+	}
+	return updated, err
+}
+
 // FillBookMediaInfo schedules a re-index when it wrote: duration, bitrate,
 // sample rate and channels are in the Bleve document (search.BookToDoc), so a
 // backfill that bypassed this decorator would leave the index stale. A nil

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -593,6 +593,14 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
 	}
+	// before is the row as read. The apply below mutates book (and resolves or
+	// creates author/series rows on the way), then only the fields it changed
+	// relative to before are merged onto the row re-read under the book's write
+	// lock -- see the ModifyBook call.
+	before, err := database.SnapshotBook(book)
+	if err != nil {
+		return nil, err
+	}
 
 	// Policy check: policy:no-metadata tag skips automated metadata application.
 	if tags, tagErr := mfs.db.GetBookTags(id); tagErr == nil {
@@ -687,13 +695,20 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		book.MetadataSourceHash = &h
 	}
 
-	updatedBook, updateErr := mfs.db.UpdateBook(id, book)
+	// Write only what this apply changed, onto the row as it stands under the
+	// book's write lock. A whole-struct UpdateBook(id, book) here replaced every
+	// column with this apply's read, so a book-page save (or any other write)
+	// that committed during the apply was silently reverted.
+	updatedBook, updateErr := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
+		_, mErr := database.MergeBookChanges(fresh, before, book)
+		return mErr
+	})
 	if updateErr != nil {
 		return nil, fmt.Errorf("failed to update book: %w", updateErr)
 	}
-	// A nil book with a nil error violates the contract every real Store honors
-	// (PebbleStore returns an error on every path that yields no book), but
-	// database.MockStore returns (nil, nil) whenever UpdateBookFunc is unset. That
+	// A nil book with a nil error means the row is gone (ModifyBook's contract
+	// for a missing book), or a mock that returns (nil, nil) when unstubbed:
+	// database.MockStore does that whenever UpdateBookFunc is unset. That
 	// made this an outright panic at updatedBook.Title below rather than anything
 	// diagnosable. Fail loudly instead: a store that reports success while handing
 	// back nothing is a bug wherever it happens, not a case to route around.

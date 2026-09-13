@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.22.0
+// version: 5.23.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -83,6 +83,7 @@ type metafetchBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetBookTags(bookID string) ([]string, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	GetBooksByMetadataSourceHash(hash string) ([]database.Book, error)

@@ -24219,6 +24219,74 @@ func (_c *MockStore_MergeChapterBooks_Call) RunAndReturn(run func(primaryID stri
 	return _c
 }
 
+// ModifyBook provides a mock function for the type MockStore
+func (_mock *MockStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	ret := _mock.Called(id, fn)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ModifyBook")
+	}
+
+	var r0 *database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) (*database.Book, error)); ok {
+		return returnFunc(id, fn)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) *database.Book); ok {
+		r0 = returnFunc(id, fn)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, func(*database.Book) error) error); ok {
+		r1 = returnFunc(id, fn)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ModifyBook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ModifyBook'
+type MockStore_ModifyBook_Call struct {
+	*mock.Call
+}
+
+// ModifyBook is a helper method to define mock.On call
+//   - id string
+//   - fn func(*database.Book) error
+func (_e *MockStore_Expecter) ModifyBook(id any, fn any) *MockStore_ModifyBook_Call {
+	return &MockStore_ModifyBook_Call{Call: _e.mock.On("ModifyBook", id, fn)}
+}
+
+func (_c *MockStore_ModifyBook_Call) Run(run func(id string, fn func(*database.Book) error)) *MockStore_ModifyBook_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 func(*database.Book) error
+		if args[1] != nil {
+			arg1 = args[1].(func(*database.Book) error)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ModifyBook_Call) Return(book *database.Book, err error) *MockStore_ModifyBook_Call {
+	_c.Call.Return(book, err)
+	return _c
+}
+
+func (_c *MockStore_ModifyBook_Call) RunAndReturn(run func(id string, fn func(*database.Book) error) (*database.Book, error)) *MockStore_ModifyBook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MoveBookFilesToBook provides a mock function for the type MockStore
 func (_mock *MockStore) MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error {
 	ret := _mock.Called(fileIDs, sourceBookID, targetBookID)

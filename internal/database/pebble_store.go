@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.160.0
+// version: 1.161.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -119,7 +119,7 @@ type PebbleStore struct {
 	nameIdx                  nameIndexLocks // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex     // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
 	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
-	bookMediaMu              sync.Mutex     // serializes FillBookMediaInfo's fresh-read-then-fill so two read-path backfills can't interleave (pebble_store_book_media.go)
+	bookLocks                bookLocks      // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	opsLogSeq                atomic.Int64   // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string         // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex     // gates recompute to prevent stampede when N callers see dirty cache
@@ -2597,7 +2597,22 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 // written as nil and silently restores a trashed book. Callers must pass the
 // row they fetched (GetBookByID) with their change applied, never a freshly
 // constructed Book carrying only the fields they meant to change.
+//
+// The book's write stripe (pebble_store_book_lock.go) is held across the read
+// of the stored row and the commit, so two UpdateBook calls for one book can
+// no longer interleave their index diffs. It does NOT stop a lost update: a
+// caller that read the row, then called UpdateBook after someone else wrote,
+// still replaces that write with its stale copy. Use ModifyBook (read and
+// write under one hold) for that.
 func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
+	unlock := p.lockBook(id)
+	defer unlock()
+	return p.updateBookLocked(id, book)
+}
+
+// updateBookLocked is UpdateBook's body. The caller must hold id's write
+// stripe (lockBook).
+func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
 	// Get old book to clean up old indexes
 	oldBook, err := p.GetBookByID(id)
 	if err != nil {
@@ -2731,14 +2746,14 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 
 	// Multi-valued path index. The Set is UNCONDITIONAL, outside the
-	// path-changed branch above, and must stay there. oldBook is read without
-	// a lock, so UpdateBook races with itself: W1 moves A->B while W2, from a
-	// stale read of A, rewrites the row at A with "no path change". Gated on a
-	// change, W2 would stage no index op and the final state would be a row at
-	// A with only a B key, i.e. a false "path is free". Unconditional, the last
-	// committing batch always carries its own row's key, and the only thing a
-	// race can leave is an extra, which LiveBookIDsAtPath drops. It also
-	// self-heals any key lost for any other reason on the next write.
+	// path-changed branch above, and must stay there. Until 2026-09-13 oldBook
+	// was read without a lock, so UpdateBook raced with itself: W1 moved A->B
+	// while W2, from a stale oldBook of A, rewrote the row at A with "no path
+	// change", leaving a row at A with only a B key (a false "path is free").
+	// The book's write stripe now covers oldBook's read and the commit, which
+	// closes that window, but the unconditional Set stays: it is one small
+	// idempotent write, and it self-heals any key lost for any other reason
+	// (a pre-index row, a partial commit) on the book's next write.
 	if err := batch.Set(bookAtPathKey(book.FilePath, id), []byte{}, nil); err != nil {
 		batch.Close()
 		return nil, err
@@ -2955,13 +2970,21 @@ func strPtrEq(a, b *string) bool {
 // UpdateBookRating updates only the user rating fields for the given book.
 // Fields are applied selectively: nil pointer = no change, Clear* = set to nil.
 func (p *PebbleStore) UpdateBookRating(id string, req UpdateBookRatingRequest) error {
-	book, err := p.GetBookByID(id)
+	book, err := p.ModifyBook(id, func(book *Book) error {
+		applyBookRating(book, req)
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 	if book == nil {
 		return fmt.Errorf("book not found")
 	}
+	return nil
+}
+
+// applyBookRating sets the rating fields req names on book, in memory.
+func applyBookRating(book *Book, req UpdateBookRatingRequest) {
 
 	if req.ClearOverall {
 		book.UserRatingOverall = nil
@@ -2986,9 +3009,6 @@ func (p *PebbleStore) UpdateBookRating(id string, req UpdateBookRatingRequest) e
 	} else if req.Notes != nil {
 		book.UserRatingNotes = req.Notes
 	}
-
-	_, err = p.UpdateBook(id, book)
-	return err
 }
 
 // GetBookSnapshots returns CoW version snapshots for a book, newest-first.
@@ -3935,17 +3955,12 @@ func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) 
 // FlagMetadataHashDuplicate marks duplicateID as absorbed into primaryID.
 // PebbleStore stub — metadata dedup is only performed by SQLiteStore in production.
 func (p *PebbleStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
-	book, err := p.GetBookByID(duplicateID)
-	if err != nil {
-		return err
-	}
-	if book == nil {
+	_, err := p.ModifyBook(duplicateID, func(book *Book) error {
+		f := false
+		book.MergedIntoBookID = &primaryID
+		book.IsPrimaryVersion = &f
 		return nil
-	}
-	f := false
-	book.MergedIntoBookID = &primaryID
-	book.IsPrimaryVersion = &f
-	_, err = p.UpdateBook(duplicateID, book)
+	})
 	return err
 }
 
@@ -5232,19 +5247,19 @@ func (p *PebbleStore) MergeChapterBooks(primaryID string, srcIDs []string, newTi
 			return fmt.Errorf("MergeChapterBooks: flag duplicate: %w", err)
 		}
 	}
-	// Update primary book's title and duration.
-	primary, err := p.GetBookByID(primaryID)
-	if err != nil || primary == nil {
-		return err
-	}
-	if newTitle != "" {
-		primary.Title = newTitle
-	}
-	if duration > 0 {
-		d := int(duration)
-		primary.Duration = &d
-	}
-	_, err = p.UpdateBook(primaryID, primary)
+	// Update primary book's title and duration. FlagMetadataHashDuplicate above
+	// released each source book's stripe before this takes the primary's, so
+	// no two stripes are ever held together.
+	_, err := p.ModifyBook(primaryID, func(primary *Book) error {
+		if newTitle != "" {
+			primary.Title = newTitle
+		}
+		if duration > 0 {
+			d := int(duration)
+			primary.Duration = &d
+		}
+		return nil
+	})
 	return err
 }
 

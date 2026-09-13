@@ -1,5 +1,5 @@
 // file: internal/database/author_primary_repoint.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e61d4-8a27-4f5b-b0e3-7d2a4c16f958
 // last-edited: 2026-09-13
 
@@ -133,9 +133,18 @@ func (p *PebbleStore) repointPrimaryScalarsBeforeDelete(authorID int) error {
 			return fmt.Errorf("%w: successor author %d for book %s did not resolve (err=%v)",
 				ErrNoPrimaryAuthorSuccessor, next, c.ID, tErr)
 		}
-		full.AuthorID = &target.ID
-		full.Author = target
-		if _, uErr := p.UpdateBook(c.ID, full); uErr != nil {
+		// The successor is resolved above, outside the book's write stripe
+		// (resolveUnknownAuthorID may take nameIdx.author). The write re-checks
+		// the primary author on the row as it stands under the stripe, so a
+		// concurrent edit that already moved the book off authorID is kept.
+		if _, uErr := p.ModifyBook(c.ID, func(row *Book) error {
+			if row.AuthorID == nil || *row.AuthorID != authorID {
+				return ErrSkipBookWrite
+			}
+			row.AuthorID = &target.ID
+			row.Author = target
+			return nil
+		}); uErr != nil {
 			return fmt.Errorf("repoint primary author of book %s from %d to %d: %w", c.ID, authorID, target.ID, uErr)
 		}
 	}

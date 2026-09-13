@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -347,19 +347,18 @@ func (p *PebbleStore) bookStampDescribesExactlyOneFile(book *Book) (*BookFile, e
 // directory, so there is nothing correct to write; they cold-start until the
 // per-file writer lands, which is exactly what they already do today.
 func (p *PebbleStore) UpdateScanCache(bookID string, mtime int64, size int64) error {
-	book, err := p.GetBookByID(bookID)
+	f := false
+	book, err := p.ModifyBook(bookID, func(book *Book) error {
+		book.LastScanMtime = &mtime
+		book.LastScanSize = &size
+		book.NeedsRescan = &f
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 	if book == nil {
 		return nil // non-fatal: book not found
-	}
-	book.LastScanMtime = &mtime
-	book.LastScanSize = &size
-	f := false
-	book.NeedsRescan = &f
-	if _, err = p.UpdateBook(bookID, book); err != nil {
-		return err
 	}
 
 	bf, err := p.bookStampDescribesExactlyOneFile(book)
@@ -396,17 +395,16 @@ func (p *PebbleStore) UpdateScanCache(bookID string, mtime int64, size int64) er
 // per-file writer lands, so classifySkipFile reports cacheMiss and re-reads them
 // regardless, which is the same thing NeedsRescan would have forced.
 func (p *PebbleStore) MarkNeedsRescan(bookID string) error {
-	book, err := p.GetBookByID(bookID)
+	t := true
+	book, err := p.ModifyBook(bookID, func(book *Book) error {
+		book.NeedsRescan = &t
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 	if book == nil {
 		return nil // non-fatal: book not found
-	}
-	t := true
-	book.NeedsRescan = &t
-	if _, err = p.UpdateBook(bookID, book); err != nil {
-		return err
 	}
 
 	bf, err := p.bookStampDescribesExactlyOneFile(book)

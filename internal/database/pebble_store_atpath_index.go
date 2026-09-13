@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // The book_atpath: multi-valued path index.
 //
@@ -96,9 +96,10 @@ const bookAtPathBackfillLogEvery = 10_000
 var bookAtPathBackfillAfterChunk func(commits int)
 
 // updateBookAfterOldReadHook, when non-nil, runs inside UpdateBook right after
-// it reads oldBook (unlocked) and before it commits. Test-only: it lets a test
-// land a competing write in exactly the window UpdateBook's self-race lives
-// in. nil in production.
+// it reads oldBook and before it commits -- with the book's write stripe HELD.
+// Test-only; nil in production. A hook must not write the same book
+// synchronously (it would deadlock on the stripe); start the competing write
+// on another goroutine instead, which is what proves it now waits.
 var updateBookAfterOldReadHook func(id string)
 
 // bookAtPathKey is the index key for one (path, book) pair.

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-05
+// last-edited: 2026-09-13
 
 package audiobooks
 
@@ -32,6 +32,15 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 	if currentBook == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+	// before is the row as read. Everything below edits currentBook (with
+	// author/series/narrator resolution and an os.Stat in between); the save
+	// then merges only the fields that changed relative to before onto the row
+	// re-read under the book's write lock, so a concurrent metadata apply's
+	// fields survive this save.
+	before, err := database.SnapshotBook(currentBook)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -354,10 +363,16 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		payload.Book.Series = &database.Series{ID: *payload.SeriesID, Name: resolvedSeriesName, AuthorID: payload.AuthorID}
 	}
 
-	// Save to database
-	updatedBook, err := svc.store.UpdateBook(id, payload.Book)
+	// Save to database: this edit's changed fields only, onto the fresh row.
+	updatedBook, err := svc.store.ModifyBook(id, func(fresh *database.Book) error {
+		_, mErr := database.MergeBookChanges(fresh, before, payload.Book)
+		return mErr
+	})
 	if err != nil {
 		return nil, err
+	}
+	if updatedBook == nil {
+		return nil, fmt.Errorf("audiobook not found")
 	}
 
 	// Save metadata state
