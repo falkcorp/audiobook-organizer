@@ -1,5 +1,5 @@
 // file: internal/scheduler/interval_clock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41a7b98-3e26-4d05-9f7a-2b8e6d015c3f
 // last-edited: 2026-09-13
 
@@ -136,14 +136,15 @@ func TestCleanupActivityLogIsReachable(t *testing.T) {
 	}
 }
 
-// TestNightlyActivityCompactionIsReachable: the task is registered, has an
-// interval (Schedule on the def fires nothing), maps to its def, and stays out
-// of the sequential maintenance window.
+// TestNightlyActivityCompactionIsReachable: the task is registered, runs at
+// 00:10 local by DailyAt (Schedule on the def fires nothing), maps to its def,
+// and stays out of the sequential maintenance window.
 func TestNightlyActivityCompactionIsReachable(t *testing.T) {
 	ts := settingsBackedScheduler(t, map[string]string{})
 	task, ok := ts.tasks["nightly_activity_compaction"]
 	require.True(t, ok)
-	assert.Positive(t, task.GetInterval())
+	assert.Equal(t, "00:10", task.DailyAt)
+	assert.True(t, task.selfScheduled())
 	assert.False(t, ts.inMaintenanceOrder("nightly_activity_compaction"))
 	assert.Equal(t, "maintenance.nightly-compact-activity-log", taskV2DefIDs["nightly_activity_compaction"])
 }

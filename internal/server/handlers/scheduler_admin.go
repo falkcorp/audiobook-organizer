@@ -1,5 +1,5 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
 // last-edited: 2026-09-13
 
@@ -310,7 +310,7 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		return taskConfigBinding{
 			enabled: &config.AppConfig.ActivityLogNightlyCompactionEnabled,
 			hints: map[string]string{
-				"interval_minutes":          "fixed at 24h; the cutoff is local midnight whenever it runs",
+				"interval_minutes":          "runs daily at 00:10 server-local time; the cutoff is local midnight whenever it runs",
 				"run_on_startup":            fixedScheduleHint,
 				"run_in_maintenance_window": "kept out of the window on purpose — a catch-up run can take 6h",
 			},

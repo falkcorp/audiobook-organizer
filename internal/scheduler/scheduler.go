@@ -98,7 +98,7 @@ type TaskInfo struct {
 	Enabled                bool    `json:"enabled"`
 	IntervalMinutes        int     `json:"interval_minutes"`
 	DailyAt                string  `json:"daily_at,omitempty"` // "HH:MM" server-local; interval_minutes is 0 for these
-	RunOnStartup        bool    `json:"run_on_startup"`
+	RunOnStartup           bool    `json:"run_on_startup"`
 	RunInMaintenanceWindow bool    `json:"run_in_maintenance_window"`
 	LastRun                *string `json:"last_run,omitempty"`
 	IsRunning              bool    `json:"is_running"`
