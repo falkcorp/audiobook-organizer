@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -23,16 +23,17 @@ package metabatch
 import (
 	"context"
 	"fmt"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"log/slog"
 	"strings"
 
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // MetadataUpgradeService finds books with low-quality metadata
@@ -68,12 +69,13 @@ type UpgradeResult struct {
 
 // MinUpgradeConfidence is the minimum score a non-current-source
 // candidate must achieve to trigger an automatic metadata apply.
-// Set conservatively high to avoid upgrading to a worse match.
-const MinUpgradeConfidence = 0.90
+// Set conservatively high to avoid upgrading to a worse match. It is the
+// shared bulk-apply floor (internal/applygate), not a number of its own.
+const MinUpgradeConfidence = applygate.MinScore
 
 // MinUpgradeConfidenceWithTranscription relaxes the gate when the candidate
 // independently matches the book's audio-derived title/author.
-const MinUpgradeConfidenceWithTranscription = 0.85
+const MinUpgradeConfidenceWithTranscription = applygate.MinScoreAudioConfirmed
 
 // RunUpgrade scans for books tagged with low-quality metadata
 // sources and attempts to find a better match from other sources.
@@ -146,24 +148,9 @@ func (s *MetadataUpgradeService) RunUpgrade(ctx context.Context, limit int, prog
 
 // transcriptionConfirmsCandidate returns true when the candidate's title/author
 // independently matches the book's audio-derived (transcribed) title/author.
-// The title must match exactly after normalization. The author, if present and
-// longer than 3 characters, must appear as a substring of the candidate's
-// author (case-insensitive). A title-only match is sufficient when no usable
-// transcribed author is available.
+// The rule lives in internal/applygate so every bulk-apply path shares it.
 func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCandidate) bool {
-	if book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
-		return false
-	}
-	transcribedTitle := util.NormalizeTitle(*book.TranscribedTitle)
-	if util.NormalizeTitle(c.Title) != transcribedTitle {
-		return false
-	}
-	// Title matches. Now check author if one is available.
-	if book.TranscribedAuthor == nil || len(*book.TranscribedAuthor) <= 3 {
-		return true // no usable author — title alone confirms
-	}
-	transcribedAuthor := util.NormalizeAuthor(*book.TranscribedAuthor)
-	return strings.Contains(util.NormalizeAuthor(c.Author), transcribedAuthor)
+	return applygate.TranscriptionConfirms(book, c)
 }
 
 // tryUpgradeBook re-searches metadata for a single book and
@@ -201,27 +188,17 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 			continue
 		}
 
-		// A candidate that independently matches the book's audio-derived
-		// title/author is corroborated and gets a relaxed score gate.
-		transcriptionConfirms := transcriptionConfirmsCandidate(book, c)
-
-		// Hard gate: when the book has an audio-derived (transcribed) title but
-		// this candidate does NOT match it (title+author), never auto-upgrade —
-		// a score-only pass would let a same-author, wrong-title record win
-		// ("matches the author but not the actual book"). Defer to manual review.
-		hasTranscribedTitle := book.TranscribedTitle != nil && *book.TranscribedTitle != ""
-		if hasTranscribedTitle && !transcriptionConfirms {
-			slog.Debug("upgrade skip: transcribed title present but candidate not confirmed",
-				"id", bookID, "candidate_title", c.Title, "score", c.Score)
-			continue
-		}
-
-		gate := MinUpgradeConfidence
-		if transcriptionConfirms {
-			gate = MinUpgradeConfidenceWithTranscription
-		}
-		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", gate, "transcription_confirms", transcriptionConfirms)
-		if c.Score < gate {
+		// The shared bulk-apply gate (internal/applygate): the transcription
+		// hard gate (a book with a transcribed title never takes a candidate
+		// that does not match it), the 0.90 / 0.85-with-audio score floor, and
+		// the sequence-number guard, so "Big Cats 3" can never upgrade
+		// "Big Cats 1" however well it scores. There is no cache-identity leg
+		// here: the candidates were searched a moment ago from the book's
+		// current fields, so nothing can have drifted.
+		v := applygate.Evaluate(book, c, nil)
+		slog.Debug("upgrade gate", "id", bookID, "score", c.Score, "gate", v.ScoreFloor,
+			"transcription_confirms", v.AudioConfirmed, "allowed", v.Allowed, "reason", v.Reason, "detail", v.Detail)
+		if !v.Allowed {
 			continue
 		}
 		if bestCandidate == nil || c.Score > bestCandidate.Score {

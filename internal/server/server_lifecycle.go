@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.5.1
+// version: 4.6.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
@@ -1438,6 +1438,9 @@ func (s *Server) setupRoutes() {
 			// /library/quick-queries migrated to the handlers/system sub-package
 			// (wireHandlers).
 			protected.POST("/metadata/batch-apply-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleBatchApplyCandidates)
+			// Bulk-apply dry run: start one, then page / download its report.
+			protected.POST("/metadata/bulk-apply-preview", s.perm(auth.PermLibraryView), s.handleStartBulkApplyPreview)
+			protected.GET("/metadata/bulk-apply-preview/:id", s.perm(auth.PermLibraryView), s.handleGetBulkApplyPreview)
 			protected.POST("/metadata/batch-reject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleRejectCandidates)
 			protected.POST("/metadata/batch-unreject-candidates", s.perm(auth.PermLibraryEditMetadata), s.handleUnrejectCandidates)
 			// fetch-metadata / search-metadata / apply-metadata / mark-no-match /
