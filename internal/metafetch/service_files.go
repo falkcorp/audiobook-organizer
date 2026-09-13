@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-12
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -137,13 +138,22 @@ var errFileTargetChanged = errors.New("the book's library copy changed after its
 // Nil means a protected book with no copy: nothing may be written.
 //
 // targetID is what the job locked: lockLibraryCopy's result, "" when it locked
-// no copy. The step's own resolution must agree with it; when it does not, the
-// result is errFileTargetChanged and nothing is written. Until 2026-09-12 each
-// step resolved the copy again on its own, so a version sibling that became a
-// library copy between the lock step and a file step was written by a job that
-// did not hold its lock. The resolution is still made, rather than the locked
-// row being re-read by id, because a rename earlier in the job moves the files
-// and the fresh row is the one carrying the post-rename path.
+// no copy. A library copy is re-read BY ID and checked to still be one
+// (libraryCopyGone); the lookup is not run again. The lookup takes the first
+// usable sibling after sortVersions (primary flag, then title), and a job on
+// another copy of the group can change either while holding only its own
+// lock, so in a group with two copies the pick can flip mid-job. Comparing a
+// fresh lookup with the locked copy turned that flip into a spurious
+// errFileTargetChanged. The row re-read by id carries the path left by a
+// rename earlier in this job, as a lookup's would. A book that is its own
+// target, or has none, is still resolved by the lookup: its answer cannot
+// flip to another copy, because a book under root_dir or outside every
+// protected tree always resolves to itself.
+//
+// Until 2026-09-12 each step resolved the copy again on its own, so a version
+// sibling that became a library copy between the lock step and a file step
+// was written by a job that did not hold its lock. A disagreement with
+// targetID is now errFileTargetChanged, and nothing is written.
 //
 // It never creates a copy. It is the ONE resolution both the writers (embed,
 // rename pipeline, tag write) and the path-lock key use: before 2026-09-12
@@ -152,6 +162,17 @@ var errFileTargetChanged = errors.New("the book's library copy changed after its
 func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*database.Book, error) {
 	if book == nil {
 		return nil, nil
+	}
+	if targetID != "" && targetID != book.ID {
+		cp, err := mfs.db.GetBookByID(targetID)
+		if err != nil {
+			return nil, fmt.Errorf("book %s: re-read its locked library copy %s: %w", book.ID, targetID, err)
+		}
+		if why := mfs.libraryCopyGone(book, cp); why != "" {
+			return nil, fmt.Errorf("book %s: its file work locked library copy %s, but %s, so nothing was written: %w",
+				book.ID, targetID, why, errFileTargetChanged)
+		}
+		return cp, nil
 	}
 	resolved, _ := mfs.existingLibraryCopy(book)
 	resolvedID := ""
@@ -163,6 +184,24 @@ func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*datab
 			book.ID, describeFileTarget(targetID), describeFileTarget(resolvedID), errFileTargetChanged)
 	}
 	return resolved, nil
+}
+
+// libraryCopyGone says why cp is no longer book's library copy, or "" when it
+// still is one: a row under root_dir, in book's version group, with no present
+// file row inside a protected tree -- what librarySibling requires.
+func (mfs *Service) libraryCopyGone(book, cp *database.Book) string {
+	switch {
+	case cp == nil:
+		return "the copy was deleted"
+	case !pathUnderRoot(cp.FilePath, config.AppConfig.RootDir):
+		return "the copy is no longer under root_dir"
+	case book.VersionGroupID == nil || cp.VersionGroupID == nil || *book.VersionGroupID != *cp.VersionGroupID:
+		return "the copy is no longer in the book's version group"
+	}
+	if p := mfs.firstProtectedFileRow(cp.ID); p != "" {
+		return "the copy has a file row under a protected path"
+	}
+	return ""
 }
 
 // describeFileTarget names a file-work target in an error.
@@ -209,28 +248,23 @@ func (mfs *Service) lockWriteTarget(id, targetID string) (func(), error) {
 // Path keys are absolute paths, so the "book:" prefix cannot collide with one.
 func bookLockKey(id string) string { return "book:" + id }
 
-// vgLockKey is the lock-table key ensureLibraryCopy holds around the
-// re-check-and-create of a library copy. It names the book's version group:
-// a library copy is found through the group (librarySibling), and every
-// version of one book shares it, so two versions that are linked always take
-// the same key. A book with no group yet is keyed by its own id, as
-// "vg:book:<id>" (never "book:<id>", which is lockBook's key). Such a book has
-// no version sibling, so no other book's job can find or make a copy for it,
-// and its own jobs are serialized by its book lock. CreateOrganizedVersion
-// gives it a fresh group, and from then on it keys by that group.
-func vgLockKey(book *database.Book) string {
-	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		return "vg:" + *book.VersionGroupID
-	}
-	return "vg:book:" + book.ID
-}
+// vgLockKey is the lock-table key of book's version group,
+// organizer.VersionGroupLockKey. The organizer takes the same key around
+// CreateOrganizedVersion, so both makers of a library copy share it. Every
+// version of one book shares a group, so two versions that are linked always
+// take the same key. A book with no group yet is keyed by its own id
+// ("vg:book:<id>", never lockBook's "book:<id>"): it has no version sibling,
+// so no other book's job can find or make a copy for it, and its own jobs are
+// serialized by its book lock.
+func vgLockKey(book *database.Book) string { return organizer.VersionGroupLockKey(book) }
 
 // lockVersionGroup takes book's version-group lock (vgLockKey) and returns the
 // book re-read under it, with the release (never nil). The key comes from a
 // row read before blocking, so the re-read checks it again: a book moved to
 // another group in between would otherwise be checked under a lock its new
 // siblings do not take. On a changed key the lock is swapped and the check
-// repeated, a bounded number of times.
+// repeated, a bounded number of times. A book deleted meanwhile comes back
+// nil with no error.
 func (mfs *Service) lockVersionGroup(book *database.Book) (*database.Book, func(), error) {
 	noop := func() {}
 	key := vgLockKey(book)
@@ -246,7 +280,7 @@ func (mfs *Service) lockVersionGroup(book *database.Book) (*database.Book, func(
 		}
 		if fresh == nil {
 			release()
-			return nil, noop, fmt.Errorf("book %s vanished before its library copy was made", book.ID)
+			return nil, noop, nil
 		}
 		if next := vgLockKey(fresh); next != key {
 			release()
@@ -274,28 +308,35 @@ func (mfs *Service) lockVersionGroup(book *database.Book) (*database.Book, func(
 // takes them in this order and in no other:
 //
 //  1. its own book (lockBook), held for the whole job;
-//  2. the version group (vgLockKey), ONLY inside ensureLibraryCopy, around the
-//     re-check-and-create of the library copy. It is released before
-//     ensureLibraryCopy returns, so before anything else is locked;
+//  2. the version group (vgLockKey), in lockLibraryCopy, around the lookup of
+//     the files' owner and, when a protected book has no copy, its creation.
+//     Every job takes it, a copy's own job included. Released before step 3;
 //  3. the book whose files it writes (lockLibraryCopy): for a protected book,
 //     its library copy. Held for the rest of the job;
 //  4. path locks (lockPath, lockWriteTarget), taken and released per write.
 //
+// WithBookFilesLocked, for a caller outside this package that moves a book's
+// files (batch save's organize), takes 1 and then 4. The organizer's
+// CreateOrganizedVersion takes the version-group key too
+// (organizer.Service.VersionGroupLocker), under whatever its caller holds.
+//
 // Why this cannot cycle:
-//   - A vg lock is held with only the job's own book lock above it, and nothing
-//     in this table is locked under it (OrganizeOneBook, CreateOrganizedVersion
-//     and syncMetadataToLibraryCopy take no key here). ensureLibraryCopy is
-//     reached only from createUsableLibraryCopy in lockLibraryCopy, before step
-//     3, and returns through its unlocked fast path whenever a copy exists. So
-//     no job holding a copy's lock ever waits for a vg lock.
-//   - Step 3 comes after the vg lock is released, so it does not matter that
-//     the copy and the own book are different books.
-//   - A library copy always resolves to itself: existingLibraryCopy returns any
-//     book under root_dir as its own target, and librarySibling only hands back
-//     siblings under root_dir. So a copy's own job never takes a second book
-//     lock, and a job waiting for a copy's lock waits on one that is never
-//     held across a wait for another book.
-//   - Path locks are innermost: a job holding one takes no book or vg lock.
+//   - The version-group key is a LEAF: nothing is locked while it is held.
+//     Under it, lockLibraryCopy runs existingLibraryCopy and, through
+//     ensureLibraryCopy, OrganizeOneBook, CreateOrganizedVersion on
+//     metafetch's own organize service (no locker) and
+//     syncMetadataToLibraryCopy; the organizer's CreateOrganizedVersion runs
+//     ApplyOrganizedFileMetadata and ComputeITunesPath. None takes a key. A
+//     holder that never waits cannot be part of a cycle, so the key may be
+//     taken under any other.
+//   - Without it, what is left is book keys, then path keys. Path keys are
+//     innermost: nothing that holds one takes a book key.
+//   - A job holds at most two book keys, its own and then its copy's. A
+//     library copy always resolves to itself (existingLibraryCopy returns any
+//     book under root_dir as its own target, and librarySibling only hands
+//     back siblings under root_dir), so a copy's own job takes no second book
+//     key. Every wait for a book key while holding one is own-then-copy, and
+//     the copy's holder never waits for a book key: no cycle among book keys.
 //
 // A caller outside this package must NOT hold a key from the same table
 // around these entry points. The server's bulk write-back and batch save used
@@ -317,13 +358,25 @@ func (mfs *Service) lockBook(id string) func() {
 // book with no copy under existingCopyOnly, or a deleted book, which the file
 // steps report). The release is never nil, error or not.
 //
-// It is the ONE place a library copy is made, for every entry point listed at
-// lockBook. WriteBackMetadataForBook (bulk write-back, batch save, the
-// write-back handler) and RunApplyPipelineRenameOnly made one with no lock
-// until 2026-09-12. Under createLibraryCopy a protected book with no copy gets
-// one here, through ensureLibraryCopy and its version-group lock, so two jobs
-// on two versions of one book make one copy between them. Two gaps it closes,
-// both 2026-09-12:
+// THE LOOKUP RUNS UNDER THE VERSION-GROUP KEY (resolveLibraryCopy), for every
+// job, and so does the creation of a copy when there is none. A copy is made
+// by one of two holders of that key -- ensureLibraryCopy, or the organizer's
+// CreateOrganizedVersion -- and each holds it until the copy's book row, its
+// book_file rows and (in ensureLibraryCopy) its metadata sync are written or
+// rolled back. So no lookup ever finds a copy that is still being made.
+// Until 2026-09-12 the lookup ran unlocked: a job could find copy S as soon as
+// its book row existed, lock S -- which its creator never holds -- and write
+// S's files while the creator was still writing S's rows, rolling S back, or
+// overwriting S's row with syncMetadataToLibraryCopy. A job whose book is its
+// own target takes the key as well: a copy's own job waits until the copy is
+// finished.
+//
+// Under createLibraryCopy a protected book with no copy gets one here, so two
+// jobs on two versions of one book make one copy between them. It is the only
+// place metafetch makes a copy, for every entry point listed at lockBook;
+// WriteBackMetadataForBook (bulk write-back, batch save, the write-back
+// handler) and RunApplyPipelineRenameOnly made one with no lock until
+// 2026-09-12. Two more gaps it closes, both 2026-09-12:
 //   - the copy used to be made part-way through, by whichever step reached it
 //     first, so the job never held its lock and an apply of another protected
 //     version of the same book could find it and write its files alongside;
@@ -351,23 +404,63 @@ func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint fun
 		// Deleted: the file steps re-read it and report that.
 		return "", noop, nil
 	}
-	target, ok := mfs.existingLibraryCopy(book)
-	if !ok && policy == createLibraryCopy {
-		if err := standDown(checkpoint, id, "creating the library copy"); err != nil {
-			return "", noop, err
-		}
-		if target, err = mfs.createUsableLibraryCopy(id, book); err != nil {
-			return "", noop, err
-		}
-	}
-	if target == nil {
-		return "", noop, nil
+	target, err := mfs.resolveLibraryCopy(id, book, policy, checkpoint)
+	if err != nil || target == nil {
+		return "", noop, err
 	}
 	if target.ID == id {
 		// The book's own files: its own lock, already held, covers them.
 		return id, noop, nil
 	}
 	return target.ID, mfs.lockBook(target.ID), nil
+}
+
+// resolveLibraryCopy is lockLibraryCopy's lookup, and its creation of a copy
+// when there is none, under book's version-group key. The key is released
+// before it returns, so before the copy's book lock is taken.
+func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy copyPolicy, checkpoint func() error) (*database.Book, error) {
+	fresh, release, err := mfs.lockVersionGroup(book)
+	defer release()
+	if err != nil {
+		return nil, fmt.Errorf("apply file work for book %s: %w", id, err)
+	}
+	if fresh == nil {
+		// Deleted while this job waited: the file steps report it.
+		return nil, nil
+	}
+	target, ok := mfs.existingLibraryCopy(fresh)
+	if ok || policy != createLibraryCopy {
+		return target, nil
+	}
+	if err := standDown(checkpoint, id, "creating the library copy"); err != nil {
+		return nil, err
+	}
+	return mfs.createUsableLibraryCopy(id, fresh)
+}
+
+// WithBookFilesLocked runs fn on book id as re-read under its file-work lock,
+// with the path of its files locked too: lockBook, a fresh read, then lockPath
+// on the fresh FilePath -- steps 1 and 4 of the order at lockBook. It is for a
+// caller outside this package that moves a book's files, such as batch save's
+// organize, which must not run while an apply of the same book renames or
+// tags them. Until 2026-09-12 batch save took only a path lock, keyed on a
+// FilePath read before its write-back: an apply that renamed the book P -> Q
+// in between let the organize take P's lock, re-read the book, and move the
+// files at Q that the apply was still tagging. fn must not call this
+// package's file-work entry points: the lock table is not reentrant.
+func (mfs *Service) WithBookFilesLocked(id string, fn func(book *database.Book) error) error {
+	releaseBook := mfs.lockBook(id)
+	defer releaseBook()
+	book, err := mfs.db.GetBookByID(id)
+	if err != nil {
+		return fmt.Errorf("book %s: load under its file-work lock: %w", id, err)
+	}
+	if book == nil {
+		return fmt.Errorf("book %s vanished before its files were locked", id)
+	}
+	releasePath := mfs.lockPath(book.FilePath)
+	defer releasePath()
+	return fn(book)
 }
 
 // createUsableLibraryCopy makes book's library copy and checks that the file
@@ -430,8 +523,9 @@ func (mfs *Service) createUsableLibraryCopy(id string, book *database.Book) (*da
 //
 // LOCKING. The whole sequence runs under the book's own lock (lockBook), so
 // two jobs for the same book never overlap; after the cover download a
-// protected book's library copy is locked too (lockLibraryCopy, which also
-// makes the copy -- the only place one is made). Inside them, every audio-file
+// protected book's library copy is locked too (lockLibraryCopy, which looks it
+// up, and makes it when there is none, under the version-group key). Inside
+// them, every audio-file
 // write holds the server's per-path lock
 // (SetPathLocker) on the path of the files it writes, resolved per write by
 // fileWorkTarget: the cover embed and the rename lock the files' current path

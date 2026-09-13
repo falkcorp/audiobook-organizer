@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.37.1
+// version: 1.38.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -161,6 +161,35 @@ type Service struct {
 	// ctx is threaded so a cancelled organize op aborts an in-flight external
 	// metadata fetch promptly.
 	FetchMetadataForBook func(ctx context.Context, bookID string) (any, error)
+
+	// VersionGroupLocker takes a key in the server's file-work lock table
+	// (writeBackPathLocks, which metafetch shares through SetPathLocker) and
+	// returns its release. CreateOrganizedVersion holds the book's
+	// version-group key (VersionGroupLockKey) with it while it makes a
+	// version, the key metafetch holds while it looks up or makes a library
+	// copy, so the two never make copies for one group at once and metafetch
+	// never finds a version this service is still writing. Set by the server;
+	// nil takes no lock. metafetch's own organize service leaves it nil:
+	// metafetch already holds the key when it calls CreateOrganizedVersion,
+	// and the table is not reentrant.
+	VersionGroupLocker func(key string) func()
+}
+
+// VersionGroupLockKey is the lock-table key of book's version group:
+// "vg:"+VersionGroupID, or "vg:book:"+ID for a book with no group yet (never
+// "book:<id>", which is metafetch's per-book key). Every version of one book
+// shares a group, so every maker of a version of one book takes the same key.
+// A book with no group has no sibling to race, and CreateOrganizedVersion
+// gives it a fresh group, keyed by that group from then on.
+//
+// The key is a LEAF in the file-work lock order (metafetch's lockBook): no key
+// is ever taken while it is held, so taking it under any other key closes no
+// cycle.
+func VersionGroupLockKey(book *database.Book) string {
+	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
+		return "vg:" + *book.VersionGroupID
+	}
+	return "vg:book:" + book.ID
 }
 
 // SetWriteBackBatcher sets the iTunes write-back batcher.
@@ -1814,6 +1843,18 @@ func RemoveCreated(landing *Landing, owner string, log logger.Logger) {
 }
 
 // CreateOrganizedVersion creates a new book record for the organized copy and links it to the original.
+//
+// It holds the book's version-group key (VersionGroupLockKey, through
+// VersionGroupLocker when the server wires one) from before the new row is
+// created until the row and its book_file rows are written or rolled back.
+// metafetch looks library copies up under the same key, so it never finds a
+// version this call is still making, and never makes a second copy for the
+// group while this one is being made. Until 2026-09-12 organize took no key:
+// Organize Library and batch save's organize could make a version of a group
+// alongside metafetch's library copy, and metafetch could find and write a
+// version whose rows this call had not written yet, or was rolling back.
+// Nothing is locked under the key (ApplyOrganizedFileMetadata and
+// ComputeITunesPath take none).
 func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
 	if landing == nil || landing.Path == "" {
 		return nil, fmt.Errorf("organize: no landing for %s (%s) — refusing to create an organized version from nothing", book.Title, book.ID)
@@ -1825,6 +1866,10 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// on InPlace before calling; this refusal is for the caller that forgets.
 	if landing.InPlace {
 		return nil, fmt.Errorf("organize: landing for %s (%s) is in place at %s — the existing row must be updated, not versioned", book.Title, book.ID, landing.Path)
+	}
+	if orgSvc.VersionGroupLocker != nil {
+		release := orgSvc.VersionGroupLocker(VersionGroupLockKey(book))
+		defer release()
 	}
 	newPath := landing.Path
 	isDir := landing.IsDir()

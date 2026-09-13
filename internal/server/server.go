@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.52.0
+// version: 2.53.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-12
 
@@ -970,6 +970,12 @@ func NewServer(store database.Store) *Server {
 		// which shares writeBackPathLocks -- touch one set of files at once.
 		// Auto-fetch's file work also goes through the file-I/O pool.
 		server.metadataFetchService.SetPathLocker(writeBackPathLocks.lock)
+		// Organize's version creation holds the version-group key from the
+		// same table, the key metafetch looks library copies up and makes them
+		// under, so neither finds or makes a copy while the other is making one.
+		if server.organizeService != nil {
+			server.organizeService.VersionGroupLocker = writeBackPathLocks.lock
+		}
 		server.metadataFetchService.SetFileWorkScheduler(newAutoFetchScheduler(
 			func() *FileIOPool { return server.fileIOPool }))
 		slog.Info("metafetch.Service.SetSafeWriteDeps wired (cover embed guard active)")

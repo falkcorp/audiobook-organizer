@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-12
 
@@ -474,10 +474,10 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 	libCopy.VersionNotes = original.VersionNotes
 }
 
-// ensureLibraryCopy returns a book record with files in the library folder.
-// If the book is already in the library, returns it as-is. If the book is in a
-// protected path (iTunes/import), looks for an existing library version or
-// organizes (hard-links) the file(s) to the library and creates a new version record.
+// ensureLibraryCopy makes the library copy of a book in a protected path
+// (iTunes/import) that has none: it organizes (hard-links) the file(s) to the
+// library and creates a new version record. Its one caller, lockLibraryCopy,
+// has already looked for a copy under the version-group key and found none.
 //
 // The copy is made by the organize service's OrganizeOneBook +
 // CreateOrganizedVersion — the same path "Organize Library" and the post-scan
@@ -498,29 +498,17 @@ func (mfs *Service) copyMetadataColumns(original, libCopy *database.Book) {
 // Genre and MetadataReviewStatus on the new copy rather than the narrower
 // field set CreateOrganizedVersion clones.
 //
-// VERSION-GROUP LOCK. The re-check-and-create runs under the book's version
-// group lock (lockVersionGroup, vgLockKey), and under it the book is re-read
-// and its copy looked up again: a copy another job made while this one waited
-// is returned, not made twice. Two applies on different versions of one book
-// hold different book locks, so until 2026-09-12 both could find no copy and
-// both make one, leaving two library copies in one version group. The lock is
-// taken only AFTER the unlocked fast path below and released before this
-// returns; see lockBook for why that placement is what keeps the lock order
-// acyclic. It is the only place the vg lock is taken.
+// VERSION-GROUP LOCK. The caller holds the book's version-group key
+// (lockVersionGroup), passes the book as re-read under it, and keeps holding
+// it until this returns: through the copy's book row, its book_file rows and
+// the metadata sync below, so no lookup under the key ever finds a half-made
+// copy. Two applies on different versions of one book hold different book
+// locks, so until 2026-09-12 both could find no copy and both make one,
+// leaving two library copies in one version group. The organizer's
+// CreateOrganizedVersion takes the same key for its own versions; the organize
+// service used here (libraryOrganizeService) has no locker, because the key is
+// already held and the lock table is not reentrant.
 func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
-	if target, ok := mfs.existingLibraryCopy(book); ok {
-		return target
-	}
-	fresh, release, err := mfs.lockVersionGroup(book)
-	if err != nil {
-		slog.Warn("library copy: not made", "id", logger.SanitizeLogValue(book.ID), "error", logger.SanitizeLogValue(err.Error()))
-		return nil
-	}
-	defer release()
-	if target, ok := mfs.existingLibraryCopy(fresh); ok {
-		return target
-	}
-	book = fresh
 	if mfs.libraryCopyMaker != nil {
 		return mfs.libraryCopyMaker(book)
 	}
@@ -570,7 +558,9 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 // place for the two to disagree. ApplyOrganizedFileMetadata and
 // ComputeITunesPath match what audiobooks.NewOrganizeService installs on the
 // production organize service, so a copy made here is indistinguishable from
-// one made by "Organize Library".
+// one made by "Organize Library". It has no VersionGroupLocker:
+// ensureLibraryCopy calls CreateOrganizedVersion already holding the
+// version-group key, and the lock table is not reentrant.
 func (mfs *Service) libraryOrganizeService() *organizer.Service {
 	mfs.organizeOnce.Do(func() {
 		svc := organizer.NewService(mfs.db)
