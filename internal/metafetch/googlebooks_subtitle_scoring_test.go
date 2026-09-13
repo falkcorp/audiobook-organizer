@@ -60,4 +60,41 @@ func TestGoogleBooksSubtitle_ScoredTitleNamesTheBook(t *testing.T) {
 	if _, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "Star Wars: Thrawn"}); boosted {
 		t.Errorf("a different Star Wars title must not boost this candidate")
 	}
+
+	// F1 base tier: the library book is titled just "A New Dawn". The bare
+	// franchise title scored 0 here; the candidate must now score a full match.
+	if got := computeF1Base(cand, SignificantWords("A New Dawn")); !floatNear(got, 1.0) {
+		t.Errorf("F1 vs library title %q = %v, want 1.0", "A New Dawn", got)
+	}
+}
+
+// TestComputeF1Base_SubtitleDoesNotDiluteMainTitle locks the other side of the
+// Google Books title join: an ordinary subtitle must not cut the precision of a
+// candidate whose main title is an exact match for the library's title.
+func TestComputeF1Base_SubtitleDoesNotDiluteMainTitle(t *testing.T) {
+	joined := metadata.BookMetadata{
+		Title:    "Sapiens: A Brief History of Humankind",
+		Subtitle: "A Brief History of Humankind",
+	}
+	if got := computeF1Base(joined, SignificantWords("Sapiens")); !floatNear(got, 1.0) {
+		t.Errorf("F1 vs %q = %v, want 1.0 (main title is an exact match)", "Sapiens", got)
+	}
+
+	// Audible shape: Title is the book, Subtitle is separate. Unchanged.
+	audible := metadata.BookMetadata{Title: "A New Dawn", Subtitle: "Star Wars"}
+	if got := computeF1Base(audible, SignificantWords("A New Dawn")); !floatNear(got, 1.0) {
+		t.Errorf("Audible-shaped F1 = %v, want 1.0", got)
+	}
+
+	// Audible shape: a separate franchise subtitle must NOT be scored alone,
+	// or a library title of "Star Wars" would fully match every Star Wars book.
+	if got := computeF1Base(audible, SignificantWords("Star Wars")); floatNear(got, 1.0) {
+		t.Errorf("separate subtitle %q must not be scored alone, got %v", audible.Subtitle, got)
+	}
+
+	// No subtitle: a colon in the title is scored as a whole, as before.
+	plain := metadata.BookMetadata{Title: "Dune: Messiah"}
+	if got := computeF1Base(plain, SignificantWords("Dune")); floatNear(got, 1.0) {
+		t.Errorf("title without a Subtitle must not be split for scoring, got %v", got)
+	}
 }
