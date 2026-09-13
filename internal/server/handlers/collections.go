@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -186,7 +186,7 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 
 	created, err := h.store.CreateCollection(col)
 	if err != nil {
-		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "duplicate") {
+		if errors.Is(err, database.ErrCollectionNameInUse) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
@@ -346,7 +346,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.store.UpdateCollection(col); err != nil {
-		if errors.Is(err, database.ErrCollectionVersionConflict) || strings.Contains(err.Error(), "already in use") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) || errors.Is(err, database.ErrCollectionNameInUse) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}

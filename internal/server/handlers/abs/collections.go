@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package abs
 
@@ -185,7 +185,7 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 		// A duplicate name is the user's mistake, not the server's; reporting it
 		// as 500 would send the app's generic "something went wrong" for a
 		// condition the user can fix by typing a different name.
-		if strings.Contains(err.Error(), "already in use") {
+		if errors.Is(err, database.ErrCollectionNameInUse) {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
@@ -249,7 +249,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 	}
 
 	if err := h.collections.UpdateCollection(col); err != nil {
-		if errors.Is(err, database.ErrCollectionVersionConflict) || strings.Contains(err.Error(), "already in use") {
+		if errors.Is(err, database.ErrCollectionVersionConflict) || errors.Is(err, database.ErrCollectionNameInUse) {
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}

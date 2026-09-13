@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c9e2b71-6f83-4a15-9d02-7e5b1a83c064
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package database
 
@@ -63,7 +63,7 @@ func (p *PebbleStore) CreateCollection(col *Collection) (*Collection, error) {
 		existing := string(v)
 		closer.Close()
 		if existing != col.ID {
-			return nil, fmt.Errorf("collection name %q already in use", col.Name)
+			return nil, fmt.Errorf("%w: %q", ErrCollectionNameInUse, col.Name)
 		}
 	}
 
@@ -183,10 +183,14 @@ func (p *PebbleStore) ListCollections(collectionType string, limit, offset int) 
 //
 // Callers detect it with errors.Is, not by matching the message: the wrapped
 // error carries the collection id and both versions for the log, and that
-// wording is free to change without silently breaking every call site. The
-// duplicate-name conflict in this same file still signals by string match;
-// see todo.d for converting it too.
+// wording is free to change without silently breaking every call site.
 var ErrCollectionVersionConflict = errors.New("collection version conflict")
+
+// ErrCollectionNameInUse is returned by CreateCollection and UpdateCollection
+// when another collection already holds the requested name (compared after
+// util.NormalizeString). The wrapped error names the collection; callers map
+// it to 409 with errors.Is, never by matching the text.
+var ErrCollectionNameInUse = errors.New("collection name already in use")
 
 // UpdateCollection rewrites a collection, moving the name index if the name
 // changed.
@@ -253,7 +257,7 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 			existing := string(v)
 			closer.Close()
 			if existing != col.ID {
-				return fmt.Errorf("collection name %q already in use", col.Name)
+				return fmt.Errorf("%w: %q", ErrCollectionNameInUse, col.Name)
 			}
 		}
 	}

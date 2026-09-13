@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f5a92c3-71b8-4d26-9e04-3ca8175bd6e1
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package abs_test
 
@@ -41,6 +41,9 @@ type abscolFakeStore struct {
 	// catch — without spinning up real goroutines against gin/httptest, which
 	// cannot be made to land in a deterministic order.
 	staleRead *database.Collection
+	// createErr, when set, is returned by CreateCollection only, so a test can
+	// drive the create error mapping without failing the reads around it.
+	createErr error
 }
 
 func (f *abscolFakeStore) ListCollections(t string, _, _ int) ([]database.Collection, int, error) {
@@ -74,6 +77,9 @@ func (f *abscolFakeStore) GetCollection(id string) (*database.Collection, error)
 
 func (f *abscolFakeStore) CreateCollection(col *database.Collection) (*database.Collection, error) {
 	f.creates++
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -87,10 +93,9 @@ func (f *abscolFakeStore) CreateCollection(col *database.Collection) (*database.
 // UpdateCollection mirrors PebbleStore.UpdateCollection's compare-and-swap on
 // Version (internal/database/pebble_store_collections.go): a write built from
 // a stale read — col.Version not matching the currently-stored row's Version —
-// is rejected instead of silently clobbering whatever landed since. Real
-// callers reach this through the same "already in use"-style string match the
-// handlers use for the CAS conflict, so the error text matters, not just its
-// presence.
+// is rejected instead of silently clobbering whatever landed since. The
+// handlers detect the conflict with errors.Is, so the fake must wrap the real
+// sentinel rather than reproduce its wording.
 func (f *abscolFakeStore) UpdateCollection(col *database.Collection) error {
 	f.updates++
 	if f.err != nil {
@@ -607,5 +612,37 @@ func TestAddBookToCollection_ConcurrentAdds_SecondGets409(t *testing.T) {
 	if store.updates != 2 {
 		t.Fatalf("store.updates = %d, want 2 (one accepted write from A, one rejected attempt from B)",
 			store.updates)
+	}
+}
+
+// TestCollections_CreateDuplicateNameIs409 pins the duplicate-name mapping to
+// database.ErrCollectionNameInUse. The lookalike error carries the old wording
+// without the sentinel and must be a 500: the handler used to match the text,
+// so this proves it now asks errors.Is and nothing else.
+func TestCollections_CreateDuplicateNameIs409(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"sentinel", fmt.Errorf("%w: %q", database.ErrCollectionNameInUse, "Tasting"), http.StatusConflict},
+		{"lookalike text", fmt.Errorf("collection name %q already in use", "Tasting"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &abscolFakeStore{createErr: tc.err}
+			h, _, tok := abscolHarness(t, store)
+			code, _ := h.doAny(t, request{
+				method:  http.MethodPost,
+				path:    "/api/collections",
+				headers: bearer(tok),
+				body:    map[string]any{"libraryId": h.libraryID(), "name": "Tasting"},
+			})
+			if code != tc.want {
+				t.Fatalf("POST /api/collections with %s error = %d, want %d", tc.name, code, tc.want)
+			}
+			if store.creates != 1 {
+				t.Fatalf("store saw %d creates, want 1 — the handler must reach the write", store.creates)
+			}
+		})
 	}
 }
