@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_timings_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a9d13-4c85-4e7b-9b20-6d1e8a3c5f47
 // last-edited: 2026-09-13
 
@@ -150,6 +150,64 @@ func TestWriteBackForBook_PerFileWritesConcurrentButGateBounded(t *testing.T) {
 	}
 }
 
+// The book_file-row loop (totalTracks > 1) is the other parallel loop, with a
+// different sharing shape: each writer builds its own tag map from shared
+// book/author/narrator values and numbers its track by index. Under -race this
+// is the only test that runs that closure concurrently.
+func TestWriteBackForBook_BookFileRowsConcurrentExactlyOnce(t *testing.T) {
+	svc, book, files := dirBookFixture(t, 9)
+	store := svc.db.(*database.MockStore)
+	rows := make([]database.BookFile, 0, len(files))
+	for i, f := range files {
+		rows = append(rows, database.BookFile{ID: fmt.Sprintf("bf%d", i), BookID: book.ID, FilePath: f})
+	}
+	store.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		if id == book.ID {
+			return rows, nil
+		}
+		return nil, nil
+	}
+	cw := &countingWriter{written: map[string]int{}}
+	var mu sync.Mutex
+	tracks := map[string]string{}
+	svc.fileTagWrite = func(path string, tm map[string]any) error {
+		mu.Lock()
+		tracks[path], _ = tm["track"].(string)
+		mu.Unlock()
+		return cw.write(path, tm)
+	}
+	gate := make(chan struct{}, 3)
+	svc.SetFileWriteGate(func() (func(), bool) {
+		select {
+		case gate <- struct{}{}:
+			return func() { <-gate }, true
+		default:
+			return nil, false
+		}
+	})
+
+	written, err := svc.writeBackForBook(book.ID, nil, book.ID, nil)
+	if err != nil {
+		t.Fatalf("writeBackForBook: %v", err)
+	}
+	if written != len(files) {
+		t.Errorf("written = %d, want %d", written, len(files))
+	}
+	for i, f := range files {
+		if cw.written[f] != 1 {
+			t.Errorf("%s written %d times, want exactly 1", filepath.Base(f), cw.written[f])
+		}
+		// Track numbering must follow the row order, not the order the
+		// writers happened to finish in.
+		if want := fmt.Sprintf("%d/%d", i+1, len(files)); tracks[f] != want {
+			t.Errorf("%s track = %q, want %q", filepath.Base(f), tracks[f], want)
+		}
+	}
+	if got := cw.maxSeen.Load(); got < 2 || got > 4 {
+		t.Errorf("max concurrent writers = %d, want 2..4 (1 own + up to 3 gate slots, capped at %d)", got, maxFileWritersPerBook)
+	}
+}
+
 // With no gate wired the book's files are written one at a time, as before.
 func TestWriteBackForBook_NoGateIsSequential(t *testing.T) {
 	svc, book, files := dirBookFixture(t, 6)
@@ -220,10 +278,15 @@ func TestFinishApplyFileWorkTimed_EmitsPhaseLine(t *testing.T) {
 	if !strings.HasPrefix(line, "b1 ") {
 		t.Errorf("line does not name the book: %q", line)
 	}
-	for _, p := range phaseOrder {
+	// The phases this path runs (a tag write, no rename) are all measured...
+	for _, p := range []string{PhaseGateWait, PhaseLockWait, PhaseCover, PhaseCopyLock, PhaseEmbed, PhaseTagPrep, PhaseTags, PhaseDBPost} {
 		if !strings.Contains(line, p+"=") {
 			t.Errorf("line missing phase %q: %q", p, line)
 		}
+	}
+	// ...and one this timer never measured is absent, not a fake 0ms.
+	if strings.Contains(line, PhaseApplyDB+"=") {
+		t.Errorf("line reports %s, which this timer never measured: %q", PhaseApplyDB, line)
 	}
 	for _, want := range []string{"gate_wait=7ms", "files=3", "total="} {
 		if !strings.Contains(line, want) {
