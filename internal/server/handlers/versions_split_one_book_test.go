@@ -70,9 +70,13 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	freshDur := 300
 	fresh := *splitSource()
 	fresh.Duration = &freshDur
+	// The source has no FilePath the remaining file sits in, so it moves to
+	// that file's FOLDER (never the file's own path), once that folder is
+	// checked free.
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2").Return(nil, nil).Once()
 	store.EXPECT().GetBookByID("src").Return(&fresh, nil).Once()
 	store.EXPECT().UpdateBook("src", mock.MatchedBy(func(b *database.Book) bool {
-		return b.FilePath == "/lib/Omnibus/Book 2/01.mp3" && b.Duration != nil && *b.Duration == 300
+		return b.FilePath == "/lib/Omnibus/Book 2" && b.Duration != nil && *b.Duration == 300
 	})).Return(&fresh, nil)
 	store.EXPECT().GetBookByID("new").Return(&database.Book{ID: "new", Title: "Book One"}, nil)
 
@@ -100,6 +104,125 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"segments_moved":2`) {
 		t.Fatalf("want segments_moved 2: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "warnings") {
+		t.Fatalf("a clean split carries no warnings: %s", w.Body.String())
+	}
+}
+
+// expectSplitThroughMove sets up a one-book split of f1+f2 (folder
+// "/lib/Omnibus/Book 1") from src up to and including a successful move and
+// an author read with no authors. The source's FilePath is srcPath.
+func expectSplitThroughMove(store *handlersmocks.MockVersionsStore, srcPath string) {
+	src := splitSource()
+	src.FilePath = srcPath
+	store.EXPECT().GetBookByID("src").Return(src, nil).Once()
+	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil).Once()
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 1").Return(nil, nil).Once()
+	store.EXPECT().CreateBook(mock.Anything).RunAndReturn(func(b *database.Book) (*database.Book, error) {
+		out := *b
+		out.ID = "new"
+		return &out, nil
+	})
+	store.EXPECT().MoveBookFilesToBook([]string{"f1", "f2"}, "src", "new").Return(nil).Once()
+	store.EXPECT().GetBookAuthors("src").Return(nil, nil)
+	store.EXPECT().GetBookFiles("src").Return(splitFiles()[2:], nil).Once()
+	store.EXPECT().GetBookByID("new").Return(&database.Book{ID: "new"}, nil).Once()
+}
+
+func splitOneBookReq() (*gin.Context, *httptest.ResponseRecorder) {
+	return splitReq(`{"segment_ids":["f1","f2"],"as_one_book":true}`)
+}
+
+// The source's library_state is copied onto the new book, so ABS (which
+// lists only "organized" books) shows both halves.
+func TestSplitSegmentsToBooks_AsOneBookCopiesLibraryState(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	organized := "organized"
+	src := splitSource()
+	src.FilePath = "/lib/Omnibus"
+	src.LibraryState = &organized
+	store.EXPECT().GetBookByID("src").Return(src, nil).Once()
+	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil).Once()
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 1").Return(nil, nil).Once()
+	store.EXPECT().CreateBook(mock.MatchedBy(func(b *database.Book) bool {
+		return b.LibraryState != nil && *b.LibraryState == "organized"
+	})).Return(&database.Book{ID: "new"}, nil)
+	store.EXPECT().MoveBookFilesToBook([]string{"f1", "f2"}, "src", "new").Return(nil).Once()
+	store.EXPECT().GetBookAuthors("src").Return(nil, nil)
+	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil)
+	store.EXPECT().GetBookFiles("src").Return(splitFiles()[2:], nil).Once()
+	store.EXPECT().GetBookByID("new").Return(&database.Book{ID: "new"}, nil).Once()
+
+	c, w := splitOneBookReq()
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The source still contains its remaining file, so its path is left alone:
+// no UpdateBook at all (the strict mock fails on one).
+func TestSplitSegmentsToBooks_AsOneBookSourcePathKeptWhenFilesStillInside(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	expectSplitThroughMove(store, "/lib/Omnibus")
+	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil)
+
+	c, w := splitOneBookReq()
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The files moved, but the source's path update failed: 207 with the reason
+// in warnings, not a 200 over a log line.
+func TestSplitSegmentsToBooks_AsOneBookSourcePathUpdateFailureIs207(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	expectSplitThroughMove(store, "")
+	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil)
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2").Return(nil, nil).Once()
+	store.EXPECT().GetBookByID("src").Return(splitSource(), nil).Once()
+	store.EXPECT().UpdateBook("src", mock.Anything).Return(nil, errors.New("disk full"))
+
+	c, w := splitOneBookReq()
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusMultiStatus || !strings.Contains(w.Body.String(), "warnings") ||
+		!strings.Contains(w.Body.String(), "disk full") {
+		t.Fatalf("want 207 with the update failure in warnings, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The remaining files' folder already belongs to another book: the source's
+// path is left as is and the operator is told why.
+func TestSplitSegmentsToBooks_AsOneBookSourceTargetOccupiedIs207(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	expectSplitThroughMove(store, "")
+	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil)
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2").Return([]string{"other"}, nil).Once()
+
+	c, w := splitOneBookReq()
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusMultiStatus || !strings.Contains(w.Body.String(), "other") {
+		t.Fatalf("want 207 naming the occupant, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// An external-ID mapping that could not be moved to the new book is reported.
+func TestSplitSegmentsToBooks_AsOneBookExternalIDFailureIs207(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	expectSplitThroughMove(store, "/lib/Omnibus")
+	store.EXPECT().GetExternalIDsForBook("src").Return([]database.ExternalIDMapping{
+		{Source: "itunes", ExternalID: "PID1", BookID: "src", FilePath: "/lib/Omnibus/Book 1/01.mp3"},
+	}, nil)
+	store.EXPECT().DeleteRaw("ext_id:book:src:itunes:PID1").Return(nil)
+	store.EXPECT().CreateExternalIDMapping(mock.Anything).Return(errors.New("write refused"))
+
+	c, w := splitOneBookReq()
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusMultiStatus || !strings.Contains(w.Body.String(), "external IDs") ||
+		!strings.Contains(w.Body.String(), "write refused") {
+		t.Fatalf("want 207 with the external-ID failure in warnings, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
