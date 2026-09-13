@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.38.2
+// version: 1.38.3
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -332,9 +332,14 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 			// Stamp per page. This loop pulls the whole library in 1,000-book
 			// pages and had no progress calls at all, so on a large library it
 			// was a second silent window after the backup — same failure mode,
-			// same watchdog. (0, 1) because the row count is not known until
-			// the last short page arrives.
-			log.UpdateProgress(0, 1, fmt.Sprintf("Loading library: %d books", len(allBooks)))
+			// same watchdog. Total 0 (indeterminate) because the row count is
+			// not known until the last short page arrives. Not (0, 1): every
+			// progress bar in web/src renders total > 0 as a determinate bar,
+			// so total 1 showed the op as "0/1" stuck at 0% -- the same value
+			// the scanner's phases use for "unknown" is 0 (scanner.go,
+			// discovery phase). total 0 still stamps the watchdog clock:
+			// reporter_db.UpdateProgress touches it before reading any value.
+			log.UpdateProgress(0, 0, fmt.Sprintf("Loading library: %d books", len(allBooks)))
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -375,7 +380,8 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 			for i := range page {
 				allBooks = append(allBooks, page[i].ToBook())
 			}
-			log.UpdateProgress(0, 1, fmt.Sprintf("Reloading library after metadata: %d books", len(allBooks)))
+			// Indeterminate (total 0) for the same reason as the first paging loop.
+			log.UpdateProgress(0, 0, fmt.Sprintf("Reloading library after metadata: %d books", len(allBooks)))
 			if len(page) < fetchPageSize {
 				break
 			}
@@ -583,10 +589,11 @@ func backupProgressReporter(ctx context.Context, log logger.Logger, interval tim
 		default:
 			msg = "Backing up database"
 		}
-		// (0, 1) rather than a computed denominator: the total size of the
-		// archive is not known until it is written, and inventing one produces
-		// a percentage that jumps backwards.
-		log.UpdateProgress(0, 1, msg)
+		// Total 0 (indeterminate) rather than a computed denominator: the
+		// total size of the archive is not known until it is written, and
+		// inventing one produces a percentage that jumps backwards. Not
+		// (0, 1), which the UI draws as a determinate "0/1" bar stuck at 0%.
+		log.UpdateProgress(0, 0, msg)
 		return nil
 	}
 }
@@ -629,7 +636,8 @@ func (orgSvc *Service) autoBackup(ctx context.Context, log logger.Logger) backup
 	// operation looks hung for the entire archive and the registry marks it
 	// stuck — see autoBackupMinInterval above.
 	start := time.Now()
-	log.UpdateProgress(0, 1, "Backing up database before organize (this can take several minutes)")
+	// Total 0: indeterminate, see backupProgressReporter.
+	log.UpdateProgress(0, 0, "Backing up database before organize (this can take several minutes)")
 	// Log the RESOLVED destination, not just the source. backup_dir is
 	// configurable and falls back to a directory beside the database when unset,
 	// so an empty or lost setting silently relocates archives back onto the
