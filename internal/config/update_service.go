@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.24.0
+// version: 3.25.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package config
 
@@ -127,6 +127,7 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 		masked.DownloadClient.Usenet.SABnzbd.APIKey = database.MaskSecret(masked.DownloadClient.Usenet.SABnzbd.APIKey)
 	}
 	masked.MetadataSources = maskMetadataSourceCredentials(cfg.MetadataSources)
+	masked.AIEndpoints = MaskAIEndpoints(cfg.AIEndpoints)
 	return masked
 }
 
@@ -528,8 +529,13 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	if err != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to encode payload: " + err.Error()}
 	}
+	// Validated only when the PUT carries the key, so rows a newer binary
+	// stored (with capability IDs this one does not register) are kept and
+	// never block an unrelated save.
+	_, hasEndpoints := filtered["ai_endpoints"]
 	var (
 		unmarshalErr error
+		endpointsErr error
 		ladderErr    error
 		validateErr  error
 		// prior is a DEEP copy of the whole in-memory config as it stood
@@ -578,9 +584,25 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// their own mask. See restoreRoundTripSecrets.
 		priorRoundTrip := snapshotRoundTripSecrets(candidate)
 
+		// A PUT that carries ai_endpoints REPLACES the list. Without this,
+		// json decoding into the clone's backing array would merge each
+		// submitted row onto the stored row at the same index, so a field
+		// the operator omitted (host_roots, capability_models) would survive.
+		if hasEndpoints {
+			candidate.AIEndpoints = nil
+		}
 		if err := decodeConfigPayload(payloadJSON, candidate); err != nil {
 			unmarshalErr = err
 			return
+		}
+		if hasEndpoints {
+			// GET masks auth_ref; map it back before validating so a
+			// GET-then-PUT round trip is accepted.
+			unmaskAIEndpointAuthRefs(candidate.AIEndpoints)
+			if err := validateAIEndpoints(candidate.AIEndpoints); err != nil {
+				endpointsErr = err
+				return
+			}
 		}
 		restoreMaskedCredentials(candidate.MetadataSources, priorCreds)
 		restoreRoundTripSecrets(candidate, priorRoundTrip)
@@ -624,6 +646,10 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	})
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
+	}
+	if endpointsErr != nil {
+		slog.Warn("config update rejected: invalid ai_endpoints; nothing persisted", "err", endpointsErr)
+		return http.StatusBadRequest, map[string]any{"error": endpointsErr.Error() + " — nothing was saved"}
 	}
 	if validateErr != nil {
 		slog.Warn("config update rejected: invalid configuration; nothing persisted", "err", validateErr)

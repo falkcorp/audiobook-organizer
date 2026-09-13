@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
-// last-edited: 2026-07-03
+// last-edited: 2026-09-13
 
 // Package aibackendshandler provides HTTP handlers for the AI backend-mode
 // toggle (TASK-10's AIBackendConfig): a status probe that reports the
@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
@@ -187,6 +188,146 @@ func (h *Handler) PullModel(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{
 		"model":  req.Model,
 		"pulled": true,
+	})
+}
+
+// CapabilityInfo is one registry entry as served by GET /api/v1/ai/capabilities.
+type CapabilityInfo struct {
+	ID                  string   `json:"id"`
+	Kind                string   `json:"kind"`
+	RequiredFeatures    []string `json:"required_features"`
+	OptionalFeatures    []string `json:"optional_features"`
+	Description         string   `json:"description"`
+	DataSent            string   `json:"data_sent"`
+	TypicalRequest      string   `json:"typical_request"`
+	InMigrationBaseline bool     `json:"in_migration_baseline"`
+}
+
+// Capabilities serves the capability registry (the checkbox list), including
+// what each capability sends off the machine, so an operator can decide which
+// servers to trust with it.
+//
+//	GET /api/v1/ai/capabilities
+func (h *Handler) Capabilities(c *gin.Context) {
+	specs := aidispatch.Registry()
+	out := make([]CapabilityInfo, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, CapabilityInfo{
+			ID:                  s.Capability.ID(),
+			Kind:                string(s.Kind),
+			RequiredFeatures:    nonNil(s.RequiredFeatures),
+			OptionalFeatures:    nonNil(s.OptionalFeatures),
+			Description:         s.Description,
+			DataSent:            s.DataSent,
+			TypicalRequest:      s.TypicalRequest,
+			InMigrationBaseline: aidispatch.InMigrationBaseline(s.Capability),
+		})
+	}
+	httputil.RespondWithOK(c, gin.H{"capabilities": out})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// ProbeState is an endpoint's last health probe. PR 2 does not probe: the
+// status is always "not_probed". Probing (and the measured gpu label) lands
+// with the probe PR.
+type ProbeState struct {
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// EndpointStatus is one ai_endpoints row plus the dispatcher's live state.
+type EndpointStatus struct {
+	Endpoint config.AIEndpoint `json:"endpoint"`
+	// UnknownCapabilities are ticked IDs this binary does not register
+	// (written by a newer build). Selection ignores them.
+	UnknownCapabilities  []string   `json:"unknown_capabilities"`
+	InFlight             int        `json:"in_flight"`
+	EffectiveConcurrency int        `json:"effective_concurrency"`
+	InCooldown           bool       `json:"in_cooldown"`
+	CooldownUntil        *time.Time `json:"cooldown_until,omitempty"`
+	Probe                ProbeState `json:"probe"`
+}
+
+// CapabilityCoverage is what selection over the rows would pick for one
+// capability: the candidates in order, and why every other row was refused.
+type CapabilityCoverage struct {
+	Capability string               `json:"capability"`
+	Candidates []string             `json:"candidates"`
+	Refusals   []aidispatch.Refusal `json:"refusals"`
+}
+
+// EndpointsStatusResponse is the body of GET /api/v1/ai/endpoints/status.
+type EndpointsStatusResponse struct {
+	// RoutingActive is false until call sites move onto the dispatcher; the
+	// rows are informational and every site still uses the legacy fields.
+	RoutingActive bool                 `json:"routing_active"`
+	Note          string               `json:"note"`
+	Endpoints     []EndpointStatus     `json:"endpoints"`
+	Coverage      []CapabilityCoverage `json:"coverage"`
+}
+
+const endpointsStatusNote = "ai_endpoints is stored and validated but not yet used for routing; " +
+	"every AI call still resolves its backend from the legacy settings. Endpoints are not probed yet, " +
+	"so coverage ignores whisper_requires (the gpu label is measured by the probe, not declared)."
+
+// EndpointsStatus reports each ai_endpoints row with the process-wide
+// in-flight and failure-cooldown state from the dispatcher, plus per-capability
+// coverage. It never contacts an endpoint.
+//
+//	GET /api/v1/ai/endpoints/status
+func (h *Handler) EndpointsStatus(c *gin.Context) {
+	snap := config.Snapshot()
+	rows := snap.AIEndpoints
+	health := aidispatch.DefaultHealth()
+	slots := aidispatch.DefaultSlots()
+
+	masked := config.MaskAIEndpoints(rows)
+	eps := make([]EndpointStatus, 0, len(rows))
+	for i, r := range rows {
+		st := EndpointStatus{
+			Endpoint:             masked[i],
+			UnknownCapabilities:  nonNil(r.UnknownCapabilities()),
+			InFlight:             slots.Depth(r.ID),
+			EffectiveConcurrency: aidispatch.EffectiveConcurrency(r.Concurrency),
+			InCooldown:           health.InCooldown(r.ID),
+			Probe:                ProbeState{Status: "not_probed", Detail: "endpoint probing is not implemented yet"},
+		}
+		if st.InCooldown {
+			until := health.CooldownUntil(r.ID)
+			st.CooldownUntil = &until
+		}
+		eps = append(eps, st)
+	}
+
+	d := aidispatch.New(config.DispatchEndpoints(rows))
+	specs := aidispatch.Registry()
+	coverage := make([]CapabilityCoverage, 0, len(specs))
+	for _, s := range specs {
+		cands, refusals, err := d.Candidates(s.Capability)
+		if err != nil {
+			continue
+		}
+		cc := CapabilityCoverage{Capability: s.Capability.ID(), Candidates: []string{}, Refusals: refusals}
+		if cc.Refusals == nil {
+			cc.Refusals = []aidispatch.Refusal{}
+		}
+		for _, ep := range cands {
+			cc.Candidates = append(cc.Candidates, ep.ID)
+		}
+		coverage = append(coverage, cc)
+	}
+
+	httputil.RespondWithOK(c, EndpointsStatusResponse{
+		RoutingActive: false,
+		Note:          endpointsStatusNote,
+		Endpoints:     eps,
+		Coverage:      coverage,
 	})
 }
 

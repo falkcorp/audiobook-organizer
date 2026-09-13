@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-07-13
+// last-edited: 2026-09-13
 
 package server
 
@@ -80,6 +80,9 @@ func (s *Server) wireMediaRoutes(
 	// AI backend-mode toggle (TASK-11): status probe + on-demand model pull.
 	protected.GET("/ai/backends/status", s.perm(auth.PermSettingsManage), aiBackendsH.Status)
 	protected.POST("/ai/backends/pull-model", s.perm(auth.PermSettingsManage), aiBackendsH.PullModel)
+	// Capability routing (PR 2): read-only registry + ai_endpoints status.
+	protected.GET("/ai/capabilities", s.perm(auth.PermSettingsManage), aiBackendsH.Capabilities)
+	protected.GET("/ai/endpoints/status", s.perm(auth.PermSettingsManage), aiBackendsH.EndpointsStatus)
 
 	// Plugins
 	plugins := protected.Group("/plugins")

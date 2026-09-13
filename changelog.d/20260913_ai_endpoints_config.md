@@ -1,0 +1,5 @@
+### Added
+
+- AI capability routing, PR 2: a new `ai_endpoints` setting holds one row per AI server (protocol, URL, models, priority, concurrency, ticked capabilities, labels, features, `require_gpu`, `auth_ref`, `host_roots`). On first load it is derived once from the legacy AI settings so every call site's capability resolves to the server it uses today. The legacy fields keep being written. Nothing routes on the new rows yet.
+- PUT /api/v1/config validates `ai_endpoints` when a request includes it. IDs and (protocol, URL) pairs must be unique, capabilities must be registered IDs with no wildcards, concurrency must be at least 0, and `auth_ref` must name a known secret. A misspelled nested key gets a 400. GET masks `auth_ref`, and a masked value sent back is accepted.
+- Two read-only endpoints: `GET /api/v1/ai/capabilities` serves the capability registry, including what each capability sends off the machine. `GET /api/v1/ai/endpoints/status` returns each row with in-flight and failure-cooldown state and per-capability coverage. Endpoints are not probed yet, and the response says so.

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.116.0
+// version: 1.117.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package config
 
@@ -1211,6 +1211,15 @@ type Config struct {
 	// Environment-authoritative (WHISPER_REQUIRES, comma-separated, e.g.
 	// "gpu" or "gpu,local"). Labels are matched case-insensitively.
 	WhisperRequires []string `json:"whisper_requires" mapstructure:"whisper_requires"`
+
+	// AIEndpoints are the capability-routing server rows (PLAN section 3; see
+	// AIEndpoint). Derived once from the legacy AI fields by
+	// migrateAIEndpointsBlob. No omitempty: an operator's empty list must
+	// round-trip as [] so the migration does not re-run over it.
+	//
+	// NOT READ FOR DISPATCH YET — every call site still resolves its backend
+	// from ai_backend / openai_api_key / whisper_endpoints.
+	AIEndpoints []AIEndpoint `json:"ai_endpoints" mapstructure:"ai_endpoints"`
 
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
