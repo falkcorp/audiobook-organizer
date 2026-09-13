@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-13
 
@@ -56,6 +56,12 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// --- database ---
 		p.dbOptimizeDef(),
 		p.activityReclaimDef(),
+
+		// --- version groups ---
+		// version-group-primary-report is REPORT ONLY (read capability, no
+		// schedule): it counts version groups with more than one effective
+		// primary (VG-DOUBLE-PRIMARY) and changes nothing.
+		p.versionGroupPrimaryReportDef(),
 
 		// --- author/series ---
 		p.authorDedupScanDef(),

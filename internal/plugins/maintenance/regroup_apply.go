@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-09-13
 
@@ -383,7 +383,17 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				return fmt.Errorf("regroup version-group apply: list group %s members: %w", target, err)
 			}
 			for _, m := range all {
-				if m.ID == primaryID || m.IsPrimaryVersion == nil || !*m.IsPrimaryVersion {
+				// VG-DOUBLE-PRIMARY: a nil flag is NOT safe to skip. The store
+				// reads nil as primary (database.EffectiveIsPrimaryVersion; the
+				// memdb is_primary_version index defaults to true), so a nil
+				// member left alone lists alongside the new primary. Only an
+				// explicit false is already demoted. Writing explicit false is
+				// correct under both nil readings — the repair if nil counts as
+				// primary, a no-op if it does not — which is why merge
+				// (internal/merge/service.go) and fs_regroup_xml.go's demotion
+				// rewrite nil the same way. The ELECTION is deliberately not
+				// shared with merge: lowest-ULID here, BookIsBetter there.
+				if m.ID == primaryID || !database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
 					continue
 				}
 				// Re-fetch-and-patch (UpdateBook is a full-column replace): mutate

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
 // last-edited: 2026-09-13
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -505,6 +506,111 @@ func TestApplyVersionGroup_DemotesStaleExistingPrimary(t *testing.T) {
 	assertSinglePrimary()
 
 	dbtest.AssertStoreInvariants(t, store)
+}
+
+// putInGroupRaw is putInGroup with the stored tri-state exposed: pass nil to
+// seed a member whose flag was never written (the pre-flag shape).
+func putInGroupRaw(t *testing.T, store database.Store, id, groupID string, primary *bool) {
+	t.Helper()
+	b, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	b.VersionGroupID = &groupID
+	b.IsPrimaryVersion = primary
+	_, err = store.UpdateBook(id, b)
+	require.NoError(t, err)
+	got, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	if primary == nil {
+		require.Nil(t, got.IsPrimaryVersion, "fixture precondition: the store must keep a nil flag nil")
+	}
+}
+
+// TestApplyVersionGroup_NeverLeavesTwoEffectivePrimaries is VG-DOUBLE-PRIMARY
+// for the regroup path. Primacy is counted with database.EffectiveIsPrimaryVersion
+// (nil == primary, the reading the library list uses), NOT `!= nil && *flag`:
+// the explicit-only count passes in the broken state, because the member the
+// old code skipped is exactly the nil one.
+func TestApplyVersionGroup_NeverLeavesTwoEffectivePrimaries(t *testing.T) {
+	tr, f := true, false
+	cases := []struct {
+		name string
+		// flags of pre-existing group members that are NOT in the hold.
+		outside []*bool
+		// flag of the hold member that is already in the group.
+		inGroup *bool
+		// flag of the hold member being moved in (ungrouped before apply).
+		moved *bool
+	}{
+		{name: "nil-flag outside member", outside: []*bool{nil}, inGroup: &f, moved: nil},
+		{name: "group already has a primary and the moved book is also primary", outside: []*bool{&tr}, inGroup: &f, moved: &tr},
+		{name: "nil in-group hold member plus explicit outside primary", outside: []*bool{&tr}, inGroup: nil, moved: &tr},
+		{name: "explicit and nil outside members together", outside: []*bool{&tr, nil}, inGroup: &tr, moved: &tr},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newApplyTestStore(t)
+			groupID := ulid.Make().String()
+			newBook := func(title string) string {
+				id := ulid.Make().String()
+				_, err := store.CreateBook(&database.Book{ID: id, Title: title, Format: "mp3", FilePath: "/lib/vgdp/" + id + ".mp3"})
+				require.NoError(t, err)
+				return id
+			}
+			var outsideIDs []string
+			for i, fl := range tc.outside {
+				id := newBook("Outside " + string(rune('A'+i)))
+				putInGroupRaw(t, store, id, groupID, fl)
+				outsideIDs = append(outsideIDs, id)
+			}
+			aID := newBook("In Group")
+			putInGroupRaw(t, store, aID, groupID, tc.inGroup)
+			bID := newBook("Moved In")
+			if tc.moved != nil {
+				b, err := store.GetBookByID(bID)
+				require.NoError(t, err)
+				b.IsPrimaryVersion = tc.moved
+				_, err = store.UpdateBook(bID, b)
+				require.NoError(t, err)
+			}
+
+			apply := ApplyVersionGroup(store)
+			item := versionGroupItem(t, "/lib/vgdp", []string{aID, bID})
+			check := func() {
+				members, err := store.GetBooksByVersionGroup(groupID)
+				require.NoError(t, err)
+				require.Len(t, members, len(outsideIDs)+2)
+				want := minID(aID, bID)
+				var primaries []string
+				for _, m := range members {
+					if database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
+						primaries = append(primaries, m.ID)
+					}
+				}
+				require.Equal(t, []string{want}, primaries, "exactly one EFFECTIVE primary: the hold's chosen one")
+
+				// The detector agrees, over the store's own list path.
+				all, err := store.GetAllBooksCoreComplete(0, 0)
+				require.NoError(t, err)
+				r := findVersionGroupPrimaryViolations(all, 10)
+				require.Zero(t, r.DoubleGroups, "detector found a double: %+v", r.Sample)
+				require.Zero(t, r.ZeroPrimary)
+			}
+			require.NoError(t, apply(context.Background(), item))
+			check()
+			for _, id := range outsideIDs {
+				b, err := store.GetBookByID(id)
+				require.NoError(t, err)
+				require.NotNil(t, b.IsPrimaryVersion, "demoted member must carry an explicit false, not nil")
+				require.False(t, *b.IsPrimaryVersion)
+				require.True(t, strings.HasPrefix(b.Title, "Outside "), "demotion must patch ONLY IsPrimaryVersion")
+			}
+			// Idempotent re-apply.
+			require.NoError(t, apply(context.Background(), item))
+			check()
+			dbtest.AssertStoreInvariants(t, store)
+		})
+	}
 }
 
 // TestApplyVersionGroup_RefusesCrossGroupMerge is BUG 3: when hold members sit in
