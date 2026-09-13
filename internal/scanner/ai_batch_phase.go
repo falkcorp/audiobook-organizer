@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-09-13
 
@@ -74,6 +74,12 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	batchSize, batchTimeout := batch.Size, batch.Timeout
 	const delayBetweenBatches = 2 * time.Second
 
+	// Files that already failed on their own in maxAIParseSingleFileFailures
+	// runs are not asked about again (ai_parse_giveup.go). Filtered before the
+	// batches are cut so they cannot drag a healthy batch into a split.
+	nominated := len(candidates)
+	candidates, booksSkipped := filterGivenUpAIParse(books, candidates, log)
+
 	totalBatches := (len(candidates) + batchSize - 1) / batchSize
 	// batchTimeout is logged, not just used: when this phase fails, the first
 	// question is always "against what deadline?", and the answer is now
@@ -89,7 +95,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	// failures anywhere aborts, where before 3 had to land in a row.
 	var failures atomic.Int64
 	var started atomic.Int64
-	var batchesOK, booksParsed, savesFailed, batchesSplit, booksFailed atomic.Int64
+	var batchesOK, booksParsed, savesFailed, batchesSplit, booksFailed, booksGivenUp atomic.Int64
 	var abortedPermanent, abortedThreshold atomic.Bool
 	aborted := make(chan struct{})
 	var abortOnce sync.Once
@@ -295,6 +301,24 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				recordBookFailure(AIBookFailure{Path: books[idx].FilePath, Err: out.bookErrs[i].Error()})
 				log.Warn("AI parsing failed for %s even on its own (batch %d/%d): %v",
 					books[idx].FilePath, batchNum, totalBatches, out.bookErrs[i])
+
+				// Durable, across runs: after maxAIParseSingleFileFailures of
+				// these the file is skipped by filterGivenUpAIParse until its
+				// path changes. The mark records the failure and its reason; the
+				// book is still not saved as parsed.
+				count, gaveUp, markErr := recordAIParseSingleFileFailure(books[idx].FilePath, out.bookErrs[i].Error())
+				if markErr != nil {
+					log.Warn("could not record AI parse failure for %s (it will be retried next run): %v",
+						books[idx].FilePath, markErr)
+				} else if gaveUp {
+					booksGivenUp.Add(1)
+					log.Warn("AI parsing gave up on %s after %d failed run(s); rename the file to retry",
+						books[idx].FilePath, count)
+					// Scan-cache stamp now, so the scan stops re-reading the file
+					// to re-nominate it. The stamp means "file read", not
+					// "parsed"; the give-up mark is what records the failure.
+					writeBackScanCache(books[idx].FilePath, nil, log)
+				}
 			}
 
 			if aiErr := out.err; aiErr != nil {
@@ -387,7 +411,9 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	defer detailMu.Unlock()
 
 	return AIPhaseSummary{
-		BooksNominated:   len(candidates),
+		BooksNominated:   nominated,
+		BooksSkipped:     booksSkipped,
+		BooksGivenUp:     int(booksGivenUp.Load()),
 		BatchesTotal:     totalBatches,
 		BatchesOK:        int(batchesOK.Load()),
 		BatchesFailed:    int(failures.Load()),
@@ -642,8 +668,14 @@ type AIPhaseSummary struct {
 	// BatchesSplit counts batches re-asked in smaller pieces after a reply
 	// with the wrong number of results (parseBatchSplitting). BooksFailed
 	// counts the books that still failed alone, with detail in BookFailures.
-	BatchesSplit     int
-	BooksFailed      int
+	BatchesSplit int
+	BooksFailed  int
+	// BooksSkipped counts nominated books not asked about at all because they
+	// had already failed on their own in maxAIParseSingleFileFailures runs.
+	// BooksGivenUp counts the books that reached that cap during THIS run.
+	// Neither makes the run Failed(): a skip is the cap working as designed.
+	BooksSkipped     int
+	BooksGivenUp     int
 	AbortedPermanent bool
 	AbortedThreshold bool
 	// BatchFailures and SaveFailures are the capped detail behind the two
@@ -701,6 +733,10 @@ func (s AIPhaseSummary) String() string {
 	if s.BatchesSplit > 0 || s.BooksFailed > 0 {
 		msg += fmt.Sprintf("; %d batch(es) split after a wrong result count, %d book(s) failed on their own",
 			s.BatchesSplit, s.BooksFailed)
+	}
+	if s.BooksSkipped > 0 || s.BooksGivenUp > 0 {
+		msg += fmt.Sprintf("; %d book(s) skipped after %d failed runs, %d newly given up",
+			s.BooksSkipped, maxAIParseSingleFileFailures, s.BooksGivenUp)
 	}
 	switch {
 	case s.AbortedPermanent:
