@@ -4772,6 +4772,8 @@ export interface TaskInfo {
   category: string;
   enabled: boolean;
   interval_minutes: number;
+  /** "HH:MM" in the server's local zone; set for tasks that run at a fixed time each day. */
+  daily_at?: string;
   run_on_startup: boolean;
   run_in_maintenance_window: boolean;
   last_run?: string;

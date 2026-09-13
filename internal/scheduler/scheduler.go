@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-09-09
+// last-edited: 2026-09-13
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -83,6 +83,11 @@ type TaskDefinition struct {
 	GetInterval            func() time.Duration // 0 = manual only
 	RunOnStart             func() bool
 	RunInMaintenanceWindow func() bool // whether this task runs during the maintenance window
+	// DailyAt, when set, runs the task once a day at this 24-hour "HH:MM"
+	// wall-clock time in the server's local zone (see daily_at.go), and
+	// GetInterval is then ignored for scheduling. Empty means the task uses
+	// its interval, unchanged.
+	DailyAt string
 }
 
 // TaskInfo is the API-facing view of a registered task.
@@ -92,7 +97,8 @@ type TaskInfo struct {
 	Category               string  `json:"category"`
 	Enabled                bool    `json:"enabled"`
 	IntervalMinutes        int     `json:"interval_minutes"`
-	RunOnStartup           bool    `json:"run_on_startup"`
+	DailyAt                string  `json:"daily_at,omitempty"` // "HH:MM" server-local; interval_minutes is 0 for these
+	RunOnStartup        bool    `json:"run_on_startup"`
 	RunInMaintenanceWindow bool    `json:"run_in_maintenance_window"`
 	LastRun                *string `json:"last_run,omitempty"`
 	IsRunning              bool    `json:"is_running"`
@@ -270,7 +276,36 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 		// scheduler look healthy.
 		//
 		// A scheduler that drops a task must say which task and why.
-		if task.IsEnabled() && task.GetInterval() > 0 {
+		//
+		// A DailyAt task is checked first: it has its own wall-clock timer
+		// (daily_at.go) and must never also get an interval ticker.
+		if task.IsEnabled() && task.DailyAt != "" {
+			hour, minute, perr := parseDailyAt(task.DailyAt)
+			if perr != nil {
+				slog.Warn("Scheduled task is ENABLED but can NEVER run — its daily-at time does not parse",
+					"taskName", name, "dailyAt", task.DailyAt, "err", perr)
+				continue
+			}
+			taskName := name
+			loc := time.Local
+			wg.Go(func() {
+				// Check once immediately so a run missed while the server was
+				// down fires at startup rather than one poll later.
+				ts.runDailyAtCheck(taskName, hour, minute, loc)
+				ticker := time.NewTicker(intervalPollInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						ts.runDailyAtCheck(taskName, hour, minute, loc)
+					case <-shutdown:
+						return
+					}
+				}
+			})
+			slog.Info("Scheduled task daily", "taskName", taskName, "dailyAt", task.DailyAt,
+				"zone", loc.String(), "poll", intervalPollInterval, "durableClock", true)
+		} else if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
 			// The cadence is driven by a DURABLE clock in settings, polled every
@@ -291,30 +326,9 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 				for {
 					select {
 					case <-ticker.C:
-						last, ok := ts.loadIntervalLastTick(taskName)
-						if !ok {
-							// First observation of this task on this deployment.
-							// Seed the clock and decline, so the task becomes due
-							// one interval from now — what RunOnStart=false asks
-							// for. The seed MUST persist; if it does not, every
-							// boot re-seeds and the task never becomes due, which
-							// is the same silence this replaces.
-							ts.stampIntervalTick(taskName, time.Now())
+						if !ts.claimIntervalRun(taskName, interval, time.Now()) {
 							continue
 						}
-						if time.Since(last) < interval {
-							continue
-						}
-						// Stamp BEFORE calling TriggerFn, and stamp on every due
-						// check rather than only on a successful enqueue. That is
-						// what reproduces ticker semantics: a task that
-						// legitimately declines (library_scan skips while a scan
-						// is active; library_scan_full declines 167 of every 168
-						// due checks by design) is re-checked one interval later
-						// instead of on every poll. ts.lastRun keeps its own,
-						// different meaning — the last tick that actually
-						// enqueued — and runTask still stamps it only then.
-						ts.stampIntervalTick(taskName, time.Now())
 						if op, err := ts.RunTask(taskName); err != nil {
 							slog.Warn("Scheduled task failed", "taskName", taskName, "err", err)
 						} else if op != nil {
@@ -451,6 +465,7 @@ func (ts *TaskScheduler) ListTasks() []TaskInfo {
 			Category:        task.Category,
 			Enabled:         task.IsEnabled(),
 			IntervalMinutes: int(task.GetInterval() / time.Minute),
+			DailyAt:         task.DailyAt,
 			RunOnStartup:    task.RunOnStart(),
 		}
 		if task.RunInMaintenanceWindow != nil {
