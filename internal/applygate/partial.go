@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-09-13
 
@@ -31,6 +31,9 @@ var (
 	spanRe = regexp.MustCompile(`(?i)\b(?:omnibus|box(?:ed)?\s*set|boxset|publisher.?s\s+pack|complete\s+series|books\s*\d+\s*(?:-|–|to|thru|&|and)\s*\d+|vol(?:ume)?s\.?\s*\d+\s*(?:-|–|to|&|and)\s*\d+|vol(?:ume)?\.?\s*\d+\s*(?:&|and)\s*\d+)\b`)
 	// fileExtRe is a file extension at the end of a path.
 	fileExtRe = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{1,3}$`)
+	// rangeTailRe follows a part marker that opens a range ("Disc 1-3",
+	// "Parts 1 & 2"): a range means the files hold every part, not one.
+	rangeTailRe = regexp.MustCompile(`(?i)^\s*(?:-|–|to|thru|through|&|and)\s*(?:\d+|[ivx]+)\b`)
 
 	partWords = map[string]float64{"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
 	partRoman = map[string]float64{"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10}
@@ -68,7 +71,7 @@ func (x *ClaimIndex) Add(book *database.Book, c *metafetch.MetadataCandidate) {
 		return
 	}
 	d := bookDir(book.FilePath)
-	p, ok := partOf(book.Title + " | " + dirBase(d))
+	p, ok := partOf(bookSide(book.Title, book.FilePath))
 	x.mu.Lock()
 	x.byKey[k] = append(x.byKey[k], claim{bookID: book.ID, dir: d, part: p, hasPart: ok})
 	x.mu.Unlock()
@@ -132,7 +135,7 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		return r
 	}
 	d := bookDir(book.FilePath)
-	bside := book.Title + " | " + dirBase(d)
+	bside := bookSide(book.Title, book.FilePath)
 	cside := c.Title + " " + c.Subtitle
 	bp, bok := partOf(bside)
 	cp, cok := partOf(cside)
@@ -167,24 +170,42 @@ func partText(p float64, ok bool) string {
 	return "is part " + ftoa(p)
 }
 
-// partOf returns the part number of the first part marker in s.
+// partOf returns the part number of the first part marker in s. A marker
+// that opens a range ("Disc 1-3") is not a part: those files hold them all.
 func partOf(s string) (float64, bool) {
-	m := partRe.FindStringSubmatch(s)
-	if m == nil {
-		return 0, false
+	for _, ix := range partRe.FindAllStringSubmatchIndex(s, -1) {
+		if rangeTailRe.MatchString(s[ix[1]:]) {
+			continue
+		}
+		var tok string
+		if ix[2] >= 0 {
+			tok = strings.ToLower(s[ix[2]:ix[3]])
+		} else {
+			tok = s[ix[4]:ix[5]]
+		}
+		if v, ok := partWords[tok]; ok {
+			return v, true
+		}
+		if v, ok := partRoman[tok]; ok {
+			return v, true
+		}
+		if v, err := strconv.ParseFloat(tok, 64); err == nil {
+			return v, true
+		}
 	}
-	tok := strings.ToLower(m[1])
-	if tok == "" {
-		tok = m[2]
+	return 0, false
+}
+
+// bookSide is the text a book's part marker can sit in: its title, its
+// folder name and, for a single-file book, the file name without extension
+// ("Lonesome Dove Part 1.m4b").
+func bookSide(title, filePath string) string {
+	d := bookDir(filePath)
+	s := title + " | " + dirBase(d)
+	if p := strings.TrimSpace(filePath); p != "" && p != d {
+		s += " | " + fileExtRe.ReplaceAllString(filepath.Base(p), "")
 	}
-	if v, ok := partWords[tok]; ok {
-		return v, true
-	}
-	if v, ok := partRoman[tok]; ok {
-		return v, true
-	}
-	v, err := strconv.ParseFloat(tok, 64)
-	return v, err == nil
+	return s
 }
 
 // bookDir is the book's folder: the path itself for a folder book, its
