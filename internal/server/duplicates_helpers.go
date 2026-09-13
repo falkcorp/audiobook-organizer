@@ -971,7 +971,9 @@ func executeSeriesNormalizeCore(
 	}
 	positionMembers, pmErr := database.SeriesMembershipAllVersions(store, positionIDs)
 	if pmErr != nil {
-		return affectedBookIDs, fmt.Errorf("series normalize: refusing to rename or merge without "+
+		// nil, not affectedBookIDs: nothing was renamed or merged, so there is
+		// nothing for the caller to re-organize or write back.
+		return nil, fmt.Errorf("series normalize: refusing to rename or merge without "+
 			"series membership, so no series position is lost unrecorded: %w", pmErr)
 	}
 	for _, pa := range positionedActions {
