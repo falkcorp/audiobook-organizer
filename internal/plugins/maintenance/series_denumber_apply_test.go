@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -296,5 +296,81 @@ func TestRunSeriesDenumber_DryRunReportsGuardHeldBack(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("dry-run summary did not report the guard-held-back count; logs: %v", reporter.logs)
+	}
+}
+
+// TestRunSeriesDenumber_DoesNotDeleteAfterAFailedReassignment pins the OTHER
+// half of the delete gate: movedAll. The trashed-row test above isolates
+// safeToDelete; this one holds safeToDelete true (the unfiltered count equals
+// what AllVersions enumerated) and fails one UpdateBook, so only movedAll can
+// stop DeleteSeries(numberedID). Deleting there would leave the failed row
+// holding a series ID that no longer resolves -- #2908's failed-reassignment
+// shape on the fourth series-delete path.
+func TestRunSeriesDenumber_DoesNotDeleteAfterAFailedReassignment(t *testing.T) {
+	const (
+		baseID     = 10
+		numberedID = 11
+		movable    = "dw05-ok"
+		stuck      = "dw05-write-fails"
+	)
+	authorID := 3
+
+	store := &database.MockStore{}
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{
+			{ID: baseID, Name: "Discworld", AuthorID: &authorID},
+			{ID: numberedID, Name: "Discworld 05", AuthorID: &authorID},
+		}, nil
+	}
+	store.GetAllSeriesBookCountsFunc = func() (map[int]int, error) {
+		return map[int]int{baseID: 4, numberedID: 2}, nil
+	}
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == numberedID {
+			return []database.BookCore{{ID: movable}, {ID: stuck}}, nil
+		}
+		return nil, nil
+	}
+	// Equal to what AllVersions returns, so the reference guard passes and
+	// only movedAll is left to refuse the delete.
+	store.GetAllSeriesBookRefCountsFunc = func() (map[int]int, error) {
+		return map[int]int{baseID: 4, numberedID: 2}, nil
+	}
+	store.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := numberedID
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	repointed := map[string]int{}
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == stuck {
+			return nil, errors.New("simulated write failure")
+		}
+		if b.SeriesID != nil {
+			repointed[id] = *b.SeriesID
+		}
+		return b, nil
+	}
+	deleted := []int{}
+	store.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+
+	p := &Plugin{deps: fakeDeps{store: store}}
+	if err := p.runSeriesDenumber(context.Background(), json.RawMessage(`{"apply": true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("runSeriesDenumber: %v", err)
+	}
+
+	// Fixture guard: the plan must actually have been applied, or the
+	// no-delete assertion below passes against a run that did nothing.
+	if got, ok := repointed[movable]; !ok || got != baseID {
+		t.Fatalf("movable book %s not repointed to %d (present=%v, got %d) -- the plan was "+
+			"not applied, so this test proves nothing", movable, baseID, ok, got)
+	}
+	for _, id := range deleted {
+		if id == numberedID {
+			t.Fatalf("series %d deleted even though UpdateBook(%s) failed and that row still "+
+				"points at it -- the movedAll gate did not hold", numberedID, stuck)
+		}
 	}
 }
