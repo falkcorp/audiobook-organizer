@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -53,7 +53,7 @@ var slogRatchet = map[string]int{
 	"internal/audiobooks/service_filtering.go":                   3,
 	"internal/audiobooks/service_mutation.go":                    14,
 	"internal/audiobooks/service_query.go":                       16,
-	"internal/audiobooks/service_single.go":                      10,
+	"internal/audiobooks/service_single.go":                      8,
 	"internal/audiobooks/service_tags.go":                        2,
 	"internal/audioutil/duration.go":                             1,
 	"internal/backup/backup.go":                                  9,
