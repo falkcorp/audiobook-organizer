@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-09-13
 
@@ -68,7 +68,14 @@ type mergeSamePathParams struct {
 	// PathPrefix scopes the sweep to one tree (e.g. only the organizer's tree).
 	// The match is on a folder boundary: "/lib" matches "/lib" and "/lib/…" but
 	// not "/lib2/…". Empty = no filter.
+	//
+	// Accepted as "pathPrefix" OR "path_prefix" (the latter lands in
+	// PathPrefixAlias and is folded in by decodeOpParams; both present with
+	// different values is an error). Unknown keys are rejected.
 	PathPrefix string `json:"pathPrefix"`
+	// PathPrefixAlias is the "path_prefix" spelling of PathPrefix. Never read
+	// it directly: decodeOpParams folds it into PathPrefix and clears it.
+	PathPrefixAlias string `json:"path_prefix,omitempty"`
 	// Max bounds merged groups per run. <=0 uses mergeSamePathDefaultMax.
 	Max int `json:"max"`
 	// ReportPath overrides where the full per-group TSV lands.
@@ -173,10 +180,8 @@ func (p *Plugin) mergeSamePathDupesDef() sdk.OperationDef {
 
 func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params mergeSamePathParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("merge-same-path-dupes: decode params: %w", err)
-		}
+	if err := decodeOpParams(rawParams, &params); err != nil {
+		return fmt.Errorf("merge-same-path-dupes: decode params: %w", err)
 	}
 	store := p.deps.OpsStore()
 	if store == nil {
