@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_pebble_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b4d6f8a-0c1e-4f3a-8d5b-9e1f3a5c7b86
 // last-edited: 2026-09-13
 
@@ -7,12 +7,123 @@ package handlers_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
+
+func openSplitStore(t *testing.T) *database.PebbleStore {
+	t.Helper()
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "split-db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// seedSplitBook creates a book at bookPath holding one row per file path and
+// returns the book and the row ids in order.
+func seedSplitBook(t *testing.T, store *database.PebbleStore, bookPath string, files ...string) (*database.Book, []string) {
+	t.Helper()
+	src, err := store.CreateBook(&database.Book{Title: "Source", FilePath: bookPath, Format: "mp3"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	ids := make([]string, 0, len(files))
+	for _, p := range files {
+		f := &database.BookFile{BookID: src.ID, FilePath: p, Format: "mp3", Duration: 100, FileSize: 10}
+		if err := store.CreateBookFile(f); err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+		ids = append(ids, f.ID)
+	}
+	return src, ids
+}
+
+func runSplit(t *testing.T, store *database.PebbleStore, srcID string, fileIDs ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := `{"segment_ids":["` + strings.Join(fileIDs, `","`) + `"],"as_one_book":true,"title":"Split"}`
+	c, w := splitReq(body)
+	c.Params[0].Value = srcID
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	return w
+}
+
+// assertSourceUntouched checks that a refused split wrote nothing: the source
+// still owns its path's lookup key, is the only live book there, and holds
+// every row.
+func assertSourceUntouched(t *testing.T, store *database.PebbleStore, src *database.Book, rows int) {
+	t.Helper()
+	owner, err := store.GetBookByFilePath(src.FilePath)
+	if err != nil || owner == nil || owner.ID != src.ID {
+		t.Fatalf("GetBookByFilePath(%q) = %+v, %v; want the source %s", src.FilePath, owner, err, src.ID)
+	}
+	live, err := store.LiveBookIDsAtPath(src.FilePath)
+	if err != nil || len(live) != 1 || live[0] != src.ID {
+		t.Fatalf("live books at %q = %v, %v; want only the source", src.FilePath, live, err)
+	}
+	files, err := store.GetBookFiles(src.ID)
+	if err != nil || len(files) != rows {
+		t.Fatalf("source rows = %d, %v; want %d", len(files), err, rows)
+	}
+}
+
+// Scenario A: files from two sibling folders. Their common folder is the
+// source's own path, so creating a book there would take the source's lookup
+// key. Refused before any write.
+func TestSplitAsOneBook_FilesFromTwoFolders_Refused(t *testing.T) {
+	store := openSplitStore(t)
+	src, ids := seedSplitBook(t, store, "/lib/Parent",
+		"/lib/Parent/A/01.mp3", "/lib/Parent/B/01.mp3", "/lib/Parent/B/02.mp3")
+
+	w := runSplit(t, store, src.ID, ids[0], ids[1])
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "split_files_span_folders") {
+		t.Fatalf("want 400 split_files_span_folders, got %d: %s", w.Code, w.Body.String())
+	}
+	assertSourceUntouched(t, store, src, 3)
+}
+
+// Scenario B: the selected files sit directly in the source's folder, so the
+// new book's path would be the source's path. Refused before any write; the
+// source keeps its key (before the fix the new book took it, and the source's
+// later path update deleted it, leaving the path with no owner).
+func TestSplitAsOneBook_FolderIsSourcePath_Refused(t *testing.T) {
+	store := openSplitStore(t)
+	src, ids := seedSplitBook(t, store, "/lib/New",
+		"/lib/New/01.mp3", "/lib/New/02.mp3", "/lib/Other/03.mp3")
+
+	w := runSplit(t, store, src.ID, ids[0], ids[1])
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "split_path_taken") {
+		t.Fatalf("want 400 split_path_taken, got %d: %s", w.Code, w.Body.String())
+	}
+	assertSourceUntouched(t, store, src, 3)
+}
+
+// The target folder already holds another live book: refused, and that book
+// keeps its key.
+func TestSplitAsOneBook_FolderHeldByAnotherBook_Refused(t *testing.T) {
+	store := openSplitStore(t)
+	src, ids := seedSplitBook(t, store, "/lib/Omnibus",
+		"/lib/Omnibus/Book 1/01.mp3", "/lib/Omnibus/Book 1/02.mp3", "/lib/Omnibus/Book 2/01.mp3")
+	other, err := store.CreateBook(&database.Book{Title: "Other", FilePath: "/lib/Omnibus/Book 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := runSplit(t, store, src.ID, ids[0], ids[1])
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), other.ID) {
+		t.Fatalf("want 400 naming %s, got %d: %s", other.ID, w.Code, w.Body.String())
+	}
+	assertSourceUntouched(t, store, src, 3)
+	if got, _ := store.GetBookByFilePath("/lib/Omnibus/Book 1"); got == nil || got.ID != other.ID {
+		t.Fatalf("occupant lost its key: %+v", got)
+	}
+}
 
 // End to end on the real Pebble store: split two of three files into one new
 // book, then read both books back. Each row is under exactly one book, and

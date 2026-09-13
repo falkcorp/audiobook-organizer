@@ -510,6 +510,68 @@ func (_c *MockVersionsStore_GetExternalIDsForBook_Call) RunAndReturn(run func(bo
 	return _c
 }
 
+// LiveBookIDsAtPath provides a mock function for the type MockVersionsStore
+func (_mock *MockVersionsStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	ret := _mock.Called(path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LiveBookIDsAtPath")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]string, error)); ok {
+		return returnFunc(path)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []string); ok {
+		r0 = returnFunc(path)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(path)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockVersionsStore_LiveBookIDsAtPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LiveBookIDsAtPath'
+type MockVersionsStore_LiveBookIDsAtPath_Call struct {
+	*mock.Call
+}
+
+// LiveBookIDsAtPath is a helper method to define mock.On call
+//   - path string
+func (_e *MockVersionsStore_Expecter) LiveBookIDsAtPath(path any) *MockVersionsStore_LiveBookIDsAtPath_Call {
+	return &MockVersionsStore_LiveBookIDsAtPath_Call{Call: _e.mock.On("LiveBookIDsAtPath", path)}
+}
+
+func (_c *MockVersionsStore_LiveBookIDsAtPath_Call) Run(run func(path string)) *MockVersionsStore_LiveBookIDsAtPath_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockVersionsStore_LiveBookIDsAtPath_Call) Return(strings []string, err error) *MockVersionsStore_LiveBookIDsAtPath_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockVersionsStore_LiveBookIDsAtPath_Call) RunAndReturn(run func(path string) ([]string, error)) *MockVersionsStore_LiveBookIDsAtPath_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MoveBookFilesToBook provides a mock function for the type MockVersionsStore
 func (_mock *MockVersionsStore) MoveBookFilesToBook(fileIDs []string, sourceBookID string, targetBookID string) error {
 	ret := _mock.Called(fileIDs, sourceBookID, targetBookID)

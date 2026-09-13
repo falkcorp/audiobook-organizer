@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.162.0
+// version: 1.163.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -66,7 +66,7 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - series:<id>                -> Series JSON
 // - series:name:<name>:<author_id> -> series_id (for lookups)
 // - book:<id>                  -> Book JSON
-// - book:path:<path>           -> book_id (for lookups; single owner, last writer wins)
+// - book:path:<path>           -> book_id (for lookups; single owner, never taken from a live owner: pebble_store_book_path_owner.go)
 // - book_atpath:<path>\x00<id> -> empty (every book at a path; see pebble_store_atpath_index.go)
 // NOTE: book:series and book:author prefix indexes were removed in Task 3.4.
 //       GetBooksBySeriesIDCore and GetBooksByAuthorIDCore fall back to a full Pebble scan
@@ -2452,6 +2452,15 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 		book.ID = id
 	}
 
+	// Hold this book's write stripe across the commit, so a caller-supplied ID
+	// cannot interleave with an UpdateBook or DeleteBook of the same ID.
+	// setBookPathKeyIfFree reads the path key's current owner row WITHOUT that
+	// owner's stripe: taking a second stripe would break the one-stripe rule
+	// (pebble_store_book_lock.go). A stale read there can only skip the key,
+	// and the book stays findable through book_atpath.
+	unlock := p.lockBook(book.ID)
+	defer unlock()
+
 	// Set timestamps
 	now := time.Now()
 	book.CreatedAt = &now
@@ -2481,9 +2490,9 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 		return nil, err
 	}
 
-	// Path index
-	pathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
-	if err := batch.Set(pathKey, []byte(book.ID), nil); err != nil {
+	// Single-valued path index, unless another live book owns that key
+	// (pebble_store_book_path_owner.go).
+	if err := p.setBookPathKeyIfFree(batch, book.FilePath, book.ID); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -2729,13 +2738,13 @@ func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
 
 	// Update path index if changed
 	if oldBook.FilePath != book.FilePath {
-		oldPathKey := []byte(fmt.Sprintf("book:path:%s", oldBook.FilePath))
-		if err := batch.Delete(oldPathKey, nil); err != nil {
+		// Compare-and-delete the old key, set the new one only if free
+		// (pebble_store_book_path_owner.go).
+		if err := p.deleteBookPathKeyIfOwned(batch, oldBook.FilePath, id); err != nil {
 			batch.Close()
 			return nil, err
 		}
-		newPathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
-		if err := batch.Set(newPathKey, []byte(id), nil); err != nil {
+		if err := p.setBookPathKeyIfFree(batch, book.FilePath, id); err != nil {
 			batch.Close()
 			return nil, err
 		}
@@ -3205,6 +3214,14 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 }
 
 func (p *PebbleStore) DeleteBook(id string) error {
+	// The book's write stripe (pebble_store_book_lock.go) spans the read below
+	// and the commit, so a concurrent UpdateBook cannot move the book's path
+	// between them: the compare-and-delete of book:path: and the book_atpath
+	// row then act on the path the book is really at. The owner check reads
+	// only the path key and this book's row, never another book's stripe.
+	unlock := p.lockBook(id)
+	defer unlock()
+
 	book, err := p.GetBookByID(id)
 	if err != nil {
 		return err
@@ -3234,9 +3251,9 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 
-	// Delete path index
-	pathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
-	if err := batch.Delete(pathKey, nil); err != nil {
+	// Single-valued path index, only if it still names this book
+	// (pebble_store_book_path_owner.go).
+	if err := p.deleteBookPathKeyIfOwned(batch, book.FilePath, id); err != nil {
 		batch.Close()
 		return err
 	}
