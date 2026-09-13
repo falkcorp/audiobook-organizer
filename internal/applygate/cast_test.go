@@ -1,5 +1,5 @@
 // file: internal/applygate/cast_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
 // last-edited: 2026-09-13
 
@@ -83,6 +83,15 @@ func TestCheckCastInAuthor(t *testing.T) {
 			name: "self-read (d): co-written memoir read by its first author blocks",
 			book: database.Book{Title: "Becoming Kareem", Narrator: strp("Kareem Abdul-Jabbar")},
 			cand: metafetch.MetadataCandidate{Title: "Becoming Kareem", Author: "Kareem Abdul-Jabbar, Raymond Obstfeld"},
+			want: ReasonCastInAuthor,
+		},
+		{
+			// The apply would write the whole list over the stored author
+			// (it skips the author only when it equals the narrator), so the
+			// author == narrator case must not be exempt.
+			name: "Big Finish: stored author = narrator = the writer, cast appended",
+			book: database.Book{Title: "Resistance", Author: &database.Author{Name: "Steve Lyons"}, Narrator: strp("Steve Lyons")},
+			cand: metafetch.MetadataCandidate{Title: "Resistance", Author: "Steve Lyons, Anneke Wills, John Sackville"},
 			want: ReasonCastInAuthor,
 		},
 		{
