@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/op_params.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 89996e05-3a09-42d5-866b-67006fe7787f
 // last-edited: 2026-09-13
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // The two spellings of the path-prefix param. Historically three ops
@@ -39,6 +40,8 @@ type pathPrefixParams interface {
 //   - Unknown keys are REJECTED (json.Decoder.DisallowUnknownFields), so a typo
 //     such as "path_prefx" fails the run instead of widening it. The error text
 //     names the key.
+//   - A key repeated in the top-level object, exactly or in another case, is
+//     rejected ("duplicate key"): json would otherwise keep the last value.
 //   - Trailing data after the object is rejected too.
 //   - An empty body (or JSON null) decodes to the zero value: no filter,
 //     report-only, exactly as before.
@@ -49,6 +52,9 @@ type pathPrefixParams interface {
 // the op having done nothing.
 func decodeOpParams(raw json.RawMessage, dst pathPrefixParams) error {
 	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := rejectDuplicateKeys(raw); err != nil {
+			return err
+		}
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(dst); err != nil {
@@ -60,6 +66,46 @@ func decodeOpParams(raw json.RawMessage, dst pathPrefixParams) error {
 		}
 	}
 	return dst.foldPathPrefixAlias()
+}
+
+// rejectDuplicateKeys fails a top-level object that names any key twice.
+//
+// encoding/json keeps the LAST value for a repeated key and matches keys to
+// fields case-insensitively, so {"pathPrefix":"/lib","pathPrefix":""} or
+// {"pathPrefix":"/a","PathPrefix":""} would decode to an EMPTY prefix: the
+// same whole-library sweep the alias fix closes. Keys are compared after
+// ToLower(ToUpper(k)), which also collapses the non-ASCII case folds json
+// accepts (U+017F long s matches "s", U+212A Kelvin sign matches "k").
+//
+// A body that is not an object (e.g. null) is left to the real decode.
+// Syntax errors are returned as-is; the real decode would report them too.
+func rejectDuplicateKeys(raw json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := keyTok.(string)
+		folded := strings.ToLower(strings.ToUpper(key))
+		if seen[folded] {
+			return fmt.Errorf("duplicate key %q", key)
+		}
+		seen[folded] = true
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // foldPathPrefixAlias moves the alias spelling into the canonical field. Both
