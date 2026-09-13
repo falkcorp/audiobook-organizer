@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-13
 
@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -269,8 +270,71 @@ func TestSearchAudiobookMetadata_PlainFetchAndCache(t *testing.T) {
 	}
 }
 
+func noPool(c *cfg) { c.hasPool = false }
+
+// A rename known to fail refuses the apply before any write: 409 with the
+// shared reason and the preflight's detail. ApplyMetadataCandidate,
+// InvalidateCachedCandidates, the write-back enqueue, the pool submit and the
+// event are never set up, so the strict mocks fail the test if any runs.
+func TestApplyAudiobookMetadata_RenamePreflightRefusesBeforeAnyWrite(t *testing.T) {
+	h, d := newHandler(t)
+	blocked := fmt.Errorf("%w: two files of one book plan the same target path", metafetch.ErrApplyFileWorkWouldFail)
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(blocked)
+	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
+		map[string]any{"candidate": map[string]any{"title": "X"}, "fields": []string{"title"}}, idParam("b1"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Reason != metafetch.ApplyRefusedReasonFileWorkWouldFail {
+		t.Fatalf("reason = %q, want %q", body.Reason, metafetch.ApplyRefusedReasonFileWorkWouldFail)
+	}
+	if !strings.Contains(body.Error, "same target path") {
+		t.Fatalf("error must carry the preflight detail, got %q", body.Error)
+	}
+	if len(d.rec.publishedEvents) != 0 {
+		t.Fatalf("a refused apply must publish no event, got %d", len(d.rec.publishedEvents))
+	}
+}
+
+// With no file-IO pool there is no file sequel, so no rename to check: the
+// preflight is not called (the strict mock has no expectation for it).
+func TestApplyAudiobookMetadata_NoFileSequelSkipsRenamePreflight(t *testing.T) {
+	h, d := newHandler(t, noPool)
+	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
+		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
+	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
+	d.wb.EXPECT().Enqueue("b1").Return()
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
+	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
+		map[string]any{"candidate": map[string]any{"title": "X"}}, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// write_back=false still runs the file I/O (and so the rename) in the
+// background job, so the preflight still runs.
+func TestApplyAudiobookMetadata_WriteBackOffStillRunsRenamePreflight(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).
+		Return(fmt.Errorf("%w: planned target held by another file", metafetch.ErrApplyFileWorkWouldFail))
+	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
+		map[string]any{"candidate": map[string]any{"title": "X"}, "write_back": false}, idParam("b1"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestApplyAudiobookMetadata(t *testing.T) {
 	h, d := newHandler(t)
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
