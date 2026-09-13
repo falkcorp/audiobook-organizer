@@ -1,5 +1,5 @@
 // file: internal/applygate/cast_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
 // last-edited: 2026-09-13
 
@@ -60,6 +60,32 @@ func TestCheckCastInAuthor(t *testing.T) {
 			cand: metafetch.MetadataCandidate{Title: "Hellhole", Author: "Frank Herbert, Brian Herbert, Kevin J. Anderson"},
 		},
 		{
+			name: "self-read (a): solo author reads their own book, no stored author",
+			book: database.Book{Title: "A Promised Land", Narrator: strp("Barack Obama")},
+			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama"},
+		},
+		{
+			name: "self-read (b): stored author, narrator and candidate are the same person",
+			book: database.Book{Title: "A Promised Land", Author: &database.Author{Name: "Barack Obama"}, Narrator: strp("Barack Obama")},
+			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama"},
+		},
+		{
+			name: "self-read (c): candidate names its own narrator, so the check steps aside",
+			book: database.Book{Title: "A Promised Land", Narrator: strp("Barack Obama")},
+			cand: metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama, Second Author", Narrator: "Barack Obama"},
+		},
+		{
+			// Known false positive, kept on purpose (owner decision on F1): a
+			// co-written book read by its FIRST author, with no stored author
+			// and no candidate narrator, looks exactly like a Big Finish drama
+			// credited to its writer plus the cast. A block only sends the row
+			// to manual review; nothing is written.
+			name: "self-read (d): co-written memoir read by its first author blocks",
+			book: database.Book{Title: "Becoming Kareem", Narrator: strp("Kareem Abdul-Jabbar")},
+			cand: metafetch.MetadataCandidate{Title: "Becoming Kareem", Author: "Kareem Abdul-Jabbar, Raymond Obstfeld"},
+			want: ReasonCastInAuthor,
+		},
+		{
 			name: "narrator repeats the first author in full-name form",
 			book: database.Book{Title: "Frostfire", Narrator: strp("Marc Platt")},
 			cand: metafetch.MetadataCandidate{Title: "Frostfire", Author: "Marc Platt, Maureen O'Brien"},
@@ -102,6 +128,27 @@ func TestCheckCastInAuthor(t *testing.T) {
 				t.Fatalf("reason %q (%s), want %q", r.Reason, r.Detail, c.want)
 			}
 		})
+	}
+}
+
+// TestCheckEvidence_SelfReadIsNotCast runs self-read case (a) through the
+// whole evidence leg: cast_in_author must stay neutral and must not be the
+// reason for any refusal.
+func TestCheckEvidence_SelfReadIsNotCast(t *testing.T) {
+	book := database.Book{Title: "A Promised Land", Duration: intp(104400), Narrator: strp("Barack Obama"),
+		FilePath: "/lib/Barack Obama/A Promised Land/A Promised Land.m4b"}
+	cand := metafetch.MetadataCandidate{Title: "A Promised Land", Author: "Barack Obama", DurationSec: 104400}
+	v := CheckEvidence(&book, &cand, false)
+	if v.Reason == ReasonCastInAuthor {
+		t.Fatalf("self-read blocked as cast: %+v", v)
+	}
+	for _, ch := range v.Checks {
+		if ch.Name == "cast_in_author" && ch.Outcome != OutcomeNeutral {
+			t.Fatalf("cast_in_author = %+v, want neutral", ch)
+		}
+	}
+	if !v.Pass {
+		t.Fatalf("self-read with matching runtime, title and path did not pass: reason %q (%s)", v.Reason, v.Detail)
 	}
 }
 
