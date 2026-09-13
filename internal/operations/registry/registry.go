@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.25.1
+// version: 3.25.2
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package registry
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/oklog/ulid/v2"
 )
@@ -694,7 +695,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 			bw, bmw := effectiveBatchWindows(def)
 			r.batchAdd(defID, database.OpSubject{Type: sub.Type, ID: sub.ID}, bw, bmw)
 			r.logger.Debug("registry: batchable op bucketed",
-				"def_id", defID, "subject_type", sub.Type, "subject_id", sub.ID)
+				"def_id", defID, "subject_type", logger.SanitizeLogValue(sub.Type), "subject_id", logger.SanitizeLogValue(sub.ID))
 			return "", nil // op ID assigned at flush time
 		}
 	}
@@ -878,7 +879,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 
 	if status == "waiting_deps" {
 		r.logger.Info("registry: parked op (waiting_deps)", "op_id", opID, "def_id", defID,
-			"subject_type", subjectType, "subject_id", subjectID)
+			"subject_type", logger.SanitizeLogValue(subjectType), "subject_id", logger.SanitizeLogValue(subjectID))
 	} else {
 		r.logger.Info("registry: enqueued op", "op_id", opID, "def_id", defID, "priority", priority)
 	}
