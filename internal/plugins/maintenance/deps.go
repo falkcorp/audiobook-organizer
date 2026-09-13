@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-13
 
@@ -513,12 +513,19 @@ type RuntimeConfig interface {
 	RootDir() string
 	LogRetentionDays() int
 	PurgeSoftDeletedAfterDays() int
+	BackupRetentionDays() int
+	ActivityRetentionConfig
+}
+
+// ActivityRetentionConfig is the activity-log slice of RuntimeConfig: how long
+// entries keep full detail (nightly compaction), and the legacy compaction,
+// summarize and prune windows the midnight cleanup reads.
+type ActivityRetentionConfig interface {
 	ActivityLogCompactionDays() int
 	ActivityLogNightlyCompactionEnabled() bool
 	ActivityLogFullDetailDays() int
 	ActivityLogRetentionChangeDays() int
 	ActivityLogRetentionDebugDays() int
-	BackupRetentionDays() int
 }
 
 // OpEnqueuer enqueues and awaits other operations.
