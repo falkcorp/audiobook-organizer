@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -382,7 +382,7 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	case err != nil:
 		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
 	case updated == nil:
-		slog.Warn("library copy vanished before the metadata sync", "id", libCopy.ID)
+		logger.New("metafetch-library-copy").Warn("library copy %s vanished before the metadata sync", logger.SanitizeLogValue(libCopy.ID))
 		return
 	default:
 		// Keep the caller's struct in step with what was written, as the
