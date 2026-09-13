@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
 // last-edited: 2026-09-13
 
@@ -94,8 +94,12 @@ func TestModifyBook_ConcurrentWritersLoseNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := len(setters) * iters; row.Duration == nil || *row.Duration != want {
-		t.Fatalf("counter = %v, want %d: a concurrent write was lost", row.Duration, want)
+	want := len(setters) * iters
+	if row.Duration == nil {
+		t.Fatalf("counter is nil, want %d: a concurrent write was lost", want)
+	}
+	if *row.Duration != want {
+		t.Fatalf("counter = %d, want %d: a concurrent write was lost", *row.Duration, want)
 	}
 	for g, get := range getters {
 		want := fmt.Sprintf("g%d-%d", g, iters-1)
