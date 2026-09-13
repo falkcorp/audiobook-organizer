@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -90,6 +90,19 @@ import {
  * If the steps do not replay to the shipped score, the panel says so rather than
  * rendering a confident-looking breakdown of a number it cannot account for.
  */
+/**
+ * The candidate's subtitle, when it adds something the title does not already
+ * say. Some providers (Google Books) fold the subtitle into the title
+ * ("Star Wars: A New Dawn"), so repeating it underneath would be noise; others
+ * (Audible) keep them apart and the subtitle is the only place it shows.
+ */
+function candidateSubtitle(candidate: MetadataCandidate): string | null {
+  const subtitle = candidate.subtitle?.trim();
+  if (!subtitle) return null;
+  if (candidate.title.toLowerCase().includes(subtitle.toLowerCase())) return null;
+  return subtitle;
+}
+
 function EvidenceSection({ candidate }: { candidate: MetadataCandidate }) {
   return (
     <Box sx={{ mt: 2 }} data-testid="evidence-section">
@@ -684,6 +697,11 @@ const CompactRow = memo(function CompactRow({
                   >
                     {r.candidate.title}
                   </Typography>
+                  {candidateSubtitle(r.candidate) && (
+                    <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                      {candidateSubtitle(r.candidate)}
+                    </Typography>
+                  )}
                   <Typography variant="body2">{r.candidate.author}</Typography>
                   {r.candidate.narrator && (
                     <Typography
@@ -889,6 +907,11 @@ const TwoColumnCard = memo(function TwoColumnCard({
                 >
                   {r.candidate.title}
                 </Typography>
+                {candidateSubtitle(r.candidate) && (
+                  <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                    {candidateSubtitle(r.candidate)}
+                  </Typography>
+                )}
                 <Typography variant="body2">{r.candidate.author}</Typography>
                 {r.candidate.narrator && (
                   <Typography

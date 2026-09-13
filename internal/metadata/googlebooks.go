@@ -1,7 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package metadata
 
@@ -64,6 +64,7 @@ type googleBooksVol struct {
 
 type googleBooksVolumeInfo struct {
 	Title               string                  `json:"title"`
+	Subtitle            string                  `json:"subtitle"`
 	Authors             []string                `json:"authors"`
 	Publisher           string                  `json:"publisher"`
 	PublishedDate       string                  `json:"publishedDate"`
@@ -131,7 +132,8 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 	for _, item := range gbResp.Items {
 		vi := item.VolumeInfo
 		meta := BookMetadata{
-			Title:       vi.Title,
+			Title:       googleBooksFullTitle(vi.Title, vi.Subtitle),
+			Subtitle:    strings.TrimSpace(vi.Subtitle),
 			Publisher:   vi.Publisher,
 			Description: vi.Description,
 			Language:    vi.Language,
@@ -171,4 +173,31 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 		results = append(results, meta)
 	}
 	return results, nil
+}
+
+// googleBooksFullTitle joins Google's title and subtitle into the single
+// "Title: Subtitle" form the rest of the pipeline treats as canonical
+// (metafetch's stripSubtitle and titleSegment both split on ": ").
+//
+// Google Books often files a franchise or series name as the title and the
+// book's real title as the subtitle: "A New Dawn" comes back as title
+// "Star Wars", subtitle "A New Dawn". Using the bare title made the candidate
+// indistinguishable from every other book in the franchise, and scoring
+// compared "Star Wars" against the book's real title. Audible and Audnexus
+// keep Title as-is because their title field IS the book title; Google's is
+// not reliably, so the full form is the only safe title to score and display.
+// The raw subtitle is still carried separately in BookMetadata.Subtitle.
+func googleBooksFullTitle(title, subtitle string) string {
+	title = strings.TrimSpace(title)
+	subtitle = strings.TrimSpace(subtitle)
+	switch {
+	case subtitle == "":
+		return title
+	case title == "":
+		return subtitle
+	case strings.Contains(strings.ToLower(title), strings.ToLower(subtitle)):
+		// Already baked in (or identical): avoid "X: Y: Y".
+		return title
+	}
+	return title + ": " + subtitle
 }
