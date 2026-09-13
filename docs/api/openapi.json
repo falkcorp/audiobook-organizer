@@ -8844,17 +8844,70 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
+          "202": {
+            "description": "Rename queued as an undoable entities.series-rename operation. Poll GET /operations/v2/{id} until it is terminal; revert it with POST /operations/{id}/revert.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "The v2 operation id."
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "entities.series-rename"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
-            "description": "Bad request"
+            "description": "Bad request: invalid series id or empty name"
           },
           "401": {
             "description": "Unauthorized"
           },
           "404": {
-            "description": "Not found"
+            "description": "Series not found"
+          },
+          "500": {
+            "description": "Failed to read the series or enqueue the operation"
+          }
+        },
+        "description": "Queues an undoable rename of the series and answers 202 with the operation. The request is validated synchronously; the rename itself runs in the operation, which journals a series_rename change row so reverting the operation renames the series back.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The new series name. A name another series already holds is not refused."
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -8948,17 +9001,70 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
+          "202": {
+            "description": "Rename queued as an undoable entities.series-rename operation. Poll GET /operations/v2/{id} until it is terminal; revert it with POST /operations/{id}/revert.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "The v2 operation id."
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "entities.series-rename"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "queued"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
-            "description": "Bad request"
+            "description": "Bad request: invalid series id or empty name"
           },
           "401": {
             "description": "Unauthorized"
           },
           "404": {
-            "description": "Not found"
+            "description": "Series not found"
+          },
+          "500": {
+            "description": "Failed to read the series or enqueue the operation"
+          }
+        },
+        "description": "Queues an undoable rename of the series and answers 202 with the operation. The request is validated synchronously; the rename itself runs in the operation, which journals a series_rename change row so reverting the operation renames the series back.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The new series name. A name another series already holds is not refused."
+                  }
+                }
+              }
+            }
           }
         }
       }
