@@ -1,5 +1,5 @@
 // file: internal/organizer/plan_unique_targets_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f0b8e52-7c1d-4a9e-b6f4-2d85c9e1a703
 // last-edited: 2026-09-13
 
@@ -144,36 +144,106 @@ func TestPlanTargetPaths_FlatFolderOrderedByDiscWhenEveryRowHasOne(t *testing.T)
 	assertNames(t, got, map[string]string{"d1t1": "Book - 01.mp3", "d1t2": "Book - 02.mp3", "d2t1": "Book - 03.mp3", "d2t2": "Book - 04.mp3"})
 }
 
-// Repeated track numbers that nothing on disk orders -- one folder, no disc
-// numbers, or a folder mixing disc 0 and disc N -- are refused, not guessed.
-// Before the fix these planned "<title> - 02 - 02" twice and failed half way.
-func TestPlanTargetPaths_UnorderableRepeatIsRefused(t *testing.T) {
+// Tags that repeat a track number inside ONE folder (every file tagged track
+// 1 is common) cannot order it, so the folder falls back to natural file-name
+// order. Before the fallback these books were refused, and with write-back
+// the pre-apply check then refused their metadata apply too.
+func TestPlanTargetPaths_RepeatedTracksInOneFolderFallBackToFileNames(t *testing.T) {
 	src := t.TempDir()
-	sameFolder := []database.BookFile{
-		{ID: "a", FilePath: filepath.Join(src, "a.mp3"), Format: "mp3", TrackNumber: 1},
-		{ID: "b", FilePath: filepath.Join(src, "b.mp3"), Format: "mp3", TrackNumber: 2},
-		{ID: "c", FilePath: filepath.Join(src, "c.mp3"), Format: "mp3", TrackNumber: 2},
+
+	// Every file tagged track 1: natural order, so Book 2 before Book 10.
+	got := planNames(t, []database.BookFile{
+		{ID: "b10", FilePath: filepath.Join(src, "Book 10.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "b2", FilePath: filepath.Join(src, "Book 2.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "b1", FilePath: filepath.Join(src, "Book 1.mp3"), Format: "mp3", TrackNumber: 1},
+	})
+	assertNames(t, got, map[string]string{"b1": "Book - 01.mp3", "b2": "Book - 02.mp3", "b10": "Book - 03.mp3"})
+
+	// A partial repeat puts the whole folder in name order, not only the
+	// clashing rows: tracks 1, 2, 2 as z, a, b gives a, b, z.
+	got = planNames(t, []database.BookFile{
+		{ID: "z", FilePath: filepath.Join(src, "p", "z.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "a", FilePath: filepath.Join(src, "p", "a.mp3"), Format: "mp3", TrackNumber: 2},
+		{ID: "b", FilePath: filepath.Join(src, "p", "b.mp3"), Format: "mp3", TrackNumber: 2},
+	})
+	assertNames(t, got, map[string]string{"a": "Book - 01.mp3", "b": "Book - 02.mp3", "z": "Book - 03.mp3"})
+
+	// One folder mixing disc 0 and disc 2: disc is not trusted there, the
+	// tracks repeat, so the names decide.
+	got = planNames(t, []database.BookFile{
+		{ID: "b", FilePath: filepath.Join(src, "m", "b.mp3"), Format: "mp3", TrackNumber: 1, DiscNumber: 2},
+		{ID: "a", FilePath: filepath.Join(src, "m", "a.mp3"), Format: "mp3", TrackNumber: 1},
+	})
+	assertNames(t, got, map[string]string{"a": "Book - 01.mp3", "b": "Book - 02.mp3"})
+
+	// The same book under a trackless pattern still plans distinct targets.
+	entries, err := planTargetPaths(t.TempDir(), "{author}", "{title} - {author}", []database.BookFile{
+		{ID: "b10", FilePath: filepath.Join(src, "Book 10.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "b2", FilePath: filepath.Join(src, "Book 2.mp3"), Format: "mp3", TrackNumber: 1},
+	}, dupeTestVars, dupeTestOpts)
+	if err != nil {
+		t.Fatalf("trackless pattern: %v", err)
 	}
-	mixedDisc := []database.BookFile{
+	assertUniqueTargets(t, entries)
+}
+
+// Names that do not really differ -- equal stems that differ only by
+// extension, or by case and leading zeros -- cannot order a folder whose
+// tracks repeat. Those books are refused, not guessed.
+func TestPlanTargetPaths_IndistinguishableFileNamesAreRefused(t *testing.T) {
+	src := t.TempDir()
+	sameStem := []database.BookFile{
+		{ID: "mp3", FilePath: filepath.Join(src, "01.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "m4a", FilePath: filepath.Join(src, "01.m4a"), Format: "m4a", TrackNumber: 1},
 		{ID: "a", FilePath: filepath.Join(src, "a.mp3"), Format: "mp3", TrackNumber: 1},
-		{ID: "b", FilePath: filepath.Join(src, "b.mp3"), Format: "mp3", TrackNumber: 1, DiscNumber: 2},
+	}
+	caseAndZeros := []database.BookFile{
+		{ID: "p1", FilePath: filepath.Join(src, "Part 1.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "p01", FilePath: filepath.Join(src, "part 01.mp3"), Format: "mp3", TrackNumber: 1},
 	}
 	for _, pattern := range []string{"{title} - {track:02d}", "{title} - {author}"} {
-		assertRefused(t, sameFolder, pattern)
-		assertRefused(t, mixedDisc, pattern)
+		assertRefused(t, sameStem, pattern)
+		assertRefused(t, caseAndZeros, pattern)
 	}
 }
 
-// A position-derived number (row with TrackNumber 0) that lands on another
-// row's explicit number is renumbered: numbered rows first, then by name.
-func TestPlanTargetPaths_PositionalNumberDoesNotCollideWithExplicit(t *testing.T) {
+// Anti-churn for the fallback: tags that DO order a folder win over names,
+// so a healthy book is never reordered by file name.
+func TestPlanTargetPaths_DistinctTracksAreNotReorderedByName(t *testing.T) {
 	src := t.TempDir()
 	got := planNames(t, []database.BookFile{
-		{ID: "x", FilePath: filepath.Join(src, "x.mp3"), Format: "mp3", TrackNumber: 2},
-		{ID: "y", FilePath: filepath.Join(src, "y.mp3"), Format: "mp3"},
-		{ID: "z", FilePath: filepath.Join(src, "z.mp3"), Format: "mp3"},
+		{ID: "b", FilePath: filepath.Join(src, "b.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "a", FilePath: filepath.Join(src, "a.mp3"), Format: "mp3", TrackNumber: 2},
 	})
-	assertNames(t, got, map[string]string{"x": "Book - 01.mp3", "y": "Book - 02.mp3", "z": "Book - 03.mp3"})
+	assertNames(t, got, map[string]string{"b": "Book - 01.mp3", "a": "Book - 02.mp3"})
+}
+
+// Shape (e): a position-derived number (row with TrackNumber 0) that lands on
+// another row's explicit number is renumbered, and the explicit row sorts
+// FIRST even though its name sorts last.
+func TestPlanTargetPaths_ExplicitTrackSortsBeforePositional(t *testing.T) {
+	src := t.TempDir()
+	got := planNames(t, []database.BookFile{
+		{ID: "a", FilePath: filepath.Join(src, "a.mp3"), Format: "mp3"},
+		{ID: "b", FilePath: filepath.Join(src, "b.mp3"), Format: "mp3"},
+		{ID: "z", FilePath: filepath.Join(src, "z.mp3"), Format: "mp3", TrackNumber: 2},
+	})
+	assertNames(t, got, map[string]string{"z": "Book - 01.mp3", "a": "Book - 02.mp3", "b": "Book - 03.mp3"})
+}
+
+// Shape (d): a Missing row keeps its OWN track number through a renumbering,
+// so a repointed file comes back to it. old/x.mp3 is track 3; the two-CD
+// clash numbers the present files 1, 2, then 4, 5.
+func TestPlanTargetPaths_RenumberReservesMissingRowTrackNumber(t *testing.T) {
+	src := t.TempDir()
+	got := planNames(t, []database.BookFile{
+		{ID: "gone", FilePath: filepath.Join(src, "old", "x.mp3"), Format: "mp3", TrackNumber: 3, Missing: true},
+		{ID: "c1t1", FilePath: filepath.Join(src, "CD1", "01.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "c1t2", FilePath: filepath.Join(src, "CD1", "02.mp3"), Format: "mp3", TrackNumber: 2},
+		{ID: "c2t1", FilePath: filepath.Join(src, "CD2", "01.mp3"), Format: "mp3", TrackNumber: 1},
+		{ID: "c2t2", FilePath: filepath.Join(src, "CD2", "02.mp3"), Format: "mp3", TrackNumber: 2},
+	})
+	assertNames(t, got, map[string]string{"c1t1": "Book - 01.mp3", "c1t2": "Book - 02.mp3", "c2t1": "Book - 04.mp3", "c2t2": "Book - 05.mp3"})
 }
 
 // When a renumbered book has a Missing row, the row keeps its slot so the
