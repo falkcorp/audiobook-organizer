@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-09-13
 
@@ -314,11 +314,15 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 			if embedModel == "" {
 				embedModel = model
 			} else if model != embedModel {
+				refusals = append(refusals, Refusal{EndpointID: ep.ID,
+					Reason: fmt.Sprintf("failover skipped: embed model %q differs from %q", model, embedModel)})
 				continue
 			}
 		}
 		// A sibling goroutine may have benched this endpoint since selection.
 		if i > 0 && d.health.InCooldown(ep.ID) {
+			refusals = append(refusals, Refusal{EndpointID: ep.ID,
+				Reason: "failover skipped: benched after selection"})
 			continue
 		}
 
@@ -326,6 +330,10 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		release, err := d.slots.Acquire(ctx, ep.ID, ep.Concurrency, d.totals[spec.Kind])
 		slotWaitSeconds.WithLabelValues(ep.ID).Observe(time.Since(waitStart).Seconds())
 		if err != nil {
+			// Acquire has no timeout of its own: it fails only when the
+			// CALLER's ctx is done, so trying the next endpoint would fail the
+			// same way. Stopping here is ClassStop, not a skip. If Acquire ever
+			// gains its own bound, this must become a skip plus a refusal.
 			return zero, err
 		}
 
