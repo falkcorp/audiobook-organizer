@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -658,9 +658,10 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	//
 	// resolveKeyCounter, not a bare assertion and no longer the concrete type.
 	// Traced 2026-08-19: this handler is built in wireHandlers, which runs
-	// setupRoutes -> NewServer, so the s.Ops() it captured is the BARE store
-	// and the bare form was NOT failing here. Construction time is what decides
-	// this, not the fact that GetDBHealth itself runs at request time. The
+	// setupRoutes -> NewServer, so the s.Ops() it captured was then the BARE
+	// store and the bare form was not failing. Since 2026-09-13 NewServer wraps
+	// the store before anything captures it, so this now holds the indexedStore
+	// decorator and a bare assertion WOULD fail here. The
 	// failure mode is invisible either way: a nil here just drops resp.Pebble
 	// from the payload, so db-health reports a healthy store with no Pebble
 	// section rather than an error.

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 
 package acoustid
 
@@ -67,7 +67,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
 	// faster than the per-row fallback below.
 	// resolveFingerprintResetter, which walks the decorator chain: the server
-	// installs the indexedStore decorator during Start(), and p.store therefore
+	// installs the indexedStore decorator in NewServer, and p.store therefore
 	// holds the WRAPPER in production. A bare p.store.(*database.PebbleStore)
 	// fails against it and
 	// silently takes the per-row fallback below -- ~100x slower, with no error
