@@ -2023,15 +2023,17 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 //
 // ⚠️ Cost, stated because the reference's cost note does NOT transfer. That
 // function justifies the sticky-lostRows expense with "no caller counts inside
-// a loop." Four callers of THIS getter do exactly that — cleanup_series.go:105,
-// duplicates_helpers.go:291, series_dedup.go:419 and :634 all call it per
-// series inside a loop, and none hoists or caches. Once memdb is tainted, each
-// iteration costs a full "book:" prefix scan, a range memdb_warmup.go measures
-// at ~7.5 keys per admitted book row. On a 41k-book library that is
-// O(series x 7.5 x books) single-threaded on the nightly maintenance window.
-// Correctness is still worth it — a stranded book is unrecoverable and a slow
-// window is not — but this is a real standing cost, not a free guard, and the
-// per-series hoist is tracked in todo.d rather than pretended away.
+// a loop." That premise was FALSE for this getter: four repoint-then-delete
+// loops (cleanup-series, series prune phase 1, dedup series and MergeSeries)
+// called it once per series, and once memdb is tainted each call is a full
+// "book:" prefix scan -- O(series x books) on the nightly window. Those loops
+// now hoist the whole membership once per operation through
+// SeriesMembershipAllVersions (series_membership.go), which falls through to
+// ONE Pebble scan for every series (SERIES-MERGE-PERSERIES-SCAN-COST). Do not
+// add a new per-series caller inside a loop; hoist through the bulk twin.
+// Single-series callers remain (e.g. MergeSeries re-reading the kept series
+// after its loop, which must see the books the loop just moved in), and each
+// of those pays one scan per call when memdb is tainted.
 //
 // This was the only membership getter with the guard until 2026-09-10, when
 // GetAllBooksCoreComplete and ListSoftDeletedBooks joined it for the orphan
