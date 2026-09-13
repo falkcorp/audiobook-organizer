@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -303,5 +303,66 @@ func TestSyncID_ConcurrentMintRace_SingleWinner(t *testing.T) {
 	}
 	if finalID != want {
 		t.Fatalf("GetSyncIDForBook returned %q, want %q", finalID, want)
+	}
+}
+
+// TestSyncID_ClearSyncMerge covers the undo primitive: it reverses one merge
+// (redirect cleared, loser removed from MergedFrom, other MergedFrom entries
+// kept), leaves a redirect that points at a DIFFERENT winner alone, and is a
+// no-op when repeated.
+func TestSyncID_ClearSyncMerge(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	ids := map[string]string{}
+	for _, b := range []string{"loser", "other", "winner", "elsewhere", "stray"} {
+		id, err := store.MintOrGetSyncID("book-" + b)
+		if err != nil {
+			t.Fatalf("mint %s: %v", b, err)
+		}
+		ids[b] = id
+	}
+	for _, pair := range [][2]string{{"loser", "winner"}, {"other", "winner"}, {"stray", "elsewhere"}} {
+		if err := store.RecordSyncMerge("book-"+pair[0], "book-"+pair[1]); err != nil {
+			t.Fatalf("RecordSyncMerge %v: %v", pair, err)
+		}
+	}
+
+	if err := store.ClearSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge: %v", err)
+	}
+	loser, err := store.ResolveSyncItem(ids["loser"])
+	if err != nil || loser == nil || loser.SyncID != ids["loser"] || loser.RedirectTo != "" {
+		t.Fatalf("loser should resolve to itself with no redirect, got %+v err=%v", loser, err)
+	}
+	winner, err := store.ResolveSyncItem(ids["winner"])
+	if err != nil || winner == nil {
+		t.Fatalf("resolve winner: %+v %v", winner, err)
+	}
+	if len(winner.MergedFrom) != 1 || winner.MergedFrom[0] != ids["other"] {
+		t.Fatalf("winner MergedFrom = %v, want only the other loser %q", winner.MergedFrom, ids["other"])
+	}
+	other, _ := store.ResolveSyncItem(ids["other"])
+	if other == nil || other.SyncID != ids["winner"] {
+		t.Fatalf("the other loser must still redirect to the winner, got %+v", other)
+	}
+
+	// A redirect to a different winner is not this merge: leave it.
+	if err := store.ClearSyncMerge("book-stray", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (wrong winner): %v", err)
+	}
+	stray, _ := store.ResolveSyncItem(ids["stray"])
+	if stray == nil || stray.SyncID != ids["elsewhere"] {
+		t.Fatalf("stray must still redirect to elsewhere, got %+v", stray)
+	}
+
+	// Repeat and unminted books are no-ops.
+	if err := store.ClearSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (repeat): %v", err)
+	}
+	if err := store.ClearSyncMerge("book-never-minted", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (unminted): %v", err)
+	}
+	winner2, _ := store.ResolveSyncItem(ids["winner"])
+	if len(winner2.MergedFrom) != 1 {
+		t.Fatalf("repeat changed MergedFrom: %v", winner2.MergedFrom)
 	}
 }
