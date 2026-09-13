@@ -1,5 +1,5 @@
 // file: internal/metadata/provider_fields_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1270d9f8-04bd-4897-aa87-7890b09e0ddf
 // last-edited: 2026-09-13
 
@@ -83,7 +83,7 @@ func TestGoogleBooks_MapsEveryUsefulField(t *testing.T) {
 		{"ISBN13", m.ISBN13, "9780062877154"},
 		{"ISBN", m.ISBN, "9780062877154"},
 		{"PageCount (printed preferred)", m.PageCount, 560},
-		{"Genre", m.Genre, "Fiction"},
+		{"Genre (most specific category, not mainCategory)", m.Genre, "Collections & Anthologies"},
 		{"CoverURL (largest, https)", m.CoverURL, "https://books.google.com/books/content?id=abc123&zoom=6"},
 		{"Language", m.Language, "en"},
 		{"GoogleRatingAverage", m.GoogleRatingAverage, 4.0},
@@ -97,6 +97,24 @@ func TestGoogleBooks_MapsEveryUsefulField(t *testing.T) {
 	wantTags := []string{"Fiction", "Fiction / Fantasy / Collections & Anthologies"}
 	if !slices.Equal(m.CategoryTags, wantTags) {
 		t.Errorf("CategoryTags = %v, want %v", m.CategoryTags, wantTags)
+	}
+}
+
+func TestGoogleBooksGenre(t *testing.T) {
+	for _, c := range []struct {
+		cats []string
+		main string
+		want string
+	}{
+		{[]string{"Fiction / Science Fiction / General"}, "Fiction", "Science Fiction"},
+		{[]string{"Fiction"}, "", "Fiction"},
+		{nil, "Fiction", "Fiction"},
+		{[]string{"General"}, "History", "History"},
+		{nil, "", ""},
+	} {
+		if got := googleBooksGenre(c.cats, c.main); got != c.want {
+			t.Errorf("googleBooksGenre(%v, %q) = %q, want %q", c.cats, c.main, got, c.want)
+		}
 	}
 }
 

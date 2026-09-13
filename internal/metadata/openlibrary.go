@@ -1,5 +1,5 @@
 // file: internal/metadata/openlibrary.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-13
 
@@ -204,15 +204,16 @@ type BookMetadata struct {
 	CategoryTags []string
 }
 
-// unambiguousLanguage returns the single distinct (case-insensitive) value in
-// vals, or "" when vals is empty or holds differing values. Open Library search
+// unambiguousValue returns the single distinct (case-insensitive) value in
+// vals, or "" when vals is empty or holds differing values. It is used for both
+// Language and Publisher. Open Library search
 // docs return Language as an UNORDERED aggregate across every edition, so
 // Language[0] is not "most relevant" — a book whose first-listed edition is a
 // translation would be mislabeled. That value is persisted as a
 // metadata:language:<code> system tag driving the review language filter, so a
 // guessed language is actively harmful: when ambiguous we set none, because no
 // tag beats a wrong one.
-func unambiguousLanguage(vals []string) string {
+func unambiguousValue(vals []string) string {
 	first := ""
 	for _, v := range vals {
 		v = strings.TrimSpace(v)
@@ -462,7 +463,7 @@ func searchDocsToMetadata(docs []SearchResult) []BookMetadata {
 		// language: publisher[0] is whichever edition Solr listed first, so a US
 		// book could be credited to its UK or translated edition's publisher.
 		// Set it only when the editions agree.
-		meta.Publisher = unambiguousLanguage(doc.Publisher)
+		meta.Publisher = unambiguousValue(doc.Publisher)
 
 		// doc.ISBN is a single mixed array; classify by length so both ISBN types
 		// are preserved. The single ISBN is kept for back-compat (prefer 13).
@@ -487,8 +488,8 @@ func searchDocsToMetadata(docs []SearchResult) []BookMetadata {
 			meta.ISBN = doc.ISBN[0]
 		}
 
-		// Only set language when the editions agree — see unambiguousLanguage.
-		meta.Language = unambiguousLanguage(doc.Language)
+		// Only set language when the editions agree — see unambiguousValue.
+		meta.Language = unambiguousValue(doc.Language)
 
 		if doc.CoverI > 0 {
 			meta.CoverURL = fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-L.jpg", doc.CoverI)
@@ -523,7 +524,7 @@ func olLanguageFromRefs(refs []openlibrary.OLRef) string {
 	for _, r := range refs {
 		codes = append(codes, strings.TrimPrefix(strings.TrimSpace(r.Key), "/languages/"))
 	}
-	return unambiguousLanguage(codes)
+	return unambiguousValue(codes)
 }
 
 var olSeriesSep = regexp.MustCompile(`^(.*?)\s*(?:;|#|,\s*(?:bk|book|no|vol|v)\.?)\s*(?:(?:bk|book|no|vol|v|volume)\.?\s*)?([0-9]+(?:\.[0-9]+)?)\s*\)?\s*$`)

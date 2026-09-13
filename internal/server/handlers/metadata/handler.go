@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -1071,6 +1071,8 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 				return book.Language != nil && strings.TrimSpace(*book.Language) != ""
 			case database.FieldKeyAudiobookReleaseYear:
 				return book.AudiobookReleaseYear != nil && *book.AudiobookReleaseYear != 0
+			case database.FieldKeyNarrator:
+				return book.Narrator != nil && strings.TrimSpace(*book.Narrator) != ""
 			case "print_year":
 				return book.PrintYear != nil && *book.PrintYear != 0
 			case database.FieldKeyGenre:
@@ -1209,6 +1211,9 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			value string
 			set   func(string)
 		}{
+			// Narrator: providers now route role-marked credits here instead of
+			// into the author string, so bulk must write it too.
+			{database.FieldKeyNarrator, meta.Narrator, func(v string) { book.Narrator = new(v) }},
 			{database.FieldKeyGenre, meta.Genre, func(v string) { book.Genre = new(v) }},
 			{database.FieldKeyDescription, meta.Description, func(v string) { book.Description = new(v) }},
 			{"subtitle", meta.Subtitle, func(v string) { book.Subtitle = new(v) }},

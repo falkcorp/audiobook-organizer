@@ -1,7 +1,7 @@
 // file: internal/metadata/openlibrary_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-20
+// last-edited: 2026-09-13
 
 package metadata
 
@@ -453,8 +453,8 @@ func TestUnambiguousLanguage(t *testing.T) {
 		{"blank_then_single", []string{"", "spa"}, "spa"},
 	}
 	for _, c := range cases {
-		if got := unambiguousLanguage(c.in); got != c.want {
-			t.Errorf("%s: unambiguousLanguage(%v) = %q, want %q", c.name, c.in, got, c.want)
+		if got := unambiguousValue(c.in); got != c.want {
+			t.Errorf("%s: unambiguousValue(%v) = %q, want %q", c.name, c.in, got, c.want)
 		}
 	}
 }

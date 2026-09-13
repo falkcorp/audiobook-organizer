@@ -1,7 +1,7 @@
 // file: internal/covers/covers.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 //
 // Cover service logic for proxy caching and validation.
 // Business logic extracted from internal/server/covers.go.
@@ -47,6 +47,8 @@ func IsAllowedCoverSource(url string) bool {
 		"http://covers.openlibrary.org/",
 		"https://books.google.com/",
 		"http://books.google.com/",
+		// Google Books serves some imageLinks sizes from this host.
+		"https://books.googleusercontent.com/",
 		"https://images-na.ssl-images-amazon.com/",
 		"http://images-na.ssl-images-amazon.com/",
 		"https://images.amazon.com/",
