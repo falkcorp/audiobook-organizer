@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // CountFiles returns the total number of audio files across all books.
@@ -126,7 +128,7 @@ func (p *PebbleStore) GetBookCountsByLocation(rootDir string) (library, import_ 
 		return 0, 0, err
 	}
 	for _, b := range books {
-		if rootDir != "" && strings.HasPrefix(b.FilePath, rootDir) {
+		if rootDir != "" && pathutil.IsWithin(b.FilePath, rootDir) {
 			library++
 		} else {
 			import_++
@@ -147,7 +149,7 @@ func (p *PebbleStore) GetBookSizesByLocation(rootDir string) (librarySize, impor
 		if b.FileSize != nil {
 			sz = *b.FileSize
 		}
-		if rootDir != "" && strings.HasPrefix(b.FilePath, rootDir) {
+		if rootDir != "" && pathutil.IsWithin(b.FilePath, rootDir) {
 			librarySize += sz
 		} else {
 			importSize += sz
@@ -356,14 +358,14 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 		// Organized vs unorganized + per-import-path (primary versions only)
 		if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
 			primaryBookIDs[b.ID] = struct{}{}
-			if p.rootDir != "" && strings.HasPrefix(b.FilePath, p.rootDir) {
+			if p.rootDir != "" && pathutil.IsWithin(b.FilePath, p.rootDir) {
 				stats.OrganizedBooks++
 				stats.OrganizedSize += size
 			} else {
 				stats.UnorganizedBooks++
 				stats.UnorganizedSize += size
 				for _, ip := range importPaths {
-					if strings.HasPrefix(b.FilePath, ip.Path) {
+					if pathutil.IsWithin(b.FilePath, ip.Path) {
 						stats.BooksByImportPath[ip.ID]++
 						stats.SizeByImportPath[ip.ID] += size
 						break

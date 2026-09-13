@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package server
 
@@ -165,7 +165,7 @@ func calculateLibrarySizes(rootDir string, importFolders []database.ImportPath) 
 					return nil
 				}
 				// Skip files that are under rootDir to avoid double counting
-				if rootDir != "" && strings.HasPrefix(path, rootDir) {
+				if rootDir != "" && pathutil.IsWithin(path, rootDir) {
 					return nil
 				}
 				importSize += filePhysicalSize(info)

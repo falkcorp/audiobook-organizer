@@ -1,7 +1,7 @@
 // file: internal/pathutil/abbreviate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d2e91-3c58-4b06-9f2a-1d8e6b07c534
-// last-edited: 2026-06-19
+// last-edited: 2026-09-12
 
 // Package pathutil renders filesystem paths in a short, readable form for the
 // UI by replacing known library roots with literal $(var) tokens. The same
@@ -9,11 +9,7 @@
 // PathVars is the single source of truth for the root values both sides use.
 package pathutil
 
-import (
-	"strings"
-
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-)
+import "strings"
 
 // PathVar is a named library root used for abbreviation. Value is the absolute
 // path prefix; Name is the short token shown in its place (e.g. "libroot").
@@ -42,10 +38,14 @@ func Abbreviate(p string, vars []PathVar) string {
 	return p
 }
 
-// PathVars returns the configured library roots in match order (most-specific
-// first): libroot = config RootDir, books = its parent directory.
-func PathVars() []PathVar {
-	root := strings.TrimRight(config.AppConfig.RootDir, "/")
+// PathVars returns the library roots in match order (most-specific first):
+// libroot = rootDir (the configured RootDir), books = its parent directory.
+//
+// rootDir is a parameter rather than a read of config.AppConfig so pathutil
+// stays a leaf package: config imports database, and database uses pathutil's
+// containment helpers, so pathutil importing config would be a cycle.
+func PathVars(rootDir string) []PathVar {
+	root := strings.TrimRight(rootDir, "/")
 	if root == "" {
 		return nil
 	}
@@ -59,7 +59,7 @@ func PathVars() []PathVar {
 	}
 }
 
-// AbbreviatePath abbreviates p using the configured library roots.
-func AbbreviatePath(p string) string {
-	return Abbreviate(p, PathVars())
+// AbbreviatePath abbreviates p using the library roots derived from rootDir.
+func AbbreviatePath(p, rootDir string) string {
+	return Abbreviate(p, PathVars(rootDir))
 }

@@ -1,5 +1,5 @@
 // file: internal/pathutil/prefix.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f81aaa2-4529-41f2-9f2c-6649fc5b1ee9
 // last-edited: 2026-09-12
 
@@ -33,6 +33,29 @@ func CutPathPrefix(p, prefix string) (rest string, ok bool) {
 		return "", false
 	}
 	return boundaryRest(p, prefix)
+}
+
+// IsWithin reports whether path is root itself or lies under root, on a
+// path-component boundary. It is the predicate form of CutPathPrefix and is the
+// replacement for a bare strings.HasPrefix(path, root) containment check, which
+// wrongly treats "/lib2/a.m4b" as inside "/lib".
+//
+// For every path a bare HasPrefix accepts, IsWithin agrees except when root
+// lacks a trailing separator AND the byte of path right after root is not a
+// separator (the sibling case). In particular:
+//   - root "/lib/" (trailing separator) matches exactly what HasPrefix matched;
+//   - root "/" matches every absolute path, as before;
+//   - path == root matches, as before;
+//   - an empty root matches nothing (HasPrefix matched everything), so a
+//     caller that relied on "" meaning "everything" must say so itself.
+//
+// Both '/' and '\' count as separators, so Windows drive roots such as
+// `C:\lib` and "C:/lib" work without normalising. The comparison is
+// case-sensitive and does no cleaning: "/lib/../x" is "within" "/lib" here
+// exactly as it was under HasPrefix.
+func IsWithin(path, root string) bool {
+	_, ok := CutPathPrefix(path, root)
+	return ok
 }
 
 // CutPathPrefixFold is CutPathPrefix with an ASCII/Unicode case-insensitive

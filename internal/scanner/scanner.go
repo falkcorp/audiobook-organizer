@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.91.0
+// version: 1.91.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-12
 
@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
+	"github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -38,7 +40,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	"github.com/oklog/ulid/v2"
 )
 
 // saveBook is the per-book persistence hook used by ProcessBooksParallel.
@@ -2724,7 +2725,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			if size, err := getFileSize(book.FilePath); err == nil {
 				fileSize = &size
 			}
-			if rootDir != "" && strings.HasPrefix(book.FilePath, rootDir) {
+			if rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir) {
 				organizedFileHash = stringPtrValue(hash)
 			}
 		}
@@ -2846,8 +2847,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				alreadyLinked := existing.VersionGroupID != nil && *existing.VersionGroupID != ""
 
 				if rootDir != "" &&
-					strings.HasPrefix(book.FilePath, rootDir) &&
-					!strings.HasPrefix(existing.FilePath, rootDir) {
+					pathutil.IsWithin(book.FilePath, rootDir) &&
+					!pathutil.IsWithin(existing.FilePath, rootDir) {
 					defaultLog.Debug("Promoting organized path for %s", existing.Title)
 				} else if alreadyLinked {
 					defaultLog.Debug("Already version-linked (group %s), skipping: %s", *existing.VersionGroupID, existing.FilePath)
@@ -2857,8 +2858,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					h := sha256.Sum256([]byte(existing.ID + "|" + book.FilePath))
 					groupID := fmt.Sprintf("vg-%x", h[:8])
 
-					existingInRoot := rootDir != "" && strings.HasPrefix(existing.FilePath, rootDir)
-					newInRoot := rootDir != "" && strings.HasPrefix(book.FilePath, rootDir)
+					existingInRoot := rootDir != "" && pathutil.IsWithin(existing.FilePath, rootDir)
+					newInRoot := rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir)
 
 					// Mark the one in RootDir as primary; if neither or both are in root, existing wins.
 					existingPrimary := existingInRoot || !newInRoot
@@ -2939,8 +2940,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					}
 					h2 := sha256.Sum256([]byte(matchedBook.ID + "|" + book.FilePath))
 					groupID := fmt.Sprintf("vg-%x", h2[:8])
-					existingInRoot := rootDir != "" && strings.HasPrefix(matchedBook.FilePath, rootDir)
-					newInRoot := rootDir != "" && strings.HasPrefix(book.FilePath, rootDir)
+					existingInRoot := rootDir != "" && pathutil.IsWithin(matchedBook.FilePath, rootDir)
+					newInRoot := rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir)
 					matchedPrimary := existingInRoot || !newInRoot
 					newPrimary := newInRoot && !existingInRoot
 					matchedBook.VersionGroupID = &groupID

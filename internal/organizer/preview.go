@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package organizer
 
@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // PreviewStep describes a single step in the organize preview.
@@ -112,7 +112,7 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	}
 
 	protected := ops.IsProtectedPath(currentPath)
-	alreadyInRoot := config.AppConfig.RootDir != "" && strings.HasPrefix(currentPath, config.AppConfig.RootDir)
+	alreadyInRoot := config.AppConfig.RootDir != "" && pathutil.IsWithin(currentPath, config.AppConfig.RootDir)
 	needsCopy := false
 	needsRename := currentPath != targetPath
 

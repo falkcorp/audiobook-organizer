@@ -1,7 +1,7 @@
 // file: internal/itunes/service/validate.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9e3a7f2b-5d1c-4b8e-a6f0-3c8d5e7b9a1f
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 package itunesservice
 
@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // ErrLibraryNotFound is returned by Validate when the library file does not exist.
@@ -88,7 +88,10 @@ func TestMapping(req TestMappingRequest) (TestMappingResponse, error) {
 		if !itunes.IsAudiobook(track) {
 			continue
 		}
-		if !strings.HasPrefix(track.Location, req.From) {
+		// An empty From has always sampled every audiobook track (a bare
+		// HasPrefix with "" is true), so keep that; otherwise match on a
+		// path boundary so From "/lib" does not sample "/lib2/...".
+		if req.From != "" && !pathutil.IsWithin(track.Location, req.From) {
 			continue
 		}
 		if response.Tested >= 20 {

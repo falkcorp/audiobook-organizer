@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-09-12
 
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -969,12 +970,12 @@ func (m *MemStore) CountBooksByPathPrefix(prefix string) (int, error) {
 			continue
 		}
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {
-			if strings.HasPrefix(*b.SourceImportPath, prefix) {
+			if pathutil.IsWithin(*b.SourceImportPath, prefix) {
 				count++
 			}
 			continue
 		}
-		if strings.HasPrefix(b.FilePath, prefix) {
+		if pathutil.IsWithin(b.FilePath, prefix) {
 			count++
 		}
 	}
@@ -1040,7 +1041,7 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 			continue
 		}
 		primaryBookIDs[b.ID] = struct{}{}
-		if rootDir != "" && strings.HasPrefix(b.FilePath, rootDir) {
+		if rootDir != "" && pathutil.IsWithin(b.FilePath, rootDir) {
 			stats.OrganizedBooks++
 			stats.OrganizedSize += size
 			continue
@@ -1048,7 +1049,7 @@ func (m *MemStore) ComputeLibraryStats(rootDir string, importPaths []ImportPath)
 		stats.UnorganizedBooks++
 		stats.UnorganizedSize += size
 		for _, ip := range importPaths {
-			if strings.HasPrefix(b.FilePath, ip.Path) {
+			if pathutil.IsWithin(b.FilePath, ip.Path) {
 				stats.BooksByImportPath[ip.ID]++
 				stats.SizeByImportPath[ip.ID] += size
 				break

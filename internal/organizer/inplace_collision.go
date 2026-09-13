@@ -57,14 +57,16 @@ import (
 	"strings"
 	"sync"
 
+	ulid "github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	ulid "github.com/oklog/ulid/v2"
-	"golang.org/x/sync/errgroup"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // Outcome categories for an organize that met an occupied destination, or was
@@ -520,7 +522,7 @@ func (orgSvc *Service) detectFragmentCollapse(ctx context.Context, books []datab
 	g.SetLimit(runtime.NumCPU())
 	for i := range books {
 		b := &books[i]
-		if !strings.HasPrefix(b.FilePath, root) || !exts.MatchPath(b.FilePath) {
+		if !pathutil.IsWithin(b.FilePath, root) || !exts.MatchPath(b.FilePath) {
 			continue
 		}
 		g.Go(func() error {

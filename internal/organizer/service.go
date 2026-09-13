@@ -18,14 +18,16 @@ import (
 
 	"path/filepath"
 
+	ulid "github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
-	ulid "github.com/oklog/ulid/v2"
 )
 
 // Store is the narrow slice of database.Store required by this package.
@@ -776,7 +778,7 @@ func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, 
 			}
 		}
 		// If already in root directory, check if path needs updating based on current metadata
-		if config.AppConfig.RootDir != "" && strings.HasPrefix(book.FilePath, config.AppConfig.RootDir) {
+		if config.AppConfig.RootDir != "" && pathutil.IsWithin(book.FilePath, config.AppConfig.RootDir) {
 			needsReOrganize, err := orgSvc.bookNeedsReOrganize(&book, log)
 			if err != nil {
 				log.Debug("Organize: Cannot compute target for %s: %s", book.Title, err.Error())
@@ -797,7 +799,7 @@ func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, 
 		// For books outside RootDir, rely on book_files to determine readiness.
 		// Avoid os.Stat on 140K+ paths during filter — that was the main bottleneck.
 		// organizeBook() will skip individual missing files when it runs.
-		if config.AppConfig.RootDir == "" || !strings.HasPrefix(book.FilePath, config.AppConfig.RootDir) {
+		if config.AppConfig.RootDir == "" || !pathutil.IsWithin(book.FilePath, config.AppConfig.RootDir) {
 			bookFiles, bfErr := orgSvc.db.GetBookFiles(book.ID)
 			if bfErr != nil || len(bookFiles) == 0 {
 				// No book_files: can't organize without knowing which files to copy.
@@ -1656,7 +1658,7 @@ func (orgSvc *Service) OrganizeOneBook(org *Organizer, book *database.Book, log 
 		return nil, fmt.Errorf("cannot organize: book is nil")
 	}
 	oldPath := book.FilePath
-	if config.AppConfig.RootDir != "" && strings.HasPrefix(oldPath, config.AppConfig.RootDir) {
+	if config.AppConfig.RootDir != "" && pathutil.IsWithin(oldPath, config.AppConfig.RootDir) {
 		newPath, res, err := orgSvc.reOrganizeInPlace(book, log)
 		if err != nil {
 			return nil, err
