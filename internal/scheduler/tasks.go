@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-09-13
 
@@ -1023,8 +1023,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 
 	// Nightly activity compaction — collapse every activity entry from before
 	// the kept full-detail days (default: before today, local time) into daily
-	// digests. The op recomputes its cutoff from the clock when it runs, so the
-	// 24h durable-clock cadence decides only staleness, never what is kept.
+	// digests. It runs at 00:10 server-local time (DailyAt, see daily_at.go),
+	// just after midnight, so each run compacts the day that just ended; the op
+	// computes its cutoff as local midnight today when it runs, so the firing
+	// time decides only staleness, never what is kept. A run missed while the
+	// server was down fires once at the next startup.
 	// Deliberately NOT in maintenanceOrder: a catch-up run can take the op's
 	// full 6h, and the window runs its tasks sequentially and stops when the
 	// window closes, so it would starve every task after it.
@@ -1042,9 +1045,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled: func() bool {
 			return ts.deps.HasActivitySvc() && config.AppConfig.ActivityLogNightlyCompactionEnabled
 		},
-		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		GetInterval:            func() time.Duration { return 0 }, // scheduled by DailyAt
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
+		DailyAt:                "00:10",
 	})
 
 	// Activity DB Optimize — refresh the activity store's query-planner statistics.

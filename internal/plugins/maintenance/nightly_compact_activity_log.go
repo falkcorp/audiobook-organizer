@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
 // last-edited: 2026-09-13
 
@@ -30,7 +30,9 @@ const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log
 // SCHEDULE. The Schedule field below is documentation and the EnqueueOp
 // dedupe arm only: nothing reads OperationDef.Schedule (no cron library in the
 // module). The run is driven by the nightly_activity_compaction task in
-// internal/scheduler/tasks.go. Because the cutoff is recomputed from the clock
+// internal/scheduler/tasks.go, which fires at 00:10 server-local time via the
+// scheduler's DailyAt trigger (internal/scheduler/daily_at.go), matching the
+// "10 0 * * *" below. Because the cutoff is recomputed from the clock
 // when the op RUNS, the firing time changes only how stale the oldest full-
 // detail entry can get, never what is kept: today is never compacted.
 //
@@ -47,13 +49,13 @@ const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log
 // Statistics taken mid-catch-up are merely staler; the next night refreshes
 // them.
 func (p *Plugin) nightlyCompactActivityLogDef() sdk.OperationDef {
-	sched := "10 0 * * *" // documentation only — see above
+	sched := "10 0 * * *" // documentation only; the scheduler's DailyAt "00:10" is what fires it
 	return sdk.OperationDef{
 		ID:              NightlyCompactActivityLogDefID,
 		Liveness:        sdk.LivenessManual,
 		ProgressTimeout: 20 * time.Minute, // same reason as compactActivityLogDef
 		Plugin:          "maintenance",
-		DisplayName:     "Nightly activity compaction",
+		DisplayName:     "Nightly activity compaction (00:10 local)",
 		Description:     "Collapses every activity entry from before the kept full-detail days (default: before today) into daily digests, on every activity database.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
