@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-13
 
@@ -247,6 +247,14 @@ type BookReader interface { //nolint:interfacebloat // transitional composition 
 type BookMutator interface {
 	CreateBook(book *Book) (*Book, error)
 	UpdateBook(id string, book *Book) (*Book, error)
+	// ModifyBook reads the stored row and writes fn's changes to it under the
+	// book's write lock, so no concurrent write lands between the read and the
+	// write and gets reverted. (nil, nil) when the book does not exist; fn
+	// returning ErrSkipBookWrite writes nothing. fn must not write any book.
+	// Prefer it over GetBookByID -> mutate -> UpdateBook; for a caller that
+	// must do slow work between read and write, pair it with SnapshotBook and
+	// MergeBookChanges.
+	ModifyBook(id string, fn func(*Book) error) (*Book, error)
 	UpdateBookRating(id string, req UpdateBookRatingRequest) error
 	// FillBookMediaInfo sets the patch's media fields on the stored row only
 	// where they are still empty, re-reading the row inside the store; it

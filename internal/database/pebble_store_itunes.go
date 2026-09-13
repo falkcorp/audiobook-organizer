@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_itunes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f359d1ff-32ad-45c2-b58c-bd254479a552
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -14,30 +14,26 @@ import (
 )
 
 // SetLastWrittenAt stamps the last_written_at timestamp for book id.
+// A missing book is not an error (ModifyBook returns nil, nil for it).
 func (p *PebbleStore) SetLastWrittenAt(id string, t time.Time) error {
-	book, err := p.GetBookByID(id)
-	if err != nil {
-		return err
-	}
-	if book == nil {
-		return nil // non-fatal: book not found
-	}
-	book.LastWrittenAt = &t
-	_, err = p.UpdateBook(id, book)
+	_, err := p.ModifyBook(id, func(book *Book) error {
+		book.LastWrittenAt = &t
+		return nil
+	})
 	return err
 }
 
 // MarkITunesSynced sets itunes_sync_status to "synced" for the given book IDs.
+// Each book is read and written under its own stripe, one at a time.
 func (p *PebbleStore) MarkITunesSynced(bookIDs []string) (int64, error) {
 	var count int64
-	synced := "synced"
 	for _, id := range bookIDs {
-		book, err := p.GetBookByID(id)
-		if err != nil || book == nil {
-			continue
-		}
-		book.ITunesSyncStatus = &synced
-		if _, err := p.UpdateBook(id, book); err == nil {
+		book, err := p.ModifyBook(id, func(book *Book) error {
+			synced := "synced"
+			book.ITunesSyncStatus = &synced
+			return nil
+		})
+		if err == nil && book != nil {
 			count++
 		}
 	}

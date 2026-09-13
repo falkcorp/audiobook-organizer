@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-29
+// last-edited: 2026-09-13
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -66,97 +66,103 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		}
 	}
 
-	// Fetch current book for read-modify-write.
-	book, err := p.GetBookByID(bookID)
+	// Read-modify-write of the book row under its write stripe (ModifyBook):
+	// the file sums above are computed outside it; only the row read, the
+	// partial-data decision and the commit run inside.
+	var wantDuration int
+	var wantFileSize int64
+	found, wrote := false, false
+	_, err = p.ModifyBook(bookID, func(book *Book) error {
+		found = true
+
+		// --- partial-data rule for Duration ---
+		// Estimate how many files contributed to the existing snapshot. We can't
+		// know exactly (it was set at import), so we treat any non-nil existing
+		// value as coming from len(files) files. When files shrinks (all missing)
+		// or fewer files carry a duration than before, protect the old value.
+		writeDuration := true
+		if book.Duration != nil && *book.Duration > 0 && filesWithDuration == 0 {
+			// No files with duration at all — cannot produce a better value; keep.
+			slog.Warn("RecomputeBookAggregates: no files have Duration — keeping existing book.Duration",
+				"book_id", bookID,
+				"existing_duration_sec", *book.Duration,
+				"total_files", len(files),
+			)
+			writeDuration = false
+		}
+
+		// --- partial-data rule for FileSize ---
+		writeFileSize := true
+		if book.FileSize != nil && *book.FileSize > 0 && filesWithFileSize == 0 {
+			slog.Warn("RecomputeBookAggregates: no files have FileSize — keeping existing book.FileSize",
+				"book_id", bookID,
+				"existing_file_size_bytes", *book.FileSize,
+				"total_files", len(files),
+			)
+			writeFileSize = false
+		}
+
+		// Compute what we will actually write for each field.
+		// If write* is false, we keep the existing value; otherwise use the new sum.
+		if writeDuration {
+			wantDuration = sumDuration
+		} else if book.Duration != nil {
+			wantDuration = *book.Duration // keep old
+		}
+
+		if writeFileSize {
+			wantFileSize = sumFileSize
+		} else if book.FileSize != nil {
+			wantFileSize = *book.FileSize // keep old
+		}
+
+		// Check if either field actually changed from the current book value.
+		existingDuration := 0
+		if book.Duration != nil {
+			existingDuration = *book.Duration
+		}
+		existingFileSize := int64(0)
+		if book.FileSize != nil {
+			existingFileSize = *book.FileSize
+		}
+		if existingDuration == wantDuration && existingFileSize == wantFileSize {
+			// "caller" is the redundancy signal: a book recomputed many times from
+			// the same originator with no change to show for it is exactly what the
+			// coalescing fix is meant to eliminate.
+			//
+			// The Enabled guard is NOT redundant with slog's own level check. Go
+			// evaluates arguments before the call, so an unguarded
+			// slog.Debug(..., "caller", aggregateCaller()) would walk the stack on
+			// every no-change return regardless of log level — and this is the
+			// hottest path in the function: the maintenance backfill sweeps the whole
+			// library and most books have nothing to update. That would add an
+			// unconditional stack walk to a full-library loop inside the very
+			// function this instrumentation exists to make cheaper.
+			if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+				slog.Debug("RecomputeBookAggregates: no change needed",
+					"book_id", bookID,
+					"caller", aggregateCaller(),
+				)
+			}
+			return ErrSkipBookWrite
+		}
+
+		// Apply changes.
+		book.Duration = &wantDuration
+		book.FileSize = &wantFileSize
+		wrote = true
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("RecomputeBookAggregates GetBookByID %s: %w", bookID, err)
+		return fmt.Errorf("RecomputeBookAggregates ModifyBook %s: %w", bookID, err)
 	}
-	if book == nil {
+	if !found {
 		// Book deleted between the BookFile mutation and this call — harmless.
 		slog.Warn("RecomputeBookAggregates book not found, skipping", "book_id", bookID)
 		return nil
 	}
-
-	// --- partial-data rule for Duration ---
-	// Estimate how many files contributed to the existing snapshot. We can't
-	// know exactly (it was set at import), so we treat any non-nil existing
-	// value as coming from len(files) files. When files shrinks (all missing)
-	// or fewer files carry a duration than before, protect the old value.
-	writeDuration := true
-	if book.Duration != nil && *book.Duration > 0 && filesWithDuration == 0 {
-		// No files with duration at all — cannot produce a better value; keep.
-		slog.Warn("RecomputeBookAggregates: no files have Duration — keeping existing book.Duration",
-			"book_id", bookID,
-			"existing_duration_sec", *book.Duration,
-			"total_files", len(files),
-		)
-		writeDuration = false
-	}
-
-	// --- partial-data rule for FileSize ---
-	writeFileSize := true
-	if book.FileSize != nil && *book.FileSize > 0 && filesWithFileSize == 0 {
-		slog.Warn("RecomputeBookAggregates: no files have FileSize — keeping existing book.FileSize",
-			"book_id", bookID,
-			"existing_file_size_bytes", *book.FileSize,
-			"total_files", len(files),
-		)
-		writeFileSize = false
-	}
-
-	// Compute what we will actually write for each field.
-	// If write* is false, we keep the existing value; otherwise use the new sum.
-	var wantDuration int
-	if writeDuration {
-		wantDuration = sumDuration
-	} else if book.Duration != nil {
-		wantDuration = *book.Duration // keep old
-	}
-
-	var wantFileSize int64
-	if writeFileSize {
-		wantFileSize = sumFileSize
-	} else if book.FileSize != nil {
-		wantFileSize = *book.FileSize // keep old
-	}
-
-	// Check if either field actually changed from the current book value.
-	existingDuration := 0
-	if book.Duration != nil {
-		existingDuration = *book.Duration
-	}
-	existingFileSize := int64(0)
-	if book.FileSize != nil {
-		existingFileSize = *book.FileSize
-	}
-	if existingDuration == wantDuration && existingFileSize == wantFileSize {
-		// "caller" is the redundancy signal: a book recomputed many times from
-		// the same originator with no change to show for it is exactly what the
-		// coalescing fix is meant to eliminate.
-		//
-		// The Enabled guard is NOT redundant with slog's own level check. Go
-		// evaluates arguments before the call, so an unguarded
-		// slog.Debug(..., "caller", aggregateCaller()) would walk the stack on
-		// every no-change return regardless of log level — and this is the
-		// hottest path in the function: the maintenance backfill sweeps the whole
-		// library and most books have nothing to update. That would add an
-		// unconditional stack walk to a full-library loop inside the very
-		// function this instrumentation exists to make cheaper.
-		if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
-			slog.Debug("RecomputeBookAggregates: no change needed",
-				"book_id", bookID,
-				"caller", aggregateCaller(),
-			)
-		}
+	if !wrote {
 		return nil
-	}
-
-	// Apply changes.
-	book.Duration = &wantDuration
-	book.FileSize = &wantFileSize
-
-	if _, err := p.UpdateBook(bookID, book); err != nil {
-		return fmt.Errorf("RecomputeBookAggregates UpdateBook %s: %w", bookID, err)
 	}
 
 	// "caller" names the subsystem that drove this write. This is the line the

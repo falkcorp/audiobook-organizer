@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_media.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b623e68-386f-4ecd-9e24-026f6dbf0a43
 // last-edited: 2026-09-13
 
@@ -68,25 +68,17 @@ func (p BookMediaInfoPatch) applyTo(book *Book) bool {
 // empty media fields are set on that fresh copy, so no other column can be
 // carried over from a stale read.
 //
-// bookMediaMu serializes FillBookMediaInfo calls against each other. It does
-// not serialize against UpdateBook, whose own read-then-commit is unlocked
-// (see updateBookAfterOldReadHook): a full UpdateBook that commits in the few
-// microseconds between this method's read and its commit can still be
-// overwritten, exactly as between any two UpdateBook calls. Nothing slow
-// (ffprobe, tag reads) runs inside that window any more.
+// The read and the write run under the book's write stripe (ModifyBook), the
+// same one UpdateBook and every other in-store read-modify-write takes, so no
+// write to this book -- a metadata apply, an edit, another backfill -- can
+// commit between the read and this method's commit and be reverted by it.
+// Nothing slow (ffprobe, tag reads) runs under the stripe; the caller derives
+// the patch first.
 func (p *PebbleStore) FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error) {
-	p.bookMediaMu.Lock()
-	defer p.bookMediaMu.Unlock()
-
-	fresh, err := p.GetBookByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if fresh == nil {
-		return nil, nil
-	}
-	if !patch.applyTo(fresh) {
-		return fresh, nil
-	}
-	return p.UpdateBook(id, fresh)
+	return p.ModifyBook(id, func(fresh *Book) error {
+		if !patch.applyTo(fresh) {
+			return ErrSkipBookWrite
+		}
+		return nil
+	})
 }
