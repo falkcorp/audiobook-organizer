@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.219.1",
+    "version": "0.219.2",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -670,30 +670,6 @@
     }
   },
   "paths": {
-    "/accept-invite": {
-      "post": {
-        "operationId": "handleAcceptInvite",
-        "summary": "Accept Invite",
-        "tags": [
-          "general"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/activity": {
       "get": {
         "operationId": "listActivity",
@@ -3462,6 +3438,98 @@
         }
       }
     },
+    "/auth/accept-invite": {
+      "post": {
+        "operationId": "acceptInvite",
+        "summary": "Accept Invite",
+        "description": "Consumes an invite token, creates the user with the given password, and starts a session. The session token is set only in the HttpOnly ao_session cookie, never in the body.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token",
+                  "password"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User created and session started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "description": "Safe user shape. Never includes the password hash.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "roles": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "status": {
+                              "type": "string",
+                              "description": "active or locked."
+                            },
+                            "created_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        "expires_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request: missing body or fields, password shorter than 8 characters, or invite invalid, expired or already used"
+          },
+          "500": {
+            "description": "Failed to hash the password or create the session"
+          }
+        }
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
@@ -5458,6 +5526,116 @@
         }
       }
     },
+    "/deluge/status": {
+      "get": {
+        "operationId": "getDelugeStatus",
+        "summary": "Deluge Status",
+        "description": "Reports the Deluge integration configuration. Does not contact Deluge. url falls back to the download-client host and port (default port 8112) when deluge_web_url is unset.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deluge configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "discovery_enabled": {
+                          "type": "boolean"
+                        },
+                        "move_enabled": {
+                          "type": "boolean"
+                        },
+                        "discovery_label": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks integrations.manage"
+          }
+        }
+      }
+    },
+    "/deluge/test-connection": {
+      "post": {
+        "operationId": "testDelugeConnection",
+        "summary": "Deluge Test Connection",
+        "description": "Logs in to the configured Deluge Web UI and reports whether it is connected to a daemon. Takes no request body.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Login succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connected": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "deluge_web_url not configured"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks integrations.manage"
+          },
+          "500": {
+            "description": "Failed to create the Deluge client"
+          },
+          "502": {
+            "description": "Deluge login or connection check failed"
+          }
+        }
+      }
+    },
     "/diagnostics/ai-results/{operationId}": {
       "parameters": [
         {
@@ -5943,101 +6121,6 @@
         }
       }
     },
-    "/invite": {
-      "post": {
-        "operationId": "handleCreateInvite",
-        "summary": "Create Invite",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/invites": {
-      "get": {
-        "operationId": "handleListInvites",
-        "summary": "List Invites",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/invites/{token}": {
-      "parameters": [
-        {
-          "name": "token",
-          "in": "path",
-          "required": true,
-          "description": "The token path parameter.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "delete": {
-        "operationId": "handleDeleteInvite",
-        "summary": "Delete Invite",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/itunes/books": {
       "get": {
         "tags": [
@@ -6270,6 +6353,110 @@
         }
       }
     },
+    "/itunes/rebuild": {
+      "post": {
+        "operationId": "rebuildITL",
+        "summary": "Rebuild ITL (diff and batch)",
+        "description": "Diffs the database against the configured ITL file and applies all adds, removes, metadata and location updates in one atomic safe write. With dry_run=true, returns the diff preview without writing.",
+        "tags": [
+          "iTunes"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "description": "true returns the preview without applying.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "allow_full_library",
+            "in": "query",
+            "required": false,
+            "description": "true overrides the guard that refuses to rebuild an ITL that looks like a full library (music, podcasts, playlists).",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dry-run preview ({dry_run, preview}) or applied result ({preview, applied})",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "dry_run": {
+                          "type": "boolean",
+                          "description": "Present (true) only on the dry-run response."
+                        },
+                        "preview": {
+                          "type": "object",
+                          "properties": {
+                            "tracks_in_itl": {
+                              "type": "integer"
+                            },
+                            "books_in_db": {
+                              "type": "integer"
+                            },
+                            "to_remove": {
+                              "type": "integer"
+                            },
+                            "to_add": {
+                              "type": "integer"
+                            },
+                            "to_update_metadata": {
+                              "type": "integer"
+                            },
+                            "to_update_location": {
+                              "type": "integer"
+                            },
+                            "already_synced": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "applied": {
+                          "type": "boolean",
+                          "description": "Present only on the apply response."
+                        },
+                        "error": {
+                          "type": "string",
+                          "description": "Present only when applied is false."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ITunesLibraryWritePath not configured, or the target-shape guard refused the write"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks library.edit_metadata"
+          },
+          "500": {
+            "description": "Invalid configured path or diff failed; or the safe write failed, in which case the body carries {preview, applied: false, error}"
+          }
+        }
+      }
+    },
     "/itunes/sync": {
       "post": {
         "tags": [
@@ -6450,6 +6637,76 @@
         }
       }
     },
+    "/itunes/write-back-all": {
+      "post": {
+        "operationId": "writeBackAllITunes",
+        "summary": "Write back all books to iTunes",
+        "description": "Writes the file locations of every book with an iTunes persistent ID back to the ITL file, then marks those books as iTunes-synced. Takes no request body.",
+        "tags": [
+          "iTunes"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Write-back result. When no book has a persistent ID, only success, updated_count (0) and message are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "success": {
+                          "type": "boolean"
+                        },
+                        "updated_count": {
+                          "type": "integer",
+                          "description": "ITL chunks updated."
+                        },
+                        "file_pid_pairs": {
+                          "type": "integer",
+                          "description": "(file, PID) pairs sent to the ITL writer."
+                        },
+                        "primary_book_count": {
+                          "type": "integer",
+                          "description": "Primary books whose locations were written."
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Write-back disabled in config, no ITL path configured, or ITL file not found"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks library.edit_metadata"
+          },
+          "409": {
+            "description": "The ITL file changed since it was last read"
+          },
+          "500": {
+            "description": "Database not initialized, or the ITL write or rename failed"
+          },
+          "503": {
+            "description": "iTunes integration disabled"
+          }
+        }
+      }
+    },
     "/itunes/write-back/preview": {
       "post": {
         "tags": [
@@ -6501,6 +6758,77 @@
           },
           "404": {
             "description": "Not found"
+          }
+        }
+      }
+    },
+    "/maintenance/jobs": {
+      "get": {
+        "operationId": "listMaintenanceJobs",
+        "summary": "List Maintenance Jobs",
+        "description": "Returns the catalogue of every registered maintenance job. This is the live source of truth for the job_id values POST /maintenance/jobs/{job_id} accepts; that path's enum is a snapshot of it.",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job catalogue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "jobs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "category": {
+                                "type": "string"
+                              },
+                              "default_params": {
+                                "type": "object",
+                                "description": "Job-specific default parameters. When it has a dry_run key, that value is the default POST /maintenance/jobs/{job_id} applies when the request omits dry_run."
+                              },
+                              "can_resume": {
+                                "type": "boolean"
+                              },
+                              "permission": {
+                                "type": "string",
+                                "description": "Permission required to run the job. settings.manage unless the job declares its own."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks settings.manage"
           }
         }
       }
@@ -6613,6 +6941,112 @@
           },
           "409": {
             "description": "Conflict enqueueing the operation"
+          }
+        }
+      }
+    },
+    "/maintenance/wipe": {
+      "post": {
+        "operationId": "wipeLibraryData",
+        "summary": "Wipe Library Data",
+        "description": "Admin only. Deletes the selected data classes. dry_run defaults to true: a request that omits it only counts what would be removed. The body must include confirm: \"WIPE\" even for a dry run. \"all\" expands to every other target. organized_folders deletes top-level folders under the library root (keeping .covers, .itunes-writeback and openlibrary-dumps); files deletes the books' files from disk.",
+        "tags": [
+          "maintenance"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "books",
+                        "book_files",
+                        "segments",
+                        "files",
+                        "organized_folders",
+                        "activity",
+                        "authors",
+                        "series",
+                        "external_ids",
+                        "all"
+                      ]
+                    }
+                  },
+                  "confirm": {
+                    "type": "string",
+                    "enum": [
+                      "WIPE"
+                    ]
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wipe (or dry-run count) finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "dry_run": {
+                          "type": "boolean"
+                        },
+                        "results": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          },
+                          "description": "Rows or folders removed (or that would be removed), per target."
+                        },
+                        "incomplete": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Targets that stopped early on an error. Their count in results is partial. Omitted when every target finished."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or confirm is not \"WIPE\""
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: admin role required"
+          },
+          "500": {
+            "description": "Database not initialized"
           }
         }
       }
@@ -8540,34 +8974,6 @@
         }
       }
     },
-    "/rebuild": {
-      "post": {
-        "operationId": "rebuildITLHandler",
-        "summary": "rebuild I T L",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/series": {
       "get": {
         "operationId": "listSeries",
@@ -9173,34 +9579,6 @@
         }
       }
     },
-    "/status": {
-      "get": {
-        "operationId": "handleDelugeStatus",
-        "summary": "Deluge Status",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/system/activity-log": {
       "get": {
         "operationId": "getSystemActivityLog",
@@ -9531,34 +9909,6 @@
         }
       }
     },
-    "/test-connection": {
-      "post": {
-        "operationId": "handleDelugeTestConnection",
-        "summary": "Deluge Test Connection",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
     "/update/apply": {
       "post": {
         "operationId": "applyUpdate",
@@ -9639,6 +9989,510 @@
           },
           "404": {
             "description": "Not found"
+          }
+        }
+      }
+    },
+    "/users/invite": {
+      "post": {
+        "operationId": "createUserInvite",
+        "summary": "Create Invite",
+        "description": "Generates a single-use invite token for a new account with the given role. The invite expires after expires_in hours (default 72).",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "role_id"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "role_id": {
+                    "type": "string"
+                  },
+                  "expires_in": {
+                    "type": "integer",
+                    "description": "Lifetime in hours. 0 or omitted means 72."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "invite": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "role_id": {
+                              "type": "string"
+                            },
+                            "created_by_user_id": {
+                              "type": "string",
+                              "description": "ID of the admin who created the invite (audit trail)."
+                            },
+                            "created_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "used_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            }
+                          }
+                        },
+                        "token": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request: username or role_id missing"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "500": {
+            "description": "Failed to create the invite"
+          }
+        }
+      }
+    },
+    "/users/invites": {
+      "get": {
+        "operationId": "listUserInvites",
+        "summary": "List Invites",
+        "description": "Returns the active (unused, unexpired) invites.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active invites",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "invites": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "token": {
+                                "type": "string"
+                              },
+                              "username": {
+                                "type": "string"
+                              },
+                              "email": {
+                                "type": "string"
+                              },
+                              "role_id": {
+                                "type": "string"
+                              },
+                              "created_by_user_id": {
+                                "type": "string",
+                                "description": "ID of the admin who created the invite (audit trail)."
+                              },
+                              "created_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "expires_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "used_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        },
+                        "count": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "500": {
+            "description": "Failed to list invites"
+          }
+        }
+      }
+    },
+    "/users/invites/{token}": {
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "Invite token.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteUserInvite",
+        "summary": "Delete Invite",
+        "description": "Revokes an invite.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invite revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "deleted": {
+                          "type": "string",
+                          "description": "The revoked token."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "500": {
+            "description": "Failed to delete the invite"
+          }
+        }
+      }
+    },
+    "/users/{id}/deactivate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User ID.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "deactivateUser",
+        "summary": "Deactivate User",
+        "description": "Sets the user's status to locked.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "description": "Safe user shape. Never includes the password hash.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "roles": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "status": {
+                              "type": "string",
+                              "description": "active or locked."
+                            },
+                            "created_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Failed to read or update the user"
+          }
+        }
+      }
+    },
+    "/users/{id}/reactivate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User ID.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reactivateUser",
+        "summary": "Reactivate User",
+        "description": "Sets the user's status to active.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User reactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "description": "Safe user shape. Never includes the password hash.",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "roles": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "status": {
+                              "type": "string",
+                              "description": "active or locked."
+                            },
+                            "created_at": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Failed to read or update the user"
+          }
+        }
+      }
+    },
+    "/users/{id}/reset-password": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User ID.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "resetUserPassword",
+        "summary": "Reset Password",
+        "description": "Mints a single-use temporary login link for the user. The user follows it to get a session and then sets their own password with PUT /auth/me/password. The admin never chooses or sees the new password. Nothing is written to the database; the token lives in memory until used.",
+        "tags": [
+          "Auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Temporary login link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string"
+                        },
+                        "login_url": {
+                          "type": "string",
+                          "description": "Absolute when the server has an external URL configured, otherwise a relative path."
+                        },
+                        "expires_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "user": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "session_ttl_hours": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden: caller lacks users.manage"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Database not initialized or token generation failed"
           }
         }
       }
@@ -9900,151 +10754,6 @@
         "summary": "list Work Books",
         "tags": [
           "works"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/write-back-all": {
-      "post": {
-        "operationId": "handleITunesWriteBackAll",
-        "summary": "I Tunes Write Back All",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/deactivate": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "operationId": "handleDeactivateUser",
-        "summary": "Deactivate User",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/reactivate": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "operationId": "handleReactivateUser",
-        "summary": "Reactivate User",
-        "tags": [
-          "general"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/{id}/reset-password": {
-      "parameters": [
-        {
-          "name": "id",
-          "in": "path",
-          "required": true,
-          "description": "Unique identifier.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "operationId": "handleResetPassword",
-        "summary": "Reset Password",
-        "tags": [
-          "general"
         ],
         "security": [
           {
