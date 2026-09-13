@@ -5459,7 +5459,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       exactly one definition (`pebble_store.go:149`) and no other store wrapper
       dispatches to memdb.
 
-- [ ] **SERIES-MERGE-PERSERIES-SCAN-COST** Four callers of
+- [x] **SERIES-MERGE-PERSERIES-SCAN-COST** — DONE 2026-09-13 (perf/series-lookup-hoist, closes #2902): membership is hoisted once per operation via `database.SeriesMembershipAllVersions`. Four callers of
       `GetBooksBySeriesIDAllVersions` call it once per series inside a loop and
       none hoists or caches: `cleanup_series.go:105` (inside
       `for _, ser := range allSeries` at `:73`), `duplicates_helpers.go:291`,

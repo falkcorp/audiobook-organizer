@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.116.0
+// version: 1.117.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 
@@ -58,7 +58,11 @@ type MockStore struct {
 	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
 	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
 	// rather than returning an empty slice — see the method for why.
-	GetBooksBySeriesIDAllVersionsFunc    func(seriesID int) ([]BookCore, error)
+	GetBooksBySeriesIDAllVersionsFunc func(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDsAllVersionsFunc stubs the bulk membership read. When
+	// nil the mock answers per ID through GetBooksBySeriesIDAllVersions, so a
+	// suite that stubs one series at a time sees the same books either way.
+	GetBooksBySeriesIDsAllVersionsFunc   func(seriesIDs []int) (map[int][]BookCore, error)
 	GetBooksByAuthorIDCoreFunc           func(authorID int) ([]BookCore, error)
 	GetBooksByAuthorIDWithRoleFunc       func(authorID int) ([]BookCore, error)
 	GetBooksByAuthorIDForRelinkFunc      func(authorID int) ([]BookCore, error)
@@ -1116,6 +1120,26 @@ func (m *MockStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, err
 		return m.GetBooksBySeriesIDCoreFunc(seriesID)
 	}
 	return nil, nil
+}
+
+// GetBooksBySeriesIDsAllVersions satisfies SeriesMembershipStore. Unset, it
+// defers to GetBooksBySeriesIDAllVersions per ID (and so, transitively, to the
+// Core stub), keeping the hoisted and per-series answers identical by
+// construction for every existing fixture. An error from any ID fails the
+// whole read, as the real store's single scan would.
+func (m *MockStore) GetBooksBySeriesIDsAllVersions(seriesIDs []int) (map[int][]BookCore, error) {
+	if m.GetBooksBySeriesIDsAllVersionsFunc != nil {
+		return m.GetBooksBySeriesIDsAllVersionsFunc(seriesIDs)
+	}
+	out := make(map[int][]BookCore, len(seriesIDs))
+	for _, id := range seriesIDs {
+		books, err := m.GetBooksBySeriesIDAllVersions(id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = books
+	}
+	return out, nil
 }
 
 func (m *MockStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {

@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -463,6 +463,29 @@ func DedupSeries(
 			fmt.Sprintf("%s (0/%d, 0.00%%)", msg, len(dupGroups)))
 	}
 
+	// Complete (AllVersions) membership of every series in a duplicate group,
+	// read ONCE instead of once per merged-away series inside the loop below
+	// (SERIES-MERGE-PERSERIES-SCAN-COST): with a tainted memdb each per-series
+	// read was a full "book:" Pebble scan.
+	//
+	// Staleness: groups are disjoint by normalised name, each merged-away
+	// series is read once, and books only move onto its own group's keeper,
+	// which is never read from this map -- so no read here can be stale today.
+	// Successful writes are still recorded with Move so the map keeps matching
+	// the store. A dry run writes nothing and so moves nothing.
+	//
+	// Fails CLOSED like refCounts, before anything is written.
+	var dupIDs []int
+	for _, group := range dupGroups {
+		for _, s := range group {
+			dupIDs = append(dupIDs, s.ID)
+		}
+	}
+	members, err := database.SeriesMembershipAllVersions(store, dupIDs)
+	if err != nil {
+		return SeriesDedupResult{}, fmt.Errorf("series dedup refusing to run without series membership: %w", err)
+	}
+
 	result := SeriesDedupResult{DryRun: dryRun}
 	for gi, group := range dupGroups {
 		if progress != nil && progress.IsCanceled() {
@@ -497,12 +520,8 @@ func DedupSeries(
 			// row it is handed and then deletes s.ID. A non-primary version the
 			// listing getter hides is one this loop never repoints, and it is
 			// left holding a series that no longer exists.
-			books, err := store.GetBooksBySeriesIDAllVersions(s.ID)
-			if err != nil {
-				result.Errors = append(result.Errors,
-					fmt.Sprintf("failed to get books for series %d: %v", s.ID, err))
-				continue
-			}
+			// From the hoisted map (see members above).
+			books := members[s.ID]
 			// moved counts reassignments that actually SUCCEEDED. It is not
 			// len(books): that is what we ATTEMPTED, and the three continue
 			// paths below leave a row still pointing at s.ID while it would
@@ -575,6 +594,7 @@ func DedupSeries(
 						fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 					continue
 				}
+				members.Move(full.ID, s.ID, &keepID)
 				// Undo ledger. internal/undo reverses a "metadata_update" row by
 				// writing OldValue back into FieldName, so this row is what makes
 				// a dry_run=false run undoable at all — without it git revert
@@ -862,6 +882,18 @@ func MergeSeries(
 		return SeriesMergeResult{}, fmt.Errorf("series merge refusing to run without unfiltered reference counts: %w", err)
 	}
 
+	// Membership of every merged-away series, hoisted once instead of once per
+	// mergeID inside the loop (SERIES-MERGE-PERSERIES-SCAN-COST). keepID is
+	// deliberately NOT served from this map: the author-linking read after the
+	// loop must see the books this loop just moved in, so it stays a live
+	// per-series read (one call, not a loop). mergeIDs are de-duplicated and
+	// never equal keepID, so no in-loop read can be stale; Move keeps the map
+	// honest anyway. Fails CLOSED like refCounts.
+	members, err := database.SeriesMembershipAllVersions(store, mergeIDs)
+	if err != nil {
+		return SeriesMergeResult{}, fmt.Errorf("series merge refusing to run without series membership: %w", err)
+	}
+
 	var result SeriesMergeResult
 	for i, mergeID := range mergeIDs {
 		if progress != nil && progress.IsCanceled() {
@@ -886,12 +918,7 @@ func MergeSeries(
 		// row it is handed and then calls DeleteSeries(mergeID) below. A
 		// non-primary version the listing getter hides is one this loop never
 		// repoints, and it is left holding a series that no longer exists.
-		books, err := store.GetBooksBySeriesIDAllVersions(mergeID)
-		if err != nil {
-			result.Errors = append(result.Errors,
-				fmt.Sprintf("failed to get books for series %d: %v", mergeID, err))
-			continue
-		}
+		books := members[mergeID]
 
 		// moved counts reassignments that actually SUCCEEDED, and is the
 		// subtrahend of the reference guard below. It is deliberately NOT
@@ -932,6 +959,7 @@ func MergeSeries(
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 			} else {
+				members.Move(bookCore.ID, mergeID, &keepID)
 				moved++
 				_ = store.CreateOperationChange(&database.OperationChange{
 					ID:          ulid.Make().String(),

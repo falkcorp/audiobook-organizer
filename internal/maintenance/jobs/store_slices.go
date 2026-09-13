@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package jobs
 
@@ -147,16 +147,15 @@ type seriesUnlinker interface {
 	DeleteSeries(id int) error
 }
 
-// seriesMerger is seriesUnlinker plus the membership read needed to fold one
-// series group into another.
-//
-// AllVersions rather than Core: this membership read feeds a loop that repoints
-// every row it is handed and then deletes the series. Reading the filtered
-// listing getter here does not merely skip a non-primary version, it strands it.
+// seriesMerger is what csMergeSeriesGroup writes through. It deliberately has
+// NO membership read: the caller hoists the complete (AllVersions) membership
+// once per job via database.SeriesMembershipAllVersions and passes it in, so
+// a per-series GetBooksBySeriesIDAllVersions inside the merge loop -- a full
+// Pebble scan per series once memdb is tainted -- is a compile error here
+// (SERIES-MERGE-PERSERIES-SCAN-COST).
 type seriesMerger interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	DeleteSeries(id int) error
 }
 

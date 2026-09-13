@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -54,8 +54,11 @@ import (
 type seriesPruneStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	// See maintenanceSeriesStore: display may filter, writes may not.
-	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
+	// No per-series AllVersions read on purpose: phase 1 hoists the complete
+	// membership once through database.SeriesMembershipAllVersions (a
+	// capability, resolved through the decorator chain), so a per-series read
+	// inside the merge loop cannot come back without widening this interface
+	// (SERIES-MERGE-PERSERIES-SCAN-COST).
 	DeleteSeries(id int) error
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
@@ -252,6 +255,32 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		return fmt.Errorf("series prune refusing to merge without unfiltered reference counts: %w", refCountErr)
 	}
 
+	// Complete (AllVersions) membership of every series phase 1 may merge away,
+	// read ONCE instead of once per series inside the loop below
+	// (SERIES-MERGE-PERSERIES-SCAN-COST): with a tainted memdb each per-series
+	// read was a full "book:" Pebble scan.
+	//
+	// Staleness: groups are disjoint and each merged-from series is read once,
+	// and books only move from it onto its own group's keeper, which is never
+	// read from this map. So no read here can see a stale entry today. Every
+	// successful repoint is still recorded with Move, so the map stays equal to
+	// what a fresh read would return if a later change adds such a read.
+	//
+	// Fails CLOSED, before anything is written, like phase1RefCounts.
+	var phase1IDs []int
+	for _, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		for _, s := range group {
+			phase1IDs = append(phase1IDs, s.ID)
+		}
+	}
+	phase1Members, memberErr := database.SeriesMembershipAllVersions(store, phase1IDs)
+	if memberErr != nil {
+		return fmt.Errorf("series prune refusing to merge without series membership: %w", memberErr)
+	}
+
 	// Phase 1: Merge duplicates. Counters are declared at the top of the function
 	// so the deferred cache invalidation can observe them on every exit path.
 	dupGroupCount := 0
@@ -325,11 +354,8 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			// row it is handed and then deletes ser.ID below. A non-primary
 			// version the listing getter hides is one this loop never repoints,
 			// and it is left holding a series that no longer exists.
-			books, err := store.GetBooksBySeriesIDAllVersions(ser.ID)
-			if err != nil {
-				mergeErrors = append(mergeErrors, fmt.Sprintf("failed to get books for series %d: %v", ser.ID, err))
-				continue
-			}
+			// From the hoisted map (see phase1Members).
+			books := phase1Members[ser.ID]
 			// Every book that could NOT be repointed. The delete below is gated on
 			// this being zero: a book still holding ser.ID when the row is deleted
 			// is stranded exactly as if the getter had hidden it, and the operator
@@ -373,6 +399,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 					// cached series list.
 					booksRepointed++
 					moved++
+					phase1Members.Move(bookCore.ID, ser.ID, &keepID)
 					if operationID != "" {
 						_ = store.CreateOperationChange(&database.OperationChange{
 							ID:          ulid.Make().String(),
@@ -748,15 +775,19 @@ func buildSeriesNormalizePreview(store seriesMergeStore) seriesNormalizePreviewR
 // as before this guard was added: a failed listing, a failed hydration, an
 // unhydratable (nil) book, or a failed write. This function is fail-CLOSED on
 // everything it can see; the new guard only extends that to what it could not.
-func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, refCounts map[int]int) (merged, refused int, err error) {
+//
+// members is the caller's hoisted AllVersions membership map
+// (database.SeriesMembershipAllVersions), read once per pass instead of once
+// per merged-away series (SERIES-MERGE-PERSERIES-SCAN-COST). Every successful
+// repoint is recorded with members.Move, so if action N's keeper were later the
+// fromID of action M its entry would include what N moved in -- the stale-LOW
+// read that would otherwise repoint too little and then delete.
+func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, refCounts map[int]int, members database.SeriesBooksMap) (merged, refused int, err error) {
 	for _, fromID := range mergeIDs {
 		// AllVersions, not the Core listing getter: this loop repoints every row
 		// it is handed. A non-primary version the listing getter hides is never
 		// repointed and would be left holding a series that no longer exists.
-		books, gerr := store.GetBooksBySeriesIDAllVersions(fromID)
-		if gerr != nil {
-			return merged, refused, fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, gerr)
-		}
+		books := members[fromID]
 
 		// moved counts rows actually reassigned by THIS iteration. It is the
 		// subtrahend of the reference guard below and must never be len(books):
@@ -781,6 +812,7 @@ func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, 
 			if _, uerr := store.UpdateBook(book.ID, current); uerr != nil {
 				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, uerr)
 			}
+			members.Move(book.ID, fromID, &keepID)
 			moved++
 		}
 
@@ -983,9 +1015,27 @@ func executeSeriesNormalizeCore(
 	// performed above are NOT rolled back) rather than falling back to a
 	// filtered count, which would delete rows while reporting success.
 	seriesRefCounts, refCountErr := database.SeriesRefCounts(store)
+	// Membership of every series this pass merges away, hoisted once
+	// (SERIES-MERGE-PERSERIES-SCAN-COST). Keepers are included so the map
+	// stays coherent if one is ever also a fromID; see mergeSeriesGroupHelper.
+	// Fails CLOSED exactly like the ref counts: no map, no merge pass.
+	var mergeMembers database.SeriesBooksMap
+	var memberErr error
+	if refCountErr == nil {
+		var ids []int
+		for _, a := range actions {
+			if a.Action == "merge_into" && a.MergeTargetID != nil {
+				ids = append(ids, a.SeriesID, *a.MergeTargetID)
+			}
+		}
+		mergeMembers, memberErr = database.SeriesMembershipAllVersions(store, ids)
+	}
 	if refCountErr != nil {
 		errs = append(errs, fmt.Sprintf(
 			"series normalize refusing to merge without unfiltered reference counts: %v", refCountErr))
+	} else if memberErr != nil {
+		errs = append(errs, fmt.Sprintf(
+			"series normalize refusing to merge without series membership: %v", memberErr))
 	} else {
 		for _, a := range actions {
 			if a.Action != "merge_into" || a.MergeTargetID == nil {
@@ -994,7 +1044,7 @@ func executeSeriesNormalizeCore(
 			if ctx.Err() != nil {
 				return affectedBookIDs, ctx.Err()
 			}
-			_, refused, mErr := mergeSeriesGroupHelper(store, *a.MergeTargetID, []int{a.SeriesID}, seriesRefCounts)
+			_, refused, mErr := mergeSeriesGroupHelper(store, *a.MergeTargetID, []int{a.SeriesID}, seriesRefCounts, mergeMembers)
 			if mErr != nil {
 				errs = append(errs, fmt.Sprintf("mergeSeriesGroupHelper(keep=%d, merge=%d): %v", *a.MergeTargetID, a.SeriesID, mErr))
 			}

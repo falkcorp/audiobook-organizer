@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-08-24
+// last-edited: 2026-09-13
 
 package jobs
 
@@ -64,6 +64,29 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		return fmt.Errorf("cleanup-series refusing to run without unfiltered reference counts: %w", err)
 	}
 
+	// Complete (AllVersions) membership of every series, read ONCE for the
+	// whole job instead of once per series inside both loops below
+	// (SERIES-MERGE-PERSERIES-SCAN-COST). With a tainted memdb each per-series
+	// read was a full "book:" Pebble scan; this is one.
+	//
+	// Kept current, not re-read: every successful unlink (phase 1) and repoint
+	// (phase 2) calls members.Move, so a later read of a series this job has
+	// already touched sees what a fresh read would. The case that makes this
+	// load-bearing: a phase-1 unlink that fails part-way leaves the series row
+	// (it is not in deletedIDs), so phase 2 can meet it as a merged-from series.
+	// Without the Move, phase 2 would re-home the books phase 1 had ALREADY
+	// unlinked onto the keeper -- a write no fresh read would ever have made.
+	//
+	// Fails CLOSED like refCounts: no membership, no job.
+	seriesIDs := make([]int, len(allSeries))
+	for i, ser := range allSeries {
+		seriesIDs[i] = ser.ID
+	}
+	members, err := database.SeriesMembershipAllVersions(store, seriesIDs)
+	if err != nil {
+		return fmt.Errorf("cleanup-series refusing to run without series membership: %w", err)
+	}
+
 	reporter.SetTotal(len(allSeries))
 
 	// Phase 1: single-book series
@@ -102,8 +125,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		// Selection and mutation legitimately ask different questions here, which
 		// is why this reads a different getter rather than replacing the one
 		// above.
-		unlink, uErr := store.GetBooksBySeriesIDAllVersions(ser.ID)
-		if uErr != nil || len(unlink) == 0 {
+		// From the hoisted map; see members above.
+		unlink := members[ser.ID]
+		if len(unlink) == 0 {
 			reporter.Increment()
 			continue
 		}
@@ -135,7 +159,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 
 		singleFound++
 		if !dryRun {
-			if applyErr := csUnlinkAndDeleteSeries(store, unlink, ser.ID); applyErr != nil {
+			if applyErr := csUnlinkAndDeleteSeries(store, unlink, ser.ID, members); applyErr != nil {
 				slog.Error("Failed to remove 1-book series", "seriesID", ser.ID, "seriesName", ser.Name, "err", applyErr)
 			} else {
 				deletedIDs[ser.ID] = true
@@ -178,7 +202,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		}
 
 		if !dryRun {
-			merged, refused, mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts)
+			merged, refused, mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts, members)
 			dupRefused += refused
 			switch {
 			case mergeErr != nil:
@@ -222,7 +246,10 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 // place, which is the recoverable state -- the rows still point at a series
 // that still exists, and a later run retries. Deleting after a partial unlink
 // would strand exactly the rows that failed.
-func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, seriesID int) error {
+//
+// members is the job's hoisted membership map; each successful unlink is
+// recorded in it so a partial failure leaves the map matching the store.
+func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, seriesID int, members database.SeriesBooksMap) error {
 	if len(books) == 0 {
 		// Deleting here would be a delete with no unlink at all. The caller
 		// already skips an empty set; this is the second lock on that door.
@@ -242,6 +269,7 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 		if _, err = store.UpdateBook(id, current); err != nil {
 			return fmt.Errorf("UpdateBook(%s): %w", id, err)
 		}
+		members.Move(id, seriesID, nil)
 	}
 	if err := store.DeleteSeries(seriesID); err != nil {
 		return fmt.Errorf("DeleteSeries: %w", err)
@@ -260,7 +288,14 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 // actually deleted, refused the number kept back by the reference guard. The
 // caller needs both -- a group in which every merge was refused is not a
 // completed merge, and reporting it as one is how a refusal becomes invisible.
-func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int) (int, int, error) {
+//
+// members is the caller's hoisted AllVersions membership map
+// (database.SeriesMembershipAllVersions). It replaced a per-fromID
+// GetBooksBySeriesIDAllVersions call, which cost a full Pebble scan per series
+// once memdb is tainted; seriesMerger no longer carries that method, so a
+// per-series read cannot creep back in here without a compile error. Every
+// successful repoint is recorded with members.Move.
+func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int, members database.SeriesBooksMap) (int, int, error) {
 	var merged, refused int
 	for _, fromID := range mergeIDs {
 		// AllVersions, not Core. This loop repoints every row it is handed and
@@ -270,10 +305,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 		// alternate rip failed refCounts-moved > 0 and was refused -- on EVERY
 		// run, not once. The guard was not wrong, it was misaligned; aligning the
 		// read leaves it firing only on the rows it still cannot see (trashed).
-		books, err := store.GetBooksBySeriesIDAllVersions(fromID)
-		if err != nil {
-			return merged, refused, fmt.Errorf("GetBooksBySeriesIDAllVersions(%d): %w", fromID, err)
-		}
+		books := members[fromID]
 		// moved counts rows actually reassigned, mirroring the dedup path. The
 		// nil-hydration skip below must NOT count -- and the resulting refusal
 		// is NOT merely a one-run deferral. GetAllSeriesBookRefCounts prefers
@@ -302,6 +334,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			if _, err = store.UpdateBook(book.ID, current); err != nil {
 				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
 			}
+			members.Move(book.ID, fromID, &keepID)
 			moved++
 		}
 		if stranded := refCounts[fromID] - moved; stranded > 0 {
@@ -323,7 +356,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			refused++
 			continue
 		}
-		if err = store.DeleteSeries(fromID); err != nil {
+		if err := store.DeleteSeries(fromID); err != nil {
 			return merged, refused, fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
 		}
 		merged++
