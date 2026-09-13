@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-12
 
@@ -73,18 +73,10 @@ type BookBulkReader interface {
 	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
 }
 
-// BookLookupReader resolves books by a natural key: path, hash, or external ID.
-type BookLookupReader interface {
+// BookNaturalKeyReader resolves books by a single-valued natural key: the
+// path's owner key, a hash, or an external ID.
+type BookNaturalKeyReader interface {
 	GetBookByFilePath(path string) (*Book, error)
-	// LiveBookIDsAtPath returns the id of EVERY live (not soft-deleted) book
-	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
-	// whose single-owner key names at most one book (last writer wins), this
-	// is the answer to "is this path free?". Any read or decode error fails
-	// the call rather than returning a partial set.
-	//
-	// It is on Store, not a narrower capability, so every decorator that
-	// embeds Store (server.indexedStore in production) forwards it.
-	LiveBookIDsAtPath(path string) ([]string, error)
 	GetBookByITunesPersistentID(persistentID string) (*Book, error)
 	ListBooksByITunesPID(limit, offset int) ([]Book, error)
 	GetBookByFileHash(hash string) (*Book, error)
@@ -99,6 +91,31 @@ type BookLookupReader interface {
 	// gate on that flag themselves.
 	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
 	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
+}
+
+// BookPathSetReader answers "which live books sit at this path?" from the
+// multi-valued book_atpath index.
+type BookPathSetReader interface {
+	// LiveBookIDsAtPath returns the id of EVERY live (not soft-deleted) book
+	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
+	// whose single-owner key names at most one book (last writer wins), this
+	// is the answer to "is this path free?". Any read or decode error fails
+	// the call rather than returning a partial set.
+	//
+	// It is on Store (via BookLookupReader), not a narrower capability, so
+	// every decorator that embeds Store (server.indexedStore in production)
+	// forwards it.
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// BookLookupReader resolves books by a natural key: path, hash, or external ID.
+//
+// Split into the 2 interfaces above on 2026-09-12 (interfacebloat caps an
+// interface at 8 entries). This name is retained as their composition so the
+// method set is byte-identical and no consumer moves; the type checker proves it.
+type BookLookupReader interface {
+	BookNaturalKeyReader
+	BookPathSetReader
 }
 
 // BookDuplicateReader finds candidate duplicates.
