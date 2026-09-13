@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer.go
-// version: 1.42.0
+// version: 1.42.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-12
 
@@ -161,7 +161,7 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 	if book.FileHash != nil && *book.FileHash != "" && o.store != nil {
 		existingBook, err := o.store.GetBookByFileHash(*book.FileHash)
 		if err == nil && existingBook != nil && existingBook.ID != book.ID {
-			if strings.HasPrefix(existingBook.FilePath, o.config.RootDir) {
+			if pathutil.IsWithin(existingBook.FilePath, o.config.RootDir) {
 				// Content-identical book already organized under a
 				// different row. This is a true duplicate — fire the
 				// collision hook so the dedup tab picks it up.

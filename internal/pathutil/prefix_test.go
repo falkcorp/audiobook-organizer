@@ -1,11 +1,14 @@
 // file: internal/pathutil/prefix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8fb7e6b5-92b6-4818-a62f-c4cb2f90702e
 // last-edited: 2026-09-12
 
 package pathutil
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCutPathPrefix(t *testing.T) {
 	tests := []struct {
@@ -61,5 +64,71 @@ func TestCutPathPrefixFold(t *testing.T) {
 				t.Fatalf("CutPathPrefixFold(%q, %q) = (%q, %v), want (%q, %v)", tt.p, tt.prefix, rest, ok, tt.wantRest, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestIsWithin(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		root string
+		want bool
+	}{
+		{"child", "/lib/a.m4b", "/lib", true},
+		{"sibling", "/lib2/a.m4b", "/lib", false},
+		{"sibling with shared stem", "/library/a.m4b", "/lib", false},
+		{"root equals path", "/lib", "/lib", true},
+		{"root with trailing separator, child", "/lib/a.m4b", "/lib/", true},
+		{"root with trailing separator, sibling", "/lib2/a.m4b", "/lib/", false},
+		{"root with trailing separator, path is root without it", "/lib", "/lib/", false},
+		{"root with trailing separator equals path", "/lib/", "/lib/", true},
+		{"slash root, absolute path", "/lib/a.m4b", "/", true},
+		{"slash root, itself", "/", "/", true},
+		{"slash root, relative path", "lib/a.m4b", "/", false},
+		{"empty root matches nothing", "/lib/a.m4b", "", false},
+		{"empty root, empty path", "", "", false},
+		{"empty path", "", "/lib", false},
+		{"path shorter than root", "/li", "/lib", false},
+		{"nested child", "/lib/Author/Title/01.mp3", "/lib/Author", true},
+		{"nested sibling", "/lib/Author2/Title/01.mp3", "/lib/Author", false},
+		{"case differs", "/LIB/a.m4b", "/lib", false},
+		{"drive root forward slash, child", "C:/lib/a.m4b", "C:/lib", true},
+		{"drive root forward slash, sibling", "C:/lib2/a.m4b", "C:/lib", false},
+		{"drive root backslash, child", `C:\lib\a.m4b`, `C:\lib`, true},
+		{"drive root backslash, sibling", `C:\lib2\a.m4b`, `C:\lib`, false},
+		{"bare drive root with separator", `C:\lib\a.m4b`, `C:\`, true},
+		{"bare drive letter without separator", "C:/lib/a.m4b", "C:", true},
+		{"other drive", "D:/lib/a.m4b", "C:/lib", false},
+		{"file URL root", "file://localhost/C:/lib/a%20b.m4b", "file://localhost/C:/lib", true},
+		{"file URL sibling", "file://localhost/C:/lib2/a.m4b", "file://localhost/C:/lib", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsWithin(tt.path, tt.root); got != tt.want {
+				t.Fatalf("IsWithin(%q, %q) = %v, want %v", tt.path, tt.root, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsWithin_AgreesWithHasPrefixInsideRoot pins the byte-identity promise:
+// wherever the path really is inside the root, IsWithin gives the same answer
+// a bare strings.HasPrefix gave, so only siblings change.
+func TestIsWithin_AgreesWithHasPrefixInsideRoot(t *testing.T) {
+	roots := []string{"/lib", "/lib/", "/", "C:/lib", `C:\lib`, "/x/lib"}
+	suffixes := []string{"", "/a.m4b", "/Author/Title/01.mp3", `\a.m4b`}
+	for _, root := range roots {
+		for _, suf := range suffixes {
+			p := root + suf
+			if strings.HasSuffix(root, "/") || strings.HasSuffix(root, `\`) {
+				p = root + strings.TrimLeft(suf, `/\`)
+			}
+			if !strings.HasPrefix(p, root) {
+				t.Fatalf("fixture %q is not under %q", p, root)
+			}
+			if !IsWithin(p, root) {
+				t.Errorf("IsWithin(%q, %q) = false; HasPrefix said true and the path is inside", p, root)
+			}
+		}
 	}
 }

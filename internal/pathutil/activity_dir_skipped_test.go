@@ -1,15 +1,19 @@
 // file: internal/pathutil/activity_dir_skipped_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e17b4a90-3c62-4d85-b0f1-9a5e6c283d47
-// last-edited: 2026-09-07
+// last-edited: 2026-09-12
 
-package pathutil
+// External test package: config imports database, and database imports
+// pathutil for its containment checks, so an in-package test importing config
+// would be an import cycle.
+package pathutil_test
 
 import (
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // TestActivityDBDirIsSkippedByLibraryWalks pins a load-bearing assumption of the
@@ -25,14 +29,14 @@ import (
 // The constants are referenced rather than retyped so that renaming the directory
 // cannot quietly leave this test guarding a name nothing uses any more.
 func TestActivityDBDirIsSkippedByLibraryWalks(t *testing.T) {
-	root := "/mnt/bigdata/books/audiobook-organizer"
+	root := "/lib/audiobook-organizer"
 	activityDir := filepath.Join(root, config.ActivityDBDirName)
 
-	if IsVisibleHiddenDir(config.ActivityDBDirName) {
+	if pathutil.IsVisibleHiddenDir(config.ActivityDBDirName) {
 		t.Fatalf("%s is carved out of the hidden-directory skip — library walks would "+
 			"descend into the activity database", config.ActivityDBDirName)
 	}
-	if !ShouldSkipDir(root, activityDir, AppDirs{}) {
+	if !pathutil.ShouldSkipDir(root, activityDir, pathutil.AppDirs{}) {
 		t.Errorf("ShouldSkipDir(%q) = false; the activity database directory must never be walked", activityDir)
 	}
 

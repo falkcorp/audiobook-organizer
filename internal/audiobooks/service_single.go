@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package audiobooks
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // GetAudiobook retrieves a single audiobook by ID with full metadata provenance
@@ -437,7 +438,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 							if config.AppConfig.RootDir != "" {
 								parentDir := filepath.Dir(book.FilePath)
 								for parentDir != config.AppConfig.RootDir &&
-									strings.HasPrefix(parentDir, config.AppConfig.RootDir) &&
+									pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
 									parentDir != "/" {
 									pe, peErr := os.ReadDir(parentDir)
 									if peErr != nil || len(pe) > 0 {
@@ -462,7 +463,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 						if config.AppConfig.RootDir != "" {
 							parentDir := filepath.Dir(book.FilePath)
 							for parentDir != config.AppConfig.RootDir &&
-								strings.HasPrefix(parentDir, config.AppConfig.RootDir) &&
+								pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
 								parentDir != "/" {
 								pe, peErr := os.ReadDir(parentDir)
 								if peErr != nil || len(pe) > 0 {

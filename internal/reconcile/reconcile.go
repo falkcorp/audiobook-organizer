@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package reconcile
 
@@ -18,6 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -26,8 +29,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
-	"github.com/oklog/ulid/v2"
-	"golang.org/x/sync/errgroup"
 )
 
 // The reconcile package's database surface, grouped by what each part is for.
@@ -775,7 +776,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 		// Separate into originals (non-primary, outside library) and organized copies (in library)
 		var originals, libraryCopies []database.BookCore
 		for _, m := range members {
-			if rootDir != "" && strings.HasPrefix(m.FilePath, rootDir) {
+			if rootDir != "" && pathutil.IsWithin(m.FilePath, rootDir) {
 				libraryCopies = append(libraryCopies, m)
 			} else {
 				originals = append(originals, m)
@@ -805,7 +806,7 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 
 			if !dryRun {
 				// Delete the file if it exists and is in the library
-				if rootDir != "" && strings.HasPrefix(dup.FilePath, rootDir) {
+				if rootDir != "" && pathutil.IsWithin(dup.FilePath, rootDir) {
 					if _, err := os.Stat(dup.FilePath); err == nil {
 						if err := os.Remove(dup.FilePath); err != nil {
 							slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
@@ -882,7 +883,7 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 	for i := range allBooks {
 		book := allBooks[i]
 		// Only check directory-based books in import paths (not in library)
-		if config.AppConfig.RootDir != "" && strings.HasPrefix(book.FilePath, config.AppConfig.RootDir) {
+		if config.AppConfig.RootDir != "" && pathutil.IsWithin(book.FilePath, config.AppConfig.RootDir) {
 			continue
 		}
 		g.Go(func() error {
@@ -981,7 +982,7 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 				vgPrimaryByTitle[normTitle] = b
 			}
 		} else {
-			if rootDir != "" && strings.HasPrefix(b.FilePath, rootDir) {
+			if rootDir != "" && pathutil.IsWithin(b.FilePath, rootDir) {
 				noVGBooks = append(noVGBooks, *b)
 			}
 		}
@@ -1416,7 +1417,7 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 		}
 
 		// Only process books in the library directory
-		if rootDir == "" || !strings.HasPrefix(c.FilePath, rootDir) {
+		if rootDir == "" || !pathutil.IsWithin(c.FilePath, rootDir) {
 			result.NotInLibrary++
 			continue
 		}

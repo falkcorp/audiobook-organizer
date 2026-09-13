@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.25.1
+// version: 1.25.2
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-09-12
 
@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -32,7 +34,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/oklog/ulid/v2"
 )
 
 // itlState guards the last ITL read time for conflict detection.
@@ -2305,7 +2306,7 @@ func remapWindowsPath(p string, opts itunes.ImportOptions) string {
 			continue
 		}
 		// Separator-boundary match (case-sensitive, then case-insensitive):
-		// From "W:/lib" must not rewrite "W:/lib2/…".
+		// From "C:/lib" must not rewrite "C:/lib2/…".
 		if rest, ok := pathutil.CutPathPrefix(normalized, plainFrom); ok {
 			return m.To + rest
 		}

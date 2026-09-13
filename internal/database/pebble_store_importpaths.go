@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
 // last-edited: 2026-09-12
 
@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // GetAllImportPaths returns all managed import paths.
@@ -83,10 +85,10 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 			return nil
 		}
 		if b.SourceImportPath != nil && *b.SourceImportPath != "" {
-			if strings.HasPrefix(*b.SourceImportPath, prefix) {
+			if pathutil.IsWithin(*b.SourceImportPath, prefix) {
 				count++
 			}
-		} else if strings.HasPrefix(b.FilePath, prefix) {
+		} else if pathutil.IsWithin(b.FilePath, prefix) {
 			count++
 		}
 		return nil

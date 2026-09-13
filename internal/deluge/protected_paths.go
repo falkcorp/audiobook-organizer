@@ -1,16 +1,17 @@
 // file: internal/deluge/protected_paths.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d5b8e2a1-3c9f-4076-b7d4-0e8a2c5f1b93
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 // Package deluge provides integration with the Deluge BitTorrent client.
 package deluge
 
 import (
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 const protectedPathTTL = 5 * time.Minute
@@ -49,7 +50,7 @@ func (c *ProtectedPathCache) IsProtected(filePath string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, prefix := range c.paths {
-		if prefix != "" && strings.HasPrefix(filePath, prefix) {
+		if prefix != "" && pathutil.IsWithin(filePath, prefix) {
 			return true
 		}
 	}

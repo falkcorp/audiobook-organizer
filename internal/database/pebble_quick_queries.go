@@ -1,5 +1,5 @@
 // file: internal/database/pebble_quick_queries.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-12
 
@@ -8,10 +8,11 @@ package database
 import (
 	"encoding/json"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // quickQueryCacheKeyPrefix is the PebbleDB key prefix for per-query count caches.
@@ -204,7 +205,7 @@ func (p *PebbleStore) computeQuickQueryCount(id string) (int, error) {
 		case "in_import_path":
 			matched := false
 			for _, ip := range importPaths {
-				if strings.HasPrefix(b.FilePath, ip.Path) {
+				if pathutil.IsWithin(b.FilePath, ip.Path) {
 					matched = true
 					break
 				}
@@ -320,7 +321,7 @@ func (p *PebbleStore) GetAllBookIDsForQuickQuery(id string) ([]string, error) {
 			}
 		case "in_import_path":
 			for _, ip := range importPaths {
-				if strings.HasPrefix(b.FilePath, ip.Path) {
+				if pathutil.IsWithin(b.FilePath, ip.Path) {
 					ids = append(ids, b.ID)
 					break
 				}

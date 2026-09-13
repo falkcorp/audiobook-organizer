@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.11.3
+// version: 1.11.4
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-12
 
@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"howett.net/plist"
+
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -29,7 +31,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	"howett.net/plist"
 )
 
 // resolverFailureCounters (H3, 2026-07 error-correction sweep) tracks
@@ -149,7 +150,7 @@ func TranslateITunesPath(location string, mappings []config.ITunesPathMap) strin
 			// A From of "/" trims to "" and has always mapped every location.
 			return m.To + stripped
 		}
-		// Separator-boundary match: From "W:/lib" must not rewrite "W:/lib2/…".
+		// Separator-boundary match: From "C:/lib" must not rewrite "C:/lib2/…".
 		if rest, ok := pathutil.CutPathPrefix(stripped, from); ok {
 			return m.To + rest
 		}
