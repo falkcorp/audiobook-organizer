@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-09-12
 
