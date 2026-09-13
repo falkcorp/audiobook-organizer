@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/path_prefix_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e41b6d09-2f7a-4c83-9b15-6a0d8e3c47f2
 // last-edited: 2026-09-13
 
@@ -27,6 +27,7 @@ func TestPathPrefixMatches(t *testing.T) {
 		{"/lib2/a.m4b", "/lib", false}, // the sibling-folder bug this fixes
 		{"/lib2/a.m4b", "/lib/", false},
 		{"/lib2", "/lib", false},
+		{"/lib/a.m4b", " ", false}, // whitespace-only prefix is NOT trimmed to "no filter"
 	} {
 		require.Equal(t, c.want, pathPrefixMatches(c.path, c.prefix), "path=%q prefix=%q", c.path, c.prefix)
 	}
@@ -102,6 +103,7 @@ func TestPathPrefix_OpsMatchOnFolderBoundary(t *testing.T) {
 		{"path equal to prefix", paths[0], 1},
 		{"sibling folder itself", root + "2", 1},
 		{"partial folder name", filepath.Join(dir, "li"), 0}, // HasPrefix matched all 3
+		{"whitespace-only prefix", " ", 0},                   // never trimmed into match-all
 	}
 	for name, run := range ops {
 		for _, c := range cases {
