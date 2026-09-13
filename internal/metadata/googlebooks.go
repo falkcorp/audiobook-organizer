@@ -1,5 +1,5 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
 // last-edited: 2026-09-13
 
@@ -126,6 +126,25 @@ func googleBooksCategories(main string, cats []string) []string {
 	return out
 }
 
+// googleBooksGenre picks the most specific genre Google offers: the deepest
+// meaningful segment of the first category ("Fiction / Science Fiction /
+// General" -> "Science Fiction"), falling back to mainCategory. mainCategory is
+// the coarsest label ("Fiction") and the apply writes Genre unconditionally,
+// so using it would replace a specific genre from another source with
+// "Fiction".
+func googleBooksGenre(cats []string, main string) string {
+	for _, c := range cats {
+		segs := strings.Split(c, "/")
+		for i := len(segs) - 1; i >= 0; i-- {
+			s := strings.TrimSpace(segs[i])
+			if s != "" && !strings.EqualFold(s, "General") {
+				return s
+			}
+		}
+	}
+	return strings.TrimSpace(main)
+}
+
 // SearchByTitle searches Google Books by title.
 func (c *GoogleBooksClient) SearchByTitle(ctx context.Context, title string) ([]BookMetadata, error) {
 	q := url.QueryEscape(fmt.Sprintf("intitle:%s", title))
@@ -195,9 +214,9 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 			meta.PageCount = vi.PageCount
 		}
 		if cats := googleBooksCategories(vi.MainCategory, vi.Categories); len(cats) > 0 {
-			meta.Genre = cats[0]
 			meta.CategoryTags = cats
 		}
+		meta.Genre = googleBooksGenre(vi.Categories, vi.MainCategory)
 		if len(vi.PublishedDate) >= 4 {
 			fmt.Sscanf(vi.PublishedDate, "%d", &meta.PublishYear)
 		}

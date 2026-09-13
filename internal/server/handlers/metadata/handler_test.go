@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-13
 
@@ -429,7 +429,7 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{{
 			Title: "New", Source: "Google Books", Year: 1937,
 			ISBN10: "0261103342", ISBN13: "9780261103344",
-			Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
+			Narrator: "Rob Inglis", Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
 		}}}, nil)
 	d.mfs.EXPECT().RecordChangeHistory(mock.Anything, mock.Anything, "Google Books").Return()
 	var saved *database.Book
@@ -460,6 +460,9 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 	}
 	if saved.Subtitle == nil || *saved.Subtitle != "There and Back Again" {
 		t.Errorf("Subtitle = %v", saved.Subtitle)
+	}
+	if saved.Narrator == nil || *saved.Narrator != "Rob Inglis" {
+		t.Errorf("Narrator = %v, want Rob Inglis (bulk must write narrator)", saved.Narrator)
 	}
 	if saved.PageCount == nil || *saved.PageCount != 310 {
 		t.Errorf("PageCount = %v", saved.PageCount)
