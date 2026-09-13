@@ -498,18 +498,20 @@ func searchDocsToMetadata(docs []SearchResult) []BookMetadata {
 	return results
 }
 
-var fourDigitYear = regexp.MustCompile(`\b(1[0-9]{3}|20[0-9]{2})\b`)
+// fourDigitYear finds a standalone 4-digit year: not part of a longer number,
+// but allowed right after a letter ("c1999", the copyright-date form).
+var fourDigitYear = regexp.MustCompile(`(?:^|[^0-9])(1[0-9]{3}|20[0-9]{2})(?:[^0-9]|$)`)
 
 // yearFromDate extracts the year from an Open Library publish_date, which is
 // free text: "1937", "1937-09-21", "September 21, 1937", "Sep 1937". The old
 // fmt.Sscanf("%d") read only a LEADING number, so every "Month D, YYYY" date
 // produced 0 (or the day of the month).
 func yearFromDate(s string) int {
-	m := fourDigitYear.FindString(s)
-	if m == "" {
+	m := fourDigitYear.FindStringSubmatch(s)
+	if m == nil {
 		return 0
 	}
-	y, _ := strconv.Atoi(m)
+	y, _ := strconv.Atoi(m[1])
 	return y
 }
 

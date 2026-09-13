@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -413,6 +413,56 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 		map[string]any{"book_ids": []string{"b1"}}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A Google Books candidate through bulk fetch: its print year lands in
+// PrintYear (it used to overwrite AudiobookReleaseYear), both ISBN columns are
+// filled, and genre / subtitle / page count are written -- the fields the
+// hand-written BookMetadata literal used to drop.
+func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
+	h, d := newHandler(t)
+	expectNoLocks(d.store)
+	release := 2019
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old", AudiobookReleaseYear: &release}, nil)
+	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{{
+			Title: "New", Source: "Google Books", Year: 1937,
+			ISBN10: "0261103342", ISBN13: "9780261103344",
+			Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
+		}}}, nil)
+	d.mfs.EXPECT().RecordChangeHistory(mock.Anything, mock.Anything, "Google Books").Return()
+	var saved *database.Book
+	d.store.EXPECT().UpdateBook("b1", mock.Anything).
+		Run(func(_ string, b *database.Book) { saved = b }).
+		Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Google Books", "").Return()
+
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": []string{"b1"}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if saved == nil {
+		t.Fatal("book not saved")
+	}
+	if saved.AudiobookReleaseYear == nil || *saved.AudiobookReleaseYear != 2019 {
+		t.Errorf("AudiobookReleaseYear = %v, want untouched 2019", saved.AudiobookReleaseYear)
+	}
+	if saved.PrintYear == nil || *saved.PrintYear != 1937 {
+		t.Errorf("PrintYear = %v, want 1937", saved.PrintYear)
+	}
+	if saved.ISBN10 == nil || *saved.ISBN10 != "0261103342" || saved.ISBN13 == nil || *saved.ISBN13 != "9780261103344" {
+		t.Errorf("ISBN10/13 = %v/%v, want both", saved.ISBN10, saved.ISBN13)
+	}
+	if saved.Genre == nil || *saved.Genre != "Fiction" {
+		t.Errorf("Genre = %v", saved.Genre)
+	}
+	if saved.Subtitle == nil || *saved.Subtitle != "There and Back Again" {
+		t.Errorf("Subtitle = %v", saved.Subtitle)
+	}
+	if saved.PageCount == nil || *saved.PageCount != 310 {
+		t.Errorf("PageCount = %v", saved.PageCount)
 	}
 }
 
