@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-09-13
 
@@ -7,6 +7,7 @@ package audiobooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
+
+// errAlreadySoftDeleted is returned by DeleteAudiobook's soft-delete when the
+// row, as re-read under its write stripe, is already deleted.
+var errAlreadySoftDeleted = errors.New("audiobook already soft deleted")
 
 // UpdateAudiobook updates an audiobook with new metadata and handles overrides
 func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req *UpdateAudiobookRequest) (*database.Book, error) {
@@ -418,14 +423,28 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			return nil, fmt.Errorf("audiobook already soft deleted")
 		}
 
+		// Set the three deletion columns on the row as it stands under the
+		// book's write stripe, re-checking "already deleted" there, so a
+		// concurrent writer's change is not reverted by a whole-struct replace
+		// of the read above.
 		now := time.Now()
-		book.MarkedForDeletion = new(true)
-		book.MarkedForDeletionAt = &now
-		book.LibraryState = new("deleted")
-
-		if _, err := svc.store.UpdateBook(id, book); err != nil {
+		updated, err := svc.store.ModifyBook(id, func(row *database.Book) error {
+			if row.IsSoftDeleted() ||
+				(row.LibraryState != nil && strings.EqualFold(*row.LibraryState, "deleted")) {
+				return errAlreadySoftDeleted
+			}
+			row.MarkedForDeletion = new(true)
+			row.MarkedForDeletionAt = &now
+			row.LibraryState = new("deleted")
+			return nil
+		})
+		if err != nil {
 			return nil, err
 		}
+		if updated == nil {
+			return nil, fmt.Errorf("audiobook not found")
+		}
+		book = updated
 
 		// Optionally block the hash
 		blocked := false

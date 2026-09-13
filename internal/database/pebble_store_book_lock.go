@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-13
 
@@ -160,7 +160,7 @@ func MergeBookChanges(dst, before, after *Book) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("merge book changes: encode %s: %w", f.Name, err)
 		}
-		if bytes.Equal(bj, aj) {
+		if bytes.Equal(bj, aj) || emptyCollections(bv.Field(i), av.Field(i)) {
 			continue
 		}
 		dv.Field(i).Set(av.Field(i))
@@ -174,4 +174,19 @@ func MergeBookChanges(dst, before, after *Book) ([]string, error) {
 		changed = append(changed, name)
 	}
 	return changed, nil
+}
+
+// emptyCollections reports whether a and b are both slices, or both maps, of
+// length zero. MergeBookChanges treats nil and empty as the same value because
+// SnapshotBook's JSON round trip cannot keep them apart: Authors and
+// MetadataProvenance are omitempty, so a non-nil empty []/{} in the caller's
+// read comes back nil in before. Without this, a working copy that still holds
+// that empty []/{} reads as "changed" and wipes the authors or provenance a
+// concurrent writer committed.
+func emptyCollections(a, b reflect.Value) bool {
+	switch a.Kind() {
+	case reflect.Slice, reflect.Map:
+		return a.Len() == 0 && b.Len() == 0
+	}
+	return false
 }

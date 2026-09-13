@@ -1,5 +1,5 @@
 // file: internal/merge/itunes_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d025d9c-5d1a-4c6a-b6d3-6c88a9739dd6
 // last-edited: 2026-09-13
 
@@ -182,6 +182,9 @@ func (w *writeTrapStore) trip(op string) error {
 }
 func (w *writeTrapStore) UpdateBook(string, *database.Book) (*database.Book, error) {
 	return nil, w.trip("UpdateBook")
+}
+func (w *writeTrapStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, w.trip("ModifyBook")
 }
 func (w *writeTrapStore) DeleteBook(string) error { return w.trip("DeleteBook") }
 func (w *writeTrapStore) RecomputeBookAggregates(string) error {

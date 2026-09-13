@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
 // last-edited: 2026-09-13
 
@@ -187,6 +187,50 @@ func TestModifyBook_MergeKeepsConcurrentWrite(t *testing.T) {
 	}
 }
 
+// TestMergeBookChanges_EmptyCollectionIsNotAChange: the caller's read held a
+// non-nil EMPTY Authors slice and MetadataProvenance map, and the caller
+// changed only the title. SnapshotBook's JSON round trip turns those empties
+// into nil (both fields are omitempty), so a JSON-only comparison sees
+// "[]" vs "null" and copies the caller's empties over the authors and
+// provenance a concurrent writer committed. nil and empty must compare equal.
+func TestMergeBookChanges_EmptyCollectionIsNotAChange(t *testing.T) {
+	read := &Book{
+		ID:                 "b",
+		Title:              "old",
+		Authors:            []BookAuthor{},
+		MetadataProvenance: map[string]MetadataProvenanceEntry{},
+	}
+	before, err := SnapshotBook(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read.Title = "new"
+
+	// The row as a concurrent writer left it.
+	fresh := &Book{
+		ID:                 "b",
+		Title:              "old",
+		Authors:            []BookAuthor{{BookID: "b", AuthorID: 9, Role: "author"}},
+		MetadataProvenance: map[string]MetadataProvenanceEntry{"title": {}},
+	}
+	changed, err := MergeBookChanges(fresh, before, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Title != "new" {
+		t.Fatalf("title = %q, want the caller's change", fresh.Title)
+	}
+	if len(fresh.Authors) != 1 || fresh.Authors[0].AuthorID != 9 {
+		t.Fatalf("concurrent writer's authors were cleared: %+v (copied %v)", fresh.Authors, changed)
+	}
+	if _, ok := fresh.MetadataProvenance["title"]; !ok || len(fresh.MetadataProvenance) != 1 {
+		t.Fatalf("concurrent writer's provenance was cleared: %+v (copied %v)", fresh.MetadataProvenance, changed)
+	}
+	if len(changed) != 1 {
+		t.Fatalf("copied %v, want only title", changed)
+	}
+}
+
 // TestModifyBook_SkipAndMissing pins the two non-write outcomes.
 func TestModifyBook_SkipAndMissing(t *testing.T) {
 	s := newAtPathStore(t)
@@ -284,6 +328,132 @@ func TestBookLock_SameStripeDifferentBooksDoNotDeadlock(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+// TestBookLock_MergeChapterBooksSameStripeDoesNotDeadlock: MergeChapterBooks
+// writes the source (FlagMetadataHashDuplicate) and then the primary. With
+// both books on ONE stripe it must release the source's hold before taking the
+// primary's, or it re-enters the non-re-entrant mutex and hangs. Concurrent
+// writers on both books run alongside to catch an ordering cycle as well.
+func TestBookLock_MergeChapterBooksSameStripeDoesNotDeadlock(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	primary, src := sameStripePair(t, s)
+	if stripeFor(primary) != stripeFor(src) {
+		t.Fatalf("precondition: %s and %s are on different stripes", primary, src)
+	}
+
+	withDeadline(t, 60*time.Second, "MergeChapterBooks with primary and source on one stripe", func() {
+		var wg sync.WaitGroup
+		for _, id := range []string{primary, src} {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				for i := 0; i < 20; i++ {
+					notes := fmt.Sprintf("n%d", i)
+					if err := s.UpdateBookRating(id, UpdateBookRatingRequest{Notes: &notes}); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			}(id)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.MergeChapterBooks(primary, []string{src}, "merged title", 3600); err != nil {
+				t.Error(err)
+			}
+		}()
+		wg.Wait()
+	})
+
+	row, err := s.GetBookByID(primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Title != "merged title" || row.Duration == nil || *row.Duration != 3600 {
+		t.Fatalf("primary not updated: title=%q duration=%v", row.Title, row.Duration)
+	}
+}
+
+// TestBookLock_AuthorDeleteRepointSameStripeDoesNotDeadlock: two books on ONE
+// stripe, each with a different primary author, both authors deleted at the
+// same time while other writers hit both books. The repoint writes one book
+// per ModifyBook and resolves the successor before taking the stripe, so the
+// deletes must queue on the shared stripe, never hang, and each book must end
+// on its surviving co-author.
+func TestBookLock_AuthorDeleteRepointSameStripeDoesNotDeadlock(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	id1, id2 := sameStripePair(t, s)
+	if stripeFor(id1) != stripeFor(id2) {
+		t.Fatalf("precondition: %s and %s are on different stripes", id1, id2)
+	}
+
+	mkAuthor := func(name string) *Author {
+		a, err := s.CreateAuthor(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	gone1, gone2, successor := mkAuthor("Lock Gone One"), mkAuthor("Lock Gone Two"), mkAuthor("Lock Successor")
+	for _, pair := range []struct {
+		book    string
+		primary *Author
+	}{{id1, gone1}, {id2, gone2}} {
+		pid := pair.primary.ID
+		if _, err := s.ModifyBook(pair.book, func(row *Book) error {
+			row.AuthorID = &pid
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetBookAuthors(pair.book, []BookAuthor{
+			{BookID: pair.book, AuthorID: pid, Role: "author", Position: 0},
+			{BookID: pair.book, AuthorID: successor.ID, Role: "author", Position: 1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	withDeadline(t, 60*time.Second, "concurrent author deletes repointing two books on one stripe", func() {
+		var wg sync.WaitGroup
+		for _, a := range []*Author{gone1, gone2} {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				if err := s.DeleteAuthor(id); err != nil {
+					t.Error(err)
+				}
+			}(a.ID)
+		}
+		for _, id := range []string{id1, id2} {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				for i := 0; i < 20; i++ {
+					notes := fmt.Sprintf("n%d", i)
+					if err := s.UpdateBookRating(id, UpdateBookRatingRequest{Notes: &notes}); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			}(id)
+		}
+		wg.Wait()
+	})
+
+	for _, id := range []string{id1, id2} {
+		row, err := s.GetBookByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.AuthorID == nil || *row.AuthorID != successor.ID {
+			t.Fatalf("book %s primary author = %v, want successor %d", id, row.AuthorID, successor.ID)
+		}
+	}
 }
 
 // TestBookLock_DifferentStripesWriteInParallel: while one book's stripe is

@@ -1,5 +1,5 @@
 // file: internal/dedup/itunes_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e1f47-2b8a-4d6e-9f15-7a0c4e2b8d61
 // last-edited: 2026-09-13
 
@@ -40,6 +40,9 @@ func (w *dedupWriteTrap) trip(op string) error {
 }
 func (w *dedupWriteTrap) UpdateBook(string, *database.Book) (*database.Book, error) {
 	return nil, w.trip("UpdateBook")
+}
+func (w *dedupWriteTrap) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, w.trip("ModifyBook")
 }
 func (w *dedupWriteTrap) DeleteBook(string) error { return w.trip("DeleteBook") }
 func (w *dedupWriteTrap) MoveBookFilesToBook([]string, string, string) error {
