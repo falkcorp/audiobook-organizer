@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-12
 
@@ -82,6 +82,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.purgeEmptyNarratorsDef(),
 		p.authorStripMergeDef(),
 		p.missingFileAuditDef(),
+		// book_atpath: index: read-only verify + rollback-runbook rebuild.
+		p.bookAtPathIndexVerifyDef(),
+		p.bookAtPathIndexBackfillDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
 		// filepath-collision-report is a standing library-health check, decoupled

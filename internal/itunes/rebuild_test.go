@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.1.0
-// last-edited: 2026-09-11
+// version: 1.2.0
+// last-edited: 2026-09-12
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -100,6 +100,19 @@ func (m *mockRebuildStore) GetAllBookSummaries(limit, offset int) ([]database.Bo
 
 func (m *mockRebuildStore) GetBookByFilePath(path string) (*database.Book, error) {
 	return nil, nil
+}
+
+// LiveBookIDsAtPath mirrors PebbleStore's contract from the books map: every
+// non-soft-deleted book whose FilePath is exactly path, in id order.
+func (m *mockRebuildStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	var ids []string
+	for id, b := range m.books {
+		if b.FilePath == path && (b.MarkedForDeletion == nil || !*b.MarkedForDeletion) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 func (m *mockRebuildStore) GetBookByITunesPersistentID(persistentID string) (*database.Book, error) {

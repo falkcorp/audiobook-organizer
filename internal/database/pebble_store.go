@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.155.1
+// version: 1.156.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -66,7 +66,8 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - series:<id>                -> Series JSON
 // - series:name:<name>:<author_id> -> series_id (for lookups)
 // - book:<id>                  -> Book JSON
-// - book:path:<path>           -> book_id (for lookups)
+// - book:path:<path>           -> book_id (for lookups; single owner, last writer wins)
+// - book_atpath:<path>\x00<id> -> empty (every book at a path; see pebble_store_atpath_index.go)
 // NOTE: book:series and book:author prefix indexes were removed in Task 3.4.
 //       GetBooksBySeriesIDCore and GetBooksByAuthorIDCore fall back to a full Pebble scan
 //       (the in-memory query layer covers the hot paths).
@@ -102,6 +103,9 @@ type PebbleStore struct {
 	// deepCoverageBusy admits one deep signal-coverage scan at a time; see
 	// GetBookFileSignalCoverage.
 	deepCoverageBusy atomic.Bool
+	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
+	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
+	bookAtPathBuilt atomic.Bool
 	// memPending buffers write-throughs that arrive while memPtr is still nil
 	// because the async warmup hasn't published yet, and replays them into the
 	// MemStore immediately before it is published. Without it those writes were
@@ -2476,6 +2480,13 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 		return nil, err
 	}
 
+	// Multi-valued path index, same batch as the row (completeness invariant:
+	// pebble_store_atpath_index.go). Every book, trashed or not.
+	if err := batch.Set(bookAtPathKey(book.FilePath, book.ID), []byte{}, nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
+
 	// Hash index (if hash provided)
 	if book.FileHash != nil && *book.FileHash != "" {
 		hashKey := []byte(fmt.Sprintf("book:hash:%s", *book.FileHash))
@@ -2586,6 +2597,9 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	}
 	if oldBook == nil {
 		return nil, fmt.Errorf("book not found")
+	}
+	if updateBookAfterOldReadHook != nil {
+		updateBookAfterOldReadHook(id)
 	}
 
 	book.ID = id
@@ -2702,6 +2716,24 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 			batch.Close()
 			return nil, err
 		}
+		if err := batch.Delete(bookAtPathKey(oldBook.FilePath, id), nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	}
+
+	// Multi-valued path index. The Set is UNCONDITIONAL, outside the
+	// path-changed branch above, and must stay there. oldBook is read without
+	// a lock, so UpdateBook races with itself: W1 moves A->B while W2, from a
+	// stale read of A, rewrites the row at A with "no path change". Gated on a
+	// change, W2 would stage no index op and the final state would be a row at
+	// A with only a B key, i.e. a false "path is free". Unconditional, the last
+	// committing batch always carries its own row's key, and the only thing a
+	// race can leave is an extra, which LiveBookIDsAtPath drops. It also
+	// self-heals any key lost for any other reason on the next write.
+	if err := batch.Set(bookAtPathKey(book.FilePath, id), []byte{}, nil); err != nil {
+		batch.Close()
+		return nil, err
 	}
 
 	updateHashIndex := func(oldVal, newVal *string, prefix string) error {
@@ -3163,6 +3195,13 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	// Delete path index
 	pathKey := []byte(fmt.Sprintf("book:path:%s", book.FilePath))
 	if err := batch.Delete(pathKey, nil); err != nil {
+		batch.Close()
+		return err
+	}
+
+	// Multi-valued path index. If book was a stale read, the row's real key
+	// survives as an extra (row gone), which the reader skips.
+	if err := batch.Delete(bookAtPathKey(book.FilePath, id), nil); err != nil {
 		batch.Close()
 		return err
 	}

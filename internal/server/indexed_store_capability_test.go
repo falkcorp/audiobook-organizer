@@ -1,11 +1,12 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-08-19
+// last-edited: 2026-09-12
 
 package server
 
 import (
+	"context"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -272,4 +273,56 @@ func TestWarmupWaiterResolvesThroughDecorator(t *testing.T) {
 			"contributor cache would be warmed against a half-published memdb")
 	}
 	w.WaitForWarmup()
+}
+
+// TestIndexedStoreExposesBookAtPathBackfill pins both halves of the
+// book_atpath: wiring through the production decorator:
+//
+//   - LiveBookIDsAtPath is on database.Store, so indexedStore forwards it with
+//     no capability lookup. #3335's fs-regroup-xml apply asserts a narrow
+//     interface containing it against OpsStore(); if the method ever leaves
+//     database.Store, that assertion misses and the op refuses to run.
+//   - The startup backfill (a *PebbleStore method outside Store) resolves
+//     through resolveBookAtPathBackfiller and actually builds the index.
+func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	inner.WaitForWarmup()
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	if _, ok := wrapped.(bookAtPathBackfiller); ok {
+		t.Fatal("a bare assertion now resolves bookAtPathBackfiller through the " +
+			"decorator; this test no longer reproduces the production shape")
+	}
+	b, ok := resolveBookAtPathBackfiller(wrapped)
+	if !ok {
+		t.Fatal("resolveBookAtPathBackfiller through indexedStore failed; the " +
+			"book_atpath index would never be built")
+	}
+
+	// Seed through the inner store (the decorator's writers need a *Server).
+	created, err := inner.CreateBook(&database.Book{Title: "At Path", FilePath: "/lib/a"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	b.WaitForWarmup()
+	res, err := b.BackfillBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatalf("BackfillBookAtPathIndex through the decorator: %v", err)
+	}
+	if res.Skipped || res.Scanned != 1 {
+		t.Fatalf("backfill result = %+v, want one book scanned", res)
+	}
+
+	ids, err := wrapped.LiveBookIDsAtPath("/lib/a")
+	if err != nil {
+		t.Fatalf("LiveBookIDsAtPath through the decorator: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != created.ID {
+		t.Fatalf("LiveBookIDsAtPath = %v, want [%s]", ids, created.ID)
+	}
 }
