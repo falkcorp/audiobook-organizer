@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.38.3
+// version: 1.38.4
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -1095,9 +1095,12 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 }
 
 // cleanupEmptyParents removes empty directories from dir up to (but not
-// including) stopAt.
+// including) stopAt. The walk only runs while dir is strictly inside stopAt on
+// a path-separator boundary: a bare HasPrefix let a dir under a sibling such
+// as "/lib2" (stopAt "/lib") be walked and its empty parents removed. An empty
+// stopAt removes nothing.
 func (orgSvc *Service) cleanupEmptyParents(dir, stopAt string, log logger.Logger) {
-	for dir != stopAt && strings.HasPrefix(dir, stopAt) && dir != "/" {
+	for dir != stopAt && pathutil.IsWithin(dir, stopAt) && dir != "/" {
 		entries, err := os.ReadDir(dir)
 		if err != nil || len(entries) > 0 {
 			break
