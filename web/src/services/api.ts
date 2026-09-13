@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.103.0
+// version: 2.105.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-12
 
@@ -1935,7 +1935,18 @@ async function awaitSeriesRenameOp(response: Response, failMessage: string): Pro
   if (!opId) {
     throw new Error(`${failMessage}: the server returned no operation id`);
   }
-  const final = await pollOperation(opId);
+  let final: Operation;
+  try {
+    final = await pollOperation(opId, undefined, 1000, SERIES_RENAME_WAIT_MS);
+  } catch (err) {
+    // The op is still queued or running (another rename may hold the
+    // series-rename concurrency key). It stays queued server-side; the
+    // dialog stops waiting instead of hanging.
+    if (err instanceof OperationPollTimeoutError) {
+      throw new Error(`rename still queued (op ${opId})`, { cause: err });
+    }
+    throw err;
+  }
   if (final.status !== 'completed') {
     throw new Error(final.error_message || `${failMessage}: operation ${final.status}`);
   }
@@ -1958,6 +1969,24 @@ export async function renameSeries(seriesId: number, name: string): Promise<Oper
     throw await buildApiError(response, 'Failed to rename series');
   }
   return awaitSeriesRenameOp(response, 'Failed to rename series');
+}
+
+/**
+ * undoSeriesRename reverts a completed entities.series-rename operation
+ * through POST /operations/:id/revert, so the server's journal decides: the
+ * series is renamed back only if it still holds the name that operation set,
+ * and a series already back on the old name counts as undone. It rejects when
+ * the revert restored nothing or left a row un-reverted (for example because
+ * the series was renamed again since), instead of blindly renaming back.
+ */
+export async function undoSeriesRename(operationId: string): Promise<RevertOperationResult> {
+  const result = await revertOperation(operationId);
+  if (result.partial || (result.restored ?? 0) === 0) {
+    throw new Error(
+      result.message || `undo of operation ${operationId} did not restore the series`
+    );
+  }
+  return result;
 }
 
 export async function splitSeries(
@@ -2294,12 +2323,30 @@ export async function getOperationStatus(id: string): Promise<Operation> {
   } as Operation;
 }
 
+/** How long the series rename callers wait for their queued op. */
+export const SERIES_RENAME_WAIT_MS = 60_000;
+
+/** Thrown by pollOperation when its optional timeoutMs elapses first. */
+export class OperationPollTimeoutError extends Error {
+  constructor(
+    public readonly operationId: string,
+    public readonly lastStatus: string
+  ) {
+    super(`operation ${operationId} still ${lastStatus}`);
+    this.name = 'OperationPollTimeoutError';
+  }
+}
+
 // Poll an operation until it completes or fails. Calls onProgress with each update.
+// With timeoutMs, rejects with OperationPollTimeoutError once that long has
+// passed without a terminal status; without it, polls for as long as it takes.
 export async function pollOperation(
   id: string,
   onProgress?: (op: Operation) => void,
-  intervalMs = 1000
+  intervalMs = 1000,
+  timeoutMs?: number
 ): Promise<Operation> {
+  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   while (true) {
     const op = await getOperationStatus(id);
     onProgress?.(op);
@@ -2308,6 +2355,9 @@ export async function pollOperation(
     // operation — and it recognised none of the interrupted_* statuses either.
     if (isOperationTerminal(op.status)) {
       return op;
+    }
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new OperationPollTimeoutError(id, op.status);
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
