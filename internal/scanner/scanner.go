@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.91.1
+// version: 1.92.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -687,16 +687,21 @@ func isExcludedPath(path string) bool {
 
 // Book represents an audiobook file
 type Book struct {
-	FilePath         string
-	Title            string
-	Author           string
-	Series           string
-	Position         int
-	Format           string
-	Duration         int
-	Narrator         string
-	Language         string
-	Publisher        string
+	FilePath  string
+	Title     string
+	Author    string
+	Series    string
+	Position  int
+	Format    string
+	Duration  int
+	Narrator  string
+	Language  string
+	Publisher string
+	// Year is the release year the AI filename parse returned, and nothing
+	// else sets it: the scan derives no year of its own. Only the queued
+	// library.ai-parse saver (saveAIFieldsToPrimary) reads it, as a gap-fill
+	// of audiobook_release_year. saveBookToDatabase ignores it.
+	Year             int
 	BookOrganizerID  string // Embedded AUDIOBOOK_ORGANIZER_ID for re-linking
 	ASIN             string
 	OpenLibraryID    string

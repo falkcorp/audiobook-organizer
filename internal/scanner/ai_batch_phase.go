@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -251,6 +251,12 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				}
 				if books[idx].Publisher == "" && aiMeta.Publisher != "" {
 					books[idx].Publisher = aiMeta.Publisher
+				}
+				// Carried as the model returned it. The plausibility range,
+				// the empty-column check and the lock are all decided in one
+				// place, the saver (saveAIFieldsToPrimary).
+				if books[idx].Year == 0 && aiMeta.Year > 0 {
+					books[idx].Year = aiMeta.Year
 				}
 
 				stampPath, saveErr := save(ctx, &books[idx])
