@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package registry
 
@@ -51,6 +51,37 @@ func ReporterOpID(rep Reporter) string {
 		return r.OpID()
 	}
 	return ""
+}
+
+// LivenessToucher is implemented by reporters that can stamp an op's liveness
+// clock without reporting progress.
+//
+// The stuck-op watchdog (watchdog.go) reads ONLY the runHandle's lastProgressAt
+// atomic, and until this interface existed the only thing that stamped it was
+// UpdateProgress (reporter_db.go). SetCurrentItem, Log and Checkpoint do not.
+// That left an op driven by RunItems no sanctioned way to say "still working"
+// inside one long item: RunItems owns the current/total it passes to
+// UpdateProgress, and a mid-item UpdateProgress would have to invent a numerator
+// (and bumps HighWaterProgress, which checkInfiniteRestart reads). On 2026-09-13
+// maintenance.tag-backfill was killed as stuck while reading the 1,400+ files of
+// one book, losing the whole dry-run result.
+//
+// Call TouchLiveness only after real work finished (a file read, a batch
+// written) -- never from a timer. A heartbeat that fires regardless of progress
+// would defeat the watchdog for exactly the ops it exists to catch.
+//
+// Separate from Reporter for the same reason OpID is (see above).
+type LivenessToucher interface {
+	TouchLiveness()
+}
+
+// TouchLiveness stamps rep's liveness clock if it can, and does nothing if it
+// cannot (test fakes, adapters). It writes nothing to the store and changes no
+// progress numbers, so it is cheap enough to call once per file.
+func TouchLiveness(rep Reporter) {
+	if t, ok := rep.(LivenessToucher); ok {
+		t.TouchLiveness()
+	}
 }
 
 // ResultSetter is implemented by reporters that can persist an operation's final

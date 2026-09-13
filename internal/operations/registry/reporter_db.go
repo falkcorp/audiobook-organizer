@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package registry
 
@@ -613,6 +613,16 @@ func (r *dbReporter) SetResult(v any) error {
 		return fmt.Errorf("registry: store result for op %s: %w", r.opID, err)
 	}
 	return nil
+}
+
+// TouchLiveness implements LivenessToucher: it stamps the runHandle's
+// lastProgressAt atomic -- the clock the stuck-op watchdog reads -- and nothing
+// else. No DB write, no bus event, no progress change, so current/total stay
+// owned by whoever calls UpdateProgress (RunItems, for LivenessRunItems ops).
+func (r *dbReporter) TouchLiveness() {
+	if r.touchProgressFn != nil {
+		r.touchProgressFn()
+	}
 }
 
 // SetCurrentItem implements Reporter. Updates the registry's in-memory label

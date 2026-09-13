@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package registry
 
@@ -328,6 +328,11 @@ func (s *standDownReporter) UpdateProgress(current, total int, message string) e
 }
 
 func (s *standDownReporter) OpID() string { return ReporterOpID(s.Reporter) }
+
+// TouchLiveness forwards the liveness stamp. Without it an op running under a
+// stand-down hold would heartbeat into nothing and be killed as stuck. It does
+// not renew the lease: the lease tracks progress, and this is not progress.
+func (s *standDownReporter) TouchLiveness() { TouchLiveness(s.Reporter) }
 
 func (s *standDownReporter) InvalidateLibraryStats() {
 	if inv, ok := s.Reporter.(interface{ InvalidateLibraryStats() }); ok {

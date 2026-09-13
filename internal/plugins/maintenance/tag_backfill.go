@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -27,15 +27,19 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -47,6 +51,30 @@ import (
 // a ~230 KB AcoustIDFingerprint, so 1000 rows is ~230 MB in one batch. A var (not
 // a const) so tests can shrink it to exercise the multi-batch path.
 var tagBackfillWriteBatchSize = 250
+
+// tagReadTimeout bounds one file's tag read. metadata.ExtractMetadata falls back
+// to TagLib running in WASM, which takes no context and cannot be interrupted, so
+// one malformed file (or a stuck mount) could hold its book -- and with it the
+// op's progress -- forever; the stuck-op watchdog then kills the op and the
+// whole run's result is lost (prod, 2026-09-13). 60s is far above any healthy
+// tag read (milliseconds locally, seconds on a slow mount): it converts a hang
+// into a per-file read error, it does not police slow files. A var, not a
+// const, so tests can reach the timeout arm without a file that really hangs.
+var tagReadTimeout = 60 * time.Second
+
+// tagReadMaxAbandoned caps how many timed-out tag reads may still be running.
+// A read that times out is abandoned, not stopped (see boundedCall): its
+// goroutine finishes whenever the parser or the kernel lets go, or leaks for
+// the life of the process. Past this many at once, something systemic is wrong
+// (a dead mount, a parser bug hit by a whole class of files) and continuing
+// would only pile up goroutines, so the op fails loudly instead. A var for
+// tests.
+var tagReadMaxAbandoned int64 = 8
+
+// tagReadsAbandoned counts abandoned tag reads whose goroutine has not yet
+// returned. Package-level on purpose: an abandoned goroutine outlives the run
+// that gave up on it, and a second run must see the ones still stuck.
+var tagReadsAbandoned atomic.Int64
 
 type tagBackfillParams struct {
 	DryRun bool `json:"dryRun"`
@@ -262,15 +290,35 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		// is renumbered as a sibling below and moved out of bMissing/bReadErr, so
 		// each row lands in exactly one counter.
 		skipped := make(map[string]bool)
-		for _, f := range b.rows {
+		// countBook folds this book's missing/unreadable rows into the op totals
+		// on every path that gives up on the book before the judge.
+		countBook := func() {
+			mu.Lock()
+			missing += bMissing
+			readErr += bReadErr
+			mu.Unlock()
+		}
+		for j, f := range b.rows {
+			// Liveness inside a book. RunItems reports progress only when a whole
+			// book returns, and one book can hold well over a thousand files, so
+			// a healthy op read for 5 minutes without a single progress stamp and
+			// the watchdog killed it as stuck (prod, 2026-09-13, at book
+			// 48,747/48,749). Stamp once per finished file: TouchLiveness writes
+			// nothing and leaves RunItems' current/total alone, and it follows a
+			// real read (each bounded by tagReadTimeout), so a genuinely wedged
+			// book still goes quiet and still gets caught.
+			if j > 0 {
+				registry.TouchLiveness(reporter)
+			}
+			// Zero DB writes (Reporter.SetCurrentItem), so per file is fine: it
+			// shows which file of which book a long book is on.
+			reporter.SetCurrentItem(fmt.Sprintf("book %s: file %d/%d %s",
+				b.bookID, j+1, len(b.rows), filepath.Base(f.FilePath)))
 			if err := ctx.Err(); err != nil {
 				// The book is abandoned unjudged, but the rows already found
 				// missing or unreadable were still found so: count them, or the
 				// summary after a cancel under-reports both.
-				mu.Lock()
-				missing += bMissing
-				readErr += bReadErr
-				mu.Unlock()
+				countBook()
 				return err
 			}
 			if _, statErr := os.Stat(f.FilePath); statErr != nil {
@@ -278,10 +326,33 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				skipped[f.ID] = true
 				continue
 			}
-			meta, merr := metadata.ExtractMetadata(f.FilePath, nil)
+			path := f.FilePath
+			meta, merr := boundedCall(ctx, tagReadTimeout, &tagReadsAbandoned, func() (metadata.Metadata, error) {
+				return metadata.ExtractMetadata(path, nil)
+			})
 			if merr != nil {
+				timedOut := errors.Is(merr, errBoundedCallTimeout)
+				if !timedOut && ctx.Err() != nil {
+					// Canceled mid-read: same as the cancel check above.
+					countBook()
+					return ctx.Err()
+				}
 				bReadErr++
 				skipped[f.ID] = false
+				if timedOut {
+					_ = reporter.Log(slog.LevelWarn,
+						fmt.Sprintf("tag read of %s exceeded %v; counted as a read error, book continues (read abandoned, still running)",
+							logger.SanitizeLogValue(path), tagReadTimeout),
+						slog.String("book_id", b.bookID), slog.String("file_id", f.ID))
+					if n := tagReadsAbandoned.Load(); n >= tagReadMaxAbandoned {
+						// ErrModeFail (RunItems' default, not overridden below)
+						// cancels every remaining book on this error; complete
+						// books already judged are still flushed after RunItems.
+						countBook()
+						return fmt.Errorf("%d timed-out tag reads are still running (cap %d); failing rather than abandoning more goroutines -- check the mount and the last files named in the WARN log",
+							n, tagReadMaxAbandoned)
+					}
+				}
 				continue
 			}
 			if len(meta.AllTags) == 0 {
@@ -289,11 +360,9 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			}
 			readings[f.ID] = meta
 		}
+		registry.TouchLiveness(reporter) // the last file's read finished
 		if len(readings) == 0 {
-			mu.Lock()
-			missing += bMissing
-			readErr += bReadErr
-			mu.Unlock()
+			countBook()
 			return nil
 		}
 
@@ -305,6 +374,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
 		// The same list is the distinctness denominator: every file of the book.
 		full, herr := store.GetBookFiles(b.bookID)
+		registry.TouchLiveness(reporter) // a whole book's rows hydrated
 		if herr != nil {
 			mu.Lock()
 			missing += bMissing
