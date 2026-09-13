@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b31f3de0-b0bc-4cbf-8448-7309df38f7c0
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package middleware
 
@@ -252,9 +252,11 @@ func TestIPRateLimiter_StartStopsOnContextCancel(t *testing.T) {
 	r.Start(ctx)
 	r.Start(ctx) // second Start is a no-op, not a second goroutine
 
-	assert.Eventually(t, func() bool { return r.Len() == 0 }, 2*time.Second, time.Millisecond,
-		"background sweeper should evict the idle entry")
-	assert.GreaterOrEqual(t, r.SweepCount(), int64(1))
+	// Wait for both together: sweep() releases r.mu after evicting and only
+	// then bumps the sweep counter, so Len()==0 can be observed while
+	// SweepCount() is still 0. Checking them in sequence flaked in CI.
+	assert.Eventually(t, func() bool { return r.Len() == 0 && r.SweepCount() >= 1 }, 2*time.Second, time.Millisecond,
+		"background sweeper should evict the idle entry and record the sweep")
 
 	cancel()
 	select {
