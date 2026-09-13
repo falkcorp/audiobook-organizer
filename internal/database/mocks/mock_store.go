@@ -13801,6 +13801,68 @@ func (_c *MockStore_GetBookIDsByISBNASIN_Call) RunAndReturn(run func(isbn10 stri
 	return _c
 }
 
+// GetBookIDsCreditingAuthorDurable provides a mock function for the type MockStore
+func (_mock *MockStore) GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error) {
+	ret := _mock.Called(authorID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookIDsCreditingAuthorDurable")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]string, error)); ok {
+		return returnFunc(authorID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []string); ok {
+		r0 = returnFunc(authorID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(authorID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetBookIDsCreditingAuthorDurable_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookIDsCreditingAuthorDurable'
+type MockStore_GetBookIDsCreditingAuthorDurable_Call struct {
+	*mock.Call
+}
+
+// GetBookIDsCreditingAuthorDurable is a helper method to define mock.On call
+//   - authorID int
+func (_e *MockStore_Expecter) GetBookIDsCreditingAuthorDurable(authorID any) *MockStore_GetBookIDsCreditingAuthorDurable_Call {
+	return &MockStore_GetBookIDsCreditingAuthorDurable_Call{Call: _e.mock.On("GetBookIDsCreditingAuthorDurable", authorID)}
+}
+
+func (_c *MockStore_GetBookIDsCreditingAuthorDurable_Call) Run(run func(authorID int)) *MockStore_GetBookIDsCreditingAuthorDurable_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetBookIDsCreditingAuthorDurable_Call) Return(strings []string, err error) *MockStore_GetBookIDsCreditingAuthorDurable_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockStore_GetBookIDsCreditingAuthorDurable_Call) RunAndReturn(run func(authorID int) ([]string, error)) *MockStore_GetBookIDsCreditingAuthorDurable_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBookMetadataHashStats provides a mock function for the type MockStore
 func (_mock *MockStore) GetBookMetadataHashStats() (*database.BookMetadataHashStats, error) {
 	ret := _mock.Called()

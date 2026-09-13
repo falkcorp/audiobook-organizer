@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -39,6 +39,10 @@ type AuthorBookReader interface {
 	// INCLUDED. It is the relink list for every path that rewrites an author's
 	// links and then calls DeleteAuthor; listing callers must not use it.
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error)
+	// GetBookIDsCreditingAuthorDurable is the Pebble-only (never memdb) twin of
+	// the relink getter above: junction OR scalar credits, any book state. A
+	// delete-when-empty check needs both, since the two stores can diverge.
+	GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error)
 	// GetAuthorsByBookIDs returns a map from bookID → []Author for all given book IDs.
 	// Returns an empty map (not nil) if bookIDs is empty.
 	GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Author, error)

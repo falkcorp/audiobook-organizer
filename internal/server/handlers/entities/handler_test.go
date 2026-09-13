@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package entities_test
 
@@ -1062,16 +1062,12 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	assert.Equal(t, 7, wrote.Author.ID, "the denormalized Author must agree with the new AuthorID")
 }
 
-// TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives covers the case with
-// no successor at all: the reclassified person was the book's ONLY author.
-//
-// AuthorID is cleared. book.Author is deliberately NOT cleared -- UpdateBook's
-// preserve-on-nil guard makes that impossible without a store-level sentinel --
-// so this asserts the reachable half and pins the residual rather than pretending
-// it is fixed. Display is unaffected either way: on the list path memdb has
-// already stripped Author, so a cleared AuthorID and a dangling one both render
-// as no author. What changes is that nothing dangles.
-func TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives(t *testing.T) {
+// TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
+// covers the case with no successor at all: the reclassified person was the
+// book's ONLY author. AuthorID is repointed to the Unknown Author row the name
+// index resolves -- never cleared (it used to be, which left the book
+// authorless) and never left naming the deleted row.
+func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives(t *testing.T) {
 	h, d := newHandler(t)
 	reclassified := 5
 
@@ -1087,6 +1083,8 @@ func TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives(t *testing.T) {
 		{BookID: "b1", AuthorID: 5, Role: "author", Position: 0},
 	}, nil)
 	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
+	d.store.EXPECT().GetAuthorByName(database.UnknownAuthorName).
+		Return(&database.Author{ID: 9, Name: database.UnknownAuthorName}, nil)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
 		ID:       "b1",
 		AuthorID: &reclassified,
@@ -1107,9 +1105,11 @@ func TestReclassifyAuthorAsNarrator_ClearsWhenNoAuthorSurvives(t *testing.T) {
 	h.ReclassifyAuthorAsNarrator(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	require.NotNil(t, wrote, "the book row must still be written to drop the dangling pointer")
-	assert.Nil(t, wrote.AuthorID,
-		"with no surviving author, AuthorID must be cleared rather than left pointing at the deleted row")
+	require.NotNil(t, wrote, "the book row must be written to drop the dangling pointer")
+	require.NotNil(t, wrote.AuthorID, "AuthorID must never be cleared")
+	assert.Equal(t, 9, *wrote.AuthorID, "with no surviving author, AuthorID must fall back to Unknown Author")
+	require.NotNil(t, wrote.Author)
+	assert.Equal(t, 9, wrote.Author.ID, "the denormalized Author must agree with the new AuthorID")
 }
 
 // TestSetAudiobookNarrators_OmittedBookIDKeepsMemDBLive drives PUT

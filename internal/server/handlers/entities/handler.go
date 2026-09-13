@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -473,22 +473,35 @@ func (h *Handler) RenameAuthor(c *gin.Context) {
 // holding the previous Author object, which is precisely the stale-snapshot
 // half of the divergence above.
 //
-// newPrimary == nil means "no successor exists" (every remaining junction entry
-// is gone -- the reclassify case). Then AuthorID is cleared and Author is left
-// alone, because that guard makes Author UNCLEARABLE through UpdateBook: there
-// is no sentinel for a pointer struct. That is deliberate and it costs nothing
-// on screen. A cleared AuthorID and a dangling one render IDENTICALLY -- the
-// list path reaches Author first but memdb stripped it, then finds either no
-// AuthorID or an AuthorID that misses the map, and yields "" either way; the
-// full-row path shows the stale snapshot in both cases. So clearing is a pure
-// referential-integrity win with no display change, and the residual stale
-// Author needs a store-level explicit-clear to fix. Do not mistake the
-// unchanged display for the clear having done nothing.
+// newPrimary must be non-nil. Until 2026-09-13 nil meant "clear AuthorID" (the
+// reclassify case with no surviving author), which left an authorless book and a
+// stale Author snapshot. Clearing is no longer allowed: a caller with no
+// successor passes the Unknown Author placeholder (h.unknownAuthor), the same
+// fallback DeleteAuthor applies at the store level. A nil here is logged and
+// the write refused rather than silently clearing.
 //
 // Third copy of this logic, after internal/scheduler/extra_ops.go:382-410 and
 // internal/plugins/maintenance/author.go:221-246. Those two agree; this handler
 // was the one that had drifted, which is what the "keep in sync" comment on the
 // scheduler copy was meant to prevent and did not.
+// unknownAuthor returns the Unknown Author placeholder row the name index
+// resolves, creating it when absent.
+func (h *Handler) unknownAuthor() (*database.Author, error) {
+	u, err := h.store.GetAuthorByName(database.UnknownAuthorName)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		if u, err = h.store.CreateAuthor(database.UnknownAuthorName); err != nil {
+			return nil, err
+		}
+	}
+	if u == nil || u.ID <= 0 {
+		return nil, fmt.Errorf("%q author did not resolve", database.UnknownAuthorName)
+	}
+	return u, nil
+}
+
 func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID int, newPrimary *database.Author) {
 	if book == nil {
 		return
@@ -498,12 +511,13 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 	if book.AuthorID == nil || *book.AuthorID != deletedAuthorID {
 		return
 	}
-	// nil newPrimary => clear. Named so the two branches below read the same.
-	var newID *int
-	if newPrimary != nil {
-		id := newPrimary.ID
-		newID = &id
+	if newPrimary == nil {
+		slog.Warn("author repoint: no successor given, refusing to clear AuthorID",
+			"book_id", book.ID, "author_id", deletedAuthorID)
+		return
 	}
+	id := newPrimary.ID
+	newID := &id
 
 	full, err := h.store.GetBookByID(book.ID)
 	if err != nil || full == nil {
@@ -521,12 +535,7 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 	}
 
 	full.AuthorID = newID
-	// Only assign Author when there is a successor: nil would be ignored by
-	// UpdateBook's preserve-on-nil guard anyway, and assigning it would falsely
-	// suggest the snapshot gets cleared here.
-	if newPrimary != nil {
-		full.Author = newPrimary
-	}
+	full.Author = newPrimary
 	if _, err := h.store.UpdateBook(book.ID, full); err != nil {
 		slog.Warn("author repoint: failed to update book",
 			"book_id", book.ID, "new_author_id", newID, "err", err)
@@ -922,6 +931,7 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 	}
 
 	booksUpdated := 0
+	var unknown *database.Author // resolved at most once, on first need
 	for _, book := range books {
 		// Remove author link
 		bookAuthors, err := h.store.GetBookAuthors(book.ID)
@@ -948,9 +958,21 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 			if a, err := h.store.GetAuthorByID(newAuthors[0].AuthorID); err == nil && a != nil {
 				successor = a
 			}
-			// A failed lookup falls through with successor == nil, which
-			// clears rather than repoints. Clearing is the safe direction: it
-			// cannot invent a link, and it leaves nothing dangling.
+		}
+		if successor == nil {
+			// No surviving author (or its lookup failed): fall back to the
+			// Unknown Author placeholder the name index resolves. Clearing is
+			// not allowed -- it strands the book authorless -- and leaving the
+			// scalar would dangle once DeleteAuthor below runs.
+			if unknown == nil {
+				u, uErr := h.unknownAuthor()
+				if uErr != nil {
+					httputil.InternalError(c, "failed to resolve the Unknown Author placeholder", uErr)
+					return
+				}
+				unknown = u
+			}
+			successor = unknown
 		}
 		h.repointPrimaryAuthor(&book, authorID, successor)
 

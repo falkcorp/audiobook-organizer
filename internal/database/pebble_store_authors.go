@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -194,7 +194,26 @@ func (p *PebbleStore) CreateAuthor(name string) (*Author, error) {
 	return author, nil
 }
 
+// DeleteAuthor removes the author row, its name-index entry, its aliases and its
+// book_authors credits. Before any of that it repoints Book.AuthorID/Author on
+// every book whose scalar names this author to the book's next author by
+// join-row position, or to the Unknown Author placeholder when none remains
+// (repointPrimaryScalarsBeforeDelete explains why that happens before, not
+// inside, the delete batch). If a book cannot be repointed the delete is
+// refused: the scalar is never cleared and never left dangling.
 func (p *PebbleStore) DeleteAuthor(id int) error {
+	// Only a live row of THIS id has books to repoint. A tombstoned id
+	// resolves to its canonical row on read, so its scalars are not dangling
+	// and the cleanup below (which only ever touches keys of this id) runs
+	// exactly as before.
+	if existing, err := p.GetAuthorByID(id); err != nil {
+		return err
+	} else if existing != nil && existing.ID == id {
+		if err := p.repointPrimaryScalarsBeforeDelete(id); err != nil {
+			return fmt.Errorf("delete author %d: %w", id, err)
+		}
+	}
+
 	// Held from before the row read until after the commit, so the name read
 	// here and the ownership checks below cannot go stale: the author lock for
 	// author:name:, then the alias lock for the alias cascade's

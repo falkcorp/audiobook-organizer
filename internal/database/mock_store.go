@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.115.0
+// version: 1.116.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -58,57 +58,58 @@ type MockStore struct {
 	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
 	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
 	// rather than returning an empty slice — see the method for why.
-	GetBooksBySeriesIDAllVersionsFunc func(seriesID int) ([]BookCore, error)
-	GetBooksByAuthorIDCoreFunc        func(authorID int) ([]BookCore, error)
-	GetBooksByAuthorIDWithRoleFunc    func(authorID int) ([]BookCore, error)
-	GetBooksByAuthorIDForRelinkFunc   func(authorID int) ([]BookCore, error)
-	GetBookByITunesPersistentIDFunc   func(persistentID string) (*Book, error)
-	ListBooksByITunesPIDFunc          func(limit, offset int) ([]Book, error)
-	GetBookByFileHashFunc             func(hash string) (*Book, error)
-	GetBookByOriginalHashFunc         func(hash string) (*Book, error)
-	GetBookByOrganizedHashFunc        func(hash string) (*Book, error)
-	GetBookVersionsFunc               func(id string, limit int) ([]BookSnapshot, error)
-	GetBookAtVersionFunc              func(id string, ts time.Time) (*Book, error)
-	RevertBookToVersionFunc           func(id string, ts time.Time) (*Book, error)
-	PruneBookVersionsFunc             func(id string, keepCount int) (int, error)
-	CountBookSnapshotsFunc            func(id string) (int, error)
-	MarkITunesSyncedFunc              func(bookIDs []string) (int64, error)
-	GetITunesDirtyBooksFunc           func() ([]Book, error)
-	GetITunesPurgePendingBooksFunc    func() ([]Book, error)
-	GetQuarantinedBooksFunc           func(limit, offset int) ([]Book, error)
-	CountQuarantinedBooksFunc         func() (int, error)
-	GetScanFailCountFunc              func(pathHash string) (int, error)
-	IncrScanFailCountFunc             func(pathHash string) (int, error)
-	ResetScanFailCountFunc            func(pathHash string) error
-	MergeChapterBooksFunc             func(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
-	FlagMetadataHashDuplicateFunc     func(primaryID, duplicateID string) error
-	RecomputeBookAggregatesFunc       func(bookID string) error
-	OptimizeFunc                      func() error
-	CompactionStatsFunc               func() CompactionStats
-	GetDuplicateBooksFunc             func() ([][]Book, error)
-	GetBooksByTitleInDirFunc          func(normalizedTitle, dirPath string) ([]Book, error)
-	GetFolderDuplicatesCoreFunc       func() ([][]BookCore, error)
-	GetDuplicateBooksByMetadataFunc   func(threshold float64) ([][]BookCore, error)
-	CreateBookFunc                    func(book *Book) (*Book, error)
-	UpdateBookFunc                    func(id string, book *Book) (*Book, error)
-	UpdateBookRatingFunc              func(id string, req UpdateBookRatingRequest) error
-	UpdateBookRatingError             error
-	DeleteBookFunc                    func(id string) error
-	SearchBooksFunc                   func(query string, limit, offset int) ([]Book, error)
-	CountPrimaryBooksFunc             func() (int, error)
-	CountAllBooksFunc                 func() (int, error)
-	GetDistinctGenresFunc             func() ([]string, error)
-	GetDistinctLanguagesFunc          func() ([]string, error)
-	GetDistinctPublishedYearsFunc     func() ([]int, error)
-	CountFilesFunc                    func() (int, error)
-	CountAuthorsFunc                  func() (int, error)
-	CountSeriesFunc                   func() (int, error)
-	GetBookCountsByLocationFunc       func(rootDir string) (int, int, error)
-	GetBookSizesByLocationFunc        func(rootDir string) (int64, int64, error)
-	GetDashboardStatsFunc             func() (*DashboardStats, error)
-	SetRootDirFunc                    func(string)
-	InvalidateLibraryStatsFunc        func()
-	ListSoftDeletedBooksFunc          func(limit, offset int, olderThan *time.Time) ([]Book, error)
+	GetBooksBySeriesIDAllVersionsFunc    func(seriesID int) ([]BookCore, error)
+	GetBooksByAuthorIDCoreFunc           func(authorID int) ([]BookCore, error)
+	GetBooksByAuthorIDWithRoleFunc       func(authorID int) ([]BookCore, error)
+	GetBooksByAuthorIDForRelinkFunc      func(authorID int) ([]BookCore, error)
+	GetBookIDsCreditingAuthorDurableFunc func(authorID int) ([]string, error)
+	GetBookByITunesPersistentIDFunc      func(persistentID string) (*Book, error)
+	ListBooksByITunesPIDFunc             func(limit, offset int) ([]Book, error)
+	GetBookByFileHashFunc                func(hash string) (*Book, error)
+	GetBookByOriginalHashFunc            func(hash string) (*Book, error)
+	GetBookByOrganizedHashFunc           func(hash string) (*Book, error)
+	GetBookVersionsFunc                  func(id string, limit int) ([]BookSnapshot, error)
+	GetBookAtVersionFunc                 func(id string, ts time.Time) (*Book, error)
+	RevertBookToVersionFunc              func(id string, ts time.Time) (*Book, error)
+	PruneBookVersionsFunc                func(id string, keepCount int) (int, error)
+	CountBookSnapshotsFunc               func(id string) (int, error)
+	MarkITunesSyncedFunc                 func(bookIDs []string) (int64, error)
+	GetITunesDirtyBooksFunc              func() ([]Book, error)
+	GetITunesPurgePendingBooksFunc       func() ([]Book, error)
+	GetQuarantinedBooksFunc              func(limit, offset int) ([]Book, error)
+	CountQuarantinedBooksFunc            func() (int, error)
+	GetScanFailCountFunc                 func(pathHash string) (int, error)
+	IncrScanFailCountFunc                func(pathHash string) (int, error)
+	ResetScanFailCountFunc               func(pathHash string) error
+	MergeChapterBooksFunc                func(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
+	FlagMetadataHashDuplicateFunc        func(primaryID, duplicateID string) error
+	RecomputeBookAggregatesFunc          func(bookID string) error
+	OptimizeFunc                         func() error
+	CompactionStatsFunc                  func() CompactionStats
+	GetDuplicateBooksFunc                func() ([][]Book, error)
+	GetBooksByTitleInDirFunc             func(normalizedTitle, dirPath string) ([]Book, error)
+	GetFolderDuplicatesCoreFunc          func() ([][]BookCore, error)
+	GetDuplicateBooksByMetadataFunc      func(threshold float64) ([][]BookCore, error)
+	CreateBookFunc                       func(book *Book) (*Book, error)
+	UpdateBookFunc                       func(id string, book *Book) (*Book, error)
+	UpdateBookRatingFunc                 func(id string, req UpdateBookRatingRequest) error
+	UpdateBookRatingError                error
+	DeleteBookFunc                       func(id string) error
+	SearchBooksFunc                      func(query string, limit, offset int) ([]Book, error)
+	CountPrimaryBooksFunc                func() (int, error)
+	CountAllBooksFunc                    func() (int, error)
+	GetDistinctGenresFunc                func() ([]string, error)
+	GetDistinctLanguagesFunc             func() ([]string, error)
+	GetDistinctPublishedYearsFunc        func() ([]int, error)
+	CountFilesFunc                       func() (int, error)
+	CountAuthorsFunc                     func() (int, error)
+	CountSeriesFunc                      func() (int, error)
+	GetBookCountsByLocationFunc          func(rootDir string) (int, int, error)
+	GetBookSizesByLocationFunc           func(rootDir string) (int64, int64, error)
+	GetDashboardStatsFunc                func() (*DashboardStats, error)
+	SetRootDirFunc                       func(string)
+	InvalidateLibraryStatsFunc           func()
+	ListSoftDeletedBooksFunc             func(limit, offset int, olderThan *time.Time) ([]Book, error)
 
 	// Work methods
 	GetAllWorksFunc func() ([]Work, error)
@@ -1158,6 +1159,18 @@ func (m *MockStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, e
 	}
 	return nil, fmt.Errorf("MockStore.GetBooksByAuthorIDForRelinkFunc is not set: "+
 		"a test reaching a relink-then-DeleteAuthor path must say which books still credit author %d", authorID)
+}
+
+// GetBookIDsCreditingAuthorDurable is backed by
+// GetBookIDsCreditingAuthorDurableFunc. Unset is an ERROR, for the same reason
+// as GetBooksByAuthorIDForRelinkCore above: it guards a delete, and a permissive
+// empty default would let any unstubbed test pass that guard.
+func (m *MockStore) GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error) {
+	if m.GetBookIDsCreditingAuthorDurableFunc != nil {
+		return m.GetBookIDsCreditingAuthorDurableFunc(authorID)
+	}
+	return nil, fmt.Errorf("MockStore.GetBookIDsCreditingAuthorDurableFunc is not set: "+
+		"a test reaching a delete-when-empty check must say which books still credit author %d", authorID)
 }
 
 func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {

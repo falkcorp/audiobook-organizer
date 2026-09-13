@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -75,6 +75,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// launder a book-title row into a plausible-looking author the way an
 		// automatic "these two look like the same person" classifier would.
 		p.authorDuplicateMergeDef(),
+		p.authorIDRepairDef(),
 		p.purgeEmptyAuthorsDef(),
 		// purge-empty-narrators is the narrator twin, but with two guards the
 		// author op lacks: a per-narrator link re-check immediately before each
