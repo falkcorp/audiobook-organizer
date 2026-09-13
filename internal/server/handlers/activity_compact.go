@@ -1,12 +1,14 @@
 // file: internal/server/handlers/activity_compact.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b5d2e8a4-7c19-4f6b-a3e0-1d8f4c7b9e26
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -72,7 +74,9 @@ type CompactStartedResponse struct {
 //     one. A different-params request while one is running is queued behind
 //     it (ConcurrencyKey serialises runs) and answered 202, because the
 //     caller asked for different work and will get it.
-//   - 400 — negative day count or malformed body.
+//   - 400 — "older_than_days must be a whole number of days" when the value
+//     is not an integer (1.75, "3", 1e3); "must be zero or positive" when it
+//     is negative; a body-shape message when the JSON itself is malformed.
 //   - 500 — registry unavailable or the enqueue failed.
 func (h *ActivityCompactHandler) CompactActivity(c *gin.Context) {
 	if h.enqueuer == nil {
@@ -81,7 +85,19 @@ func (h *ActivityCompactHandler) CompactActivity(c *gin.Context) {
 	}
 
 	var req maintenance.CompactActivityLogParams
-	if err := c.ShouldBindJSON(&req); err != nil || req.OlderThanDays < 0 {
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// A fractional, exponent, string or out-of-range value fails to decode
+		// into the int field. Until 2026-09-13 this answered "must be zero or
+		// positive" for 1.75, which is both. Say what is actually wrong.
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			httputil.RespondWithBadRequest(c, "older_than_days must be a whole number of days")
+			return
+		}
+		httputil.RespondWithBadRequest(c, `request body must be a JSON object like {"older_than_days": N}`)
+		return
+	}
+	if req.OlderThanDays < 0 {
 		httputil.RespondWithBadRequest(c, "older_than_days must be zero or positive")
 		return
 	}
