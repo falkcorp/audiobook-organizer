@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"reflect"
@@ -410,7 +411,7 @@ func TestBookSigMigrate_SkipsRacedRow(t *testing.T) {
 	stale = append(stale, ' ') // any difference at all must abort the write
 
 	outcome, err := store.commitBookSigMigration(
-		id, []byte("book:"+id), stale, []byte(`{"id":"`+id+`"}`), []byte(`{"v1":"x"}`),
+		id, "/tmp/migrate_raced.m4b", []byte("book:"+id), stale, []byte(`{"id":"`+id+`"}`), []byte(`{"v1":"x"}`),
 		false, BookSigMigrateMigrated)
 	require.NoError(t, err)
 	require.Equal(t, BookSigMigrateSkippedRaced, outcome)
@@ -419,6 +420,46 @@ func TestBookSigMigrate_SkipsRacedRow(t *testing.T) {
 		"a raced row must be left completely untouched, not partially written")
 	require.Nil(t, migrateSidecarRaw(t, store, id),
 		"a raced book must not get a sidecar either — the row and sidecar move together or not at all")
+}
+
+// TestBookSigMigrate_RaceKeepsBookAtPathKey reproduces the race the CAS cannot
+// close: the re-read passes, then an UpdateBook moves the book A->B (deleting
+// key A, setting key B) before the migration commits the row back at A. The
+// migration's batch must carry key A itself, or LiveBookIDsAtPath(A) reports a
+// path holding a live book as free.
+func TestBookSigMigrate_RaceKeepsBookAtPathKey(t *testing.T) {
+	env := newBookSigEnv(t)
+	store := env.store
+
+	const id = "01MIGRATEATPATH000000000"
+	migrateSeedLegacyRow(t, store, id, "atpath", nil)
+	const pathA = "/tmp/migrate_atpath.m4b"
+	_, err := store.RebuildBookAtPathIndex(context.Background())
+	require.NoError(t, err)
+
+	defer func() { bookSigMigrateAfterRecheckHook = nil }()
+	bookSigMigrateAfterRecheckHook = func(hid string) {
+		bookSigMigrateAfterRecheckHook = nil
+		b, err := store.GetBookByID(hid)
+		if err != nil || b == nil {
+			t.Errorf("hook read: %v %v", b, err)
+			return
+		}
+		b.FilePath = "/tmp/migrate_atpath_moved.m4b"
+		if _, err := store.UpdateBook(hid, b); err != nil {
+			t.Error(err)
+		}
+	}
+	outcome, err := store.MigrateBookSigToSidecar(id, false)
+	require.NoError(t, err)
+	require.Equal(t, BookSigMigrateMigrated, outcome)
+
+	row, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, pathA, row.FilePath, "precondition: the migration's lost update leaves the row at A")
+	ids, err := store.LiveBookIDsAtPath(pathA)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, ids, "live book at A missing from the path set: a false free")
 }
 
 // TestBookSigMigrate_ConformancePairing is the invariant that makes the

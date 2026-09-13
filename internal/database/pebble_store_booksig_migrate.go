@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
-// last-edited: 2026-08-13
+// last-edited: 2026-09-12
 
 package database
 
@@ -272,7 +272,7 @@ func (p *PebbleStore) MigrateBookSigToSidecar(id string, dryRun bool) (BookSigMi
 		// stored as explicit JSON null. There is no signature to preserve, so
 		// stripping the row alone is correct and creating a sidecar would
 		// manufacture an empty one.
-		return p.commitBookSigMigration(id, rowKey, before, stripped, nil, dryRun, BookSigMigrateStrippedOnly)
+		return p.commitBookSigMigration(id, book.FilePath, rowKey, before, stripped, nil, dryRun, BookSigMigrateStrippedOnly)
 	}
 
 	// Sidecar already present? Then it is authoritative (bookSigSidecar.applyTo)
@@ -305,21 +305,30 @@ func (p *PebbleStore) MigrateBookSigToSidecar(id string, dryRun bool) (BookSigMi
 		if !filled {
 			merged = nil // sidecar already covers every inline field; leave it untouched.
 		}
-		return p.commitBookSigMigration(id, rowKey, before, stripped, merged, dryRun, BookSigMigrateStrippedOnly)
+		return p.commitBookSigMigration(id, book.FilePath, rowKey, before, stripped, merged, dryRun, BookSigMigrateStrippedOnly)
 	}
 
 	payload, err := json.Marshal(sig)
 	if err != nil {
 		return BookSigMigrateNotCandidate, fmt.Errorf("marshal book signature sidecar %q: %w", id, err)
 	}
-	return p.commitBookSigMigration(id, rowKey, before, stripped, payload, dryRun, BookSigMigrateMigrated)
+	return p.commitBookSigMigration(id, book.FilePath, rowKey, before, stripped, payload, dryRun, BookSigMigrateMigrated)
 }
+
+// bookSigMigrateAfterRecheckHook, when non-nil, runs inside
+// commitBookSigMigration after the CAS re-read has passed and before the batch
+// commits: the window a concurrent UpdateBook can still land in. Test-only;
+// nil in production.
+var bookSigMigrateAfterRecheckHook func(id string)
 
 // commitBookSigMigration performs the CAS re-read and the single-batch write.
 // sidecar may be nil, meaning "write the stripped row only, create no sidecar
 // key" — the stripped_only path. It NEVER deletes a sidecar key.
+//
+// filePath is the FilePath of the row being written (decoded from before), so
+// the batch can carry that row's book_atpath: key; see the Set below.
 func (p *PebbleStore) commitBookSigMigration(
-	id string,
+	id, filePath string,
 	rowKey, before, stripped, sidecar []byte,
 	dryRun bool,
 	outcome BookSigMigrateOutcome,
@@ -335,6 +344,9 @@ func (p *PebbleStore) commitBookSigMigration(
 	if after == nil || !bytes.Equal(before, after) {
 		return BookSigMigrateSkippedRaced, nil
 	}
+	if bookSigMigrateAfterRecheckHook != nil {
+		bookSigMigrateAfterRecheckHook(id)
+	}
 
 	batch := p.db.NewBatch()
 	defer batch.Close()
@@ -346,6 +358,16 @@ func (p *PebbleStore) commitBookSigMigration(
 	}
 	if err := batch.Set(rowKey, stripped, nil); err != nil {
 		return BookSigMigrateNotCandidate, fmt.Errorf("stage stripped row %q: %w", id, err)
+	}
+	// The row's own book_atpath: key, UNCONDITIONALLY, for the same reason
+	// UpdateBook sets it unconditionally. The re-read above is not a CAS: an
+	// UpdateBook that moves this book A->B between it and this commit deletes
+	// key A and sets key B, and this batch then writes the row back at A (the
+	// accepted lost update). Without this Set that leaves a live book at A with
+	// no A key, which LiveBookIDsAtPath reports as a free path. With it, the
+	// only residue is the B key, an extra the reader drops.
+	if err := batch.Set(bookAtPathKey(filePath, id), []byte{}, nil); err != nil {
+		return BookSigMigrateNotCandidate, fmt.Errorf("stage book_atpath key %q: %w", id, err)
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return BookSigMigrateNotCandidate, fmt.Errorf("commit book signature migration %q: %w", id, err)
