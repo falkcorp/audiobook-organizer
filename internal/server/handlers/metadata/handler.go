@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -66,6 +66,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -884,11 +885,31 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 	renamed := 0
 	doRename := (body.Rename != nil && *body.Rename) || config.AppConfig.AutoRenameOnApply
 	if doRename && len(body.SegmentIDs) == 0 {
-		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(id, book); err != nil {
-			slog.Warn("rename failed for book", "id", logger.SanitizeLogValue(id), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
-		} else {
-			renamed = 1
+		// Refuse before anything moves when the rename is known to fail (two
+		// files on one target, a broken pattern, an unresolved recorded
+		// collision). Until 2026-09-13 this path found out by trying: the
+		// rename moved some files, failed on the next, and the handler logged a
+		// warning, wrote tags and answered 200 "metadata written".
+		if err := h.metadataFetchService.RenameOnlyPreflight(id); err != nil {
+			if errors.Is(err, metafetch.ErrApplyFileWorkWouldFail) {
+				httputil.RespondWithError(c, http.StatusConflict, err.Error(), metafetch.ApplyRefusedReasonFileWorkWouldFail)
+				return
+			}
+			httputil.InternalError(c, "rename preflight failed", err)
+			return
 		}
+		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(id, book); err != nil {
+			// The rename may have moved some files before it failed (their rows
+			// are updated; see RunApplyPipelineRenameOnly). Writing tags now
+			// would stamp a half-moved book, so stop and say what happened.
+			status := http.StatusInternalServerError
+			if errors.Is(err, organizer.ErrDuplicateRenameTarget) || errors.Is(err, metafetch.ErrApplyFileWorkWouldFail) {
+				status = http.StatusConflict
+			}
+			httputil.RespondWithError(c, status, "rename failed; no tags were written: "+err.Error(), "rename_failed")
+			return
+		}
+		renamed = 1
 	}
 
 	// Step 2: Write tags to files
