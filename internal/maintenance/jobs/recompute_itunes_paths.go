@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a1000013-0000-0000-0000-000000000013
 // last-edited: 2026-09-12
 
@@ -103,7 +103,10 @@ func (j *recomputeITunesPathsJob) Run(ctx context.Context, store maintenance.Job
 	if dryRun {
 		verb = "would update"
 	}
-	summary := fmt.Sprintf("recompute-itunes-paths: %s %d book_file rows; kept %d rows whose file path no iTunes mapping covers",
+	// kept counts only rows with a stored iTunes path to keep. An uncovered
+	// row whose stored path is already empty matched want above and is not
+	// counted, so this is not a count of unmapped files.
+	summary := fmt.Sprintf("recompute-itunes-paths: %s %d book_file rows; kept %d stored iTunes paths that no mapping covers",
 		verb, updated, kept)
 	if kept > keptRowLogLimit {
 		summary += fmt.Sprintf(" (first %d listed)", keptRowLogLimit)

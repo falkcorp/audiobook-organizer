@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b7c8d9e0-f1a2-3456-bcde-789012345012
 // last-edited: 2026-09-12
 
@@ -128,7 +128,7 @@ func TestRecomputeItunesPathsJob_KeepsStoredPathNoMappingCovers(t *testing.T) {
 	if !strings.Contains(logs, "warn: book_file bf-sib") {
 		t.Errorf("the kept row must be listed as a warning; logs:\n%s", logs)
 	}
-	if !strings.Contains(logs, "updated 1 book_file rows; kept 1 rows") {
+	if !strings.Contains(logs, "updated 1 book_file rows; kept 1 stored iTunes paths") {
 		t.Errorf("the summary must count updated and kept rows; logs:\n%s", logs)
 	}
 }
