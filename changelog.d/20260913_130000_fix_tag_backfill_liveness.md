@@ -7,7 +7,8 @@
   whole dry-run result. The op now stamps its liveness after every file it
   reads (through a new `registry.TouchLiveness`, which changes no progress
   numbers and writes nothing to the database) and shows the book and file it is
-  on. A single tag read is now bounded at 60 seconds: a read that hangs (TagLib
-  WASM cannot be interrupted) counts as a read error for that file, is named in
+  on. Each file's existence check and tag read are now bounded together at 60
+  seconds: a check or read that hangs (a dead mount, or TagLib WASM, which cannot
+  be interrupted) counts as a read error for that file, is named in
   a WARN log, and the book continues; if 8 such reads are still stuck at once,
   the op fails with an error instead of piling up goroutines.

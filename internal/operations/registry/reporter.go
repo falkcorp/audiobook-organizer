@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-13
 
@@ -71,6 +71,10 @@ func ReporterOpID(rep Reporter) string {
 // would defeat the watchdog for exactly the ops it exists to catch.
 //
 // Separate from Reporter for the same reason OpID is (see above).
+//
+// Not effective in subprocess mode: the child's reporter is built with a nil
+// touchProgressFn (subprocess.go), because there is no runHandle in that
+// process to stamp, so an Isolate op's TouchLiveness is a no-op.
 type LivenessToucher interface {
 	TouchLiveness()
 }

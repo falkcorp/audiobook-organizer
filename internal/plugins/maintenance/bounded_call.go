@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bounded_call.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2593968b-b7d3-4939-9ff5-351fd51fbf7b
 // last-edited: 2026-09-13
 
@@ -44,6 +44,18 @@ const (
 // (duration_reextract.go, now built on this) and processFileBounded in
 // internal/scanner/process_file.go.
 func boundedCall[T any](ctx context.Context, bound time.Duration, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
+	return boundedCallHooked(ctx, bound, nil, fn, abandoned...)
+}
+
+// boundedHooks are test-only interleaving points. They are a parameter, not
+// package globals, so goroutines abandoned by other tests can never race on
+// them. nil in production.
+type boundedHooks struct {
+	afterSend func() // goroutine: result sent, CAS not yet attempted
+	onGiveUp  func() // waiter: timer or ctx fired, result not yet re-checked
+}
+
+func boundedCallHooked[T any](ctx context.Context, bound time.Duration, hooks *boundedHooks, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
 	add := func(d int64) {
 		for _, c := range abandoned {
 			c.Add(d)
@@ -58,6 +70,9 @@ func boundedCall[T any](ctx context.Context, bound time.Duration, fn func() (T, 
 	go func() {
 		v, err := fn()
 		ch <- result{v, err}
+		if hooks != nil && hooks.afterSend != nil {
+			hooks.afterSend()
+		}
 		if !state.CompareAndSwap(boundedRunning, boundedFinished) {
 			add(-1) // the waiter gave up on us and counted us; uncount
 		}
@@ -74,6 +89,19 @@ func boundedCall[T any](ctx context.Context, bound time.Duration, fn func() (T, 
 		giveUp = fmt.Errorf("%w after %v (uncancellable call abandoned)", errBoundedCallTimeout, bound)
 	case <-ctx.Done():
 		giveUp = ctx.Err()
+	}
+	if hooks != nil && hooks.onGiveUp != nil {
+		hooks.onGiveUp()
+	}
+	// The timer (or ctx) can fire just after the goroutine sent its result but
+	// before its CAS. Take a result that is already there instead of reporting a
+	// spurious timeout and discarding it. Nothing was counted yet, and the
+	// goroutine's CAS (running -> finished) still succeeds, so it does not
+	// uncount: the counters stay balanced.
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	default:
 	}
 	// Count first, then claim: if the goroutine finished in the meantime the
 	// claim fails, we uncount, and its result is already in ch.
