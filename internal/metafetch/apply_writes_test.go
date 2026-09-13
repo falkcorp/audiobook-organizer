@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-09-12
 //
@@ -612,7 +612,17 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
 	var siblings []database.Book
 	svc := NewService(&database.MockStore{
-		GetBookByIDFunc:            func(string) (*database.Book, error) { b := *book; return &b, nil },
+		// A read by id returns that row: the file steps re-read the locked
+		// library copy by id and check it is still one.
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			for _, sib := range siblings {
+				if sib.ID == id {
+					return &sib, nil
+				}
+			}
+			b := *book
+			return &b, nil
+		},
 		GetBooksByVersionGroupFunc: func(string) ([]database.Book, error) { return siblings, nil },
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
 			return []database.BookFile{{ID: "f-" + id, BookID: id, FilePath: filepath.Join(root, "A Book", "a.m4b")}}, nil
@@ -1247,16 +1257,20 @@ func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
 	assert.GreaterOrEqual(t, countPrefix(keys, sPath), 4, "both jobs write the one copy's files (embed and tags each)")
 }
 
-// A library copy that appears between the lock step and the file steps is not
-// written: the steps write the copy the job locked, or stop with an error.
-// They used to resolve the copy again, each on its own, and write whatever
-// they found, which could be a copy this job held no lock on.
-func TestFinishApplyFileWork_CopyChangedAfterTheLockIsAnError(t *testing.T) {
+// The file steps write the library copy the job locked even when a lookup
+// would now pick another. librarySibling takes the first usable sibling after
+// sortVersions (primary flag, then title), and a job on another copy can
+// change either while holding only its own lock, so in a group with two
+// copies the pick can flip mid-job. The steps used to compare a fresh lookup
+// with the locked copy, and fail the job on the flip; before that they wrote
+// whichever copy the fresh lookup found, one the job held no lock on.
+func TestFinishApplyFileWork_WritesTheLockedCopyWhenTheLookupFlips(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	root := config.AppConfig.RootDir
 	vg := "vg1"
+	sPath := filepath.Join(root, "A Book")
 	h.mu.Lock()
-	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: sPath, VersionGroupID: &vg}
 	h.mu.Unlock()
 	s2 := database.Book{ID: "s2", Title: "A Book", FilePath: filepath.Join(root, "A Book 2"), VersionGroupID: &vg}
 	ms := svc.db.(*database.MockStore)
@@ -1276,13 +1290,160 @@ func TestFinishApplyFileWork_CopyChangedAfterTheLockIsAnError(t *testing.T) {
 	var tags []string
 	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
-	require.ErrorIs(t, err, errFileTargetChanged)
-	assert.Empty(t, tags, "no tags may be written once the copy is not the one the job locked")
+	require.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil))
+	assert.Equal(t, []string{"a"}, tags, "the job's tags are written once")
 	keys := locks.taken()
 	assert.Contains(t, keys, bookLockKey("s"), "the job locked S")
+	assert.Contains(t, keys, sPath, "the job writes S, the copy it locked")
 	assert.NotContains(t, keys, bookLockKey("s2"))
 	assert.NotContains(t, keys, s2.FilePath, "S2's files must not be written by a job that did not lock S2")
+}
+
+// A locked library copy that stops being one before the file steps -- here it
+// leaves the version group -- is not written: the job stops with
+// errFileTargetChanged. The steps re-read the locked copy by id and check it.
+func TestFinishApplyFileWork_LockedCopyThatIsNoLongerACopyIsAnError(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	root := config.AppConfig.RootDir
+	vg := "vg1"
+	h.mu.Lock()
+	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
+	h.mu.Unlock()
+	ms := svc.db.(*database.MockStore)
+	byID := ms.GetBookByIDFunc
+	// The lock step finds S through the group. Read by id, S has left it.
+	ms.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		b, err := byID(id)
+		if id == "s" && b != nil {
+			other := "vg-other"
+			b.VersionGroupID = &other
+		}
+		return b, err
+	}
+	var tags []string
+	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+
+	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	require.ErrorIs(t, err, errFileTargetChanged)
+	assert.Contains(t, err.Error(), "no longer in the book's version group")
+	assert.Empty(t, tags, "no tags may be written into a book that is no longer the copy")
+}
+
+// No job writes a library copy while it is still being made. The maker below
+// parks after copy S's book row exists -- every lookup finds S -- and before
+// its file rows and metadata sync, which is where CreateOrganizedVersion is
+// between CreateBook and BatchCreateBookFiles. The lookup used to run with no
+// version-group key, so an apply of C found S there, locked S (its creator
+// never holds S's lock) and wrote S's files; a job on S itself did the same.
+func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	svc.SetPathLocker((&testPathLocks{}).lock)
+	wrote := make(chan string, 8)
+	svc.tagWriter = func(id string) (int, error) { wrote <- id; return 1, nil }
+	created := make(chan struct{})
+	proceed := make(chan struct{})
+	inner := svc.libraryCopyMaker
+	svc.libraryCopyMaker = func(b *database.Book) *database.Book {
+		s := inner(b)
+		close(created)
+		<-proceed
+		return s
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	select {
+	case <-created:
+	case <-time.After(5 * time.Second):
+		close(proceed)
+		t.Fatal("the apply of A never made copy S")
+	}
+	// One job at a time. S's own job holds S's book lock while it waits, so
+	// started together it would block C at S's lock and hide a C that found
+	// S with no version-group key.
+	for _, id := range []string{"c", "s"} {
+		wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(id, "", true, true, nil)) })
+		select {
+		case who := <-wrote:
+			t.Errorf("the apply of %s wrote files while copy S was still being made", who)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	close(proceed)
+	wg.Wait()
+	close(wrote)
+	var ids []string
+	for id := range wrote {
+		ids = append(ids, id)
+	}
+	assert.ElementsMatch(t, []string{"a", "c", "s"}, ids, "every job writes once S is finished")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	assert.Equal(t, 1, h.made, "one library copy for the version group")
+}
+
+// WithBookFilesLocked (batch save's organize) waits for an apply of the same
+// book, then locks the book's CURRENT path and hands fn the book as it stands.
+// Batch save used to take only a path lock, keyed on a FilePath read before
+// its write-back: an apply that renamed the book P -> Q in between let the
+// organize take P, re-read the book and move the files it was tagging at Q.
+func TestWithBookFilesLocked_WaitsForAnApplyAndLocksTheCurrentPath(t *testing.T) {
+	svc, h := newCopyHarness(t)
+	root := config.AppConfig.RootDir
+	vg := "vg1"
+	p := filepath.Join(root, "A Book")
+	q := filepath.Join(root, "A Book (renamed)")
+	h.mu.Lock()
+	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: p, VersionGroupID: &vg}
+	h.mu.Unlock()
+	locks := &testPathLocks{}
+	svc.SetPathLocker(locks.lock)
+	tagging := make(chan struct{})
+	proceed := make(chan struct{})
+	var once sync.Once
+	svc.tagWriter = func(string) (int, error) {
+		once.Do(func() { close(tagging) })
+		<-proceed
+		// The apply moves S's files to Q before it releases S: after the
+		// organize started waiting, so only a read made under S's lock sees Q.
+		h.mu.Lock()
+		b := h.books["s"]
+		b.FilePath = q
+		h.books["s"] = b
+		h.mu.Unlock()
+		return 1, nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("s", "", true, true, nil)) })
+	select {
+	case <-tagging:
+	case <-time.After(5 * time.Second):
+		close(proceed)
+		t.Fatal("the apply of S never reached its tag write")
+	}
+	organized := make(chan string, 1)
+	wg.Go(func() {
+		assert.NoError(t, svc.WithBookFilesLocked("s", func(b *database.Book) error {
+			organized <- b.FilePath
+			return nil
+		}))
+	})
+	got := ""
+	select {
+	case got = <-organized:
+		t.Error("the organize ran while an apply of the same book was tagging its files")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(proceed)
+	wg.Wait()
+	if got == "" {
+		got = <-organized
+	}
+	assert.Equal(t, q, got, "the organize must get the book as it stands after the apply")
+	keys := locks.taken()
+	require.NotEmpty(t, keys)
+	assert.Equal(t, q, keys[len(keys)-1], "the organize must lock the book's current path; keys: %v", keys)
 }
 
 // WriteBackMetadataForBook and RunApplyPipelineRenameOnly take the file work's

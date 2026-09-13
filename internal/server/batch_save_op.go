@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-09-12
 //
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -38,7 +39,7 @@ type batchSaveOpParams struct {
 //
 // The book is re-loaded BY ID rather than reusing the caller's struct: the
 // write-back that just ran may have renamed the file, and a FilePath is not
-// durable across that boundary.
+// durable across that boundary (see LOCKING below).
 //
 // The two halves are both required. OrganizeOneBook owns the in-place /
 // directory / single-file decision and does the file operation; CommitLanding
@@ -50,27 +51,38 @@ type batchSaveOpParams struct {
 // organize colliding with the orphan as _copy1. It counted them as organized
 // anyway. A CommitLanding failure has already rolled the copies back, which
 // the returned error says so the operator is not left hunting for them.
+//
+// LOCKING. It runs under metafetch's WithBookFilesLocked: the book's file-work
+// lock, the book re-read under it, then the path lock on THAT FilePath -- the
+// order every apply takes. The book is re-read there rather than here for the
+// same reason as above, and because only a read under the book lock is
+// current: until 2026-09-12 batch save took only a path lock, keyed on the
+// FilePath its worker read before the write-back. An apply that renamed the
+// book P -> Q meanwhile released P; the organize took P, re-read the book,
+// found Q and moved the files the apply was still tagging at Q. For a
+// protected book that key was the iTunes path, which guards nothing this
+// organize writes. CreateOrganizedVersion takes the version-group key under
+// these locks; it is a leaf (see metafetch's lockBook), so that closes no
+// cycle.
 func (s *Server) organizeAfterWriteBack(bookID, operationID string, log logger.Logger) (bool, error) {
-	store := s.storeForWiring()
-	book, err := store.GetBookByID(bookID)
-	if err != nil {
-		return false, fmt.Errorf("reload book %s before organize: %w", bookID, err)
+	if s.metadataFetchService == nil {
+		return false, fmt.Errorf("organize book %s: the metadata service is not wired, so its files cannot be locked", bookID)
 	}
-	if book == nil {
-		return false, fmt.Errorf("book %s vanished before organize", bookID)
-	}
-
-	org := organizer.NewOrganizer(&config.AppConfig)
-	landing, err := s.organizeService.OrganizeOneBook(org, book, log)
-	if err != nil {
-		return false, err
-	}
-
-	outcome, _, err := s.organizeService.CommitLanding(book, landing, operationID, log)
-	if err != nil {
-		return false, fmt.Errorf("%w (the organized copies were rolled back; the book is unchanged)", err)
-	}
-	return outcome != organizer.LandingUnchanged, nil
+	moved := false
+	err := s.metadataFetchService.WithBookFilesLocked(bookID, func(book *database.Book) error {
+		org := organizer.NewOrganizer(&config.AppConfig)
+		landing, err := s.organizeService.OrganizeOneBook(org, book, log)
+		if err != nil {
+			return err
+		}
+		outcome, _, err := s.organizeService.CommitLanding(book, landing, operationID, log)
+		if err != nil {
+			return fmt.Errorf("%w (the organized copies were rolled back; the book is unchanged)", err)
+		}
+		moved = outcome != organizer.LandingUnchanged
+		return nil
+	})
+	return moved, err
 }
 
 func mergeBatchSaveQueuedParams(existing, incoming json.RawMessage) (json.RawMessage, bool, error) {
@@ -209,20 +221,20 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// Stamp last_written_at on the book the user sees (may differ from library copy)
 				_ = store.SetLastWrittenAt(id, time.Now())
 
-				// Organize under the path lock: organizing MOVES the file, so it
-				// must not run alongside another worker's write to it. Taken once
-				// the write-back has returned and released its own locks from the
-				// same table, which is not reentrant. A write by another worker
-				// between the two runs before the move, never during it.
+				// Organize in the file work's lock order: organizeAfterWriteBack
+				// takes the book's lock, then the lock on the path it re-reads
+				// under it (metafetch's WithBookFilesLocked). Organizing MOVES the
+				// files, so it must not run while an apply of the same book is
+				// renaming or tagging them. Nothing from the lock table is held
+				// here: the write-back above released its own locks, and the
+				// table is not reentrant.
 				if p.Organize {
-					release := writeBackPathLocks.lock(book.FilePath)
 					if organizedOne, orgErr := s.organizeAfterWriteBack(id, opsregistry.ReporterOpID(reporter), log2); orgErr != nil {
 						detail := orgErr.Error()
 						_ = progress.Log("warn", fmt.Sprintf("organize failed for %s", book.Title), &detail)
 					} else if organizedOne {
 						organized.Add(1)
 					}
-					release()
 				}
 
 				// Enqueue ITL write-back

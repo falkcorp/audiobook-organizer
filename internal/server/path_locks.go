@@ -1,5 +1,5 @@
 // file: internal/server/path_locks.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6e2a9c14-7d3b-4f58-9a01-2c8b4d5e6f70
 // last-edited: 2026-09-12
 
@@ -39,6 +39,18 @@ import (
 type pathLocks struct {
 	mu sync.Mutex
 	m  map[string]*pathLockEntry
+	// trace, when set, is told of every acquire ("+key", before it blocks)
+	// and release ("-key"), under mu. Tests use it to check the lock order
+	// across the server and metafetch, which share this table. Nil in
+	// production.
+	trace func(event string)
+}
+
+// setTrace installs (or, with nil, removes) the table's trace hook.
+func (pl *pathLocks) setTrace(fn func(event string)) {
+	pl.mu.Lock()
+	pl.trace = fn
+	pl.mu.Unlock()
 }
 
 // pathLockEntry is one path's lock plus the number of goroutines currently
@@ -98,6 +110,9 @@ func (pl *pathLocks) lock(path string) func() {
 		pl.m[key] = e
 	}
 	e.refs++
+	if pl.trace != nil {
+		pl.trace("+" + key)
+	}
 	pl.mu.Unlock()
 
 	e.ch <- struct{}{} // blocks while another worker holds this path
@@ -107,6 +122,9 @@ func (pl *pathLocks) lock(path string) func() {
 		once.Do(func() {
 			<-e.ch
 			pl.mu.Lock()
+			if pl.trace != nil {
+				pl.trace("-" + key)
+			}
 			e.refs--
 			if e.refs == 0 {
 				delete(pl.m, key)

@@ -1,5 +1,5 @@
 // file: internal/server/organize_row_writers_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f4c1a92-53d8-4a06-9c7e-1b0d2e6f84a3
 // last-edited: 2026-09-12
 
@@ -16,12 +16,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -172,12 +174,132 @@ func TestOrganizeAfterWriteBackWritesBookFileRows(t *testing.T) {
 	store := rowWritersStore(t)
 	f := newRowWritersFixture(t, store)
 
-	srv := &Server{store: store, organizeService: NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: NewOrganizeService(store), metadataFetchService: lockedMetafetch(store)}
+	srv.organizeService.VersionGroupLocker = writeBackPathLocks.lock
+	events := traceWriteBackLocks(t)
 	moved, err := srv.organizeAfterWriteBack(f.book.ID, "op-batch-save", logger.New("test"))
 	require.NoError(t, err)
 	require.True(t, moved, "the book was outside the library; organize must report that it moved")
 
 	assertRowsLandedInLibrary(t, f)
+
+	// The organize runs in the file work's lock order: the book's key, then
+	// the key of the path it re-read under it; and the new version is made
+	// under the version-group key. It used to take a path lock alone, keyed on
+	// a FilePath read before the write-back, and the version no key at all.
+	ev := events()
+	require.Contains(t, ev, "+"+bookLockKeyForTest(f.book.ID), "the organize must take the book's file-work lock: %v", ev)
+	require.Contains(t, ev, "+"+filepath.Clean(f.srcDir), "the organize must lock the book's path: %v", ev)
+	require.True(t, hasEventPrefix(ev, "+vg:"), "CreateOrganizedVersion must hold the version-group key: %v", ev)
+	requireFileWorkLockOrder(t, ev)
+}
+
+// lockedMetafetch is a metafetch service on store sharing writeBackPathLocks,
+// as server.go wires it.
+func lockedMetafetch(store *database.PebbleStore) *metafetch.Service {
+	mfs := metafetch.NewService(store)
+	mfs.SetPathLocker(writeBackPathLocks.lock)
+	return mfs
+}
+
+// bookLockKeyForTest is metafetch's per-book lock-table key.
+func bookLockKeyForTest(id string) string { return "book:" + id }
+
+func hasEventPrefix(events []string, prefix string) bool {
+	for _, e := range events {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// traceWriteBackLocks records every acquire ("+key") and release ("-key") in
+// writeBackPathLocks, the table the server and metafetch share.
+func traceWriteBackLocks(t *testing.T) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var events []string
+	writeBackPathLocks.setTrace(func(ev string) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	})
+	t.Cleanup(func() { writeBackPathLocks.setTrace(nil) })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), events...)
+	}
+}
+
+// requireFileWorkLockOrder fails on a book key taken while a path key is held
+// -- path-then-book, the reverse of metafetch's lockBook order -- and on a
+// path key taken with no book key held, a file lock no book lock covers.
+// Version-group keys are leaves and may come anywhere.
+func requireFileWorkLockOrder(t *testing.T, events []string) {
+	t.Helper()
+	held := map[string]int{}
+	holding := func(match func(string) bool) bool {
+		for k, n := range held {
+			if n > 0 && match(k) {
+				return true
+			}
+		}
+		return false
+	}
+	isBook := func(k string) bool { return strings.HasPrefix(k, "book:") }
+	isPath := func(k string) bool { return !isBook(k) && !strings.HasPrefix(k, "vg:") }
+	for _, ev := range events {
+		key := ev[1:]
+		if ev[0] == '-' {
+			held[key]--
+			continue
+		}
+		if isBook(key) {
+			require.False(t, holding(isPath), "book key %s taken while a path key was held: %v", key, events)
+		}
+		if isPath(key) {
+			require.True(t, holding(isBook), "path key %s taken with no book key held: %v", key, events)
+		}
+		held[key]++
+	}
+}
+
+// The bulk write-back holds no key of the shared lock table around
+// RunApplyPipelineRenameOnly or WriteBackMetadataForBook: each takes the
+// book's key and then path keys itself. A path lock put back around either is
+// path-then-book, a deadlock against an apply of the same book, and on a book
+// that is its own target a self-deadlock on the non-reentrant table.
+func TestBulkWriteBack_HoldsNoFileLockAroundTheFileWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("touches the filesystem and the full write-back pipeline")
+	}
+	store := rowWritersStore(t)
+	f := newRowWritersFixture(t, store)
+	srv := &Server{store: store, metadataFetchService: lockedMetafetch(store)}
+	events := traceWriteBackLocks(t)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.runBulkWriteBack(context.Background(), "op-lock-order", []string{f.book.ID}, true, 0,
+			registryProgressAdapter{r: &sdReporter{id: "op-lock-order"}}, nil)
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the bulk write-back deadlocked on its own lock table")
+	}
+	ev := events()
+	n := 0
+	for _, e := range ev {
+		if e == "+"+bookLockKeyForTest(f.book.ID) {
+			n++
+		}
+	}
+	require.Equal(t, 2, n, "the rename and the write-back each take the book's lock: %v", ev)
+	requireFileWorkLockOrder(t, ev)
 }
 
 // failingBatchStore is a real store whose book_file batch write fails. Only
@@ -213,7 +335,7 @@ func TestOrganizeRollsBackCreatedCopiesWhenRowWriteFails(t *testing.T) {
 	f := newRowWritersFixture(t, base)
 
 	failing := &failingBatchStore{PebbleStore: base}
-	srv := &Server{store: base, organizeService: NewOrganizeService(failing)}
+	srv := &Server{store: base, organizeService: NewOrganizeService(failing), metadataFetchService: lockedMetafetch(base)}
 
 	moved, err := srv.organizeAfterWriteBack(f.book.ID, "op-rollback", logger.New("test"))
 	require.Error(t, err, "a failed row write must fail the organize, not be swallowed")
