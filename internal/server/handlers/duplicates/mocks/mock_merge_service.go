@@ -110,6 +110,68 @@ func (_c *MockMergeService_CombineBooks_Call) RunAndReturn(run func(bookIDs []st
 	return _c
 }
 
+// ListCombineJournals provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) ListCombineJournals(limit int) ([]merge.CombineJournal, error) {
+	ret := _mock.Called(limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListCombineJournals")
+	}
+
+	var r0 []merge.CombineJournal
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]merge.CombineJournal, error)); ok {
+		return returnFunc(limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []merge.CombineJournal); ok {
+		r0 = returnFunc(limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]merge.CombineJournal)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMergeService_ListCombineJournals_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCombineJournals'
+type MockMergeService_ListCombineJournals_Call struct {
+	*mock.Call
+}
+
+// ListCombineJournals is a helper method to define mock.On call
+//   - limit int
+func (_e *MockMergeService_Expecter) ListCombineJournals(limit any) *MockMergeService_ListCombineJournals_Call {
+	return &MockMergeService_ListCombineJournals_Call{Call: _e.mock.On("ListCombineJournals", limit)}
+}
+
+func (_c *MockMergeService_ListCombineJournals_Call) Run(run func(limit int)) *MockMergeService_ListCombineJournals_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_ListCombineJournals_Call) Return(combineJournals []merge.CombineJournal, err error) *MockMergeService_ListCombineJournals_Call {
+	_c.Call.Return(combineJournals, err)
+	return _c
+}
+
+func (_c *MockMergeService_ListCombineJournals_Call) RunAndReturn(run func(limit int) ([]merge.CombineJournal, error)) *MockMergeService_ListCombineJournals_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MergeBooks provides a mock function for the type MockMergeService
 func (_mock *MockMergeService) MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error) {
 	ret := _mock.Called(bookIDs, primaryID)
@@ -174,6 +236,68 @@ func (_c *MockMergeService_MergeBooks_Call) Return(result *merge.Result, err err
 }
 
 func (_c *MockMergeService_MergeBooks_Call) RunAndReturn(run func(bookIDs []string, primaryID string) (*merge.Result, error)) *MockMergeService_MergeBooks_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UndoCombine provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) UndoCombine(journalID string) (*merge.CombineUndoResult, error) {
+	ret := _mock.Called(journalID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UndoCombine")
+	}
+
+	var r0 *merge.CombineUndoResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*merge.CombineUndoResult, error)); ok {
+		return returnFunc(journalID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *merge.CombineUndoResult); ok {
+		r0 = returnFunc(journalID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*merge.CombineUndoResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(journalID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMergeService_UndoCombine_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UndoCombine'
+type MockMergeService_UndoCombine_Call struct {
+	*mock.Call
+}
+
+// UndoCombine is a helper method to define mock.On call
+//   - journalID string
+func (_e *MockMergeService_Expecter) UndoCombine(journalID any) *MockMergeService_UndoCombine_Call {
+	return &MockMergeService_UndoCombine_Call{Call: _e.mock.On("UndoCombine", journalID)}
+}
+
+func (_c *MockMergeService_UndoCombine_Call) Run(run func(journalID string)) *MockMergeService_UndoCombine_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_UndoCombine_Call) Return(combineUndoResult *merge.CombineUndoResult, err error) *MockMergeService_UndoCombine_Call {
+	_c.Call.Return(combineUndoResult, err)
+	return _c
+}
+
+func (_c *MockMergeService_UndoCombine_Call) RunAndReturn(run func(journalID string) (*merge.CombineUndoResult, error)) *MockMergeService_UndoCombine_Call {
 	_c.Call.Return(run)
 	return _c
 }

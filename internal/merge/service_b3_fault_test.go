@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package merge
 
@@ -30,10 +30,14 @@ type b3FaultStore struct {
 	failDeleteBookFor          map[string]bool
 	failRecomputeAggregates    bool
 	failUpdateBook             bool
-	failGetAuthorByName        bool
-	failCreateAuthor           bool
-	failSetBookAuthors         bool
-	failCreateBookFile         bool
+	// failUpdateBookFor fails UpdateBook for the listed ids only, so a test
+	// can fail the survivor override write without also failing the
+	// absorbed shell's soft-delete (which is an UpdateBook too).
+	failUpdateBookFor   map[string]bool
+	failGetAuthorByName bool
+	failCreateAuthor    bool
+	failSetBookAuthors  bool
+	failCreateBookFile  bool
 
 	// stickyFilesFor forces GetBookFiles(id) to always report a fixed
 	// non-empty file list for id, regardless of the underlying store's real
@@ -137,7 +141,7 @@ func (f *b3FaultStore) RecomputeBookAggregates(bookID string) error {
 }
 
 func (f *b3FaultStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
-	if f.failUpdateBook {
+	if f.failUpdateBook || f.failUpdateBookFor[id] {
 		return nil, fmt.Errorf("b3 injected UpdateBook failure")
 	}
 	return f.Store.UpdateBook(id, b)
@@ -320,7 +324,8 @@ func TestB3_CombineBooks_ReassignExternalIDsError_NonFatal(t *testing.T) {
 
 	l, err := real.GetBookByID(loser.ID)
 	require.NoError(t, err)
-	assert.Nil(t, l, "loser is still deleted despite the reassignment warning")
+	require.NotNil(t, l, "combine soft-deletes, never hard-deletes")
+	assert.True(t, l.IsSoftDeleted(), "loser is still soft-deleted despite the reassignment warning")
 }
 
 func TestB3_CombineBooks_FilesRemainingAfterMove_AbortsDelete(t *testing.T) {
@@ -344,14 +349,18 @@ func TestB3_CombineBooks_FilesRemainingAfterMove_AbortsDelete(t *testing.T) {
 	_, err = ms.CombineBooks([]string{survivor.ID, loser.ID}, survivor.ID, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "still owns")
-	assert.Contains(t, err.Error(), "aborting delete")
+	assert.Contains(t, err.Error(), "aborting soft-delete")
 
 	l, err := real.GetBookByID(loser.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, l, "the guard must abort BEFORE DeleteBook runs")
+	require.NotNil(t, l)
+	assert.False(t, l.IsSoftDeleted(), "the guard must abort BEFORE the soft-delete runs")
 }
 
-func TestB3_CombineBooks_DeleteBookError(t *testing.T) {
+// The absorbed shell's soft-delete is an UpdateBook. When it fails the combine
+// must fail loudly: the shell is left live (no files, visible) and the journal
+// stays "pending", which UndoCombine refuses.
+func TestB3_CombineBooks_SoftDeleteError(t *testing.T) {
 	real := setupTestStore(t)
 
 	survivor := &database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/b3delerr-survivor.mp3"}
@@ -361,12 +370,25 @@ func TestB3_CombineBooks_DeleteBookError(t *testing.T) {
 	_, err = real.CreateBook(loser)
 	require.NoError(t, err)
 
-	fault := &b3FaultStore{Store: real, failDeleteBookFor: map[string]bool{loser.ID: true}}
+	fault := &b3FaultStore{Store: real, failUpdateBookFor: map[string]bool{loser.ID: true}}
 	ms := NewService(fault)
 
 	_, err = ms.CombineBooks([]string{survivor.ID, loser.ID}, survivor.ID, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "delete absorbed book")
+	assert.Contains(t, err.Error(), "soft-delete absorbed book")
+
+	l, err := real.GetBookByID(loser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, l)
+	assert.False(t, l.IsSoftDeleted())
+
+	journals, err := ms.ListCombineJournals(0)
+	require.NoError(t, err)
+	require.Len(t, journals, 1)
+	assert.Equal(t, CombineJournalPending, journals[0].Status)
+	_, err = ms.UndoCombine(journals[0].ID)
+	var refused *CombineUndoRefusedError
+	require.ErrorAs(t, err, &refused, "a pending (failed) combine must never be undone automatically")
 }
 
 func TestB3_CombineBooks_RecomputeAggregatesError_NonFatal(t *testing.T) {
@@ -399,11 +421,11 @@ func TestB3_CombineBooks_OverrideUpdateBookError_NonFatal(t *testing.T) {
 	_, err = real.CreateBook(loser)
 	require.NoError(t, err)
 
-	// UpdateBook is only reached from the override block in CombineBooks
-	// (the main move/delete loop never calls it), so failing it always
-	// exercises BOTH warn branches: the title/narrator write and the
+	// Fail UpdateBook for the SURVIVOR only: the absorbed shell's soft-delete
+	// is an UpdateBook too and must succeed. Failing the survivor's exercises
+	// BOTH warn branches: the title/narrator write and the
 	// author-backward-compat AuthorID write.
-	fault := &b3FaultStore{Store: real, failUpdateBook: true}
+	fault := &b3FaultStore{Store: real, failUpdateBookFor: map[string]bool{survivor.ID: true}}
 	ms := NewService(fault)
 
 	res, err := ms.CombineBooks([]string{survivor.ID, loser.ID}, survivor.ID,
@@ -507,7 +529,7 @@ func TestB3_AttachVirtualFile_MoveBookFilesToBookError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failMoveBookFilesToBookFor: map[string]bool{strayOwner.ID: true}}
 	ms := NewService(fault)
 
-	n := ms.attachVirtualFile(target, target.ID)
+	_, n := ms.attachVirtualFile(target, target.ID)
 	assert.Equal(t, 0, n, "a failed reattach move must be warned and return 0, not panic")
 
 	// The stray file is still owned by its original book — the move never
@@ -527,7 +549,7 @@ func TestB3_AttachVirtualFile_CreateBookFileError_NonFatal(t *testing.T) {
 	fault := &b3FaultStore{Store: real, failCreateBookFile: true}
 	ms := NewService(fault)
 
-	n := ms.attachVirtualFile(b, b.ID)
+	_, n := ms.attachVirtualFile(b, b.ID)
 	assert.Equal(t, 0, n, "a failed CreateBookFile must be warned and return 0, not panic")
 
 	files, err := real.GetBookFiles(b.ID)

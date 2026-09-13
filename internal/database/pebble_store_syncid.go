@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-09-08
+// last-edited: 2026-09-13
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -371,6 +371,62 @@ func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 		return err
 	}
 
+	batch := p.db.NewBatch()
+	if err := batch.Set(syncItemKey(loserSyncID), loserData, nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Set(syncItemKey(winnerSyncID), winnerData, nil); err != nil {
+		batch.Close()
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+// ClearSyncMerge is the exact reverse of RecordSyncMerge, for an undone
+// combine: the loser's item stops redirecting to the winner and the loser's
+// syncID leaves the winner's MergedFrom. Once the loser book is live again a
+// kept redirect would send a client holding its libraryItemId to the other
+// book, so undo must remove it.
+//
+// It only clears a redirect that points at THIS winner. A loser redirecting
+// somewhere else (merged again after the undo target was recorded) is left
+// alone, and a loser with no syncID or no redirect is a no-op, so a retried
+// undo is safe.
+func (p *PebbleStore) ClearSyncMerge(loserBookID, winnerBookID string) error {
+	loserSyncID, has, err := p.GetSyncIDForBook(loserBookID)
+	if err != nil || !has {
+		return err
+	}
+	winnerSyncID, hasW, err := p.GetSyncIDForBook(winnerBookID)
+	if err != nil || !hasW {
+		return err
+	}
+	loserItem, err := p.getSyncItem(loserSyncID)
+	if err != nil {
+		return err
+	}
+	if loserItem == nil || loserItem.RedirectTo != winnerSyncID {
+		return nil
+	}
+	winnerItem, err := p.getSyncItem(winnerSyncID)
+	if err != nil {
+		return err
+	}
+	if winnerItem == nil {
+		return fmt.Errorf("sync item %s referenced by reverse index but record missing", winnerSyncID)
+	}
+
+	loserItem.RedirectTo = ""
+	winnerItem.MergedFrom = slices.DeleteFunc(winnerItem.MergedFrom, func(s string) bool { return s == loserSyncID })
+	loserData, err := json.Marshal(loserItem)
+	if err != nil {
+		return err
+	}
+	winnerData, err := json.Marshal(winnerItem)
+	if err != nil {
+		return err
+	}
 	batch := p.db.NewBatch()
 	if err := batch.Set(syncItemKey(loserSyncID), loserData, nil); err != nil {
 		batch.Close()

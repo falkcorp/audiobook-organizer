@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-07-18
+// last-edited: 2026-09-13
 
 package merge
 
@@ -392,7 +392,7 @@ func TestB3_EnsureOwnFile_NoFilePath_ReturnsZero(t *testing.T) {
 	ms := NewService(store)
 
 	b := &database.Book{ID: ulid.Make().String(), Title: "No path"}
-	assert.Equal(t, 0, ms.ensureOwnFile(b))
+	assert.Equal(t, 0, second(ms.ensureOwnFile(b)))
 }
 
 func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
@@ -406,7 +406,7 @@ func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
 		ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: "mp3",
 	}))
 
-	assert.Equal(t, 0, ms.ensureOwnFile(b), "book already has a BookFile row; nothing to materialize")
+	assert.Equal(t, 0, second(ms.ensureOwnFile(b)), "book already has a BookFile row; nothing to materialize")
 }
 
 // TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook exercises the
@@ -428,7 +428,7 @@ func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook(t *testing.T) {
 	strayFile := &database.BookFile{ID: ulid.Make().String(), BookID: strayOwner.ID, FilePath: target.FilePath, Format: "mp3"}
 	require.NoError(t, store.CreateBookFile(strayFile))
 
-	n := ms.attachVirtualFile(target, target.ID)
+	_, n := ms.attachVirtualFile(target, target.ID)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(target.ID)
@@ -453,7 +453,7 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	_, err := store.CreateBook(b)
 	require.NoError(t, err)
 
-	n := ms.attachVirtualFile(b, b.ID)
+	_, n := ms.attachVirtualFile(b, b.ID)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(b.ID)
@@ -461,3 +461,6 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Equal(t, dur, files[0].Duration)
 }
+
+// second returns the file count from ensureOwnFile, discarding the journal record.
+func second(_ CombineFileMove, n int) int { return n }

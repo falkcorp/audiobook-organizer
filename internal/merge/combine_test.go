@@ -1,7 +1,7 @@
 // file: internal/merge/combine_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8e4d1a-9f3b-4e6a-8b7c-1d2e3f4a5b6c
-// last-edited: 2026-07-13
+// last-edited: 2026-09-13
 // last-edited: 2026-06-21
 
 package merge
@@ -89,11 +89,17 @@ func TestService_CombineBooks(t *testing.T) {
 	assert.True(t, paths["/tmp/book/ch02.mp3"], "survivor own file materialized")
 	assert.True(t, paths["/tmp/book/ch03.mp3"], "ch03 present")
 
-	// The two absorbed books are gone.
-	b1, _ := store.GetBookByID(book1.ID)
-	assert.Nil(t, b1, "book1 should be hard-deleted")
-	b3, _ := store.GetBookByID(book3.ID)
-	assert.Nil(t, b3, "book3 should be hard-deleted")
+	// The two absorbed books are SOFT-deleted (recoverable via UndoCombine),
+	// and their FilePath is cleared: the path now belongs to a survivor-owned
+	// file row, and the purge job deletes a purged book's FilePath from disk.
+	for _, id := range []string{book1.ID, book3.ID} {
+		b, err := store.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b, "absorbed book %s must be soft-deleted, not hard-deleted", id)
+		assert.True(t, b.IsSoftDeleted(), "absorbed book %s must be soft-deleted", id)
+		assert.Empty(t, b.FilePath, "absorbed book %s must not keep a FilePath the survivor now owns", id)
+	}
+	assert.NotEmpty(t, res.JournalID, "every combine returns its undo key")
 
 	// External-id mappings reassigned to the survivor.
 	if eid := AsExternalIDReassigner(store); eid != nil {

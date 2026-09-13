@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-13
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -759,9 +760,17 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 
 // CombineResult is the outcome of a CombineBooks call.
 type CombineResult struct {
-	PrimaryID    string `json:"primary_id"`
-	FilesMoved   int    `json:"files_moved"`
-	BooksDeleted int    `json:"books_deleted"`
+	PrimaryID  string `json:"primary_id"`
+	FilesMoved int    `json:"files_moved"`
+	// BooksDeleted counts absorbed books SOFT-deleted by the combine. The wire
+	// key keeps its old name for API compatibility; the books are recoverable
+	// via UndoCombine(JournalID) until the purge job removes them.
+	BooksDeleted int `json:"books_deleted"`
+	// JournalID is the undo key (POST /api/v1/merge/undo/:journal_id).
+	JournalID string `json:"journal_id,omitempty"`
+	// UndoUnavailable is set, and JournalID empty, when the combine applied
+	// but its journal could not be finalized, so it cannot be undone.
+	UndoUnavailable string `json:"undo_unavailable,omitempty"`
 }
 
 // CombineOverride holds optional metadata fields to apply to the survivor book
@@ -776,9 +785,17 @@ type CombineOverride struct {
 // CombineBooks combines several books into ONE multi-file book — distinct from
 // MergeBooks, which links them as alternate VERSIONS in a version group. Every
 // selected book's audio files become real BookFiles on the survivor, and the
-// absorbed shells are hard-deleted. This is the manual analogue of the
+// absorbed shells are SOFT-deleted and journaled so the combine can be undone
+// (UndoCombine, combine_journal.go). This is the manual analogue of the
 // shattered-book heal (applyFSRegroup): use it to reassemble tracks that were
 // imported as one book per file (e.g. an untagged folder of chapters).
+//
+// Why soft-delete: an approved review-queue "combine" or "duplicate-of" runs
+// this with no human at the keyboard for the specific rows, and a hard delete
+// made every such approval permanent. The journal is written BEFORE the first
+// mutation; if it cannot be written the combine is refused, because an
+// irreversible combine with no undo key is worse than no combine at all (the
+// same rule dedup.MergeBooksJournaled follows).
 //
 // DB-only: files stay where they are on disk (most shattered sets are already in
 // one folder). Run organize afterward to physically co-locate if desired.
@@ -794,14 +811,14 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	}
 
 	// Serialize the entire read-modify-write against every other merge-family
-	// path (MergeBooks / CombineBooks / dedup.MergeBooks). CombineBooks is a
-	// synchronous HTTP handler with no concurrency key, so two combines — or a
-	// combine racing a MergeBooks on a shared book — can otherwise interleave
-	// GetBookByID -> MoveBookFilesToBook -> ReassignExternalIDs -> DeleteBook
-	// -> UpdateBook and corrupt the same way #1930 fixed for MergeBooks. Scoped
-	// to the combine itself; only local DB work runs while it is held.
-	// (CombineBooks never calls MergeBooks or dedup.MergeBooks, so the
-	// non-reentrant mutex is taken exactly once.)
+	// path (MergeBooks / CombineBooks / UndoCombine / dedup.MergeBooks).
+	// CombineBooks is a synchronous HTTP handler with no concurrency key, so two
+	// combines — or a combine racing a MergeBooks on a shared book — can
+	// otherwise interleave GetBookByID -> MoveBookFilesToBook ->
+	// ReassignExternalIDs -> soft-delete -> UpdateBook and corrupt the same way
+	// #1930 fixed for MergeBooks. Scoped to the combine itself; only local DB
+	// work runs while it is held. (CombineBooks never calls MergeBooks or
+	// dedup.MergeBooks, so the non-reentrant mutex is taken exactly once.)
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 
@@ -814,6 +831,7 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	}
 	// Validate all IDs up front so a bad ID aborts before any mutation.
 	seen := map[string]bool{}
+	books := make(map[string]*database.Book, len(bookIDs))
 	for _, id := range bookIDs {
 		if seen[id] {
 			return nil, fmt.Errorf("duplicate book id %s", id)
@@ -826,6 +844,14 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		if b == nil {
 			return nil, &BookNotFoundError{BookID: id}
 		}
+		// A soft-deleted participant is refused, as MergeBooks refuses it. It
+		// is already merged away or trashed; combining it would re-stamp its
+		// MarkedForDeletionAt (restarting retention) and journal an undo that
+		// "restores" a book the user had deleted.
+		if b.IsSoftDeleted() {
+			return nil, &SoftDeletedInputError{BookID: id, AsPrimary: id == primaryID}
+		}
+		books[id] = b
 	}
 	if !seen[primaryID] {
 		return nil, fmt.Errorf("primary_id %s not in book_ids", primaryID)
@@ -837,9 +863,91 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	res := &CombineResult{PrimaryID: primaryID}
 	eidStore := AsExternalIDReassigner(ms.db)
 
+	// Users are listed once so each FollowMerge's progress drain can be
+	// snapshotted for undo. Household-scale, not library-scale.
+	var users []database.User
+	if ms.syncFollower != nil {
+		if users, err = ms.db.ListUsers(); err != nil {
+			return nil, fmt.Errorf("list users for combine journal: %w", err)
+		}
+	}
+
+	// --- Journal, before the first mutation ---
+	journal := &CombineJournal{
+		ID:             ulid.Make().String(),
+		Status:         CombineJournalPending,
+		CreatedAt:      time.Now().UTC(),
+		SurvivorID:     primaryID,
+		ITunesRemovals: []string{},
+	}
+	ownFiles, err := ms.db.GetBookFiles(primaryID)
+	if err != nil {
+		return nil, fmt.Errorf("load files of %s: %w", primaryID, err)
+	}
+	for _, f := range ownFiles {
+		journal.SurvivorOwnFiles = append(journal.SurvivorOwnFiles, CombineFileMove{
+			FileID: f.ID, FromBookID: primaryID, FilePath: f.FilePath,
+			DiscBefore: f.DiscNumber, TrackBefore: f.TrackNumber,
+		})
+	}
+	movedFiles := make(map[string][]string, len(bookIDs))
+	bulk := make([]database.BookFileMove, 0, len(bookIDs))
+	for _, id := range bookIDs {
+		if id == primaryID {
+			continue
+		}
+		b := books[id]
+		files, err := ms.db.GetBookFiles(id)
+		if err != nil {
+			return nil, fmt.Errorf("load files of %s: %w", id, err)
+		}
+		a := CombineAbsorbed{
+			BookID:           id,
+			FilePath:         b.FilePath,
+			IsPrimaryVersion: b.IsPrimaryVersion,
+			VersionGroupID:   b.VersionGroupID,
+			SyncRedirected:   ms.syncFollower != nil,
+		}
+		if len(files) > 0 {
+			ids := make([]string, len(files))
+			for i := range files {
+				ids[i] = files[i].ID
+				a.Files = append(a.Files, CombineFileMove{
+					FileID: files[i].ID, FromBookID: id, FilePath: files[i].FilePath,
+					DiscBefore: files[i].DiscNumber, TrackBefore: files[i].TrackNumber,
+				})
+			}
+			movedFiles[id] = ids
+			bulk = append(bulk, database.BookFileMove{FileIDs: ids, SourceBookID: id})
+		}
+		if eidStore != nil {
+			mappings, err := ms.db.GetExternalIDsForBook(id)
+			if err != nil {
+				return nil, fmt.Errorf("load external ids of %s: %w", id, err)
+			}
+			for _, m := range mappings {
+				// Tombstoned mappings are dead reimport blockers; they ride along
+				// with ReassignExternalIDs but resolve to no book, so they are
+				// neither checked nor moved back by undo.
+				if !m.Tombstoned {
+					a.ExternalIDs = append(a.ExternalIDs, CombineExternalID{Source: m.Source, ExternalID: m.ExternalID})
+				}
+			}
+		}
+		journal.Absorbed = append(journal.Absorbed, a)
+	}
+	if err := ms.putCombineJournal(journal); err != nil {
+		return nil, fmt.Errorf("combine refused: undo journal could not be written: %w", err)
+	}
+
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
 	// BookFile so the combined book owns ALL its files explicitly.
-	res.FilesMoved += ms.ensureOwnFile(survivor)
+	if fm, n := ms.ensureOwnFile(survivor); n > 0 {
+		res.FilesMoved += n
+		if fm.FileID != "" {
+			journal.SurvivorFiles = append(journal.SurvivorFiles, fm)
+		}
+	}
 
 	// Move every absorbed book's files onto the survivor in ONE batch, before the
 	// per-book loop below.
@@ -849,99 +957,233 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	// survivor's entire, steadily growing file set. Batching pays a single
 	// recompute per distinct book for the whole combine.
 	//
-	// Failure semantics are unchanged: the loop returned immediately on a move
-	// error, and the batch is atomic, so a failure here writes nothing and returns
-	// the same way. No per-book fallback, deliberately — a partially-moved combine
-	// is exactly what the old early return existed to prevent.
-	movedFiles := make(map[string][]string, len(bookIDs))
-	{
-		bulk := make([]database.BookFileMove, 0, len(bookIDs))
-		for _, id := range bookIDs {
-			if id == primaryID {
-				continue
-			}
-			files, _ := ms.db.GetBookFiles(id)
-			if len(files) == 0 {
-				continue
-			}
-			ids := make([]string, len(files))
-			for i := range files {
-				ids[i] = files[i].ID
-			}
-			movedFiles[id] = ids
-			bulk = append(bulk, database.BookFileMove{FileIDs: ids, SourceBookID: id})
-		}
-		if len(bulk) > 0 {
-			if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
-				return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
-			}
+	// The batch is atomic, so a failure here writes nothing and returns. No
+	// per-book fallback, deliberately — a partially-moved combine is exactly what
+	// the early return exists to prevent.
+	if len(bulk) > 0 {
+		if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
+			return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
 		}
 	}
 
-	for _, id := range bookIDs {
-		if id == primaryID {
-			continue
-		}
-		book, _ := ms.db.GetBookByID(id)
-		if book == nil {
+	kept := make([]CombineAbsorbed, 0, len(journal.Absorbed))
+	for _, entry := range journal.Absorbed {
+		a := &entry
+		id := a.BookID
+
+		// A book deleted by something else between validation and here is
+		// skipped, not fatal. If the bulk move already took its files, its
+		// entry stays so the journal still names those moves; undo then
+		// refuses, because a vanished book cannot be restored.
+		if cur, _ := ms.db.GetBookByID(id); cur == nil {
+			slog.Warn("combine: absorbed book vanished mid-combine; skipped", "id", id, "journal", journal.ID)
+			if len(movedFiles[id]) > 0 {
+				journal.Warnings = append(journal.Warnings, fmt.Sprintf("absorbed book %s vanished after its files moved", id))
+				kept = append(kept, entry)
+			}
 			continue
 		}
 
-		// Attach this book's files to the survivor.
-		//
-		// The move itself already happened in the batched pre-pass above;
-		// movedFiles carries the ids it took from this book. Batching it there
-		// matters because MoveBookFilesToBook recomputes BOTH of its books, so
-		// moving per absorbed book here would recompute the survivor once per
-		// absorbed book, each time re-reading its whole and growing file set.
-		ids := movedFiles[id]
-		if len(ids) > 0 {
+		// Attach this book's files to the survivor. The move itself happened in
+		// the batched pre-pass above; movedFiles carries the ids it took.
+		if ids := movedFiles[id]; len(ids) > 0 {
 			// Carry each moved file's sync_file identity (ino) onto the
-			// survivor. Still inside mergeSerializeMu and well before the
-			// hard delete below, matching the FollowMerge call's own
-			// placement and rationale.
+			// survivor, still inside mergeSerializeMu.
 			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(ids)
-		} else if book.FilePath != "" {
-			res.FilesMoved += ms.attachVirtualFile(book, survivor.ID)
+		} else if a.FilePath != "" {
+			fm, n := ms.attachVirtualFile(books[id], survivor.ID)
+			res.FilesMoved += n
+			if fm.FileID != "" {
+				a.Files = append(a.Files, fm)
+			}
 		}
 
 		// Reassign external IDs to the survivor.
 		if eidStore != nil {
 			if err := eidStore.ReassignExternalIDs(id, survivor.ID); err != nil {
 				slog.Warn("combine ReassignExternalIDs", "from", id, "to", survivor.ID, "err", err)
+				// Nothing moved, so undo has nothing to move back.
+				a.ExternalIDs = nil
+				journal.Warnings = append(journal.Warnings, fmt.Sprintf("external ids of %s were not reassigned: %v", id, err))
 			}
 		}
 
 		// Carry the absorbed shell's sync identity and listening position onto
-		// the survivor BEFORE the hard delete below. Unlike MergeBooks (which
-		// soft-deletes), there is no surviving row to repoint afterwards, so a
-		// missed follow here is unrecoverable: the client's stored
-		// libraryItemId would resolve to nothing forever. Still inside
-		// mergeSerializeMu, so this is exactly-once w.r.t. every other merge.
+		// the survivor, snapshotting both sides first so undo can put them
+		// back (mergeUserProgress DRAINS the loser; nothing else keeps it).
+		var before, after progressSnap
+		if ms.syncFollower != nil {
+			before = ms.snapProgressPair(users, id, survivor.ID, journal)
+		}
 		FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})
+		if ms.syncFollower != nil {
+			after = ms.snapProgressPair(users, id, survivor.ID, journal)
+			a.Progress = buildProgressJournal(before, after)
+		}
 
-		// Guard (mirrors applyFSRegroup): never delete a book that still owns
+		// Guard (mirrors applyFSRegroup): never retire a book that still owns
 		// files — that would orphan audio. After the move it must be empty.
 		if remaining, _ := ms.db.GetBookFiles(id); len(remaining) != 0 {
-			return nil, fmt.Errorf("book %s still owns %d files after move; aborting delete", id, len(remaining))
+			return nil, fmt.Errorf("book %s still owns %d files after move; aborting soft-delete (journal %s left %s)",
+				id, len(remaining), journal.ID, CombineJournalPending)
 		}
-		if err := ms.db.DeleteBook(id); err != nil {
-			return nil, fmt.Errorf("delete absorbed book %s: %w", id, err)
+		stamp, err := ms.softDeleteAbsorbed(id)
+		if err != nil {
+			return nil, fmt.Errorf("soft-delete absorbed book %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 		}
+		a.MarkedForDeletionAt = stamp
 		res.BooksDeleted++
+		kept = append(kept, *a)
 	}
+	journal.Absorbed = kept
 
 	if err := ms.db.RecomputeBookAggregates(survivor.ID); err != nil {
 		slog.Warn("combine RecomputeBookAggregates", "id", survivor.ID, "err", err)
 	}
 
-	// Apply metadata overrides to the survivor. UpdateBook does a full column
-	// replacement, so we re-fetch after the aggregate recompute and patch only
-	// the non-empty override fields.
 	if override != nil && (override.Title != "" || override.Author != "" || override.Narrator != "") {
+		journal.Override = ms.applyCombineOverride(primaryID, override)
+	}
+
+	journal.Status = CombineJournalApplied
+	if err := ms.putCombineJournal(journal); err != nil {
+		// The combine is done and cannot be failed now. Say plainly that this
+		// one has no undo, both in the log and to the caller.
+		slog.Error("combine applied but its undo journal could not be finalized; this combine is NOT undoable",
+			"journal", journal.ID, "survivor", survivor.ID, "err", err)
+		res.UndoUnavailable = err.Error()
+	} else {
+		res.JournalID = journal.ID
+	}
+
+	slog.Info("combined books into one", "survivor", survivor.ID, "journal", journal.ID,
+		"files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+	return res, nil
+}
+
+// softDeleteAbsorbed soft-deletes a combine's absorbed shell and CLEARS its
+// FilePath, returning the MarkedForDeletionAt stamp as the store kept it.
+//
+// Clearing FilePath is what makes the soft delete safe: the path now belongs to
+// a file row the survivor owns, and PurgeSoftDeletedBooks (with delete-files
+// on) os.Remove()s a purged single-file book's FilePath. The journal keeps the
+// original for undo. A separate function from SoftDeleteBook because
+// MergeBooks' losers keep their own files and must keep their FilePath.
+func (ms *Service) softDeleteAbsorbed(bookID string) (*time.Time, error) {
+	current, err := ms.db.GetBookByID(bookID)
+	if err != nil {
+		return nil, fmt.Errorf("GetBookByID %s: %w", bookID, err)
+	}
+	if current == nil {
+		return nil, &BookNotFoundError{BookID: bookID}
+	}
+	t := true
+	now := time.Now()
+	current.MarkedForDeletion = &t
+	current.MarkedForDeletionAt = &now
+	current.FilePath = ""
+	if _, err := ms.db.UpdateBook(bookID, current); err != nil {
+		return nil, err
+	}
+	stored, err := ms.db.GetBookByID(bookID)
+	if err != nil || stored == nil || stored.MarkedForDeletionAt == nil {
+		return nil, fmt.Errorf("read back soft-delete of %s: %v", bookID, err)
+	}
+	return stored.MarkedForDeletionAt, nil
+}
+
+// progressSnap is one moment's progress on both sides of a FollowMerge.
+type progressSnap struct {
+	absState, survState map[string]*database.UserBookState
+	absPos, survPos     map[string][]database.UserPosition
+}
+
+func (ms *Service) snapProgressPair(users []database.User, absorbedID, survivorID string, j *CombineJournal) progressSnap {
+	var s progressSnap
+	var err error
+	if s.absState, s.absPos, err = snapshotProgress(ms.db, users, absorbedID); err == nil {
+		s.survState, s.survPos, err = snapshotProgress(ms.db, users, survivorID)
+	}
+	if err != nil {
+		slog.Warn("combine: progress snapshot failed; undo will not restore listening progress for this book",
+			"absorbed", absorbedID, "err", err)
+		j.Warnings = append(j.Warnings, fmt.Sprintf("progress of %s not journaled: %v", absorbedID, err))
+		return progressSnap{}
+	}
+	return s
+}
+
+// buildProgressJournal keeps only users who had progress on the absorbed book
+// before the follow — nobody else's progress was touched by FollowMerge.
+func buildProgressJournal(before, after progressSnap) []CombineUserProgress {
+	var out []CombineUserProgress
+	userIDs := map[string]bool{}
+	for u := range before.absState {
+		userIDs[u] = true
+	}
+	for u := range before.absPos {
+		userIDs[u] = true
+	}
+	ids := make([]string, 0, len(userIDs))
+	for u := range userIDs {
+		ids = append(ids, u)
+	}
+	slices.Sort(ids)
+	for _, u := range ids {
+		out = append(out, CombineUserProgress{
+			UserID:              u,
+			AbsorbedState:       before.absState[u],
+			AbsorbedPositions:   before.absPos[u],
+			SurvivorStateBefore: before.survState[u],
+			SurvivorPosBefore:   before.survPos[u],
+			SurvivorStateAfter:  after.survState[u],
+			SurvivorPosAfter:    after.survPos[u],
+		})
+	}
+	return out
+}
+
+// applyCombineOverride writes the caller's title/narrator/author onto the
+// survivor and returns what the survivor held before, for undo. UpdateBook
+// does a full column replacement, so it re-fetches after the aggregate
+// recompute and patches only the non-empty override fields.
+func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverride) *CombineOverrideUndo {
+	undo := &CombineOverrideUndo{Applied: *override, FieldStates: map[string]*database.MetadataFieldState{}}
+
+	// Lock rows the override is about to write, as they were before.
+	lockKeys := []string{}
+	if override.Title != "" {
+		lockKeys = append(lockKeys, database.FieldKeyTitle)
+	}
+	if override.Narrator != "" {
+		lockKeys = append(lockKeys, database.FieldKeyNarrator)
+	}
+	if override.Author != "" {
+		lockKeys = append(lockKeys, database.FieldKeyAuthorName)
+	}
+	if states, err := ms.db.GetMetadataFieldStates(primaryID); err == nil {
+		byField := map[string]database.MetadataFieldState{}
+		for _, st := range states {
+			byField[st.Field] = st
+		}
+		for _, k := range lockKeys {
+			if st, ok := byField[k]; ok {
+				st := st
+				undo.FieldStates[k] = &st
+			} else {
+				undo.FieldStates[k] = nil
+			}
+		}
+	} else {
+		slog.Warn("combine override: could not read lock rows for undo journal", "id", primaryID, "err", err)
+	}
+
+	if override.Title != "" || override.Narrator != "" {
 		fresh, err := ms.db.GetBookByID(primaryID)
 		if err == nil && fresh != nil {
+			undo.TitleBefore = fresh.Title
+			undo.NarratorBefore = fresh.Narrator
 			if override.Title != "" {
 				fresh.Title = override.Title
 			}
@@ -950,6 +1192,8 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 			}
 			if _, err := ms.db.UpdateBook(fresh.ID, fresh); err != nil {
 				slog.Warn("combine override UpdateBook", "id", fresh.ID, "err", err)
+				// Not applied, so nothing for undo to roll back or check.
+				undo.Applied.Title, undo.Applied.Narrator = "", ""
 			} else {
 				slog.Info("combine applied metadata override", "id", fresh.ID,
 					"title", override.Title, "narrator", override.Narrator)
@@ -968,77 +1212,92 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 				}
 			}
 		}
-		// Author resolution: find or create by name, then link to the survivor.
-		//
-		// Creation gate. The override is often PREFILLED from one of the books
-		// being combined rather than typed, so a book already carrying an
-		// author row like "Track 01" would otherwise propagate that name onto
-		// the survivor. Logged at Warn rather than dropped quietly: every
-		// sibling override on this path surfaces its failures, and a rejected
-		// author is a change the caller asked for that did not happen.
-		//
-		// The predicate lives in internal/personname, not internal/dedup: six
-		// dedup files import this package, so anything reachable from here has
-		// to sit in a leaf.
-		cleanedAuthor := ""
-		if override.Author != "" {
-			if c, ok := personname.CleanAuthorNameForCreation(override.Author); ok {
-				cleanedAuthor = c
-			} else {
-				slog.Warn("combine override author rejected as unusable; survivor left unchanged",
-					"id", primaryID, "author", override.Author)
-			}
+	}
+	// Author resolution: find or create by name, then link to the survivor.
+	//
+	// Creation gate. The override is often PREFILLED from one of the books
+	// being combined rather than typed, so a book already carrying an
+	// author row like "Track 01" would otherwise propagate that name onto
+	// the survivor. Logged at Warn rather than dropped quietly: every
+	// sibling override on this path surfaces its failures, and a rejected
+	// author is a change the caller asked for that did not happen.
+	//
+	// The predicate lives in internal/personname, not internal/dedup: six
+	// dedup files import this package, so anything reachable from here has
+	// to sit in a leaf.
+	cleanedAuthor := ""
+	if override.Author != "" {
+		if c, ok := personname.CleanAuthorNameForCreation(override.Author); ok {
+			cleanedAuthor = c
+		} else {
+			slog.Warn("combine override author rejected as unusable; survivor left unchanged",
+				"id", primaryID, "author", override.Author)
 		}
-		if cleanedAuthor != "" {
-			author, err := ms.db.GetAuthorByName(cleanedAuthor)
-			if err == nil && author == nil {
-				author, err = ms.db.CreateAuthor(cleanedAuthor)
-			}
-			if err == nil && author != nil {
-				// Surface failures instead of swallowing them: a dropped write here
-				// silently discards the user's explicit author choice while Combine
-				// still reports success (matches the sibling title/narrator path above).
-				if saErr := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
-					{BookID: primaryID, AuthorID: author.ID, Role: "author", Position: 0},
-				}); saErr != nil {
-					slog.Warn("combine override SetBookAuthors", "id", primaryID, "author", override.Author, "err", saErr)
-				}
-				// Also set AuthorID on the book row for backward compat.
-				if b, err2 := ms.db.GetBookByID(primaryID); err2 == nil && b != nil {
-					b.AuthorID = &author.ID
-					if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
-						slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
-					} else if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
-						// The CLEANED name, not the raw override: this row is
-						// the lock that protects the field from later scans, so
-						// it has to name the author actually linked above.
-						// Recording the raw "001-147 Kevin J Anderson" would
-						// lock the field to a value nothing else agrees with.
-						database.FieldKeyAuthorName: cleanedAuthor,
-					}); lErr != nil {
-						slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
-					}
-				}
-			}
-			if err != nil {
-				slog.Warn("combine override author", "name", override.Author, "err", err)
+	}
+	if cleanedAuthor == "" {
+		undo.Applied.Author = ""
+		delete(undo.FieldStates, database.FieldKeyAuthorName)
+		return undo
+	}
+	author, err := ms.db.GetAuthorByName(cleanedAuthor)
+	if err == nil && author == nil {
+		author, err = ms.db.CreateAuthor(cleanedAuthor)
+	}
+	if err != nil || author == nil {
+		if err != nil {
+			slog.Warn("combine override author", "name", override.Author, "err", err)
+		}
+		undo.Applied.Author = ""
+		delete(undo.FieldStates, database.FieldKeyAuthorName)
+		return undo
+	}
+	if prior, aerr := ms.db.GetBookAuthors(primaryID); aerr == nil {
+		undo.AuthorsBefore = prior
+	} else {
+		slog.Warn("combine override: could not read prior authors for undo journal", "id", primaryID, "err", aerr)
+	}
+	// Surface failures instead of swallowing them: a dropped write here
+	// silently discards the user's explicit author choice while Combine
+	// still reports success (matches the sibling title/narrator path above).
+	if saErr := ms.db.SetBookAuthors(primaryID, []database.BookAuthor{
+		{BookID: primaryID, AuthorID: author.ID, Role: "author", Position: 0},
+	}); saErr != nil {
+		slog.Warn("combine override SetBookAuthors", "id", primaryID, "author", override.Author, "err", saErr)
+	}
+	// Also set AuthorID on the book row for backward compat.
+	if b, err2 := ms.db.GetBookByID(primaryID); err2 == nil && b != nil {
+		undo.AuthorIDBefore = b.AuthorID
+		b.AuthorID = &author.ID
+		if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
+			slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
+		} else {
+			id := author.ID
+			undo.AuthorIDAfter = &id
+			if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
+				// The CLEANED name, not the raw override: this row is
+				// the lock that protects the field from later scans, so
+				// it has to name the author actually linked above.
+				// Recording the raw "001-147 Kevin J Anderson" would
+				// lock the field to a value nothing else agrees with.
+				database.FieldKeyAuthorName: cleanedAuthor,
+			}); lErr != nil {
+				slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
 			}
 		}
 	}
-
-	slog.Info("combined books into one", "survivor", survivor.ID,
-		"files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
-	return res, nil
+	return undo
 }
 
 // ensureOwnFile materializes a single-file book's FilePath as a BookFile when it
-// has no BookFile rows yet (the virtual-segment model). Returns files created (0/1).
-func (ms *Service) ensureOwnFile(b *database.Book) int {
+// has no BookFile rows yet (the virtual-segment model). Returns the journal
+// record of what it did (FileID empty when nothing changed) and the number of
+// files attached (0/1).
+func (ms *Service) ensureOwnFile(b *database.Book) (CombineFileMove, int) {
 	if b.FilePath == "" {
-		return 0
+		return CombineFileMove{}, 0
 	}
 	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
-		return 0 // already materialized
+		return CombineFileMove{}, 0 // already materialized
 	}
 	return ms.attachVirtualFile(b, b.ID)
 }
@@ -1046,21 +1305,26 @@ func (ms *Service) ensureOwnFile(b *database.Book) int {
 // attachVirtualFile creates (or reattaches) a BookFile at book.FilePath owned by
 // targetBookID. Reattach-safe per #1549: an existing row at that path is MOVED
 // (its BookID can't be changed in place — the primary key embeds it), never
-// duplicated. Returns files attached (0/1).
-func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int {
+// duplicated. Returns the journal record (FileID empty when nothing changed:
+// the row was already the target's) and files attached (0/1).
+func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) (CombineFileMove, int) {
 	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
-		if existing.BookID != targetBookID {
-			oldOwnerID := existing.BookID
-			if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, oldOwnerID, targetBookID); err != nil {
-				slog.Warn("combine reattach existing file", "path", b.FilePath, "err", err)
-				return 0
-			}
-			// Same file-move shape as the main CombineBooks loop: the row's
-			// owning book id just changed, so its sync_file ino must follow.
-			FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{existing.ID})
+		if existing.BookID == targetBookID {
+			return CombineFileMove{}, 1
 		}
-		return 1
+		oldOwnerID := existing.BookID
+		if err := ms.db.MoveBookFilesToBook([]string{existing.ID}, oldOwnerID, targetBookID); err != nil {
+			slog.Warn("combine reattach existing file", "path", b.FilePath, "err", err)
+			return CombineFileMove{}, 0
+		}
+		// Same file-move shape as the main CombineBooks loop: the row's
+		// owning book id just changed, so its sync_file ino must follow.
+		FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{existing.ID})
+		return CombineFileMove{
+			FileID: existing.ID, FromBookID: oldOwnerID, FilePath: existing.FilePath,
+			DiscBefore: existing.DiscNumber, TrackBefore: existing.TrackNumber,
+		}, 1
 	}
 	bf := &database.BookFile{
 		ID:       ulid.Make().String(),
@@ -1073,9 +1337,9 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) int 
 	}
 	if err := ms.db.CreateBookFile(bf); err != nil {
 		slog.Warn("combine create file", "path", b.FilePath, "err", err)
-		return 0
+		return CombineFileMove{}, 0
 	}
-	return 1
+	return CombineFileMove{FileID: bf.ID, FromBookID: b.ID, FilePath: bf.FilePath, Created: true}, 1
 }
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_duplicateof_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3d81b47a-52e9-4c6f-9a13-8be07f2c65d1
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -109,7 +109,7 @@ func TestApplyDuplicateOf_MergesDebrisIntoCanonicalBook(t *testing.T) {
 	require.NotNil(t, got, "the canonical book must be the survivor")
 	require.False(t, got.IsSoftDeleted(), "the canonical book must not be merged away")
 
-	// ...and the debris is gone (hard-deleted or soft-deleted by CombineBooks).
+	// ...and the debris is merged away (soft-deleted by CombineBooks).
 	for _, id := range []string{debris1, debris2} {
 		b, err := store.GetBookByID(id)
 		require.NoError(t, err)
@@ -324,5 +324,6 @@ func TestApplyDuplicateOf_VetoHoldsWhenListerIgnoresStatus(t *testing.T) {
 	require.NoError(t, apply(context.Background(), duplicateOfItem(t, "/lib/junk", []string{debris})))
 	got, err := store.GetBookByID(debris)
 	require.NoError(t, err)
-	require.Nil(t, got, "the live pending candidate must still merge the debris away")
+	require.NotNil(t, got)
+	require.True(t, got.IsSoftDeleted(), "the live pending candidate must still merge the debris away")
 }

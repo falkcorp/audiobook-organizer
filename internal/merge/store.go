@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package merge
 
@@ -92,6 +92,44 @@ type mergeVersionGroupReader interface {
 // interface here would state a requirement that does not exist.
 type syncCapabilityStore = any
 
+// combineUndoStore is what the combine undo journal and UndoCombine need on
+// top of the merge surface: raw keys for the journal itself (see
+// combine_journal.go for why it is not the dedup auto-merge journal), point
+// reads/writes of single file rows (the refuse-if-changed checks and the
+// disc/track restore), and the reverse of each mapping the combine rewrote.
+// Every method here is on database.Store, so the indexedStore decorator
+// forwards it without a capability assertion. Composed from three focused
+// pieces so no single declaration is wide.
+type combineUndoStore interface {
+	combineJournalKV
+	combineFileRowStore
+	combineReverseMappingStore
+}
+
+// combineJournalKV stores the journal itself as raw keys.
+type combineJournalKV interface {
+	SetRaw(key string, value []byte) error
+	GetRaw(key string) ([]byte, error)
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+}
+
+// combineFileRowStore reads and rewrites single file rows: the refuse-if-
+// changed checks, the disc/track restore, and removing rows the combine made.
+type combineFileRowStore interface {
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+	DeleteBookFile(id string) error
+}
+
+// combineReverseMappingStore reverses the mappings a combine rewrites:
+// external IDs, the survivor's author links, and override lock rows.
+type combineReverseMappingStore interface {
+	GetBookByExternalID(source, externalID string) (string, error)
+	ReassignExternalID(source, externalID, newBookID string) error
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	DeleteMetadataFieldState(bookID, field string) error
+}
+
 // Store is the whole merge surface, for Service and its constructor. Exported
 // so a caller that constructs a Service can name it instead of database.Store.
 type Store interface {
@@ -105,4 +143,5 @@ type Store interface {
 	UserProgressMerger
 	mergeExternalIDReader
 	mergeVersionGroupReader
+	combineUndoStore
 }

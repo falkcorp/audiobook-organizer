@@ -1,7 +1,7 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package merge
 
@@ -183,7 +183,7 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 			defer wg.Done()
 			p := pairs[i]
 			if i%2 == 0 {
-				// Combine b into a (a survives, b absorbed + hard-deleted).
+				// Combine b into a (a survives, b absorbed + soft-deleted).
 				_, _ = ms.CombineBooks([]string{p.a, p.b}, p.a, nil)
 			} else {
 				// Merge auto-picks the m4b winner (b); a is soft-deleted.
@@ -199,12 +199,12 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 	}
 
 	// Spot-check consistency of one pair of each kind.
-	// pair[0] was combined: survivor a alive, absorbed b hard-deleted (gone).
+	// pair[0] was combined: survivor a alive, absorbed b soft-deleted.
 	if a0, err := real.GetBookByID(pairs[0].a); err != nil || a0 == nil {
 		t.Fatalf("combine survivor A missing: %v", err)
 	}
-	if b0, _ := real.GetBookByID(pairs[0].b); b0 != nil {
-		t.Fatalf("combine absorbed B was not deleted")
+	if b0, _ := real.GetBookByID(pairs[0].b); b0 == nil || !b0.IsSoftDeleted() {
+		t.Fatalf("combine absorbed B was not soft-deleted: %+v", b0)
 	}
 	// pair[1] was merged: both books share one non-empty version group.
 	a1, _ := real.GetBookByID(pairs[1].a)
@@ -215,6 +215,6 @@ func TestMergeFamily_CombineAndMerge_ShareOneLock(t *testing.T) {
 	}
 
 	// Whole-store invariant after the concurrent Combine+Merge race across all
-	// pairs (combine hard-deletes an absorbed book; merge soft-deletes a loser).
+	// pairs (combine and merge both soft-delete the absorbed/losing book).
 	dbtest.AssertStoreInvariants(t, real)
 }

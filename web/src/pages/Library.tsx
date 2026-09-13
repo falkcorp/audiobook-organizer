@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.90.0
+// version: 1.91.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1347,7 +1347,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   // handleCombineIntoOneBook combines the selected single-file books into ONE
   // multi-file book on the chosen survivor (mergePrimaryId), hard-deleting the
-  // absorbed shells. Distinct from handleMergeAsVersions (version-group merge).
+  // absorbed shells (soft-deleted, undoable). Distinct from handleMergeAsVersions (version-group merge).
   const handleCombineIntoOneBook = async () => {
     if (selectedAudiobooks.length < 2) return;
     setCombineInProgress(true);
@@ -1364,7 +1364,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           : undefined;
       const result = await api.combineBooks(keepId, mergeIds, override);
       toast(
-        `Combined ${result.files_moved} files into one book; removed ${result.books_deleted} entries.`,
+        `Combined ${result.files_moved} files into one book; moved ${result.books_deleted} entries to trash (undoable).`,
         'success'
       );
       setSelectedAudiobooks([]);
