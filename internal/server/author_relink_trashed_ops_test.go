@@ -1,7 +1,7 @@
 // file: internal/server/author_relink_trashed_ops_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2a9c41-7d38-4e05-b1a6-93c8e2d05f17
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
@@ -200,8 +200,10 @@ func TestAuthorMergeOp_KeepsSourceWhileTrashedBookStillCredits(t *testing.T) {
 }
 
 // The AI apply rewrites the junction only (see the comment at its DeleteAuthor
-// in ai_ops.go): the trashed book's junction credit moves, its legacy AuthorID
-// still names the deleted author, and the tombstone resolves that id to KeepID.
+// in ai_ops.go): the trashed book's junction credit moves, and DeleteAuthor
+// itself then repoints the legacy AuthorID to the book's next author -- KeepID,
+// now the only junction entry -- so it never names the deleted row. The
+// tombstone is still written for any external reference to the old id.
 func TestAIAuthorMergeApplyOp_MovesTrashedBookCredit(t *testing.T) {
 	for _, action := range []string{"merge", "alias"} {
 		t.Run(action, func(t *testing.T) {
@@ -223,7 +225,7 @@ func TestAIAuthorMergeApplyOp_MovesTrashedBookCredit(t *testing.T) {
 			require.Equal(t, []int{into.ID}, junctionIDs(t, st, trashed), "trashed book lost its credit to the AI %s", action)
 			full := requireTrashed(t, st, trashed)
 			require.NotNil(t, full.AuthorID)
-			require.Equal(t, from.ID, *full.AuthorID, "AI apply is junction-only; legacy AuthorID is left for the tombstone")
+			require.Equal(t, into.ID, *full.AuthorID, "DeleteAuthor must repoint the legacy AuthorID onto the kept author, not leave it dangling")
 
 			requireSourceDeleted(t, st, from.ID)
 			canonical, err := st.GetAuthorTombstone(from.ID)

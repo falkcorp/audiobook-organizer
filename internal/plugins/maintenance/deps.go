@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -148,6 +148,9 @@ type opsLinkStore interface {
 	// GetBooksByAuthorIDForRelinkCore includes the trash; relink-then-delete
 	// paths only. See database.PebbleStore.GetBooksByAuthorIDForRelinkCore.
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+	// GetBookIDsCreditingAuthorDurable is the Pebble-only twin: the second half
+	// of a delete-when-empty check (author-id-repair).
+	GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error)
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 	ReassignExternalID(source string, externalID string, newBookID string) error
 	ReassignExternalIDs(oldBookID string, newBookID string) error

@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -165,10 +165,12 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 						// step reads returns books linked by EITHER, so it would
 						// report every book whose legacy AuthorID was mergeID as
 						// still linked and refuse every such merge. The guard this
-						// path has instead is the reassignErrs check above. A
-						// leftover legacy AuthorID keeps resolving to KeepID only
-						// through the tombstone written below, so a failed
-						// CreateAuthorTombstone is logged rather than dropped.
+						// path has instead is the reassignErrs check above. The
+						// leftover legacy AuthorID is repointed by DeleteAuthor
+						// itself (next author by junction position -- KeepID after
+						// the reassign), so it never dangles; the tombstone below
+						// only serves external references to the old id, and a
+						// failed CreateAuthorTombstone is logged rather than dropped.
 						if err := store.DeleteAuthor(mergeID); err != nil {
 							applyErrors = append(applyErrors, fmt.Sprintf("delete author %d: %v", mergeID, err))
 						} else if err := store.CreateAuthorTombstone(mergeID, sug.KeepID); err != nil {
@@ -210,7 +212,7 @@ func (s *Server) RegisterAIAuthorMergeApplyOp(reg *opsregistry.Registry) error {
 							}
 							// No VerifyAuthorUnlinked, for the same reason as the
 							// merge case above: the junction-only reassign leaves the
-							// legacy AuthorID, which the tombstone resolves.
+							// legacy AuthorID, which DeleteAuthor repoints.
 							if err := store.DeleteAuthor(mergeID); err != nil {
 								applyErrors = append(applyErrors, fmt.Sprintf("delete aliased author %d: %v", mergeID, err))
 							} else if err := store.CreateAuthorTombstone(mergeID, sug.KeepID); err != nil {
