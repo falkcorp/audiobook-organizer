@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-13
 
@@ -121,6 +121,17 @@ func SnapshotBook(b *Book) (*Book, error) {
 // so a time.Time that lost its monotonic reading in the snapshot round trip
 // still compares equal. ID, CreatedAt and UpdatedAt are never copied: the store
 // owns them.
+//
+// The db:"-" fields Authors and MetadataProvenance are persisted in the JSON
+// row like everything else, so they are merged like everything else, on
+// purpose. A copied slice or map shares its backing storage with after; that is
+// safe because after is the caller's working copy and is not used again once
+// the merged row is written.
+//
+// Memdb-projection safety: dst must be a full Pebble row (ModifyBook passes
+// one). If before and after came from a stripped projection, the stripped
+// fields are nil on both sides, compare equal, and are not copied, so dst keeps
+// the stored values.
 //
 // It returns the JSON names of the fields it copied, for logging and tests.
 func MergeBookChanges(dst, before, after *Book) ([]string, error) {

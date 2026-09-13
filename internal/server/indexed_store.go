@@ -1,5 +1,5 @@
 // file: internal/server/indexed_store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
 // last-edited: 2026-09-13
 //
