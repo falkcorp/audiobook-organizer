@@ -59,7 +59,7 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 	// was read before ffprobe and the tag read, and a whole-struct save of it
 	// reverted any apply or edit that landed in between.
 	if book.FilePath != "" && book.Duration == nil {
-		if mi, miErr := mediainfo.Extract(book.FilePath); miErr == nil && mi.Duration > 0 {
+		if mi, miErr := extractMediaInfo(book.FilePath); miErr == nil && mi.Duration > 0 {
 			book.Duration = &mi.Duration
 			if fresh := svc.fillMediaInfo(book.ID, database.BookMediaInfoPatch{Duration: &mi.Duration}); fresh != nil {
 				book = fresh
@@ -117,7 +117,7 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 	// in GetAudiobook, only the derived still-empty fields are written
 	// (fillMediaInfo), never the whole struct read before ffprobe.
 	if book.FilePath != "" && (book.Codec == nil || book.Bitrate == nil || book.SampleRate == nil) {
-		if mi, err := mediainfo.Extract(book.FilePath); err == nil {
+		if mi, err := extractMediaInfo(book.FilePath); err == nil {
 			var patch database.BookMediaInfoPatch
 			if book.Codec == nil && mi.Codec != "" {
 				book.Codec = &mi.Codec
@@ -195,6 +195,10 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 
 // singleLog is the logger for this file's read-path backfill writes.
 var singleLog = logger.New("audiobooks")
+
+// extractMediaInfo probes a book's audio file. A variable so tests can stand
+// in for ffprobe and land a concurrent write while it "runs".
+var extractMediaInfo = mediainfo.Extract
 
 // fillMediaInfo writes a read path's derived media fields through
 // FillBookMediaInfo, which re-reads the row inside the store and fills only
