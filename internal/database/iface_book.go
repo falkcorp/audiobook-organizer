@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-12
 
@@ -100,7 +100,9 @@ type BookPathSetReader interface {
 	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
 	// whose single-owner key names at most one book (last writer wins), this
 	// is the answer to "is this path free?". Any read or decode error fails
-	// the call rather than returning a partial set.
+	// the call rather than returning a partial set. That includes a book row
+	// ANYWHERE in the store that does not decode: its path is unknown, so no
+	// path can be vouched for until it is rewritten or removed.
 	//
 	// It is on Store (via BookLookupReader), not a narrower capability, so
 	// every decorator that embeds Store (server.indexedStore in production)

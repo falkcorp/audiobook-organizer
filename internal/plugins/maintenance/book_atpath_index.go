@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
 // last-edited: 2026-09-12
 
@@ -108,9 +108,11 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 	}
 	summary := fmt.Sprintf(
 		"sentinel_set=%t books=%d keys=%d missing_live=%d missing_trashed=%d "+
-			"extra_row_gone=%d extra_row_moved=%d malformed=%d undecodable_rows=%d",
+			"extra_row_gone=%d extra_row_moved=%d malformed=%d undecodable_rows=%d "+
+			"stale_markers=%d unmarked_undecodable=%d",
 		rep.SentinelSet, rep.BooksScanned, rep.IndexKeysScanned, rep.MissingLive,
-		rep.MissingTrashed, rep.ExtraRowGone, rep.ExtraRowMoved, rep.Malformed, rep.UndecodableRows)
+		rep.MissingTrashed, rep.ExtraRowGone, rep.ExtraRowMoved, rep.Malformed, rep.UndecodableRows,
+		rep.StaleMarkers, rep.UnmarkedUndecodable)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	if b, mErr := json.Marshal(rep); mErr == nil {
 		_ = reporter.Log(slog.LevelInfo, "report: "+string(b))
@@ -121,6 +123,11 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 		return fmt.Errorf("book_atpath index is INCOMPLETE: %d live book(s) have no key at their "+
 			"path, so LiveBookIDsAtPath can report a taken path as free; run "+
 			"maintenance.book-atpath-index-backfill (%s)", rep.MissingLive, summary)
+	}
+	if rep.SentinelSet && rep.UnmarkedUndecodable > 0 {
+		return fmt.Errorf("book_atpath index cannot see %d undecodable book row(s) (no marker), so "+
+			"LiveBookIDsAtPath can report their path as free; run maintenance.book-atpath-index-backfill (%s)",
+			rep.UnmarkedUndecodable, summary)
 	}
 	if !rep.Complete() {
 		return fmt.Errorf("book_atpath index verify is incomplete: %d book row(s) did not decode "+
@@ -152,8 +159,9 @@ func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, _ json.RawMessa
 		// Same stance as the verify op: rows that could not be decoded were
 		// not indexed, so the run is reported as incomplete, not green.
 		_ = reporter.Log(slog.LevelError, msg)
-		return fmt.Errorf("book_atpath index rebuilt, but %d book row(s) did not decode and "+
-			"were not indexed (sample ids: %v)", res.UndecodableRows, res.SampleUndecodable)
+		return fmt.Errorf("book_atpath index rebuilt, but %d book row(s) cannot be decoded (sample ids: "+
+			"%v); LiveBookIDsAtPath refuses until each is rewritten or removed out of band, then run "+
+			"maintenance.book-atpath-index-backfill", res.UndecodableRows, res.SampleUndecodable)
 	}
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil

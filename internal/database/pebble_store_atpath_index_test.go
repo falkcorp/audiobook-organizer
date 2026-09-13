@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
 // last-edited: 2026-09-12
 
@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -512,13 +514,10 @@ func TestBackfill_WorkerPoolIndexesEveryRow(t *testing.T) {
 	checkAgainstOracle(t, s, paths)
 }
 
-// TestBackfill_UndecodableRowIsSkippedAndCounted: one bad row used to fail the
-// startup backfill on every boot, leaving production on the full-scan path
-// forever with only a Warn. Now it is skipped, counted and sampled, and the
-// sentinel still vouches for every decodable row.
-func TestBackfill_UndecodableRowIsSkippedAndCounted(t *testing.T) {
-	s := newAtPathStore(t)
-	defer s.Close()
+// seedUndecodableAfterBackfill builds the index over one good book at /good
+// plus one book row that does not decode, and returns the good book's id.
+func seedUndecodableAfterBackfill(t *testing.T, s *PebbleStore) string {
+	t.Helper()
 	good, err := s.CreateBook(&Book{Title: "good", FilePath: "/good"})
 	if err != nil {
 		t.Fatal(err)
@@ -534,22 +533,182 @@ func TestBackfill_UndecodableRowIsSkippedAndCounted(t *testing.T) {
 	if res.UndecodableRows != 1 || !reflect.DeepEqual(res.SampleUndecodable, []string{"01BADROW"}) {
 		t.Fatalf("undecodable = %d %v, want 1 [01BADROW]", res.UndecodableRows, res.SampleUndecodable)
 	}
-	if res.Scanned != 1 {
-		t.Fatalf("scanned = %d, want 1 (only the decodable row is indexed)", res.Scanned)
-	}
 	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
-		t.Fatalf("sentinel not set after every decodable row committed: %v %v", built, err)
+		t.Fatalf("sentinel not set: %v %v", built, err)
 	}
-	ids, err := s.LiveBookIDsAtPath("/good")
-	if err != nil || len(ids) != 1 || ids[0] != good.ID {
-		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, good.ID)
+	return good.ID
+}
+
+func hasUndecodableMarker(t *testing.T, s *PebbleStore, id string) bool {
+	t.Helper()
+	_, closer, err := s.db.Get(bookAtPathUndecodableKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer.Close()
+	return true
+}
+
+func setRawBookRow(t *testing.T, s *PebbleStore, id, v string) {
+	t.Helper()
+	if err := s.db.Set([]byte("book:"+id), []byte(v), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLiveBookIDsAtPath_UndecodableRowFailsClosed: an undecodable row has no
+// readable path, so after the backfill no path can be vouched for. The lookup
+// must ERROR, never return an empty or partial set (#3335 reads empty as free).
+func TestLiveBookIDsAtPath_UndecodableRowFailsClosed(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedUndecodableAfterBackfill(t, s)
+	if !hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("backfill wrote no marker for the undecodable row")
+	}
+	for _, p := range []string{"/good", "/anything"} {
+		if ids, err := s.LiveBookIDsAtPath(p); err == nil {
+			t.Fatalf("LiveBookIDsAtPath(%s) = %v, nil; want a fail-closed error", p, ids)
+		} else if !strings.Contains(err.Error(), "01BADROW") {
+			t.Fatalf("error does not name the sample id: %v", err)
+		}
 	}
 	rep, err := s.VerifyBookAtPathIndex(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.UndecodableRows != res.UndecodableRows || rep.MissingLive != 0 {
-		t.Fatalf("verify undecodable=%d missing_live=%d, want %d and 0", rep.UndecodableRows, rep.MissingLive, res.UndecodableRows)
+	if rep.UndecodableRows != 1 || rep.StaleMarkers != 0 || rep.UnmarkedUndecodable != 0 || rep.MissingLive != 0 {
+		t.Fatalf("verify = %+v, want undecodable 1 and no drift", rep)
+	}
+}
+
+// TestLiveBookIDsAtPath_RepairedOutOfBandIsACandidate: a row rewritten as valid
+// JSON out of band has a marker but NO index key. It must be returned at its
+// own path (ignoring it would read that folder as free) and not at another.
+func TestLiveBookIDsAtPath_RepairedOutOfBandIsACandidate(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/good"}`)
+	ids, err := s.LiveBookIDsAtPath("/good")
+	want := []string{goodID, "01BADROW"}
+	sort.Strings(want)
+	if err != nil || !reflect.DeepEqual(ids, want) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want %v", ids, err, want)
+	}
+
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/elsewhere"}`)
+	if ids, err := s.LiveBookIDsAtPath("/good"); err != nil || !reflect.DeepEqual(ids, []string{goodID}) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, goodID)
+	}
+	if ids, err := s.LiveBookIDsAtPath("/elsewhere"); err != nil || !reflect.DeepEqual(ids, []string{"01BADROW"}) {
+		t.Fatalf("LiveBookIDsAtPath(/elsewhere) = %v %v, want [01BADROW]", ids, err)
+	}
+
+	// A trashed repaired row is not live.
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/elsewhere","marked_for_deletion":true}`)
+	if ids, err := s.LiveBookIDsAtPath("/elsewhere"); err != nil || len(ids) != 0 {
+		t.Fatalf("LiveBookIDsAtPath(/elsewhere) = %v %v, want [] for a trashed row", ids, err)
+	}
+}
+
+// TestLiveBookIDsAtPath_RemovedOutOfBandLiftsBlock: a marker whose row is gone
+// is stale and does not block.
+func TestLiveBookIDsAtPath_RemovedOutOfBandLiftsBlock(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+	if err := s.db.Delete([]byte("book:01BADROW"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.LiveBookIDsAtPath("/good"); err != nil || !reflect.DeepEqual(ids, []string{goodID}) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, goodID)
+	}
+}
+
+// TestUpdateAndDeleteBook_DropUndecodableMarker: once a row decodes again,
+// UpdateBook and DeleteBook drop its marker in their own batch.
+func TestUpdateAndDeleteBook_DropUndecodableMarker(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedUndecodableAfterBackfill(t, s)
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","title":"fixed","file_path":"/fixed"}`)
+	b, err := s.GetBookByID("01BADROW")
+	if err != nil || b == nil {
+		t.Fatalf("repaired row does not read: %v %v", b, err)
+	}
+	if _, err := s.UpdateBook("01BADROW", b); err != nil {
+		t.Fatal(err)
+	}
+	if hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("UpdateBook left the undecodable marker behind")
+	}
+	if ids, err := s.LiveBookIDsAtPath("/fixed"); err != nil || !reflect.DeepEqual(ids, []string{"01BADROW"}) {
+		t.Fatalf("LiveBookIDsAtPath(/fixed) = %v %v, want [01BADROW]", ids, err)
+	}
+
+	if err := s.db.Set(bookAtPathUndecodableKey("01BADROW"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteBook("01BADROW"); err != nil {
+		t.Fatal(err)
+	}
+	if hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("DeleteBook left the undecodable marker behind")
+	}
+}
+
+// TestRebuild_RecomputesUndecodableMarkers: the rebuild clears every marker and
+// re-adds one only for rows that are still undecodable.
+func TestRebuild_RecomputesUndecodableMarkers(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+	// A stale marker (row gone) and a marker on a decodable book.
+	for _, id := range []string{"01GONEMARKER", goodID} {
+		if err := s.db.Set(bookAtPathUndecodableKey(id), []byte{}, pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StaleMarkers != 2 || rep.UnmarkedUndecodable != 0 {
+		t.Fatalf("verify drift = stale %d unmarked %d, want 2 and 0", rep.StaleMarkers, rep.UnmarkedUndecodable)
+	}
+	// And an undecodable row with no marker.
+	setRawBookRow(t, s, "01BADTWO", "[")
+	rep, err = s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.UnmarkedUndecodable != 1 || !reflect.DeepEqual(rep.SampleUnmarked, []string{"01BADTWO"}) {
+		t.Fatalf("verify unmarked = %d %v, want 1 [01BADTWO]", rep.UnmarkedUndecodable, rep.SampleUnmarked)
+	}
+
+	res, err := s.RebuildBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UndecodableRows != 2 {
+		t.Fatalf("rebuild undecodable = %d, want 2", res.UndecodableRows)
+	}
+	for id, want := range map[string]bool{"01GONEMARKER": false, goodID: false, "01BADROW": true, "01BADTWO": true} {
+		if got := hasUndecodableMarker(t, s, id); got != want {
+			t.Fatalf("marker %s = %v after rebuild, want %v", id, got, want)
+		}
+	}
+	rep, err = s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StaleMarkers != 0 || rep.UnmarkedUndecodable != 0 {
+		t.Fatalf("verify after rebuild = stale %d unmarked %d, want 0 and 0", rep.StaleMarkers, rep.UnmarkedUndecodable)
 	}
 }
 
