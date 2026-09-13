@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -125,7 +125,7 @@ func newTagFixture(t *testing.T, files []database.BookFile, tags map[string]meta
 		}
 	}
 	metadata.SetMetadataExtractor(fx.extractor)
-	t.Cleanup(func() { metadata.SetMetadataExtractor(nil) })
+	t.Cleanup(func() { drainAbandonedTagReads(t); metadata.SetMetadataExtractor(nil) })
 
 	fx.store = &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
@@ -258,7 +258,7 @@ func TestTagBackfill_ParallelProducesSameResultAsSerial(t *testing.T) {
 
 	extractor := &fakeTagExtractor{}
 	metadata.SetMetadataExtractor(extractor)
-	t.Cleanup(func() { metadata.SetMetadataExtractor(nil) })
+	t.Cleanup(func() { drainAbandonedTagReads(t); metadata.SetMetadataExtractor(nil) })
 
 	var files []database.BookFile
 	wantBackfilled := map[string]bool{}
@@ -890,6 +890,23 @@ func TestTagBackfill_ForceMissingCandidateCountsOnce(t *testing.T) {
 	assertPosition(t, fx.row("fm2"), 0, 2)
 	assertSummaryHas(t, summary, "missing-on-disk=0", "siblings-renumbered=1", "read-took-tag-tracks=1",
 		"judged-rows=2", "wrote 2 rows; not-written=0")
+}
+
+// drainAbandonedTagReads waits for tag reads the op gave up on to return. A
+// canceled run (ErrModeFail after a write error, a test cancel) abandons its
+// in-flight reads; they still read metadata's package-level extractor, so
+// resetting it before they return races with them under -race. Production never
+// swaps the extractor, so this is test hygiene, not a product fix.
+func drainAbandonedTagReads(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for tagReadsAbandoned.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Errorf("abandoned tag reads did not drain: %d", tagReadsAbandoned.Load())
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // summaryInt reads the integer after "key=" in a summary line.
