@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -56,6 +57,12 @@ type VersionRawKVDeleter interface {
 	DeleteRaw(key string) error
 }
 
+// VersionBookPathChecker reports which live books sit at a path. The split
+// endpoints use it to refuse a new book on a path another book owns.
+type VersionBookPathChecker interface {
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
 // VersionsStore is the narrow database interface VersionsHandler requires.
 // It lists only the database.Store methods the version-grouping handlers
 // actually call, including the external-ID methods used by
@@ -71,6 +78,7 @@ type VersionsStore interface {
 	VersionBookAuthorStore
 	VersionExternalIDStore
 	VersionRawKVDeleter
+	VersionBookPathChecker
 }
 
 // VersionsHandler handles audiobook version-group endpoints: listing, linking,
@@ -532,9 +540,9 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 	if title == "" {
 		title = sourceBook.Title + " (split)"
 	}
-	newPath := selected[0].FilePath
-	if len(selected) > 1 {
-		newPath = filesCommonDir(selected)
+	newPath, ok := h.splitTargetPath(c, sourceBook, selected)
+	if !ok {
+		return
 	}
 	created, err := h.store.CreateBook(&database.Book{
 		Title:     title,
@@ -602,6 +610,64 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		"source_book_id": sourceBook.ID,
 		"segments_moved": len(ids),
 	})
+}
+
+// splitTargetPath picks the FilePath of the book splitSegmentsToOneBook is
+// about to create, or answers the request and returns ok=false when there is
+// no path the new book can own.
+//
+// A book's FilePath is also its single-valued book:path:<path> lookup key
+// (GetBookByFilePath, which the scanner, the organizer's collision checks,
+// the iTunes import and autoscan all read), so the new book must never be
+// given a path another live book sits on:
+//
+//   - One file: the file's own path, the scanner's convention for a
+//     single-file book (createSingleFileBookFile).
+//   - More than one: the ONE folder they are all in. Files from two folders
+//     are refused rather than given their common ancestor: that ancestor is
+//     typically the source book's own folder, and the new book would take the
+//     source's lookup key (the book:path: index is last-writer-wins).
+//   - Refused when that path is the source's FilePath, or when any live book
+//     already sits there (LiveBookIDsAtPath, the multi-valued index, not the
+//     single key). A lookup error refuses too: LiveBookIDsAtPath fails closed,
+//     and treating its error as "free" would re-open exactly this hole.
+//
+// Every refusal happens before anything is written.
+func (h *VersionsHandler) splitTargetPath(c *gin.Context, sourceBook *database.Book, selected []database.BookFile) (string, bool) {
+	newPath := selected[0].FilePath
+	if len(selected) > 1 {
+		newPath = filepath.Dir(selected[0].FilePath)
+		dirs := []string{newPath}
+		for _, f := range selected[1:] {
+			if d := filepath.Dir(f.FilePath); !slices.Contains(dirs, d) {
+				dirs = append(dirs, d)
+			}
+		}
+		if len(dirs) > 1 {
+			httputil.RespondWithErrorFields(c, http.StatusBadRequest,
+				"the selected files are in more than one folder; a book's path is one folder, so split one folder at a time",
+				"split_files_span_folders", map[string]any{"folders": dirs})
+			return "", false
+		}
+	}
+	if filepath.Clean(newPath) == filepath.Clean(sourceBook.FilePath) {
+		httputil.RespondWithErrorFields(c, http.StatusBadRequest,
+			fmt.Sprintf("the new book's path %q is the source book's own path; two books cannot share it", newPath),
+			"split_path_taken", map[string]any{"path": newPath, "book_ids": []string{sourceBook.ID}})
+		return "", false
+	}
+	occupants, err := h.store.LiveBookIDsAtPath(newPath)
+	if err != nil {
+		httputil.InternalError(c, "could not check whether the new book's path is free; nothing was written", err)
+		return "", false
+	}
+	if len(occupants) > 0 {
+		httputil.RespondWithErrorFields(c, http.StatusBadRequest,
+			fmt.Sprintf("another book already has the path %q; two books cannot share it", newPath),
+			"split_path_taken", map[string]any{"path": newPath, "book_ids": occupants})
+		return "", false
+	}
+	return newPath, true
 }
 
 var versionsLog = logger.New("handlers.versions")

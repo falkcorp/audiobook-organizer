@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
 // last-edited: 2026-09-13
 
@@ -46,6 +46,7 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	store.EXPECT().GetBookByID("src").Return(src, nil).Once()
 	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil).Once()
 
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 1").Return(nil, nil).Once()
 	var createdBook *database.Book
 	store.EXPECT().CreateBook(mock.Anything).RunAndReturn(func(b *database.Book) (*database.Book, error) {
 		createdBook = b
@@ -132,6 +133,7 @@ func TestSplitSegmentsToBooks_AsOneBookMoveFailure(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("src").Return(splitSource(), nil)
 	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil)
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2/01.mp3").Return(nil, nil)
 	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "new"}, nil)
 	store.EXPECT().GetBookAuthors("src").Return(nil, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f3"}, "src", "new").Return(errors.New("file not found: f3"))
@@ -140,5 +142,20 @@ func TestSplitSegmentsToBooks_AsOneBookMoveFailure(t *testing.T) {
 	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), `"created_book_id":"new"`) {
 		t.Fatalf("want 500 naming the created book, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// LiveBookIDsAtPath fails closed; its error must refuse the split, not be
+// read as "path free". Nothing is created (the mock fails on any write).
+func TestSplitSegmentsToBooks_AsOneBookPathLookupError(t *testing.T) {
+	store := handlersmocks.NewMockVersionsStore(t)
+	store.EXPECT().GetBookByID("src").Return(splitSource(), nil)
+	store.EXPECT().GetBookFiles("src").Return(splitFiles(), nil)
+	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 1").Return(nil, errors.New("1 book row(s) cannot be decoded"))
+
+	c, w := splitReq(`{"segment_ids":["f1","f2"],"as_one_book":true}`)
+	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
