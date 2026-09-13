@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-13
 
@@ -16,7 +16,7 @@
 // match does damage in three places. A book that fails this gate is NOT
 // applied; it is reported with a reason so it goes to manual review.
 //
-// The gate has three legs, all required:
+// The gate has four legs, all required:
 //
 //  1. score: >= MinScore, or >= MinScoreAudioConfirmed when the book's
 //     transcribed (audio-derived) title/author independently confirm the
@@ -29,6 +29,9 @@
 //     error, because only the caller knows where the candidate came from.
 //  3. sequence: CheckSequence — the book's volume number and the candidate's
 //     must agree.
+//  4. evidence: CheckEvidence (evidence.go) — no hard contradiction from the
+//     runtime, author-role, author-vs-path, title, narrator or ASIN checks, and
+//     at least MinAgreements independent signals positively agree.
 //
 // It must never be imported by internal/metafetch: the gate wraps the apply
 // from outside, it is not part of ApplyMetadataCandidate (the single-book
@@ -90,6 +93,7 @@ type Verdict struct {
 	ScoreFloor     float64         `json:"score_floor"`
 	AudioConfirmed bool            `json:"audio_confirmed"`
 	Sequence       SequenceVerdict `json:"sequence"`
+	Evidence       EvidenceVerdict `json:"evidence"`
 }
 
 // TranscriptionConfirms reports whether the candidate's title/author
@@ -138,6 +142,7 @@ func Evaluate(book *database.Book, c *metafetch.MetadataCandidate, identityErr e
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
 	v.ScoreFloor, v.AudioConfirmed = floor, audio
 	v.Sequence = CheckSequence(book, c)
+	v.Evidence = CheckEvidence(book, c, audio)
 
 	switch {
 	case identityErr != nil:
@@ -151,6 +156,8 @@ func Evaluate(book *database.Book, c *metafetch.MetadataCandidate, identityErr e
 		}
 	case !v.Sequence.Pass:
 		v.Reason, v.Detail = v.Sequence.Reason, v.Sequence.Detail
+	case !v.Evidence.Pass:
+		v.Reason, v.Detail = v.Evidence.Reason, v.Evidence.Detail
 	default:
 		v.Allowed = true
 	}

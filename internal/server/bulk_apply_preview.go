@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -91,6 +91,9 @@ type previewBook struct {
 	Series   string `json:"series"`
 	Position string `json:"position"`
 	FilePath string `json:"file_path"`
+	// DurationSec is the files' runtime; the gate's runtime check reads it.
+	DurationSec int    `json:"duration_sec,omitempty"`
+	Narrator    string `json:"narrator,omitempty"`
 }
 
 // previewCandidate is the candidate the apply would take.
@@ -102,6 +105,10 @@ type previewCandidate struct {
 	Source   string  `json:"source"`
 	Score    float64 `json:"score"`
 	ASIN     string  `json:"asin,omitempty"`
+	Subtitle string  `json:"subtitle,omitempty"`
+	Narrator string  `json:"narrator,omitempty"`
+	// DurationSec is the source's runtime (0 = the source gave none).
+	DurationSec int `json:"duration_sec,omitempty"`
 }
 
 // bulkApplyPreviewRow is one book's line in the report.
@@ -126,6 +133,12 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	row := bulkApplyPreviewRow{BookID: id}
 	if b := plan.Book; b != nil {
 		pb := &previewBook{ID: b.ID, Title: b.Title, FilePath: b.FilePath}
+		if b.Duration != nil {
+			pb.DurationSec = *b.Duration
+		}
+		if b.Narrator != nil {
+			pb.Narrator = *b.Narrator
+		}
 		if b.Author != nil {
 			pb.Author = b.Author.Name
 		}
@@ -141,7 +154,8 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	}
 	if c := plan.Candidate; c != nil {
 		row.Candidate = &previewCandidate{Title: c.Title, Author: c.Author, Series: c.Series,
-			Position: c.SeriesPosition, Source: c.Source, Score: c.Score, ASIN: c.ASIN}
+			Position: c.SeriesPosition, Source: c.Source, Score: c.Score, ASIN: c.ASIN,
+			Subtitle: c.Subtitle, Narrator: c.Narrator, DurationSec: c.DurationSec}
 	}
 	row.Gate = plan.Gate
 

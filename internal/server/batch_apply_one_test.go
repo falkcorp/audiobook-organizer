@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -62,7 +62,8 @@ func (f fakeBooks) GetBookByID(id string) (*database.Book, error) {
 	if b, ok := f[id]; ok {
 		return b, nil
 	}
-	return &database.Book{ID: id, Title: "A Title"}, nil
+	dur := 36000
+	return &database.Book{ID: id, Title: "A Title", FilePath: "/lib/An Author/A Title/A Title.m4b", Duration: &dur}, nil
 }
 
 func (f *fakeApplySvc) GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error) {
@@ -123,7 +124,7 @@ func (f *fakeITunes) Enqueue(bookID string) { f.ids = append(f.ids, bookID) }
 
 func oneCandidate(t *testing.T) []json.RawMessage {
 	t.Helper()
-	blob, err := json.Marshal(metafetch.MetadataCandidate{Title: "A Title", Author: "An Author", Score: 0.95})
+	blob, err := json.Marshal(metafetch.MetadataCandidate{Title: "A Title", Author: "An Author", Score: 0.95, DurationSec: 36000})
 	if err != nil {
 		t.Fatalf("marshal candidate: %v", err)
 	}
