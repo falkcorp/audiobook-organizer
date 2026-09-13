@@ -1,11 +1,15 @@
 // file: internal/server/absauth/audit.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0e5c72a8-91b3-4f46-8d27-4a08b6e1c937
-// last-edited: 2026-08-02
+// last-edited: 2026-09-13
 
 package absauth
 
-import "log/slog"
+import (
+	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+)
 
 // AuditEventName is the fixed slog attribute every ABS auth record carries, so the
 // whole audit trail is one grep/log-query away: `event=abs.auth`.
@@ -87,39 +91,39 @@ type AuditEvent struct {
 func Audit(ev AuditEvent) {
 	attrs := []any{
 		"event", AuditEventName,
-		"action", ev.Action,
-		"outcome", string(ev.Outcome),
-		"source_ip", ev.SourceIP,
+		"action", logger.SanitizeLogValue(ev.Action),
+		"outcome", logger.SanitizeLogValue(string(ev.Outcome)),
+		"source_ip", logger.SanitizeLogValue(ev.SourceIP),
 	}
 	if ev.Mode != "" {
-		attrs = append(attrs, "mode", ev.Mode)
+		attrs = append(attrs, "mode", logger.SanitizeLogValue(ev.Mode))
 	}
 	if ev.UserID != "" {
-		attrs = append(attrs, "user_id", ev.UserID)
+		attrs = append(attrs, "user_id", logger.SanitizeLogValue(ev.UserID))
 	}
 	if ev.Username != "" {
-		attrs = append(attrs, "username", ev.Username)
+		attrs = append(attrs, "username", logger.SanitizeLogValue(ev.Username))
 	}
 	if ev.Email != "" {
-		attrs = append(attrs, "email", ev.Email)
+		attrs = append(attrs, "email", logger.SanitizeLogValue(ev.Email))
 	}
 	// Emitted right beside user_id/username on purpose — the PAIRING is the signal
 	// (see the field comment). Also emitted on failures, where it is the only
 	// attribution available.
 	if ev.ServiceToken != "" {
-		attrs = append(attrs, "service_token", ev.ServiceToken)
+		attrs = append(attrs, "service_token", logger.SanitizeLogValue(ev.ServiceToken))
 	}
 	if ev.SessionID != "" {
-		attrs = append(attrs, "session_id", ev.SessionID)
+		attrs = append(attrs, "session_id", logger.SanitizeLogValue(ev.SessionID))
 	}
 	if ev.Reason != "" {
-		attrs = append(attrs, "reason", ev.Reason)
+		attrs = append(attrs, "reason", logger.SanitizeLogValue(ev.Reason))
 	}
 	if ev.Path != "" {
-		attrs = append(attrs, "path", ev.Path)
+		attrs = append(attrs, "path", logger.SanitizeLogValue(ev.Path))
 	}
 	if ev.UserAgent != "" {
-		attrs = append(attrs, "user_agent", ev.UserAgent)
+		attrs = append(attrs, "user_agent", logger.SanitizeLogValue(ev.UserAgent))
 	}
 
 	switch ev.Outcome {

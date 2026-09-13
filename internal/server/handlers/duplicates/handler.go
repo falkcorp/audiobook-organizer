@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -36,6 +36,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/gin-gonic/gin"
 )
@@ -254,7 +255,7 @@ func respondMergeError(c *gin.Context, err error, fallback string) {
 		// RespondWithConflict does not log. A soft-deleted participant on
 		// this endpoint means the duplicates listing served a stale row, so
 		// operators need the line even though the user got the reason.
-		slog.Warn("merge refused", "path", c.FullPath(), "err", err)
+		slog.Warn("merge refused", "path", logger.SanitizeLogValue(c.FullPath()), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
 		httputil.RespondWithConflict(c, err.Error())
 	default:
 		httputil.InternalError(c, fallback, err)

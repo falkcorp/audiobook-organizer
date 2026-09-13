@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -11,6 +11,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/readstatus"
 	svrmw "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -200,7 +201,7 @@ func (h *ReadingHandler) ListByStatus(c *gin.Context) {
 		return
 	}
 	if partial {
-		slog.Warn("reading list: some states could not be read", "user", userID, "status", status, "unreadable", unreadable, "err", err)
+		slog.Warn("reading list: some states could not be read", "user", userID, "status", logger.SanitizeLogValue(status), "unreadable", unreadable, "err", err)
 	}
 	httputil.RespondWithOK(c, gin.H{"states": list, "count": len(list), "limit": p.Limit, "offset": p.Offset, "unreadable": unreadable})
 }

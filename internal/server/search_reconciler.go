@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -38,9 +38,11 @@ package server
 import (
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"sync/atomic"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -116,7 +118,7 @@ func (s *Server) markIndexDirty(bookID string) {
 	}
 	if err := ds.MarkSearchIndexDirty(bookID); err != nil {
 		slog.Error("search index dirty-set write failed; index update is now unrecoverable",
-			"bookID", bookID, "err", err)
+			"bookID", logger.SanitizeLogValue(bookID), "err", err)
 	}
 }
 

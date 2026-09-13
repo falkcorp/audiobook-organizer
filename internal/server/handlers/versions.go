@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -417,7 +418,7 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 
 		created, createErr := h.store.CreateBook(newBook)
 		if createErr != nil {
-			slog.Warn("splitSegmentsToBooks failed to create book for file", "fileID", fileID, "createErr", createErr)
+			slog.Warn("splitSegmentsToBooks failed to create book for file", "fileID", logger.SanitizeLogValue(fileID), "createErr", createErr)
 			continue
 		}
 
@@ -595,11 +596,11 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 
 		m.BookID = targetBookID
 		if createErr := h.store.CreateExternalIDMapping(&m); createErr != nil {
-			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "source", m.Source, "externalID", m.ExternalID, "targetBookID", targetBookID, "createErr", createErr)
+			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "source", m.Source, "externalID", m.ExternalID, "targetBookID", logger.SanitizeLogValue(targetBookID), "createErr", createErr)
 		}
 	}
 
-	slog.Info("reassigned external ID mapping(s) from book to", "toMove_count", len(toMove), "sourceBookID", sourceBookID, "targetBookID", targetBookID)
+	slog.Info("reassigned external ID mapping(s) from book to", "toMove_count", len(toMove), "sourceBookID", logger.SanitizeLogValue(sourceBookID), "targetBookID", logger.SanitizeLogValue(targetBookID))
 }
 
 // filesCommonDir returns the common parent directory of the given files.

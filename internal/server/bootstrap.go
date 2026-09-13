@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-09-09
+// last-edited: 2026-09-13
 
 package server
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -312,14 +313,14 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// doesn't burn the one-time token.
 	adminUser, generatedPassword, err := findOrCreateAdminUser(store)
 	if err != nil || adminUser == nil {
-		slog.Info("find/create admin error ip err", "ip", ip, "err", err)
+		slog.Info("find/create admin error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
 		httputil.RespondWithInternalError(c, "failed to find or create admin user")
 		return
 	}
 
 	valid, err := ConsumeBootstrapToken(store, dataDir, req.Token)
 	if err != nil {
-		slog.Info("consume error ip err", "ip", ip, "err", err)
+		slog.Info("consume error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
 		httputil.RespondWithInternalError(c, "internal error")
 		return
 	}
@@ -336,7 +337,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 
 	raw, hash, err := database.GenerateAPIKeyToken()
 	if err != nil {
-		slog.Info("generate api key error ip err", "ip", ip, "err", err)
+		slog.Info("generate api key error ip err", "ip", logger.SanitizeLogValue(ip), "err", err)
 		httputil.RespondWithInternalError(c, "failed to generate API key")
 		return
 	}
@@ -366,12 +367,12 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 
 	created, err := store.CreateAPIKey(key)
 	if err != nil {
-		slog.Info("create api key error user ip err", "adminUser", adminUser.ID, "ip", ip, "err", err)
+		slog.Info("create api key error user ip err", "adminUser", adminUser.ID, "ip", logger.SanitizeLogValue(ip), "err", err)
 		httputil.RespondWithInternalError(c, "failed to create API key")
 		return
 	}
 
-	slog.Info("Token consumed new API key created user key_id ip", "adminUser", adminUser.Username, "created", created.ID, "ip", ip)
+	slog.Info("Token consumed new API key created user key_id ip", "adminUser", adminUser.Username, "created", created.ID, "ip", logger.SanitizeLogValue(ip))
 
 	type bootstrapResp struct {
 		APIKey            string     `json:"api_key"`

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
@@ -444,7 +445,7 @@ func (h *ITunesHandler) WriteBack(c *gin.Context) {
 		if err != nil {
 			metrics.RecordITunesLocationUnmappable("invalid_path")
 			stdlog.Warn("iTunes update-locations: skipping unmappable location (never written raw — CRIT-2)",
-				"pid", *book.ITunesPersistentID, "raw", itunesPath, "error", err.Error())
+				"pid", *book.ITunesPersistentID, "raw", logger.SanitizeLogValue(itunesPath), "error", err.Error())
 			continue
 		}
 		itlUpdates = append(itlUpdates, itunes.ITLLocationUpdate{
@@ -735,7 +736,7 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 			// reporting the count as exact.
 			truncated = true
 			stdlog.Warn("itunes ListBooks: search over-fetch window exhausted; iTunes-tagged results may be a lower bound",
-				"query", search, "window", itunesSearchOverfetchWindow)
+				"query", logger.SanitizeLogValue(search), "window", itunesSearchOverfetchWindow)
 		}
 		for _, book := range allBooks {
 			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -657,7 +657,7 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			// FinishApplyFileWork re-checks the hold (hold.Checkpoint) before the
 			// cover download, the file I/O and the tag write.
 			if err := hold.Checkpoint(); err != nil {
-				slog.Warn("background apply skipped: scan stand-down lost", "bookID", bookID, "err", err)
+				slog.Warn("background apply skipped: scan stand-down lost", "bookID", logger.SanitizeLogValue(bookID), "err", err)
 				return
 			}
 			// The shared sequel the batch sibling also runs: cover download
@@ -722,7 +722,7 @@ func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 		RejectedAt:      time.Now(),
 	}
 	if rerr := store.AddMetadataRejection(rejection); rerr != nil {
-		slog.Warn("markAudiobookNoMatch could not record rejection for", "id", id, "rerr", rerr)
+		slog.Warn("markAudiobookNoMatch could not record rejection for", "id", logger.SanitizeLogValue(id), "rerr", rerr)
 	}
 	httputil.RespondWithOK(c, gin.H{"message": "Book marked as no match"})
 }
@@ -865,7 +865,7 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 	doRename := (body.Rename != nil && *body.Rename) || config.AppConfig.AutoRenameOnApply
 	if doRename && len(body.SegmentIDs) == 0 {
 		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(id, book); err != nil {
-			slog.Warn("rename failed for book", "id", id, "err", err)
+			slog.Warn("rename failed for book", "id", logger.SanitizeLogValue(id), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
 		} else {
 			renamed = 1
 		}
@@ -1222,7 +1222,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		if len(fetchedValues) > 0 {
 			if err := h.updateFetchedMetadataState(bookID, fetchedValues); err != nil {
-				slog.Warn("bulkFetchMetadata failed to persist fetched metadata state for", "bookID", bookID, "err", err)
+				slog.Warn("bulkFetchMetadata failed to persist fetched metadata state for", "bookID", logger.SanitizeLogValue(bookID), "err", err)
 			}
 		}
 

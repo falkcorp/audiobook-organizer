@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.5.0
+// version: 4.5.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-13
 //
@@ -332,7 +332,7 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 	for _, r := range pageRaw {
 		var cr CandidateResult
 		if err := json.Unmarshal([]byte(r.ResultJSON), &cr); err != nil {
-			slog.Warn("failed to unmarshal result for book in op", "r", r.BookID, "opID", opID, "err", err)
+			slog.Warn("failed to unmarshal result for book in op", "r", r.BookID, "opID", logger.SanitizeLogValue(opID), "err", err)
 			continue
 		}
 		candidateResults = append(candidateResults, cr)
@@ -631,7 +631,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 				if !pool.Submit(bid, func() {
 					defer jobDone()
 					if err := hold.Checkpoint(); err != nil {
-						slog.Warn("background apply file I/O skipped: scan stand-down lost", "bid", bid, "err", err)
+						slog.Warn("background apply file I/O skipped: scan stand-down lost", "bid", logger.SanitizeLogValue(bid), "err", err)
 						return
 					}
 					// Logged, not returned: this runs in the pool AFTER the

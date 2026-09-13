@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -46,6 +46,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
@@ -696,7 +697,7 @@ func (h *Handler) ExportDedupCandidates(c *gin.Context) {
 			cand.UpdatedAt.Format(time.RFC3339),
 		})
 	}
-	slog.Info("dedup export wrote candidate rows as", "candidates_count", len(candidates), "format", format)
+	slog.Info("dedup export wrote candidate rows as", "candidates_count", len(candidates), "format", logger.SanitizeLogValue(format))
 }
 
 // series-aware dedup helpers below. These exist to support "merge
@@ -974,7 +975,7 @@ func (h *Handler) MergeDedupCandidateSeries(c *gin.Context) {
 		}
 	}
 
-	slog.Info("dedup series merge series clusters_merged books_merged candidates_updated failures", "body", body.SeriesID, "mergedClusters", mergedClusters, "mergedBooks", mergedBooks, "candidatesUpdated", candidatesUpdated, "failures_count", len(failures))
+	slog.Info("dedup series merge series clusters_merged books_merged candidates_updated failures", "body", logger.SanitizeLogValue(fmt.Sprint(body.SeriesID)), "mergedClusters", mergedClusters, "mergedBooks", mergedBooks, "candidatesUpdated", candidatesUpdated, "failures_count", len(failures))
 
 	httputil.RespondWithOK(c, gin.H{
 		"series_id":          body.SeriesID,
@@ -1545,7 +1546,7 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 					"candidate_id", id,
 					"entity_a", candidate.EntityAID,
 					"entity_b", candidate.EntityBID,
-					"err", mergeErr,
+					"err", logger.SanitizeLogValue(fmt.Sprint(mergeErr)),
 				)
 				c.JSON(http.StatusConflict, gin.H{
 					"status":       "already_merged",
@@ -1558,7 +1559,7 @@ func (h *Handler) MergeDedupCandidate(c *gin.Context) {
 			// 409 carrying the service's reason — the only place the user
 			// learns why their pick lost. The candidate stays pending.
 			if merge.IsRefusal(mergeErr) {
-				slog.Warn("dedup merge refused", "candidate_id", id, "err", mergeErr)
+				slog.Warn("dedup merge refused", "candidate_id", id, "err", logger.SanitizeLogValue(fmt.Sprint(mergeErr)))
 				httputil.RespondWithConflict(c, mergeErr.Error())
 				return
 			}

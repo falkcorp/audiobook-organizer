@@ -1,11 +1,12 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -187,7 +189,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		httputil.InternalError(c, "failed to create api key", err)
 		return
 	}
-	slog.Info("apikey created", "id", created.ID, "user", targetUserID, "name", created.Name, "scopes", created.Scopes, "expires", created.ExpiresAt)
+	slog.Info("apikey created", "id", created.ID, "user", logger.SanitizeLogValue(targetUserID), "name", logger.SanitizeLogValue(created.Name), "scopes", logger.SanitizeLogValue(fmt.Sprint(created.Scopes)), "expires", created.ExpiresAt)
 	httputil.RespondWithCreated(c, CreateAPIKeyResponse{
 		ID:        created.ID,
 		Name:      created.Name,
@@ -316,7 +318,7 @@ func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 		httputil.InternalError(c, "failed to update api key status", err)
 		return
 	}
-	slog.Info("apikey status changed", "id", id, "caller", caller.ID, "status", req.Status)
+	slog.Info("apikey status changed", "id", logger.SanitizeLogValue(id), "caller", caller.ID, "status", logger.SanitizeLogValue(req.Status))
 	updated, err := h.store.GetAPIKey(id)
 	if err != nil || updated == nil {
 		httputil.RespondWithOK(c, gin.H{"status": req.Status})
@@ -350,7 +352,7 @@ func (h *APIKeyHandler) Revoke(c *gin.Context) {
 		httputil.InternalError(c, "failed to revoke api key", err)
 		return
 	}
-	slog.Info("apikey revoked", "id", id, "caller", caller.ID, "name", key.Name)
+	slog.Info("apikey revoked", "id", logger.SanitizeLogValue(id), "caller", caller.ID, "name", key.Name)
 	httputil.RespondWithNoContent(c)
 }
 

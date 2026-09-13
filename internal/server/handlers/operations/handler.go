@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -392,7 +392,7 @@ func (h *Handler) SetInternalFlag(c *gin.Context) {
 		httputil.InternalError(c, "failed to set flag", err)
 		return
 	}
-	slog.Info("setInternalFlag", "key", req.Key, "value", req.Value)
+	slog.Info("setInternalFlag", "key", logger.SanitizeLogValue(req.Key), "value", logger.SanitizeLogValue(req.Value))
 	httputil.RespondWithOK(c, gin.H{"key": req.Key, "value": req.Value})
 }
 

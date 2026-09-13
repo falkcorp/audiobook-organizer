@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -26,10 +26,13 @@
 package server
 
 import (
+	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"sync/atomic"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -153,7 +156,7 @@ func (s *Server) enqueueIndex(bookID string, del bool) {
 		// which read as a delete on every upsert drop and made the prod logs
 		// actively misleading. The operation is in the del field.
 		slog.Warn("search index queue full, event dropped and marked for reconcile",
-			"bookID", bookID, "del", del, "dropped_total", searchIndexDropped.Load())
+			"bookID", logger.SanitizeLogValue(bookID), "del", logger.SanitizeLogValue(fmt.Sprint(del)), "dropped_total", searchIndexDropped.Load())
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -148,7 +149,7 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 		ChangedAt:     time.Now(),
 	}
 	if err := store.RecordMetadataChange(undoRecord); err != nil {
-		slog.Warn("failed to record undo change for /", "id", id, "field", field, "err", err)
+		slog.Warn("failed to record undo change for /", "id", logger.SanitizeLogValue(id), "field", logger.SanitizeLogValue(field), "err", err)
 	}
 
 	// METADATA-CACHED-MATCHER: undo of a metadata field rewrites book
@@ -224,13 +225,13 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 				prevValue = *rec.PreviousValue
 			}
 			if setErr := h.metadataStateService.SetOverride(id, rec.Field, prevValue, false); setErr != nil {
-				slog.Warn("undo-last-apply failed to revert for", "rec", rec.Field, "id", id, "setErr", setErr)
+				slog.Warn("undo-last-apply failed to revert for", "rec", rec.Field, "id", logger.SanitizeLogValue(id), "setErr", setErr)
 				continue
 			}
 		} else {
 			if clrErr := h.metadataStateService.ClearOverride(id, rec.Field); clrErr != nil {
 				if !strings.Contains(clrErr.Error(), "not found") {
-					slog.Warn("undo-last-apply failed to clear for", "rec", rec.Field, "id", id, "clrErr", clrErr)
+					slog.Warn("undo-last-apply failed to clear for", "rec", rec.Field, "id", logger.SanitizeLogValue(id), "clrErr", clrErr)
 					continue
 				}
 			}
@@ -248,7 +249,7 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 			ChangedAt:     time.Now(),
 		}
 		if recErr := store.RecordMetadataChange(undoRec); recErr != nil {
-			slog.Warn("undo-last-apply failed to record undo for /", "id", id, "rec", rec.Field, "recErr", recErr)
+			slog.Warn("undo-last-apply failed to record undo for /", "id", logger.SanitizeLogValue(id), "rec", rec.Field, "recErr", recErr)
 		}
 	}
 

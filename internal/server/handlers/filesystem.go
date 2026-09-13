@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
@@ -271,7 +272,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 		// starting a scan; the synchronous fallback below cannot cover it, being
 		// gated on opEnqueuer being nil rather than on the enqueue failing.
 		slog.Warn("folder auto-scan enqueue failed; folder created without a scan",
-			"folder_id", folder.ID, "path", folder.Path, "err", enqErr)
+			"folder_id", folder.ID, "path", logger.SanitizeLogValue(folder.Path), "err", enqErr)
 	}
 
 	// Fallback: synchronous scan when op registry is unavailable.
@@ -309,7 +310,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 					// below already does, rather than move audio with no rows.
 					if h.autoOrganize {
 						slog.Warn("folder auto-organize skipped: the operation registry is unavailable and the synchronous fallback does not organize; run library.organize once the registry is up",
-							"folder_id", folder.ID, "path", folder.Path, "books", len(books))
+							"folder_id", folder.ID, "path", logger.SanitizeLogValue(folder.Path), "books", len(books))
 					}
 				}
 				folder.BookCount = len(books)

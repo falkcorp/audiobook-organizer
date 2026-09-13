@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.19.1
+// version: 2.19.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/gin-gonic/gin"
 )
@@ -315,10 +316,10 @@ func (s *Server) handleWipe(c *gin.Context) {
 	}
 
 	if len(incomplete) > 0 {
-		slog.Warn("wipe stopped early", "dry_run", dryRun, "targets", req.Targets,
+		slog.Warn("wipe stopped early", "dry_run", logger.SanitizeLogValue(fmt.Sprint(dryRun)), "targets", logger.SanitizeLogValue(fmt.Sprint(req.Targets)),
 			"results", results, "incomplete", incomplete)
 	} else {
-		slog.Info("wipe complete", "dry_run", dryRun, "targets", req.Targets, "results", results)
+		slog.Info("wipe complete", "dry_run", logger.SanitizeLogValue(fmt.Sprint(dryRun)), "targets", logger.SanitizeLogValue(fmt.Sprint(req.Targets)), "results", results)
 	}
 	httputil.RespondWithOK(c, struct {
 		DryRun     bool             `json:"dry_run"`
@@ -527,7 +528,7 @@ func (s *Server) lookupMaintenanceResultOp(opID, jobID string, legacyTypes ...st
 	row, err := store.GetOperationV2(opID)
 	if err != nil {
 		slog.Error("maintenance result lookup failed reading the v2 operations store",
-			"opID", opID, "jobID", jobID, "error", err)
+			"opID", logger.SanitizeLogValue(opID), "jobID", jobID, "error", err)
 		return maintenanceResultOp{}, fmt.Errorf("reading v2 operation %s: %w", opID, err)
 	}
 	if row != nil {
@@ -544,7 +545,7 @@ func (s *Server) lookupMaintenanceResultOp(opID, jobID string, legacyTypes ...st
 	op, err := store.GetOperationByID(opID)
 	if err != nil {
 		slog.Error("maintenance result lookup failed reading the v1 operations store",
-			"opID", opID, "jobID", jobID, "error", err)
+			"opID", logger.SanitizeLogValue(opID), "jobID", jobID, "error", err)
 		return maintenanceResultOp{}, fmt.Errorf("reading v1 operation %s: %w", opID, err)
 	}
 	if op == nil {

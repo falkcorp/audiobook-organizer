@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauthprobe.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c9f21a7-3e64-48db-b0d2-9a8e7c4f6103
-// last-edited: 2026-08-01
+// last-edited: 2026-09-13
 
 package middleware
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
@@ -81,9 +82,9 @@ func ABSAuthProbe() gin.HandlerFunc {
 
 		slog.Info("abs: auth probe",
 			"method", c.Request.Method,
-			"path", c.Request.URL.Path,
+			"path", logger.SanitizeLogValue(c.Request.URL.Path),
 			// Identifies WHICH client is calling — ShelfPlayer, Plappa, a browser, curl.
-			"user_agent", c.Request.UserAgent(),
+			"user_agent", logger.SanitizeLogValue(c.Request.UserAgent()),
 			// Mode C / browser-SSO signal: the edge verified a person and injected this.
 			"cf_assertion", assertion != "",
 			"cf_assertion_len", len(assertion),
