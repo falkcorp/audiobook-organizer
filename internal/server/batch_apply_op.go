@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -285,7 +285,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			}
 			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
-			var applied, noCandidates, decodeFailed, applyFailed, writeFailed atomic.Int64
+			var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing atomic.Int64
 			// gateDeferred holds the IDS — not a count — of books never
 			// ATTEMPTED because the write-back gate stayed saturated past this
 			// item's own timeout. Kept separate from writeFailed: nothing was
@@ -373,7 +373,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBook(svc, itunes, id, p.WriteBack,
+				out := applyCachedCandidateForBook(svc, s.store, itunes, id, p.WriteBack,
 					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) })
 
 				if !out.Applied {
@@ -384,11 +384,23 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						decodeFailed.Add(1)
 					case applySkipApplyFailed:
 						applyFailed.Add(1)
+					case applySkipBookNotFound:
+						bookMissing.Add(1)
+					case applySkipGateBlocked:
+						// The certainty gate refused (score floor, stale cache
+						// identity, or a volume-number mismatch). Nothing was
+						// written; the book stays for manual review.
+						gateBlocked.Add(1)
 					}
-					reporter.Log(slog.LevelWarn, "book not applied",
+					attrs := []slog.Attr{
 						slog.String("book_id", id),
 						slog.String("reason", out.Reason),
-						slog.String("error", errText(out.Err)))
+						slog.String("error", errText(out.Err)),
+					}
+					if out.Gate != nil {
+						attrs = append(attrs, slog.String("gate_reason", out.Gate.Reason), slog.Float64("score", out.Gate.Score))
+					}
+					reporter.Log(slog.LevelWarn, "book not applied", attrs...)
 					return nil
 				}
 
@@ -550,8 +562,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (no candidates %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
-				applied.Load(), total, noCandidates.Load(), decodeFailed.Load(),
+				"applied %d of %d (refused by certainty gate %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
+				applied.Load(), total, gateBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), stillDeferred,
 				skippedLocked.Load())
 			if priorDone > 0 {

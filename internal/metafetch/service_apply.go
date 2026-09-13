@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -612,35 +612,8 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 		slog.Warn("duration-mismatch apply book title candidate deltas (books audibles) wrong match or abridged version", "bookID", id, "bookTitle", book.Title, "candidateTitle", candidate.Title, "durationDeltaSec", candidate.DurationDeltaSec, "bookDurationSec", bookDurSec, "candidateDurationSec", candidate.DurationSec)
 	}
 
-	meta := metadata.BookMetadata{
-		Title:          candidate.Title,
-		Author:         candidate.Author,
-		Narrator:       candidate.Narrator,
-		Series:         candidate.Series,
-		SeriesPosition: candidate.SeriesPosition,
-		PublishYear:    candidate.Year,
-		Publisher:      candidate.Publisher,
-		ISBN:           candidate.ISBN,
-		ISBN10:         candidate.ISBN10,
-		ISBN13:         candidate.ISBN13,
-		ASIN:           candidate.ASIN,
-		Genre:          candidate.Genre,
-		CoverURL:       candidate.CoverURL,
-		Description:    candidate.Description,
-		Language:       candidate.Language,
-		DurationSec:    candidate.DurationSec,
-		// Content-matcher SIGNAL fields — carried so a manual apply persists them
-		// too, matching the auto-fetch path.
-		Abridged:                candidate.Abridged,
-		Subtitle:                candidate.Subtitle,
-		PageCount:               candidate.PageCount,
-		SeriesSecondary:         candidate.SeriesSecondary,
-		SeriesSecondaryPosition: candidate.SeriesSecondaryPosition,
-		// candidate.Year is a bare int with no kind attached; derive whether it
-		// is an audiobook release year (Audible/Audnexus) from the source name so
-		// ApplyMetadataToBook routes it to the same field as the auto-fetch path.
-		PublishYearIsAudiobookRelease: metadata.SourceProducesAudiobookReleaseYear(candidate.Source),
-	}
+	// candidateMetadata (apply_preview.go) is shared with the dry-run preview.
+	meta := candidateMetadata(candidate)
 
 	// If fields is non-empty, zero out every field NOT in it. The allowlist is
 	// ApplyFields (apply_fields.go) -- the same list provenance is recorded

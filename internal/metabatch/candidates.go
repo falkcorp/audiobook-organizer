@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -80,6 +80,10 @@ type BatchFetchRequest struct {
 
 // BatchApplyRequest is the JSON body for the batch candidate apply handler.
 type BatchApplyRequest struct {
+	// DryRun defaults to TRUE when absent: an API caller that does not say
+	// dry_run:false gets a preview (metadata.bulk-apply-preview), not an apply.
+	// The web UI's Apply button sends dry_run:false explicitly.
+	DryRun      *bool    `json:"dry_run,omitempty"`
 	OperationID string   `json:"operation_id" binding:"required"`
 	BookIDs     []string `json:"book_ids" binding:"required"`
 }

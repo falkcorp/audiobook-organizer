@@ -1,7 +1,7 @@
 // file: internal/server/metadata_scan_standdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c83e1a5f-02d7-4b69-8f4e-5a91d6c70b28
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package server
 
@@ -124,7 +124,7 @@ func TestBatchApplyCandidates_409WhileScanRuns(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates",
-		strings.NewReader(`{"operation_id":"op","book_ids":["b1"]}`))
+		strings.NewReader(`{"operation_id":"op","book_ids":["b1"],"dry_run":false}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	s.handleBatchApplyCandidates(c)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
@@ -145,7 +145,7 @@ func TestBatchApplyCandidates_RenewsPerBookAndStopsWhenHoldLost(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/metadata/batch-apply-candidates",
-			strings.NewReader(`{"operation_id":"op","book_ids":["b1","b2","b3"]}`))
+			strings.NewReader(`{"operation_id":"op","book_ids":["b1","b2","b3"],"dry_run":false}`))
 		c.Request.Header.Set("Content-Type", "application/json")
 		s.handleBatchApplyCandidates(c)
 		return w

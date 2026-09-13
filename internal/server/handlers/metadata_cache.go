@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -732,6 +732,11 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// WriteBack defaults to TRUE when absent — identical semantics to the
 		// single-book path's body.WriteBack.
 		WriteBack *bool `json:"write_back"`
+		// DryRun defaults to TRUE when absent: a caller that does not say
+		// dry_run:false gets the metadata.bulk-apply-preview report (candidate,
+		// certainty-gate verdict, field changes, rename) and nothing is
+		// applied. The web UI's Apply button sends dry_run:false.
+		DryRun *bool `json:"dry_run"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
@@ -739,6 +744,31 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 	}
 
 	shouldWriteBack := body.WriteBack == nil || *body.WriteBack
+
+	if body.DryRun == nil || *body.DryRun {
+		// No apply cap: a preview writes nothing, and "preview everything that
+		// would be applied" is the point.
+		opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.bulk-apply-preview", map[string]any{
+			"book_ids":   body.BookIDs,
+			"write_back": shouldWriteBack,
+			"source":     "cache",
+		})
+		if err != nil {
+			httputil.InternalError(c, "failed to enqueue metadata apply preview", err)
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{
+			"data": gin.H{
+				"op_id":       opID,
+				"dry_run":     true,
+				"requested":   len(body.BookIDs),
+				"write_back":  shouldWriteBack,
+				"results_url": "/api/v1/metadata/bulk-apply-preview/" + opID,
+				"note":        "dry run: nothing was applied. Send dry_run:false to apply.",
+			},
+		})
+		return
+	}
 
 	// Fail-safe cap (internal/applycap): refuse before enqueueing so the caller
 	// gets a 422 now instead of an op that fails a moment later. The op's Run

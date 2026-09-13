@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -109,7 +109,7 @@ func TestBatchApplyFromCache_EnqueuesOpWithBookIDs(t *testing.T) {
 	ops := &capturingEnqueuer{opID: "op-abc"}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3"]}`)
+	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	require.Equal(t, http.StatusAccepted, w.Code, "must return 202, not a completed result")
@@ -137,7 +137,7 @@ func TestBatchApplyFromCache_WriteBackDefaultsOn(t *testing.T) {
 	ops := &capturingEnqueuer{}
 	h := newDispatchHandler(t, ops)
 
-	c, _ := batchApplyCtx(`{"book_ids":["b1"]}`)
+	c, _ := batchApplyCtx(`{"book_ids":["b1"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	require.Equal(t, 1, ops.calls)
@@ -152,7 +152,7 @@ func TestBatchApplyFromCache_WriteBackFalseIsForwarded(t *testing.T) {
 	ops := &capturingEnqueuer{}
 	h := newDispatchHandler(t, ops)
 
-	c, _ := batchApplyCtx(`{"book_ids":["b1"],"write_back":false}`)
+	c, _ := batchApplyCtx(`{"book_ids":["b1"],"write_back":false,"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	require.Equal(t, 1, ops.calls)
@@ -167,7 +167,7 @@ func TestBatchApplyFromCache_WriteBackFalseIsForwarded(t *testing.T) {
 func TestBatchApplyFromCache_NoRegistryIsAnError(t *testing.T) {
 	h := newDispatchHandler(t, nil)
 
-	c, w := batchApplyCtx(`{"book_ids":["b1"]}`)
+	c, w := batchApplyCtx(`{"book_ids":["b1"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -180,7 +180,7 @@ func TestBatchApplyFromCache_EnqueueFailureIsReported(t *testing.T) {
 	ops := &capturingEnqueuer{err: errors.New("registry down")}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["b1"]}`)
+	c, w := batchApplyCtx(`{"book_ids":["b1"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -209,7 +209,7 @@ func TestBatchApplyFromCache_RefusesOverTheBulkApplyCap(t *testing.T) {
 	ops := &capturingEnqueuer{opID: "op-never"}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3","b4"]}`)
+	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3","b4"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
@@ -233,7 +233,7 @@ func TestBatchApplyFromCache_AllowsExactlyTheCap(t *testing.T) {
 	ops := &capturingEnqueuer{opID: "op-cap"}
 	h := newDispatchHandler(t, ops)
 
-	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3"]}`)
+	c, w := batchApplyCtx(`{"book_ids":["b1","b2","b3"],"dry_run":false}`)
 	h.BatchApplyFromCache(c)
 
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
@@ -254,7 +254,7 @@ func TestBatchApplyFromCache_ZeroConfigMeansDefaultNotUnlimited(t *testing.T) {
 	for i := range ids {
 		ids[i] = fmt.Sprintf("b%d", i)
 	}
-	raw, err := json.Marshal(map[string]any{"book_ids": ids})
+	raw, err := json.Marshal(map[string]any{"book_ids": ids, "dry_run": false})
 	require.NoError(t, err)
 	c, w := batchApplyCtx(string(raw))
 	h.BatchApplyFromCache(c)

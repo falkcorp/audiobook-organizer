@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.4.0
+// version: 4.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -476,6 +476,32 @@ const batchApplyConcurrency = 4
 
 // handleBatchApplyCandidates applies stored metadata candidates for the selected books.
 func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
+	var req batchApplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, "operation_id and book_ids are required")
+		return
+	}
+	if len(req.BookIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "book_ids must not be empty")
+		return
+	}
+	// Dry run unless the caller says dry_run:false: the preview reports, for
+	// each selected book, the gate verdict, field changes and rename, and
+	// applies nothing. It is read-only, so it takes neither the apply cap nor
+	// the scan stand-down hold below.
+	if req.DryRun == nil || *req.DryRun {
+		s.enqueueBulkApplyPreview(c, bulkApplyPreviewParams{
+			BookIDs: req.BookIDs, Source: previewSourceOpResults, OperationID: req.OperationID,
+		})
+		return
+	}
+	// Fail-safe cap (internal/applycap): refuse an implausibly large selection
+	// before a single candidate is applied. Refusal, not truncation.
+	if ex := applycap.Refuse("batch-apply-candidates", len(req.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
+	}
+
 	// Metadata is never applied during a library scan: 409 at once, no wait.
 	hold, ok := s.holdScanStandDownForRequest(c, "batch-apply-candidates")
 	if !ok {
@@ -486,22 +512,6 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	// The list this feeds is memoised; a status change must not keep offering a
 	// candidate the user just acted on.
 	defer invalidateMetadataResultsCache()
-
-	var req batchApplyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, "operation_id and book_ids are required")
-		return
-	}
-	if len(req.BookIDs) == 0 {
-		httputil.RespondWithBadRequest(c, "book_ids must not be empty")
-		return
-	}
-	// Fail-safe cap (internal/applycap): refuse an implausibly large selection
-	// before a single candidate is applied. Refusal, not truncation.
-	if ex := applycap.Refuse("batch-apply-candidates", len(req.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
-		httputil.RespondWithApplyCapExceeded(c, ex)
-		return
-	}
 
 	store := s.Ops()
 	mfs := s.metadataFetchService
@@ -529,7 +539,12 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	type applyOutcome struct {
 		applied bool
 		skipped bool
-		errMsg  string
+		// blocked: the certainty gate refused the candidate (see
+		// internal/applygate); nothing was written, the book is left for
+		// manual review, and blockMsg says which leg refused.
+		blocked  bool
+		blockMsg string
+		errMsg   string
 	}
 	outcomes := make([]applyOutcome, len(req.BookIDs))
 
@@ -573,7 +588,20 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 				return nil
 			}
 
-			candidate := *cr.Candidate
+			// Certainty gate: score floor, fetch-time identity, and the
+			// sequence-number guard. The "matched" status above is only "the
+			// top non-rejected candidate", with no floor behind it.
+			plan := planOpResultApply(s.store, bookID, cr)
+			if plan.Reason == applySkipGateBlocked {
+				outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, plan.Err)}
+				return nil
+			}
+			if plan.Reason != "" {
+				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: %s: %v", bookID, plan.Reason, plan.Err)}
+				return nil
+			}
+
+			candidate := *plan.Candidate
 			resp, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil)
 			if err != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
@@ -641,30 +669,38 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 
 	applied := 0
 	skipped := 0
-	var errors []string
+	var errors, blocked []string
 	for _, o := range outcomes {
 		switch {
 		case o.applied:
 			applied++
 		case o.skipped:
 			skipped++
+		case o.blocked:
+			blocked = append(blocked, o.blockMsg)
 		case o.errMsg != "":
 			errors = append(errors, o.errMsg)
 		}
 	}
 
 	httputil.RespondWithOK(c, struct {
-		Applied     int      `json:"applied"`
-		Skipped     int      `json:"skipped"`
-		Errors      []string `json:"errors"`
-		ErrorCount  int      `json:"error_count"`
-		OperationID string   `json:"operation_id"`
+		Applied int `json:"applied"`
+		Skipped int `json:"skipped"`
+		// Blocked lists books the certainty gate refused, with the reason. Not
+		// errors: nothing failed, the match was not certain enough to apply.
+		Blocked      []string `json:"blocked"`
+		BlockedCount int      `json:"blocked_count"`
+		Errors       []string `json:"errors"`
+		ErrorCount   int      `json:"error_count"`
+		OperationID  string   `json:"operation_id"`
 	}{
-		Applied:     applied,
-		Skipped:     skipped,
-		Errors:      errors,
-		ErrorCount:  len(errors),
-		OperationID: req.OperationID,
+		Applied:      applied,
+		Skipped:      skipped,
+		Blocked:      blocked,
+		BlockedCount: len(blocked),
+		Errors:       errors,
+		ErrorCount:   len(errors),
+		OperationID:  req.OperationID,
 	})
 }
 

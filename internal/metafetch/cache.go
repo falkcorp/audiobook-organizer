@@ -1,5 +1,6 @@
 // file: internal/metafetch/cache.go
-// version: 1.4.0
+// version: 1.5.0
+// last-edited: 2026-09-13
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -97,6 +98,43 @@ func (mfs *Service) ValidateCachedIdentity(entry *MetadataCandidateCache, bookID
 		return fmt.Errorf("%w: book %s (stored %s, current %s)", ErrStaleMetadataCache, bookID, entry.SourceHash, want)
 	}
 	return nil
+}
+
+// ValidateCachedIdentityForBook is ValidateCachedIdentity for a caller holding
+// the book, and it knows the two input shapes the cache writers use.
+//
+// The batch fetch (fetchCandidateForBook) hashes (title, author, "", ""): it
+// never searched by narrator or series. Recomputing over the book's CURRENT
+// narrator and series, as the transcription path does, would fail closed on
+// every batch-cached book that has either one, which is most of a library, and
+// a bulk-apply gate built on that would read as mass identity drift that never
+// happened. So a row passes when its hash matches either the full shape
+// (title, author, narrator, series — the UI writer for an untyped search) or
+// the batch shape (title, author, "", ""). Both are "the book's current
+// fields"; a row matching neither was fetched for a title or author the book
+// no longer has, and fails closed with ErrStaleMetadataCache. A legacy row
+// with no hash keeps ValidateCachedIdentity's fail-open.
+func (mfs *Service) ValidateCachedIdentityForBook(entry *MetadataCandidateCache, book *database.Book) error {
+	if entry == nil {
+		return nil
+	}
+	if book == nil {
+		return fmt.Errorf("%w: book %s no longer exists", ErrStaleMetadataCache, entry.BookID)
+	}
+	author, narrator, series := "", "", ""
+	if book.Author != nil {
+		author = book.Author.Name
+	}
+	if book.Narrator != nil {
+		narrator = *book.Narrator
+	}
+	if book.Series != nil {
+		series = book.Series.Name
+	}
+	if entry.SourceHash != "" && entry.SourceHash == hashSearchInputs(book.ID, book.Title, author, "", "") {
+		return nil
+	}
+	return mfs.ValidateCachedIdentity(entry, book.ID, book.Title, author, narrator, series)
 }
 
 // FetchAndCache runs the existing search pipeline, writes top-N to

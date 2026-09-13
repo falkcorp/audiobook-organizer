@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_cap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3f9a52-6c1e-4b8a-9e07-5a2d8c4f1b63
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -185,7 +185,7 @@ func TestBatchApplyCachedOp_ZeroConfigIsTheDefaultCap(t *testing.T) {
 func capCandidatesReq(t *testing.T, srv *Server, n int) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	body, err := json.Marshal(batchApplyRequest{OperationID: "op1", BookIDs: capIDs("b", n)})
+	body, err := json.Marshal(batchApplyRequest{OperationID: "op1", BookIDs: capIDs("b", n), DryRun: new(false)})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

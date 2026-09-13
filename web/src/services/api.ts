@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.105.0
+// version: 2.106.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4322,7 +4322,9 @@ export async function batchApplyFromCache(
   bookIds: string[],
   writeBack?: boolean
 ): Promise<BatchApplyDispatch> {
-  const body: Record<string, unknown> = { book_ids: bookIds };
+  // dry_run:false is explicit: absent, the server enqueues a preview
+  // (metadata.bulk-apply-preview) and applies nothing.
+  const body: Record<string, unknown> = { book_ids: bookIds, dry_run: false };
   if (writeBack !== undefined) body.write_back = writeBack;
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
@@ -4436,7 +4438,9 @@ export async function batchApplyCandidates(
   const response = await apiFetch(`${API_BASE}/metadata/batch-apply-candidates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ operation_id: operationId, book_ids: bookIds }),
+    // dry_run:false is explicit: absent, the server enqueues a preview
+    // (metadata.bulk-apply-preview) and applies nothing.
+    body: JSON.stringify({ operation_id: operationId, book_ids: bookIds, dry_run: false }),
   });
   if (!response.ok) throw await buildApiError(response, 'Failed to apply candidates');
   return response.json();
