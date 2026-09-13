@@ -1,11 +1,12 @@
 // file: internal/server/handlers/versions.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -467,7 +468,9 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		_ = h.store.MoveBookFilesToBook([]string{fileID}, sourceBook.ID, created.ID)
 
 		// Reassign external ID mappings (iTunes PIDs) that belong to the moved file
-		h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, []database.BookFile{f})
+		if xErr := h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, []database.BookFile{f}); xErr != nil {
+			versionsLog.Warn("split-to-books: external IDs of file %s not all moved to %s: %v", f.ID, created.ID, xErr)
+		}
 
 		createdBooks = append(createdBooks, created)
 	}
@@ -560,6 +563,9 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		Narrator:  sourceBook.Narrator,
 		Language:  sourceBook.Language,
 		Publisher: sourceBook.Publisher,
+		// ABS lists only library_state "organized" books, so a new book with
+		// no state would vanish from ABS while its source still shows.
+		LibraryState: sourceBook.LibraryState,
 	})
 	if err != nil {
 		httputil.InternalError(c, "failed to create book", err)
@@ -587,48 +593,112 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		return
 	}
 
+	// From here on the files have moved and that is not undone. A step that
+	// fails is reported in "warnings" with status 207, so the operator sees
+	// that the split landed but is not whole, rather than a 200 over a log line.
+	var warnings []string
+	warn := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		warnings = append(warnings, msg)
+		versionsLog.Warn("split-to-one-book %s -> %s: %s", logger.SanitizeLogValue(sourceBook.ID), created.ID, logger.SanitizeLogValue(msg))
+	}
+
 	if authors, aErr := h.store.GetBookAuthors(sourceBook.ID); aErr != nil {
-		versionsLog.Warn("split-to-one-book: could not read authors of %s to copy onto %s: %v",
-			logger.SanitizeLogValue(sourceBook.ID), created.ID, aErr)
+		warn("could not read the source book's authors to copy them onto the new book: %v", aErr)
 	} else if len(authors) > 0 {
 		newAuthors := make([]database.BookAuthor, 0, len(authors))
 		for _, ba := range authors {
 			newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role})
 		}
 		if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
-			versionsLog.Warn("split-to-one-book: could not copy authors onto %s: %v", created.ID, sErr)
+			warn("could not copy the source book's authors onto the new book: %v", sErr)
 		}
 	}
 
-	h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, selected)
-
-	// The source keeps its remaining files; point its FilePath at them.
-	// Re-read both books: the move's aggregate recompute has just written
-	// their Duration/FileSize, and writing back the rows read before it would
-	// put the old totals back.
-	if remaining, rErr := h.store.GetBookFiles(sourceBook.ID); rErr != nil {
-		versionsLog.Warn("split-to-one-book: could not list remaining files of %s: %v", logger.SanitizeLogValue(sourceBook.ID), rErr)
-	} else if len(remaining) > 0 {
-		if fresh, gErr := h.store.GetBookByID(sourceBook.ID); gErr == nil && fresh != nil {
-			if len(remaining) == 1 {
-				fresh.FilePath = remaining[0].FilePath
-			} else {
-				fresh.FilePath = filesCommonDir(remaining)
-			}
-			if _, uErr := h.store.UpdateBook(fresh.ID, fresh); uErr != nil {
-				versionsLog.Warn("split-to-one-book: could not update path of %s: %v", logger.SanitizeLogValue(fresh.ID), uErr)
-			}
-		}
+	if xErr := h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, selected); xErr != nil {
+		warn("external IDs of the moved files were not all moved to the new book: %v", xErr)
 	}
+
+	h.keepSplitSourceAFolder(sourceBook, warn)
+
+	// Re-read the new book: the move's aggregate recompute has written its
+	// Duration/FileSize since CreateBook returned.
 	if fresh, gErr := h.store.GetBookByID(created.ID); gErr == nil && fresh != nil {
 		created = fresh
 	}
 
-	httputil.RespondWithOK(c, gin.H{
+	body := gin.H{
 		"book":           created,
 		"source_book_id": sourceBook.ID,
 		"segments_moved": len(ids),
-	})
+	}
+	if len(warnings) > 0 {
+		body["warnings"] = warnings
+		c.JSON(http.StatusMultiStatus, body)
+		return
+	}
+	httputil.RespondWithOK(c, body)
+}
+
+// keepSplitSourceAFolder settles the split source's FilePath after its files
+// moved out. It stays a folder, as a multi-file book's FilePath is everywhere
+// else: unchanged (no write at all) while every remaining file is still
+// inside it, the usual case. Otherwise it becomes the remaining files' common
+// folder, never one file's path, and only when no other live book sits there.
+// Every failure is reported through warn.
+//
+// The source row is re-read before the write: the move's aggregate recompute
+// has just rewritten its Duration/FileSize, and writing back the row read
+// before the move would put the old totals back.
+func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, warn func(string, ...any)) {
+	remaining, err := h.store.GetBookFiles(sourceBook.ID)
+	if err != nil {
+		warn("could not list the source book's remaining files to check its path: %v", err)
+		return
+	}
+	if len(remaining) == 0 || allFilesWithin(sourceBook.FilePath, remaining) {
+		return
+	}
+	target := filepath.Dir(remaining[0].FilePath)
+	if len(remaining) > 1 {
+		target = filesCommonDir(remaining)
+	}
+	occupants, err := h.store.LiveBookIDsAtPath(target)
+	if err != nil {
+		warn("source book path left at %q: could not check whether %q is free: %v", sourceBook.FilePath, target, err)
+		return
+	}
+	others := slices.DeleteFunc(occupants, func(id string) bool { return id == sourceBook.ID })
+	if len(others) > 0 {
+		warn("source book path left at %q: its remaining files' folder %q already belongs to book(s) %s",
+			sourceBook.FilePath, target, strings.Join(others, ", "))
+		return
+	}
+	fresh, err := h.store.GetBookByID(sourceBook.ID)
+	if err != nil || fresh == nil {
+		warn("source book path left at %q: could not re-read the source book to move it to %q: %v", sourceBook.FilePath, target, err)
+		return
+	}
+	fresh.FilePath = target
+	if _, err := h.store.UpdateBook(fresh.ID, fresh); err != nil {
+		warn("source book path left at %q: could not update it to %q: %v", sourceBook.FilePath, target, err)
+	}
+}
+
+// allFilesWithin reports whether every file is dir itself or inside it. An
+// empty dir contains nothing.
+func allFilesWithin(dir string, files []database.BookFile) bool {
+	if dir == "" {
+		return false
+	}
+	dir = filepath.Clean(dir)
+	for _, f := range files {
+		p := filepath.Clean(f.FilePath)
+		if p != dir && !strings.HasPrefix(p, dir+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
 }
 
 // splitTargetPath picks the FilePath of the book splitSegmentsToOneBook is
@@ -772,7 +842,10 @@ func (h *VersionsHandler) MoveSegments(c *gin.Context) {
 	}
 
 	// 6. Reassign external ID mappings (iTunes PIDs) for moved files
-	h.reassignExternalIDsForFiles(id, req.TargetBookID, movedFiles)
+	if xErr := h.reassignExternalIDsForFiles(id, req.TargetBookID, movedFiles); xErr != nil {
+		versionsLog.Warn("move-segments: external IDs not all moved from %s to %s: %v",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(req.TargetBookID), xErr)
+	}
 
 	httputil.RespondWithOK(c, gin.H{
 		"segments_moved": len(req.SegmentIDs),
@@ -785,14 +858,20 @@ func (h *VersionsHandler) MoveSegments(c *gin.Context) {
 // source book to a target book for the given moved files. Reimplemented from the
 // server-package *Server.reassignExternalIDsForFiles, backed by the narrow
 // VersionsStore interface.
-func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID string, files []database.BookFile) {
+//
+// It returns every read, delete and create failure joined, so a caller can
+// report them; the reassignment carries on past each one, as it always has.
+func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID string, files []database.BookFile) error {
 	if h.store == nil {
-		return
+		return nil
 	}
 
 	mappings, err := h.store.GetExternalIDsForBook(sourceBookID)
-	if err != nil || len(mappings) == 0 {
-		return
+	if err != nil {
+		return fmt.Errorf("read external IDs of book %s: %w", sourceBookID, err)
+	}
+	if len(mappings) == 0 {
+		return nil
 	}
 
 	// Build lookup sets from the moved files
@@ -816,21 +895,26 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 		}
 	}
 	if len(toMove) == 0 {
-		return
+		return nil
 	}
 
 	// Reassign each mapping: delete old reverse key, update primary, add new reverse key
+	var errs []error
 	for _, m := range toMove {
 		oldReverseKey := fmt.Sprintf("ext_id:book:%s:%s:%s", sourceBookID, m.Source, m.ExternalID)
-		_ = h.store.DeleteRaw(oldReverseKey)
+		if dErr := h.store.DeleteRaw(oldReverseKey); dErr != nil {
+			errs = append(errs, fmt.Errorf("delete old reverse key for %s %s: %w", m.Source, m.ExternalID, dErr))
+		}
 
 		m.BookID = targetBookID
 		if createErr := h.store.CreateExternalIDMapping(&m); createErr != nil {
-			slog.Warn("reassignExternalIDsForFiles failed to reassign to", "source", m.Source, "externalID", m.ExternalID, "targetBookID", logger.SanitizeLogValue(targetBookID), "createErr", createErr)
+			errs = append(errs, fmt.Errorf("reassign %s %s to book %s: %w", m.Source, m.ExternalID, targetBookID, createErr))
 		}
 	}
 
-	slog.Info("reassigned external ID mapping(s) from book to", "toMove_count", len(toMove), "sourceBookID", logger.SanitizeLogValue(sourceBookID), "targetBookID", logger.SanitizeLogValue(targetBookID))
+	versionsLog.Info("reassigned %d external ID mapping(s) from book %s to %s (%d failed)",
+		len(toMove), logger.SanitizeLogValue(sourceBookID), logger.SanitizeLogValue(targetBookID), len(errs))
+	return errors.Join(errs...)
 }
 
 // filesCommonDir returns the common parent directory of the given files.

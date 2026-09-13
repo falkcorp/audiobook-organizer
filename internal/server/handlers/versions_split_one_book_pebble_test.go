@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_pebble_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b4d6f8a-0c1e-4f3a-8d5b-9e1f3a5c7b86
 // last-edited: 2026-09-13
 
@@ -136,7 +136,8 @@ func TestSplitSegmentsToBooks_AsOneBook_PebbleStore(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	dur, size := 600, int64(60)
-	src, err := store.CreateBook(&database.Book{Title: "Omnibus", FilePath: "/lib/Omnibus", Format: "mp3", Duration: &dur, FileSize: &size})
+	organized := "organized"
+	src, err := store.CreateBook(&database.Book{Title: "Omnibus", FilePath: "/lib/Omnibus", Format: "mp3", Duration: &dur, FileSize: &size, LibraryState: &organized})
 	if err != nil {
 		t.Fatalf("create book: %v", err)
 	}
@@ -201,6 +202,9 @@ func TestSplitSegmentsToBooks_AsOneBook_PebbleStore(t *testing.T) {
 	if newBook.FilePath != "/lib/Omnibus/Book 1" {
 		t.Fatalf("new book path %q", newBook.FilePath)
 	}
+	if newBook.LibraryState == nil || *newBook.LibraryState != "organized" {
+		t.Fatalf("new book library_state = %v, want the source's \"organized\"", newBook.LibraryState)
+	}
 	if newBook.Duration == nil || *newBook.Duration != 300 || newBook.FileSize == nil || *newBook.FileSize != 30 {
 		t.Fatalf("new book aggregates not recomputed: duration=%v size=%v", newBook.Duration, newBook.FileSize)
 	}
@@ -211,7 +215,15 @@ func TestSplitSegmentsToBooks_AsOneBook_PebbleStore(t *testing.T) {
 	if srcBook.Duration == nil || *srcBook.Duration != 300 || srcBook.FileSize == nil || *srcBook.FileSize != 30 {
 		t.Fatalf("source aggregates not recomputed: duration=%v size=%v", srcBook.Duration, srcBook.FileSize)
 	}
-	if srcBook.FilePath != "/lib/Omnibus/Book 2/01.mp3" {
-		t.Fatalf("source path %q", srcBook.FilePath)
+	// The remaining file is still inside the source's folder, so the source
+	// keeps that folder (never the one file's path) and its lookup key.
+	if srcBook.FilePath != "/lib/Omnibus" {
+		t.Fatalf("source path %q, want the unchanged folder", srcBook.FilePath)
+	}
+	if owner, _ := store.GetBookByFilePath("/lib/Omnibus"); owner == nil || owner.ID != src.ID {
+		t.Fatalf("source lost its path key: %+v", owner)
+	}
+	if owner, _ := store.GetBookByFilePath("/lib/Omnibus/Book 1"); owner == nil || owner.ID != newID {
+		t.Fatalf("new book does not own its path key: %+v", owner)
 	}
 }

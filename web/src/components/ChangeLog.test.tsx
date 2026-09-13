@@ -1,13 +1,14 @@
 // file: web/src/components/ChangeLog.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e2f1a4c-9b3d-4e7a-8c1f-5d2b6a9e0f3c
-// last-edited: 2026-08-23
+// last-edited: 2026-09-13
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { ChangeLog } from './ChangeLog';
+import { ToastProvider } from './toast/ToastProvider';
 import { fetchActivity } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 
@@ -132,5 +133,68 @@ describe('ChangeLog', () => {
     // The button's click bubbles up to the row's own onClick (also wired to
     // onCompareSnapshot) unless the button's handler stops propagation.
     expect(onCompareSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  describe('revert write-back failure', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("shows the server's reason when the write-back (rename:true) is refused", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        entries: [importEntry, tagWriteEntry],
+        total: 2,
+      });
+      const reason = 'rename refused before any move: two files would be renamed to the same target';
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/revert-metadata')) {
+          return new Response('{}', { status: 200 });
+        }
+        return new Response(JSON.stringify({ error: reason, code: 'rename_refused' }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const onRevert = vi.fn();
+      const user = userEvent.setup();
+
+      renderWithProviders(
+        <ToastProvider>
+          <ChangeLog bookId="book1" onRevert={onRevert} />
+        </ToastProvider>
+      );
+
+      await user.click(await screen.findByRole('button', { name: /revert/i }));
+
+      expect(await screen.findByText(new RegExp(reason))).toBeInTheDocument();
+      expect(screen.getByText(/writing it to the files failed/i)).toBeInTheDocument();
+      const writeBackCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/write-back'));
+      expect(writeBackCall).toBeDefined();
+      // The revert itself landed, so the parent still refreshes.
+      expect(onRevert).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the HTTP status when a failed response has no body', async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        entries: [importEntry, tagWriteEntry],
+        total: 2,
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('', { status: 500 }))
+      );
+      const user = userEvent.setup();
+
+      renderWithProviders(
+        <ToastProvider>
+          <ChangeLog bookId="book1" />
+        </ToastProvider>
+      );
+
+      await user.click(await screen.findByRole('button', { name: /revert/i }));
+
+      expect(await screen.findByText(/Revert failed: HTTP 500/)).toBeInTheDocument();
+    });
   });
 });

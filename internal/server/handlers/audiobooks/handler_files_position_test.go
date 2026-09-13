@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_files_position_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b0e6f5a-2c41-4d8e-9a7b-6f1c2d9e8a53
 // last-edited: 2026-09-13
 
@@ -8,6 +8,7 @@ package audiobookshandler_test
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -119,6 +120,41 @@ func TestUndoMetadataChange_RevertsBookFilePosition(t *testing.T) {
 	h.UndoMetadataChange(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// undoRoute is the production pattern from wire_audiobooks_routes.go.
+const undoRoute = "/audiobooks/:id/metadata-history/:field/undo"
+
+// Routed through a real gin engine: a file-position field carries colons
+// (book_file:<id>:track_number), and :field must receive it whole, both as
+// the frontend sends it (raw, api.ts builds the URL unencoded) and
+// percent-encoded.
+func TestUndoMetadataChange_RoutedFieldWithColons(t *testing.T) {
+	const field = "book_file:f1:track_number"
+	for _, target := range []string{
+		"/audiobooks/b1/metadata-history/book_file:f1:track_number/undo",
+		"/audiobooks/b1/metadata-history/book_file%3Af1%3Atrack_number/undo",
+	} {
+		t.Run(target, func(t *testing.T) {
+			h, d := newHandler(t)
+			prev, next := "3", "0"
+			d.store.EXPECT().GetMetadataChangeHistory("b1", field, 1).Return([]database.MetadataChangeRecord{
+				{BookID: "b1", Field: field, PreviousValue: &prev, NewValue: &next, ChangeType: "manual"},
+			}, nil)
+			d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(
+				&database.BookFile{ID: "f1", TrackNumber: 0}, &database.BookFile{ID: "f1", TrackNumber: 3}, nil)
+			d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil)
+			d.metaFetch.EXPECT().InvalidateCachedCandidates("b1").Return(nil).Maybe()
+
+			r := gin.New()
+			r.POST(undoRoute, h.UndoMetadataChange)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, target, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

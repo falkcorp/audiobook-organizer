@@ -1,7 +1,7 @@
 // file: web/src/components/ChangeLog.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 00f575de-ecea-45b7-9aa5-d6dbbc3f21f6
-// last-edited: 2026-08-23
+// last-edited: 2026-09-13
 
 import { useCallback, useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
@@ -10,6 +10,7 @@ import type { ChangeLogEntry } from '../services/api';
 import * as api from '../services/api';
 import { fetchActivity } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
+import { useToast } from './toast/ToastProvider';
 
 interface ChangeLogProps {
   bookId: string;
@@ -34,6 +35,20 @@ const TYPE_LABELS: Record<string, string> = {
   transcode: 'Transcode',
 };
 
+// responseErrorMessage reads the server's reason from a failed response: the
+// JSON body's "error" field when there is one, else the raw text, else the
+// HTTP status.
+const responseErrorMessage = async (resp: Response): Promise<string> => {
+  const text = await resp.text().catch(() => '');
+  try {
+    const body = JSON.parse(text) as { error?: unknown };
+    if (typeof body.error === 'string' && body.error) return body.error;
+  } catch {
+    // not JSON; fall through to the raw text
+  }
+  return text.trim() || `HTTP ${resp.status}`;
+};
+
 const formatTimestamp = (ts: string): string => {
   const date = new Date(ts);
   if (isNaN(date.getTime())) return ts;
@@ -44,6 +59,7 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
   const [entries, setEntries] = useState<ChangeLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [reverting, setReverting] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const mapActivityToChangeLogEntry = (a: ActivityEntry): ChangeLogEntry => ({
     timestamp: a.timestamp,
@@ -88,22 +104,28 @@ export const ChangeLog = ({ bookId, refreshKey, onRevert, onCompareSnapshot }: C
         body: JSON.stringify({ timestamp }),
       });
       if (!revertResp.ok) {
-        console.error('Revert failed:', revertResp.status, await revertResp.text());
+        toast(`Revert failed: ${await responseErrorMessage(revertResp)}`, 'error');
         return;
       }
-      // Also trigger write-back to sync tags to file
+      // Also trigger write-back to sync tags to file. With rename:true the
+      // server refuses (409) or fails (500) before writing tags when the
+      // rename cannot be done, so the operator must see why: the revert
+      // itself landed, but the files were not updated.
       const wbResp = await fetch(`/api/v1/audiobooks/${bookId}/write-back`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rename: true }),
       });
       if (!wbResp.ok) {
-        console.error('Write-back after revert failed:', wbResp.status);
+        toast(
+          `Metadata reverted, but writing it to the files failed: ${await responseErrorMessage(wbResp)}`,
+          'error'
+        );
       }
       loadChangelog();
       onRevert?.();
     } catch (err) {
-      console.error('Revert failed:', err);
+      toast(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
     } finally {
       setReverting(null);
     }
