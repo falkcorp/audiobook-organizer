@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.18.0
+// version: 13.19.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package ai
 
@@ -14,6 +14,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -38,6 +41,189 @@ type ParsedMetadata struct {
 	Publisher  string `json:"publisher,omitempty"`
 	Year       int    `json:"year,omitempty"`
 	Confidence string `json:"confidence"` // high, medium, low
+
+	// numericCoercions records the numeric fields decodeResultElement had to
+	// coerce or drop because the model sent something other than a JSON
+	// integer. Nil when nothing was coerced (so a normal result still
+	// compares equal to a literal ParsedMetadata). Consumed and cleared by
+	// logNumericCoercions, which knows the filename; never serialized.
+	numericCoercions *[]numericCoercion
+}
+
+// numericCoercion is one numeric field whose model-sent value was not a
+// plain JSON integer.
+type numericCoercion struct {
+	Field   string // JSON key, e.g. "year"
+	Raw     string // the raw JSON value as sent, truncated
+	Dropped bool   // true: the value was unusable and the field is zero
+}
+
+// lenientInt decodes a numeric metadata field from an LLM reply without ever
+// failing the decode.
+//
+// The local model has been seen sending "year": "2015" and
+// "year": "not available" for a field the prompt shows as a number. A plain
+// int field fails the whole json.Unmarshal on either, and in the batch path
+// that failed every book in the batch ("result 0 does not decode as
+// metadata: ... ParsedMetadata.year of type int"). So:
+//
+//   - a JSON integer, or an integral JSON number such as 3.0, is the value;
+//   - a string that, trimmed, is such a number ("2015", " 3 ", "3.0") is the
+//     value, recorded as coerced;
+//   - null is zero, not recorded (the observed "found nothing" placeholder);
+//   - anything else -- non-numeric text, "", a fractional number such as
+//     "3.5" or 3.5, a number out of int range, a bool, object or array -- is
+//     zero for THIS FIELD ONLY, recorded as dropped.
+//
+// Zero is the "no value" the save path already skips: runAIBatchPhase copies
+// SeriesNum only when > 0, and Year is not carried to the save at all.
+type lenientInt struct {
+	value   int
+	raw     string
+	coerced bool
+	dropped bool
+}
+
+// maxCoercionRawBytes bounds the raw value kept for the coercion log line.
+const maxCoercionRawBytes = 80
+
+func (l *lenientInt) UnmarshalJSON(b []byte) error {
+	*l = lenientInt{}
+	t := bytes.TrimSpace(b)
+	if bytes.Equal(t, []byte("null")) {
+		return nil
+	}
+	l.raw = string(t)
+	if len(l.raw) > maxCoercionRawBytes {
+		cut := maxCoercionRawBytes
+		for cut > 0 && !utf8.RuneStart(l.raw[cut]) {
+			cut--
+		}
+		l.raw = l.raw[:cut] + "..."
+	}
+
+	text := string(t)
+	isString := len(t) > 0 && t[0] == '"'
+	if isString {
+		var s string
+		if err := json.Unmarshal(t, &s); err != nil {
+			l.dropped = true
+			return nil
+		}
+		text = strings.TrimSpace(s)
+	} else if len(t) == 0 || (t[0] != '-' && (t[0] < '0' || t[0] > '9')) {
+		// true/false, an object or an array.
+		l.dropped = true
+		return nil
+	}
+
+	v, ok := integralNumber(text)
+	if !ok {
+		l.dropped = true
+		return nil
+	}
+	l.value = v
+	// A JSON integer literal is the normal case and is not recorded; a
+	// string, or a number written as 3.0, is.
+	if _, err := strconv.Atoi(text); isString || err != nil {
+		l.coerced = true
+	}
+	return nil
+}
+
+// integralNumber parses s as a decimal number with no fractional part that
+// fits in an int. "3.0" is 3; "3.5", "", "NaN", "Inf" and "0x1F" are rejected.
+func integralNumber(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	if v, err := strconv.Atoi(s); err == nil {
+		return v, true
+	}
+	// ParseFloat accepts spellings JSON numbers do not ("Inf", "NaN", hex,
+	// underscores); require a plain decimal first.
+	for _, r := range s {
+		if !(r >= '0' && r <= '9') && r != '.' && r != '-' && r != '+' && r != 'e' && r != 'E' {
+			return 0, false
+		}
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
+		return 0, false
+	}
+	// float64(math.MaxInt) rounds UP to 2^63, which int cannot hold, hence >=.
+	if f >= float64(math.MaxInt) || f < float64(math.MinInt) {
+		return 0, false
+	}
+	return int(f), true
+}
+
+// plainParsedMetadata has ParsedMetadata's fields and none of its methods,
+// so parsedMetadataWire can embed it.
+type plainParsedMetadata ParsedMetadata
+
+// parsedMetadataWire is how decodeResultElement reads one result: every
+// field decodes into the embedded ParsedMetadata exactly as before, except
+// the numeric ones, which the shallower fields below shadow (encoding/json
+// prefers the less-nested field for the same key) with lenientInt.
+// TestParsedMetadataWire_ShadowsEveryNumericField fails if a numeric field
+// is added to ParsedMetadata without a lenient shadow here.
+type parsedMetadataWire struct {
+	*plainParsedMetadata
+	SeriesNum lenientInt `json:"series_number"`
+	Year      lenientInt `json:"year"`
+}
+
+// decodeParsedMetadataLeniently decodes raw into a ParsedMetadata with the
+// lenientInt rules for the numeric fields. It errors only when raw does not
+// decode as an object whose string fields are strings -- i.e. exactly the
+// failures a plain Unmarshal had, minus the numeric ones.
+func decodeParsedMetadataLeniently(raw []byte) (*ParsedMetadata, error) {
+	var m ParsedMetadata
+	wire := parsedMetadataWire{plainParsedMetadata: (*plainParsedMetadata)(&m)}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, err
+	}
+	var notes []numericCoercion
+	for _, f := range []struct {
+		key string
+		src lenientInt
+		dst *int
+	}{
+		{"series_number", wire.SeriesNum, &m.SeriesNum},
+		{"year", wire.Year, &m.Year},
+	} {
+		*f.dst = f.src.value
+		if f.src.coerced || f.src.dropped {
+			notes = append(notes, numericCoercion{Field: f.key, Raw: f.src.raw, Dropped: f.src.dropped})
+		}
+	}
+	if len(notes) > 0 {
+		m.numericCoercions = &notes
+	}
+	return &m, nil
+}
+
+// logNumericCoercions logs, once, each numeric field of m that the decoder
+// coerced or dropped, attributed to source (the filename, where known), then
+// clears the record so a cached copy does not log again. A dropped value is
+// logged at Info so a model regression is visible in the normal log; an
+// accepted numeric string at Debug. Only the field's own raw value is
+// logged, never the whole reply.
+func logNumericCoercions(source string, m *ParsedMetadata) {
+	if m == nil || m.numericCoercions == nil {
+		return
+	}
+	for _, c := range *m.numericCoercions {
+		if c.Dropped {
+			slog.Info("AI parse: dropped a non-numeric value for a numeric field; field left empty",
+				"file", sanitizeReplyText(source), "field", c.Field, "raw", sanitizeReplyText(c.Raw))
+		} else {
+			slog.Debug("AI parse: accepted a numeric field sent as a string or non-integer literal",
+				"file", sanitizeReplyText(source), "field", c.Field, "raw", sanitizeReplyText(c.Raw))
+		}
+	}
+	m.numericCoercions = nil
 }
 
 // OpenAIParser handles AI-powered metadata parsing using OpenAI
@@ -247,6 +433,7 @@ Set confidence based on clarity of the filename structure.`
 		return nil, err
 	}
 
+	logNumericCoercions(filename, result)
 	// Cache the result
 	p.responseCache.Set(key, result)
 	return result, nil
@@ -352,6 +539,7 @@ Set confidence based on how much context was available and how unambiguous it is
 		return nil, err
 	}
 
+	logNumericCoercions(abCtx.FilePath, result)
 	p.responseCache.Set(key, result)
 	return result, nil
 }
@@ -446,7 +634,16 @@ Set confidence based on clarity of the filename structure.`
 	}
 	// Always exactly len(filenames) entries (nil where the model had nothing),
 	// or an error: the caller assigns results by position.
-	return parseBatchMetadataFromJSON(content, len(filenames))
+	results, err := parseBatchMetadataFromJSON(content, len(filenames))
+	if err != nil {
+		return nil, err
+	}
+	// results[i] belongs to filenames[i]: the count check above guarantees
+	// the lengths match.
+	for i, m := range results {
+		logNumericCoercions(filenames[i], m)
+	}
+	return results, nil
 }
 
 // ParseCoverArt uses OpenAI vision to extract metadata from audiobook cover art.
@@ -510,7 +707,12 @@ Set confidence based on how clearly the text is readable on the cover.`
 	}
 
 	content := completion.Choices[0].Message.Content
-	return parseMetadataFromJSON(content)
+	result, err := parseMetadataFromJSON(content)
+	if err != nil {
+		return nil, err
+	}
+	logNumericCoercions("(cover art)", result)
+	return result, nil
 }
 
 // TestConnection tests the OpenAI API connection
@@ -691,11 +893,15 @@ func decodeResultElement(raw json.RawMessage) (m *ParsedMetadata, isMetadata boo
 	if key, ok := errorReportKey(obj); ok {
 		return nil, false, fmt.Errorf("carries an %q key, so it is an error report and not a result", sanitizeReplyText(key))
 	}
-	var metadata ParsedMetadata
-	if err := json.Unmarshal(raw, &metadata); err != nil {
+	// Lenient on the numeric fields only (see lenientInt): one "year":
+	// "not available" zeroes that book's year instead of failing the element
+	// and, in the batch path, every other book in the batch with it. A string
+	// field holding a non-string still fails, as before.
+	metadata, err := decodeParsedMetadataLeniently(raw)
+	if err != nil {
 		return nil, false, fmt.Errorf("does not decode as metadata: %w", err)
 	}
-	return &metadata, len(obj) > 0, nil
+	return metadata, len(obj) > 0, nil
 }
 
 // SuggestionRole represents a detected role (author, narrator, or publisher) in an AI suggestion.
