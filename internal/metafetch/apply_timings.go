@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
 // last-edited: 2026-09-13
 
@@ -90,6 +90,11 @@ func (t *ApplyPhaseTimings) Get(phase string) time.Duration {
 }
 
 // String renders "gate_wait=0ms apply_db=812ms ... total=4210ms files=58".
+//
+// Only phases that were actually MEASURED appear. A phase this timer never
+// saw is left out rather than printed as 0ms: the single-book apply handler
+// runs its DB apply before the file work starts its timer, and a line saying
+// "apply_db=0ms" there would claim a measurement that was never made.
 func (t *ApplyPhaseTimings) String() string {
 	if t == nil {
 		return ""
@@ -98,7 +103,9 @@ func (t *ApplyPhaseTimings) String() string {
 	defer t.mu.Unlock()
 	var b strings.Builder
 	for _, p := range phaseOrder {
-		fmt.Fprintf(&b, "%s=%dms ", p, t.d[p].Milliseconds())
+		if d, ok := t.d[p]; ok {
+			fmt.Fprintf(&b, "%s=%dms ", p, d.Milliseconds())
+		}
 	}
 	fmt.Fprintf(&b, "total=%dms files=%d", time.Since(t.start).Milliseconds(), t.files.Load())
 	return b.String()
