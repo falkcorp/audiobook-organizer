@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -186,7 +187,14 @@ func enqueueAIParse(ctx context.Context, books []Book, candidates []int, scanLog
 // aiParseCandidate strips a Book down to what the AI phase actually reads and
 // writes, which is measured rather than assumed: ai_batch_phase.go touches
 // FilePath, Title, Author, Series, Position, Narrator and Publisher, and
-// saveAIFieldsToPrimary touches the same seven.
+// saveAIFieldsToPrimary touches the same seven plus Year.
+//
+// Year is deliberately NOT carried, and that is not an oversight to "fix" for
+// symmetry with Position. Position is a real input: the scan derives it from
+// tags and the filename before the AI phase runs. Year is an output only: the
+// scan has no year source, so the model is the only thing that sets it, inside
+// runAIBatchPhase. A candidate Year field would serialize a permanent zero into
+// every params row.
 //
 // This bounds the operation's params row. A Book carries SegmentFiles and
 // SegmentHashes, so a batch of segment-heavy multi-file books would serialize
@@ -409,6 +417,19 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		row.Publisher = &pub
 		changed = true
 	}
+	// Release year is a gap-fill, the same rule as the series position: written
+	// only into an EMPTY audiobook_release_year the user has not locked, never
+	// over a year the row already has. Same column and lock key the single-book
+	// ParseAudiobook handler writes.
+	if !hasReleaseYear(row) && book.Year != 0 && !locks.Locked(database.FieldKeyAudiobookReleaseYear) {
+		if plausibleAIYear(book.Year, time.Now()) {
+			y := book.Year
+			row.AudiobookReleaseYear = &y
+			changed = true
+		} else {
+			aiParseLog.Debug("AI parse: ignoring implausible year %d for %s", book.Year, row.ID)
+		}
+	}
 
 	// The row's CURRENT path is what gets stamped into the scan cache, not the
 	// one the params carried -- organize may have renamed the file since. An
@@ -432,6 +453,29 @@ var aiParseLog = logger.New("ai_parse")
 // present but blank.
 func isBlankPtr(s *string) bool {
 	return s == nil || strings.TrimSpace(*s) == ""
+}
+
+// hasReleaseYear reports whether the row already carries a release year. A nil
+// pointer and a pointer to 0 (or less) both count as empty, the same test every
+// year reader in the tree applies (organizer/rename.go, audiobooks/helpers.go,
+// metafetch/service_writeback.go all check `!= nil && > 0`). No other legacy
+// sentinel exists: nothing in the tree writes 9999 or -1 for a year.
+func hasReleaseYear(row *database.Book) bool {
+	return row.AudiobookReleaseYear != nil && *row.AudiobookReleaseYear > 0
+}
+
+// aiYearFloor is the lowest year the AI parse may record. The lenient numeric
+// decoder (#3352) accepts any year >= 1, so without this floor a stray track
+// number or a "1" parsed out of "Book 1" would be saved as a year.
+const aiYearFloor = 1000
+
+// plausibleAIYear bounds the model's year to aiYearFloor..now+1. Inside that
+// range the year is taken as the model returned it. The model sometimes returns
+// a copyright or original-recording year rather than the audiobook release
+// year; nothing here can tell those apart, and the gap-fill rule (never
+// overwrite, respect locks) is what limits the damage.
+func plausibleAIYear(y int, now time.Time) bool {
+	return y >= aiYearFloor && y <= now.Year()+1
 }
 
 // primaryVersionOf returns the primary member of row's version group, or nil
