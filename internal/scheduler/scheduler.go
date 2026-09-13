@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-09-13
 
@@ -284,8 +284,8 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 		if task.IsEnabled() && task.DailyAt != "" {
 			hour, minute, perr := parseDailyAt(task.DailyAt)
 			if perr != nil {
-				slog.Warn("Scheduled task is ENABLED but can NEVER run — its daily-at time does not parse",
-					"taskName", name, "dailyAt", task.DailyAt, "err", perr)
+				schedLog.Warn("Scheduled task is ENABLED but can NEVER run — its daily-at time does not parse: taskName=%s dailyAt=%q err=%v",
+					name, task.DailyAt, perr)
 				continue
 			}
 			taskName := name
@@ -305,8 +305,8 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 					}
 				}
 			})
-			slog.Info("Scheduled task daily", "taskName", taskName, "dailyAt", task.DailyAt,
-				"zone", loc.String(), "poll", intervalPollInterval, "durableClock", true)
+			schedLog.Info("Scheduled task daily: taskName=%s dailyAt=%s zone=%s poll=%s durableClock=true",
+				taskName, task.DailyAt, loc.String(), intervalPollInterval)
 		} else if task.IsEnabled() && task.GetInterval() > 0 {
 			interval := task.GetInterval()
 			taskName := name
