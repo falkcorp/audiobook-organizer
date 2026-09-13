@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.21.1
+// version: 5.22.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -228,6 +228,16 @@ type Service struct {
 	// work takes it itself, on the path it is about to write (fileWorkTarget,
 	// lockWriteTarget). Nil means no lock: tests and organize's per-call service.
 	pathLock func(path string) func()
+
+	// fileWriteSlot is a NON-BLOCKING take on the server's process-wide
+	// write-back gate (SetFileWriteGate). The per-file tag writes of one book
+	// use it to add writers beyond the first; see runFileWrites. Nil means no
+	// extra writers: every book's files are written one at a time.
+	fileWriteSlot func() (release func(), ok bool)
+
+	// fileTagWrite replaces the per-file safe tag write (backup + WriteTagsSafe)
+	// in tests so they can observe per-file concurrency. Nil in production.
+	fileTagWrite func(path string, tagMap map[string]any) error
 }
 
 type FetchMetadataResponse struct {

@@ -1,7 +1,7 @@
 // file: internal/server/file_write_gate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d02fb725-e59d-4f45-8b4c-d21c5260a330
-// last-edited: 2026-08-27
+// last-edited: 2026-09-13
 
 package server
 
@@ -28,5 +28,22 @@ func (g *fileWriteGate) acquire(ctx context.Context) (func(), error) {
 		return func() { <-g.slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// tryAcquire takes a slot only if one is free right now. It never blocks.
+//
+// It exists for fan-out INSIDE a holder: a batch-apply worker already holds
+// one slot for its book and wants extra per-file writers. A blocking acquire
+// there would deadlock once every slot is held by a book waiting for more
+// (8 books x 1 slot, each waiting for a 2nd). A holder that takes extras only
+// when they are free can never wait on itself, and the total of concurrent
+// writers still never exceeds the gate's limit.
+func (g *fileWriteGate) tryAcquire() (func(), bool) {
+	select {
+	case g.slots <- struct{}{}:
+		return func() { <-g.slots }, true
+	default:
+		return nil, false
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -100,4 +100,16 @@ func (mfs *Service) SetFileWorkScheduler(s FileWorkScheduler) {
 // The lock is not reentrant: no caller may hold it around those calls.
 func (mfs *Service) SetPathLocker(lock func(path string) func()) {
 	mfs.pathLock = lock
+}
+
+// SetFileWriteGate wires a non-blocking take on the server's process-wide
+// write-back gate (writeBackFileGate.tryAcquire). A book's tag write uses it to
+// run extra per-file writers while slots are free, so one book with 58 files
+// no longer writes them strictly one after another, and the process never has
+// more concurrent writers than the gate allows. It must never block: the
+// callers already hold a slot for the book (batch apply, bulk write-back), and
+// a blocking take there would deadlock once every slot was held by a book
+// waiting for a second.
+func (mfs *Service) SetFileWriteGate(tryAcquire func() (release func(), ok bool)) {
+	mfs.fileWriteSlot = tryAcquire
 }

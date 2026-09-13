@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -105,11 +105,11 @@ type tagWriteResult struct {
 // writeTags is the one tag write every apply path goes through, on the files
 // of targetID: the book the job locked (lockLibraryCopy). tagWriter is a test
 // seam that counts it; nil in production.
-func (mfs *Service) writeTags(id, targetID string) (int, error) {
+func (mfs *Service) writeTags(id, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	if mfs.tagWriter != nil {
 		return mfs.tagWriter(id)
 	}
-	return mfs.writeBackForBook(id, nil, targetID)
+	return mfs.writeBackForBook(id, nil, targetID, pt)
 }
 
 // copyPolicy says whether lockLibraryCopy may create a library copy for a book
@@ -547,12 +547,25 @@ func (mfs *Service) createUsableLibraryCopy(id string, book *database.Book) (*da
 // they shared this sequel; a single check before the call would let a scan
 // that resumes mid-sequel run alongside the rename and the tag write.
 func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+	return mfs.FinishApplyFileWorkTimed(id, pendingCoverURL, fileIO, writeTags, checkpoint, NewApplyPhaseTimings())
+}
+
+// FinishApplyFileWorkTimed is FinishApplyFileWork recording each phase into
+// pt, which the caller may have started earlier (the batch apply records its
+// gate wait and DB apply into the same timer). When it returns it logs the one
+// per-book "apply phase durations" line. A nil pt records and logs nothing.
+func (mfs *Service) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
+	defer logApplyPhaseTimings(id, pt)
+	lockStart := time.Now()
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
+	pt.Since(PhaseLockWait, lockStart)
 	if err := standDown(checkpoint, id, "the cover download"); err != nil {
 		return err
 	}
+	coverStart := time.Now()
 	mfs.DownloadPendingCover(id, pendingCoverURL)
+	pt.Since(PhaseCover, coverStart)
 	// Only a job that writes audio files (step 2 or 3) may make a library copy;
 	// a cover-only apply must not create one just to pick a lock. After the
 	// download, so a copy made here inherits the new cover_url.
@@ -560,12 +573,14 @@ func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writ
 	if fileIO || writeTags {
 		lockPolicy = createLibraryCopy
 	}
+	copyStart := time.Now()
 	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, lockPolicy, checkpoint)
+	pt.Since(PhaseCopyLock, copyStart)
 	if err != nil {
 		return err
 	}
 	defer releaseCopy()
-	return mfs.finishFileWork(id, targetID, fileIO, writeTags, checkpoint)
+	return mfs.finishFileWork(id, targetID, fileIO, writeTags, checkpoint, pt)
 }
 
 // standDown runs a stand-down checkpoint before a file-writing step. A nil
@@ -636,7 +651,7 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
 	defer release()
-	if _, err := mfs.writeTags(id, targetID); err != nil {
+	if _, err := mfs.writeTags(id, targetID, nil); err != nil {
 		return fmt.Errorf("auto-fetch file work: write tags for book %s: %w", id, err)
 	}
 	return nil
@@ -647,14 +662,14 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 // made and locked any library copy the job needs and returned it as targetID.
 // Every step here writes that target (fileWorkTarget) and none can make or
 // switch to a copy outside that lock.
-func (mfs *Service) finishFileWork(id, targetID string, fileIO, writeTags bool, checkpoint func() error) error {
+func (mfs *Service) finishFileWork(id, targetID string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
 		if err := standDown(checkpoint, id, "the file I/O"); err != nil {
 			return err
 		}
-		tags, fileErr = mfs.applyMetadataFileIO(id, targetID)
+		tags, fileErr = mfs.applyMetadataFileIO(id, targetID, pt)
 	}
 	if writeTags && !tags.handled {
 		if err := standDown(checkpoint, id, "the tag write"); err != nil {
@@ -667,11 +682,13 @@ func (mfs *Service) finishFileWork(id, targetID string, fileIO, writeTags bool, 
 		}
 		// Resolved and locked after the pipeline returned (and released its
 		// own locks), so the key is the post-rename path of the files written.
+		lockStart := time.Now()
 		release, err := mfs.lockWriteTarget(id, targetID)
+		pt.Since(PhaseLockWait, lockStart)
 		if err != nil {
 			tags.err = err
 		} else {
-			if _, err := mfs.writeTags(id, targetID); err != nil {
+			if _, err := mfs.writeTags(id, targetID, pt); err != nil {
 				tags.err = err
 			}
 			release()
@@ -740,14 +757,14 @@ func (mfs *Service) ApplyMetadataFileIO(id string) error {
 		return err
 	}
 	defer releaseCopy()
-	_, err = mfs.applyMetadataFileIO(id, targetID)
+	_, err = mfs.applyMetadataFileIO(id, targetID, nil)
 	return err
 }
 
 // applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
 // pipeline did about tags, for FinishApplyFileWork's write-once guard. Its
 // callers have run lockLibraryCopy, and it writes the target that locked.
-func (mfs *Service) applyMetadataFileIO(id, targetID string) (tagWriteResult, error) {
+func (mfs *Service) applyMetadataFileIO(id, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
@@ -760,11 +777,13 @@ func (mfs *Service) applyMetadataFileIO(id, targetID string) (tagWriteResult, er
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: book %s not found", id)
 	}
 
+	embedStart := time.Now()
 	mfs.embedCover(id, book, targetID)
+	pt.Since(PhaseEmbed, embedStart)
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		tags, err := mfs.runApplyPipeline(id, book, targetID)
+		tags, err := mfs.runApplyPipeline(id, book, targetID, pt)
 		if err != nil {
 			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}
