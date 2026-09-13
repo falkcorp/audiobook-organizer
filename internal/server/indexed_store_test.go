@@ -1,11 +1,12 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.3.2
-// last-edited: 2026-09-02
+// version: 1.4.0
+// last-edited: 2026-09-13
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -367,4 +368,33 @@ func TestIndexedStore_UpdateReindexes(t *testing.T) {
 
 	srv.closeIndexQueue()
 	<-done
+}
+
+// TestIndexedStore_CreateRejectsColonBookID proves the decorator does not
+// bypass the store's book-ID guard (PEBBLE-KEY-BOUND-CENSUS, #2896): the
+// inner CreateBook's ErrInvalidBookID reaches the caller unchanged and no
+// index refresh is queued for a row that was never written.
+func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatalf("pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	srv := NewServer(store)
+	srv.indexQueue = make(chan indexRequest, 4)
+	wrapped := &indexedStore{Store: store, server: srv}
+
+	created, err := wrapped.CreateBook(&database.Book{
+		ID: "bad:id", Title: "Colon", FilePath: "/tmp/colon", Format: "m4b",
+	})
+	if !errors.Is(err, database.ErrInvalidBookID) {
+		t.Fatalf("CreateBook err = %v, want database.ErrInvalidBookID", err)
+	}
+	if created != nil {
+		t.Errorf("CreateBook returned %+v on error, want nil", created)
+	}
+	if n := len(srv.indexQueue); n != 0 {
+		t.Errorf("index queue holds %d requests after a rejected create, want 0", n)
+	}
 }

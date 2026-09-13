@@ -4907,8 +4907,14 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       behaviour in, so changing it means changing that test too. Owner
       decision; not a live vulnerability either way. Raised by TASK-082 / PR #2774.
 
-- [ ] **PEBBLE-KEY-BOUND-CENSUS** Two related gaps surfaced while fixing
+- [x] **PEBBLE-KEY-BOUND-CENSUS** Two related gaps surfaced while fixing
       `VGBACKFILL-BOUNDS-FRAGILE` (#2801):
+
+      **Resolved 2026-09-13:** gap 1 is fixed. `PebbleStore.CreateBook` now
+      rejects a caller-supplied book ID containing `:` with
+      `database.ErrInvalidBookID` (`internal/database/book_id.go`). Gap 2, the
+      47+ site `<prefix>:0`/`<prefix>:;` bound sweep, is not small, so it is
+      split out as `PEBBLE-KEY-BOUND-SWEEP` in `todo.d/`.
 
       **1. Colon-count gap in the version-group backfill's structural filter
       (pre-existing, NOT introduced by #2801).** `BackfillVersionGroupIndex`'s
