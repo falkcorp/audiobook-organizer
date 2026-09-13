@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.6.0
+// version: 4.7.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-13
 //
@@ -551,8 +551,9 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	outcomes := make([]applyOutcome, len(req.BookIDs))
 
 	// Claim index for the gate's partial_book check, built before any apply
-	// the same way the preview builds it (buildClaimIndex).
-	claims := buildClaimIndex(c.Request.Context(), req.BookIDs, opResultClaimLoader(s.store, func(id string) (CandidateResult, bool) {
+	// over EVERY row of the operation (not req.BookIDs), the same universe the
+	// preview uses, so a subset request sees the same siblings.
+	claims := buildClaimIndex(c.Request.Context(), keysOf(resultsByBook), opResultClaimLoader(s.store, func(id string) (CandidateResult, bool) {
 		r, ok := resultsByBook[id]
 		if !ok {
 			return CandidateResult{}, false
