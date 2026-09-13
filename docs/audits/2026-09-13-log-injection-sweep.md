@@ -1,5 +1,5 @@
 <!-- file: docs/audits/2026-09-13-log-injection-sweep.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7e2c91d4-3b6a-4f08-9a5e-d14b8c7f2e60 -->
 <!-- last-edited: 2026-09-13 -->
 
@@ -104,6 +104,34 @@ Message wording and keys are unchanged.
 CodeQL credits `SanitizeLogValue` as a barrier only because its
 `strings.ReplaceAll` of `\r` and `\n` runs on every path. See the doc comment
 in `internal/logger/sanitize.go` before you touch it.
+
+## Batch B status: done (PR #3370)
+
+PR #3370 (`fix/log-injection-sweep-b`) targets all **81** batch-B alerts,
+across 25 files in the packages marked B above. `internal/server/handlers/abs`
+was done in PR A. The list came from the alerts API on `main`, filtered to
+`internal/server/` minus `handlers/abs`.
+
+- Each value CodeQL flagged is wrapped with `logger.SanitizeLogValue` at the
+  sink. Message wording and keys are unchanged. The query emits one alert per
+  tainted argument, so only the flagged arguments are wrapped. A bare
+  `"err", err` beside a wrapped value is an argument CodeQL did not flag.
+- Errors use `fmt.Sprint(err)` everywhere in this batch. It is nil-safe and
+  prints what slog printed.
+- Six non-string values go through `fmt.Sprint` before the sanitizer: the bools
+  `dryRun`, `del` and `*body.SkipScan`, the int `body.SeriesID`, and the slices
+  `req.Targets` and `created.Scopes`. TextHandler output is unchanged. A JSON
+  handler now logs them as strings (`"dry_run":"true"`). This is the same trade
+  PR A made for its `int` durations, because the barrier only accepts a string.
+- `internal/server/absauth/audit.go`'s `Audit` builds a variadic `attrs` slice,
+  and its three alerts point at `attrs...`. Each string value is wrapped where
+  it is appended, which covers the Info, Error and Warn sinks.
+- No direct slog call was added or removed, so the ratchet counts are
+  unchanged. `TestGuard_NoDirectSlogCalls` passes on the rebased branch.
+
+Coverage check: each of the 78 direct-sink alert lines maps, through the diff,
+to a line that contains `SanitizeLogValue`. The other 3 are the `attrs...`
+sinks.
 
 ## The CI guard
 
