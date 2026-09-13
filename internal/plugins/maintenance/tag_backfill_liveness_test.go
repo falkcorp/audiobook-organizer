@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill_liveness_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c8f0282-d1ad-446a-af3d-d36cea86888b
 // last-edited: 2026-09-13
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -203,5 +204,34 @@ func TestTagBackfill_EarlierStuckReadsDoNotPoisonLaterRuns(t *testing.T) {
 	assertSummaryHas(t, rep.logs[len(rep.logs)-1], "read-errors=1")
 	if !strings.Contains(strings.Join(rep.logs, "\n"), fmt.Sprintf("%d tag reads abandoned by earlier runs", leftover)) {
 		t.Errorf("no start-of-run WARN reporting the %d leftover reads; logs: %q", leftover, rep.logs)
+	}
+}
+
+// A stat that hangs (dead mount) is bounded like the tag read: the row counts
+// as a read error, the book continues, and the op returns.
+func TestTagBackfill_HungStatCountsAsReadErr(t *testing.T) {
+	fx := newTagFixture(t, []database.BookFile{
+		{ID: "s1", BookID: "S", TrackNumber: 1},
+		{ID: "s2", BookID: "S", TrackNumber: 2},
+	}, map[string]metadata.Metadata{"s1.mp3": tagMeta(1, 2, 0, 0), "s2.mp3": tagMeta(2, 2, 0, 0)})
+	installBlockingExtractor(t, fx, 30*time.Millisecond) // short bound, no blocked reads
+	release := make(chan struct{})
+	oldStat := tagStat
+	tagStat = func(p string) (os.FileInfo, error) {
+		if strings.HasSuffix(p, "s2.mp3") {
+			<-release
+		}
+		return oldStat(p)
+	}
+	// LIFO: release the hung stat, then installBlockingExtractor drains and restores.
+	t.Cleanup(func() { close(release); tagStat = oldStat })
+
+	rep := &livenessReporter{}
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+		t.Fatalf("op failed: %v", err)
+	}
+	assertSummaryHas(t, rep.logs[len(rep.logs)-1], "read-errors=1", "missing-on-disk=0", "judged-rows=1")
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "s2.mp3") {
+		t.Errorf("no WARN naming the file whose stat hung; logs: %q", rep.logs)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-13
 
@@ -75,10 +75,27 @@ var tagReadTimeout = 60 * time.Second
 // (tagReadsAbandoned). A var for tests.
 var tagReadMaxAbandoned int64 = 8
 
+// Trade-off: the cap and the bound only catch reads that HANG. A read that is
+// merely slow (returns after 45s, say) is neither timed out nor abandoned, and
+// every file stamps liveness, so a book of slow files -- or a whole library on
+// a slow mount -- no longer trips the 5-minute stuck check. It runs until the
+// op's own Timeout (120 minutes, tagBackfillDef) instead. That is the intended
+// side of the trade: the stuck check killed a working run and lost its result,
+// while a slow run still ends at Timeout with its summary logged.
+//
 // tagReadsAbandoned is a process-wide gauge of abandoned tag reads whose
 // goroutine has not yet returned, across every run. It gates nothing; a run
 // logs it at start when non-zero, since those goroutines are still held.
 var tagReadsAbandoned atomic.Int64
+
+// tagStat is os.Stat, a seam so tests can make the stat hang. The worker reads
+// it once per file before starting the bounded call, so an abandoned goroutine
+// never reads the package variable a test may be restoring.
+var tagStat = os.Stat
+
+// errTagFileMissing marks a file that os.Stat could not find (a missing row,
+// not a read error).
+var errTagFileMissing = errors.New("file missing on disk")
 
 type tagBackfillParams struct {
 	DryRun bool `json:"dryRun"`
@@ -331,15 +348,23 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				countBook()
 				return err
 			}
-			if _, statErr := os.Stat(f.FilePath); statErr != nil {
+			// Stat and tag read are ONE bounded unit per file. A stat on a dead
+			// mount blocks forever just like a WASM read, and an unbounded one
+			// here would hold this worker past the watchdog's cancel: RunItems
+			// waits on every worker (run_items.go wg.Wait), so the op would never
+			// return at all.
+			path, stat := f.FilePath, tagStat
+			meta, merr := boundedCall(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
+				if _, statErr := stat(path); statErr != nil {
+					return metadata.Metadata{}, fmt.Errorf("%w: %v", errTagFileMissing, statErr)
+				}
+				return metadata.ExtractMetadata(path, nil)
+			}, &runAbandoned, &tagReadsAbandoned)
+			if errors.Is(merr, errTagFileMissing) {
 				bMissing++
 				skipped[f.ID] = true
 				continue
 			}
-			path := f.FilePath
-			meta, merr := boundedCall(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
-				return metadata.ExtractMetadata(path, nil)
-			}, &runAbandoned, &tagReadsAbandoned)
 			if merr != nil {
 				timedOut := errors.Is(merr, errBoundedCallTimeout)
 				if !timedOut && ctx.Err() != nil {
@@ -351,7 +376,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				skipped[f.ID] = false
 				if timedOut {
 					_ = reporter.Log(slog.LevelWarn,
-						fmt.Sprintf("tag read of %s exceeded %v; counted as a read error, book continues (read abandoned, still running)",
+						fmt.Sprintf("stat+tag read of %s exceeded %v; counted as a read error, book continues (read abandoned, still running)",
 							logger.SanitizeLogValue(path), tagReadTimeout),
 						slog.String("book_id", b.bookID), slog.String("file_id", f.ID))
 					if n := runAbandoned.Load(); n >= tagReadMaxAbandoned {
