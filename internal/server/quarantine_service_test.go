@@ -1,5 +1,7 @@
 // file: internal/server/quarantine_service_test.go
-// version: 1.1.0
+// version: 1.2.0
+// guid: b26d7d64-1256-4cf7-96a5-c008ca54c3cb
+// last-edited: 2026-09-12
 
 package server
 
@@ -41,7 +43,8 @@ func TestQuarantineBook_MovesFileAndUpdatesDB(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "original file should be removed")
 
 	// File should be in .failed/
-	expected := filepath.Join(root, ".failed", "Unknown Author", "Book", "book.m4b")
+	// The folder carries the book ID so duplicate versions never share one.
+	expected := filepath.Join(root, ".failed", "Unknown Author", "Book ["+book.ID+"]", "book.m4b")
 	_, err = os.Stat(expected)
 	require.NoError(t, err, "file should exist in .failed/")
 

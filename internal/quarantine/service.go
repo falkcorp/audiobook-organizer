@@ -1,5 +1,5 @@
 // file: internal/quarantine/service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-12
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 )
@@ -109,23 +110,30 @@ func scanFailKey(path string) string {
 const scanFailThreshold = 3
 
 // QuarantineBook moves a book out of the library into
-// .failed/{author}/{title}/, repoints every one of the book's book_file rows
-// at the file's new location in the same pass, updates the book row, records
-// path history (the book's path, plus one quarantine_file row per moved file
-// so UnquarantineBook can put each file back), sets iTunes purge_pending if
-// linked, and publishes a book.quarantined event.
+// .failed/{author}/{title} [{bookID}]/, repoints every one of the book's
+// book_file rows at the file's new location in the same pass, updates the
+// book row, sets iTunes purge_pending if linked, and publishes a
+// book.quarantined event.
 //
 // Until 2026-09-12 only the book row moved: every book_file row kept pointing
 // at the old path, so a quarantined book's files read as MISSING while the
 // audio sat under .failed/, where the recover-missing-files walk (which prunes
 // dot-dirs) can never find it again.
 //
-// Rows always match the disk. A file that could not move because its
-// destination is taken keeps its row, is named in the returned error, and
-// leaves the book NOT marked quarantined; calling QuarantineBook again resumes
-// from where the files actually are and finishes the job. A row whose file was
-// already missing before the pass is left alone and logged -- it cannot move
-// and does not block the quarantine.
+// History is written BEFORE the move it describes (journal-first): the book's
+// "quarantine" entry when a pass starts, and one "quarantine_file" entry
+// immediately before each file's rename. A history write that fails stops
+// that move before it happens, so no file can sit under .failed/ without a
+// record of where it came from. The folder carries the book ID so two books
+// with the same author and title never share one.
+//
+// A file whose destination is taken keeps its row, is named in the returned
+// error, and leaves the book NOT marked quarantined. Calling QuarantineBook
+// again resumes the same cycle: same source layout, same destination (even if
+// the title changed), and a file an interrupted pass already moved is accepted
+// only when its history entry and its size (and hash, when known) confirm it
+// is this row's file. A row whose file was missing before the pass is logged
+// and left alone.
 func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 	if qs.store == nil {
 		return fmt.Errorf("store not initialized")
@@ -154,36 +162,54 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 	}
 
 	failedRoot := filepath.Clean(filepath.Join(root, ".failed"))
-	var from, destDir, dest string
-	if isUnder(failedRoot, book.FilePath) {
-		// An earlier pass moved the book path but did not finish. Resume from
-		// where things actually are: the destination is where the book already
-		// sits (a title edit since then must not move it a second time), and
-		// the source layout is the path it was quarantined FROM.
-		history, err := qs.store.GetBookPathHistory(bookID)
-		if err != nil {
-			return fmt.Errorf("get path history: %w", err)
+	// The snapshot every "already moved" confirmation is checked against. It
+	// is read before this pass writes anything, so a pass can never confirm a
+	// move with an entry it wrote itself.
+	history, err := qs.store.GetBookPathHistory(bookID)
+	if err != nil {
+		return fmt.Errorf("get path history: %w", err)
+	}
+
+	var from, dest string
+	bookJournaled := false
+	if last, ok := openQuarantineCycle(history, book.FilePath); ok {
+		// An earlier pass started this cycle and did not finish. Resume it
+		// exactly: its source layout and its destination, whatever the title
+		// says now, so one book never ends up split across two folders.
+		from, dest = last.OldPath, last.NewPath
+		bookJournaled = true
+		if !isUnder(failedRoot, dest) {
+			return fmt.Errorf("recorded quarantine path %q is outside .failed", dest)
 		}
-		last, ok := latestChange(history, changeQuarantine)
-		if !ok {
-			return fmt.Errorf("book %s is under .failed but has no quarantine history entry", bookID)
-		}
-		from, dest = last.OldPath, book.FilePath
-		destDir = filepath.Dir(dest)
 	} else {
+		if isUnder(failedRoot, book.FilePath) {
+			return fmt.Errorf("book %s is under .failed but no open quarantine history entry records where it came from", bookID)
+		}
 		from = book.FilePath
-		destDir = filepath.Clean(filepath.Join(failedRoot, author, title))
+		if _, err := os.Lstat(from); err != nil {
+			// Nothing of this book is known to have moved; a destination that
+			// happens to exist cannot be taken as this book's.
+			return fmt.Errorf("move to .failed: %w", err)
+		}
+		destDir := filepath.Clean(filepath.Join(failedRoot, author, quarantineDirName(title, bookID)))
 		dest = filepath.Clean(filepath.Join(destDir, filepath.Base(from)))
 		// Boundary check: dest must stay inside .failed/
 		if !isUnder(failedRoot, dest) || !isUnder(failedRoot, destDir) {
 			return fmt.Errorf("quarantine path %q escapes .failed directory", dest)
 		}
+		if err := qs.store.RecordPathChange(&database.BookPathChange{
+			BookID: bookID, OldPath: from, NewPath: dest, ChangeType: changeQuarantine,
+		}); err != nil {
+			return fmt.Errorf("journal quarantine (nothing moved): %w", err)
+		}
+		bookJournaled = true
 	}
 
 	// A file-shaped book's other files keep their layout relative to the book
 	// file's ORIGINAL directory, so disc1/01.mp3 and disc2/01.mp3 cannot
 	// collide -- on a resumed pass too, which is why srcBase comes from `from`
 	// and never from the book's current path.
+	destDir := filepath.Dir(dest)
 	srcBase := filepath.Dir(from)
 	fileTo := func(p string) (string, bool, string) {
 		if isUnder(failedRoot, p) {
@@ -195,21 +221,21 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 		}
 		to = filepath.Clean(to)
 		if !isUnder(failedRoot, to) {
-			return "", false, logger.SanitizeLogValue(p) + ": destination escapes .failed, left in place"
+			return "", false, "destination escapes .failed"
 		}
 		return to, true, ""
 	}
 
-	oldPath := book.FilePath
 	rl, err := qs.relocate(relocateSpec{
-		bookID: bookID, from: from, to: dest,
-		fileTo: fileTo, fileChangeType: changeQuarantineFile,
+		bookID: bookID, from: from, to: dest, fileTo: fileTo,
+		fileChangeType: changeQuarantineFile, bookChangeType: changeQuarantine,
+		bookJournaled: bookJournaled, history: history,
 	})
 	if err != nil {
 		return err
 	}
 	complete := rl.bookAtDest && len(rl.blocked) == 0
-	bookChanged := rl.bookAtDest && oldPath != dest
+	bookChanged := rl.bookAtDest && book.FilePath != dest
 
 	now := time.Now()
 	if bookChanged || complete {
@@ -229,12 +255,6 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 			return fmt.Errorf("update book: %w", err)
 		}
 	}
-	if bookChanged {
-		rl.journal = append(rl.journal, database.BookPathChange{
-			BookID: bookID, OldPath: oldPath, NewPath: dest, ChangeType: changeQuarantine,
-		})
-	}
-	qs.flushJournal(rl)
 	qs.logNotes(rl, "QuarantineBook", bookID)
 
 	if !complete {
@@ -260,14 +280,43 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 	return nil
 }
 
+// quarantineDirName names a book's folder under .failed/{author}/. The book ID
+// is part of it: author+title alone is shared by duplicate versions of a book,
+// and two books in one folder let one book's "already moved" file be taken for
+// another's.
+func quarantineDirName(title, bookID string) string {
+	return sanitizeDirName(title + " [" + bookID + "]")
+}
+
+// openQuarantineCycle returns the newest "quarantine" entry when it opens a
+// cycle this book is still in: no "unquarantine" entry after it, and the book
+// path is still that entry's source or destination (a book organized
+// elsewhere since then starts a new cycle).
+func openQuarantineCycle(history []database.BookPathChange, bookPath string) (database.BookPathChange, bool) {
+	lastQ, ok := latestChange(history, changeQuarantine)
+	if !ok {
+		return lastQ, false
+	}
+	if lastU, ok := latestChange(history, changeUnquarantine); ok && !newer(lastQ, lastU) {
+		return lastQ, false
+	}
+	if bookPath != lastQ.OldPath && bookPath != lastQ.NewPath {
+		return lastQ, false
+	}
+	return lastQ, true
+}
+
 // UnquarantineBook moves a quarantined book back to its original path
 // (retrieved from path history), repoints its book_file rows back with it,
 // and clears the quarantine fields.
 //
-// Each file goes back to the path its NEWEST quarantine_file journal row
-// recorded. A book quarantined before that journal existed had only its book
-// path moved (its other rows were never repointed), so a row with no journal
-// entry is left alone; one that sits under .failed/ is logged.
+// Each file goes back to the path its NEWEST quarantine_file entry recorded.
+// A row with no entry that sits in the book's own quarantine folder (books
+// quarantined before the per-file journal existed, or rows repointed there by
+// a repair) is mapped back by its position under that folder; the move
+// happens only if that destination is free. Any other row under .failed/ with
+// no recorded origin blocks the pass, so the book stays quarantined rather
+// than being cleared with files left behind.
 func (qs *QuarantineService) UnquarantineBook(bookID string) error {
 	if qs.store == nil {
 		return fmt.Errorf("store not initialized")
@@ -299,20 +348,26 @@ func (qs *QuarantineService) UnquarantineBook(bookID string) error {
 	if qs.cfg != nil && qs.cfg.RootDir != "" {
 		failedRoot = filepath.Clean(filepath.Join(qs.cfg.RootDir, ".failed"))
 	}
+	quarDir, origDir := filepath.Dir(from), filepath.Dir(origPath)
 	fileTo := func(p string) (string, bool, string) {
 		if e, ok := fileOrig[p]; ok {
 			return e.OldPath, true, ""
 		}
+		if rel, ok := relUnder(quarDir, p); ok && rel != "" {
+			return filepath.Join(origDir, rel), true,
+				"no quarantine_file entry; mapped back by its place in the book's quarantine folder"
+		}
 		if failedRoot != "" && isUnder(failedRoot, p) {
-			return "", false, logger.SanitizeLogValue(p) + ": no recorded original path, left under .failed"
+			return "", false, "under .failed with no recorded original path"
 		}
 		return "", false, "" // never moved, or already back
 	}
 
 	oldPath := book.FilePath
 	rl, err := qs.relocate(relocateSpec{
-		bookID: bookID, from: from, to: origPath,
-		fileTo: fileTo, fileChangeType: changeUnquarantineFile,
+		bookID: bookID, from: from, to: origPath, fileTo: fileTo,
+		fileChangeType: changeUnquarantineFile, bookChangeType: changeUnquarantine,
+		history: history,
 	})
 	if err != nil {
 		return err
@@ -337,12 +392,6 @@ func (qs *QuarantineService) UnquarantineBook(bookID string) error {
 			return fmt.Errorf("update book: %w", err)
 		}
 	}
-	if bookChanged {
-		rl.journal = append(rl.journal, database.BookPathChange{
-			BookID: bookID, OldPath: oldPath, NewPath: origPath, ChangeType: changeUnquarantine,
-		})
-	}
-	qs.flushJournal(rl)
 	qs.logNotes(rl, "UnquarantineBook", bookID)
 
 	if !complete {
@@ -402,29 +451,59 @@ func newer(a, b database.BookPathChange) bool {
 	return a.ID > b.ID
 }
 
+// hasEntry reports whether history records a changeType move of exactly
+// from -> to.
+func hasEntry(history []database.BookPathChange, changeType, from, to string) bool {
+	for _, h := range history {
+		if h.ChangeType == changeType && h.OldPath == from && h.NewPath == to {
+			return true
+		}
+	}
+	return false
+}
+
+// sameFile reports whether the file at p is plausibly the file row describes:
+// its size matches the row's recorded size, and its hash matches the row's
+// FileHash when one is recorded (filehash is the one algorithm that column is
+// written with). A row that records neither is judged by its history entry
+// alone.
+func sameFile(row database.BookFile, p string) bool {
+	info, err := os.Lstat(p)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if row.FileSize > 0 && info.Size() != row.FileSize {
+		return false
+	}
+	if row.FileHash != "" {
+		h, err := filehash.BookFileHash(p)
+		if err != nil || h != row.FileHash {
+			return false
+		}
+	}
+	return true
+}
+
 // diskMove is one rename relocate performed, kept so rollback can reverse it.
 type diskMove struct{ from, to string }
 
 // relocation is the outcome of one relocate pass.
 type relocation struct {
 	// bookAtDest: the book path is at its destination on disk now -- moved in
-	// this pass, or already there from an earlier pass or an interrupted one.
+	// this pass, or confirmed moved by an earlier, interrupted one.
 	bookAtDest bool
 	moves      []diskMove
 	// priors are full-record snapshots of every row repointed in this pass.
 	priors    []database.BookFile
 	repointed int
 	// blocked names files that should have moved and could not (destination
-	// taken, rename failed). Only these keep a pass incomplete.
+	// taken, history write failed, rename failed). Only these keep a pass
+	// incomplete.
 	blocked []string
-	// notes names rows that were left alone for a reason that a retry cannot
-	// change: the file was missing before the pass, or lies outside a
-	// directory-shaped book. Logged, never counted as failures.
+	// notes names rows left alone for a reason a retry cannot change (missing
+	// before the pass, outside a directory-shaped book) and rows restored by
+	// the positional fallback. Logged, never counted as failures.
 	notes []string
-	// journal holds the per-file path-history rows this pass owes. They are
-	// written by flushJournal only after the book row commits, so a rolled
-	// back pass leaves no stale entry for UnquarantineBook to follow.
-	journal []database.BookPathChange
 }
 
 func (r *relocation) err(bookID, verb string) error {
@@ -445,10 +524,17 @@ func (r *relocation) note(path, why string) {
 // row) so a resumed pass works from where the book came from, not from where
 // a half-finished pass left it.
 type relocateSpec struct {
-	bookID         string
-	from, to       string
-	fileTo         func(string) (to string, ok bool, note string)
+	bookID   string
+	from, to string
+	// fileTo maps a non-book row to its destination. ok=false with a problem
+	// blocks the row; ok=true with a problem is a note (the move proceeds).
+	fileTo         func(string) (to string, ok bool, problem string)
 	fileChangeType string
+	bookChangeType string
+	// bookJournaled: the bookChangeType entry for from->to is already written.
+	bookJournaled bool
+	// history is the snapshot read BEFORE this pass wrote anything.
+	history []database.BookPathChange
 }
 
 // pathState classifies a source/destination pair by what is on disk.
@@ -456,7 +542,7 @@ type pathState int
 
 const (
 	stMove    pathState = iota // source present, destination free
-	stAtDest                   // source gone, destination present: already moved
+	stAtDest                   // source gone, destination present
 	stBlocked                  // both present: the destination is taken
 	stMissing                  // neither present: missing before this pass
 )
@@ -483,17 +569,21 @@ func classify(from, to string) (pathState, bool, error) {
 }
 
 // relocate moves a book's files to their destinations and repoints each
-// book_file row in the same pass. It never deletes a row and never repoints a
-// row to a path that does not exist.
+// book_file row in the same pass. It never deletes a row, never repoints a
+// row to a path that does not exist, and writes each history entry BEFORE the
+// rename it describes.
+//
+// "Source gone, destination present" is the state an interrupted pass leaves,
+// but it is also what an unrelated file sitting at the destination looks like.
+// It is accepted as this book's move only when the pre-pass history records
+// exactly that move and (for files) the destination is this row's file by
+// size and hash; otherwise the row is blocked and nothing is touched.
 //
 // When the book path is a directory it is renamed in one step (so cover art
-// and sidecars travel with it) and each row under it is translated by prefix.
-// When it is a file, each row's file is handled on its own: the row at
-// spec.from goes to spec.to, every other row goes where fileTo says.
-//
-// A file already at its destination with its source gone -- the state a crash
-// between a rename and its row write leaves behind -- is repointed without a
-// move, so a retry repairs an interrupted pass instead of failing on it.
+// and sidecars travel with it) and each row under it is translated by prefix;
+// the book-level entry covers every row. When it is a file, each row's file is
+// handled on its own: the row at spec.from goes to spec.to, every other row
+// goes where fileTo says.
 //
 // An error return means nothing was moved.
 func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
@@ -508,7 +598,24 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 	if bookState == stMissing {
 		return nil, fmt.Errorf("book path %s is not on disk (nor at %s)", sp.from, sp.to)
 	}
+	if bookState == stAtDest && sp.from != sp.to && !hasEntry(sp.history, sp.bookChangeType, sp.from, sp.to) {
+		return nil, fmt.Errorf("book path %s is not on disk, and nothing records that %s (which exists) is where this book was moved",
+			sp.from, sp.to)
+	}
 	rl := &relocation{}
+
+	journalBook := func() error {
+		if sp.bookJournaled || sp.bookChangeType == "" {
+			return nil
+		}
+		if err := qs.store.RecordPathChange(&database.BookPathChange{
+			BookID: sp.bookID, OldPath: sp.from, NewPath: sp.to, ChangeType: sp.bookChangeType,
+		}); err != nil {
+			return fmt.Errorf("journal %s (not moved): %w", sp.bookChangeType, err)
+		}
+		sp.bookJournaled = true
+		return nil
+	}
 
 	if isDir {
 		switch bookState {
@@ -516,6 +623,10 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 			rl.block(sp.from, fmt.Sprintf("destination %s already exists", sp.to))
 			return rl, nil
 		case stMove:
+			if err := journalBook(); err != nil {
+				rl.block(sp.from, err.Error())
+				return rl, nil
+			}
 			if err := moveNoClobber(sp.from, sp.to); err != nil {
 				rl.block(sp.from, err.Error())
 				return rl, nil
@@ -543,7 +654,11 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 				rl.note(row.FilePath, "missing before this pass, left in place")
 				continue
 			}
-			if err := qs.repointRow(rl, row, newPath, ""); err != nil {
+			if !sameFile(row, newPath) {
+				rl.block(row.FilePath, fmt.Sprintf("%s does not match this row's size or hash", newPath))
+				continue
+			}
+			if err := qs.repointRow(rl, row, newPath); err != nil {
 				rl.block(row.FilePath, "repoint row: "+err.Error())
 			}
 		}
@@ -553,23 +668,27 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 	bookRowSeen := false
 	for i := range rows {
 		row := rows[i]
+		isBookRow := false
 		var to string
 		switch {
 		case row.FilePath == sp.from:
-			bookRowSeen = true
+			bookRowSeen, isBookRow = true, true
 			to = sp.to
 		case row.FilePath == sp.to:
 			bookRowSeen = true
 			continue // already repointed
 		default:
 			var ok bool
-			var why string
-			to, ok, why = sp.fileTo(row.FilePath)
-			if why != "" {
-				rl.notes = append(rl.notes, why)
-			}
+			var problem string
+			to, ok, problem = sp.fileTo(row.FilePath)
 			if !ok {
+				if problem != "" {
+					rl.block(row.FilePath, problem)
+				}
 				continue
+			}
+			if problem != "" {
+				rl.note(row.FilePath, problem)
 			}
 		}
 		if row.FilePath == to {
@@ -587,16 +706,33 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 		case stBlocked:
 			rl.block(row.FilePath, fmt.Sprintf("destination %s already exists", to))
 			continue
+		case stAtDest:
+			// Only an interrupted pass of THIS book, confirmed by its own
+			// history entry and by the file itself, may be adopted.
+			if !hasEntry(sp.history, sp.fileChangeType, row.FilePath, to) || !sameFile(row, to) {
+				rl.block(row.FilePath, fmt.Sprintf("destination %s is taken by a different file", to))
+				continue
+			}
 		case stMove:
+			if isBookRow {
+				if err := journalBook(); err != nil {
+					rl.block(row.FilePath, err.Error())
+					continue
+				}
+			}
+			if err := qs.store.RecordPathChange(&database.BookPathChange{
+				BookID: row.BookID, OldPath: row.FilePath, NewPath: to, ChangeType: sp.fileChangeType,
+			}); err != nil {
+				rl.block(row.FilePath, fmt.Sprintf("journal %s (not moved): %v", sp.fileChangeType, err))
+				continue
+			}
 			if err := moveNoClobber(row.FilePath, to); err != nil {
 				rl.block(row.FilePath, err.Error())
 				continue
 			}
 			rl.moves = append(rl.moves, diskMove{from: row.FilePath, to: to})
-		case stAtDest:
-			// Moved by an interrupted pass; only the row is behind.
 		}
-		if err := qs.repointRow(rl, row, to, sp.fileChangeType); err != nil {
+		if err := qs.repointRow(rl, row, to); err != nil {
 			// The row could not follow its file. Put the file back if this
 			// pass moved it, so the row is right again.
 			if st == stMove {
@@ -619,7 +755,9 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 	if !bookRowSeen {
 		switch bookState {
 		case stMove:
-			if err := moveNoClobber(sp.from, sp.to); err != nil {
+			if err := journalBook(); err != nil {
+				rl.block(sp.from, err.Error())
+			} else if err := moveNoClobber(sp.from, sp.to); err != nil {
 				rl.block(sp.from, err.Error())
 			} else {
 				rl.moves = append(rl.moves, diskMove{from: sp.from, to: sp.to})
@@ -630,7 +768,8 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 	}
 
 	// Decided from the disk, not from bookkeeping: the book path is at its
-	// destination when the destination exists and the source does not.
+	// destination when the destination exists and the source does not (the
+	// history check at the top already refused an unconfirmed one).
 	if st, _, err := classify(sp.from, sp.to); err == nil && st == stAtDest {
 		rl.bookAtDest = true
 	}
@@ -638,9 +777,9 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 }
 
 // repointRow rewrites one row's FilePath. row is the FULL record from
-// GetBookFiles, because UpdateBookFile replaces the whole record. When
-// changeType is set a path-history row is queued on rl.journal.
-func (qs *QuarantineService) repointRow(rl *relocation, row database.BookFile, newPath, changeType string) error {
+// GetBookFiles, because UpdateBookFile replaces the whole record. The history
+// entry for the move was written before the move.
+func (qs *QuarantineService) repointRow(rl *relocation, row database.BookFile, newPath string) error {
 	updated := row
 	updated.FilePath = newPath
 	if err := qs.store.UpdateBookFile(row.ID, &updated); err != nil {
@@ -648,40 +787,22 @@ func (qs *QuarantineService) repointRow(rl *relocation, row database.BookFile, n
 	}
 	rl.priors = append(rl.priors, row)
 	rl.repointed++
-	if changeType != "" {
-		rl.journal = append(rl.journal, database.BookPathChange{
-			BookID: row.BookID, OldPath: row.FilePath, NewPath: newPath, ChangeType: changeType,
-		})
-	}
 	return nil
-}
-
-// flushJournal writes the path-history rows a committed pass owes.
-func (qs *QuarantineService) flushJournal(rl *relocation) {
-	for i := range rl.journal {
-		c := rl.journal[i]
-		if err := qs.store.RecordPathChange(&c); err != nil {
-			slog.Warn("quarantine: could not journal path change; the reverse move will not find it",
-				"bookID", logger.SanitizeLogValue(c.BookID),
-				"changeType", c.ChangeType,
-				"path", logger.SanitizeLogValue(c.NewPath), "err", err)
-		}
-	}
-	rl.journal = nil
 }
 
 func (qs *QuarantineService) logNotes(rl *relocation, op, bookID string) {
 	for _, n := range rl.notes {
-		slog.Warn(op+": row left in place", "bookID", logger.SanitizeLogValue(bookID), "detail", n)
+		slog.Warn(op+": row note", "bookID", logger.SanitizeLogValue(bookID), "detail", n)
 	}
 }
 
 // rollback reverses a relocate pass after the book-row update failed. Each
 // rename is undone newest-first; afterwards a row snapshot is restored only
-// if its original file is back on disk, so rows keep matching the disk even
-// when a rename back fails. The pass's journal is discarded unwritten.
+// if its original file is back on disk, so a row never names a path its file
+// is not at. History entries the pass wrote stay: each is looked up by a
+// row's CURRENT path, and a rolled-back row is back at the entry's OldPath,
+// so it can never match.
 func (qs *QuarantineService) rollback(rl *relocation, op string) {
-	rl.journal = nil
 	for i := len(rl.moves) - 1; i >= 0; i-- {
 		m := rl.moves[i]
 		if err := os.Rename(m.to, m.from); err != nil {

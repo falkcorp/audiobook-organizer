@@ -4,21 +4,29 @@
   file's new location under `.failed/`, in the same pass that moves the files.
   Before, only the `books` row moved, so a quarantined book's files read as
   missing while the audio sat under `.failed/`, where the recover-missing-files
-  walk never looks. Unquarantine moves the rows back. Rows always match the
-  disk, no row is ever deleted, and existing files are never overwritten.
-- A file whose destination is already taken keeps its row and is named in the
-  error, and the book is not marked quarantined. Running quarantine again
-  resumes from where the files actually are: it keeps the original
-  destination even if the title changed, and keeps subfolders such as `disc2/`.
-  It also repairs a pass interrupted between a file move and its database
-  write, instead of failing on the missing source.
+  walk never looks. Unquarantine moves the rows back. No row is ever deleted,
+  and existing files are never overwritten.
+- Each book now gets its own quarantine folder,
+  `.failed/<author>/<title> [<book id>]/`, so two copies of the same book can
+  no longer share a folder and pick up each other's files.
+- Path history is written before each move it describes: the book's entry
+  when a pass starts, and each file's entry right before the file is renamed.
+  If a history write fails, that move is stopped before it happens, so no file
+  ends up under `.failed/` without a record of where it came from.
+- A file whose destination is taken keeps its row and is named in the error,
+  and the book is not marked quarantined. Running quarantine again resumes the
+  same pass. It reuses the source layout and destination folder the first
+  pass recorded, even if the title changed since, as long as the book is still
+  at that pass's source or destination. A file an interrupted pass already
+  moved is picked up only if its history entry and its size (and hash, when
+  known) show it is that file. An unrelated file sitting at a destination is
+  never taken over.
 - A row whose file was already missing before quarantine is left alone and
   logged instead of blocking the quarantine forever.
-- Unquarantine now picks the newest quarantine history by timestamp. A book
-  quarantined twice goes back to where it was before the second quarantine,
-  not the first.
-- Each file move is journaled as a `quarantine_file` path-history row, written
-  only after the book row is saved, so a rolled-back pass leaves no stale
-  entries.
+- Unquarantine picks history by timestamp, so a book quarantined twice goes
+  back to where it was before the second quarantine. A row with no per-file
+  history that sits in the book's quarantine folder is mapped back by its
+  place in that folder. Any other row under `.failed/` with no recorded origin
+  keeps the book quarantined rather than being left behind.
 - Added a test proving the recover-missing-files walk skips a configured
   database directory that has no leading dot.
