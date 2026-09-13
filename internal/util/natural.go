@@ -1,7 +1,7 @@
 // file: internal/util/natural.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b6a0a81-b5c4-4778-b467-f600e8e0d14e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package util
 
@@ -34,6 +34,13 @@ func CompareNatural(a, b string) int {
 // NaturalLess reports whether a sorts before b under CompareNatural. It is
 // shaped for sort.Slice / slices.SortFunc adapters.
 func NaturalLess(a, b string) bool { return CompareNatural(a, b) < 0 }
+
+// EquivalentNatural reports whether a and b are the same name to a reader:
+// equal under CompareNatural's rules before its byte-wise tie-break ("Part 1"
+// and "part 01"). CompareNatural still puts such a pair in a fixed order, but
+// that order carries no meaning; a caller that must not guess uses this to
+// detect the pair.
+func EquivalentNatural(a, b string) bool { return compareNaturalFold(a, b) == 0 }
 
 func compareNaturalFold(a, b string) int {
 	i, j := 0, 0

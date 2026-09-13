@@ -1,5 +1,5 @@
 // file: internal/organizer/pipeline.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-13
 
@@ -295,21 +295,41 @@ func legacyTrackNumbers(sorted []database.BookFile) []int {
 //     number -- a flat folder of disc-tagged files. A directory mixing disc 0
 //     and disc N has no trustworthy disc order, and a disc-0 row must not be
 //     sorted ahead of its neighbours just because 0 < 1;
-//  3. numbered rows before unnumbered ones, in track order (the caller's rule);
-//  4. file name, in natural order, for unnumbered rows.
+//  3. within a group (directory, disc) whose track numbers are distinct:
+//     numbered rows before unnumbered ones, in track order (the caller's
+//     rule), then unnumbered rows by file name;
+//  4. within a group whose track numbers REPEAT (every file tagged track 1,
+//     say), the tags cannot order it, so the whole group is ordered by file
+//     name in natural order ("Book 2" before "Book 10"). That is how the
+//     files read in a file manager, and it is how such books were ripped.
 //
-// If two PRESENT rows in one (directory, disc) group still share a track
-// number, nothing on disk says which comes first; the book is refused rather
-// than numbered by a guess, and the caller reports ErrDuplicateRenameTarget.
+// Only names that do not really differ are refused: two files ordered by name
+// whose stems are equal to a reader ("01.mp3" beside "01.m4a", "Part 1" beside
+// "part 01"). Nothing on disk says which comes first, so the book is refused
+// rather than numbered by a guess, and the caller reports
+// ErrDuplicateRenameTarget.
 //
-// Missing rows keep a slot in the numbering, for the reason totalTracks counts
-// them: a book with a file missing is still that many tracks long, and giving
-// the gap to the missing file means the survivors do not shift when it comes
-// back. Missing rows are left out of the ambiguity check -- they plan no
-// target, so they cannot collide.
+// Missing rows are left out of the ordering and keep their OWN track number:
+// present rows are numbered 1, 2, ... skipping every number a Missing row
+// holds. A repointed file then comes back to the number it was planned under
+// and the survivors do not shift. A Missing row with no track number reserves
+// nothing. Missing rows plan no target, so they never make a book ambiguous.
 func renumberInListeningOrder(sorted []database.BookFile) ([]database.BookFile, []int, error) {
-	discTrusted := make(map[string]bool)
+	var present, missing []database.BookFile
+	reserved := make(map[int]bool)
 	for _, f := range sorted {
+		if f.Missing {
+			missing = append(missing, f)
+			if f.TrackNumber > 0 {
+				reserved[f.TrackNumber] = true
+			}
+			continue
+		}
+		present = append(present, f)
+	}
+
+	discTrusted := make(map[string]bool)
+	for _, f := range present {
 		dir := filepath.Dir(f.FilePath)
 		trusted, seen := discTrusted[dir]
 		if !seen {
@@ -317,51 +337,90 @@ func renumberInListeningOrder(sorted []database.BookFile) ([]database.BookFile, 
 		}
 		discTrusted[dir] = trusted && f.DiscNumber != 0
 	}
-	disc := func(f database.BookFile) int {
-		if discTrusted[filepath.Dir(f.FilePath)] {
-			return f.DiscNumber
+	type group struct {
+		dir  string
+		disc int
+	}
+	groupOf := func(f database.BookFile) group {
+		g := group{dir: filepath.Dir(f.FilePath)}
+		if discTrusted[g.dir] {
+			g.disc = f.DiscNumber
 		}
-		return 0
+		return g
+	}
+	stem := func(f database.BookFile) string {
+		base := filepath.Base(f.FilePath)
+		return strings.TrimSuffix(base, filepath.Ext(base))
 	}
 
-	type slot struct {
-		dir         string
-		disc, track int
-	}
-	firstAt := make(map[slot]string)
-	for _, f := range sorted {
-		if f.Missing || f.TrackNumber == 0 {
+	// Groups whose tags repeat a track number are ordered by file name.
+	tracks := make(map[group]map[int]bool)
+	byName := make(map[group]bool)
+	for _, f := range present {
+		if f.TrackNumber == 0 {
 			continue
 		}
-		k := slot{filepath.Dir(f.FilePath), disc(f), f.TrackNumber}
-		if prev, dup := firstAt[k]; dup {
-			return nil, nil, fmt.Errorf("%q and %q are both track %d of the same folder and disc, so their order is unknown",
-				filepath.Base(prev), filepath.Base(f.FilePath), f.TrackNumber)
+		g := groupOf(f)
+		if tracks[g] == nil {
+			tracks[g] = make(map[int]bool)
 		}
-		firstAt[k] = f.FilePath
+		if tracks[g][f.TrackNumber] {
+			byName[g] = true
+		}
+		tracks[g][f.TrackNumber] = true
 	}
 
-	ordered := make([]database.BookFile, len(sorted))
-	copy(ordered, sorted)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		a, b := ordered[i], ordered[j]
+	// Every row placed by its name must have a name that differs.
+	named := make(map[group][]database.BookFile)
+	for _, f := range present {
+		g := groupOf(f)
+		if !byName[g] && f.TrackNumber != 0 {
+			continue
+		}
+		for _, prev := range named[g] {
+			if util.EquivalentNatural(stem(prev), stem(f)) {
+				return nil, nil, fmt.Errorf("%q and %q in %q cannot be ordered: their track numbers do not tell them apart and neither do their names",
+					filepath.Base(prev.FilePath), filepath.Base(f.FilePath), g.dir)
+			}
+		}
+		named[g] = append(named[g], f)
+	}
+
+	sort.SliceStable(present, func(i, j int) bool {
+		a, b := present[i], present[j]
 		if c := util.CompareNatural(filepath.Dir(a.FilePath), filepath.Dir(b.FilePath)); c != 0 {
 			return c < 0
 		}
-		if da, db := disc(a), disc(b); da != db {
-			return da < db
+		ga, gb := groupOf(a), groupOf(b)
+		if ga.disc != gb.disc {
+			return ga.disc < gb.disc
 		}
-		if (a.TrackNumber != 0) != (b.TrackNumber != 0) {
-			return a.TrackNumber != 0
+		if !byName[ga] {
+			if (a.TrackNumber != 0) != (b.TrackNumber != 0) {
+				return a.TrackNumber != 0
+			}
+			if a.TrackNumber != b.TrackNumber {
+				return a.TrackNumber < b.TrackNumber
+			}
 		}
-		if a.TrackNumber != b.TrackNumber {
-			return a.TrackNumber < b.TrackNumber
+		if c := util.CompareNatural(stem(a), stem(b)); c != 0 {
+			return c < 0
 		}
 		return util.CompareNatural(filepath.Base(a.FilePath), filepath.Base(b.FilePath)) < 0
 	})
+
+	ordered := append(present, missing...)
 	nums := make([]int, len(ordered))
-	for i := range nums {
-		nums[i] = i + 1
+	next := 1
+	for i := range present {
+		for reserved[next] {
+			next++
+		}
+		nums[i] = next
+		next++
+	}
+	for i, f := range missing {
+		nums[len(present)+i] = f.TrackNumber // planPass skips Missing rows
 	}
 	return ordered, nums, nil
 }
