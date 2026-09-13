@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_faildelete_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c9e17ab-52d3-4f80-b6a1-9e35b7c0284f
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package server
 
@@ -385,5 +385,57 @@ func TestExecuteSeriesPrune_AFailedCountDisqualifiesTheGroup(t *testing.T) {
 	if len(repointed) > 0 {
 		t.Errorf("books were repointed (%v) for a group whose canonical series could not be "+
 			"determined; the merge must not proceed on an unresolved vote", repointed)
+	}
+}
+
+// TestMergeSeriesGroupHelper_DoesNotDeleteAfterAFailedUpdate pins the
+// failed-reassignment branch of the series-normalize merge path. The first book
+// repoints, the second's UpdateBook fails, and the unfiltered count equals what
+// was enumerated, so the reference guard would pass: only the early error
+// return keeps DeleteSeries(mergeID) from firing with the failed row still
+// holding mergeID.
+func TestMergeSeriesGroupHelper_DoesNotDeleteAfterAFailedUpdate(t *testing.T) {
+	const (
+		keepID  = 1
+		mergeID = 2
+		movable = "book-ok"
+		stuck   = "book-write-fails"
+	)
+
+	store := &database.MockStore{}
+	store.GetBooksBySeriesIDAllVersionsFunc = func(id int) ([]database.BookCore, error) {
+		if id == mergeID {
+			return []database.BookCore{{ID: movable}, {ID: stuck}}, nil
+		}
+		return nil, nil
+	}
+	store.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		sid := mergeID
+		return &database.Book{ID: id, SeriesID: &sid}, nil
+	}
+	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
+		if id == stuck {
+			return nil, errors.New("simulated write failure")
+		}
+		return b, nil
+	}
+	var deleted []int
+	store.DeleteSeriesFunc = func(id int) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+
+	merged, _, err := mergeSeriesGroupHelper(store, keepID, []int{mergeID}, map[int]int{mergeID: 2})
+	if err == nil {
+		t.Fatal("a failed UpdateBook must fail the merge -- got nil error, so the caller " +
+			"records this merge as successful")
+	}
+	if merged != 0 {
+		t.Errorf("merged = %d, want 0: the series was not merged away", merged)
+	}
+	for _, id := range deleted {
+		if id == mergeID {
+			t.Fatalf("series %d deleted even though UpdateBook(%s) failed: %v", mergeID, stuck, err)
+		}
 	}
 }
