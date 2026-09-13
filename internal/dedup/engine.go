@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.80.0
+// version: 1.80.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-13
 
@@ -257,11 +257,11 @@ func (de *Engine) SetLSHStore(s LSHAcoustIDStore) {
 // therefore takes the WORSE reachability of the two and fails on any decorator,
 // and nothing in the inline spelling says which half is the weak one.
 //
-// de.bookStore is the BARE store today, so the inline form was not failing:
-// serviceregistry.Container.Build runs eagerly inside NewServer and resolves
-// KeyStore to the value Override("store", resolvedStore) put there, and that
-// entry is never replaced with the wrapped store. This is hardening, not a bug
-// fix. It earns its keep because the call site's `if lshStore != nil` guard is
+// de.bookStore is the registry's KeyStore, which since 2026-09-13 is the
+// server's indexedStore decorator (NewServer wraps before Container.Build), so
+// the inline form WOULD fail now. It was written as hardening on 2026-08-19,
+// when KeyStore was still the bare store. It matters because the call site's
+// `if lshStore != nil` guard is
 // silent -- a nil there drops the whole scan onto the O(n) segment walk with no
 // log line and no error, indistinguishable from a SQLite backend.
 type lshCandidateStore interface {

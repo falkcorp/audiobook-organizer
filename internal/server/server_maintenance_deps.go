@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-13
 
@@ -66,7 +66,7 @@ func (s *Server) MetadataCacheStore() database.MetadataCacheStore { return s.sto
 //
 // Returned directly rather than through database.AsCapability because
 // ListActiveOperationsV2 IS part of database.Store (operationsStore ->
-// OpsV2Store), so the indexedStore decorator installed by Start() forwards it
+// OpsV2Store), so the indexedStore decorator installed by NewServer forwards it
 // like every other Store method.
 func (s *Server) OperationQueueStore() maintenanceplugin.OpQueueReader { return s.store }
 
@@ -98,7 +98,7 @@ func (s *Server) FileProvenanceStore() database.FileProvenanceStore {
 // operation. A store without it yields nil and the op reports that.
 //
 // Resolved through database.AsCapability for the reason FileProvenanceStore
-// gives: the decorator installed by Start() hides every capability from a bare
+// gives: the decorator installed by NewServer hides every capability from a bare
 // assertion. TestMaintenanceStoreAccessorsResolveThroughIndexedStore holds both
 // accessors to that.
 func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
