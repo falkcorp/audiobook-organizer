@@ -1,7 +1,7 @@
 <!-- file: changelog.d/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8d3a1f26-4c7b-4e59-b0a2-6f1d9c8e5a34 -->
-<!-- last-edited: 2026-07-16 -->
+<!-- last-edited: 2026-09-12 -->
 
 # Changelog fragments (`changelog.d/`)
 
@@ -57,6 +57,26 @@ the new stable version.
   only when a single change genuinely spans them.
 - Fragments are **exempt from the file-header rule** — do not add the
   `file`/`version`/`guid` header (it would leak into `CHANGELOG.md`).
+- **Never use a `#` or `##` heading in a fragment.** `##` is the version-entry
+  level: `scriv collect` treats every `##` heading in `CHANGELOG.md` as a
+  release and refuses to run when one is not a version. A fragment is copied
+  into `CHANGELOG.md` verbatim, so a stray `##` passes its own release and
+  breaks the next one. That is how v0.222.0's collect failed on 2026-09-12, on
+  a `## Corrections, made before release` section. Use `###` only for the
+  category names above, and `####` or lower for everything else.
+  `scripts/check_changelog_scriv.py` (run by `changelog-check.yml` on every PR)
+  fails a PR that would introduce one.
+
+## Correcting an entry
+
+- **Not yet released** (the fragment is still in `changelog.d/`): edit that
+  fragment in place. To keep a record of what was wrong, add a
+  `#### Corrections, made before release` sub-section at the end of the same
+  category section. A correction belongs inside the entry it corrects; it is
+  never a new `##` section.
+- **Already released** (the text is in `CHANGELOG.md` under a version): do not
+  rewrite the released entry. Add a new fragment whose `####` entry names the
+  earlier release and states the correction, so it ships in the next version.
 
 ## How assembly works
 
