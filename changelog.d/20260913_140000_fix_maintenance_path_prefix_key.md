@@ -10,5 +10,10 @@
   `pathPrefix` or `path_prefix`. If both are sent with different values the op
   fails, and any unknown key (such as a typo like `path_prefx`) fails the op
   with the key named, before any store read or write. An empty body still
-  means no filter. Params stored by earlier runs decode unchanged on retry,
-  whichever spelling they used.
+  means no filter. A key repeated in the body, exactly or in another case
+  (`"pathPrefix"` twice, or `"pathPrefix"` and `"PathPrefix"`), also fails the
+  op, because JSON decoding would otherwise keep the last, possibly empty,
+  value. Params stored by earlier runs decode unchanged on retry, whichever
+  spelling they used. Keys these ops used to ignore silently (for example
+  `dry_run`, or `apply` on `missing-file-audit`) now fail the op, and a past
+  run stored with such a key cannot be retried as-is.

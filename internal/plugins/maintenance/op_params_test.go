@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/op_params_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e7d2c-3f41-4a8e-9c16-e2a7f4d90b38
 // last-edited: 2026-09-13
 
@@ -170,6 +170,58 @@ func TestPathPrefixParams_RejectedBeforeAnyStoreCall(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Mixed-case spellings of either key land in PathPrefix (json matches keys
+// case-insensitively), and a mismatch between them is still an error.
+func TestPathPrefixParams_MixedCaseKeys(t *testing.T) {
+	for _, op := range pathPrefixOps() {
+		t.Run(op.name, func(t *testing.T) {
+			for _, raw := range []string{`{"PATH_PREFIX":"/lib"}`, `{"PathPrefix":"/lib"}`, `{"PathPrefix":"/lib","PATH_PREFIX":"/lib"}`} {
+				prefix, _, err := op.decode(json.RawMessage(raw))
+				require.NoError(t, err, raw)
+				require.Equal(t, "/lib", prefix, raw)
+			}
+			_, _, err := op.decode(json.RawMessage(`{"PathPrefix":"/a","PATH_PREFIX":"/b"}`))
+			require.ErrorContains(t, err, "conflicting path prefixes")
+		})
+	}
+}
+
+// A repeated key would otherwise let json keep the LAST value, e.g. an empty
+// prefix after a real one: the whole-library sweep again. Driven through every
+// op's real run function; the store must never be reached.
+func TestPathPrefixParams_DuplicateKeysRejectedBeforeAnyStoreCall(t *testing.T) {
+	for _, op := range pathPrefixOps() {
+		t.Run(op.name, func(t *testing.T) {
+			bodies := map[string]string{
+				"exact repeat, primary":  `{"` + op.canon + `":"/lib","` + op.canon + `":""}`,
+				"case variant, primary":  `{"` + op.canon + `":"/a","` + strings.ToUpper(op.canon) + `":""}`,
+				"exact repeat, alias":    `{"` + op.alias + `":"/lib","` + op.alias + `":""}`,
+				"case variant, alias":    `{"` + op.alias + `":"/a","` + strings.ToUpper(op.alias) + `":""}`,
+				"alias twice with canon": `{"` + op.canon + `":"/lib","` + op.alias + `":"/lib","` + op.alias + `":""}`,
+				"same value repeated":    `{"` + op.canon + `":"/lib","` + op.canon + `":"/lib"}`,
+				"repeat of a non-prefix": `{"` + op.canon + `":"/lib","sample_limit":1,"SAMPLE_LIMIT":2}`,
+			}
+			for name, body := range bodies {
+				var calls atomic.Int32
+				p := &Plugin{deps: countingOpsDeps{opsStoreCalls: &calls}}
+				err := op.run(p, json.RawMessage(body))
+				require.ErrorContains(t, err, "duplicate key", name)
+				require.Zero(t, calls.Load(), "%s: the store must not be reached", name)
+			}
+		})
+	}
+}
+
+// encoding/json folds U+017F (long s) to "s" when matching keys, so
+// "ſample_limit" reaches SampleLimit. It must count as a repeat of
+// "sample_limit", not slip past a plain ToLower comparison.
+func TestDecodeOpParams_RejectsNonASCIICaseFoldRepeat(t *testing.T) {
+	var p missingFileAuditParams
+	require.ErrorContains(t,
+		decodeOpParams(json.RawMessage(`{"sample_limit":1,"ſample_limit":2}`), &p),
+		"duplicate key")
 }
 
 func TestDecodeOpParams_RejectsTrailingData(t *testing.T) {
