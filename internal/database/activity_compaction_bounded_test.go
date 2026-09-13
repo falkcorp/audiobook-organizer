@@ -1,7 +1,7 @@
 // file: internal/database/activity_compaction_bounded_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b7e0a34-16cf-4d29-8e71-c30a9d4f2b16
-// last-edited: 2026-09-09
+// last-edited: 2026-09-13
 
 package database
 
@@ -107,7 +107,7 @@ func TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
 	hi := day.Add(24 * time.Hour).UnixNano()
 
 	// The kill: one chunk commits, the rest never runs.
-	n, err := s.compactDayChunk(context.Background(), day, lo, hi)
+	n, err := s.compactDayChunk(context.Background(), day, lo, hi, nil)
 	require.NoError(t, err)
 	require.Equal(t, sqlActDeleteChunk, n)
 	require.Equal(t, 1, countNonDigestRows(t, s), "one row must survive the interrupted run")

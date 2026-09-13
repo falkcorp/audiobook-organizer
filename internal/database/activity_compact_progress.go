@@ -1,11 +1,14 @@
 // file: internal/database/activity_compact_progress.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package database
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // CompactProgressEvent is one liveness/progress notification emitted while
 // CompactByDay runs. Backends emit one after every chunk and every day they
@@ -20,6 +23,14 @@ type CompactProgressEvent struct {
 	// Result is the running (Done=false) or final (Done=true) counters for
 	// Backend alone — never a cross-backend total.
 	Result CompactResult
+	// Day is the UTC calendar day the backend is working on when the event
+	// fired. Zero on Done events and wherever the emitter has no day in hand.
+	Day time.Time
+	// Heartbeat marks a liveness-only event: a bounded unit of real work
+	// finished (one window of the SQLite digest-sample scan) but no row was
+	// removed, so Result has not moved. A consumer should stamp liveness and
+	// must not treat it as progress. Never set together with Done.
+	Heartbeat bool
 	// Done is true for the single completion event a wrapper emits per backend.
 	Done bool
 	// Err is set on a Done event when that backend's compaction failed.
@@ -66,10 +77,21 @@ func compactProgressFrom(ctx context.Context) CompactProgress {
 }
 
 // reportCompactProgress emits a non-terminal progress event for backend if a
-// hook is attached. Stores call it after every chunk and every day.
-func reportCompactProgress(ctx context.Context, backend string, result CompactResult) {
+// hook is attached. Stores call it after every chunk and every day; day is the
+// day being compacted (zero if unknown).
+func reportCompactProgress(ctx context.Context, backend string, day time.Time, result CompactResult) {
 	if fn := compactProgressFrom(ctx); fn != nil {
-		fn(CompactProgressEvent{Backend: backend, Result: result})
+		fn(CompactProgressEvent{Backend: backend, Result: result, Day: day})
+	}
+}
+
+// reportCompactHeartbeat emits a liveness-only event (Heartbeat=true) for
+// backend if a hook is attached. Call it only after a bounded unit of real work
+// finished — never from a timer, which would hide a genuinely wedged pass from
+// the op watchdog (see registry.LivenessToucher).
+func reportCompactHeartbeat(ctx context.Context, backend string, day time.Time, result CompactResult) {
+	if fn := compactProgressFrom(ctx); fn != nil {
+		fn(CompactProgressEvent{Backend: backend, Result: result, Day: day, Heartbeat: true})
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
 // last-edited: 2026-09-13
 
@@ -194,6 +194,61 @@ func TestCompactCutoff_RefusesWrappedCutoff(t *testing.T) {
 	if got, err := compactCutoff(now, 0); err != nil || !got.Equal(now) {
 		t.Errorf("days=0 must mean everything up to now: got %s, %v", got, err)
 	}
+}
+
+// compactLivenessReporter records UpdateProgress numerators and TouchLiveness calls.
+type compactLivenessReporter struct {
+	resultReporter
+	currents []int
+	touches  int
+}
+
+func (r *compactLivenessReporter) UpdateProgress(cur, total int, msg string) error {
+	r.currents = append(r.currents, cur)
+	return r.resultReporter.UpdateProgress(cur, total, msg)
+}
+
+func (r *compactLivenessReporter) TouchLiveness() { r.touches++ }
+
+// TestCompactProgressToReporter_StampsEveryBackendBoundary pins the adapter
+// half of the 2026-09-13 stuck-op cancel: the Done event at the Pebble→SQLite
+// handoff must stamp liveness, the counter must not jump backwards when the
+// second backend starts, the message must name the day, and a heartbeat must
+// touch liveness without writing progress.
+func TestCompactProgressToReporter_StampsEveryBackendBoundary(t *testing.T) {
+	rep := &compactLivenessReporter{}
+	fwd := compactProgressToReporter(rep)
+	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+
+	fwd(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 1719}})
+	fwd(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 1719}, Done: true})
+	fwd(database.CompactProgressEvent{Backend: "sqlite", Day: day, Heartbeat: true})
+	fwd(database.CompactProgressEvent{Backend: "sqlite", Day: day, Result: database.CompactResult{EntriesDeleted: 5000}})
+
+	if want := []int{1719, 1719, 6719}; !equalInts(rep.currents, want) {
+		t.Errorf("UpdateProgress numerators = %v, want %v (cumulative, Done forwarded, heartbeat not)", rep.currents, want)
+	}
+	if rep.touches != 1 {
+		t.Errorf("TouchLiveness calls = %d, want 1 (the heartbeat)", rep.touches)
+	}
+	joined := strings.Join(rep.progress, "\n")
+	for _, want := range []string{"pebble: finished, 1 days compacted, 1719 entries removed", "sqlite: 0 days compacted, 5000 entries removed so far (day 2026-09-07)"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("progress messages missing %q; got:\n%s", want, joined)
+		}
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestCleanupActivityLog_ForwardsProgressToReporter pins the same liveness
