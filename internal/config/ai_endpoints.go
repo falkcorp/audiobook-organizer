@@ -1,5 +1,5 @@
 // file: internal/config/ai_endpoints.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0b6c2e-8a41-4d7e-9b15-6e2c7a9d4f10
 // last-edited: 2026-09-13
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strconv"
@@ -287,8 +288,11 @@ type aiEndpointsSeed struct {
 // The legacy fields are left in place and keep being written, and nothing
 // reads ai_endpoints for dispatch in this PR.
 func migrateAIEndpointsBlob(blob string, seed aiEndpointsSeed) (string, bool) {
+	// Every failure below is logged: a migration that silently never runs
+	// leaves ai_endpoints empty with nothing in the boot log to say why.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(blob), &raw); err != nil || raw == nil {
+		slog.Warn("config: ai_endpoints migration skipped: blob is not a JSON object", "err", err)
 		return blob, false
 	}
 	if v, ok := raw["ai_endpoints"]; ok && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
@@ -300,6 +304,7 @@ func migrateAIEndpointsBlob(blob string, seed aiEndpointsSeed) (string, bool) {
 		cfg = seed.Base.Clone()
 	}
 	if err := json.Unmarshal([]byte(blob), cfg); err != nil {
+		slog.Warn("config: ai_endpoints migration skipped: blob does not decode into Config", "err", err)
 		return blob, false
 	}
 	if seed.EnvWhisperEndpoints != nil {
@@ -316,11 +321,13 @@ func migrateAIEndpointsBlob(blob string, seed aiEndpointsSeed) (string, bool) {
 
 	enc, err := json.Marshal(buildMigratedAIEndpoints(cfg, hasKey))
 	if err != nil {
+		slog.Warn("config: ai_endpoints migration skipped: encoding rows failed", "err", err)
 		return blob, false
 	}
 	raw["ai_endpoints"] = enc
 	out, err := json.Marshal(raw)
 	if err != nil {
+		slog.Warn("config: ai_endpoints migration skipped: encoding blob failed", "err", err)
 		return blob, false
 	}
 	return string(out), true
