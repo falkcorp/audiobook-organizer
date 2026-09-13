@@ -39,9 +39,13 @@ Review follow-ups on the same change:
   there, so the folder would read as empty.
 - A factory reset now also forgets that the index was built, so lookups fall
   back to the full scan until the index is rebuilt.
-- One unreadable book row no longer stops the index from ever being built. Such
-  rows are skipped, counted and logged as errors with sample ids. The rebuild
-  maintenance operation reports them as a failure, as the verify operation does.
+- One unreadable book row no longer stops the index from ever being built, and
+  it can no longer make a folder look empty. The index records each unreadable
+  row, and path lookups return an error (never "nobody here") while any such
+  row is still unreadable, as the old full scan did. The rows are logged as
+  errors with sample ids. Rewriting or removing a row lifts the error, and the
+  next rebuild clears its record. The rebuild maintenance operation reports the
+  rows as a failure, as the verify operation does.
 - The lookup interface was split in two (`BookNaturalKeyReader` and
   `BookPathSetReader`) to stay within the eight-method interface limit. The
   main store's method set is unchanged.

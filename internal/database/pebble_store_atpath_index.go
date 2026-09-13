@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-09-12
 
@@ -60,6 +60,21 @@ const bookAtPathPrefix = "book_atpath:"
 // rollback-then-roll-forward, run maintenance.book-atpath-index-backfill (which
 // rebuilds unconditionally) and then maintenance.book-atpath-index-verify.
 const bookAtPathBackfillKey = "system:backfill:book_atpath_index_v1_done"
+
+// bookAtPathUndecodablePrefix holds one marker per book row the backfill could
+// not decode: book_atpath_undecodable:<id> -> (empty value). Like book_atpath:
+// it sorts outside the book: scan range ("_" is not ":"), and it is not inside
+// book_atpath:'s range either. A decoded row has a path and gets an index key;
+// an undecodable one has neither, so without a marker the index could not tell
+// "no book here" from "a book here whose path nobody can read".
+// LiveBookIDsAtPath fails closed while any marker names a row that is still
+// present and still undecodable (see undecodableMarkedAtPath).
+const bookAtPathUndecodablePrefix = "book_atpath_undecodable:"
+
+// bookAtPathUndecodableKey is the marker key for one undecodable book row.
+func bookAtPathUndecodableKey(id string) []byte {
+	return []byte(bookAtPathUndecodablePrefix + id)
+}
 
 // bookAtPathBackfillChunk is how many index keys one worker buffers per commit.
 // A var only so tests can exercise the multi-chunk path; never reassign in prod
@@ -156,10 +171,13 @@ type BookAtPathBackfillResult struct {
 	Scanned int
 	Commits int
 	// UndecodableRows are book rows whose JSON did not decode, counted the
-	// same way VerifyBookAtPathIndex counts them. They are skipped, not
-	// indexed: no path can be read from them, and LiveBookIDsAtPath's full
-	// scan fails on them too. SampleUndecodable holds up to
-	// bookAtPathSampleCap of their ids, sorted.
+	// same way VerifyBookAtPathIndex counts them. No path can be read from
+	// them, so they get no index key; each gets a
+	// book_atpath_undecodable:<id> marker instead, in the same worker batches,
+	// and LiveBookIDsAtPath FAILS CLOSED (returns an error, never an empty or
+	// partial set) while any such row is still present and still undecodable,
+	// exactly as the pre-sentinel full scan does. SampleUndecodable holds up
+	// to bookAtPathSampleCap of their ids, sorted.
 	UndecodableRows   int      `json:"undecodable_rows"`
 	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
 }
@@ -227,6 +245,18 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 		}
 	}
 
+	// Recompute the undecodable markers from scratch: a marker for a row that
+	// has since been repaired or removed would block lookups for no reason.
+	// Rows that are still undecodable get their marker back below, before the
+	// sentinel is written. A Set by a concurrent writer is never lost here
+	// (only the backfill writes markers); a concurrent UpdateBook/DeleteBook
+	// only ever deletes one.
+	if err := p.db.DeleteRange([]byte(bookAtPathUndecodablePrefix),
+		bareRowUpperBound(bookAtPathUndecodablePrefix), pebble.Sync); err != nil {
+		slog.Error("book-atpath-backfill: cannot clear undecodable markers, aborting", "err", err)
+		return res, fmt.Errorf("clear undecodable markers: %w", err)
+	}
+
 	workers := bookAtPathBackfillWorkers
 	if workers < 1 {
 		workers = 1
@@ -290,11 +320,21 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 					// A row that cannot be decoded has no readable path, so it
 					// cannot be indexed. Failing the run on it would leave
 					// every boot on the full-scan path forever over one bad
-					// row, so skip it, count it, and report it at Error below.
-					// The sentinel still vouches only for decodable rows.
+					// row. Instead stage its marker, which keeps
+					// LiveBookIDsAtPath failing closed while the row stays
+					// broken, and report it at Error below.
+					if err := batch.Set(bookAtPathUndecodableKey(r.id), []byte{}, nil); err != nil {
+						return fmt.Errorf("stage undecodable marker for %s: %w", r.id, err)
+					}
+					buffered++
 					undecMu.Lock()
 					undecodable = append(undecodable, r.id)
 					undecMu.Unlock()
+					if buffered >= bookAtPathBackfillChunk {
+						if err := flush(); err != nil {
+							return err
+						}
+					}
 					continue
 				}
 				if err := batch.Set(bookAtPathKey(row.FilePath, r.id), []byte{}, nil); err != nil {
@@ -321,8 +361,8 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 	res.UndecodableRows = len(undecodable)
 	res.SampleUndecodable = sampleSorted(undecodable)
 	if res.UndecodableRows > 0 {
-		slog.Error("book-atpath-backfill: book rows did not decode and were NOT indexed; "+
-			"LiveBookIDsAtPath cannot see them. Run maintenance.book-atpath-index-verify and repair the rows",
+		slog.Error("book-atpath-backfill: book:<id> cannot be decoded; LiveBookIDsAtPath refuses "+
+			"until it is rewritten or removed out of band, then run maintenance.book-atpath-index-backfill",
 			"mode", mode, "undecodable", res.UndecodableRows, "sample_ids", res.SampleUndecodable)
 	}
 	if err == nil {
@@ -372,6 +412,13 @@ type BookAtPathIndexReport struct {
 	ExtraRowMoved int `json:"extra_row_moved"`
 	// Malformed keys have no NUL separator or an empty id. Informational.
 	Malformed int `json:"malformed"`
+	// Undecodable-row marker drift. Verify is report-only; only the backfill
+	// and rebuild recompute markers. StaleMarkers name a row that is gone or
+	// now decodes (harmless: the reader handles both). UnmarkedUndecodable
+	// rows have no marker, so once the sentinel is set the reader cannot see
+	// them and their path can read as free: run the rebuild.
+	StaleMarkers        int `json:"stale_markers"`
+	UnmarkedUndecodable int `json:"unmarked_undecodable"`
 
 	// Samples are "<id> <path>" strings (keys, quoted, for malformed), at most
 	// bookAtPathSampleCap per class, sorted.
@@ -379,6 +426,7 @@ type BookAtPathIndexReport struct {
 	SampleMissingTrashed []string `json:"sample_missing_trashed,omitempty"`
 	SampleExtra          []string `json:"sample_extra,omitempty"`
 	SampleMalformed      []string `json:"sample_malformed,omitempty"`
+	SampleUnmarked       []string `json:"sample_unmarked_undecodable,omitempty"`
 }
 
 // Complete reports whether every book row was decodable and therefore checked.
@@ -403,6 +451,7 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	type pair struct{ path, id string }
 	expected := make(map[pair]bool) // value: trashed
 	rowPath := make(map[string]string)
+	undecodable := make(map[string]bool)
 	n := 0
 	if err := forEachBookRow(snap, func(id string, v []byte) error {
 		n++
@@ -415,6 +464,7 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 		var row bookAtPathRow
 		if err := json.Unmarshal(v, &row); err != nil {
 			rep.UndecodableRows++
+			undecodable[id] = true
 			return nil
 		}
 		expected[pair{row.FilePath, id}] = markedForDeletionFlag(row.MarkedForDeletion)
@@ -455,6 +505,27 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	}); err != nil {
 		return rep, fmt.Errorf("verify book_atpath: scan index: %w", err)
 	}
+
+	markers := make(map[string]bool)
+	mLower := []byte(bookAtPathUndecodablePrefix)
+	if err := forEachKeyInRange(snap, mLower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
+		id := string(key[len(mLower):])
+		markers[id] = true
+		if !undecodable[id] {
+			rep.StaleMarkers++
+		}
+		return nil
+	}); err != nil {
+		return rep, fmt.Errorf("verify book_atpath: scan undecodable markers: %w", err)
+	}
+	var unmarked []string
+	for id := range undecodable {
+		if !markers[id] {
+			rep.UnmarkedUndecodable++
+			unmarked = append(unmarked, id)
+		}
+	}
+	rep.SampleUnmarked = sampleSorted(unmarked)
 
 	var missLive, missTrashed []string
 	for k, trashed := range expected {

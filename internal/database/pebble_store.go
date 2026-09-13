@@ -2735,6 +2735,14 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 		batch.Close()
 		return nil, err
 	}
+	// This batch writes a decodable row, so any undecodable-row marker for it
+	// is now stale. Dropping it here keeps the marker set exact. (A row that
+	// is still undecodable never reaches this batch: the GetBookByID above
+	// fails on it.)
+	if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
 
 	updateHashIndex := func(oldVal, newVal *string, prefix string) error {
 		var oldStr, newStr string
@@ -3201,6 +3209,10 @@ func (p *PebbleStore) DeleteBook(id string) error {
 
 	// Multi-valued path index. If book was a stale read, the row's real key
 	// survives as an extra (row gone), which the reader skips.
+	if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
+		batch.Close()
+		return err
+	}
 	if err := batch.Delete(bookAtPathKey(book.FilePath, id), nil); err != nil {
 		batch.Close()
 		return err
@@ -4701,6 +4713,14 @@ func (p *PebbleStore) RemoveBookAlternativeTitle(bookID, title string) error {
 
 // Reset clears all data from the store and resets all counters to initial state
 func (p *PebbleStore) Reset() error {
+	// The wipe below removes the book_atpath: backfill sentinel, so drop the
+	// cached positive read of it FIRST: a LiveBookIDsAtPath that starts after
+	// this line takes the full-scan path instead of trusting a wiped index.
+	// This narrows the window but does not close it. A reader already inside
+	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
+	// set. Reset is a factory-reset path with no concurrent library work.
+	p.bookAtPathBuilt.Store(false)
+
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.
 	batch := p.db.NewBatch()
@@ -4745,11 +4765,6 @@ func (p *PebbleStore) Reset() error {
 		fresh = nil
 	}
 	p.replaceMemStoreAfterReset(fresh)
-
-	// The wipe removed the book_atpath: backfill sentinel; drop the cached
-	// positive read of it too, or LiveBookIDsAtPath keeps trusting an index
-	// that the next startup backfill has not rebuilt yet.
-	p.bookAtPathBuilt.Store(false)
 
 	return nil
 }

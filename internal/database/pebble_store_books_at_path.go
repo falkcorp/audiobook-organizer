@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
 // last-edited: 2026-09-12
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -81,9 +82,14 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 	snap := p.db.NewSnapshot()
 	defer snap.Close()
 
+	repaired, err := undecodableMarkedAtPath(snap, path)
+	if err != nil {
+		return nil, fmt.Errorf("live books at path: %w", err)
+	}
+
 	lower, upper := bookAtPathBounds(path)
 	var candidates []string
-	err := forEachKeyInRange(snap, lower, upper, func(key, _ []byte) error {
+	err = forEachKeyInRange(snap, lower, upper, func(key, _ []byte) error {
 		rest := key[len(lower):]
 		if len(rest) == 0 {
 			return fmt.Errorf("corrupt book_atpath key %q: empty book id", key)
@@ -120,5 +126,60 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 			ids = append(ids, id)
 		}
 	}
+	if len(repaired) > 0 {
+		// Merge the repaired-out-of-band rows, deduped, back into id order.
+		ids = append(ids, repaired...)
+		slices.Sort(ids)
+		ids = slices.Compact(ids)
+	}
 	return ids, nil
+}
+
+// undecodableMarkedAtPath walks the undecodable-row markers and point-reads
+// each marked book:<id> from snap, the same snapshot as the rest of the read:
+//
+//   - row gone: the marker is stale; ignore it (the next rebuild clears it).
+//   - row still undecodable: return the fail-closed error. Store-wide on
+//     purpose: such a row has no readable path, so it could be at ANY path,
+//     and the pre-sentinel full scan already fails every lookup on it. An
+//     empty answer would tell a caller (#3335's regroup) that an occupied
+//     folder is free.
+//   - row now decodes (repaired out of band): it has NO book_atpath key yet,
+//     so ignoring it would report its folder free. It is a candidate: if it is
+//     live and at path, its id is returned for merging with the index result.
+//
+// Normally there are no markers, so this is one empty seek.
+func undecodableMarkedAtPath(snap *pebble.Snapshot, path string) ([]string, error) {
+	lower := []byte(bookAtPathUndecodablePrefix)
+	var blocking, atPath []string
+	err := forEachKeyInRange(snap, lower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
+		id := string(key[len(lower):])
+		v, closer, err := snap.Get([]byte("book:" + id))
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read undecodable-marked book %s: %w", id, err)
+		}
+		var row bookAtPathRow
+		decErr := json.Unmarshal(v, &row)
+		closer.Close()
+		if decErr != nil {
+			blocking = append(blocking, id)
+			return nil
+		}
+		if row.FilePath == path && !markedForDeletionFlag(row.MarkedForDeletion) {
+			atPath = append(atPath, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(blocking) > 0 {
+		return nil, fmt.Errorf("%d book row(s) cannot be decoded (e.g. book:%s); LiveBookIDsAtPath "+
+			"refuses until each is rewritten or removed out of band (UpdateBook and DeleteBook cannot "+
+			"read it either), then run maintenance.book-atpath-index-backfill", len(blocking), blocking[0])
+	}
+	return atPath, nil
 }
