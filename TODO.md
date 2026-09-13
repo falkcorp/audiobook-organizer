@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.5 -->
+<!-- version: 10.73.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-13 -->
 
@@ -5842,7 +5842,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       whether it is cleaned up. Low priority; fix alongside DEMO-RECORDING-BROKEN, since the
       script does not currently get far enough to matter.
 
-- [ ] **`regroup_apply.go` skips nil members when demoting, so it can still leave a
+- [x] **`regroup_apply.go` skips nil members when demoting, so it can still leave a
       double-primary group.** Same invariant as VG-DOUBLE-PRIMARY (TASK-042, fixed in
       `internal/merge`), different file, opposite nil handling.
 
