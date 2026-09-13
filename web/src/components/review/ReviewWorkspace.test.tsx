@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -319,6 +319,88 @@ describe('evidence', () => {
 
     const panels = await screen.findAllByTestId('evidence-section');
     expect(panels.length).toBeGreaterThan(0);
+  });
+});
+
+describe('cover lightbox', () => {
+  // Owner report 2026-09-13: clicking the "Proposed" cover on the two-column
+  // card opened an image SMALLER than the 60x80 thumbnail. The viewer was an
+  // inline `maxWidth="sm"` Dialog whose image was `max-width: 100%` of a
+  // shrink-wrapped Paper. jsdom has no layout, so these assert the contract
+  // that replaces it: a dedicated viewer, bounded in viewport units, showing
+  // the provider's full-size variant -- not pixel sizes.
+  const CURRENT = 'https://images-na.ssl-images-amazon.com/images/I/cur._SL500_.jpg';
+  const PROPOSED = 'https://m.media-amazon.com/images/I/prop._SL500_.jpg';
+
+  beforeEach(() => {
+    const r = makeResult('a');
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue({
+      results: [
+        {
+          ...r,
+          book: { ...r.book, cover_url: CURRENT },
+          candidate: { ...r.candidate, cover_url: PROPOSED },
+        } as unknown as api.CandidateResult,
+      ],
+      total_count: 1,
+      matched: 1,
+      no_match: 0,
+      errors: 0,
+    });
+  });
+
+  // The owner's screen: a compact row expanded into its Current / Proposed
+  // columns (CompareSpine's expanded-row detail).
+  async function openExpandedRow() {
+    const user = userEvent.setup();
+    renderWorkspace();
+    const spine = await screen.findByTestId('compare-spine');
+    await user.click(within(spine).getByText(/Book a/));
+    await screen.findByText('Proposed');
+    return user;
+  }
+
+  // The thumbnail in the column under the given heading. Matched through the
+  // heading, not by src: the collapsed row's own avatar shows the same URL.
+  function columnCover(heading: 'Current' | 'Proposed', src: string): HTMLImageElement {
+    const column = screen.getByText(heading).parentElement;
+    const img = column?.querySelector<HTMLImageElement>('img');
+    if (!img) throw new Error(`no cover thumbnail under "${heading}"`);
+    expect(img.getAttribute('src')).toBe(src);
+    return img;
+  }
+
+  it('opens the Proposed cover full size, bounded by the viewport, not the thumbnail', async () => {
+    const user = await openExpandedRow();
+    expect(screen.queryByTestId('cover-lightbox')).not.toBeInTheDocument();
+
+    await user.click(columnCover('Proposed', PROPOSED));
+
+    const viewer = await screen.findByTestId('cover-lightbox');
+    expect(viewer).toHaveAttribute('role', 'dialog');
+    const big = within(viewer).getByTestId('cover-lightbox-img') as HTMLImageElement;
+    // The full-size variant, not the `._SL500_.` resize the card shows.
+    expect(big.getAttribute('src')).toBe('https://m.media-amazon.com/images/I/prop.jpg');
+    expect(big.style.maxWidth).toBe('90vw');
+    expect(big.style.maxHeight).toBe('90vh');
+    expect(big.style.objectFit).toBe('contain');
+    // Not sized to the thumbnail, and not a percentage of a shrink-wrapped box.
+    expect(big.style.width).not.toBe('60px');
+    expect(big.style.height).not.toBe('80px');
+    expect(big.style.maxWidth).not.toBe('100%');
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('cover-lightbox')).not.toBeInTheDocument());
+  });
+
+  it('opens the Current cover through the same viewer', async () => {
+    const user = await openExpandedRow();
+    await user.click(columnCover('Current', CURRENT));
+
+    const viewer = await screen.findByTestId('cover-lightbox');
+    const big = within(viewer).getByTestId('cover-lightbox-img') as HTMLImageElement;
+    expect(big.getAttribute('src')).toBe('https://images-na.ssl-images-amazon.com/images/I/cur.jpg');
+    expect(big.style.maxWidth).toBe('90vw');
   });
 });
 

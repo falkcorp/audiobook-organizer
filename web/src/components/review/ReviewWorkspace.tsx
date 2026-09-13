@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 //
 // The unified review workspace: one screen for dedup, metadata apply, and the
 // review queue.
@@ -58,6 +58,8 @@ import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import * as api from '../../services/api';
 import type { DedupBand } from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
+import { CoverLightbox } from '../CoverLightbox';
+import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import type { SpineViewMode } from './spine/CompareSpine';
 import { DupesPanel } from './DupesPanel';
@@ -540,23 +542,17 @@ export function ReviewWorkspace() {
         </DialogActions>
       </Dialog>
 
-      {/* Cover lightbox. */}
-      <Dialog
+      {/* Cover lightbox -- shared by every CompareSpine cover, the "Current"
+          and the "Proposed" one alike. This was an inline `maxWidth="sm"`
+          Dialog whose image was `max-width: 100%` of a shrink-wrapped Paper;
+          CoverLightbox bounds the image in viewport units instead, asks for
+          the provider's full-size variant, and says so when the image fails
+          to load rather than collapsing to a few pixels. */}
+      <CoverLightbox
         open={Boolean(metadata.previewCover)}
+        src={metadata.previewCover ? coverFullSizeUrl(metadata.previewCover) : null}
         onClose={() => metadata.setPreviewCover(null)}
-        maxWidth="sm"
-      >
-        <DialogContent sx={{ p: 0 }}>
-          {metadata.previewCover && (
-            <Box
-              component="img"
-              src={metadata.previewCover}
-              alt="Cover preview"
-              sx={{ display: 'block', maxWidth: '100%' }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      />
     </Box>
   );
 }
