@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -619,7 +619,7 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		warn("external IDs of the moved files were not all moved to the new book: %v", xErr)
 	}
 
-	h.keepSplitSourceAFolder(sourceBook, warn)
+	h.keepSplitSourceAFolder(sourceBook, created.ID, warn)
 
 	// Re-read the new book: the move's aggregate recompute has written its
 	// Duration/FileSize since CreateBook returned.
@@ -650,7 +650,7 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 // The source row is re-read before the write: the move's aggregate recompute
 // has just rewritten its Duration/FileSize, and writing back the row read
 // before the move would put the old totals back.
-func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, warn func(string, ...any)) {
+func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, createdID string, warn func(string, ...any)) {
 	remaining, err := h.store.GetBookFiles(sourceBook.ID)
 	if err != nil {
 		warn("could not list the source book's remaining files to check its path: %v", err)
@@ -669,6 +669,11 @@ func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, warn
 		return
 	}
 	others := slices.DeleteFunc(occupants, func(id string) bool { return id == sourceBook.ID })
+	if slices.Contains(others, createdID) {
+		warn("source book path left at %q: its remaining files' folder %q is the path of the new book %s",
+			sourceBook.FilePath, target, createdID)
+		return
+	}
 	if len(others) > 0 {
 		warn("source book path left at %q: its remaining files' folder %q already belongs to book(s) %s",
 			sourceBook.FilePath, target, strings.Join(others, ", "))
