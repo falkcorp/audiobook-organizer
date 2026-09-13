@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
 // last-edited: 2026-09-13
 
@@ -10,12 +10,14 @@
 package audiobookshandler
 
 import (
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -195,9 +197,25 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 	var body struct {
 		SkipScan     *bool   `json:"skip_scan"`
 		DownloadHash *string `json:"download_hash"`
+		// TrackNumber and DiscNumber set the file's position by hand. 0 is
+		// accepted and stored, but it is the "no number" sentinel everywhere
+		// that reads it: the rename planner (organizer.planTargetPaths) sorts a
+		// track-0 file AFTER every numbered one and names it by position, and
+		// the tag write-back and maintenance.enrich-book-files treat it as
+		// unset. It does not mean "sorts first".
+		TrackNumber *int `json:"track_number"`
+		DiscNumber  *int `json:"disc_number"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
+		return
+	}
+	if body.TrackNumber != nil && *body.TrackNumber < 0 {
+		httputil.RespondWithBadRequest(c, "track_number must not be negative")
+		return
+	}
+	if body.DiscNumber != nil && *body.DiscNumber < 0 {
+		httputil.RespondWithBadRequest(c, "disc_number must not be negative")
 		return
 	}
 
@@ -229,11 +247,118 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 		)
 	}
 
+	// Position edits, recorded in the book's metadata change history AFTER the
+	// row is written, so the history never shows a change that did not land.
+	type positionChange struct {
+		field    string
+		old, new int
+	}
+	var positions []positionChange
+	if body.TrackNumber != nil && *body.TrackNumber != file.TrackNumber {
+		positions = append(positions, positionChange{"track_number", file.TrackNumber, *body.TrackNumber})
+		file.TrackNumber = *body.TrackNumber
+	}
+	if body.DiscNumber != nil && *body.DiscNumber != file.DiscNumber {
+		positions = append(positions, positionChange{"disc_number", file.DiscNumber, *body.DiscNumber})
+		file.DiscNumber = *body.DiscNumber
+	}
+
 	if err := store.UpsertBookFile(file); err != nil {
 		httputil.InternalError(c, "failed to update book file", err)
 		return
 	}
+
+	// The book_file row has no history of its own; its position edits go in
+	// the owning book's history. The field names the file ("track_number" for
+	// the book would be ambiguous across its files), and the values are the
+	// numbers themselves so the entry reads as the edit that was made.
+	now := time.Now()
+	for _, pc := range positions {
+		prev, next := strconv.Itoa(pc.old), strconv.Itoa(pc.new)
+		if err := store.RecordMetadataChange(&database.MetadataChangeRecord{
+			BookID:        bookID,
+			Field:         fmt.Sprintf("book_file:%s:%s", fileID, pc.field),
+			PreviousValue: &prev,
+			NewValue:      &next,
+			ChangeType:    "manual",
+			Source:        "book_file_patch",
+			ChangedAt:     now,
+		}); err != nil {
+			// The edit itself landed; a lost history row is logged, not
+			// reported as a failed edit (a retry would change nothing).
+			filesLog.Warn("book file %s: %s changed %s -> %s but the change history write failed: %v",
+				logger.SanitizeLogValue(fileID), pc.field, prev, next, err)
+		}
+		filesLog.Info("book file %s: %s set %s -> %s (book %s)",
+			logger.SanitizeLogValue(fileID), pc.field, prev, next, logger.SanitizeLogValue(bookID))
+	}
 	httputil.RespondWithOK(c, file)
+}
+
+var filesLog = logger.New("audiobooks.files")
+
+// bookFilePositionField is the metadata-history field PatchBookFile records a
+// file position edit under: "book_file:<file id>:<track_number|disc_number>".
+func bookFilePositionField(field string) (fileID, column string, ok bool) {
+	rest, found := strings.CutPrefix(field, "book_file:")
+	if !found {
+		return "", "", false
+	}
+	i := strings.LastIndex(rest, ":")
+	if i <= 0 {
+		return "", "", false
+	}
+	fileID, column = rest[:i], rest[i+1:]
+	if column != "track_number" && column != "disc_number" {
+		return "", "", false
+	}
+	return fileID, column, true
+}
+
+// errBookFilePositionChangedSince is returned when an undo finds the file no
+// longer holds the number the recorded edit set: restoring the old number
+// would overwrite a later change.
+var errBookFilePositionChangedSince = errors.New("the file's position changed after this edit; undo refused")
+
+// revertBookFilePosition undoes one PatchBookFile position edit on the file
+// row itself. The book-level undo path (metadataStateService.SetOverride)
+// must never see these fields: it would store a book override named
+// "book_file:..." that nothing reads, report "undo applied", and leave the
+// file's number where it was. handled is false for any other field.
+//
+// Compare-and-set: the row must still carry the recorded NewValue.
+func revertBookFilePosition(store AudiobooksStore, bookID string, rec *database.MetadataChangeRecord) (handled bool, err error) {
+	fileID, column, ok := bookFilePositionField(rec.Field)
+	if !ok {
+		return false, nil
+	}
+	if rec.PreviousValue == nil || rec.NewValue == nil {
+		return true, fmt.Errorf("history row for %s has no recorded values", rec.Field)
+	}
+	prev, perr := strconv.Atoi(*rec.PreviousValue)
+	set, serr := strconv.Atoi(*rec.NewValue)
+	if perr != nil || serr != nil {
+		return true, fmt.Errorf("history row for %s does not hold numbers (%q -> %q)", rec.Field, *rec.PreviousValue, *rec.NewValue)
+	}
+	f, err := store.GetBookFileByID(bookID, fileID)
+	if err != nil {
+		return true, fmt.Errorf("load book file %s: %w", fileID, err)
+	}
+	if f == nil {
+		return true, fmt.Errorf("book file %s is no longer on book %s: %w", fileID, bookID, errBookFilePositionChangedSince)
+	}
+	cur := &f.TrackNumber
+	if column == "disc_number" {
+		cur = &f.DiscNumber
+	}
+	if *cur != set {
+		return true, fmt.Errorf("book file %s %s is %d, not the %d the edit set: %w", fileID, column, *cur, set, errBookFilePositionChangedSince)
+	}
+	*cur = prev
+	if err := store.UpsertBookFile(f); err != nil {
+		return true, fmt.Errorf("restore %s of book file %s: %w", column, fileID, err)
+	}
+	return true, nil
 }
 
 // ExtractTrackInfo parses track/disk numbers from segment filenames and updates
