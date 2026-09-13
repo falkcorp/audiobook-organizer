@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -286,7 +286,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			}
 			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
-			var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing atomic.Int64
+			var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing, fileWorkBlocked atomic.Int64
 			// gateDeferred holds the IDS — not a count — of books never
 			// ATTEMPTED because the write-back gate stayed saturated past this
 			// item's own timeout. Kept separate from writeFailed: nothing was
@@ -398,6 +398,11 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						// identity, or a volume-number mismatch). Nothing was
 						// written; the book stays for manual review.
 						gateBlocked.Add(1)
+					case applySkipFileWorkWouldFail:
+						// The rename after the apply was known to fail, so the
+						// apply was refused before any write: the database and
+						// the files still agree.
+						fileWorkBlocked.Add(1)
 					}
 					attrs := []slog.Attr{
 						slog.String("book_id", id),
@@ -569,8 +574,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (refused by certainty gate %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
-				applied.Load(), total, gateBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (refused by certainty gate %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
+				applied.Load(), total, gateBlocked.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), stillDeferred,
 				skippedLocked.Load())
 			if priorDone > 0 {

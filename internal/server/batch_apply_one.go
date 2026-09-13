@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -42,6 +42,10 @@ type cachedApplyService interface {
 	// FinishApplyFileWorkTimed is FinishApplyFileWork recording its phases
 	// into pt and logging the per-book "apply phase durations" line.
 	FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
+	// RenamePreflight reports, before anything is written, that the write-back
+	// rename following an apply of candidate is known to fail (wrapping
+	// metafetch.ErrApplyFileWorkWouldFail). See applySkipFileWorkWouldFail.
+	RenamePreflight(id string, candidate metafetch.MetadataCandidate) error
 }
 
 // bookReader reads the book the gate judges the candidate against.
@@ -90,6 +94,11 @@ const (
 	// applySkipGateBlocked: the certainty gate (internal/applygate) refused the
 	// candidate. The book is left untouched for manual review.
 	applySkipGateBlocked = "gate_blocked"
+	// applySkipFileWorkWouldFail: write-back was requested and the rename that
+	// follows the apply is known to fail (metafetch.RenamePreflight). The apply
+	// is refused so the database and the files never disagree; nothing was
+	// written.
+	applySkipFileWorkWouldFail = "file_work_would_fail"
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
@@ -229,6 +238,17 @@ func applyCachedCandidateForBookTimed(
 	plan := planCachedApply(svc, books, id)
 	if plan.Reason != "" {
 		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate}
+	}
+
+	// The apply below writes the database first and the files after. On
+	// 2026-09-13 three books got their new metadata and then failed the rename
+	// ("link <tmp> <dest>: file already exists"), leaving the database and the
+	// disk disagreeing. When the file side is known to fail, refuse here,
+	// before any write. Only with writeBack: without it there is no rename.
+	if writeBack {
+		if err := svc.RenamePreflight(id, *plan.Candidate); err != nil {
+			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate}
+		}
 	}
 
 	resp, aerr := svc.ApplyMetadataCandidate(id, *plan.Candidate, nil)
