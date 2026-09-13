@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -92,8 +92,9 @@ const missingFileStatConcurrency = 24
 
 // missingFileAuditParams are the JSON parameters accepted by the op.
 type missingFileAuditParams struct {
-	// PathPrefix, when set, restricts the audit to rows whose FilePath begins with
-	// it — e.g. only the organized tree. Empty audits every row.
+	// PathPrefix, when set, restricts the audit to rows whose FilePath is it or
+	// lies under it on a folder boundary ("/lib" does not match "/lib2/…") — e.g.
+	// only the organized tree. Empty audits every row.
 	PathPrefix string `json:"path_prefix"`
 
 	// SampleLimit overrides how many example missing paths are reported (0 = the
@@ -408,7 +409,7 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 		if path == "" {
 			continue
 		}
-		if params.PathPrefix != "" && !strings.HasPrefix(path, params.PathPrefix) {
+		if !pathPrefixMatches(path, params.PathPrefix) {
 			continue
 		}
 		items = append(items, missingFileItem{idx: len(items), file: files[i]})

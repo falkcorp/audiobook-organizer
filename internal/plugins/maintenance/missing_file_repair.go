@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
-// last-edited: 2026-08-17
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -31,7 +31,8 @@ type missingFileRepairParams struct {
 	// point: the safe outcome must be what you get by forgetting a flag.
 	Apply bool `json:"apply"`
 
-	// PathPrefix restricts the sweep to rows whose FilePath begins with it.
+	// PathPrefix restricts the sweep to rows whose FilePath is it or lies under
+	// it, on a folder boundary ("/lib" does not match "/lib2/…"). Empty = all.
 	PathPrefix string `json:"path_prefix"`
 
 	// MaxFlagged caps how many rows a single run may report. 0 uses the default
@@ -196,7 +197,7 @@ func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, param
 		if path == "" {
 			continue
 		}
-		if params.PathPrefix != "" && !strings.HasPrefix(path, params.PathPrefix) {
+		if !pathPrefixMatches(path, params.PathPrefix) {
 			continue
 		}
 		items = append(items, missingFileItem{idx: len(items), file: files[i]})

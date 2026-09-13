@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
 // version: 1.7.1
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -297,7 +297,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		if path == "" {
 			continue
 		}
-		if params.PathPrefix != "" && !strings.HasPrefix(path, params.PathPrefix) {
+		if !pathPrefixMatches(path, params.PathPrefix) {
 			continue
 		}
 		items = append(items, candidateItem{idx: len(items), file: files[i]})

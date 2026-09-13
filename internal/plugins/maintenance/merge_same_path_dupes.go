@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
 // version: 1.2.1
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -321,7 +321,7 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 			if path == "" || !audioExtsForMerge[strings.ToLower(filepath.Ext(path))] {
 				continue
 			}
-			if params.PathPrefix != "" && !strings.HasPrefix(path, params.PathPrefix) {
+			if !pathPrefixMatches(path, params.PathPrefix) {
 				continue
 			}
 			byPath[path] = append(byPath[path], b)

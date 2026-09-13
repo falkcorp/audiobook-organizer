@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -295,7 +295,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		if path == "" {
 			continue
 		}
-		if params.PathPrefix != "" && !strings.HasPrefix(path, params.PathPrefix) {
+		if !pathPrefixMatches(path, params.PathPrefix) {
 			continue
 		}
 		items = append(items, item{idx: len(items), file: files[i]})
