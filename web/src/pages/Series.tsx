@@ -1,6 +1,7 @@
 // file: web/src/pages/Series.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
+// last-edited: 2026-09-12
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -75,7 +76,8 @@ interface ActionHistoryEntry {
   description: string;
   timestamp: Date;
   undoable: boolean;
-  undoData?: { seriesId: number; oldName: string };
+  // opId is the entities.series-rename operation to revert on undo.
+  undoData?: { seriesId: number; oldName: string; opId: string };
 }
 
 // --- Column definitions ---
@@ -517,16 +519,18 @@ export function Series() {
     const seriesId = renameDialog.series.id;
     const newName = renameValue.trim();
     try {
-      await api.renameSeries(seriesId, newName);
+      const op = await api.renameSeries(seriesId, newName);
       addHistory({
         action: 'rename',
         description: `Renamed "${oldName}" → "${newName}"`,
         undoable: true,
-        undoData: { seriesId, oldName },
+        undoData: { seriesId, oldName, opId: op.id },
       });
+      // Undo reverts the rename operation through its journal rather than
+      // issuing a second rename, so it refuses a series renamed again since.
       const undoFn = async () => {
         try {
-          await api.renameSeries(seriesId, oldName);
+          await api.undoSeriesRename(op.id);
           addHistory({
             action: 'rename',
             description: `Undo: renamed "${newName}" back to "${oldName}"`,
@@ -534,8 +538,12 @@ export function Series() {
           });
           setSnackbar({ open: true, message: 'Rename undone', severity: 'success' });
           fetchSeries();
-        } catch {
-          setSnackbar({ open: true, message: 'Undo failed', severity: 'error' });
+        } catch (err) {
+          setSnackbar({
+            open: true,
+            message: err instanceof Error ? `Undo failed: ${err.message}` : 'Undo failed',
+            severity: 'error',
+          });
         }
       };
       setSnackbar({
@@ -1162,10 +1170,7 @@ export function Series() {
                           size="small"
                           onClick={async () => {
                             try {
-                              await api.renameSeries(
-                                entry.undoData!.seriesId,
-                                entry.undoData!.oldName
-                              );
+                              await api.undoSeriesRename(entry.undoData!.opId);
                               addHistory({
                                 action: 'rename',
                                 description: `Undo: reverted rename on "${entry.undoData!.oldName}"`,
@@ -1177,10 +1182,13 @@ export function Series() {
                                 severity: 'success',
                               });
                               fetchSeries();
-                            } catch {
+                            } catch (err) {
                               setSnackbar({
                                 open: true,
-                                message: 'Undo failed',
+                                message:
+                                  err instanceof Error
+                                    ? `Undo failed: ${err.message}`
+                                    : 'Undo failed',
                                 severity: 'error',
                               });
                             }
