@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-09-13
 
@@ -58,7 +58,14 @@ type markMissingParams struct {
 	// PathPrefix scopes the sweep to one tree (e.g. only the organizer's tree).
 	// The match is on a folder boundary: "/lib" matches "/lib" and "/lib/…" but
 	// not "/lib2/…". Empty = no filter.
+	//
+	// Accepted as "pathPrefix" OR "path_prefix" (the latter lands in
+	// PathPrefixAlias and is folded in by decodeOpParams; both present with
+	// different values is an error). Unknown keys are rejected.
 	PathPrefix string `json:"pathPrefix"`
+	// PathPrefixAlias is the "path_prefix" spelling of PathPrefix. Never read
+	// it directly: decodeOpParams folds it into PathPrefix and clears it.
+	PathPrefixAlias string `json:"path_prefix,omitempty"`
 	// Max bounds how many rows one run will FLIP. <=0 means unbounded: unlike
 	// missing-file-repoint (which samples), a partial mark leaves the counter
 	// partially honest, which is worse than either extreme — so the default is
@@ -175,10 +182,8 @@ func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 
 func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params markMissingParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("mark-missing-files: decode params: %w", err)
-		}
+	if err := decodeOpParams(rawParams, &params); err != nil {
+		return fmt.Errorf("mark-missing-files: decode params: %w", err)
 	}
 	store := p.deps.OpsStore()
 	if store == nil {

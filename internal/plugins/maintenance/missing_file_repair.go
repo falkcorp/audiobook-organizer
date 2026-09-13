@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
 // last-edited: 2026-09-13
 
@@ -33,7 +33,14 @@ type missingFileRepairParams struct {
 
 	// PathPrefix restricts the sweep to rows whose FilePath is it or lies under
 	// it, on a folder boundary ("/lib" does not match "/lib2/…"). Empty = all.
+	//
+	// Accepted as "path_prefix" OR "pathPrefix" (the latter lands in
+	// PathPrefixAlias and is folded in by decodeOpParams; both present with
+	// different values is an error). Unknown keys are rejected.
 	PathPrefix string `json:"path_prefix"`
+	// PathPrefixAlias is the "pathPrefix" spelling of PathPrefix. Never read
+	// it directly: decodeOpParams folds it into PathPrefix and clears it.
+	PathPrefixAlias string `json:"pathPrefix,omitempty"`
 
 	// MaxFlagged caps how many rows a single run may report. 0 uses the default
 	// below. It exists so a mistaken PathPrefix, or a mount that vanished
@@ -105,16 +112,15 @@ func (p *Plugin) missingFileRepairDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	// Decode first: a bad body must fail the op before the store is touched.
+	var params missingFileRepairParams
+	if err := decodeOpParams(rawParams, &params); err != nil {
+		return fmt.Errorf("missing-file-repair: parse params: %w", err)
+	}
+
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
-	}
-
-	var params missingFileRepairParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("parse params: %w", err)
-		}
 	}
 
 	// 🔴 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly
