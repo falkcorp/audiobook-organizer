@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -72,8 +72,40 @@ func IsBetterStringPtr(oldPtr *string, newVal string) bool {
 // the significantWords pathway, extracted so alternative scorers (embedding,
 // LLM, reranker) can supply their own base score and reuse the shared
 // non-base adjustment function.
+//
+// When the result's title already contains its Subtitle (the joined
+// "Title: Subtitle" form the Google Books client produces), the title is
+// scored three ways and the best wins: the full title, the main title with the
+// subtitle stripped, and the subtitle alone. Google Books often files the
+// franchise as the title and the book as the subtitle ("Star Wars" /
+// "A New Dawn"), so the book's own title may be either half; and an ordinary
+// subtitle ("Sapiens: A Brief History of Humankind") would otherwise add words
+// the library title lacks and cut this symmetric F1's precision.
+//
+// A Subtitle kept apart from the title (Audible, Audnexus: Title "A New Dawn",
+// Subtitle "Star Wars") is NOT scored alone — there the subtitle is usually a
+// series or franchise name, and scoring it would match every book in the
+// franchise. Those results, and results with no Subtitle, are scored on their
+// title exactly as before.
 func computeF1Base(r metadata.BookMetadata, searchWords map[string]bool) float64 {
-	resultWords := SignificantWords(r.Title)
+	best := titleF1(r.Title, searchWords)
+	sub := strings.TrimSpace(r.Subtitle)
+	if sub != "" && strings.Contains(strings.ToLower(r.Title), strings.ToLower(sub)) {
+		for _, variant := range []string{stripSubtitle(r.Title), sub} {
+			if variant == r.Title {
+				continue
+			}
+			if s := titleF1(variant, searchWords); s > best {
+				best = s
+			}
+		}
+	}
+	return best
+}
+
+// titleF1 is the F1 token overlap between one candidate title and the search words.
+func titleF1(title string, searchWords map[string]bool) float64 {
+	resultWords := SignificantWords(title)
 	if len(searchWords) == 0 || len(resultWords) == 0 {
 		return 0
 	}
