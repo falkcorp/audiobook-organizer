@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -320,6 +320,10 @@ func runBulkApplyPreview(
 	if claimErr != nil {
 		return fmt.Errorf("bulk-apply-preview: %w", claimErr)
 	}
+	if n := claims.Unreadable(); n > 0 {
+		_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
+			slog.Int("unreadable", n))
+	}
 
 	var nApply, nBlocked, nSkipped, nWriteErr atomic.Int64
 	previewOne := func(_ context.Context, id string) error {
@@ -371,8 +375,8 @@ func runBulkApplyPreview(
 	if runErr != nil {
 		return runErr
 	}
-	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (report rows not saved: %d); read /api/v1/metadata/bulk-apply-preview/%s",
-		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids), nWriteErr.Load(), opID)
+	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
+		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids), nWriteErr.Load(), claims.Unreadable(), opID)
 	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
 	return nil
 }

@@ -1,5 +1,5 @@
 // file: internal/applygate/partial_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2d8f31-0b9e-4c74-8e15-c3f7a9d02b86
 // last-edited: 2026-09-13
 
@@ -108,6 +108,40 @@ func TestCheckPartialBook(t *testing.T) {
 				t.Fatalf("reason %q (%s), want %q", r.Reason, r.Detail, c.want)
 			}
 		})
+	}
+}
+
+// TestCheckPartialBook_UnreadableSibling: a book the index could not read
+// blocks its look-alikes (related folder, or the same ASIN) and nothing
+// else; with nothing known about it, it blocks nothing.
+func TestCheckPartialBook_UnreadableSibling(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "A Fall of Moondust", ASIN: "B0TESTMOON"}
+	here := database.Book{ID: "b1", Title: "A Fall of Moondust", FilePath: "/lib/Arthur C. Clarke/A Fall of Moondust/A Fall of Moondust.m4b"}
+	elsewhere := database.Book{ID: "b3", Title: "Rendezvous with Rama", FilePath: "/other/Rips/Rama/Rama.m4b"}
+	other := metafetch.MetadataCandidate{Title: "Rendezvous with Rama", ASIN: "B0TESTRAMA"}
+
+	byPath := NewClaimIndex()
+	byPath.AddUnreadable("b2", "/lib/Arthur C. Clarke/A Fall of Moondust/CD2", "")
+	if r := checkPartialBook(&here, &cand, OutcomeAgree, byPath); r.Reason != ReasonPartialBook || r.Detail != "sibling b2 unreadable; manual review" {
+		t.Fatalf("look-alike by folder: %+v", r)
+	}
+	if r := checkPartialBook(&elsewhere, &other, OutcomeUnknown, byPath); r.Outcome != OutcomeNeutral {
+		t.Fatalf("unrelated row blocked: %+v", r)
+	}
+
+	byASIN := NewClaimIndex()
+	byASIN.AddUnreadable("b2", "", "b0testmoon")
+	if r := checkPartialBook(&elsewhere, &cand, OutcomeUnknown, byASIN); r.Reason != ReasonPartialBook {
+		t.Fatalf("look-alike by ASIN: %+v", r)
+	}
+
+	unknown := NewClaimIndex()
+	unknown.AddUnreadable("b2", "", "")
+	if r := checkPartialBook(&here, &cand, OutcomeUnknown, unknown); r.Outcome != OutcomeNeutral {
+		t.Fatalf("an unreadable book with nothing known must block nothing: %+v", r)
+	}
+	if unknown.Unreadable() != 1 {
+		t.Fatalf("Unreadable = %d, want 1", unknown.Unreadable())
 	}
 }
 
