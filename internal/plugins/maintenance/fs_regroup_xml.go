@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-09-12
 
@@ -151,7 +151,13 @@ type fsRepairStore interface {
 	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
-var _ fsRepairStore = (*database.PebbleStore)(nil)
+// OpsStore() is server.indexedStore in production, which embeds
+// database.Store rather than *PebbleStore, so the op's type assertion must hold
+// for the interface too or fs-regroup-xml refuses to run in prod.
+var (
+	_ fsRepairStore = (*database.PebbleStore)(nil)
+	_ fsRepairStore = database.Store(nil)
+)
 
 func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 	return sdk.OperationDef{
