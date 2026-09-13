@@ -1,11 +1,12 @@
 // file: internal/server/handlers/audiobooks/handler_files_position_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b0e6f5a-2c41-4d8e-9a7b-6f1c2d9e8a53
 // last-edited: 2026-09-13
 
 package audiobookshandler_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -19,14 +20,17 @@ func fileParams() gin.Params {
 	return gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}}
 }
 
-// A manual track/disc edit lands on the row and is recorded in the book's
-// change history under a field that names the file.
+// A manual track/disc edit goes through the field-level store write (never a
+// whole-row write-back) and is recorded in the book's change history under a
+// field that names the file.
 func TestPatchBookFile_SetsTrackAndDiscAndRecordsHistory(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1", BookID: "b1", TrackNumber: 3, DiscNumber: 1}, nil)
-	d.store.EXPECT().UpsertBookFile(mock.MatchedBy(func(f *database.BookFile) bool {
-		return f.TrackNumber == 0 && f.DiscNumber == 2
-	})).Return(nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.MatchedBy(func(p database.BookFileFieldPatch) bool {
+		return p.TrackNumber != nil && *p.TrackNumber == 0 && p.DiscNumber != nil && *p.DiscNumber == 2 &&
+			p.SkipScan == nil && p.DownloadHash == nil
+	})).Return(
+		&database.BookFile{ID: "f1", BookID: "b1", TrackNumber: 3, DiscNumber: 1},
+		&database.BookFile{ID: "f1", BookID: "b1", TrackNumber: 0, DiscNumber: 2}, nil)
 	var recs []*database.MetadataChangeRecord
 	d.store.EXPECT().RecordMetadataChange(mock.Anything).RunAndReturn(func(r *database.MetadataChangeRecord) error {
 		recs = append(recs, r)
@@ -57,16 +61,27 @@ func TestPatchBookFile_SetsTrackAndDiscAndRecordsHistory(t *testing.T) {
 	}
 }
 
-// An unchanged number writes the row (other fields may be in the body) but
-// records no history.
+// An unchanged number records no history (the store skips the write itself;
+// see TestPatchBookFileFields_NoChangeNoWrite). The strict mock fails on any
+// RecordMetadataChange or whole-row write.
 func TestPatchBookFile_SameTrackRecordsNoHistory(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1", TrackNumber: 4}, nil)
-	d.store.EXPECT().UpsertBookFile(mock.Anything).Return(nil)
+	same := &database.BookFile{ID: "f1", TrackNumber: 4}
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(same, same, nil)
 	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"track_number": 4}, fileParams())
 	h.PatchBookFile(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestPatchBookFile_MissingFile404(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(nil, nil, nil)
+	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"track_number": 4}, fileParams())
+	h.PatchBookFile(c)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
 	}
 }
 
@@ -81,7 +96,8 @@ func TestPatchBookFile_RejectsNegativePositions(t *testing.T) {
 	}
 }
 
-// Undo of a file position edit reverts the file row, never a book override.
+// Undo of a file position edit reverts the file row, never a book override,
+// as a store-side compare-and-set on that one column.
 func TestUndoMetadataChange_RevertsBookFilePosition(t *testing.T) {
 	h, d := newHandler(t)
 	prev, next := "3", "0"
@@ -89,8 +105,10 @@ func TestUndoMetadataChange_RevertsBookFilePosition(t *testing.T) {
 	d.store.EXPECT().GetMetadataChangeHistory("b1", field, 1).Return([]database.MetadataChangeRecord{
 		{BookID: "b1", Field: field, PreviousValue: &prev, NewValue: &next, ChangeType: "manual"},
 	}, nil)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1", TrackNumber: 0}, nil)
-	d.store.EXPECT().UpsertBookFile(mock.MatchedBy(func(f *database.BookFile) bool { return f.TrackNumber == 3 })).Return(nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.MatchedBy(func(p database.BookFileFieldPatch) bool {
+		return p.TrackNumber != nil && *p.TrackNumber == 3 && p.IfTrackNumber != nil && *p.IfTrackNumber == 0 &&
+			p.DiscNumber == nil && p.IfDiscNumber == nil
+	})).Return(&database.BookFile{ID: "f1", TrackNumber: 0}, &database.BookFile{ID: "f1", TrackNumber: 3}, nil)
 	d.store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
 		return r.ChangeType == "undo" && r.Field == field
 	})).Return(nil)
@@ -113,7 +131,8 @@ func TestUndoMetadataChange_BookFilePositionChangedSince(t *testing.T) {
 	d.store.EXPECT().GetMetadataChangeHistory("b1", field, 1).Return([]database.MetadataChangeRecord{
 		{BookID: "b1", Field: field, PreviousValue: &prev, NewValue: &next},
 	}, nil)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1", TrackNumber: 7}, nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(nil, nil,
+		fmt.Errorf("book file f1 track_number is 7, expected 0: %w", database.ErrBookFileChangedSince))
 
 	c, w := newCtx("POST", "/audiobooks/b1/metadata-history/"+field+"/undo", nil,
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "field", Value: field}})

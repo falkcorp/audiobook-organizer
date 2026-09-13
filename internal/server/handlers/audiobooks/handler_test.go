@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-08-25
+// last-edited: 2026-09-13
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -471,7 +471,7 @@ func TestListBookFiles(t *testing.T) {
 
 func TestPatchBookFile_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(nil, nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(nil, nil, nil)
 	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"skip_scan": true},
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
 	h.PatchBookFile(c)
@@ -482,8 +482,9 @@ func TestPatchBookFile_NotFound(t *testing.T) {
 
 func TestPatchBookFile_Success(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1"}, nil)
-	d.store.EXPECT().UpsertBookFile(mock.Anything).Return(nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.MatchedBy(func(p database.BookFileFieldPatch) bool {
+		return p.SkipScan != nil && *p.SkipScan && p.TrackNumber == nil && p.DiscNumber == nil && p.DownloadHash == nil
+	})).Return(&database.BookFile{ID: "f1"}, &database.BookFile{ID: "f1", SkipScan: true}, nil)
 	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"skip_scan": true},
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
 	h.PatchBookFile(c)
@@ -494,10 +495,9 @@ func TestPatchBookFile_Success(t *testing.T) {
 
 func TestPatchBookFile_SetsDownloadHash(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookFileByID("b1", "f1").Return(&database.BookFile{ID: "f1"}, nil)
-	d.store.EXPECT().UpsertBookFile(mock.MatchedBy(func(f *database.BookFile) bool {
-		return f.DownloadHash == "abc123"
-	})).Return(nil)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.MatchedBy(func(p database.BookFileFieldPatch) bool {
+		return p.DownloadHash != nil && *p.DownloadHash == "abc123" && p.SkipScan == nil
+	})).Return(&database.BookFile{ID: "f1"}, &database.BookFile{ID: "f1", DownloadHash: "abc123"}, nil)
 	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"download_hash": "abc123"},
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
 	h.PatchBookFile(c)

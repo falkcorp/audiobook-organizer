@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-08-24
+// last-edited: 2026-09-13
 
 package database
 
@@ -38,6 +38,11 @@ type BookFileWriter interface {
 	BatchCreateBookFiles(files []*BookFile) error
 	UpdateBookFile(id string, file *BookFile) error
 	UpsertBookFile(file *BookFile) error
+	// PatchBookFileFields sets only the fields named in patch on a fresh read
+	// of the row, so it cannot revert another writer's column the way a
+	// read-whole-row, UpsertBookFile write-back does. See
+	// pebble_store_bookfile_patch.go.
+	PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (before, after *BookFile, err error)
 	BatchUpsertBookFiles(files []*BookFile) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	// MoveBookFilesToBookBulk moves rows from MANY source books into one target
