@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_compact_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e2c7a9f3-4b61-4d0e-8f5a-6c3b9d1e7a48
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package handlers_test
 
@@ -88,6 +88,51 @@ func TestCompactActivity_RejectsNegativeDays(t *testing.T) {
 	}
 	if enq.gotDef != "" {
 		t.Error("an invalid request must not reach the registry")
+	}
+}
+
+func TestCompactActivity_DayCountValidation(t *testing.T) {
+	const wholeMsg = "older_than_days must be a whole number of days"
+	const negMsg = "older_than_days must be zero or positive"
+	cases := []struct {
+		name     string
+		body     string
+		wantCode int
+		wantMsg  string
+		wantDays int
+	}{
+		{"fraction", `{"older_than_days": 1.75}`, http.StatusBadRequest, wholeMsg, 0},
+		{"string", `{"older_than_days": "3"}`, http.StatusBadRequest, wholeMsg, 0},
+		{"exponent", `{"older_than_days": 1e3}`, http.StatusBadRequest, wholeMsg, 0},
+		{"negative", `{"older_than_days": -1}`, http.StatusBadRequest, negMsg, 0},
+		{"malformed", `{"older_than_days":`, http.StatusBadRequest, "request body must be a JSON object", 0},
+		{"zero means everything", `{"older_than_days": 0}`, http.StatusAccepted, "", 0},
+		{"whole", `{"older_than_days": 7}`, http.StatusAccepted, "", 7},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enq := &fakeCompactEnqueuer{returnID: "op-1"}
+			h := handlers.NewActivityCompactHandler(enq, fakeActiveLister{})
+
+			w := postCompact(t, h, tc.body)
+			if w.Code != tc.wantCode {
+				t.Fatalf("status = %d, body %s; want %d", w.Code, w.Body.String(), tc.wantCode)
+			}
+			if tc.wantCode != http.StatusAccepted {
+				if !strings.Contains(w.Body.String(), tc.wantMsg) {
+					t.Errorf("body %s; want message containing %q", w.Body.String(), tc.wantMsg)
+				}
+				if enq.gotDef != "" {
+					t.Error("an invalid request must not reach the registry")
+				}
+				return
+			}
+			params, ok := enq.gotParams.(maintenance.CompactActivityLogParams)
+			if !ok || enq.gotDef != maintenance.CompactActivityLogDefID || params.OlderThanDays != tc.wantDays {
+				t.Errorf("enqueued def=%q params=%#v; want %q OlderThanDays=%d",
+					enq.gotDef, enq.gotParams, maintenance.CompactActivityLogDefID, tc.wantDays)
+			}
+		})
 	}
 }
 

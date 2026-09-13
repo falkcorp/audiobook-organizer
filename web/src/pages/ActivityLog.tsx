@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.34.0
+// version: 2.35.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -51,6 +51,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
+import CustomCompactDaysField from '../components/activity/CustomCompactDaysField';
 import type { ActivityEntry, SourceCount } from '../services/activityApi';
 import { ApiTimeoutError, isAbortError } from '../utils/apiFetch';
 import { BatchActivityEntry } from '../components/BatchActivityEntry';
@@ -2294,24 +2295,10 @@ export default function ActivityLog() {
                     </MenuItem>
                   ))}
                   <MenuItem disableRipple sx={{ '&:hover': { bgcolor: 'transparent' } }}>
-                    <TextField
-                      size="small"
-                      type="number"
-                      placeholder="Custom days"
+                    <CustomCompactDaysField
                       value={customCompactDays}
-                      onChange={(e) => setCustomCompactDays(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const n = parseInt(customCompactDays, 10);
-                          if (n > 0) handleCompact(n);
-                        }
-                        e.stopPropagation();
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      sx={{ width: 120 }}
-                      slotProps={{
-                        input: { inputProps: { min: 0 } },
-                      }}
+                      onChange={setCustomCompactDays}
+                      onSubmit={(days) => void handleCompact(days)}
                     />
                   </MenuItem>
                 </Menu>
@@ -2473,24 +2460,10 @@ export default function ActivityLog() {
                   </MenuItem>
                 ))}
                 <MenuItem disableRipple sx={{ '&:hover': { bgcolor: 'transparent' } }}>
-                  <TextField
-                    size="small"
-                    type="number"
-                    placeholder="Custom days"
+                  <CustomCompactDaysField
                     value={customCompactDays}
-                    onChange={(e) => setCustomCompactDays(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const n = parseInt(customCompactDays, 10);
-                        if (n > 0) handleCompact(n);
-                      }
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    sx={{ width: 120 }}
-                    slotProps={{
-                      input: { inputProps: { min: 0 } },
-                    }}
+                    onChange={setCustomCompactDays}
+                    onSubmit={(days) => void handleCompact(days)}
                   />
                 </MenuItem>
               </Menu>

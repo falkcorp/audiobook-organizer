@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -19,10 +19,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act, within } from '@testing-library/react';
+import { render, screen, waitFor, act, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
+import { COMPACT_DAYS_ERROR } from '../components/activity/compactDays';
 import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 import { cancelOperation, discardOperation, retryOperation, revertOperation } from '../services/api';
@@ -749,6 +750,49 @@ describe('Compact button', () => {
     const notice = await screen.findByTestId('compact-notice');
     expect(notice).toHaveTextContent('already running (operation op-7)');
   });
+
+  it('compacts with a whole custom day count', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedCompact.mockResolvedValue({
+      operation_id: 'op-43',
+      def_id: 'maintenance.compact-activity-log',
+      status: 'queued',
+    });
+    renderPage();
+    await screen.findByText('Added The Odyssey');
+
+    await user.click(screen.getAllByRole('button', { name: 'Compact' })[0]);
+    const input = await screen.findByPlaceholderText('Custom days');
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mockedCompact).toHaveBeenCalledWith(7);
+    });
+    expect(mockedCompact).toHaveBeenCalledTimes(1);
+  });
+
+  // Compaction is irreversible. "1.75" used to parseInt to 1 and compact
+  // everything older than ONE day. ('abc' reaches the page as '' — jsdom
+  // sanitizes number inputs — so it duplicates the empty case.)
+  it.each(['1.75', '0.5', '0', '-3', '1e3', 'abc', ''])(
+    'refuses custom day count %j with an inline error and no API call',
+    async (raw) => {
+      const user = userEvent.setup();
+      mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+      renderPage();
+      await screen.findByText('Added The Odyssey');
+
+      await user.click(screen.getAllByRole('button', { name: 'Compact' })[0]);
+      const input = await screen.findByPlaceholderText('Custom days');
+      fireEvent.change(input, { target: { value: raw } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(await screen.findByText(COMPACT_DAYS_ERROR)).toBeInTheDocument();
+      expect(mockedCompact).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('ActivityLog revert asks the preflight first', () => {
