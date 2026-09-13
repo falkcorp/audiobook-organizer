@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.117.0
+// version: 1.118.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 
@@ -96,6 +96,7 @@ type MockStore struct {
 	GetDuplicateBooksByMetadataFunc      func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                       func(book *Book) (*Book, error)
 	UpdateBookFunc                       func(id string, book *Book) (*Book, error)
+	FillBookMediaInfoFunc                func(id string, patch BookMediaInfoPatch) (*Book, error)
 	UpdateBookRatingFunc                 func(id string, req UpdateBookRatingRequest) error
 	UpdateBookRatingError                error
 	DeleteBookFunc                       func(id string) error
@@ -1291,6 +1292,13 @@ func (m *MockStore) CreateBook(book *Book) (*Book, error) {
 func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 	if m.UpdateBookFunc != nil {
 		return m.UpdateBookFunc(id, book)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error) {
+	if m.FillBookMediaInfoFunc != nil {
+		return m.FillBookMediaInfoFunc(id, patch)
 	}
 	return nil, nil
 }

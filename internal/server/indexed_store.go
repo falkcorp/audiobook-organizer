@@ -1,5 +1,5 @@
 // file: internal/server/indexed_store.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
 // last-edited: 2026-09-13
 //
@@ -85,6 +85,18 @@ func (s *indexedStore) CreateBook(b *database.Book) (*database.Book, error) {
 func (s *indexedStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
 	updated, err := s.Store.UpdateBook(id, b)
 	if err == nil {
+		s.server.enqueueIndex(id, updated.IsSoftDeleted())
+	}
+	return updated, err
+}
+
+// FillBookMediaInfo schedules a re-index when it wrote: duration, bitrate,
+// sample rate and channels are in the Bleve document (search.BookToDoc), so a
+// backfill that bypassed this decorator would leave the index stale. A nil
+// row (book gone) or an error schedules nothing.
+func (s *indexedStore) FillBookMediaInfo(id string, patch database.BookMediaInfoPatch) (*database.Book, error) {
+	updated, err := s.Store.FillBookMediaInfo(id, patch)
+	if err == nil && updated != nil {
 		s.server.enqueueIndex(id, updated.IsSoftDeleted())
 	}
 	return updated, err
