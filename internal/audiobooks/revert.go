@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -113,9 +113,11 @@ type RevertResult struct {
 	// caller can drop the caches a restore made stale (the server clears the
 	// series caches when a series_rename row was restored).
 	RestoredTypes map[string]int `json:"restored_types,omitempty"`
-	// ChangedSince counts the Failed rows refused because their field no
-	// longer holds what the operation wrote (undo.ReasonChangedSince): the
-	// revert left a later edit in place instead of overwriting it.
+	// ChangedSince counts the Failed rows the compare-and-set refused because
+	// their target no longer holds what the operation wrote
+	// (undo.ReasonChangedSince, or undo.ReasonSeriesRenamedSince for a
+	// series_rename): the revert left a later edit in place instead of
+	// overwriting it.
 	ChangedSince int `json:"changed_since,omitempty"`
 }
 
@@ -225,7 +227,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	for _, c := range slices.Backward(restorable) {
 		if err := rs.revertChange(c); err != nil {
 			result.Failed++
-			if undo.RefusalReason(err) == undo.ReasonChangedSince {
+			switch undo.RefusalReason(err) {
+			case undo.ReasonChangedSince, undo.ReasonSeriesRenamedSince:
 				result.ChangedSince++
 			}
 			errors = append(errors, fmt.Sprintf("change %s: %v", c.ID, err))
@@ -520,22 +523,18 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
-	// Compare-and-set: restore only while the field still holds what the
-	// operation wrote, so a user edit made since is never overwritten. A field
-	// that already holds OldValue (a rescan put library_state back, say) is
-	// already restored: nothing is written and the row is marked reverted.
-	// Anything else changed since and is refused. The preflight reports the
-	// same three states.
-	current, err := undo.CurrentBookField(book, c.FieldName)
-	if err != nil {
-		return err
-	}
-	switch current {
-	case c.NewValue:
-	case c.OldValue:
-		return nil
-	default:
-		return driftRefusal("book %s %s changed since the operation", book.ID, c.FieldName)
+	// Compare-and-set, the same three-way check series_rename rows get:
+	// restore only while the field still holds what the operation wrote, so a
+	// user edit made since is never overwritten. A field that already holds
+	// OldValue (a rescan put library_state back, say) is already restored
+	// (undo.ErrAlreadyRestored): nothing is written and the row is marked
+	// reverted. Anything else changed since and is refused. The preflight
+	// runs the same check.
+	if err := undo.CheckBookFieldCurrent(book, c); err != nil {
+		if errors.Is(err, undo.ErrAlreadyRestored) {
+			return nil
+		}
+		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
 	// Exactly OldValue goes back, typed by the Book field it names; "" clears
 	// a pointer field to nil. An unparsable value is an error, not a no-op, so

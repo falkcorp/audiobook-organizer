@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-12
 
@@ -198,8 +198,7 @@ func RestoreBookField(book *database.Book, field, oldValue string) error {
 
 // CurrentBookField renders a revertable Book field the way metadata_update rows
 // record it: a string as is, a nil pointer as "", a *string as its value and an
-// *int in decimal. The revert and the preflight compare it with the row's
-// NewValue, so neither overwrites a change made since the operation.
+// *int in decimal. CheckBookFieldCurrent compares it with the row's values.
 func CurrentBookField(book *database.Book, field string) (string, error) {
 	name, ok := revertableBookFields[field]
 	if !ok {
@@ -228,18 +227,42 @@ func CurrentBookField(book *database.Book, field string) (string, error) {
 	}
 }
 
+// CheckBookFieldCurrent is the compare-and-set check for a metadata_update row,
+// run by both the revert and the preflight so they classify the row the same
+// way. It returns nil while the field still holds the row's NewValue (restore
+// it), ErrAlreadyRestored when it already holds OldValue (nothing to write),
+// and a ReasonChangedSince refusal for anything else, a change made since the
+// operation that a revert must not overwrite. A field it cannot render is a
+// ReasonOldValueUnparsable refusal.
+func CheckBookFieldCurrent(book *database.Book, c *database.OperationChange) error {
+	current, err := CurrentBookField(book, c.FieldName)
+	if err != nil {
+		return refuse(ReasonOldValueUnparsable, "%v", err)
+	}
+	switch current {
+	case c.NewValue:
+		return nil
+	case c.OldValue:
+		return ErrAlreadyRestored
+	default:
+		return refuse(ReasonChangedSince, "book %s %s changed since the operation", c.BookID, c.FieldName)
+	}
+}
+
 // SeriesLookup is the series reads CheckRestoreReferent needs.
 type SeriesLookup interface {
 	GetSeriesByID(id int) (*database.Series, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
-// ErrAlreadyRestored is what CheckRestoreReferent returns for a series_rename
-// row whose series already holds the row's OldValue: the change is undone
-// already (by hand, or by a rename op that failed after journaling), so there
-// is nothing to write. It is not a refusal. The revert returns nil for it, so
-// the row is counted Restored and marked reverted, and the preflight counts it
-// Safe.
+// ErrAlreadyRestored is the compare-and-set "already undone" answer shared by
+// every row the revert restores by comparing current state with the row:
+// CheckRestoreReferent returns it for a series_rename row whose series already
+// holds the row's OldValue, and CheckBookFieldCurrent for a metadata_update row
+// whose field already holds OldValue (a rescan put library_state back, a hand
+// edit, or an op that failed after journaling). There is nothing to write. It
+// is not a refusal: the revert returns nil for it, so the row is counted
+// Restored and marked reverted, and the preflight counts it Safe.
 var ErrAlreadyRestored = errors.New("already restored")
 
 // BookLookup is the book read CheckRestoreBook needs.
