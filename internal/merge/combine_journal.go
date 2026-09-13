@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-13
 
@@ -427,6 +427,29 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	}
 	for _, fm := range j.SurvivorFiles {
 		checkFile(fm)
+	}
+	// A reattached row came from a book OUTSIDE the combine (attachVirtualFile
+	// moved it off its previous owner). Undo moves it back there, so that
+	// owner has to still exist.
+	inCombine := map[string]bool{j.SurvivorID: true}
+	for _, a := range j.Absorbed {
+		inCombine[a.BookID] = true
+	}
+	checkOwner := func(fm CombineFileMove) {
+		if fm.Created || inCombine[fm.FromBookID] {
+			return
+		}
+		if b, err := ms.db.GetBookByID(fm.FromBookID); err != nil || b == nil {
+			reasons = append(reasons, fmt.Sprintf("file %s came from book %s, which no longer exists", fm.FileID, fm.FromBookID))
+		}
+	}
+	for _, fm := range j.SurvivorFiles {
+		checkOwner(fm)
+	}
+	for _, a := range j.Absorbed {
+		for _, fm := range a.Files {
+			checkOwner(fm)
+		}
 	}
 	for _, fm := range j.SurvivorOwnFiles {
 		checkFile(fm)
