@@ -69,7 +69,10 @@ func AsSeriesMembershipStore(s any) SeriesMembershipStore {
 // SeriesMembershipAllVersions loads the complete membership of seriesIDs in one
 // pass. It fails CLOSED: a store without the capability, or a failed scan, is
 // an error the caller must abort on. An empty map on error would read as "every
-// series is empty", and every caller deletes on the strength of that.
+// series is empty", and every caller deletes on the strength of that. An empty
+// seriesIDs returns an empty map without reading the store (still after the
+// capability check), because the Pebble fall-through scans every book row
+// whatever it filters for.
 func SeriesMembershipAllVersions(store any, seriesIDs []int) (SeriesBooksMap, error) {
 	ms := AsSeriesMembershipStore(store)
 	if ms == nil {
