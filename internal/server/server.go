@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.54.0
+// version: 2.55.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-13
 
@@ -500,19 +500,37 @@ func NewServer(store database.Store) *Server {
 	// Register metrics (idempotent)
 	metrics.Register()
 
-	resolvedStore := store
-	if resolvedStore == nil {
+	if store == nil {
 		slog.Error("NewServer called with nil store — this is a programming error; callers must provide a concrete database.Store")
 		os.Exit(1)
 	}
-	// Wire the scanner package's local store so its free helpers
-	// (createBookFilesForBook, saveBookToDatabase, ProcessBooksParallel
-	// inline DB calls) no longer reach for database.GetGlobalStore
-	// (SERVER-GLOBAL-STORE-AUDIT phase 7).
-	scanner.SetStore(resolvedStore)
+	// Wrap the store in the search-indexing decorator HERE, before anything
+	// captures it, and hand the wrapped value to everything below: the service
+	// registry (Override("store", ...)), the services constructed inline, the
+	// scanner, the file-I/O pool, the extra-ops registrar and the Deluge
+	// importer adapter. There is exactly one store object for the life of the
+	// server, so no component can hold a copy that skips the re-index.
+	//
+	// Until 2026-09-13 the wrap was built in Start, after the registry had
+	// already been Built and PostInit'd inside this function. Every registry
+	// service therefore captured the BARE store: the audiobooks service's
+	// UpdateBook, metafetch's applies, merge, and every plugin op wrote books
+	// that were never re-indexed, so search kept serving the old titles until
+	// the periodic coverage reconcile happened to notice.
+	//
+	// The decorator does not need the search index to exist yet. It only needs
+	// the *Server, and enqueueIndex is a no-op while s.indexQueue is nil. Start
+	// creates the queue and the worker once the Bleve index has opened; until
+	// then (and forever, on a server whose index failed to open) the decorator
+	// forwards writes untouched. A book write between NewServer and Start is
+	// therefore still not re-indexed, exactly as before this change. Note the
+	// startup reconcileSearchIndexCoverage pass does NOT repair that: it seeds
+	// only books MISSING from the index, not documents whose title went stale.
+	indexed := &indexedStore{Store: store}
+	resolvedStore := database.Store(indexed)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	server := &Server{
-		store:                  store,
+		store:                  resolvedStore,
 		bgCtx:                  bgCtx,
 		bgCancel:               bgCancel,
 		shutdownArmed:          make(chan struct{}),
@@ -536,6 +554,14 @@ func NewServer(store database.Store) *Server {
 		diagnosticsService: diagnostics.NewService(resolvedStore, nil, config.AppConfig.ITunes.LibraryReadPath),
 		changelogService:   activity.NewChangelogService(resolvedStore),
 	}
+	// Bind the decorator to its server before anything can write through it.
+	indexed.server = server
+	// Wire the scanner package's local store so its free helpers
+	// (createBookFilesForBook, saveBookToDatabase, ProcessBooksParallel
+	// inline DB calls) no longer reach for database.GetGlobalStore
+	// (SERVER-GLOBAL-STORE-AUDIT phase 7). The indexing store, so books a scan
+	// creates or updates reach search.
+	scanner.SetStore(resolvedStore)
 
 	// SERVER-PLUGIN-REG: build the service registry container.
 	// Production wires services by named group (REGISTRY-NAMED-GROUPS,

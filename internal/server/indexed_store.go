@@ -1,5 +1,5 @@
 // file: internal/server/indexed_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
 // last-edited: 2026-09-13
 //
@@ -105,7 +105,8 @@ func (s *indexedStore) FillBookMediaInfo(id string, patch database.BookMediaInfo
 // Unwrap returns the inner store so decorator-aware helpers can peel layers and
 // reach concrete sub-interfaces. database.asCapability walks this chain, which is
 // what makes database.AsSyncIdentityStore / AsSyncFileStore / AsBookmarkStore
-// keep working once this decorator is installed in Start().
+// keep working through this decorator, which NewServer installs before any
+// service captures the store.
 //
 // Reaching past this decorator is safe for those capabilities specifically: sync
 // identity, sync files and bookmarks live in keyspaces this type does not index,
