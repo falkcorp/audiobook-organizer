@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
 // last-edited: 2026-09-13
 //
@@ -67,6 +67,12 @@ type RenamePreview struct {
 // apply must not run because its file sequel cannot land.
 var ErrApplyFileWorkWouldFail = fmt.Errorf("apply refused before any write: the file rename cannot land")
 
+// ApplyRefusedReasonFileWorkWouldFail is the machine-readable reason every
+// apply path reports when RenamePreflight refuses a book: the batch op's skip
+// reason and the single-book endpoint's 409 body. One constant so the two
+// cannot drift.
+const ApplyRefusedReasonFileWorkWouldFail = "file_work_would_fail"
+
 // RenamePreflight answers, BEFORE ApplyMetadataCandidate writes anything,
 // whether the write-back rename that follows the apply is known to fail.
 //
@@ -82,8 +88,15 @@ var ErrApplyFileWorkWouldFail = fmt.Errorf("apply refused before any write: the 
 // A preview that cannot be built at all is not a refusal: ApplyMetadataCandidate
 // runs the same reads (book, policy tag, field locks) and reports its own error
 // for the same cause. It is logged so it is never silent.
-func (mfs *Service) RenamePreflight(id string, candidate MetadataCandidate) error {
-	pv, err := mfs.PreviewMetadataCandidate(id, candidate, true)
+//
+// fields is the apply's field allowlist, exactly as passed to
+// ApplyMetadataCandidate (nil or empty means every field). The single-book
+// endpoint applies a user-selected subset, and a subset that leaves out the
+// title or author plans a different rename than the whole candidate would, so
+// the preflight must plan the same subset or it refuses applies that would
+// have landed.
+func (mfs *Service) RenamePreflight(id string, candidate MetadataCandidate, fields []string) error {
+	pv, err := mfs.previewMetadataCandidate(id, candidate, fields, true)
 	if err != nil {
 		preflightLog.Warn("rename preflight could not preview book %s; leaving the decision to the apply: %s",
 			logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
@@ -150,6 +163,13 @@ func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 // file sequel at all (the batch op's write_back); the rename additionally
 // requires auto_rename_on_apply, as in runApplyPipeline.
 func (mfs *Service) PreviewMetadataCandidate(id string, candidate MetadataCandidate, writeBack bool) (*ApplyPreview, error) {
+	return mfs.previewMetadataCandidate(id, candidate, nil, writeBack)
+}
+
+// previewMetadataCandidate is PreviewMetadataCandidate for
+// ApplyMetadataCandidate(id, candidate, fields): the same field filter the
+// apply runs (FilterApplyFields) is applied before the diff and the rename plan.
+func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandidate, fields []string, writeBack bool) (*ApplyPreview, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -158,7 +178,7 @@ func (mfs *Service) PreviewMetadataCandidate(id string, candidate MetadataCandid
 		return nil, ErrApplyPolicyBlocked
 	}
 
-	meta := FilterApplyFields(CandidateMetadata(candidate), nil)
+	meta := FilterApplyFields(CandidateMetadata(candidate), fields)
 	NormalizeMetaSeries(&meta)
 	locks, err := mfs.loadFieldLocks(id)
 	if err != nil {

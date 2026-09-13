@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -152,6 +152,10 @@ type MetadataCandidateCacheStore interface {
 // MetadataApplier applies a chosen candidate to a book, on disk and in tags.
 type MetadataApplier interface {
 	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
+	// RenamePreflight reports, before anything is written, that the rename in
+	// the file sequel that follows the apply is known to fail; the error wraps
+	// metafetch.ErrApplyFileWorkWouldFail. Read-only.
+	RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run

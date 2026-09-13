@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_rename_collision_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b61d0e4-2f7a-4c38-a5e9-4d1c8f0b7e26
 // last-edited: 2026-09-13
 
@@ -129,10 +129,10 @@ func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
 	cand := MetadataCandidate{Title: "New Title", Author: "Someone"}
 
 	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
-	require.NoError(t, svc.RenamePreflight("b1", cand), "a plannable rename must not be refused")
+	require.NoError(t, svc.RenamePreflight("b1", cand, nil), "a plannable rename must not be refused")
 
 	config.AppConfig.FileNamingPattern = "{title} - {track:x}"
-	err := svc.RenamePreflight("b1", cand)
+	err := svc.RenamePreflight("b1", cand, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrApplyFileWorkWouldFail)
 
@@ -181,7 +181,7 @@ func TestRenamePreflight_DoesNotClearAStaleFailureRecord(t *testing.T) {
 		},
 	})
 
-	require.NoError(t, svc.RenamePreflight("b1", MetadataCandidate{Title: "New Title", Author: "Someone"}))
+	require.NoError(t, svc.RenamePreflight("b1", MetadataCandidate{Title: "New Title", Author: "Someone"}, nil))
 	assert.Zero(t, writes, "preflight wrote a preference")
 	assert.NotEmpty(t, prefs[recKey], "preflight cleared the failure record")
 }

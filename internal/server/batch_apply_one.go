@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -45,7 +45,7 @@ type cachedApplyService interface {
 	// RenamePreflight reports, before anything is written, that the write-back
 	// rename following an apply of candidate is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail). See applySkipFileWorkWouldFail.
-	RenamePreflight(id string, candidate metafetch.MetadataCandidate) error
+	RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error
 }
 
 // bookReader reads the book the gate judges the candidate against.
@@ -98,7 +98,7 @@ const (
 	// follows the apply is known to fail (metafetch.RenamePreflight). The apply
 	// is refused so the database and the files never disagree; nothing was
 	// written.
-	applySkipFileWorkWouldFail = "file_work_would_fail"
+	applySkipFileWorkWouldFail = metafetch.ApplyRefusedReasonFileWorkWouldFail
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
@@ -246,7 +246,7 @@ func applyCachedCandidateForBookTimed(
 	// disk disagreeing. When the file side is known to fail, refuse here,
 	// before any write. Only with writeBack: without it there is no rename.
 	if writeBack {
-		if err := svc.RenamePreflight(id, *plan.Candidate); err != nil {
+		if err := svc.RenamePreflight(id, *plan.Candidate, nil); err != nil {
 			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate}
 		}
 	}
