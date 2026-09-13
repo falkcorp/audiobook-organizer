@@ -1,7 +1,7 @@
 // file: internal/metadata/source.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-07-13
+// last-edited: 2026-09-13
 
 package metadata
 
@@ -20,6 +20,23 @@ func SourceProducesAudiobookReleaseYear(sourceName string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// CategoryTagSource returns the book_tags source label for a candidate's
+// CategoryTags, keyed by the candidate's Source (a client Name()). The apply
+// path hard-coded "audible_category" when only Audible populated CategoryTags;
+// Google Books categories now reach it too and must not be recorded as Audible
+// provenance. Audible, Audnexus and anything unrecognised keep the historical
+// "audible_category" label so existing tags keep their vocabulary.
+func CategoryTagSource(sourceName string) string {
+	switch sourceName {
+	case (&GoogleBooksClient{}).Name():
+		return "google_books_category"
+	case (&OpenLibraryClient{}).Name():
+		return "openlibrary_subject"
+	default:
+		return "audible_category"
 	}
 }
 
