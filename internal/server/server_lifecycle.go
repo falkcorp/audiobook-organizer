@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.5.0
+// version: 4.5.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-12
 
@@ -956,6 +956,12 @@ func (s *Server) startBackfills() {
 		}
 		b, ok := resolveBookAtPathBackfiller(s.Ops())
 		if !ok {
+			// CodeQL go/clear-text-logging (alert #1929): same shape as the
+			// version-group warn above, flagged as #1472 then #1595 and
+			// dismissed both times as a false positive (see #1595). %T renders
+			// only the dynamic type name (e.g. *database.PebbleStore), never a
+			// struct field value, so no credential reachable through s.Ops()
+			// can appear in this log record.
 			slog.Warn("book-atpath-backfill: store does not implement BackfillBookAtPathIndex, index will NOT be built; LiveBookIDsAtPath stays on the full scan",
 				"store_type", fmt.Sprintf("%T", s.Ops()))
 			return
