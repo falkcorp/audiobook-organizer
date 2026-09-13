@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -1019,6 +1019,32 @@ func (ts *TaskScheduler) registerAllTasks() {
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
+	})
+
+	// Nightly activity compaction — collapse every activity entry from before
+	// the kept full-detail days (default: before today, local time) into daily
+	// digests. The op recomputes its cutoff from the clock when it runs, so the
+	// 24h durable-clock cadence decides only staleness, never what is kept.
+	// Deliberately NOT in maintenanceOrder: a catch-up run can take the op's
+	// full 6h, and the window runs its tasks sequentially and stops when the
+	// window closes, so it would starve every task after it.
+	ts.registerTask(TaskDefinition{
+		Name:        "nightly_activity_compaction",
+		Description: "Compact activity entries from before today into daily digests",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.nightly-compact-activity-log", nil)
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue nightly-compact-activity-log: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "nightly_activity_compaction"), nil
+		},
+		IsEnabled: func() bool {
+			return ts.deps.HasActivitySvc() && config.AppConfig.ActivityLogNightlyCompactionEnabled
+		},
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return false },
 	})
 
 	// Activity DB Optimize — refresh the activity store's query-planner statistics.

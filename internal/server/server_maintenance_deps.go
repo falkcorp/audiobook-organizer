@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -275,9 +275,11 @@ func (s *Server) PruneOldLogs(retentionDays int) error {
 	return err
 }
 
-// CompactActivityLog runs the nightly activity-log retention cycle: compact old
-// entries into daily digests, summarize old change entries, prune old debug
-// entries, and finally repair orphaned secondary index entries.
+// MaintainActivityLog runs the non-compaction half of the nightly activity-log
+// retention cycle: summarize old change entries, prune old debug entries, and
+// finally repair orphaned secondary index entries. Compaction is NOT here: the
+// cleanup op calls CompactActivityEntries itself, and only while nightly
+// compaction is disabled, so the two never double-compact.
 //
 // The repair pass is last on purpose. The three passes before it delete primary
 // rows (and, since the index-deletion fix, their own index entries), so running
@@ -286,18 +288,9 @@ func (s *Server) PruneOldLogs(retentionDays int) error {
 // indexes, and stays consistent rather than becoming an orphan. Repair is
 // idempotent and reports its own counts, so a nightly run that finds nothing
 // costs one scan and says zero.
-func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeDays, debugDays int, progress database.CompactProgress) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error) {
+func (s *Server) MaintainActivityLog(ctx context.Context, changeDays, debugDays int) (summarized int, pruned int, indexOrphansRemoved int64, err error) {
 	if s.activityService == nil {
-		return 0, 0, 0, 0, nil
-	}
-
-	if compactionDays <= 0 {
-		compactionDays = 14
-	}
-	compactionCutoff := time.Now().AddDate(0, 0, -compactionDays)
-	compactResult, err := s.CompactActivityEntries(ctx, compactionCutoff, progress)
-	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("compact activity: %w", err)
+		return 0, 0, 0, nil
 	}
 
 	// Each phase boundary is a liveness stamp for the nightly op (through the
@@ -311,7 +304,7 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	database.ReportMaintenanceProgress(ctx, database.MaintenancePhaseSummarize, "", 0)
 	sumCount, err := s.activityService.Summarize(ctx, changeCutoff, "change")
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("summarize activity: %w", err)
+		return 0, 0, 0, fmt.Errorf("summarize activity: %w", err)
 	}
 
 	if debugDays <= 0 {
@@ -321,16 +314,16 @@ func (s *Server) CompactActivityLog(ctx context.Context, compactionDays, changeD
 	database.ReportMaintenanceProgress(ctx, database.MaintenancePhasePrune, "", 0)
 	pruneCount, err := s.activityService.Prune(ctx, debugCutoff, "debug")
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("prune activity: %w", err)
+		return sumCount, 0, 0, fmt.Errorf("prune activity: %w", err)
 	}
 
 	database.ReportMaintenanceProgress(ctx, database.MaintenancePhaseRepairIndexes, "", 0)
 	repair, err := s.activityService.Store().RepairActivityIndexes(ctx)
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("repair activity indexes: %w", err)
+		return sumCount, pruneCount, 0, fmt.Errorf("repair activity indexes: %w", err)
 	}
 
-	return compactResult.DaysCompacted, sumCount, pruneCount, repair.Deleted, nil
+	return sumCount, pruneCount, repair.Deleted, nil
 }
 
 // CompactActivityEntries is the compaction pass alone: every compactable-tier
@@ -404,6 +397,14 @@ func (s *Server) PurgeSoftDeletedAfterDays() int {
 
 func (s *Server) ActivityLogCompactionDays() int {
 	return config.AppConfig.ActivityLogCompactionDays
+}
+
+func (s *Server) ActivityLogNightlyCompactionEnabled() bool {
+	return config.AppConfig.ActivityLogNightlyCompactionEnabled
+}
+
+func (s *Server) ActivityLogFullDetailDays() int {
+	return config.AppConfig.ActivityLogFullDetailDays
 }
 
 func (s *Server) ActivityLogRetentionChangeDays() int {

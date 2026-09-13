@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-09-13
 
@@ -83,8 +83,9 @@ type CompactBackendOutcome struct {
 // default to 20m because a single chunk statement on a 19.5 GB SQLite file
 // under load has been measured in the minutes (see optimizeActivityDBDef).
 //
-// CONCURRENCY. Shares cleanup-activity-log's key so the nightly job and a
-// button press never compact the same rows at once.
+// CONCURRENCY. Shares cleanup-activity-log's key — as does
+// nightly-compact-activity-log — so no two activity compactions (or a
+// compaction and the cleanup's summarize/prune/repair) ever run at once.
 func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              CompactActivityLogDefID,
@@ -120,6 +121,18 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 		startMsg = fmt.Sprintf("Compacting every activity entry up to %s on every activity database",
 			cutoff.UTC().Format(time.RFC3339))
 	}
+	return p.compactAndRecord(ctx, cutoff, startMsg, "compact-activity-log", reporter)
+}
+
+// compactAndRecord is the reporting half shared by the manual
+// compact-activity-log op and the nightly nightly-compact-activity-log op:
+// one call to CompactActivityEntries (the single compaction implementation,
+// on every activity backend), with per-chunk progress forwarded to the
+// watchdog, a per-backend log line as each backend finishes, and a persisted
+// CompactActivityLogResult. The two ops differ only in how they compute
+// cutoff; everything after that is this function, so a fix to the liveness or
+// result shape cannot land on one and miss the other.
+func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMsg, opName string, reporter sdk.Reporter) error {
 	logging.Info(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 	// First liveness stamp BEFORE the store is called: on a backend with
@@ -176,12 +189,12 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
 		if err != nil {
-			return fmt.Errorf("compact-activity-log: %w (and persisting the result failed: %v)", err, setErr)
+			return fmt.Errorf("%s: %w (and persisting the result failed: %v)", opName, err, setErr)
 		}
-		return fmt.Errorf("compact-activity-log: persist result: %w", setErr)
+		return fmt.Errorf("%s: persist result: %w", opName, setErr)
 	}
 	if err != nil {
-		return fmt.Errorf("compact-activity-log: %w", err)
+		return fmt.Errorf("%s: %w", opName, err)
 	}
 	return nil
 }

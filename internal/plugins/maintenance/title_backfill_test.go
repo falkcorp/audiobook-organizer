@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-13
 
@@ -138,8 +138,8 @@ func (d fakeDeps) MetadataUpgradeRun(_ context.Context, _ int, _ operations.Prog
 func (d fakeDeps) OptimizeAIScanStore(_ context.Context) error { return nil }
 func (d fakeDeps) OptimizeOLStore(_ context.Context) error     { return nil }
 func (d fakeDeps) PruneOldLogs(_ int) error                    { return nil }
-func (d fakeDeps) CompactActivityLog(_ context.Context, _, _, _ int, _ database.CompactProgress) (int, int, int, int64, error) {
-	return 0, 0, 0, 0, nil
+func (d fakeDeps) MaintainActivityLog(_ context.Context, _, _ int) (int, int, int64, error) {
+	return 0, 0, 0, nil
 }
 func (d fakeDeps) CompactActivityEntries(_ context.Context, _ time.Time, _ database.CompactProgress) (database.CompactResult, error) {
 	return database.CompactResult{}, nil
@@ -164,18 +164,20 @@ func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dr
 		DryRun:        dryRun,
 	}, nil
 }
-func (d fakeDeps) HasDedupEngine() bool                { return false }
-func (d fakeDeps) HasMetadataFetchService() bool       { return false }
-func (d fakeDeps) HasISBNEnrichment() bool             { return false }
-func (d fakeDeps) HasAIParsing() bool                  { return false }
-func (d fakeDeps) HasBatchPoller() bool                { return false }
-func (d fakeDeps) RootDir() string                     { return "/lib" }
-func (d fakeDeps) LogRetentionDays() int               { return 30 }
-func (d fakeDeps) PurgeSoftDeletedAfterDays() int      { return 30 }
-func (d fakeDeps) ActivityLogCompactionDays() int      { return 7 }
-func (d fakeDeps) ActivityLogRetentionChangeDays() int { return 30 }
-func (d fakeDeps) ActivityLogRetentionDebugDays() int  { return 7 }
-func (d fakeDeps) BackupRetentionDays() int            { return 30 }
+func (d fakeDeps) HasDedupEngine() bool                      { return false }
+func (d fakeDeps) HasMetadataFetchService() bool             { return false }
+func (d fakeDeps) HasISBNEnrichment() bool                   { return false }
+func (d fakeDeps) HasAIParsing() bool                        { return false }
+func (d fakeDeps) HasBatchPoller() bool                      { return false }
+func (d fakeDeps) RootDir() string                           { return "/lib" }
+func (d fakeDeps) LogRetentionDays() int                     { return 30 }
+func (d fakeDeps) PurgeSoftDeletedAfterDays() int            { return 30 }
+func (d fakeDeps) ActivityLogCompactionDays() int            { return 7 }
+func (d fakeDeps) ActivityLogNightlyCompactionEnabled() bool { return false }
+func (d fakeDeps) ActivityLogFullDetailDays() int            { return 0 }
+func (d fakeDeps) ActivityLogRetentionChangeDays() int       { return 30 }
+func (d fakeDeps) ActivityLogRetentionDebugDays() int        { return 7 }
+func (d fakeDeps) BackupRetentionDays() int                  { return 30 }
 func (d fakeDeps) EnqueueOp(_ context.Context, _ string, _ any) (string, error) {
 	return "", nil
 }

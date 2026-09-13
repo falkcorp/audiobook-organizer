@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.116.0
+// version: 1.117.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package config
 
@@ -464,6 +464,11 @@ type ITunesConfig struct {
 	// itunes_libraries.go and docs/specs/2026-07-23-itunes-2way-sync-system-design.md.
 	Libraries LibrarySet `json:"libraries" mapstructure:"libraries"`
 }
+
+// MaxActivityLogFullDetailDays bounds ActivityLogFullDetailDays. It equals
+// maintenance.MaxCompactDays (a test in that package pins the two together);
+// config cannot import the plugin package, so the value is repeated here.
+const MaxActivityLogFullDetailDays = 36500
 
 // MaintenanceConfig holds settings for the nightly maintenance window.
 type MaintenanceConfig struct {
@@ -1261,7 +1266,27 @@ type Config struct {
 	// Activity log retention (separate from operation log retention)
 	ActivityLogRetentionChangeDays int `json:"activity_log_retention_change_days"` // default 90
 	ActivityLogRetentionDebugDays  int `json:"activity_log_retention_debug_days"`  // default 30
-	ActivityLogCompactionDays      int `json:"activity_log_compaction_days"`       // default 14
+	// ActivityLogCompactionDays is the compaction window of the midnight
+	// cleanup-activity-log op, and it is consulted ONLY while nightly
+	// compaction (below) is disabled. 0 still means 14 there, as it always has:
+	// production stores 0, and giving 0 a new meaning would have silently
+	// changed that deployment from 14 days of detail to one.
+	ActivityLogCompactionDays int `json:"activity_log_compaction_days"` // default 14
+
+	// ActivityLogNightlyCompactionEnabled runs maintenance.nightly-compact-
+	// activity-log once a day just after local midnight, collapsing every
+	// activity entry from before the kept days into daily digests on every
+	// activity backend. While it is on, cleanup-activity-log skips its own
+	// compaction pass. Default true (owner decision 2026-09-13). Also
+	// toggleable as the nightly_activity_compaction task on the Maintenance
+	// tab.
+	ActivityLogNightlyCompactionEnabled bool `json:"activity_log_nightly_compaction_enabled"`
+	// ActivityLogFullDetailDays is how many whole days BEFORE today the
+	// nightly compaction keeps in full detail. 0 (the default) keeps today
+	// only: the cutoff is the start of the current local day. N moves the
+	// cutoff back N local calendar days. Bounded by
+	// MaxActivityLogFullDetailDays.
+	ActivityLogFullDetailDays int `json:"activity_log_full_detail_days"`
 
 	// Embedding holds configuration for the embedding pipeline (model, provider, vector backend).
 	Embedding EmbeddingConfig `json:"embedding" mapstructure:"embedding"`
@@ -2157,6 +2182,8 @@ func InitConfig() {
 	viper.SetDefault("chapter_consolidation_threshold_min", 10)
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("log_retention_days", 90)
+	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
+	viper.SetDefault("activity_log_full_detail_days", 0)
 
 	// API security/runtime limits
 	viper.SetDefault("api_rate_limit_per_minute", 100)
@@ -2650,24 +2677,26 @@ func InitConfig() {
 			CoverArtModel:                        viper.GetString("cover_art_model"),
 
 			// Performance
-			ConcurrentScans:                  viper.GetInt("concurrent_scans"),
-			ScanProgressEvery:                viper.GetInt("scan_progress_every"),
-			ChapterConsolidationThresholdMin: viper.GetInt("chapter_consolidation_threshold_min"),
-			CoalesceShatteredSiblings:        viper.GetBool("coalesce_shattered_siblings"),
-			OperationTimeoutMinutes:          viper.GetInt("operation_timeout_minutes"),
-			MinBookSizeBytes:                 viper.GetInt64("min_book_size_bytes"),
-			MinRescanAgeHours:                viper.GetInt("min_rescan_age_hours"),
-			APIRateLimitPerMinute:            viper.GetInt("api_rate_limit_per_minute"),
-			AuthRateLimitPerMinute:           viper.GetInt("auth_rate_limit_per_minute"),
-			JSONBodyLimitMB:                  viper.GetInt("json_body_limit_mb"),
-			UploadBodyLimitMB:                viper.GetInt("upload_body_limit_mb"),
-			EnableAuth:                       viper.GetBool("enable_auth"),
-			EnableRateLimit:                  viper.GetBool("enable_rate_limit"),
-			ReviewApplyEnabled:               viper.GetBool("review_apply_enabled"),
-			BulkApplyMaxItems:                viper.GetInt("bulk_apply_max_items"),
-			BasicAuthEnabled:                 viper.GetBool("basic_auth_enabled"),
-			BasicAuthUsername:                viper.GetString("basic_auth_username"),
-			BasicAuthPassword:                viper.GetString("basic_auth_password"),
+			ConcurrentScans:                     viper.GetInt("concurrent_scans"),
+			ScanProgressEvery:                   viper.GetInt("scan_progress_every"),
+			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
+			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
+			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
+			MinBookSizeBytes:                    viper.GetInt64("min_book_size_bytes"),
+			MinRescanAgeHours:                   viper.GetInt("min_rescan_age_hours"),
+			APIRateLimitPerMinute:               viper.GetInt("api_rate_limit_per_minute"),
+			AuthRateLimitPerMinute:              viper.GetInt("auth_rate_limit_per_minute"),
+			JSONBodyLimitMB:                     viper.GetInt("json_body_limit_mb"),
+			UploadBodyLimitMB:                   viper.GetInt("upload_body_limit_mb"),
+			EnableAuth:                          viper.GetBool("enable_auth"),
+			ActivityLogNightlyCompactionEnabled: viper.GetBool("activity_log_nightly_compaction_enabled"),
+			ActivityLogFullDetailDays:           viper.GetInt("activity_log_full_detail_days"),
+			EnableRateLimit:                     viper.GetBool("enable_rate_limit"),
+			ReviewApplyEnabled:                  viper.GetBool("review_apply_enabled"),
+			BulkApplyMaxItems:                   viper.GetInt("bulk_apply_max_items"),
+			BasicAuthEnabled:                    viper.GetBool("basic_auth_enabled"),
+			BasicAuthUsername:                   viper.GetString("basic_auth_username"),
+			BasicAuthPassword:                   viper.GetString("basic_auth_password"),
 
 			// OAuth / Cloudflare Access. These are environment-authoritative in prod
 			// (systemd Environment= drop-in) but read here via viper like everything
@@ -3264,6 +3293,15 @@ func (c *Config) Validate() error {
 	if c.EnableDiskQuota && (c.DiskQuotaPercent < 1 || c.DiskQuotaPercent > 100) {
 		errs = append(errs, "disk_quota_percent must be between 1 and 100")
 	}
+	// The field is an int, so a fractional day ("1.5") is already refused by
+	// the JSON decode into Config; only the range is checked here. Same bound
+	// as the manual compaction's older_than_days (maintenance.MaxCompactDays):
+	// beyond it time.AddDate wraps and the cutoff lands near NOW, which would
+	// compact today.
+	if c.ActivityLogFullDetailDays < 0 || c.ActivityLogFullDetailDays > MaxActivityLogFullDetailDays {
+		errs = append(errs, fmt.Sprintf("activity_log_full_detail_days must be a whole number of days between 0 and %d",
+			MaxActivityLogFullDetailDays))
+	}
 
 	validStrategies := map[string]struct{}{
 		"auto": {}, "copy": {}, "hardlink": {}, "reflink": {}, "symlink": {},
@@ -3394,11 +3432,13 @@ func ResetToDefaults() {
 			MemoryLimitMB:      512,
 
 			// Lifecycle / retention
-			PurgeSoftDeletedAfterDays:      30,
-			PurgeSoftDeletedDeleteFiles:    false,
-			ActivityLogRetentionChangeDays: 90,
-			ActivityLogRetentionDebugDays:  30,
-			ActivityLogCompactionDays:      14,
+			PurgeSoftDeletedAfterDays:           30,
+			PurgeSoftDeletedDeleteFiles:         false,
+			ActivityLogRetentionChangeDays:      90,
+			ActivityLogRetentionDebugDays:       30,
+			ActivityLogCompactionDays:           14,
+			ActivityLogNightlyCompactionEnabled: true,
+			ActivityLogFullDetailDays:           0,
 
 			// Embedding pipeline
 			Embedding: EmbeddingConfig{

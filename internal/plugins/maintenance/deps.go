@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-13
 
@@ -385,10 +385,12 @@ type ActivityLogOps interface {
 	// forwards them to reporter.UpdateProgress so the registry watchdog hears a
 	// long compaction (reporter.Log alone does not count as liveness). nil is
 	// allowed and means silent.
-	CompactActivityLog(ctx context.Context,
-		compactionDays, changeDays, debugDays int,
-		progress database.CompactProgress,
-	) (compacted int, summarized int, pruned int, indexOrphansRemoved int64, err error)
+	//
+	// It no longer compacts: the cleanup op decides whether to compact (only
+	// while nightly compaction is disabled) and calls CompactActivityEntries
+	// itself, so there is exactly one compaction entry point.
+	MaintainActivityLog(ctx context.Context, changeDays, debugDays int,
+	) (summarized int, pruned int, indexOrphansRemoved int64, err error)
 	// CompactActivityEntries runs ONLY the compaction pass of CompactActivityLog
 	// — every compactable-tier row older than cutoff collapsed into daily
 	// digests on every activity backend — with no summarize, prune or index
@@ -512,6 +514,8 @@ type RuntimeConfig interface {
 	LogRetentionDays() int
 	PurgeSoftDeletedAfterDays() int
 	ActivityLogCompactionDays() int
+	ActivityLogNightlyCompactionEnabled() bool
+	ActivityLogFullDetailDays() int
 	ActivityLogRetentionChangeDays() int
 	ActivityLogRetentionDebugDays() int
 	BackupRetentionDays() int
