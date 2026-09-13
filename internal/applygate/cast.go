@@ -1,5 +1,5 @@
 // file: internal/applygate/cast.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3e1a95-2b6d-4f08-9e47-a1d5c8f20b63
 // last-edited: 2026-09-13
 
@@ -57,7 +57,13 @@ func checkCastInAuthor(book *nameSource, candAuthor, candNarrator string) CheckR
 		return r
 	}
 	narr := strings.TrimSpace(parenRe.ReplaceAllString(book.narrator, " "))
-	if narr == "" || normText(narr) == normText(book.author) {
+	// No early return when the narrator equals the stored author: the apply
+	// writes the candidate's whole author string over the stored author
+	// unless it equals the narrator (metafetch applyMetadataToBook), so
+	// "Steve Lyons" stored as both would become "Steve Lyons, Anneke Wills,
+	// John Sackville". A narrator tag copied from an author credit that
+	// names every candidate author still passes: nothing is left over.
+	if narr == "" {
 		return r
 	}
 	narrators := people(narr)
