@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-09-12
 
@@ -57,6 +57,21 @@ type fsGuardStore struct {
 	*database.PebbleStore
 	hardDeletes atomic.Int64
 	lookupErr   error
+	// atPathErr and atPathIDs, when set, replace LiveBookIDsAtPath's answer,
+	// so the apply's book-folder re-check sees an error or a book the real
+	// store would not report.
+	atPathErr error
+	atPathIDs []string
+}
+
+func (s *fsGuardStore) LiveBookIDsAtPath(p string) ([]string, error) {
+	if s.atPathErr != nil {
+		return nil, s.atPathErr
+	}
+	if s.atPathIDs != nil {
+		return s.atPathIDs, nil
+	}
+	return s.PebbleStore.LiveBookIDsAtPath(p)
 }
 
 func (s *fsGuardStore) DeleteBook(id string) error {
@@ -1274,4 +1289,38 @@ func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The book-folder re-check fails closed: a LiveBookIDsAtPath error counts the
+// group as an error and applies nothing. It is never read as a free folder.
+func TestFsRegroupApply_BookFolderLookupErrorFailsGroup(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	plan, _ := fsOneFragmentsGroup(t, s)
+	before := fsRowCount(t, s)
+	g := &fsGuardStore{PebbleStore: s, atPathErr: errors.New("book_atpath read failed")}
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-err"})
+	if err == nil || res.Errors != 1 || res.Groups != 0 || res.Skipped != 0 {
+		t.Fatalf("apply err=%v res=%s, want an error, errors=1 and no group applied", err, res)
+	}
+	if n := g.hardDeletes.Load(); n != 0 {
+		t.Errorf("hard deletes = %d, want 0", n)
+	}
+	fsRequireUntouched(t, s, ids, before, "op-atpath-err")
+}
+
+// A live book other than the survivor at the book folder refuses the group,
+// even when only LiveBookIDsAtPath reports it (the single path index key
+// would not).
+func TestFsRegroupApply_OtherLiveBookAtFolderRefusesGroup(t *testing.T) {
+	s := regroupStore(t)
+	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	plan, grp := fsOneFragmentsGroup(t, s)
+	before := fsRowCount(t, s)
+	g := &fsGuardStore{PebbleStore: s, atPathIDs: []string{grp.SurvivorID, "other-live-book"}}
+	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-other"})
+	if err != nil || res.Skipped != 1 || res.Groups != 0 || res.Errors != 0 {
+		t.Fatalf("apply err=%v res=%s, want the group skipped and nothing applied", err, res)
+	}
+	fsRequireUntouched(t, s, ids, before, "op-atpath-other")
 }

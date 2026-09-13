@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -222,7 +222,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}
 
 	// Process in reverse order
-	var errors []string
+	var errMsgs []string
 	var restoredIDs []string
 	for _, c := range slices.Backward(restorable) {
 		if err := rs.revertChange(c); err != nil {
@@ -231,7 +231,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			case undo.ReasonChangedSince, undo.ReasonSeriesRenamedSince:
 				result.ChangedSince++
 			}
-			errors = append(errors, fmt.Sprintf("change %s: %v", c.ID, err))
+			errMsgs = append(errMsgs, fmt.Sprintf("change %s: %v", c.ID, err))
 			slog.Warn("revert failed for change", "c", c.ID, "err", err)
 			continue
 		}
@@ -254,8 +254,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		"restored", result.Restored, "failed", result.Failed,
 		"not_restorable", result.NotRestorable, "types", formatTypeCounts(result.NotRestorableTypes))
 
-	if len(errors) > 0 {
-		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errors), errors[0])
+	if len(errMsgs) > 0 {
+		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), errMsgs[0])
 	}
 	return result, nil
 }

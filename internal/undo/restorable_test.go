@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -243,9 +243,19 @@ func TestCheckBookFieldCurrent_ThreeWay(t *testing.T) {
 	if err := CheckBookFieldCurrent(&database.Book{Title: "Manual"}, row); RefusalReason(err) != ReasonChangedSince {
 		t.Errorf("current == other: %v, want ReferentError %q", err, ReasonChangedSince)
 	}
+	// A row whose old and new values match wrote nothing: it is restorable,
+	// never "already restored", as for series_rename.
+	same := *row
+	same.OldValue = "New"
+	if err := CheckBookFieldCurrent(&database.Book{Title: "New"}, &same); err != nil {
+		t.Errorf("old == new == current: %v, want nil", err)
+	}
+	if err := CheckBookFieldCurrent(&database.Book{Title: "Manual"}, &same); RefusalReason(err) != ReasonChangedSince {
+		t.Errorf("old == new != current: %v, want ReferentError %q", err, ReasonChangedSince)
+	}
 	bad := *row
 	bad.FieldName = "not_a_field"
-	if err := CheckBookFieldCurrent(&database.Book{}, &bad); RefusalReason(err) != ReasonOldValueUnparsable {
-		t.Errorf("unknown field: %v, want ReferentError %q", err, ReasonOldValueUnparsable)
+	if err := CheckBookFieldCurrent(&database.Book{}, &bad); RefusalReason(err) != ReasonFieldUnreadable {
+		t.Errorf("unknown field: %v, want ReferentError %q", err, ReasonFieldUnreadable)
 	}
 }
