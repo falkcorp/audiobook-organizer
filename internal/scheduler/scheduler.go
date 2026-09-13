@@ -86,7 +86,9 @@ type TaskDefinition struct {
 	// DailyAt, when set, runs the task once a day at this 24-hour "HH:MM"
 	// wall-clock time in the server's local zone (see daily_at.go), and
 	// GetInterval is then ignored for scheduling. Empty means the task uses
-	// its interval, unchanged.
+	// its interval, unchanged. RunOnStart stays a separate trigger: a task with
+	// both runs at boot AND may run again at once if a daily run is overdue, so
+	// do not combine them on a task that must not enqueue twice.
 	DailyAt string
 }
 

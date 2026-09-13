@@ -192,11 +192,14 @@ func TestParseDailyAt(t *testing.T) {
 // reaching Start, where it would only log.
 func TestRegisteredDailyAtValuesParse(t *testing.T) {
 	ts := NewTaskScheduler(reachabilityTestDeps())
+	seen := 0
 	for name, task := range ts.tasks {
 		if task.DailyAt == "" {
 			continue
 		}
+		seen++
 		_, _, err := parseDailyAt(task.DailyAt)
 		assert.NoError(t, err, "task %s", name)
 	}
+	require.Positive(t, seen, "no DailyAt task registered — this check would pass on nothing")
 }
