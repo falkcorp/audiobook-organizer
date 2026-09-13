@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -1027,28 +1027,18 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 
 		// Pick best match from service's scored candidates (first is already best)
 		candidate := searchResp.Results[0]
-		// Convert MetadataCandidate to BookMetadata for field mapping
-		meta := metadatapkg.BookMetadata{
-			Title:                    candidate.Title,
-			Author:                   candidate.Author,
-			Narrator:                 candidate.Narrator,
-			Series:                   candidate.Series,
-			SeriesPosition:           candidate.SeriesPosition,
-			PublishYear:              candidate.Year,
-			Publisher:                candidate.Publisher,
-			ISBN:                     candidate.ISBN,
-			CoverURL:                 candidate.CoverURL,
-			Description:              candidate.Description,
-			Language:                 candidate.Language,
-			DurationSec:              candidate.DurationSec,
-			AudibleRatingOverall:     candidate.AudibleRatingOverall,
-			AudibleRatingPerformance: 0, // not available from candidate
-			AudibleRatingStory:       0, // not available from candidate
-			AudibleRatingCount:       candidate.AudibleRatingCount,
-			AudibleNumReviews:        0, // not available from candidate
-			GoogleRatingAverage:      candidate.GoogleRatingAverage,
-			GoogleRatingCount:        candidate.GoogleRatingCount,
-		}
+		// Convert MetadataCandidate to BookMetadata through the SAME conversion
+		// the single-book apply uses (metafetch.CandidateMetadata), so the two
+		// paths cannot disagree about which candidate fields exist. This used to
+		// be a hand-written literal that silently dropped ISBN10/ISBN13, genre,
+		// subtitle, page count and the year's print/release kind.
+		meta := metafetch.CandidateMetadata(candidate)
+		// Ratings are not apply fields in CandidateMetadata; bulk writes them.
+		// Performance/Story/NumReviews are not carried on a candidate.
+		meta.AudibleRatingOverall = candidate.AudibleRatingOverall
+		meta.AudibleRatingCount = candidate.AudibleRatingCount
+		meta.GoogleRatingAverage = candidate.GoogleRatingAverage
+		meta.GoogleRatingCount = candidate.GoogleRatingCount
 		sourceName := candidate.Source
 		fetchedValues := map[string]any{}
 		appliedFields := []string{}
@@ -1081,6 +1071,16 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 				return book.Language != nil && strings.TrimSpace(*book.Language) != ""
 			case database.FieldKeyAudiobookReleaseYear:
 				return book.AudiobookReleaseYear != nil && *book.AudiobookReleaseYear != 0
+			case "print_year":
+				return book.PrintYear != nil && *book.PrintYear != 0
+			case database.FieldKeyGenre:
+				return book.Genre != nil && strings.TrimSpace(*book.Genre) != ""
+			case database.FieldKeyDescription:
+				return book.Description != nil && strings.TrimSpace(*book.Description) != ""
+			case "subtitle":
+				return book.Subtitle != nil && strings.TrimSpace(*book.Subtitle) != ""
+			case "page_count":
+				return book.PageCount != nil && *book.PageCount > 0
 			case database.FieldKeyISBN10:
 				return book.ISBN10 != nil && strings.TrimSpace(*book.ISBN10) != ""
 			case database.FieldKeyISBN13:
@@ -1150,31 +1150,86 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			}
 		}
 
+		// Route the year by its source kind, as applyMetadataUnguarded does. A
+		// Google Books / Open Library / Hardcover year is the PRINT year; this
+		// branch used to write every year into AudiobookReleaseYear, so a 1937
+		// print year replaced an audiobook's release year and reached the file
+		// `year` tag on write-back.
 		if meta.PublishYear != 0 {
-			addFetched(database.FieldKeyAudiobookReleaseYear, meta.PublishYear)
-			if shouldApply(database.FieldKeyAudiobookReleaseYear, hasBookValue(database.FieldKeyAudiobookReleaseYear)) {
+			yearKey := "print_year"
+			if meta.PublishYearIsAudiobookRelease {
+				yearKey = database.FieldKeyAudiobookReleaseYear
+			}
+			addFetched(yearKey, meta.PublishYear)
+			if shouldApply(yearKey, hasBookValue(yearKey)) {
 				year := meta.PublishYear
-				book.AudiobookReleaseYear = &year
-				appliedFields = append(appliedFields, database.FieldKeyAudiobookReleaseYear)
+				if meta.PublishYearIsAudiobookRelease {
+					book.AudiobookReleaseYear = &year
+				} else {
+					book.PrintYear = &year
+				}
+				appliedFields = append(appliedFields, yearKey)
 				didUpdate = true
 			}
 		}
 
-		if meta.ISBN != "" {
-			if len(meta.ISBN) == 10 {
-				addFetched(database.FieldKeyISBN10, meta.ISBN)
-				if shouldApply(database.FieldKeyISBN10, hasBookValue(database.FieldKeyISBN10)) {
-					book.ISBN10 = new(meta.ISBN)
-					appliedFields = append(appliedFields, database.FieldKeyISBN10)
-					didUpdate = true
-				}
-			} else {
-				addFetched(database.FieldKeyISBN13, meta.ISBN)
-				if shouldApply(database.FieldKeyISBN13, hasBookValue(database.FieldKeyISBN13)) {
-					book.ISBN13 = new(meta.ISBN)
-					appliedFields = append(appliedFields, database.FieldKeyISBN13)
-					didUpdate = true
-				}
+		// Both ISBN columns: providers set ISBN10 and ISBN13 separately; the
+		// single ISBN is the length-classified fallback. This used to look only
+		// at the single ISBN, so a candidate carrying both filled one column.
+		isbnOf := func(explicit string, n int) string {
+			if explicit != "" {
+				return explicit
+			}
+			if len(meta.ISBN) == n {
+				return meta.ISBN
+			}
+			return ""
+		}
+		if isbn10 := isbnOf(meta.ISBN10, 10); isbn10 != "" {
+			addFetched(database.FieldKeyISBN10, isbn10)
+			if shouldApply(database.FieldKeyISBN10, hasBookValue(database.FieldKeyISBN10)) {
+				book.ISBN10 = new(isbn10)
+				appliedFields = append(appliedFields, database.FieldKeyISBN10)
+				didUpdate = true
+			}
+		}
+		if isbn13 := isbnOf(meta.ISBN13, 13); isbn13 != "" {
+			addFetched(database.FieldKeyISBN13, isbn13)
+			if shouldApply(database.FieldKeyISBN13, hasBookValue(database.FieldKeyISBN13)) {
+				book.ISBN13 = new(isbn13)
+				appliedFields = append(appliedFields, database.FieldKeyISBN13)
+				didUpdate = true
+			}
+		}
+
+		// Plain string/int fields the candidate carries and this path never
+		// wrote. Same only-missing and lock rules as every field above.
+		for _, f := range []struct {
+			key   string
+			value string
+			set   func(string)
+		}{
+			{database.FieldKeyGenre, meta.Genre, func(v string) { book.Genre = new(v) }},
+			{database.FieldKeyDescription, meta.Description, func(v string) { book.Description = new(v) }},
+			{"subtitle", meta.Subtitle, func(v string) { book.Subtitle = new(v) }},
+		} {
+			if strings.TrimSpace(f.value) == "" || metafetch.IsGarbageValue(f.value) {
+				continue
+			}
+			addFetched(f.key, f.value)
+			if shouldApply(f.key, hasBookValue(f.key)) {
+				f.set(f.value)
+				appliedFields = append(appliedFields, f.key)
+				didUpdate = true
+			}
+		}
+		if meta.PageCount > 0 {
+			addFetched("page_count", meta.PageCount)
+			if shouldApply("page_count", hasBookValue("page_count")) {
+				pc := meta.PageCount
+				book.PageCount = &pc
+				appliedFields = append(appliedFields, "page_count")
+				didUpdate = true
 			}
 		}
 

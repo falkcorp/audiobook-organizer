@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
 // last-edited: 2026-09-13
 //
@@ -67,10 +67,10 @@ type ApplyPreview struct {
 // the same refusal ApplyMetadataCandidate makes.
 var ErrApplyPolicyBlocked = fmt.Errorf("metadata application disabled by policy:no-metadata tag")
 
-// candidateMetadata converts a candidate to the BookMetadata the apply writes.
+// CandidateMetadata converts a candidate to the BookMetadata the apply writes.
 // Shared by ApplyMetadataCandidate and the preview so the two cannot disagree
 // about which candidate fields reach the book.
-func candidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
+func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 	return metadata.BookMetadata{
 		Title:          candidate.Title,
 		Author:         candidate.Author,
@@ -116,7 +116,7 @@ func (mfs *Service) PreviewMetadataCandidate(id string, candidate MetadataCandid
 		return nil, ErrApplyPolicyBlocked
 	}
 
-	meta := FilterApplyFields(candidateMetadata(candidate), nil)
+	meta := FilterApplyFields(CandidateMetadata(candidate), nil)
 	NormalizeMetaSeries(&meta)
 	locks, err := mfs.loadFieldLocks(id)
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -613,7 +613,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	}
 
 	// candidateMetadata (apply_preview.go) is shared with the dry-run preview.
-	meta := candidateMetadata(candidate)
+	meta := CandidateMetadata(candidate)
 
 	// If fields is non-empty, zero out every field NOT in it. The allowlist is
 	// ApplyFields (apply_fields.go) -- the same list provenance is recorded
@@ -758,11 +758,14 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// UpdateBook so a failed update never leaves stale tags behind.
 	mfs.ApplyMetadataSystemTags(id, candidate.Source, meta.Language)
 
-	// Apply Audible category ladder tags. These are additive enrichment — they
-	// are not controlled by the fields allowlist and do not fail the apply if
-	// a tag write errors.
+	// Apply provider category tags (Audible category ladders, Google Books
+	// categories). These are additive enrichment — they are not controlled by
+	// the fields allowlist and do not fail the apply if a tag write errors. The
+	// tag source names the provider: it was hard-coded "audible_category" when
+	// Audible was the only source that populated CategoryTags.
+	tagSource := metadata.CategoryTagSource(candidate.Source)
 	for _, tag := range candidate.CategoryTags {
-		if err := mfs.db.AddBookTagWithSource(id, tag, "audible_category"); err != nil {
+		if err := mfs.db.AddBookTagWithSource(id, tag, tagSource); err != nil {
 			slog.Warn("failed to apply category tag to book", "value", logger.SanitizeLogValue(tag), "id", logger.SanitizeLogValue(id), "error", err)
 		}
 	}
