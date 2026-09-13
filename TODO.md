@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.1 -->
+<!-- version: 10.73.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-12 -->
+<!-- last-edited: 2026-09-13 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,88 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AUTHOR-REFCOUNT-SPLIT (owner decision)** #3309 split author reference counts into live,
+      trashed and dangling. Junction rows whose book no longer exists are dangling, and
+      `author-duplicate-merge` no longer holds an author back for dangling rows alone. Three
+      readers still use the flat sum and therefore still hold dangling-only authors:
+      `internal/plugins/maintenance/author_purge_empty.go` (held_by_refs, 4,163 on production
+      2026-09-12), `author_whitespace_collision_report.go`, and
+      `internal/server/handlers/entities/author_refcount.go`. Decide whether dangling-only
+      authors should become purgeable. If so, the dangling junction rows need cleaning up in the
+      same pass, or the delete leaves them behind.
+
+- [ ] **BOOK-PURGE-UNDECODABLE** Add an in-app way to clear a `book:<id>` row that does not
+      decode. Since #3346, once the `book_atpath` index is built, one such row makes every
+      `LiveBookIDsAtPath` call fail (fail-closed, on purpose). `UpdateBook` and `DeleteBook`
+      cannot lift that, because both read the old row through `GetBookByID` and fail on the
+      decode. Today the only fix is to rewrite or remove the row out of band, then run
+      `maintenance.book-atpath-index-backfill`. Proposed op: `maintenance.book-purge-undecodable`
+      (`CapLibraryWrite`). It hard-deletes each undecodable `book:<id>` row, its `book_sig:<id>`
+      sidecar and its `book_atpath_undecodable:<id>` marker in one batch. Caveat: the secondary
+      index keys (`book:hash:`, `book:originalhash:`, `book:organizedhash:`, `book:work:`,
+      `book:versiongroup:`, ISBN/ASIN, `book:path:`, `book_atpath:`) are derived from fields that
+      cannot be read, so the op cannot find them and they are left dangling. Either scan those
+      prefixes for values equal to the id, or document them as harmless extras that each reader
+      already point-verifies. Needs a dry-run mode and tests.
+
+- [ ] **AUTHOR-PURGE-BULK** Give bulk author deletes a single `book_authors` junction sweep.
+      `DeleteAuthor` scans the whole per-book junction on every call because there is no
+      author-to-books index (`sweepAuthorFromBookAuthors`, `internal/database/pebble_store_authors.go`).
+      Production measured about one delete per second on 2026-09-12. The 3,958-author
+      `purge-empty-authors` apply hit its 30m timeout at 1,742 deletes and needed three runs,
+      holding the scan stand-down for over an hour. Add a store method that deletes a set of
+      authors with one sweep and one memdb replay. It must keep the per-item re-check and the
+      journal-before-delete ordering, and hold the name-index lock (#3303) across the sweep and
+      commit. Then switch `purge-empty-authors` and `purge-empty-narrators` to it.
+
+- [ ] **BULK-META-STALE** Two leftover races in `BulkMetadataSearchDialog.tsx` (follow-ups on
+      #3306, not introduced by it):
+      (1) Within one session, a metadata search for the previous book can land after the user
+      moves to the next book, overwrite the current results, and clear `loading` early. The
+      guard added in #3306 is per session, not per book. Key it by book id as well.
+      (2) A late "No match" from a closed session writes server state (`api.markNoMatch`) but
+      never calls `onLibraryChanged`, unlike late applies and undos, so the list can stay stale.
+
+- [ ] **NAME-INDEX-LOCK-SPLIT** Stop holding `nameIdx.author` across `DeleteAuthor`'s full
+      junction sweep (review follow-up on #3303). Every `CreateAuthor` from metadata apply,
+      handlers and AI ops currently waits up to one full `book_authors` sweep per new name.
+      Do NOT just move the sweep outside the lock: that reopens the concurrent-delete race on
+      the whole-array rewrite of `book_authors:<id>` that #3303 closed. The intended shape is a
+      dedicated junction-sweep mutex held across sweep and commit, with lock order
+      `junctionSweepMu → nameIdx.author → nameIdx.alias`, and `nameIdx.author` covering only
+      the row read, ownership check and commit. Related: `internal/metadata/enhanced.go`
+      (~L288-313) holds `resolveMu` across `GetAuthorByName` and `CreateAuthor`, so one blocked
+      worker freezes every other worker's resolve, fast-path hits included. Narrow it.
+
+- [ ] **AUTHOR-LEDGER-RESTORE (owner decision)** `purge-empty-authors`, `author-duplicate-merge`
+      and (once #3305 merges) `purge-empty-narrators` journal every delete as an
+      `operation_changes` row: `author_delete` or `narrator_delete`, old value `"<id>:<name>"`.
+      Nothing can replay them. Undo does not restore the rows; a fix is in flight so it at least
+      stops reporting them as reverted. Decide whether an op should recreate a deleted author or
+      narrator from its ledger row, and whether it may reuse the original id (the id counter
+      has moved on) or must mint a new one and remap references. 1,742+ purge rows written on
+      2026-09-12 are the first real input.
+
+- [ ] **REVERT-FALSE-STAMPS (owner decision)** Before #3312, `RevertOperation` marked every change
+      row of an operation reverted even when its restore failed or it had no reversal
+      (`RevertOperationChanges(op)` mark-all, `internal/audiobooks/revert.go` on main). Any
+      production op that was reverted that way has ledger rows with `reverted_at` set but nothing
+      restored. #3312 skips already-marked rows one at a time and counts them as "already
+      reverted", so those false stamps are never retried, and a false stamp cannot be told apart
+      from a real undo in the stored data. Decide whether to audit which reverted ops carry
+      failed or record-only rows (for example, cross-check against the revert-time log lines) and
+      clear their `reverted_at` so a retry can pick them up, or accept them as lost.
+
+- [ ] **REVERT-PER-OP-LOCK** Reverting one operation is not serialized. Two Undo clicks at the same
+      time (the Operations indicator and the Activity Log, or a double click) both call
+      `RevertService.RevertOperation` (`internal/audiobooks/revert.go`), both read the same
+      unstamped change rows, and both apply them: files are moved back twice and metadata is
+      rewritten twice before either marks the rows. This race exists on main as well; #3312 did
+      not introduce it. Add a per-operation lock (a keyed mutex on the operation ID, held from
+      `GetOperationChanges` through `MarkOperationChangesReverted`), and have the second caller
+      either wait and then see the rows already reverted, or get a 409 "revert already in
+      progress". Add a race test that runs two reverts at once.
 
 - [ ] **Discarding an `interrupted_quiesced` op whose goroutine is still alive leaves that goroutine reporting into the void.** On 2026-09-11 the watchdog canceled a stuck `library.scan` (op `01M27QMFPFBH4JPZW0CXQ3C7J2`) at 04:19, logged "op goroutine abandoned; spawning replacement worker", and the abandoned goroutine kept running for another hour (its auto-organize summary landed at 05:18, ninety seconds after the owner discarded the row). The row-level fix (writers refuse a missing row; migration 62 sweeps shells) stops the blank card, but the abandoned goroutine still burns CPU and I/O and its writes now fail one by one. Decide whether `DiscardOperationV2` should refuse `interrupted_quiesced` rows while `registry` still tracks a live goroutine for that id, or whether the registry should hard-stop the reporter for an abandoned goroutine so nothing it says reaches the store. `internal/server/handlers/operations_v2.go` (Discard allow-list), `internal/operations/registry/worker.go` (abandon path).
 
