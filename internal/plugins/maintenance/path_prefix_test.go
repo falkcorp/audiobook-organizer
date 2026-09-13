@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/path_prefix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e41b6d09-2f7a-4c83-9b15-6a0d8e3c47f2
 // last-edited: 2026-09-13
 
@@ -101,6 +101,7 @@ func TestPathPrefix_OpsMatchOnFolderBoundary(t *testing.T) {
 		{"trailing separator", root + string(filepath.Separator), 2},
 		{"path equal to prefix", paths[0], 1},
 		{"sibling folder itself", root + "2", 1},
+		{"partial folder name", filepath.Join(dir, "li"), 0}, // HasPrefix matched all 3
 	}
 	for name, run := range ops {
 		for _, c := range cases {
