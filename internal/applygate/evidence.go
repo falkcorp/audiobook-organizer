@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-13
 
@@ -77,7 +77,9 @@ type EvidenceVerdict struct {
 
 // roleCreditRe matches a contributor credit that is not an authorship one.
 // "John Joseph Adams - editor" was applied as an author on 2026-09-13.
-var roleCreditRe = regexp.MustCompile(`(?i)(^|[\s,(\-–—])(editor|editors|ed\.|eds\.|edited by|translator|translated by|translation|narrator|narrated by|read by|foreword|introduction|illustrator|illustrated by|contributor|compiler|compiled by|adapted by|adaptation)($|[\s,)\-–—.])`)
+// "(ed)" is matched only inside parentheses: a bare "ed" is a first name
+// (Ed Greenwood). "with" is not a role: "Patterson with Paetro" is co-authorship.
+var roleCreditRe = regexp.MustCompile(`(?i)(^|[\s,(\-–—])(editor|editors|ed\.|eds\.|edited by|translator|translated by|translated|translation|trans\.|tr\.|hrsg\.|hrsg|herausgeber|herausgegeben|narrator|narrated by|read by|foreword|introduction|illustrator|illustrated by|contributor|compiler|compiled by|adapted by|adaptation)($|[\s,)\-–—.])|\(\s*(eds?|trans|tr)\.?\s*\)`)
 
 // titleStop are tokens that carry no identity in a title.
 var titleStop = map[string]bool{
@@ -102,7 +104,7 @@ func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioCon
 		checkAuthorRole(c),
 		checkAuthorPath(book, c),
 		checkTitle(book, c),
-		checkNarrator(book, c, runtime.Outcome == OutcomeAgree),
+		checkNarrator(book, c, runtime.Outcome),
 		checkASIN(book, c),
 	)
 	audio := CheckResult{Name: "transcription", Outcome: OutcomeUnknown}
@@ -136,19 +138,40 @@ func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioCon
 // overwrites lists identity fields the candidate would REPLACE (not fill).
 // Filling an empty field on thin evidence is recoverable; replacing a title
 // or author the owner may have set is not, so unknown runtime blocks only here.
+//
+// A field counts as replaced only when something the book has would be LOST:
+// a title or series token the candidate lacks, or a credited surname the
+// candidate drops. "The Hobbit" -> "The Hobbit: Or There and Back Again" and
+// "J.R.R. Tolkien" -> "J. R. R. Tolkien" keep everything and are not overwrites;
+// "A New Dawn: Star Wars" -> "Star Wars" loses "new" and "dawn" and is one.
 func overwrites(book *database.Book, c *metafetch.MetadataCandidate) []string {
 	var out []string
-	if strings.TrimSpace(book.Title) != "" && strings.TrimSpace(c.Title) != "" &&
-		normText(book.Title) != normText(c.Title) {
+	if strings.TrimSpace(c.Title) != "" && loses(tokens(book.Title, true), tokens(c.Title+" "+c.Subtitle, true)) {
 		out = append(out, "title")
 	}
-	if cur := bookAuthor(book); cur != "" && strings.TrimSpace(c.Author) != "" &&
-		normText(cur) != normText(c.Author) {
+	if strings.TrimSpace(c.Author) != "" && loses(set(surnames(bookAuthor(book))), set(surnames(c.Author))) {
 		out = append(out, "author")
 	}
-	if book.Series != nil && strings.TrimSpace(book.Series.Name) != "" && strings.TrimSpace(c.Series) != "" &&
-		normText(book.Series.Name) != normText(c.Series) {
+	if strings.TrimSpace(c.Series) != "" && loses(tokens(seriesName(book), true), tokens(c.Series, true)) {
 		out = append(out, "series")
+	}
+	return out
+}
+
+// loses reports whether have holds a token that next lacks.
+func loses(have, next map[string]bool) bool {
+	for t := range have {
+		if !next[t] {
+			return true
+		}
+	}
+	return false
+}
+
+func set(xs []string) map[string]bool {
+	out := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		out[x] = true
 	}
 	return out
 }
@@ -203,9 +226,12 @@ func checkAuthorPath(book *database.Book, c *metafetch.MetadataCandidate) CheckR
 		r.Outcome, r.Detail = OutcomeUnknown, "candidate has no author"
 		return r
 	}
+	// Path words plus the current author's surnames. Not every word of the
+	// current author: a shared first name ("Stephen" King vs Baxter, Stephen)
+	// is not evidence.
 	have := tokens(book.FilePath, false)
-	for t := range tokens(bookAuthor(book), false) {
-		have[t] = true
+	for _, n := range surnames(bookAuthor(book)) {
+		have[n] = true
 	}
 	for _, n := range names {
 		if have[n] {
@@ -226,19 +252,29 @@ func checkAuthorPath(book *database.Book, c *metafetch.MetadataCandidate) CheckR
 // checkTitle compares the candidate title with every place the book's title
 // lives: the stored title and the file and folder names. A candidate title
 // that equals a SERIES name ("Star Wars" for "A New Dawn: Star Wars") is not
-// allowed to agree through a split segment.
+// allowed to agree through a split segment, and a folder named after the
+// series ("/Star Wars/A New Dawn.m4b") is not a title at all. A candidate whose
+// title IS the series name and that nothing confirms is a hard block: that is
+// the 2026-09-13 "Star Wars" at 233% row.
 func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "title"}
 	candVariants := []string{c.Title}
 	if strings.TrimSpace(c.Subtitle) != "" {
 		candVariants = append(candVariants, c.Title+" "+c.Subtitle)
 	}
-	full, segs := bookTitleVariants(book)
 	seriesNames := map[string]bool{}
 	for _, s := range []string{c.Series, seriesName(book)} {
 		if n := normText(s); n != "" {
 			seriesNames[n] = true
 		}
+	}
+	full, segs := bookTitleVariants(book, seriesNames)
+	// The candidate's own main title ("The Hobbit" of "The Hobbit: Or There
+	// and Back Again") may agree with a whole book title, unless it is the
+	// series name ("Star Wars" of "Star Wars: A New Dawn").
+	if main := strings.TrimSpace(segSplitRe.Split(c.Title, 2)[0]); main != "" &&
+		main != strings.TrimSpace(c.Title) && !seriesNames[normText(main)] {
+		candVariants = append(candVariants, main)
 	}
 
 	best, bestAgainst := 0.0, ""
@@ -265,6 +301,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	switch {
 	case best >= 0.85:
 		r.Outcome = OutcomeAgree
+	case seriesNames[normText(c.Title)] && strings.TrimSpace(c.Subtitle) == "":
+		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
+		r.Detail = "candidate title " + strconv.Quote(c.Title) + " is the series name; " + r.Detail
 	case best < 0.5:
 		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
 	default:
@@ -273,16 +312,17 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	return r
 }
 
-// checkNarrator blocks a named-narrator contradiction unless the runtime
-// agrees (a different narrator with the same runtime is usually a credit
-// spelling, a different one with a different runtime is another recording).
-func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, runtimeAgrees bool) CheckResult {
+// checkNarrator compares narrator surnames. A contradiction blocks only when
+// the runtime is KNOWN and outside the agree band: a different narrator with
+// a different runtime is another recording, but with no runtime the stored
+// narrator is often a tag guess (the author, "Unknown") and proves nothing.
+func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, runtimeOutcome string) CheckResult {
 	r := CheckResult{Name: "narrator"}
 	cur := ""
 	if book.Narrator != nil {
 		cur = *book.Narrator
 	}
-	a, b := tokens(cur, true), tokens(c.Narrator, true)
+	a, b := set(surnames(cur)), set(surnames(c.Narrator))
 	if len(a) == 0 || len(b) == 0 {
 		r.Outcome = OutcomeUnknown
 		return r
@@ -294,7 +334,7 @@ func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, runtimeA
 		}
 	}
 	r.Detail = strconv.Quote(cur) + " vs " + strconv.Quote(c.Narrator)
-	if runtimeAgrees {
+	if runtimeOutcome != OutcomeNeutral && runtimeOutcome != OutcomeBlock {
 		r.Outcome = OutcomeNeutral
 		return r
 	}
@@ -322,22 +362,28 @@ func checkASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult 
 
 // bookTitleVariants returns whole-title forms (stored title, its
 // parenthetical-stripped form, file base name, folder name) and the segments
-// those split into at ":" / " - " separators.
-func bookTitleVariants(book *database.Book) (full, segs []string) {
+// those split into at ":" / " - " separators. A folder or file name equal to a
+// series name is skipped: it names the series, not this book.
+func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, segs []string) {
 	add := func(s string) {
 		if strings.TrimSpace(s) != "" {
 			full = append(full, s)
+		}
+	}
+	addPath := func(s string) {
+		if !seriesNames[normText(s)] {
+			add(s)
 		}
 	}
 	add(book.Title)
 	add(parenRe.ReplaceAllString(book.Title, " "))
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
-		if ext := filepath.Ext(base); ext != "" && len(ext) <= 5 {
-			add(strings.TrimSuffix(base, ext))
-			add(filepath.Base(filepath.Dir(p)))
+		if ext := filepath.Ext(base); isFileExt(ext) {
+			addPath(strings.TrimSuffix(base, ext))
+			addPath(filepath.Base(filepath.Dir(p)))
 		} else {
-			add(base)
+			addPath(base)
 		}
 	}
 	for _, f := range full {
@@ -348,6 +394,15 @@ func bookTitleVariants(book *database.Book) (full, segs []string) {
 		}
 	}
 	return full, segs
+}
+
+// isFileExt tells a real extension (".m4b", ".mp3") from a folder name that
+// merely contains a dot ("Book 1.5" -> ".5").
+func isFileExt(ext string) bool {
+	if len(ext) < 2 || len(ext) > 5 {
+		return false
+	}
+	return strings.IndexFunc(ext[1:], unicode.IsLetter) >= 0
 }
 
 var (
@@ -363,17 +418,38 @@ func titleSim(a, b string) float64 {
 	if len(A) == 0 || len(B) == 0 {
 		return 0
 	}
-	inter := 0
+	inter, alpha := 0, false
 	for t := range A {
 		if B[t] {
 			inter++
+			if !isNumber(t) {
+				alpha = true
+			}
 		}
+	}
+	// "Book 1" vs "Part 1" share only "1". A shared number is not a match
+	// unless the titles have no words at all ("1984").
+	if !alpha && (hasWord(tokens(a, false)) || hasWord(tokens(b, false))) {
+		return 0
 	}
 	den := len(A)
 	if len(B) > den {
 		den = len(B)
 	}
 	return float64(inter) / float64(den)
+}
+
+func isNumber(t string) bool {
+	return strings.IndexFunc(t, func(r rune) bool { return !unicode.IsDigit(r) }) < 0
+}
+
+func hasWord(m map[string]bool) bool {
+	for t := range m {
+		if !isNumber(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // tokens folds accents, lowercases and splits on non-alphanumerics. With
@@ -409,26 +485,43 @@ func normText(s string) string {
 
 var (
 	nameSuffix  = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "phd": true, "md": true, "dr": true}
-	creditSplit = regexp.MustCompile(`,|&|;|\band\b`)
+	creditSplit = regexp.MustCompile(`(?i),|&|;|\band\b`)
+	andWord     = regexp.MustCompile(`(?i)\band\b`)
 )
 
-// surnames returns the last name-token of each credited person.
+// surnames returns the last name-token of each credited person. A single
+// "Last, First" credit ("Baxter, Stephen") yields the part before the comma,
+// not two people.
 func surnames(author string) []string {
-	var out []string
-	for _, part := range creditSplit.Split(author, -1) {
-		var words []string
-		for _, w := range strings.FieldsFunc(normText(part), func(r rune) bool {
-			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-		}) {
-			if len([]rune(w)) > 1 && !nameSuffix[w] {
-				words = append(words, w)
+	if last, _, ok := strings.Cut(author, ","); ok && !strings.ContainsAny(author, "&;") &&
+		strings.Count(author, ",") == 1 && !andWord.MatchString(author) {
+		if w := nameWords(last); len(w) == 1 {
+			rest := nameWords(author[len(last)+1:])
+			if len(rest) > 0 && len(rest) <= 3 {
+				return w
 			}
 		}
-		if len(words) > 0 {
+	}
+	var out []string
+	for _, part := range creditSplit.Split(author, -1) {
+		if words := nameWords(part); len(words) > 0 {
 			out = append(out, words[len(words)-1])
 		}
 	}
 	return out
+}
+
+// nameWords is the name tokens of one credit, without initials or suffixes.
+func nameWords(s string) []string {
+	var words []string
+	for _, w := range strings.FieldsFunc(normText(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len([]rune(w)) > 1 && !nameSuffix[w] {
+			words = append(words, w)
+		}
+	}
+	return words
 }
 
 func bookAuthor(book *database.Book) string {

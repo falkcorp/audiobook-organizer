@@ -1,11 +1,12 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
 // last-edited: 2026-09-13
 
 package applygate
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -101,6 +102,71 @@ func TestCheckEvidence_OwnerExamples(t *testing.T) {
 				FilePath: "/lib/John Jackson Miller/Star Wars/A New Dawn.m4b"},
 			cand: metafetch.MetadataCandidate{Title: "Star Wars", Subtitle: "A New Dawn", Author: "John Jackson Miller", Series: "Star Wars", DurationSec: 22700},
 		},
+		// Review findings on #3380.
+		{
+			name: "series name as title passes through a series-named folder",
+			book: database.Book{Title: "A New Dawn: Star Wars", Duration: intp(22740),
+				FilePath: "/lib/John Jackson Miller/Star Wars/A New Dawn.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Star Wars", Author: "John Jackson Miller", Series: "Star Wars", DurationSec: 22700},
+			want: ReasonTitleDisagrees,
+		},
+		{
+			name: "a book whose title really is the series name still passes",
+			book: database.Book{Title: "Dune", Duration: intp(36000),
+				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b", Author: &database.Author{Name: "Frank Herbert"}},
+			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Series: "Dune", DurationSec: 36000},
+		},
+		{
+			name: "Last, First candidate does not agree with a shared first name",
+			book: database.Book{Title: "Carrie", Duration: intp(36000),
+				FilePath: "/lib/Unknown/Carrie/Carrie.m4b", Author: &database.Author{Name: "Stephen King"}},
+			cand: metafetch.MetadataCandidate{Title: "Carrie", Author: "Baxter, Stephen", DurationSec: 36000},
+			want: ReasonAuthorNotInPath,
+		},
+		{
+			name: "Last, First candidate agrees with the same person",
+			book: database.Book{Title: "Carrie", Duration: intp(36000),
+				FilePath: "/lib/Stephen King/Carrie/Carrie.m4b", Author: &database.Author{Name: "Stephen King"}},
+			cand: metafetch.MetadataCandidate{Title: "Carrie", Author: "King, Stephen", DurationSec: 36000},
+		},
+		{
+			name: "narrators sharing only a first name do not agree",
+			book: database.Book{Title: "Dune", Duration: intp(21 * 3600), Narrator: strp("Scott Brick"),
+				FilePath: "/lib/Frank Herbert/Dune/Dune.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Narrator: "Scott Sowers", DurationSec: 21*3600 + 90*60},
+			want: ReasonNarratorMismatch,
+		},
+		{
+			name: "narrator mismatch with no runtime does not block a fill",
+			book: database.Book{Title: "It", Narrator: strp("Stephen King"),
+				FilePath: "/lib/Stephen King/It/It.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "It", Author: "Stephen King", Narrator: "Steven Weber"},
+		},
+		{
+			name: "respelled initials are not an overwrite, so no runtime is needed",
+			book: database.Book{Title: "The Hobbit", Author: &database.Author{Name: "J.R.R. Tolkien"},
+				FilePath: "/lib/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "The Hobbit: Or There and Back Again", Author: "J. R. R. Tolkien"},
+		},
+		{
+			name: "(ed) in parentheses is a role credit",
+			book: database.Book{Title: "Wastelands", Duration: intp(36000),
+				FilePath: "/lib/John Joseph Adams/Wastelands/Wastelands.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Wastelands", Author: "John Joseph Adams (ed)", DurationSec: 36000},
+			want: ReasonAuthorRoleCredit,
+		},
+		{
+			name: "Ed as a first name is not a role credit",
+			book: database.Book{Title: "Spellfire", Duration: intp(36000),
+				FilePath: "/lib/Ed Greenwood/Spellfire/Spellfire.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Spellfire", Author: "Ed Greenwood", DurationSec: 36000},
+		},
+		{
+			name: "a dotted folder name is the title, not an extension",
+			book: database.Book{Title: "Mage Academy 1.5", Duration: intp(36000),
+				FilePath: "/lib/Jane Roe/Mage Academy 1.5"},
+			cand: metafetch.MetadataCandidate{Title: "Mage Academy 1.5", Author: "Jane Roe", DurationSec: 36000},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -138,6 +204,41 @@ func TestCheckRuntime_Bands(t *testing.T) {
 	}{{10500, OutcomeAgree}, {10501, OutcomeNeutral}, {11000, OutcomeNeutral}, {11001, OutcomeBlock}, {900, OutcomeBlock}, {0, OutcomeUnknown}} {
 		if got := checkRuntime(book, &metafetch.MetadataCandidate{DurationSec: c.cand}, false).Outcome; got != c.want {
 			t.Errorf("candidate %ds vs 10000s: %s, want %s", c.cand, got, c.want)
+		}
+	}
+}
+
+// TestTitleSim_NumberOnlyOverlap pins that a shared number alone is no match.
+func TestTitleSim_NumberOnlyOverlap(t *testing.T) {
+	if s := titleSim("Book 1", "Part 1"); s != 0 {
+		t.Fatalf("titleSim(Book 1, Part 1) = %v, want 0", s)
+	}
+	if s := titleSim("1984", "1984"); s != 1 {
+		t.Fatalf("titleSim(1984, 1984) = %v, want 1", s)
+	}
+}
+
+// TestOverwrites_ExtendIsNotReplace pins that only losing a token is an overwrite.
+func TestOverwrites_ExtendIsNotReplace(t *testing.T) {
+	book := &database.Book{Title: "A New Dawn: Star Wars", Author: &database.Author{Name: "John Jackson Miller"}}
+	if got := overwrites(book, &metafetch.MetadataCandidate{Title: "Star Wars", Author: "Miller, John Jackson"}); len(got) != 1 || got[0] != "title" {
+		t.Fatalf("overwrites = %v, want [title]", got)
+	}
+	if got := overwrites(book, &metafetch.MetadataCandidate{Title: "Star Wars", Subtitle: "A New Dawn", Author: "John Jackson Miller"}); len(got) != 0 {
+		t.Fatalf("overwrites = %v, want none", got)
+	}
+}
+
+// TestSurnames pins credit parsing.
+func TestSurnames(t *testing.T) {
+	for in, want := range map[string]string{
+		"Baxter, Stephen":                        "baxter",
+		"Dan Sugralinov, Alix Merlin Williamson": "sugralinov williamson",
+		"Smith And Jones":                        "smith jones",
+		"Martin Luther King Jr.":                 "king",
+	} {
+		if got := strings.Join(surnames(in), " "); got != want {
+			t.Errorf("surnames(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
