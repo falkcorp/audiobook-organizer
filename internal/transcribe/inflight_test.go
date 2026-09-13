@@ -1,7 +1,7 @@
 // file: internal/transcribe/inflight_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: ca92ba48-3205-42c3-b911-885ce0ba2b40
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package transcribe
 
@@ -22,12 +22,8 @@ import (
 // for the same slots), so each test has to start from a known one.
 func resetInFlight(t *testing.T, maxTotal int) {
 	t.Helper()
-	inflightMu.Lock()
-	inflightPools = map[string]*slotPool{}
-	inflightMu.Unlock()
-	poolWideMu.Lock()
-	poolWide = nil
-	poolWideMu.Unlock()
+	// The registry now lives in internal/aidispatch; this clears it there.
+	resetInFlightState()
 
 	prev := config.AppConfig.WhisperMaxInFlight
 	config.AppConfig.WhisperMaxInFlight = maxTotal

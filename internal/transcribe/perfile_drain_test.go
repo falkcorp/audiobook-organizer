@@ -1,7 +1,7 @@
 // file: internal/transcribe/perfile_drain_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a01da1c0-24b7-41ef-bbc4-8a0ed7b9025f
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 
 package transcribe
 
@@ -76,13 +76,10 @@ func TestPerFileDrainsWorkersBeforeReturning(t *testing.T) {
 	// cancelled context" is not a non-blocking probe -- the cancelled branch
 	// wins about half the time even when a slot is free. len(pool.ch) is the
 	// number of slots currently held, with no timing assumption at all.
-	inflightMu.Lock()
-	pool := inflightPools[srv.URL]
-	inflightMu.Unlock()
-	if pool == nil {
+	if !inFlightPoolExists(srv.URL) {
 		t.Fatal("no in-flight pool was created for the endpoint; the test never exercised the slot path")
 	}
-	if held := len(pool.ch); held != 0 {
+	if held := inFlightDepth(srv.URL); held != 0 {
 		t.Errorf("%d in-flight slot(s) still held when transcribeRemotePerFile "+
 			"returned -- a worker is still mid-request; the function returned "+
 			"without draining", held)
