@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.21.0
+// version: 5.21.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -455,7 +455,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 			slog.Warn("cover art embedding failed for file",
 				"path", f, "error", err,
 				"book_id", book.ID, "book_title", book.Title,
-				"cover_path", coverPath)
+				"cover_path", logger.SanitizeLogValue(coverPath))
 			failed++
 		} else {
 			embedded++
@@ -816,7 +816,7 @@ func (mfs *Service) RunApplyPipelineRenameOnly(id string, _ *database.Book) erro
 	if mfs.dedupEngine != nil {
 		go func() {
 			if _, err := mfs.dedupEngine.CheckBook(context.Background(), id); err != nil {
-				slog.Warn("dedup re-check failed for book after metadata apply", "id", id, "error", err)
+				slog.Warn("dedup re-check failed for book after metadata apply", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 			}
 		}()
 	}

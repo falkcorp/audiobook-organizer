@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -33,9 +33,9 @@ func (mfs *Service) queueISBNEnrichment(id string, book *database.Book) {
 	go func(bid string) {
 		found, err := mfs.isbnEnrichment.EnrichBookISBN(context.Background(), bid)
 		if err != nil {
-			slog.Warn("ISBN enrichment failed for", "id", bid, "error", err)
+			slog.Warn("ISBN enrichment failed for", "id", logger.SanitizeLogValue(bid), "error", logger.SanitizeLogValue(err.Error()))
 		} else if found {
-			slog.Info("ISBN enrichment succeeded for", "id", bid)
+			slog.Info("ISBN enrichment succeeded for", "id", logger.SanitizeLogValue(bid))
 		}
 	}(id)
 }
@@ -140,7 +140,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 					cachedResults[i].PublishYearIsAudiobookRelease = isRelease
 				}
 				results = cachedResults
-				slog.Debug("metadata-fetch cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+				slog.Debug("metadata-fetch cache HIT for ( ) — results, age", "id", logger.SanitizeLogValue(id), "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
 			}
 		}
 
@@ -222,7 +222,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if len(results) > 0 {
 				if blob, merr := json.Marshal(results); merr == nil {
 					if perr := database.PutCachedMetadataFetch(mfs.db, id, metadata.ProviderKey(src), blob, 0); perr != nil {
-						slog.Warn("metadata-fetch cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
+						slog.Warn("metadata-fetch cache put failed for ( )", "id", logger.SanitizeLogValue(id), "name", src.Name(), "error", perr)
 					}
 				}
 			}

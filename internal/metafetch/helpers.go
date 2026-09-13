@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
@@ -485,7 +487,7 @@ func (mfs *Service) loadMetadataState(bookID string) (map[string]metadataFieldSt
 	}
 
 	if err := mfs.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "id", bookID, "error", err)
+		slog.Warn("failed to migrate legacy metadata state for", "id", logger.SanitizeLogValue(bookID), "error", err)
 	}
 	return legacy, nil
 }
@@ -652,7 +654,7 @@ func dedupeBookFilesByPath(bookID string, files []database.BookFile) []database.
 
 	if len(out) != len(files) {
 		slog.Warn("duplicate book_file rows collapsed",
-			"book_id", bookID, "rows", len(files), "distinct", len(out),
+			"book_id", logger.SanitizeLogValue(bookID), "rows", len(files), "distinct", len(out),
 			"collapsed", len(files)-len(out))
 	}
 	return out

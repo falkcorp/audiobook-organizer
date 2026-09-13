@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -162,12 +163,12 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 		// applyMetadataUnguarded reaches a locked column by a route
 		// StripLockedFields does not know about.
 		slog.Warn("metadata apply: apply body reached a locked column after strip; restored",
-			"book_id", book.ID, "source", source, "restored", restored)
+			"book_id", book.ID, "source", logger.SanitizeLogValue(source), "restored", restored)
 		skipped = mergeSkipped(skipped, restored)
 	}
 	if len(skipped) > 0 {
 		slog.Info("metadata apply: skipped user-locked fields",
-			"book_id", book.ID, "source", source, "skipped_locked", skipped)
+			"book_id", book.ID, "source", logger.SanitizeLogValue(source), "skipped_locked", skipped)
 	}
 	return meta, skipped, nil
 }

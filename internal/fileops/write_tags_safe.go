@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 
 package fileops
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // WriteTagsSafeOptions configures WriteTagsSafe behavior.
@@ -141,7 +142,7 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 		if opts.BookFileID != "" && opts.Store != nil {
 			if uerr := opts.Store.UpdateBookFileHashes(opts.BookFileID, originalHash, postHash); uerr != nil {
 				slog.Warn("WriteTagsSafe: hash columns not updated; file was written and the ledger holds the record",
-					"book_file_id", opts.BookFileID, "path", path, "error", uerr)
+					"book_file_id", opts.BookFileID, "path", logger.SanitizeLogValue(path), "error", uerr)
 			}
 		}
 	}
@@ -184,6 +185,6 @@ func recordEvent(opts WriteTagsSafeOptions, kind database.FileEventKind, path, s
 	}
 	if err := opts.Provenance.AppendFileEvent(ev); err != nil {
 		slog.Warn("WriteTagsSafe: provenance event not recorded",
-			"kind", kind, "path", path, "book_file_id", opts.BookFileID, "error", err)
+			"kind", kind, "path", logger.SanitizeLogValue(path), "book_file_id", opts.BookFileID, "error", err)
 	}
 }

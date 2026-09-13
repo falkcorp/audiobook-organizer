@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.25.2
+// version: 3.25.3
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-13
 
@@ -690,7 +690,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 			// No subject derivable — fall through to normal non-batched path so
 			// no-subject batchable ops are not silently dropped.
 			r.logger.Warn("registry: batchable op has no subject in params; falling through to non-batch enqueue",
-				"def_id", defID)
+				"def_id", logger.SanitizeLogValue(defID))
 		} else {
 			bw, bmw := effectiveBatchWindows(def)
 			r.batchAdd(defID, database.OpSubject{Type: sub.Type, ID: sub.ID}, bw, bmw)
@@ -740,7 +740,7 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				// legitimately have no handle until dispatched.
 				if op.Status == "running" && !r.hasLiveHandle(op.ID) {
 					r.logger.Warn("registry: enqueue dedupe skipping zombie running row (no live handle)",
-						"op_id", op.ID, "def_id", defID)
+						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID))
 					continue
 				}
 				// ConcurrencyKey serializes RUNS (dispatcher Gate 3); it was never
@@ -763,13 +763,13 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 					sameParamsIgnoringLegacyID(rawParams, []byte(op.Params))
 				if !sameWork {
 					r.logger.Info("registry: active op exists but params differ — queueing a second run",
-						"op_id", op.ID, "def_id", defID, "status", op.Status)
+						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID), "status", op.Status)
 					// `continue`, not `break`: another active row for the same def
 					// may still match this request byte-for-byte.
 					continue
 				}
 				r.logger.Info("registry: enqueue deduped — active op exists",
-					"op_id", op.ID, "def_id", defID, "status", op.Status)
+					"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID), "status", op.Status)
 				return op.ID, nil
 			}
 		}
@@ -878,10 +878,10 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 	releaseAdmission()
 
 	if status == "waiting_deps" {
-		r.logger.Info("registry: parked op (waiting_deps)", "op_id", opID, "def_id", defID,
+		r.logger.Info("registry: parked op (waiting_deps)", "op_id", opID, "def_id", logger.SanitizeLogValue(defID),
 			"subject_type", logger.SanitizeLogValue(subjectType), "subject_id", logger.SanitizeLogValue(subjectID))
 	} else {
-		r.logger.Info("registry: enqueued op", "op_id", opID, "def_id", defID, "priority", priority)
+		r.logger.Info("registry: enqueued op", "op_id", opID, "def_id", logger.SanitizeLogValue(defID), "priority", priority)
 	}
 
 	r.publishOpCreated(row, false)
@@ -1049,7 +1049,7 @@ func (r *Registry) Cancel(opID string) error {
 
 	if running {
 		if h.cancel != nil {
-			r.logger.Info("registry: canceling running op", "op_id", opID)
+			r.logger.Info("registry: canceling running op", "op_id", logger.SanitizeLogValue(opID))
 			// Record the INTENT before canceling. The run may take seconds to
 			// notice its context and reach its terminal switch, by which time a
 			// shutdown may already be in progress; without this the run would be
@@ -1065,7 +1065,7 @@ func (r *Registry) Cancel(opID string) error {
 		if err != nil {
 			return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 		}
-		r.logger.Info("registry: canceled op awaiting worker pickup", "op_id", opID, "db_updated", updated)
+		r.logger.Info("registry: canceled op awaiting worker pickup", "op_id", logger.SanitizeLogValue(opID), "db_updated", updated)
 		return nil
 	}
 
@@ -1075,7 +1075,7 @@ func (r *Registry) Cancel(opID string) error {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
 	if updated {
-		r.logger.Info("registry: canceled queued op", "op_id", opID)
+		r.logger.Info("registry: canceled queued op", "op_id", logger.SanitizeLogValue(opID))
 		// R-1: a purely-queued op is never picked up by a worker once canceled,
 		// so no worker-path op.terminal fires — publish it here or the UI bell
 		// leaves the op phantom-"running". def_id is best-effort (the FE only
@@ -1129,7 +1129,7 @@ func (r *Registry) Cancel(opID string) error {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
 	r.logger.Info("registry: canceled persisted non-running op",
-		"op_id", opID, "def_id", row.DefID, "previous_status", row.Status)
+		"op_id", logger.SanitizeLogValue(opID), "def_id", row.DefID, "previous_status", row.Status)
 	r.publishOpTerminal(opID, row.DefID, "canceled")
 	return nil
 }
@@ -1193,7 +1193,7 @@ func (r *Registry) Discard(opID string) error {
 	if !deleted {
 		return fmt.Errorf("%w: op %s is %s; cancel it before discarding", ErrOpActive, opID, status)
 	}
-	r.logger.Info("registry: discarded persisted op", "op_id", opID, "previous_status", status)
+	r.logger.Info("registry: discarded persisted op", "op_id", logger.SanitizeLogValue(opID), "previous_status", status)
 	return nil
 }
 

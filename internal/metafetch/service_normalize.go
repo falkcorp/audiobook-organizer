@@ -1,17 +1,19 @@
 // file: internal/metafetch/service_normalize.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: eceba49a-b99f-476f-9d43-fd6fd39a8e24
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package metafetch
 
 import (
 	"encoding/json"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 func derefString(p *string) string {
@@ -50,9 +52,9 @@ func NormalizeMetaSeries(meta *metadata.BookMetadata) {
 			// the names the normalizer deliberately declined to touch --
 			// "when we find one I'll manually override" needs something to find.
 			slog.Info("series normalize: left a series name alone for review",
-				"series", meta.Series, "reason", string(c.FlagReason),
-				"candidate_series", c.CandidateName, "candidate_position", c.CandidatePosition,
-				"title", meta.Title, "asin", meta.ASIN)
+				"series", logger.SanitizeLogValue(meta.Series), "reason", string(c.FlagReason),
+				"candidate_series", logger.SanitizeLogValue(c.CandidateName), "candidate_position", c.CandidatePosition,
+				"title", logger.SanitizeLogValue(meta.Title), "asin", logger.SanitizeLogValue(meta.ASIN))
 		case c.Changed(meta.Series):
 			// A silent rewrite of user-visible data is the pattern this repo
 			// keeps getting burned by, so every strip is logged with the rule
@@ -60,9 +62,9 @@ func NormalizeMetaSeries(meta *metadata.BookMetadata) {
 			// CANDIDATE, before any store write, so the title and ASIN are the
 			// only identity available.
 			slog.Info("series normalize: moved the book position out of the series name",
-				"rule", c.Rule, "series_before", meta.Series, "series_after", c.Name,
-				"position", c.Position, "discarded_position", c.DiscardedPosition,
-				"title", meta.Title, "asin", meta.ASIN)
+				"rule", c.Rule, "series_before", logger.SanitizeLogValue(meta.Series), "series_after", logger.SanitizeLogValue(c.Name),
+				"position", logger.SanitizeLogValue(c.Position), "discarded_position", c.DiscardedPosition,
+				"title", logger.SanitizeLogValue(meta.Title), "asin", logger.SanitizeLogValue(meta.ASIN))
 			meta.Series = c.Name
 			if c.Position != "" && meta.SeriesPosition == "" {
 				meta.SeriesPosition = c.Position

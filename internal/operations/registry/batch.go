@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
 // last-edited: 2026-09-13
 
@@ -119,7 +119,7 @@ func (r *Registry) batchAdd(opType string, sub database.OpSubject, bw, bmw time.
 	// case a crash loses this subject (acceptable: the add API is fire-and-forget
 	// for callers that pass ("", nil) on batchable ops).
 	if err := r.store.AddToBatchBucket(opType, sub); err != nil {
-		r.logger.Warn("batch: AddToBatchBucket failed", "op_type", opType,
+		r.logger.Warn("batch: AddToBatchBucket failed", "op_type", logger.SanitizeLogValue(opType),
 			"subject_type", logger.SanitizeLogValue(sub.Type), "subject_id", logger.SanitizeLogValue(sub.ID), "error", err)
 	}
 
@@ -229,7 +229,7 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 	r.mu.RUnlock()
 	if !defOK {
 		r.logger.Warn("batch: fire: op def not found; dropping subjects",
-			"op_type", opType, "count", len(snapshot))
+			"op_type", logger.SanitizeLogValue(opType), "count", len(snapshot))
 		return
 	}
 
@@ -245,7 +245,7 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 			ok, reason, err := AllSatisfied(r.combinedDepStore(), def.Requires, regSub)
 			if err != nil {
 				r.logger.Warn("batch: fire: AllSatisfied error; keeping subject bucketed",
-					"op_type", opType, "subject_type", sub.Type, "subject_id", sub.ID, "error", err)
+					"op_type", logger.SanitizeLogValue(opType), "subject_type", sub.Type, "subject_id", sub.ID, "error", err)
 				unreadySubs = append(unreadySubs, sub)
 				continue
 			}
@@ -253,7 +253,7 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 				readySubs = append(readySubs, sub)
 			} else {
 				r.logger.Debug("batch: fire: subject not ready; staying bucketed",
-					"op_type", opType, "subject_type", sub.Type, "subject_id", sub.ID, "reason", reason)
+					"op_type", logger.SanitizeLogValue(opType), "subject_type", sub.Type, "subject_id", sub.ID, "reason", reason)
 				unreadySubs = append(unreadySubs, sub)
 			}
 		}
@@ -276,7 +276,7 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 
 	if len(readySubs) == 0 {
 		r.logger.Info("batch: fire: no ready subjects; all re-bucketed",
-			"op_type", opType, "unready", len(unreadySubs))
+			"op_type", logger.SanitizeLogValue(opType), "unready", len(unreadySubs))
 		return
 	}
 
@@ -285,18 +285,18 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 		// ClearBatchBucket only runs on success, so these subjects stay
 		// journaled and are retried on the next Start() — not lost.
 		r.logger.Warn("batch: fire: dispatch failed; subjects remain journaled and will be retried on next Start()",
-			"op_type", opType, "ready", len(readySubs), "error", err)
+			"op_type", logger.SanitizeLogValue(opType), "ready", len(readySubs), "error", err)
 		return
 	}
 
 	// Clear dispatched subjects from the journal.
 	if err := r.store.ClearBatchBucket(opType, readySubs); err != nil {
 		r.logger.Warn("batch: fire: ClearBatchBucket failed (journal may have stale entries)",
-			"op_type", opType, "error", err)
+			"op_type", logger.SanitizeLogValue(opType), "error", err)
 	}
 
 	r.logger.Info("batch: dispatched",
-		"op_type", opType, "ready", len(readySubs), "re_bucketed", len(unreadySubs))
+		"op_type", logger.SanitizeLogValue(opType), "ready", len(readySubs), "re_bucketed", len(unreadySubs))
 }
 
 // batchDispatch inserts one OperationV2Row for the given ready subjects.

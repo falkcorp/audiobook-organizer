@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package abs
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
@@ -248,8 +249,8 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	// unregistered target is answered inline and never navigated to.
 	if !oidcRedirectAllowed(redirectURI) {
 		slog.Warn("abs: openid authorize rejected an unregistered redirect_uri",
-			"redirect_uri", redirectURI, "source_ip", strings.TrimSpace(c.ClientIP()),
-			"user_agent", c.Request.UserAgent())
+			"redirect_uri", logger.SanitizeLogValue(redirectURI), "source_ip", logger.SanitizeLogValue(strings.TrimSpace(c.ClientIP())),
+			"user_agent", logger.SanitizeLogValue(c.Request.UserAgent()))
 		absauth.Audit(absauth.AuditEvent{
 			Action: "openid-authorize", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
 			SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "redirect-uri-not-registered",
