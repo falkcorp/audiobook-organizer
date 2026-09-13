@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -68,6 +68,15 @@ type scanProgressStore interface {
 	MarkNeedsRescan(bookID string) error
 	IncrScanFailCount(pathHash string) (int, error)
 	ResetScanFailCount(pathHash string) error
+	// GetRaw/SetRaw hold the batch AI parse's per-file give-up markers
+	// (ai_parse_giveup.go) -- the same kind of per-path "stop retrying a file
+	// that keeps failing" bookkeeping as the scan fail count above. Raw KV
+	// rather than a Book column: the marker is keyed by PATH so a rename makes
+	// the file eligible again with no reset step, and it needs no schema
+	// change. Both are on database.Store (RawKVStore), so the production
+	// indexedStore satisfies this without a type assertion.
+	GetRaw(key string) ([]byte, error)
+	SetRaw(key string, value []byte) error
 }
 
 // scannerStore is the whole surface the package globals carry.

@@ -14,3 +14,12 @@ and permanent failures are unchanged and never split. Extra calls per batch are
 bounded at 2n-2 (14 for a batch of 8), made sequentially inside the batch's
 worker with the usual 2s pause, so the model host never sees more requests in
 flight than `parse_batch_workers`.
+
+A file that fails on its own is recorded durably (a path-keyed give-up
+marker in the raw KV store, with the last reason). After
+`maxAIParseSingleFileFailures` (3) failed runs the batch AI parse skips it, so
+a poisoned batch costs at most 3 x (2n-1) calls over its lifetime (45 at a
+batch of 8) instead of 2n-1 on every run forever. Renaming or moving the file
+makes it eligible again; the interactive `POST /ai/parse-filename` never
+consults the marker. Skipped and newly given-up counts appear in the AI parse
+summary.
