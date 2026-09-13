@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_rename_collision_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b61d0e4-2f7a-4c38-a5e9-4d1c8f0b7e26
 // last-edited: 2026-09-13
 
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
 func TestRunApplyPipeline_RepeatedTrackNumbersRenameToDistinctTargets(t *testing.T) {
@@ -140,4 +141,47 @@ func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
 		_, statErr := os.Stat(p)
 		assert.NoError(t, statErr, "preflight moved %s", p)
 	}
+}
+
+// RenamePreflight must not write, even when it meets a recorded rename failure
+// that has gone stale: clearing it is the real rename's job, and the apply this
+// check guards may yet be refused.
+func TestRenamePreflight_DoesNotClearAStaleFailureRecord(t *testing.T) {
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	root := t.TempDir()
+	config.AppConfig.RootDir = root
+	config.AppConfig.AutoRenameOnApply = true
+	config.AppConfig.FolderNamingPattern = "{author}/{title}"
+	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+
+	dir := filepath.Join(root, "Someone", "Old")
+	a := filepath.Join(dir, "1.mp3")
+	writeFile(t, a, "one")
+	book := &database.Book{ID: "b1", Title: "Old", FilePath: dir, Author: &database.Author{ID: 1, Name: "Someone"}}
+	recKey := organizer.ApplyRenameFailurePrefix + "b1"
+	gone := filepath.Join(root, "Someone", "New Title", "gone.mp3")
+	prefs := map[string]string{recKey: `{"book_id":"b1","target_path":"` + gone + `","occupant_path":"` + gone + `"}`}
+	writes := 0
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { c := *book; return &c, nil },
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{{ID: "f1", BookID: "b1", FilePath: a, Format: "mp3", TrackNumber: 1}}, nil
+		},
+		GetUserPreferenceForUserFunc: func(_, key string) (*database.UserPreferenceKV, error) {
+			if v, ok := prefs[key]; ok {
+				return &database.UserPreferenceKV{Key: key, Value: v}, nil
+			}
+			return nil, nil
+		},
+		SetUserPreferenceForUserFunc: func(_, key, value string) error {
+			writes++
+			prefs[key] = value
+			return nil
+		},
+	})
+
+	require.NoError(t, svc.RenamePreflight("b1", MetadataCandidate{Title: "New Title", Author: "Someone"}))
+	assert.Zero(t, writes, "preflight wrote a preference")
+	assert.NotEmpty(t, prefs[recKey], "preflight cleared the failure record")
 }

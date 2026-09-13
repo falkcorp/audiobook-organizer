@@ -1,7 +1,7 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // Durable per-book failure records for the metadata apply pipeline's rename
 // phase.
@@ -172,7 +172,17 @@ func clearDurableSkip(store DurableSkipStore, prefix, bookID string) {
 //
 // plannedTargets is the current run's target set. Passing nil means "the caller
 // has no plan to compare", and only the disk conditions are checked.
-func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTargets []string, source string, evidence func() string) bool {
+//
+// mayClear says whether a record found stale is also cleared. The real rename
+// paths pass true. A preview or a pre-apply check passes false: it must be
+// read-only, and its planned targets describe an apply that has not happened
+// and may be refused, so they are no reason to drop the record.
+func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTargets []string, source string, evidence func() string, mayClear bool) bool {
+	clearIfAllowed := func() {
+		if mayClear {
+			clearDurableSkip(store, prefix, bookID)
+		}
+	}
 	rec, ok := loadDurableSkip(store, prefix, bookID)
 	if !ok {
 		return false
@@ -189,7 +199,7 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 		if !stillPlanned {
 			slog.Info("durable skip cleared — the book no longer targets the blocked path",
 				"book_id", logger.SanitizeLogValue(bookID), "blocked_target", logger.SanitizeLogValue(rec.TargetPath))
-			clearDurableSkip(store, prefix, bookID)
+			clearIfAllowed()
 			return false
 		}
 	}
@@ -202,14 +212,14 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 	if err != nil {
 		slog.Info("durable skip cleared — the blocking file is gone",
 			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant))
-		clearDurableSkip(store, prefix, bookID)
+		clearIfAllowed()
 		return false
 	}
 	if info.Size() != rec.OccupantSize || info.ModTime().Unix() != rec.OccupantModUnix {
 		slog.Info("durable skip cleared — the blocking file changed",
 			"book_id", logger.SanitizeLogValue(bookID), "occupant", logger.SanitizeLogValue(occupant),
 			"recorded_size", rec.OccupantSize, "now_size", info.Size())
-		clearDurableSkip(store, prefix, bookID)
+		clearIfAllowed()
 		return false
 	}
 
@@ -221,7 +231,7 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 			si.Size() != rec.SourceSize || si.ModTime().Unix() != rec.SourceModUnix {
 			slog.Info("durable skip cleared — the source file moved or changed",
 				"book_id", logger.SanitizeLogValue(bookID), "source", logger.SanitizeLogValue(rec.SourcePath))
-			clearDurableSkip(store, prefix, bookID)
+			clearIfAllowed()
 			return false
 		}
 	}
@@ -234,7 +244,7 @@ func durableSkipBlocked(store DurableSkipStore, prefix, bookID string, plannedTa
 			slog.Info("durable skip cleared — the database evidence changed",
 				"book_id", logger.SanitizeLogValue(bookID),
 				"recorded", logger.SanitizeLogValue(rec.Evidence), "now", logger.SanitizeLogValue(now))
-			clearDurableSkip(store, prefix, bookID)
+			clearIfAllowed()
 			return false
 		}
 	}
@@ -261,7 +271,15 @@ func ClearApplyRenameFailure(store database.UserPreferenceStore, bookID string) 
 // ApplyRenameBlocked reports whether the apply rename phase should skip a
 // book. See durableSkipBlocked.
 func ApplyRenameBlocked(store database.UserPreferenceStore, bookID string, plannedTargets []string) bool {
-	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "", nil)
+	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "", nil, true)
+}
+
+// ApplyRenameBlockedReadOnly answers the same question as ApplyRenameBlocked
+// but never writes: a record that has gone stale is reported as not blocking
+// and left in place for the real rename to clear. Used by the bulk-apply dry
+// run and by the pre-apply rename check.
+func ApplyRenameBlockedReadOnly(store database.UserPreferenceStore, bookID string, plannedTargets []string) bool {
+	return durableSkipBlocked(store, ApplyRenameFailurePrefix, bookID, plannedTargets, "", nil, false)
 }
 
 // RecordOrganizeCollisionSkip persists organize's durable skip for a declined
@@ -275,5 +293,5 @@ func RecordOrganizeCollisionSkip(store DurableSkipStore, f ApplyRenameFailure) {
 // same source path, and neither file's size nor mtime differs. Any change
 // clears the record and returns false, so the pair is retried.
 func OrganizeCollisionBlocked(store DurableSkipStore, bookID, target, source string, evidence func() string) bool {
-	return durableSkipBlocked(store, OrganizeCollisionSkipPrefix, bookID, []string{target}, source, evidence)
+	return durableSkipBlocked(store, OrganizeCollisionSkipPrefix, bookID, []string{target}, source, evidence, true)
 }
