@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.13.0
+// version: 3.13.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-13
 
@@ -128,7 +128,7 @@ const extractTimeout = 30 * time.Second
 // if it does not complete within extractTimeout. It also respects ctx so the op
 // can be cancelled between files.
 func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaInfo, error) {
-	info, err := boundedCall(ctx, extractTimeout, nil, func() (*mediainfo.MediaInfo, error) {
+	info, err := boundedCall(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
 		return mediainfo.Extract(filePath)
 	})
 	if errors.Is(err, errBoundedCallTimeout) {

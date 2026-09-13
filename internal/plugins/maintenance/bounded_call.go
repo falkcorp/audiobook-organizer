@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bounded_call.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2593968b-b7d3-4939-9ff5-351fd51fbf7b
 // last-edited: 2026-09-13
 
@@ -33,16 +33,22 @@ const (
 // process.
 //
 // On timeout the error wraps errBoundedCallTimeout; on cancellation it is
-// ctx.Err(). If abandoned is non-nil it counts goroutines given up on that
-// have not yet returned: it is incremented when the wait gives up and
-// decremented when the abandoned fn finally returns, so a caller can cap how
-// many pile up. The result channel is buffered, so an abandoned goroutine that
+// ctx.Err(). Each counter in abandoned counts goroutines given up on that have
+// not yet returned: it is incremented when the wait gives up and decremented
+// when the abandoned fn finally returns, so a caller can cap how many pile up.
+// Several counters let one call feed both a per-run cap and a process-wide
+// gauge. The result channel is buffered, so an abandoned goroutine that
 // does return can always send and exit.
 //
 // Two private copies of this shape existed before it: extractWithTimeout
 // (duration_reextract.go, now built on this) and processFileBounded in
 // internal/scanner/process_file.go.
-func boundedCall[T any](ctx context.Context, bound time.Duration, abandoned *atomic.Int64, fn func() (T, error)) (T, error) {
+func boundedCall[T any](ctx context.Context, bound time.Duration, fn func() (T, error), abandoned ...*atomic.Int64) (T, error) {
+	add := func(d int64) {
+		for _, c := range abandoned {
+			c.Add(d)
+		}
+	}
 	type result struct {
 		v   T
 		err error
@@ -52,8 +58,8 @@ func boundedCall[T any](ctx context.Context, bound time.Duration, abandoned *ato
 	go func() {
 		v, err := fn()
 		ch <- result{v, err}
-		if !state.CompareAndSwap(boundedRunning, boundedFinished) && abandoned != nil {
-			abandoned.Add(-1) // the waiter gave up on us and counted us; uncount
+		if !state.CompareAndSwap(boundedRunning, boundedFinished) {
+			add(-1) // the waiter gave up on us and counted us; uncount
 		}
 	}()
 
@@ -71,13 +77,9 @@ func boundedCall[T any](ctx context.Context, bound time.Duration, abandoned *ato
 	}
 	// Count first, then claim: if the goroutine finished in the meantime the
 	// claim fails, we uncount, and its result is already in ch.
-	if abandoned != nil {
-		abandoned.Add(1)
-	}
+	add(1)
 	if !state.CompareAndSwap(boundedRunning, boundedAbandoned) {
-		if abandoned != nil {
-			abandoned.Add(-1)
-		}
+		add(-1)
 		r := <-ch
 		return r.v, r.err
 	}

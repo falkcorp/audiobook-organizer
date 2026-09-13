@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
 // last-edited: 2026-09-13
 
@@ -62,18 +62,22 @@ var tagBackfillWriteBatchSize = 250
 // const, so tests can reach the timeout arm without a file that really hangs.
 var tagReadTimeout = 60 * time.Second
 
-// tagReadMaxAbandoned caps how many timed-out tag reads may still be running.
-// A read that times out is abandoned, not stopped (see boundedCall): its
-// goroutine finishes whenever the parser or the kernel lets go, or leaks for
-// the life of the process. Past this many at once, something systemic is wrong
-// (a dead mount, a parser bug hit by a whole class of files) and continuing
-// would only pile up goroutines, so the op fails loudly instead. A var for
-// tests.
+// tagReadMaxAbandoned caps how many of ONE run's timed-out tag reads may still
+// be running. A read that times out is abandoned, not stopped (see
+// boundedCall): its goroutine finishes whenever the parser or the kernel lets
+// go, or leaks for the life of the process. Past this many at once, something
+// systemic is wrong (a dead mount, a parser bug hit by a whole class of files)
+// and continuing would only pile up goroutines, so the run fails loudly instead.
+//
+// Per run, not process-wide: a read that never returns never decrements, so a
+// process-wide cap would leave every later run failing on its first timeout
+// until a restart. Reads still stuck from earlier runs are reported instead
+// (tagReadsAbandoned). A var for tests.
 var tagReadMaxAbandoned int64 = 8
 
-// tagReadsAbandoned counts abandoned tag reads whose goroutine has not yet
-// returned. Package-level on purpose: an abandoned goroutine outlives the run
-// that gave up on it, and a second run must see the ones still stuck.
+// tagReadsAbandoned is a process-wide gauge of abandoned tag reads whose
+// goroutine has not yet returned, across every run. It gates nothing; a run
+// logs it at start when non-zero, since those goroutines are still held.
 var tagReadsAbandoned atomic.Int64
 
 type tagBackfillParams struct {
@@ -162,6 +166,12 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	if params.DryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
+	if n := tagReadsAbandoned.Load(); n > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			"%d tag reads abandoned by earlier runs are still running (goroutines held until they return or the process restarts); this run starts its own cap at 0", n))
+	}
+	// runAbandoned is this run's count for the tagReadMaxAbandoned cap.
+	var runAbandoned atomic.Int64
 
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
@@ -327,9 +337,9 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				continue
 			}
 			path := f.FilePath
-			meta, merr := boundedCall(ctx, tagReadTimeout, &tagReadsAbandoned, func() (metadata.Metadata, error) {
+			meta, merr := boundedCall(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
 				return metadata.ExtractMetadata(path, nil)
-			})
+			}, &runAbandoned, &tagReadsAbandoned)
 			if merr != nil {
 				timedOut := errors.Is(merr, errBoundedCallTimeout)
 				if !timedOut && ctx.Err() != nil {
@@ -344,12 +354,12 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 						fmt.Sprintf("tag read of %s exceeded %v; counted as a read error, book continues (read abandoned, still running)",
 							logger.SanitizeLogValue(path), tagReadTimeout),
 						slog.String("book_id", b.bookID), slog.String("file_id", f.ID))
-					if n := tagReadsAbandoned.Load(); n >= tagReadMaxAbandoned {
+					if n := runAbandoned.Load(); n >= tagReadMaxAbandoned {
 						// ErrModeFail (RunItems' default, not overridden below)
 						// cancels every remaining book on this error; complete
 						// books already judged are still flushed after RunItems.
 						countBook()
-						return fmt.Errorf("%d timed-out tag reads are still running (cap %d); failing rather than abandoning more goroutines -- check the mount and the last files named in the WARN log",
+						return fmt.Errorf("%d of this run's timed-out tag reads are still running (cap %d); failing rather than abandoning more goroutines -- check the mount and the files named in the WARN logs",
 							n, tagReadMaxAbandoned)
 					}
 				}

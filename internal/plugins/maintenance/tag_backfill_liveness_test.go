@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_backfill_liveness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c8f0282-d1ad-446a-af3d-d36cea86888b
 // last-edited: 2026-09-13
 
@@ -131,7 +131,7 @@ func TestTagBackfill_TooManyHungReadsFailsOp(t *testing.T) {
 	tagReadMaxAbandoned = 2
 
 	err := runWith(t, fx, &livenessReporter{}, tagBackfillParams{DryRun: true})
-	if err == nil || !strings.Contains(err.Error(), "timed-out tag reads are still running") {
+	if err == nil || !strings.Contains(err.Error(), "of this run's timed-out tag reads are still running") {
 		t.Fatalf("err = %v, want the abandoned-read cap error", err)
 	}
 }
@@ -178,5 +178,30 @@ func TestTagBackfill_TouchesLivenessWithinABook(t *testing.T) {
 	}
 	if got := rep.items.Load(); got < n {
 		t.Errorf("SetCurrentItem calls = %d, want >= %d (one per file)", got, n)
+	}
+}
+
+// Reads stuck from EARLIER runs must not count against a new run's cap. A read
+// that never returns never decrements the process-wide gauge, so a process-wide
+// cap would fail every later run on its first timeout until a restart.
+func TestTagBackfill_EarlierStuckReadsDoNotPoisonLaterRuns(t *testing.T) {
+	fx := newTagFixture(t, []database.BookFile{
+		{ID: "p1", BookID: "P", TrackNumber: 1},
+		{ID: "p2", BookID: "P", TrackNumber: 2},
+	}, map[string]metadata.Metadata{"p1.mp3": tagMeta(1, 2, 0, 0), "p2.mp3": tagMeta(2, 2, 0, 0)})
+	installBlockingExtractor(t, fx, 20*time.Millisecond, "p2.mp3")
+	// Simulate reads left stuck by earlier runs, past the cap. Registered after
+	// installBlockingExtractor so it is undone before the drain runs (LIFO).
+	const leftover = 20
+	tagReadsAbandoned.Add(leftover)
+	t.Cleanup(func() { tagReadsAbandoned.Add(-leftover) })
+
+	rep := &livenessReporter{}
+	if err := runWith(t, fx, rep, tagBackfillParams{DryRun: true}); err != nil {
+		t.Fatalf("a run failed on reads abandoned by earlier runs: %v", err)
+	}
+	assertSummaryHas(t, rep.logs[len(rep.logs)-1], "read-errors=1")
+	if !strings.Contains(strings.Join(rep.logs, "\n"), fmt.Sprintf("%d tag reads abandoned by earlier runs", leftover)) {
+		t.Errorf("no start-of-run WARN reporting the %d leftover reads; logs: %q", leftover, rep.logs)
 	}
 }
