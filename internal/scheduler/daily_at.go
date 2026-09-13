@@ -1,5 +1,5 @@
 // file: internal/scheduler/daily_at.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 965c3488-7ec4-4dd5-bad3-4edc9c3c1fb0
 // last-edited: 2026-09-13
 
@@ -7,9 +7,16 @@ package scheduler
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// schedLog is the logger for code added after the log-injection guard
+// (internal/logger/slog_guard_test.go); new log calls go through it rather
+// than calling log/slog directly. Its methods are printf-style
+// (fmt.Sprintf(msg, args...)), not slog key/value pairs.
+var schedLog = logger.New("scheduler")
 
 // DailyAt scheduling: run a task once a day at a fixed wall-clock time in the
 // server's local zone ("00:10"), instead of once per durable interval.
@@ -121,9 +128,9 @@ func (ts *TaskScheduler) runDailyAtCheck(name string, hour, minute int, loc *tim
 		return
 	}
 	if op, err := ts.RunTask(name); err != nil {
-		slog.Warn("Scheduled task failed", "taskName", name, "err", err)
+		schedLog.Warn("Scheduled task failed: taskName=%s err=%v", name, err)
 	} else if op != nil {
-		slog.Info("Scheduled task started operation", "taskName", name, "op", op.ID)
+		schedLog.Info("Scheduled task started operation: taskName=%s op=%s", name, op.ID)
 	}
 }
 
