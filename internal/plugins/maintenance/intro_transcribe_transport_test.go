@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-08-20
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -31,10 +31,17 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 
 	cacheDir := t.TempDir()
 	origCacheDir := config.AppConfig.WhisperClipCacheDir
+	// InitConfig loads every viper default, including itunes.sync_enabled=true
+	// with no library paths. Left in place, that makes the merge iTunes guard
+	// refuse every merge in later tests of this package, so restore it too.
+	origITunes := config.Snapshot().ITunes
 	t.Setenv("WHISPER_CLIP_CACHE_DIR", cacheDir)
 	config.InitConfig()
 	t.Cleanup(func() {
-		config.Mutate(func(c *config.Config) { c.WhisperClipCacheDir = origCacheDir })
+		config.Mutate(func(c *config.Config) {
+			c.WhisperClipCacheDir = origCacheDir
+			c.ITunes = origITunes
+		})
 	})
 	clip := cachedClipPath(cacheDir, fileHash)
 	if err := os.WriteFile(clip, []byte("RIFF fake wav"), 0o644); err != nil {

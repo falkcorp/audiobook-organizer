@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -82,6 +82,12 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 	// row the same way. See internal/merge/serialize.go.
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+
+	// Refuse before any write if keep or any src has a file under the active
+	// iTunes library (merge.ErrITunesProtected).
+	if err := merge.GuardITunesProtected(store, append([]string{keepID}, srcIDs...)); err != nil {
+		return nil, err
+	}
 
 	keep, err := store.GetBookByID(keepID)
 	if err != nil || keep == nil {

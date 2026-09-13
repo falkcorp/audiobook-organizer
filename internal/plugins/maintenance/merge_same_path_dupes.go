@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-09-13
 
@@ -36,6 +36,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -88,7 +90,7 @@ type mergeSamePathParams struct {
 type mergeGroupDecision struct {
 	Path string `json:"path"`
 	// Bucket is one of: "mergeable" | "hash-mismatch" | "unverified-hash" |
-	// "read-error" | "capped" | "merged" | "merge-failed".
+	// "read-error" | "capped" | "merged" | "refused-itunes" | "merge-failed".
 	Bucket    string   `json:"bucket"`
 	PrimaryID string   `json:"primary_id,omitempty"`
 	LoserIDs  []string `json:"loser_ids,omitempty"`
@@ -107,6 +109,7 @@ type mergeSamePathPlan struct {
 	Merged          int  `json:"merged"`          // groups actually merged (apply)
 	RecordsMerged   int  `json:"records_merged"`  // loser records soft-deleted (apply)
 	MergeFailed     int  `json:"merge_failed"`
+	RefusedITunes   int  `json:"refused_itunes"`      // merge refused: a book has a file under the active iTunes library
 	CappedAt        int  `json:"capped_at,omitempty"` // the cap value, when it bit
 	Capped          int  `json:"capped,omitempty"`    // mergeable groups deferred by the cap
 
@@ -138,9 +141,9 @@ func (p mergeSamePathPlan) summary() string {
 		mode = "APPLIED"
 	}
 	return fmt.Sprintf(
-		"%s books=%d shared-paths=%d records-in-shared=%d mergeable=%d capped=%d merged=%d records-merged=%d | refused: hash-mismatch=%d unverified-hash=%d read-error=%d merge-failed=%d",
+		"%s books=%d shared-paths=%d records-in-shared=%d mergeable=%d capped=%d merged=%d records-merged=%d | refused: hash-mismatch=%d unverified-hash=%d read-error=%d itunes=%d merge-failed=%d",
 		mode, p.BooksScanned, p.SharedPaths, p.RecordsInShared, p.Mergeable, p.Capped,
-		p.Merged, p.RecordsMerged, p.HashMismatch, p.UnverifiedHash, p.ReadError, p.MergeFailed)
+		p.Merged, p.RecordsMerged, p.HashMismatch, p.UnverifiedHash, p.ReadError, p.RefusedITunes, p.MergeFailed)
 }
 
 // mergeSamePathStore is the narrow read surface this op needs.
@@ -504,6 +507,14 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		}
 		allIDs := append([]string{r.primaryID}, r.loserIDs...)
 		merged, mErr := mergeFn(allIDs, r.primaryID)
+		if errors.Is(mErr, merge.ErrITunesProtected) {
+			plan.RefusedITunes++
+			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: "refused-itunes",
+				PrimaryID: r.primaryID, LoserIDs: r.loserIDs, Reason: mErr.Error()})
+			log.Warn("merge-same-path-dupes: refused, a book has a file under the active iTunes library",
+				"path", r.g.path, "primary", r.primaryID, "err", mErr)
+			continue
+		}
 		if mErr != nil {
 			plan.MergeFailed++
 			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: "merge-failed",

@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package merge
 
@@ -191,7 +191,8 @@ func IsRefusal(err error) bool {
 	var fileless *FilelessPrimaryError
 	var softDeleted *SoftDeletedInputError
 	var provisional *ProvisionalScanError
-	return errors.As(err, &fileless) || errors.As(err, &softDeleted) || errors.As(err, &provisional)
+	return errors.As(err, &fileless) || errors.As(err, &softDeleted) || errors.As(err, &provisional) ||
+		errors.Is(err, ErrITunesProtected)
 }
 
 // HasAudioRoute reports whether a book row can reach audio at all: it has at
@@ -457,6 +458,9 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 			return nil, &ProvisionalScanError{BookID: b.ID}
 		}
 		filesByID[b.ID] = files
+	}
+	if err := GuardITunesProtectedLoaded(books, filesByID); err != nil {
+		return nil, err
 	}
 
 	// Survivor election is file-aware (see ElectPrimary). An explicit primary
@@ -825,6 +829,9 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	}
 	if !seen[primaryID] {
 		return nil, fmt.Errorf("primary_id %s not in book_ids", primaryID)
+	}
+	if err := GuardITunesProtected(ms.db, bookIDs); err != nil {
+		return nil, err
 	}
 
 	res := &CombineResult{PrimaryID: primaryID}

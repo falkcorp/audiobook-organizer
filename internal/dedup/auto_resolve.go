@@ -1,14 +1,14 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package dedup
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"log/slog"
 	"slices"
 	"strings"
@@ -17,6 +17,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // autoResolveSampleCapDefault bounds the per-run sample list in the dry-run
@@ -74,6 +76,10 @@ type AutoResolveResult struct {
 	SkippedCap int                 `json:"skipped_cap"` // eligible pairs left unmerged because max_merges was hit
 	DryRun     bool                `json:"dry_run"`
 	Samples    []AutoResolveSample `json:"samples"`
+	// RefusedITunes counts eligible pairs the merge refused because a book has a
+	// file under the active iTunes library (merge.ErrITunesProtected). The
+	// candidate stays pending; it is neither merged nor a failure.
+	RefusedITunes int `json:"refused_itunes"`
 }
 
 // AutoResolveSample is one eligible candidate, for the dry-run/apply report.
@@ -188,6 +194,12 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		}
 
 		winnerID, mergeErr := de.autoMergeCertain(c)
+		if errors.Is(mergeErr, merge.ErrITunesProtected) {
+			res.RefusedITunes++
+			logging.Warn(ctx, "dedup auto-resolve refused: a book has a file under the active iTunes library",
+				"candidate", c.ID, "a", c.EntityAID, "b", c.EntityBID, "err", mergeErr)
+			continue
+		}
 		if mergeErr != nil {
 			logging.Error(ctx, "dedup auto-resolve merge failed",
 				"candidate", c.ID, "a", c.EntityAID, "b", c.EntityBID, "err", mergeErr)

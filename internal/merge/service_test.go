@@ -1,7 +1,7 @@
 // file: internal/merge/service_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b3d7e21-4a6c-4f08-8e15-7c2a9d4b6e30
-// last-edited: 2026-08-23
+// last-edited: 2026-09-13
 
 package merge
 
@@ -262,6 +262,11 @@ func TestBookCurationScore(t *testing.T) {
 	}
 }
 
+// The ghost here is an iTunes-layout copy OUTSIDE the active iTunes library (an
+// old export on another volume): IsITunesGhostPath still matches it, so the
+// election rule is exercised, while the apply-time iTunes guard does not refuse
+// it. A ghost INSIDE the active library is refused outright — see
+// TestService_MergeBooks_ActiveITunesGhostIsRefused.
 func TestService_MergeBooks_PrefersOrganizedOverITunesGhost(t *testing.T) {
 	store := setupTestStore(t)
 
@@ -269,7 +274,7 @@ func TestService_MergeBooks_PrefersOrganizedOverITunesGhost(t *testing.T) {
 		ID:       ulid.Make().String(),
 		Title:    "Foundation and Empire",
 		Format:   "m4b",
-		FilePath: "/mnt/bigdata/books/itunes/iTunes Media/Audiobooks/Isaac Asimov/Foundation and Empire.m4b",
+		FilePath: "/mnt/archive/old-export/iTunes Media/Audiobooks/Isaac Asimov/Foundation and Empire.m4b",
 	}
 	bitrate := 128
 	ghost.Bitrate = &bitrate
@@ -294,6 +299,29 @@ func TestService_MergeBooks_PrefersOrganizedOverITunesGhost(t *testing.T) {
 
 	assert.Equal(t, organized.ID, result.PrimaryID,
 		"organized library path should beat iTunes ghost regardless of format")
+}
+
+// The original shape of the test above: the ghost lives in the active iTunes
+// tree (books/itunes/**). Standing rule: never mutate that tree, so the merge is
+// refused even though the ghost would have lost the election.
+func TestService_MergeBooks_ActiveITunesGhostIsRefused(t *testing.T) {
+	store := setupTestStore(t)
+	ghost := &database.Book{
+		ID: ulid.Make().String(), Title: "Foundation and Empire", Format: "m4b",
+		FilePath: "/srv/pool/books/itunes/iTunes Media/Audiobooks/Isaac Asimov/Foundation and Empire.m4b",
+	}
+	organized := &database.Book{
+		ID: ulid.Make().String(), Title: "Foundation and Empire", Format: "mp3",
+		FilePath: "/srv/pool/books/audiobook-organizer/Isaac Asimov/Foundation and Empire.mp3",
+	}
+	_, err := store.CreateBook(ghost)
+	require.NoError(t, err)
+	_, err = store.CreateBook(organized)
+	require.NoError(t, err)
+
+	_, err = NewService(store).MergeBooks([]string{ghost.ID, organized.ID}, "")
+	require.ErrorIs(t, err, ErrITunesProtected)
+	assertUntouched(t, store, ghost.ID, organized.ID)
 }
 
 func TestIsITunesGhostPath(t *testing.T) {
