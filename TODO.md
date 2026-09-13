@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.2 -->
+<!-- version: 10.73.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-13 -->
 
@@ -6305,7 +6305,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       it has. Either accept that limit explicitly, or restructure the dispatcher
       into a route table that can be checked exactly.
 
-- [ ] **TODO-MOCKWORKS** `web/tests/e2e/utils/test-helpers.ts` ~L1750:
+- [x] **TODO-MOCKWORKS** `web/tests/e2e/utils/test-helpers.ts` ~L1750:
       `pathname.startsWith('/api/v1/works')` has no trailing slash, so it also
       matches any future sibling path with that prefix (`/api/v1/workspaces`,
       `/api/v1/works-queue`, ...). Nothing is shadowed today; add the trailing
