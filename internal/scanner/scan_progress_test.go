@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_progress_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5f2a9c14-8e63-4b07-a5d9-1c4e7b0f6a38
-// last-edited: 2026-09-10
+// last-edited: 2026-09-12
 
 package scanner
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
 // progressEntry is one recorded UpdateProgress call, kept structured so tests
@@ -287,6 +288,273 @@ func TestScanFolder_ProgressStaysWithinDenominatorOnResume(t *testing.T) {
 	if got := int(processedFiles.Load()); got != bookCount {
 		t.Errorf("processedFiles=%d, want %d — resume seed (%d) plus %d processed books must total the folder count",
 			got, bookCount, resumeOffset, bookCount-resumeOffset)
+	}
+}
+
+// TestScanFolder_SubStepsNeverReplaceTheScanCounters pins the 2026-09-12 fix
+// for "why does the library scan randomly think it's scanning 0/1 and then
+// back to 60,000?".
+//
+// One op has one (current, total) row. Before the fix, the sub-steps scanFolder
+// hands its logger to wrote their OWN denominators into it: ScanDirectoryParallel
+// wrote "Scanning folders: 1/1" for an import folder holding one book, and the
+// auto-organize hook wrote (0, 1) for its backup and (n, len(this folder's
+// books)) for its loop. Each write replaced the scan's cumulative count, so the
+// bar flipped between 0/1, 1/1 and the real total.
+//
+// This drives the real scanFolder across two folders -- three books, then one
+// -- with an AutoOrganizeFn that reports exactly what the organize pipeline
+// reports (including through a With child, as the organizer does). It asserts
+// the recorded sequence never shows a total below the running cumulative total
+// or a current below the running processed count, and that the auto-organize
+// step is still visible in the message.
+func TestScanFolder_SubStepsNeverReplaceTheScanCounters(t *testing.T) {
+	mkFolder := func(books int) string {
+		root := t.TempDir()
+		for i := range books {
+			d := filepath.Join(root, fmt.Sprintf("book-%03d", i))
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(d, "track.mp3"), []byte("x"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+		return root
+	}
+	folders := []string{mkFolder(3), mkFolder(1)}
+
+	prevExt := config.AppConfig.SupportedExtensions
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
+
+	prevSave := saveBook
+	saveBook = func(context.Context, *Book) error { return nil }
+	t.Cleanup(func() { saveBook = prevSave })
+
+	spy := &progressSpy{Logger: logger.New("test")}
+	ss := &ScanService{db: &database.MockStore{}}
+	var organizeCalls atomic.Int32
+	ss.AutoOrganizeFn = func(_ context.Context, books []Book, l logger.Logger) {
+		organizeCalls.Add(1)
+		// organizer/service.go's pre-organize backup and its organize loop.
+		l.UpdateProgress(0, 1, "Backing up database before organize")
+		l.With("organizer").UpdateProgress(0, len(books), fmt.Sprintf("Organizing 0/%d books", len(books)))
+	}
+
+	var discoveredBooks atomic.Int64
+	var processedFiles atomic.Int32
+	stats := &ScanStats{}
+	for i, folder := range folders {
+		if err := ss.scanFolder(context.Background(), i, folder, folders,
+			&discoveredBooks, &processedFiles, stats, "", 0, nil, nil, spy); err != nil {
+			t.Fatalf("scanFolder(%s): %v", folder, err)
+		}
+	}
+
+	if got := organizeCalls.Load(); got != 2 {
+		t.Fatalf("AutoOrganizeFn ran %d times, want 2 (once per folder)", got)
+	}
+
+	entries := spy.snapshot()
+	maxCurrent, maxTotal := 0, 0
+	sawBackup, sawOrganize := false, false
+	for i, e := range entries {
+		if e.total < maxTotal {
+			t.Errorf("entry %d %d/%d %q: total %d is below the cumulative total %d already reported -- "+
+				"a sub-step replaced the scan's denominator with its own", i, e.current, e.total, e.message, e.total, maxTotal)
+		}
+		if e.current < maxCurrent {
+			t.Errorf("entry %d %d/%d %q: current %d went backwards from %d",
+				i, e.current, e.total, e.message, e.current, maxCurrent)
+		}
+		maxCurrent = max(maxCurrent, e.current)
+		maxTotal = max(maxTotal, e.total)
+		if strings.HasPrefix(e.message, "Auto-organize: ") {
+			switch {
+			case strings.Contains(e.message, "Backing up database"):
+				sawBackup = true
+			case strings.Contains(e.message, "Organizing"):
+				sawOrganize = true
+			}
+		}
+	}
+	if !sawBackup || !sawOrganize {
+		t.Errorf("auto-organize step not visible in progress messages (backup=%v organize=%v); "+
+			"the sub-step must keep its message, only its numbers are replaced", sawBackup, sawOrganize)
+	}
+	if last := entries[len(entries)-1]; last.current != 4 || last.total != 4 {
+		t.Errorf("last entry %d/%d %q, want 4/4 (both folders' books)", last.current, last.total, last.message)
+	}
+}
+
+// recordingReporter is an operations.ProgressReporter that records every
+// UpdateProgress. Wrapped by operations.LoggerFromReporter it gives the scan
+// the same logger production does, whose With keeps the reporter -- unlike
+// progressSpy, whose With returns itself and so cannot tell whether
+// subStepLogger.With kept the substitution on a child logger.
+type recordingReporter struct {
+	mu      sync.Mutex
+	entries []progressEntry
+}
+
+func (r *recordingReporter) UpdateProgress(current, total int, message string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = append(r.entries, progressEntry{current: current, total: total, message: message})
+	return nil
+}
+func (r *recordingReporter) Log(string, string, *string) error { return nil }
+func (r *recordingReporter) IsCanceled() bool                  { return false }
+
+func (r *recordingReporter) snapshot() []progressEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]progressEntry(nil), r.entries...)
+}
+
+// assertCumulative fails on any entry whose total drops below the largest
+// total already published or whose current steps backwards.
+func assertCumulative(t *testing.T, entries []progressEntry) {
+	t.Helper()
+	maxCurrent, maxTotal := 0, 0
+	for i, e := range entries {
+		if e.total < maxTotal {
+			t.Errorf("entry %d %d/%d %q: total below cumulative %d -- a sub-step replaced the scan's denominator",
+				i, e.current, e.total, e.message, maxTotal)
+		}
+		if e.current < maxCurrent {
+			t.Errorf("entry %d %d/%d %q: current went backwards from %d", i, e.current, e.total, e.message, maxCurrent)
+		}
+		maxCurrent = max(maxCurrent, e.current)
+		maxTotal = max(maxTotal, e.total)
+	}
+}
+
+// TestScanFolder_SubStepsKeepCountersThroughTheRealReporterLogger runs the
+// same two-folder scan as TestScanFolder_SubStepsNeverReplaceTheScanCounters
+// but through operations.LoggerFromReporter, the logger library.scan really
+// gets. Every former writer is driven for real: ScanDirectoryParallel's
+// "Scanning folders: n/len(dirs)" (the second folder holds one book, so the
+// old write was 1/1 after a total of 3), and the organize pipeline's (0, 1)
+// backup and per-folder organize count, reported through a With child exactly
+// as organizer.PerformOrganizeStats does. Deleting subStepLogger.With makes
+// the With-child writes reach the reporter with their own numbers and fails
+// this test.
+func TestScanFolder_SubStepsKeepCountersThroughTheRealReporterLogger(t *testing.T) {
+	mkFolder := func(books int) string {
+		root := t.TempDir()
+		for i := range books {
+			d := filepath.Join(root, fmt.Sprintf("book-%03d", i))
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(d, "track.mp3"), []byte("x"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+		return root
+	}
+	folders := []string{mkFolder(3), mkFolder(1)}
+
+	prevExt := config.AppConfig.SupportedExtensions
+	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
+
+	prevSave := saveBook
+	saveBook = func(context.Context, *Book) error { return nil }
+	t.Cleanup(func() { saveBook = prevSave })
+
+	rep := &recordingReporter{}
+	opLog := operations.LoggerFromReporter(rep)
+	ss := &ScanService{db: &database.MockStore{}}
+	ss.AutoOrganizeFn = func(_ context.Context, books []Book, l logger.Logger) {
+		l.UpdateProgress(0, 1, "Backing up database before organize")
+		child := l.With("organizer")
+		child.UpdateProgress(0, len(books), fmt.Sprintf("Scanning: 0/%d books", len(books)))
+		child.UpdateProgress(len(books), len(books), fmt.Sprintf("Organized %d/%d", len(books), len(books)))
+	}
+
+	var discoveredBooks atomic.Int64
+	var processedFiles atomic.Int32
+	stats := &ScanStats{}
+	for i, folder := range folders {
+		if err := ss.scanFolder(context.Background(), i, folder, folders,
+			&discoveredBooks, &processedFiles, stats, "", 0, nil, nil, opLog); err != nil {
+			t.Fatalf("scanFolder(%s): %v", folder, err)
+		}
+	}
+
+	entries := rep.snapshot()
+	assertCumulative(t, entries)
+
+	var sawFolderScan2, sawOrganized bool
+	for _, e := range entries {
+		// The walk counts the folder root and its one book dir, so the old
+		// write here was 2/2 -- below the 3 books the scan had already found.
+		if strings.HasPrefix(e.message, "Folder 2/2: Scanning folders: ") {
+			sawFolderScan2 = true
+			if e.total != 3 && e.total != 4 {
+				t.Errorf("%q published total %d, want the scan's cumulative total (3 or 4)", e.message, e.total)
+			}
+		}
+		if strings.HasPrefix(e.message, "Auto-organize: Organized") {
+			sawOrganized = true
+		}
+	}
+	if !sawFolderScan2 {
+		t.Errorf("ScanDirectoryParallel's folder-scan message for folder 2 never reached the reporter; entries: %v", entries)
+	}
+	if !sawOrganized {
+		t.Errorf("organize count written through a With child never reached the reporter as an Auto-organize message; entries: %v", entries)
+	}
+	if last := entries[len(entries)-1]; last.current != 4 || last.total != 4 {
+		t.Errorf("last entry %d/%d %q, want 4/4", last.current, last.total, last.message)
+	}
+}
+
+// TestScanProgress_SubStepSubstitutesEveryWriterShape drives each progress
+// shape a sub-step writes -- discovery (n, 0), per-folder (n, len(dirs)), the
+// AI parse phase's (batch, totalBatches), and the organize pipeline's (0, 1)
+// -- through a subStep logger over the real reporter logger, with and without
+// a With child. runAIBatchPhase needs a live AI parser to reach its write, so
+// this is where that shape is pinned.
+func TestScanProgress_SubStepSubstitutesEveryWriterShape(t *testing.T) {
+	rep := &recordingReporter{}
+	var processed atomic.Int32
+	var discovered atomic.Int64
+	processed.Store(40)
+	discovered.Store(61000)
+	p := newScanProgress(operations.LoggerFromReporter(rep), &processed, &discovered)
+	sub := p.subStep(operations.LoggerFromReporter(rep).With("scanner"), "Folder 3/9")
+
+	writers := []struct {
+		current, total int
+		message        string
+	}{
+		{7, 0, "Discovering folders: 7 found (x)"},
+		{1, 1, "Scanning folders: 1/1 (x)"},
+		{2, 5, "AI parsing batch 2/5 (50 books)"},
+		{0, 1, "Backing up database before organize"},
+	}
+	for _, w := range writers {
+		sub.UpdateProgress(w.current, w.total, w.message)
+		sub.With("child").UpdateProgress(w.current, w.total, w.message)
+	}
+
+	entries := rep.snapshot()
+	if len(entries) != 2*len(writers) {
+		t.Fatalf("got %d progress writes, want %d (a sub-step write must be substituted, never dropped -- "+
+			"it is the watchdog's liveness stamp)", len(entries), 2*len(writers))
+	}
+	for i, e := range entries {
+		w := writers[i/2]
+		if e.current != 40 || e.total != 61000 {
+			t.Errorf("write %q published %d/%d, want the scan's 40/61000", w.message, e.current, e.total)
+		}
+		if want := "Folder 3/9: " + w.message; e.message != want {
+			t.Errorf("message %q, want %q", e.message, want)
+		}
 	}
 }
 

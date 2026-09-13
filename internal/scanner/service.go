@@ -1,5 +1,5 @@
 // file: internal/scanner/service.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 package scanner
@@ -429,9 +429,15 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	// monotonic), total = books discovered so far (previous folders; this
 	// folder's books are added below once ScanDirectoryParallel has counted
 	// them). Before any folder is walked total is 0, which the UI renders as
-	// an indeterminate bar. This line is immediately superseded by the
-	// discovery/tag phases inside ScanDirectoryParallel.
-	log.UpdateProgress(int(processedFiles.Load()), int(discoveredBooks.Load()), fmt.Sprintf("Scanning folder %d/%d: %s", folderIdx+1, len(foldersToScan), folderPath))
+	// an indeterminate bar.
+	//
+	// Every progress write in this folder pass goes through progress, the one
+	// owner of the op's (current, total). The sub-steps below get subStep
+	// loggers that keep their messages but publish these cumulative counters;
+	// see scan_progress_owner.go for the 0/1 <-> 61,000 flip this prevents.
+	progress := newScanProgress(log, processedFiles, discoveredBooks)
+	folderLabel := fmt.Sprintf("Folder %d/%d", folderIdx+1, len(foldersToScan))
+	progress.report(fmt.Sprintf("Scanning folder %d/%d: %s", folderIdx+1, len(foldersToScan), folderPath))
 	log.Info("Scanning folder: %s", folderPath)
 
 	// Check if folder exists
@@ -445,7 +451,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	if workers < 1 {
 		workers = 4
 	}
-	books, err := ScanDirectoryParallel(ctx, folderPath, workers, log.With("scanner"))
+	books, err := ScanDirectoryParallel(ctx, folderPath, workers, progress.subStep(log.With("scanner"), folderLabel))
 	if err != nil {
 		return fmt.Errorf("failed to scan folder: %w", err)
 	}
@@ -463,14 +469,14 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	// total that already includes every book it will advance through. current
 	// (global books processed) therefore never exceeds total (cumulative books
 	// discovered) — no max() patch needed.
-	targetTotal := int(discoveredBooks.Add(int64(len(books))))
+	discoveredBooks.Add(int64(len(books)))
 	progressCallback := func(_ int, _ int, bookPath string) {
-		current := processedFiles.Add(1)
-		message := fmt.Sprintf("Processed: %d/%d books", current, targetTotal)
-		if bookPath != "" {
-			message = fmt.Sprintf("Processed: %d/%d books (%s)", current, targetTotal, filepath.Base(bookPath))
-		}
-		log.UpdateProgress(int(current), targetTotal, message)
+		progress.advance(func(current, total int) string {
+			if bookPath == "" {
+				return fmt.Sprintf("Processed: %d/%d books", current, total)
+			}
+			return fmt.Sprintf("Processed: %d/%d books (%s)", current, total, filepath.Base(bookPath))
+		})
 		if ss.activityWriter != nil && opID != "" {
 			activity.LogBatch(ss.activityWriter, opID, "tag-scan", "scan-service",
 				activity.BatchItem{Name: filepath.Base(bookPath)})
@@ -507,7 +513,9 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 
 		log.Info("Processing metadata for %d books using %d workers (from offset %d)", len(books), workers, start)
 		processChunk := func(ctx context.Context, chunk []Book) error {
-			return ProcessBooksParallel(ctx, chunk, workers, progressCallback, log.With("scanner"), onAIPhaseWarning)
+			// subStep, not the bare logger: the AI parse phase inside reports
+			// (batch, totalBatches) of this chunk, which is not the scan's count.
+			return ProcessBooksParallel(ctx, chunk, workers, progressCallback, progress.subStep(log.With("scanner"), folderLabel), onAIPhaseWarning)
 		}
 		if err := ss.processBookChunks(ctx, books, start, folderIdx, checkpoint, processChunk); err != nil {
 			// Do NOT fall through to auto-organize. These books did not get
@@ -535,9 +543,14 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 		}
 		log.Info("Successfully processed %d books", len(books))
 
-		// Auto-organize if enabled (via server-layer hook to avoid import cycle)
+		// Auto-organize if enabled (via server-layer hook to avoid import cycle).
+		// The hook runs the full organize pipeline, which reports its own
+		// backup (0/1) and this folder's organize count; the subStep logger
+		// keeps those as "Auto-organize: ..." messages on the scan's numbers.
+		// Logging, change records and cancellation are the parent's, so the
+		// hook's organize rows still land under this op.
 		if ss.AutoOrganizeFn != nil {
-			ss.AutoOrganizeFn(ctx, books, log)
+			ss.AutoOrganizeFn(ctx, books, progress.subStep(log, "Auto-organize"))
 		}
 	}
 

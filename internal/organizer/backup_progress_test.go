@@ -1,5 +1,5 @@
 // file: internal/organizer/backup_progress_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2f80a3d5-71c6-4e0b-9a48-c5d2b6e91473
 // last-edited: 2026-09-12
 
@@ -37,6 +37,7 @@ import (
 type recordingLogger struct {
 	mu       sync.Mutex
 	progress []string
+	totals   []int
 }
 
 func (l *recordingLogger) Trace(string, ...any) {}
@@ -44,10 +45,11 @@ func (l *recordingLogger) Debug(string, ...any) {}
 func (l *recordingLogger) Info(string, ...any)  {}
 func (l *recordingLogger) Warn(string, ...any)  {}
 func (l *recordingLogger) Error(string, ...any) {}
-func (l *recordingLogger) UpdateProgress(_, _ int, message string) {
+func (l *recordingLogger) UpdateProgress(_, total int, message string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.progress = append(l.progress, message)
+	l.totals = append(l.totals, total)
 }
 func (l *recordingLogger) RecordChange(logger.Change)     {}
 func (l *recordingLogger) ChangeCounters() map[string]int { return nil }
@@ -75,6 +77,33 @@ func TestBackupProgressReporter_IsNotATicker(t *testing.T) {
 		t.Fatalf("reporter stamped %d progress update(s) without any work being reported: %v\n"+
 			"backupProgressReporter must be driven by completed work, not by elapsed time — "+
 			"a timer would satisfy the registry watchdog for a wedged backup too", len(got), got)
+	}
+}
+
+// TestBackupProgressReporter_ReportsIndeterminateTotal pins the 2026-09-12
+// fix. The archive size is unknown, and the UI draws any total > 0 as a
+// determinate bar, so the old (0, 1) showed the op as "0/1" at 0% for the
+// whole backup. Unknown is total 0, which the UI renders as indeterminate.
+func TestBackupProgressReporter_ReportsIndeterminateTotal(t *testing.T) {
+	log := &recordingLogger{}
+	report := backupProgressReporter(context.Background(), log, 0)
+
+	for _, phase := range []string{backup.PhaseCheckpoint, backup.PhaseArchive, backup.PhaseChecksum, "other"} {
+		if err := report(phase, 3, 4096); err != nil {
+			t.Fatalf("report(%s): %v", phase, err)
+		}
+	}
+
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if len(log.totals) != 4 {
+		t.Fatalf("expected 4 progress updates, got %d: %v", len(log.totals), log.progress)
+	}
+	for i, total := range log.totals {
+		if total != 0 {
+			t.Errorf("update %d %q reported total %d, want 0 (indeterminate); "+
+				"a total of 1 renders as a determinate 0/1 bar", i, log.progress[i], total)
+		}
 	}
 }
 
