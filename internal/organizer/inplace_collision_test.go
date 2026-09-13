@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 99027475-b084-4603-adf4-4061987f30b0
 // last-edited: 2026-09-12
 
@@ -337,8 +337,8 @@ func TestFilter_PlaceholderTitleSkipped(t *testing.T) {
 	real := addInPlaceBook(t, store, "real", "Real Title", filepath.Join(root, "in", "b.mp3"), filled(100, 2), nil, 0)
 
 	toOrganize, _, skipped := svc.filterBooksNeedingOrganization([]database.Book{*ph, *real}, &noopLogger{})
-	if skipped != 1 {
-		t.Fatalf("want 1 placeholder skip, got %d", skipped)
+	if skipped.placeholderTitle != 1 {
+		t.Fatalf("want 1 placeholder skip, got %d", skipped.placeholderTitle)
 	}
 	if len(toOrganize) != 1 || toOrganize[0].ID != real.ID {
 		t.Fatalf("want only the real-titled book organized, got %+v", toOrganize)
@@ -716,8 +716,18 @@ func TestFilter_NonPrimaryWithUnreadableGroupSkipped(t *testing.T) {
 	}
 
 	svc = NewService(&faultyInPlaceStore{PebbleStore: store, vgErr: errors.New("injected: group read failed")})
-	toOrganize, _, _ = svc.filterBooksNeedingOrganization([]database.Book{*b}, &noopLogger{})
+	toOrganize, _, heldBack := svc.filterBooksNeedingOrganization([]database.Book{*b}, &noopLogger{})
 	if len(toOrganize) != 0 {
 		t.Fatalf("an unreadable group must hold the non-primary back, got %+v", toOrganize)
+	}
+	if heldBack.versionGroupUnreadable != 1 {
+		t.Fatalf("the held-back book must be counted for the run summary, got %+v", heldBack)
+	}
+
+	// The count reaches the summary tally as its own outcome.
+	var stats Stats
+	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
+	if got := formatCollisionTally(stats.Collisions); !strings.Contains(got, OutcomeVersionGroupUnreadable+"=1") {
+		t.Fatalf("summary tally must report the held-back book, got %q", got)
 	}
 }

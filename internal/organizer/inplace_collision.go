@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
 // last-edited: 2026-09-12
 
@@ -77,7 +77,11 @@ const (
 	OutcomeSameAudioUnverified  = "same_audio_unverified"
 	OutcomeFragmentCollapse     = "fragment_collapse"
 	OutcomePlaceholderSkipped   = "placeholder_skipped"
-	OutcomeSkippedDurable       = "skipped_durable"
+	// OutcomeVersionGroupUnreadable counts non-primary books the filter held
+	// back because their version group could not be read, so it could not tell
+	// whether the group already has a primary. The next run retries them.
+	OutcomeVersionGroupUnreadable = "version_group_unreadable"
+	OutcomeSkippedDurable         = "skipped_durable"
 	// OutcomeUnresolvedConflict covers occupied destinations this code does
 	// not decide: a directory book meeting a non-empty directory, a byte-equal
 	// occupant no other book row owns (nothing to link to), and two books that

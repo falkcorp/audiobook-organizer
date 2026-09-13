@@ -1,16 +1,18 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package abs
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -96,7 +98,14 @@ func (h *Handler) Sessions(c *gin.Context) {
 	}
 
 	sessions, err := h.store.ListABSSessionsForUser(user.ID)
-	if err != nil {
+	// One unreadable session record must not blank the whole device list:
+	// serve the sessions that read. The count is logged, not added to the
+	// body — sessionsResponse is matched field-for-field to real ABS and the
+	// clients decode it strictly. Any other error (a failed index scan) is a
+	// hard failure.
+	if n, partial := database.UnreadableMemberCount(err); partial {
+		slog.Warn("abs sessions: some sessions could not be read", "user", user.ID, "unreadable", n, "err", err)
+	} else if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not list sessions")
 		return
 	}
@@ -237,9 +246,25 @@ func (h *Handler) Logout(c *gin.Context) {
 	ip := c.ClientIP()
 
 	if allDevicesRequested(c) {
+		// The store revokes every session it can and joins every failure into
+		// err, so err != nil means "partial", not "nothing happened". Revoking
+		// nothing is a 500; revoking some is reported as a partial success so
+		// the client and the audit log both see that devices may remain
+		// signed in.
 		n, err := h.store.RevokeAllABSSessionsForUser(user.ID)
 		if err != nil {
-			respondError(c, http.StatusInternalServerError, "could not revoke sessions")
+			unreadable, _ := database.UnreadableMemberCount(err)
+			slog.Error("abs logout all-devices: revoke was partial", "user", user.ID, "revoked", n, "unreadable", unreadable, "err", err)
+			absauth.Audit(absauth.AuditEvent{
+				Action: "logout", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+				UserID: user.ID, Username: user.Username, Reason: "all-devices-partial",
+				Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
+			})
+			if n == 0 {
+				respondError(c, http.StatusInternalServerError, "could not revoke sessions")
+				return
+			}
+			respondJSON(c, http.StatusOK, gin.H{"success": false, "partial": true, "revoked": n, "unreadable": unreadable})
 			return
 		}
 		absauth.Audit(absauth.AuditEvent{
