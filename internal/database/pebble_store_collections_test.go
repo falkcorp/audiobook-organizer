@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a6f1e4c-92b8-4d13-9a5e-3c8f0d6e1b27
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package database
 
@@ -186,5 +186,35 @@ func TestUpdateCollection_BlindOverwrite_ZeroVersionConflicts(t *testing.T) {
 	}
 	if !errors.Is(err, ErrCollectionVersionConflict) {
 		t.Fatalf("blind overwrite error = %q, want errors.Is(err, ErrCollectionVersionConflict)", err.Error())
+	}
+}
+
+// TestCollectionNameInUse_IsSentinel pins that both duplicate-name paths
+// (create, and rename-onto-a-taken-name) wrap ErrCollectionNameInUse. The HTTP
+// handlers map it to 409 with errors.Is; if either path went back to a bare
+// fmt.Errorf the handlers would answer 500 for a mistake the user can fix.
+func TestCollectionNameInUse_IsSentinel(t *testing.T) {
+	store := newTestCollectionsStore(t)
+
+	if _, err := store.CreateCollection(&Collection{Name: "Road Trip", Type: CollectionTypeStatic}); err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	// Same name after normalization, different case.
+	_, err := store.CreateCollection(&Collection{Name: "road trip", Type: CollectionTypeStatic})
+	if !errors.Is(err, ErrCollectionNameInUse) {
+		t.Fatalf("duplicate create error = %v, want errors.Is(err, ErrCollectionNameInUse)", err)
+	}
+
+	other, err := store.CreateCollection(&Collection{Name: "Commute", Type: CollectionTypeStatic})
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	other.Name = "ROAD TRIP"
+	err = store.UpdateCollection(other)
+	if !errors.Is(err, ErrCollectionNameInUse) {
+		t.Fatalf("rename-onto-taken error = %v, want errors.Is(err, ErrCollectionNameInUse)", err)
+	}
+	if errors.Is(err, ErrCollectionVersionConflict) {
+		t.Fatalf("a name conflict must not also read as a version conflict: %v", err)
 	}
 }

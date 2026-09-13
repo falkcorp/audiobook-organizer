@@ -1,13 +1,14 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
-// last-edited: 2026-08-16
+// last-edited: 2026-09-13
 
 package handlers_test
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,9 +33,16 @@ type colFakeStore struct {
 	cols    []database.Collection
 	created *database.Collection
 	updates int
+	// createErr / updateErr, when set, are returned by the matching write so a
+	// test can drive the handler's error mapping with a real store error shape.
+	createErr error
+	updateErr error
 }
 
 func (f *colFakeStore) CreateCollection(col *database.Collection) (*database.Collection, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	if col.ID == "" {
 		col.ID = "col-1"
 	}
@@ -69,6 +77,9 @@ func (f *colFakeStore) ListCollections(t string, _, _ int) ([]database.Collectio
 
 func (f *colFakeStore) UpdateCollection(col *database.Collection) error {
 	f.updates++
+	if f.updateErr != nil {
+		return f.updateErr
+	}
 	for i := range f.cols {
 		if f.cols[i].ID == col.ID {
 			f.cols[i] = *col
@@ -478,4 +489,48 @@ func TestReadingADynamicCollectionTwiceWritesOnce(t *testing.T) {
 	assert.Equal(t, 1, store.updates,
 		"nothing changed between the two reads, so the second must not write: an "+
 			"unconditional persist here makes every GET an fsync and bumps Version")
+}
+
+// TestCollectionNameInUse_Maps409 pins the duplicate-name mapping to the typed
+// sentinel. The lookalike case is the point: an error that merely CONTAINS
+// "already in use" without wrapping database.ErrCollectionNameInUse must NOT be
+// read as a name conflict — the handler used to match that text, so a fake (or
+// a reworded store message) could pass or fail for the wrong reason.
+func TestCollectionNameInUse_Maps409(t *testing.T) {
+	inUse := fmt.Errorf("%w: %q", database.ErrCollectionNameInUse, "Road Trip")
+	lookalike := fmt.Errorf("collection name %q already in use", "Road Trip")
+	seed := func() *colFakeStore {
+		return &colFakeStore{cols: []database.Collection{{ID: "c1", Name: "Commute", Type: database.CollectionTypeStatic}}}
+	}
+	body := map[string]any{"name": "Road Trip", "type": "static"}
+
+	t.Run("create with sentinel is 409", func(t *testing.T) {
+		store := seed()
+		store.createErr = inUse
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections", body)
+		assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	})
+	t.Run("create with lookalike text is not 409", func(t *testing.T) {
+		store := seed()
+		store.createErr = lookalike
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPost, "/api/v1/collections", body)
+		assert.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	})
+	t.Run("rename with sentinel is 409", func(t *testing.T) {
+		store := seed()
+		store.updateErr = inUse
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPut, "/api/v1/collections/c1", map[string]any{"name": "Road Trip"})
+		assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, 1, store.updates, "the handler must have reached the store write")
+	})
+	t.Run("rename with lookalike text is not 409", func(t *testing.T) {
+		store := seed()
+		store.updateErr = lookalike
+		r, _ := colRouter(store)
+		w := colDo(t, r, http.MethodPut, "/api/v1/collections/c1", map[string]any{"name": "Road Trip"})
+		assert.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	})
 }

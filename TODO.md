@@ -6314,7 +6314,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       HTTP-method guard, so it answers a `DELETE /api/v1/backup/list` ahead of
       the `/api/v1/backup/` DELETE catch-all below it.
 
-- [ ] **COLLECTION-NAME-CONFLICT-SENTINEL** `PebbleStore.UpdateCollection`'s
+- [x] **COLLECTION-NAME-CONFLICT-SENTINEL** `PebbleStore.UpdateCollection`'s
       duplicate-name rejection still signals with a bare
       `fmt.Errorf("collection name %q already in use", ...)`, matched at call
       sites via `strings.Contains(err.Error(), "already in use")`
