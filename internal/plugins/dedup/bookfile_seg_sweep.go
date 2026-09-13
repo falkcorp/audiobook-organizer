@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a3b5c8e-d1f2-4e9a-b6c0-3d7f1a2e5b8c
-// last-edited: 2026-06-10
+// last-edited: 2026-09-13
 
 // Package dedup — op dedup.bookfile-seg-drop (T020, SPEC 3 §6 item 2).
 //
@@ -100,8 +100,12 @@ func (p *Plugin) bookfileSegDropDef() sdk.OperationDef {
 
 // runBookfileSegDrop implements the bookfile-seg-drop op.
 func (p *Plugin) runBookfileSegDrop(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	// Type-assert to the narrow interface — only *PebbleStore satisfies it.
-	sweepStore, ok := p.store.(BookfileSegDropStore)
+	// Resolve the narrow interface through any decorator chain — only
+	// *PebbleStore satisfies it, and the registry hands this plugin the server's
+	// search-indexing decorator, which embeds database.Store and so cannot
+	// satisfy a capability that lives outside it. A bare p.store.(T) assertion
+	// fails through that decorator.
+	sweepStore, ok := database.AsCapability[BookfileSegDropStore](p.store)
 	if !ok {
 		return fmt.Errorf("store does not implement BookfileSegDropStore (PebbleDB required)")
 	}

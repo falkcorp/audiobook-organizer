@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -381,13 +381,17 @@ func (s *Server) wireABSRoutes() {
 		}
 	}
 
-	absStore, ok := s.Ops().(abshandler.Store)
+	// Every capability below is resolved through database.AsCapability, never a
+	// bare assertion: s.store is the indexedStore decorator from NewServer on,
+	// and it embeds database.Store, so it carries none of these ABS keyspace
+	// methods itself. A bare assertion here is an os.Exit on a healthy server.
+	absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store does not implement the ABS session keyspace " +
 			"(PebbleDB is the only supported backend)")
 		os.Exit(1)
 	}
-	identityStore, ok := s.Ops().(servermiddleware.ABSIdentityStore)
+	identityStore, ok := database.AsCapability[servermiddleware.ABSIdentityStore](s.Ops())
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot resolve ABS identities")
 		os.Exit(1)
@@ -401,7 +405,7 @@ func (s *Server) wireABSRoutes() {
 	// FAIL CLOSED on the two that gate the surface: without them the browse + playback
 	// routes would not be registered at all, so /api/libraries would answer a JSON 404
 	// while the startup log claimed the ABS API was up. Exiting is the honest outcome.
-	libraryStore, ok := s.Ops().(abshandler.LibraryStore)
+	libraryStore, ok := database.AsCapability[abshandler.LibraryStore](s.Ops())
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot serve the library browse surface " +
 			"(PebbleDB is the only supported backend)")
@@ -426,7 +430,7 @@ func (s *Server) wireABSRoutes() {
 	// practice because PebbleDB (the only supported backend) satisfies both
 	// capabilities asserted here, as well as the sync-identity and library ones
 	// already asserted above.
-	progressList, ok := s.Ops().(abshandler.ProgressListStore)
+	progressList, ok := database.AsCapability[abshandler.ProgressListStore](s.Ops())
 	if !ok {
 		slog.Error("abs: refusing to start — the configured store cannot enumerate a user's listening positions, " +
 			"so /api/me could only ever report an EMPTY mediaProgress list. Clients DELETE local progress rows " +
@@ -574,7 +578,7 @@ type absIdentityAdapter struct {
 // not have it. Optional: the mapper synthesizes chapters from track durations
 // otherwise.
 func asChapterStore(s any) abshandler.ChapterStore {
-	if cs, ok := s.(abshandler.ChapterStore); ok {
+	if cs, ok := database.AsCapability[abshandler.ChapterStore](s); ok {
 		return cs
 	}
 	return nil
@@ -584,7 +588,7 @@ func asChapterStore(s any) abshandler.ChapterStore {
 // nil one means PlaySession.currentTime is always 0 — which silently rewinds the user
 // (§1.8.7) — so the caller warns about it.
 func asProgressStore(s any) abshandler.ProgressStore {
-	if ps, ok := s.(abshandler.ProgressStore); ok {
+	if ps, ok := database.AsCapability[abshandler.ProgressStore](s); ok {
 		return ps
 	}
 	return nil
@@ -681,7 +685,7 @@ func absRouteList() []string {
 // answering the empty page it answered before this was wired, which is a valid
 // Page<T> — never a 500.
 func asPlaylistStore(s any) abshandler.PlaylistStore {
-	if ps, ok := s.(abshandler.PlaylistStore); ok {
+	if ps, ok := database.AsCapability[abshandler.PlaylistStore](s); ok {
 		return ps
 	}
 	return nil
@@ -692,7 +696,7 @@ func asPlaylistStore(s any) abshandler.PlaylistStore {
 // back to the empty page and the write routes report the feature unavailable,
 // rather than the whole ABS surface failing to build.
 func asCollectionStore(s any) abshandler.CollectionStore {
-	if cs, ok := s.(abshandler.CollectionStore); ok {
+	if cs, ok := database.AsCapability[abshandler.CollectionStore](s); ok {
 		return cs
 	}
 	return nil
