@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfile_patch.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4e71a93-5b28-4f0d-8e6a-2d9f7b1c3a54
 // last-edited: 2026-09-13
 
@@ -46,7 +46,16 @@ type BookFileFieldPatch struct {
 //
 // before is the row as read, after as written (equal when nothing changed, in
 // which case nothing is written). Both are nil when the row does not exist.
-// None of these fields is in a secondary index, so only the row is rewritten.
+//
+// Differences from UpdateBookFile, on purpose:
+//   - No secondary-index rewrite: writeBookFileSecondaryIndexes indexes ID,
+//     ITunesPersistentID, FilePath, FileHash and OriginalFileHash, none of
+//     which this method can change.
+//   - No preserve-on-nil guards (AcoustIDFingerprint, IntroTranscription):
+//     those protect against a caller handing in a memdb-stripped struct.
+//     Here the struct is the stored row itself, so every column is already
+//     the stored value. marshalBookFileDropSegs is the same encoder, so the
+//     AcoustID segment drop matches.
 func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (before, after *BookFile, err error) {
 	s.bookFilePatchMu.Lock()
 	defer s.bookFilePatchMu.Unlock()

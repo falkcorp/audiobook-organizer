@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_pebble_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b4d6f8a-0c1e-4f3a-8d5b-9e1f3a5c7b86
 // last-edited: 2026-09-13
 
@@ -122,6 +122,38 @@ func TestSplitAsOneBook_FolderHeldByAnotherBook_Refused(t *testing.T) {
 	assertSourceUntouched(t, store, src, 3)
 	if got, _ := store.GetBookByFilePath("/lib/Omnibus/Book 1"); got == nil || got.ID != other.ID {
 		t.Fatalf("occupant lost its key: %+v", got)
+	}
+}
+
+// The remaining file is outside the source's folder, so the source's path
+// moves to that file's folder: the write branch on a real store. The source
+// takes the new folder's key and gives up its old one; the new book keeps
+// its own.
+func TestSplitAsOneBook_SourceMovesToRemainingFilesFolder(t *testing.T) {
+	store := openSplitStore(t)
+	src, ids := seedSplitBook(t, store, "/lib/Omnibus",
+		"/lib/Omnibus/Book 1/01.mp3", "/lib/Omnibus/Book 1/02.mp3", "/lib/Other/03.mp3")
+
+	w := runSplit(t, store, src.ID, ids[0], ids[1])
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	srcBook, err := store.GetBookByID(src.ID)
+	if err != nil || srcBook == nil || srcBook.FilePath != "/lib/Other" {
+		t.Fatalf("source = %+v, %v; want path /lib/Other", srcBook, err)
+	}
+	if owner, _ := store.GetBookByFilePath("/lib/Other"); owner == nil || owner.ID != src.ID {
+		t.Fatalf("source does not own its new path key: %+v", owner)
+	}
+	if owner, _ := store.GetBookByFilePath("/lib/Omnibus"); owner != nil {
+		t.Fatalf("the old path key still names %s after the source left", owner.ID)
+	}
+	moved, err := store.GetBookFileByPath("/lib/Omnibus/Book 1/01.mp3")
+	if err != nil || moved == nil {
+		t.Fatalf("moved row: %v", err)
+	}
+	if owner, _ := store.GetBookByFilePath("/lib/Omnibus/Book 1"); owner == nil || owner.ID != moved.BookID {
+		t.Fatalf("new book does not own its path key: %+v", owner)
 	}
 }
 
