@@ -1,5 +1,5 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
 // last-edited: 2026-09-13
 
@@ -74,6 +74,10 @@ type googleBooksVolumeInfo struct {
 	Language            string                  `json:"language"`
 	AverageRating       float64                 `json:"averageRating"`
 	RatingsCount        int                     `json:"ratingsCount"`
+	PageCount           int                     `json:"pageCount"`
+	PrintedPageCount    int                     `json:"printedPageCount"`
+	Categories          []string                `json:"categories"`
+	MainCategory        string                  `json:"mainCategory"`
 }
 
 type googleBooksIndustryID struct {
@@ -81,9 +85,45 @@ type googleBooksIndustryID struct {
 	Identifier string `json:"identifier"`
 }
 
+// googleBooksImageLinks is volumeInfo.imageLinks. Search results usually carry
+// only the two thumbnails; the larger sizes appear when Google has them.
 type googleBooksImageLinks struct {
+	ExtraLarge     string `json:"extraLarge"`
+	Large          string `json:"large"`
+	Medium         string `json:"medium"`
+	Small          string `json:"small"`
 	Thumbnail      string `json:"thumbnail"`
 	SmallThumbnail string `json:"smallThumbnail"`
+}
+
+// largest returns the largest image Google offered, upgraded to https, or "".
+func (l *googleBooksImageLinks) largest() string {
+	if l == nil {
+		return ""
+	}
+	for _, u := range []string{l.ExtraLarge, l.Large, l.Medium, l.Small, l.Thumbnail, l.SmallThumbnail} {
+		if u = strings.TrimSpace(u); u != "" {
+			return strings.Replace(u, "http://", "https://", 1)
+		}
+	}
+	return ""
+}
+
+// googleBooksCategories returns the categories de-duplicated in order, with
+// mainCategory first when present. Google's categories are BISAC-style
+// strings ("Fiction / Science Fiction / Space Opera", or just "Fiction").
+func googleBooksCategories(main string, cats []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range append([]string{main}, cats...) {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[strings.ToLower(c)] {
+			continue
+		}
+		seen[strings.ToLower(c)] = true
+		out = append(out, c)
+	}
+	return out
 }
 
 // SearchByTitle searches Google Books by title.
@@ -138,8 +178,25 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 			Description: vi.Description,
 			Language:    vi.Language,
 		}
-		if len(vi.Authors) > 0 {
-			meta.Author = strings.Join(vi.Authors, ", ")
+		// Google's authors list is plain strings, but a credit can carry its role
+		// in the text ("Jane Doe (Editor)"). Only authors go in the author
+		// string; a narrator goes to Narrator; other roles are dropped.
+		authors, narrators := PartitionCredits(vi.Authors)
+		if len(authors) > 0 {
+			meta.Author = strings.Join(authors, ", ")
+		}
+		if len(narrators) > 0 {
+			meta.Narrator = strings.Join(narrators, ", ")
+		}
+		// printedPageCount is the physical book; pageCount can be the scanned
+		// ebook's page count. Prefer the print figure.
+		meta.PageCount = vi.PrintedPageCount
+		if meta.PageCount <= 0 {
+			meta.PageCount = vi.PageCount
+		}
+		if cats := googleBooksCategories(vi.MainCategory, vi.Categories); len(cats) > 0 {
+			meta.Genre = cats[0]
+			meta.CategoryTags = cats
 		}
 		if len(vi.PublishedDate) >= 4 {
 			fmt.Sscanf(vi.PublishedDate, "%d", &meta.PublishYear)
@@ -163,9 +220,7 @@ func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]
 		case meta.ISBN10 != "":
 			meta.ISBN = meta.ISBN10
 		}
-		if vi.ImageLinks != nil && vi.ImageLinks.Thumbnail != "" {
-			meta.CoverURL = strings.Replace(vi.ImageLinks.Thumbnail, "http://", "https://", 1)
-		}
+		meta.CoverURL = vi.ImageLinks.largest()
 		if vi.AverageRating > 0 {
 			meta.GoogleRatingAverage = vi.AverageRating
 			meta.GoogleRatingCount = vi.RatingsCount
