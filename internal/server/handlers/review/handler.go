@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -65,6 +65,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/gin-gonic/gin"
 )
 
@@ -474,6 +475,12 @@ func (h *Handler) approveOne(ctx context.Context, id, requested string) (*databa
 	fn, hasHandler := h.applyHandlerFor(chosen)
 	if hasHandler && h.applyGloballyEnabled() {
 		if err := fn(ctx, *item); err != nil {
+			// A refusal because a member has a file under the active iTunes
+			// library is 409, not a 500: the item stays pending (no status
+			// transition below) and bulk approve skips it instead of aborting.
+			if errors.Is(err, merge.ErrITunesProtected) {
+				return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", err.Error())
+			}
 			return nil, "", "", err
 		}
 		updated, err := h.store.SetReviewItemDecision(id, database.ReviewStatusApplied, chosen)

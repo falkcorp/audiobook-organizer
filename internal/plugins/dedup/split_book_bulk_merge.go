@@ -1,17 +1,19 @@
 // file: internal/plugins/dedup/split_book_bulk_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8eb2e1-b4b7-4d83-b176-fc427cc5d98c
-// last-edited: 2026-08-28
+// last-edited: 2026-09-13
 
 package dedup
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -55,6 +57,7 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 
 	progress := sdk.NewProgress(reporter, len(params.Items))
 	progress.Start("Processing reviewed split-book candidates...")
+	refusedITunes := 0
 	for i, item := range params.Items {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -71,6 +74,13 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 			}
 		}
 		result, err := dedupengine.MergeSplitBookCluster(p.store, item.KeepID, srcIDs, item.SuggestedTitle)
+		if errors.Is(err, merge.ErrITunesProtected) {
+			refusedITunes++
+			reporter.Logger().Warn("split-book candidate merge refused: a book has a file under the active iTunes library",
+				"candidate_id", item.CandidateID, "error", err)
+			progress.StepN(1, fmt.Sprintf("Refused (iTunes library): %d / %d", i+1, len(params.Items)))
+			continue
+		}
 		complete := err == nil && result != nil && len(result.Errors) == 0 && result.MergedSrcCount == len(srcIDs)
 		if !complete {
 			reporter.Logger().Error("split-book candidate merge incomplete", "candidate_id", item.CandidateID, "error", err, "result", result)
@@ -82,6 +92,6 @@ func (p *Plugin) runSplitBookBulkMerge(ctx context.Context, raw json.RawMessage,
 		}
 		progress.StepN(1, fmt.Sprintf("Merged candidate: %d / %d", i+1, len(params.Items)))
 	}
-	progress.Done("Split-book bulk merge finished; incomplete candidates remain reviewable")
+	progress.Done(fmt.Sprintf("Split-book bulk merge finished; incomplete candidates remain reviewable (%d refused: iTunes library)", refusedITunes))
 	return nil
 }

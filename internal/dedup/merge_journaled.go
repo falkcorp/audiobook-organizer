@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package dedup
 
@@ -118,6 +118,14 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		if _, ok := seen[keepID]; !ok {
 			return nil, nil, fmt.Errorf("merge-journaled: keep id %s is not one of the books being merged", keepID)
 		}
+	}
+
+	// Refuse an iTunes-library participant BEFORE the provisional journal
+	// entries are written, so a refused merge leaves nothing behind. The
+	// authoritative check still runs inside MergeBooks under the merge lock;
+	// this early one only keeps the refusal write-free.
+	if err := merge.GuardITunesProtected(de.bookStore, ids); err != nil {
+		return nil, nil, fmt.Errorf("merge-journaled: %w", err)
 	}
 
 	baselines := make(map[string]int64, len(ids))

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.79.0
+// version: 1.80.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package dedup
 
@@ -4014,6 +4014,7 @@ func (de *Engine) loadAuthorEntity(entityID string) (ai.DedupEntity, bool) {
 func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]database.DedupCandidate) int {
 	applied := 0
 	autoMerged := 0
+	refusedITunes := 0
 	for _, v := range verdicts {
 		candidate, ok := byIndex[v.Index]
 		if !ok {
@@ -4084,6 +4085,11 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 			"", // auto-pick primary via bookIsBetter
 			"dedup:merge-survivor:llm-auto",
 		)
+		if errors.Is(mergeErr, merge.ErrITunesProtected) {
+			refusedITunes++
+			slog.Warn("dedup LLM auto-merge refused: a book has a file under the active iTunes library", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "err", mergeErr)
+			continue
+		}
 		if mergeErr != nil {
 			slog.Error("dedup LLM auto-merge failed for candidate ( + )", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "mergeErr", mergeErr)
 			continue
@@ -4124,6 +4130,9 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 
 		autoMerged++
 		slog.Info("dedup LLM auto-merged candidate ( + ) — reason", "candidateID", candidate.ID, "entityAID", candidate.EntityAID, "entityBID", candidate.EntityBID, "reason", reason)
+	}
+	if refusedITunes > 0 {
+		slog.Warn("dedup LLM auto-merge refused pair(s) with a file under the active iTunes library", "refused", refusedITunes)
 	}
 	if autoMerged > 0 {
 		slog.Info("dedup LLM auto-merge fired on high-confidence pair(s)", "autoMerged", autoMerged)
