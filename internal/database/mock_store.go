@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.113.0
+// version: 1.114.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-12
 
@@ -161,14 +161,15 @@ type MockStore struct {
 	ResolveTombstoneChainsFunc func() (int, error)
 
 	// Series methods
-	GetAllSeriesFunc     func() ([]Series, error)
-	GetSeriesByIDFunc    func(id int) (*Series, error)
-	GetSeriesByNameFunc  func(name string, authorID *int) (*Series, error)
-	CreateSeriesFunc     func(name string, authorID *int) (*Series, error)
-	DeleteSeriesFunc     func(id int) error
-	UpdateSeriesNameFunc func(id int, name string) error
-	RenameSeriesIfFunc   func(id int, expectCurrent, newName string) error
-	GetSeriesByIDsFunc   func(ids []int) (map[int]*Series, error)
+	GetAllSeriesFunc          func() ([]Series, error)
+	GetSeriesByIDFunc         func(id int) (*Series, error)
+	GetSeriesByNameFunc       func(name string, authorID *int) (*Series, error)
+	CreateSeriesFunc          func(name string, authorID *int) (*Series, error)
+	DeleteSeriesFunc          func(id int) error
+	UpdateSeriesNameFunc      func(id int, name string) error
+	RenameSeriesIfFunc        func(id int, expectCurrent, newName string) error
+	RenameSeriesIfCurrentFunc func(id int, expectCurrent, newName string) error
+	GetSeriesByIDsFunc        func(ids []int) (map[int]*Series, error)
 	// GetAllSeriesBookRefCountsFunc backs the SeriesBookRefStore capability.
 	// A nil func yields an empty map, i.e. "no series is referenced by
 	// anything" — the permissive answer, so a mock that does not care about
@@ -906,6 +907,13 @@ func (m *MockStore) UpdateSeriesName(id int, name string) error {
 func (m *MockStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
 	if m.RenameSeriesIfFunc != nil {
 		return m.RenameSeriesIfFunc(id, expectCurrent, newName)
+	}
+	return nil
+}
+
+func (m *MockStore) RenameSeriesIfCurrent(id int, expectCurrent, newName string) error {
+	if m.RenameSeriesIfCurrentFunc != nil {
+		return m.RenameSeriesIfCurrentFunc(id, expectCurrent, newName)
 	}
 	return nil
 }

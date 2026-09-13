@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
 // last-edited: 2026-09-12
 
@@ -270,6 +270,30 @@ func (p *PebbleStore) RenameSeriesIf(id int, expectCurrent, newName string) erro
 	}
 	if holder != nil && holder.ID != id {
 		return fmt.Errorf("series %d already answers to %q: %w", holder.ID, holder.Name, ErrRenameSeriesNameTaken)
+	}
+	return p.renameSeriesLocked(id, series, newName)
+}
+
+// RenameSeriesIfCurrent renames series id to newName only if it is still named
+// expectCurrent (an exact comparison). Unlike RenameSeriesIf it does NOT refuse
+// a newName another series under the same author already answers to: it keeps
+// UpdateSeriesName's collision behaviour (the name index key is overwritten).
+// The check and the write run under nameIdx.series, so no other rename can
+// land between them. The entities.series-rename op uses it, so the name it
+// journals as OldValue is the name the write actually replaced.
+func (p *PebbleStore) RenameSeriesIfCurrent(id int, expectCurrent, newName string) error {
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+
+	series, err := p.GetSeriesByID(id)
+	if err != nil {
+		return fmt.Errorf("read series %d: %w", id, err)
+	}
+	if series == nil {
+		return fmt.Errorf("series %d: %w", id, ErrRenameSeriesNotFound)
+	}
+	if series.Name != expectCurrent {
+		return fmt.Errorf("series %d is named %q, not %q: %w", id, series.Name, expectCurrent, ErrRenameSeriesRenamedSince)
 	}
 	return p.renameSeriesLocked(id, series, newName)
 }

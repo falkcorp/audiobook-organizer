@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package undo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -149,6 +150,32 @@ func (m seriesMap) GetSeriesByName(name string, _ *int) (*database.Series, error
 		}
 	}
 	return nil, nil
+}
+
+// A series_rename row's referent check is a three-way compare-and-set on the
+// series' current name: the recorded new name is restorable, the recorded old
+// name is already restored, anything else was renamed since.
+func TestCheckRestoreReferent_SeriesRenameThreeWay(t *testing.T) {
+	id := 9
+	row := &database.OperationChange{ChangeType: ChangeTypeSeriesRename, SeriesID: &id, FieldName: "series_name", OldValue: "Old", NewValue: "New"}
+
+	if err := CheckRestoreReferent(seriesMap{9: {ID: 9, Name: "New"}}, row); err != nil {
+		t.Errorf("current == new: %v, want nil", err)
+	}
+	if err := CheckRestoreReferent(seriesMap{9: {ID: 9, Name: "Old"}}, row); !errors.Is(err, ErrAlreadyRestored) {
+		t.Errorf("current == old: %v, want ErrAlreadyRestored", err)
+	}
+	var ref *ReferentError
+	if err := CheckRestoreReferent(seriesMap{9: {ID: 9, Name: "Manual"}}, row); !errors.As(err, &ref) || ref.Reason != ReasonSeriesRenamedSince {
+		t.Errorf("current == other: %v, want ReferentError %q", err, ReasonSeriesRenamedSince)
+	}
+	// A degenerate row whose old and new names match is restorable, not
+	// "already restored", when the series holds that name.
+	same := *row
+	same.OldValue = "New"
+	if err := CheckRestoreReferent(seriesMap{9: {ID: 9, Name: "New"}}, &same); err != nil {
+		t.Errorf("old == new == current: %v, want nil", err)
+	}
 }
 
 // Rows stored before OperationChange.SeriesID existed decode with it nil, and

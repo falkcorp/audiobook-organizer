@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.32.1
+// version: 2.33.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-09-12
 
@@ -243,9 +243,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		func(id string) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
-		func(id string) (*RevertResult, error) {
-			return NewRevertService(s.storeForWiring()).RevertOperation(id)
-		},
+		// revertOperation also drops the series caches when a series_rename
+		// row was restored (series_rename_ops.go).
+		s.revertOperation,
 	)
 	// getSystemLogs (system handler) delegates its operation_id branch to
 	// operationsH.GetOperationLogs; stash it on the Server for that call.

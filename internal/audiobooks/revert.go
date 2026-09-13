@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-12
 
@@ -109,6 +109,10 @@ type RevertResult struct {
 	// AlreadyReverted rows are restorable rows an earlier revert already
 	// restored and marked; this call skipped them.
 	AlreadyReverted int `json:"already_reverted"`
+	// RestoredTypes counts this call's Restored rows by change type, so a
+	// caller can drop the caches a restore made stale (the server clears the
+	// series caches when a series_rename row was restored).
+	RestoredTypes map[string]int `json:"restored_types,omitempty"`
 }
 
 // Partial reports whether any row of the operation was left un-reverted.
@@ -219,6 +223,10 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 			continue
 		}
 		restoredIDs = append(restoredIDs, c.ID)
+		if result.RestoredTypes == nil {
+			result.RestoredTypes = map[string]int{}
+		}
+		result.RestoredTypes[c.ChangeType]++
 	}
 
 	// Mark only the rows that were actually restored.
