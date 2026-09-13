@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -248,6 +248,11 @@ type BookMutator interface {
 	CreateBook(book *Book) (*Book, error)
 	UpdateBook(id string, book *Book) (*Book, error)
 	UpdateBookRating(id string, req UpdateBookRatingRequest) error
+	// FillBookMediaInfo sets the patch's media fields on the stored row only
+	// where they are still empty, re-reading the row inside the store; it
+	// writes nothing when no field needs filling. For read paths that backfill
+	// from the file -- never UpdateBook a struct read before slow work.
+	FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error)
 	DeleteBook(id string) error
 }
 

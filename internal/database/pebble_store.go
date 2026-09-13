@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.159.0
+// version: 1.160.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -119,6 +119,7 @@ type PebbleStore struct {
 	nameIdx                  nameIndexLocks // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex     // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
 	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
+	bookMediaMu              sync.Mutex     // serializes FillBookMediaInfo's fresh-read-then-fill so two read-path backfills can't interleave (pebble_store_book_media.go)
 	opsLogSeq                atomic.Int64   // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string         // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex     // gates recompute to prevent stampede when N callers see dirty cache

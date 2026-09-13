@@ -10075,6 +10075,74 @@ func (_c *MockStore_DeleteWork_Call) RunAndReturn(run func(id string) error) *Mo
 	return _c
 }
 
+// FillBookMediaInfo provides a mock function for the type MockStore
+func (_mock *MockStore) FillBookMediaInfo(id string, patch database.BookMediaInfoPatch) (*database.Book, error) {
+	ret := _mock.Called(id, patch)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FillBookMediaInfo")
+	}
+
+	var r0 *database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, database.BookMediaInfoPatch) (*database.Book, error)); ok {
+		return returnFunc(id, patch)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, database.BookMediaInfoPatch) *database.Book); ok {
+		r0 = returnFunc(id, patch)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, database.BookMediaInfoPatch) error); ok {
+		r1 = returnFunc(id, patch)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_FillBookMediaInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FillBookMediaInfo'
+type MockStore_FillBookMediaInfo_Call struct {
+	*mock.Call
+}
+
+// FillBookMediaInfo is a helper method to define mock.On call
+//   - id string
+//   - patch database.BookMediaInfoPatch
+func (_e *MockStore_Expecter) FillBookMediaInfo(id any, patch any) *MockStore_FillBookMediaInfo_Call {
+	return &MockStore_FillBookMediaInfo_Call{Call: _e.mock.On("FillBookMediaInfo", id, patch)}
+}
+
+func (_c *MockStore_FillBookMediaInfo_Call) Run(run func(id string, patch database.BookMediaInfoPatch)) *MockStore_FillBookMediaInfo_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 database.BookMediaInfoPatch
+		if args[1] != nil {
+			arg1 = args[1].(database.BookMediaInfoPatch)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_FillBookMediaInfo_Call) Return(book *database.Book, err error) *MockStore_FillBookMediaInfo_Call {
+	_c.Call.Return(book, err)
+	return _c
+}
+
+func (_c *MockStore_FillBookMediaInfo_Call) RunAndReturn(run func(id string, patch database.BookMediaInfoPatch) (*database.Book, error)) *MockStore_FillBookMediaInfo_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // FindAuthorByAlias provides a mock function for the type MockStore
 func (_mock *MockStore) FindAuthorByAlias(aliasName string) (*database.Author, error) {
 	ret := _mock.Called(aliasName)
