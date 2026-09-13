@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package scheduler
 
@@ -151,37 +151,56 @@ var taskV2DefIDs = map[string]string{
 	// genuinely cannot start. Giving the sweep its own key here would make it
 	// look idle while a scan was in flight, which is the exact defect this map
 	// replaced.
-	"library_scan_full":          "library.scan",
-	"library_organize":           "library.organize",
-	"library_size_refresh":       "library.size-refresh",
-	"dedup_refresh":              "dedup.author-scan",
-	"acoustid_backfill":          "acoustid.backfill",
-	"dedup_llm_review":           "scheduler.dedup-llm-review",
-	"series_prune":               "dedup.series-prune",
-	"series_normalize":           "dedup.series-normalize",
-	"isbn_enrichment":            "scheduler.isbn-enrichment",
-	"temp_file_cleanup":          "scheduler.temp-file-cleanup",
-	"trash_cleanup":              "scheduler.trash-cleanup",
-	"archive_sweep":              "scheduler.archive-sweep",
-	"metadata_upgrade":           "scheduler.metadata-upgrade",
-	"author_split_scan":          "scheduler.author-split-scan",
-	"db_optimize":                "scheduler.db-optimize",
-	"acoustid_online_lookup":     "acoustid.lookup-online",
-	"cleanup_old_backups":        "scheduler.cleanup-old-backups",
-	"purge_deleted":              "scheduler.purge-deleted",
-	"tombstone_cleanup":          "scheduler.tombstone-cleanup",
-	"resolve_production_authors": "scheduler.resolve-production-authors",
-	"metadata_refresh":           "scheduler.metadata-refresh",
-	"reconcile_scan":             "maintenance.reconcile-scan",
-	"ai_dedup_batch":             "maintenance.ai-dedup-batch",
-	"purge_old_logs":             "maintenance.purge-old-logs",
-	"cleanup_activity_log":       "maintenance.cleanup-activity-log",
-	"optimize_activity_db":       "maintenance.optimize-activity-db",
+	"library_scan_full":           "library.scan",
+	"library_organize":            "library.organize",
+	"library_size_refresh":        "library.size-refresh",
+	"dedup_refresh":               "dedup.author-scan",
+	"acoustid_backfill":           "acoustid.backfill",
+	"dedup_llm_review":            "scheduler.dedup-llm-review",
+	"series_prune":                "dedup.series-prune",
+	"series_normalize":            "dedup.series-normalize",
+	"isbn_enrichment":             "scheduler.isbn-enrichment",
+	"temp_file_cleanup":           "scheduler.temp-file-cleanup",
+	"trash_cleanup":               "scheduler.trash-cleanup",
+	"archive_sweep":               "scheduler.archive-sweep",
+	"metadata_upgrade":            "scheduler.metadata-upgrade",
+	"author_split_scan":           "scheduler.author-split-scan",
+	"db_optimize":                 "scheduler.db-optimize",
+	"acoustid_online_lookup":      "acoustid.lookup-online",
+	"cleanup_old_backups":         "scheduler.cleanup-old-backups",
+	"purge_deleted":               "scheduler.purge-deleted",
+	"tombstone_cleanup":           "scheduler.tombstone-cleanup",
+	"resolve_production_authors":  "scheduler.resolve-production-authors",
+	"metadata_refresh":            "scheduler.metadata-refresh",
+	"reconcile_scan":              "maintenance.reconcile-scan",
+	"ai_dedup_batch":              "maintenance.ai-dedup-batch",
+	"purge_old_logs":              "maintenance.purge-old-logs",
+	"cleanup_activity_log":        "maintenance.cleanup-activity-log",
+	"optimize_activity_db":        "maintenance.optimize-activity-db",
+	"nightly_activity_compaction": "maintenance.nightly-compact-activity-log",
+}
+
+// taskConcurrencySiblings lists defs that share a task's ConcurrencyKey. While
+// one runs, the task cannot start: the dispatcher parks it behind the sibling.
+// For the maintenance window that parking is harmful — it waits on each task
+// in turn, so cleanup_activity_log queued behind a 6h catch-up compaction
+// would stall the whole window until it closed. Reporting the task as running
+// makes the window skip it instead; its own 24h interval runs it later.
+var taskConcurrencySiblings = map[string][]string{
+	"cleanup_activity_log": {"maintenance.nightly-compact-activity-log", "maintenance.compact-activity-log"},
 }
 
 // isTaskRunning is the internal implementation.
 func (ts *TaskScheduler) isTaskRunning(name string) bool {
-	return ts.hasActiveV2Op(taskV2DefIDs[name])
+	if ts.hasActiveV2Op(taskV2DefIDs[name]) {
+		return true
+	}
+	for _, sib := range taskConcurrencySiblings[name] {
+		if ts.hasActiveV2Op(sib) {
+			return true
+		}
+	}
+	return false
 }
 
 // MaintenanceWindowOpParams carries parameters to the maintenance.window operation.

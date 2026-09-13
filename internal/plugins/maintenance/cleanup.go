@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -169,18 +169,35 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	// this op alive.
 	_ = reporter.UpdateProgress(0, 0, "starting activity log cleanup")
 	ctx = database.WithMaintenanceProgress(ctx, maintenanceProgressToReporter(reporter))
-	compacted, summarized, pruned, indexOrphans, err := p.deps.CompactActivityLog(
+
+	// NO SECOND COMPACTION. While nightly compaction is enabled it owns the
+	// compaction pass (maintenance.nightly-compact-activity-log, cutoff = start
+	// of the local day), and this op must not run its own 14-day pass on top:
+	// two compactors with two cutoffs is the configuration this replaced. The
+	// legacy pass survives only for a deployment that turned nightly
+	// compaction off, with its original semantics (0 or less means 14 days).
+	compactMsg := "compaction skipped (nightly compaction is enabled)"
+	if !p.deps.ActivityLogNightlyCompactionEnabled() {
+		days := p.deps.ActivityLogCompactionDays()
+		if days <= 0 {
+			days = 14
+		}
+		res, err := p.deps.CompactActivityEntries(ctx, time.Now().AddDate(0, 0, -days), compactProgressToReporter(reporter))
+		if err != nil {
+			return fmt.Errorf("compact activity: %w", err)
+		}
+		compactMsg = fmt.Sprintf("compacted %d", res.DaysCompacted)
+	}
+	summarized, pruned, indexOrphans, err := p.deps.MaintainActivityLog(
 		ctx,
-		p.deps.ActivityLogCompactionDays(),
 		p.deps.ActivityLogRetentionChangeDays(),
 		p.deps.ActivityLogRetentionDebugDays(),
-		compactProgressToReporter(reporter),
 	)
 	if err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("Activity log cleanup: compacted %d, summarized %d, pruned %d, orphaned index entries removed %d",
-		compacted, summarized, pruned, indexOrphans)
+	msg := fmt.Sprintf("Activity log cleanup: %s, summarized %d, pruned %d, orphaned index entries removed %d",
+		compactMsg, summarized, pruned, indexOrphans)
 	logging.Info(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil
