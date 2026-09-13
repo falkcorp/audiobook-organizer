@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.156.0
+// version: 1.157.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-12
 
@@ -4745,6 +4745,11 @@ func (p *PebbleStore) Reset() error {
 		fresh = nil
 	}
 	p.replaceMemStoreAfterReset(fresh)
+
+	// The wipe removed the book_atpath: backfill sentinel; drop the cached
+	// positive read of it too, or LiveBookIDsAtPath keeps trusting an index
+	// that the next startup backfill has not rebuilt yet.
+	p.bookAtPathBuilt.Store(false)
 
 	return nil
 }

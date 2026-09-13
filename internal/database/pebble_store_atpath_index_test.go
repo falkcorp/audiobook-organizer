@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
 // last-edited: 2026-09-12
 
@@ -512,18 +512,62 @@ func TestBackfill_WorkerPoolIndexesEveryRow(t *testing.T) {
 	checkAgainstOracle(t, s, paths)
 }
 
-func TestBackfill_UndecodableRowFailsWithoutSentinel(t *testing.T) {
+// TestBackfill_UndecodableRowIsSkippedAndCounted: one bad row used to fail the
+// startup backfill on every boot, leaving production on the full-scan path
+// forever with only a Warn. Now it is skipped, counted and sampled, and the
+// sentinel still vouches for every decodable row.
+func TestBackfill_UndecodableRowIsSkippedAndCounted(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
+	good, err := s.CreateBook(&Book{Title: "good", FilePath: "/good"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	resetAtPathIndex(t, s)
 	if err := s.db.Set([]byte("book:01BADROW"), []byte("{not json"), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.BackfillBookAtPathIndex(context.Background()); err == nil {
-		t.Fatal("an undecodable row must fail the backfill")
+	res, err := s.BackfillBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatalf("an undecodable row must not fail the backfill: %v", err)
 	}
-	if built, _ := s.bookAtPathIndexBuilt(); built {
-		t.Fatal("sentinel set despite a failed run")
+	if res.UndecodableRows != 1 || !reflect.DeepEqual(res.SampleUndecodable, []string{"01BADROW"}) {
+		t.Fatalf("undecodable = %d %v, want 1 [01BADROW]", res.UndecodableRows, res.SampleUndecodable)
+	}
+	if res.Scanned != 1 {
+		t.Fatalf("scanned = %d, want 1 (only the decodable row is indexed)", res.Scanned)
+	}
+	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
+		t.Fatalf("sentinel not set after every decodable row committed: %v %v", built, err)
+	}
+	ids, err := s.LiveBookIDsAtPath("/good")
+	if err != nil || len(ids) != 1 || ids[0] != good.ID {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, good.ID)
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.UndecodableRows != res.UndecodableRows || rep.MissingLive != 0 {
+		t.Fatalf("verify undecodable=%d missing_live=%d, want %d and 0", rep.UndecodableRows, rep.MissingLive, res.UndecodableRows)
+	}
+}
+
+// TestReset_ClearsBuiltCache: Reset wipes the sentinel (reachable in prod via
+// FactoryReset/ResetSystem). A cached "built" would keep LiveBookIDsAtPath on
+// an index the next startup backfill has not rebuilt.
+func TestReset_ClearsBuiltCache(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
+		t.Fatalf("precondition: sentinel not set: %v %v", built, err)
+	}
+	if err := s.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if built, err := s.bookAtPathIndexBuilt(); err != nil || built {
+		t.Fatalf("bookAtPathIndexBuilt after Reset = %v %v, want false", built, err)
 	}
 }
 

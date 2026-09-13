@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-09-12
 
@@ -40,6 +40,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -154,6 +155,13 @@ type BookAtPathBackfillResult struct {
 	Skipped bool
 	Scanned int
 	Commits int
+	// UndecodableRows are book rows whose JSON did not decode, counted the
+	// same way VerifyBookAtPathIndex counts them. They are skipped, not
+	// indexed: no path can be read from them, and LiveBookIDsAtPath's full
+	// scan fails on them too. SampleUndecodable holds up to
+	// bookAtPathSampleCap of their ids, sorted.
+	UndecodableRows   int      `json:"undecodable_rows"`
+	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
 }
 
 // BackfillBookAtPathIndex builds the book_atpath: index once, gated by its
@@ -227,6 +235,11 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 		"chunk", bookAtPathBackfillChunk, "workers", workers)
 
 	var scanned, commits atomic.Int64
+	// undecodable is appended to by every worker, so it has its own lock.
+	var (
+		undecMu     sync.Mutex
+		undecodable []string
+	)
 	g, gctx := errgroup.WithContext(ctx)
 	rows := make(chan bookAtPathBackfillRow, workers*64)
 
@@ -274,9 +287,15 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 				}
 				var row bookAtPathRow
 				if err := json.Unmarshal(r.v, &row); err != nil {
-					// A row that cannot be decoded cannot be indexed, and its
-					// absence would break completeness. Fail the run; no sentinel.
-					return fmt.Errorf("decode book row %s: %w", r.id, err)
+					// A row that cannot be decoded has no readable path, so it
+					// cannot be indexed. Failing the run on it would leave
+					// every boot on the full-scan path forever over one bad
+					// row, so skip it, count it, and report it at Error below.
+					// The sentinel still vouches only for decodable rows.
+					undecMu.Lock()
+					undecodable = append(undecodable, r.id)
+					undecMu.Unlock()
+					continue
 				}
 				if err := batch.Set(bookAtPathKey(row.FilePath, r.id), []byte{}, nil); err != nil {
 					return fmt.Errorf("stage index key for %s: %w", r.id, err)
@@ -299,6 +318,13 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 	err := g.Wait()
 	res.Scanned = int(scanned.Load())
 	res.Commits = int(commits.Load())
+	res.UndecodableRows = len(undecodable)
+	res.SampleUndecodable = sampleSorted(undecodable)
+	if res.UndecodableRows > 0 {
+		slog.Error("book-atpath-backfill: book rows did not decode and were NOT indexed; "+
+			"LiveBookIDsAtPath cannot see them. Run maintenance.book-atpath-index-verify and repair the rows",
+			"mode", mode, "undecodable", res.UndecodableRows, "sample_ids", res.SampleUndecodable)
+	}
 	if err == nil {
 		// A cancel that landed after the last row was handed out is still a
 		// cancel: do not vouch for the index on a run the caller abandoned.
@@ -319,7 +345,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool) (BookA
 	res.Commits++
 	p.bookAtPathBuilt.Store(true)
 	slog.Info("book-atpath-backfill: complete", "mode", mode, "scanned", res.Scanned,
-		"commits", res.Commits, "duration", time.Since(start).Round(time.Millisecond).String())
+		"commits", res.Commits, "undecodable", res.UndecodableRows, "duration", time.Since(start).Round(time.Millisecond).String())
 	return res, nil
 }
 

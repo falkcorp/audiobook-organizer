@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
 // last-edited: 2026-09-12
 
@@ -145,8 +145,16 @@ func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, _ json.RawMessa
 		return fmt.Errorf("rebuild book_atpath index (scanned %d before failing; sentinel "+
 			"state unchanged by this run): %w", res.Scanned, err)
 	}
-	msg := fmt.Sprintf("rebuilt book_atpath index: %d books, %d commits", res.Scanned, res.Commits)
-	_ = reporter.Log(slog.LevelInfo, msg)
+	msg := fmt.Sprintf("rebuilt book_atpath index: %d books, %d commits, %d undecodable",
+		res.Scanned, res.Commits, res.UndecodableRows)
 	_ = reporter.UpdateProgress(1, 1, msg)
+	if res.UndecodableRows > 0 {
+		// Same stance as the verify op: rows that could not be decoded were
+		// not indexed, so the run is reported as incomplete, not green.
+		_ = reporter.Log(slog.LevelError, msg)
+		return fmt.Errorf("book_atpath index rebuilt, but %d book row(s) did not decode and "+
+			"were not indexed (sample ids: %v)", res.UndecodableRows, res.SampleUndecodable)
+	}
+	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil
 }

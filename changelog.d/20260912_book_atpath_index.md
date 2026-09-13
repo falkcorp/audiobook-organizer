@@ -30,3 +30,18 @@ Two maintenance operations come with it:
 - **Book path-set index rebuild**: rewrites the index for every book. Run it,
   then the verify, after any rollback to a build older than this one, because an
   older build moves books without updating the index.
+
+Review follow-ups on the same change:
+
+- The signature-sidecar migration now writes the book's path-set entry in the
+  same atomic write as the row. Without it, a book moved by a concurrent save
+  just as the migration committed could end up at its old folder with no entry
+  there, so the folder would read as empty.
+- A factory reset now also forgets that the index was built, so lookups fall
+  back to the full scan until the index is rebuilt.
+- One unreadable book row no longer stops the index from ever being built. Such
+  rows are skipped, counted and logged as errors with sample ids. The rebuild
+  maintenance operation reports them as a failure, as the verify operation does.
+- The lookup interface was split in two (`BookNaturalKeyReader` and
+  `BookPathSetReader`) to stay within the eight-method interface limit. The
+  main store's method set is unchanged.
