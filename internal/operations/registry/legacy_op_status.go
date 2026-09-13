@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package registry
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // legacyOpStore is the slice of the v1 operations surface needed to keep a
@@ -229,9 +230,9 @@ func (r *Registry) propagateLegacyOpStatus(opID, v2Status string) {
 
 	if err := store.UpdateOperationStatus(p.LegacyOpID, legacyStatus, progress, total, message); err != nil {
 		r.logger.Warn("registry: failed to propagate terminal status to legacy op row",
-			"op_id", opID, "legacy_op_id", p.LegacyOpID, "status", legacyStatus, "error", err)
+			"op_id", logger.SanitizeLogValue(opID), "legacy_op_id", p.LegacyOpID, "status", legacyStatus, "error", err)
 		return
 	}
 	r.logger.Debug("registry: mirrored terminal status onto legacy op row",
-		"op_id", opID, "legacy_op_id", p.LegacyOpID, "status", legacyStatus)
+		"op_id", logger.SanitizeLogValue(opID), "legacy_op_id", p.LegacyOpID, "status", legacyStatus)
 }

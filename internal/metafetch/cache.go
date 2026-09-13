@@ -1,5 +1,6 @@
 // file: internal/metafetch/cache.go
-// version: 1.5.0
+// version: 1.5.1
+// guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-13
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"golang.org/x/time/rate"
 )
 
@@ -241,7 +243,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		if err := mfs.db.PutMetadataCache(entry); err != nil {
 			// Cache failure should not break the user's fetch; log and
 			// continue (callers can still consume the in-memory entry).
-			slog.Warn("metafetch FetchAndCache write", "id", bookID, "error", err)
+			slog.Warn("metafetch FetchAndCache write", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(err.Error()))
 			return entry
 		}
 	}

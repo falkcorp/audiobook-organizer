@@ -1,24 +1,25 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
 import (
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"log/slog"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
 // sortedKeys returns a tag map's keys in a stable order so a failure log names
@@ -516,7 +517,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 				skippedPaths = append(skippedPaths, e.SourcePath)
 			}
 			slog.Warn("files skipped during rename (source missing on disk)",
-				"book_id", id,
+				"book_id", logger.SanitizeLogValue(id),
 				"book_title", book.Title,
 				"skipped_count", len(renameResult.Skipped),
 				"total_files", len(bookFiles),
@@ -568,9 +569,9 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 			if newBookPath != book.FilePath {
 				book.FilePath = newBookPath
 				if _, err := mfs.db.UpdateBook(id, book); err != nil {
-					slog.Warn("failed to update book path for", "id", id, "error", err)
+					slog.Warn("failed to update book path for", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 				} else {
-					slog.Info("updated book path for", "id", id, "path", newBookPath)
+					slog.Info("updated book path for", "id", logger.SanitizeLogValue(id), "path", newBookPath)
 				}
 			}
 		}

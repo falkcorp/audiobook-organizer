@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/stream.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e2b19c74-3d05-4f81-a6c3-58790ed4b23f
-// last-edited: 2026-08-17
+// last-edited: 2026-09-13
 
 package abs
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,10 +38,10 @@ import (
 // files that are not on disk — and one line of this log would have said so.
 func fileNotFound(c *gin.Context, reason string, attrs ...any) {
 	args := append([]any{
-		"reason", reason,
-		"item", c.Param("id"),
-		"ino", c.Param("ino"),
-		"path", c.Request.URL.Path,
+		"reason", logger.SanitizeLogValue(reason),
+		"item", logger.SanitizeLogValue(c.Param("id")),
+		"ino", logger.SanitizeLogValue(c.Param("ino")),
+		"path", logger.SanitizeLogValue(c.Request.URL.Path),
 	}, attrs...)
 	slog.Warn("abs: file not found", args...)
 	respondError(c, http.StatusNotFound, "file not found")
@@ -179,7 +180,7 @@ func (h *Handler) PublicSessionTrack(c *gin.Context) {
 func (h *Handler) serveAudio(c *gin.Context, path string, asAttachment bool) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		fileNotFound(c, "abs_path_failed", "stored_path", path, "err", err)
+		fileNotFound(c, "abs_path_failed", "stored_path", logger.SanitizeLogValue(path), "err", logger.SanitizeLogValue(err.Error()))
 		return
 	}
 	if asAttachment {
@@ -200,7 +201,7 @@ func (h *Handler) serveAudio(c *gin.Context, path string, asAttachment bool) {
 		// single most useful fact for the next person — it says WHICH tree the row
 		// pointed into, which is what separated "files are gone" from "the organizer
 		// recorded destinations it never populated".
-		fileNotFound(c, "bytes_missing", "served_path", abs, "err", err)
+		fileNotFound(c, "bytes_missing", "served_path", logger.SanitizeLogValue(abs), "err", logger.SanitizeLogValue(err.Error()))
 		return
 	}
 	// The body is already written; stop gin from letting any later middleware append

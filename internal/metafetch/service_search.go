@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
@@ -477,7 +478,7 @@ func (mfs *Service) searchMetadataForBook(
 					}
 					allResults = cachedResults
 					cacheHit = true
-					slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", id, "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
+					slog.Debug("metadata-search cache HIT for ( ) — results, age", "id", logger.SanitizeLogValue(id), "name", src.Name(), "count", len(cachedResults), "value", time.Since(cached.CachedAt).Round(time.Second))
 				}
 			}
 
@@ -504,7 +505,7 @@ func (mfs *Service) searchMetadataForBook(
 						allResults = append(allResults, results...)
 					} else {
 						note(serr)
-						slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", searchTitle, "searchAuthor", searchAuthor, "error", serr)
+						slog.Debug("metadata-search SearchByTitleAndAuthor( ) error", "name", src.Name(), "searchTitle", logger.SanitizeLogValue(searchTitle), "searchAuthor", logger.SanitizeLogValue(searchAuthor), "error", serr)
 					}
 				}
 
@@ -520,7 +521,7 @@ func (mfs *Service) searchMetadataForBook(
 						if providerSentinel(serr) {
 							ladderOpen = false
 						}
-						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", searchTitle, "narrator", bookNarrator, "error", serr)
+						slog.Debug("metadata-search narrator-as-author fallback( ) error", "name", src.Name(), "searchTitle", logger.SanitizeLogValue(searchTitle), "narrator", bookNarrator, "error", serr)
 					}
 				}
 
@@ -532,7 +533,7 @@ func (mfs *Service) searchMetadataForBook(
 						allResults = append(allResults, results...)
 					} else {
 						note(serr)
-						slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", searchTitle, "error", serr)
+						slog.Debug("metadata-search SearchByTitle() error", "name", src.Name(), "value", logger.SanitizeLogValue(searchTitle), "error", serr)
 					}
 				}
 				// SearchByTitle with original title if different
@@ -595,7 +596,7 @@ func (mfs *Service) searchMetadataForBook(
 					failedErr = lastErr.Error()
 				}
 
-				slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", searchTitle)
+				slog.Debug("metadata-search returned raw results for", "name", src.Name(), "count", len(allResults), "searchTitle", logger.SanitizeLogValue(searchTitle))
 
 				// Write to cache on a successful non-empty fetch.
 				// Empty and error cases are not cached so they can
@@ -604,7 +605,7 @@ func (mfs *Service) searchMetadataForBook(
 				if len(allResults) > 0 {
 					if blob, merr := json.Marshal(allResults); merr == nil {
 						if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
-							slog.Warn("metadata-search cache put failed for ( )", "id", id, "name", src.Name(), "error", perr)
+							slog.Warn("metadata-search cache put failed for ( )", "id", logger.SanitizeLogValue(id), "name", src.Name(), "error", perr)
 						}
 					}
 				}
@@ -821,7 +822,7 @@ func (mfs *Service) searchMetadataForBook(
 			}
 		}
 		if err != nil || result == nil {
-			slog.Debug("metadata-search Audible API lookup for failed, trying Audnexus", "value", asinToLookup, "error", err)
+			slog.Debug("metadata-search Audible API lookup for failed, trying Audnexus", "value", logger.SanitizeLogValue(asinToLookup), "error", logger.SanitizeLogValue(fmt.Sprint(err)))
 			if !bypass && reg.Throttled(metadata.SourceIDAudnexus) {
 				err = metadata.ErrProviderThrottled
 			} else if werr := waitForLimiter(ctx, limiter); werr != nil {
@@ -897,7 +898,7 @@ func (mfs *Service) searchMetadataForBook(
 				})
 			}
 		} else {
-			slog.Debug("metadata-search ASIN lookup for failed", "value", asinToLookup, "error", err)
+			slog.Debug("metadata-search ASIN lookup for failed", "value", logger.SanitizeLogValue(asinToLookup), "error", logger.SanitizeLogValue(fmt.Sprint(err)))
 		}
 	}
 
@@ -949,7 +950,7 @@ func (mfs *Service) searchMetadataForBook(
 		candidates = mfs.RerankTopK(ctx, book, candidates)
 	}
 
-	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", searchTitle, "searchWords", searchWords)
+	slog.Debug("metadata-search returning candidates for (search words )", "candidateCount", len(candidates), "searchTitle", logger.SanitizeLogValue(searchTitle), "searchWords", searchWords)
 
 	return &SearchMetadataResponse{
 		Results:       candidates,

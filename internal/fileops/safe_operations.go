@@ -1,7 +1,7 @@
 // file: internal/fileops/safe_operations.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8f7e6d5c-4b3a-2918-7f6e-5d4c3b2a1908
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package fileops
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
 
@@ -148,8 +149,8 @@ func (op *FileOperation) Execute() error {
 		if _, statErr := os.Stat(op.backupPath); statErr == nil {
 			if rbErr := copyFileMkdirAll(op.backupPath, op.targetPath); rbErr != nil {
 				slog.Error("ROLLBACK FAILED: target may be corrupt and the only intact copy is the backup",
-					"target", op.targetPath, "backup", op.backupPath,
-					"copy_error", err, "rollback_error", rbErr)
+					"target", logger.SanitizeLogValue(op.targetPath), "backup", logger.SanitizeLogValue(op.backupPath),
+					"copy_error", logger.SanitizeLogValue(err.Error()), "rollback_error", logger.SanitizeLogValue(rbErr.Error()))
 				return fmt.Errorf("failed to copy file: %w; ROLLBACK ALSO FAILED: %s may be corrupt — the intact copy is at %s: %w",
 					err, op.targetPath, op.backupPath, rbErr)
 			}
@@ -189,9 +190,9 @@ func (op *FileOperation) Execute() error {
 			if _, statErr := os.Stat(op.backupPath); statErr == nil {
 				if rbErr := copyFileMkdirAll(op.backupPath, op.targetPath); rbErr != nil {
 					slog.Error("ROLLBACK FAILED after checksum mismatch: a known-corrupt file is left in place",
-						"target", op.targetPath, "backup", op.backupPath,
+						"target", logger.SanitizeLogValue(op.targetPath), "backup", logger.SanitizeLogValue(op.backupPath),
 						"original_hash", op.originalHash, "target_hash", op.targetHash,
-						"rollback_error", rbErr)
+						"rollback_error", logger.SanitizeLogValue(rbErr.Error()))
 					return fmt.Errorf("checksum mismatch: operation failed integrity check; ROLLBACK ALSO FAILED: %s is known-corrupt and was NOT restored — the intact copy is at %s: %w",
 						op.targetPath, op.backupPath, rbErr)
 				}
@@ -207,14 +208,14 @@ func (op *FileOperation) Execute() error {
 		// Only remove original if it's different from target
 		if err := os.Remove(op.originalPath); err != nil {
 			// Non-fatal: log but don't fail the operation
-			slog.Warn("failed to remove original file", "path", op.originalPath, "error", err)
+			slog.Warn("failed to remove original file", "path", logger.SanitizeLogValue(op.originalPath), "error", err)
 		}
 	}
 
 	// Step 5: Cleanup old backups if limit exceeded
 	if err := op.cleanupOldBackups(); err != nil {
 		// Non-fatal: log but don't fail the operation
-		slog.Warn("failed to cleanup old backups", "error", err)
+		slog.Warn("failed to cleanup old backups", "error", logger.SanitizeLogValue(err.Error()))
 	}
 
 	return nil
@@ -280,7 +281,7 @@ func (op *FileOperation) cleanupOldBackups() error {
 	toRemove := len(matches) - op.config.MaxBackups
 	for i := range toRemove {
 		if err := os.Remove(matches[i]); err != nil {
-			slog.Warn("failed to remove old backup", "path", matches[i], "error", err)
+			slog.Warn("failed to remove old backup", "path", logger.SanitizeLogValue(matches[i]), "error", err)
 		}
 	}
 

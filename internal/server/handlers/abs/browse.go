@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package abs
 
@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
@@ -277,7 +278,7 @@ func warnUnindexedSort(field, raw string) {
 		return
 	}
 	slog.Warn("abs: sort has no memdb index; the store must materialise the match set to order it (results are correct, but this costs more per request)",
-		"sort_param", absTruncateForLog(raw, absSortRawLogMax),
+		"sort_param", logger.SanitizeLogValue(absTruncateForLog(raw, absSortRawLogMax)),
 		"sort_field", field,
 		"remediation", "add it to enabled_sort_indexes and restart ONLY if this sort is hot enough to justify the index's memory and insert-throughput cost")
 }
@@ -375,7 +376,7 @@ func warnUnsupportedSort(field, raw string) {
 		return
 	}
 	slog.Warn("abs: client requested a sort this server has no field for; the page is returned in the store's default order",
-		"sort_param", absTruncateForLog(raw, absSortRawLogMax),
+		"sort_param", logger.SanitizeLogValue(absTruncateForLog(raw, absSortRawLogMax)),
 		"supported", absSupportedSortParams(),
 		"remediation", "none available to an operator -- this needs a mapping in absSortFields, or a field that does not exist yet")
 }
@@ -1459,7 +1460,7 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 
 	idx, err := h.contributorsCached(c.Request.Context())
 	if err != nil {
-		slog.Warn("abs: author detail: contributor index unavailable", "author_id", authorID, "err", err)
+		slog.Warn("abs: author detail: contributor index unavailable", "author_id", logger.SanitizeLogValue(authorID), "err", err)
 		respondError(c, http.StatusInternalServerError, "could not load author")
 		return
 	}
@@ -1502,7 +1503,7 @@ func (h *Handler) AuthorDetail(c *gin.Context) {
 		// 🔴 NOT an empty list. The same body carries numBooks from the index;
 		// "12 books" beside "libraryItems: []" is a contradiction the client
 		// renders as an empty page with no error, which is the report this fixes.
-		slog.Warn("abs: author detail: could not hydrate items", "author_id", authorID, "err", err)
+		slog.Warn("abs: author detail: could not hydrate items", "author_id", logger.SanitizeLogValue(authorID), "err", err)
 		respondError(c, http.StatusInternalServerError, "could not load author's items")
 		return
 	}
@@ -1693,7 +1694,7 @@ func warnUnsupportedAuthorSort(raw string) {
 		return
 	}
 	slog.Warn("abs: client requested an author sort this server has no field for; the page is returned in name order",
-		"group", "authors", "value", raw)
+		"group", "authors", "value", logger.SanitizeLogValue(raw))
 }
 
 // pageSlice returns the requested window of items. A non-positive limit means "no
@@ -2292,7 +2293,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 		return resp, nil
 	})
 	if err != nil {
-		slog.Warn("abs: search failed", "query", query, "err", err)
+		slog.Warn("abs: search failed", "query", logger.SanitizeLogValue(query), "err", err)
 		respondError(c, http.StatusInternalServerError, "search failed")
 		return
 	}
@@ -2319,7 +2320,7 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 	complete = true
 	degraded := func(what string, err error) {
 		complete = false
-		slog.Warn("abs: search source unavailable, serving that list empty", "source", what, "query", query, "err", err)
+		slog.Warn("abs: search source unavailable, serving that list empty", "source", what, "query", logger.SanitizeLogValue(query), "err", err)
 	}
 
 	books, err := h.library.SearchBooks(query, limit, 0)
@@ -2570,7 +2571,7 @@ func absFilterGroup(raw string) (group, value string, ok bool) {
 func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *itemsPageResponse) {
 	group, value, ok := absFilterGroup(raw)
 	if !ok {
-		slog.Warn("abs: undecodable item filter, serving empty page", "filter", raw)
+		slog.Warn("abs: undecodable item filter, serving empty page", "filter", logger.SanitizeLogValue(raw))
 		respondJSON(c, http.StatusOK, resp)
 		return
 	}
@@ -2580,7 +2581,7 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 	case "series":
 		seriesID, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil {
-			slog.Warn("abs: series filter value is not a series id", "value", value)
+			slog.Warn("abs: series filter value is not a series id", "value", logger.SanitizeLogValue(value))
 			respondJSON(c, http.StatusOK, resp)
 			return
 		}
@@ -2598,7 +2599,7 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 		// strconv.Itoa of the store's int id — not a name.
 		authorID, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil {
-			slog.Warn("abs: author filter value is not an author id", "value", value)
+			slog.Warn("abs: author filter value is not an author id", "value", logger.SanitizeLogValue(value))
 			respondJSON(c, http.StatusOK, resp)
 			return
 		}
@@ -2621,7 +2622,7 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 		ids = idx.narratorBooks[strings.TrimSpace(value)]
 	default:
 		slog.Warn("abs: unimplemented item filter group, serving empty page",
-			"group", group, "value", value)
+			"group", logger.SanitizeLogValue(group), "value", logger.SanitizeLogValue(value))
 		respondJSON(c, http.StatusOK, resp)
 		return
 	}
