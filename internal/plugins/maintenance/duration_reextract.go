@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.12.0
+// version: 3.13.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-08-30
+// last-edited: 2026-09-13
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -59,6 +59,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -127,25 +128,13 @@ const extractTimeout = 30 * time.Second
 // if it does not complete within extractTimeout. It also respects ctx so the op
 // can be cancelled between files.
 func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaInfo, error) {
-	type result struct {
-		info *mediainfo.MediaInfo
-		err  error
+	info, err := boundedCall(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
+		return mediainfo.Extract(filePath)
+	})
+	if errors.Is(err, errBoundedCallTimeout) {
+		return nil, fmt.Errorf("extract: %w", err)
 	}
-	ch := make(chan result, 1)
-	go func() {
-		info, err := mediainfo.Extract(filePath)
-		ch <- result{info, err}
-	}()
-	timer := time.NewTimer(extractTimeout)
-	defer timer.Stop()
-	select {
-	case r := <-ch:
-		return r.info, r.err
-	case <-timer.C:
-		return nil, fmt.Errorf("extract timed out after %v", extractTimeout)
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return info, err
 }
 
 func (p *Plugin) durationReextractDef() sdk.OperationDef {

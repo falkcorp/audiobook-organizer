@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,12 +19,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// fakeReporter satisfies sdk.Reporter (= registry.Reporter) for tests.
-type fakeReporter struct{ logs []string }
+// fakeReporter satisfies sdk.Reporter (= registry.Reporter) for tests. mu guards
+// logs: ops may Log from RunItems worker goroutines (tag-backfill's per-file
+// timeout WARN does), and -race flags an unguarded append. Read logs only after
+// the op returns.
+type fakeReporter struct {
+	mu   sync.Mutex
+	logs []string
+}
 
 func (r *fakeReporter) UpdateProgress(_, _ int, _ string) error { return nil }
 func (r *fakeReporter) Log(_ slog.Level, msg string, _ ...slog.Attr) error {
+	r.mu.Lock()
 	r.logs = append(r.logs, msg)
+	r.mu.Unlock()
 	return nil
 }
 func (r *fakeReporter) Logger() *slog.Logger   { return slog.Default() }
