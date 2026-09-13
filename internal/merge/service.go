@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.27.1
+// version: 1.27.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-13
 
@@ -977,7 +977,7 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		// entry stays so the journal still names those moves; undo then
 		// refuses, because a vanished book cannot be restored.
 		if cur, _ := ms.db.GetBookByID(id); cur == nil {
-			slog.Warn("combine: absorbed book vanished mid-combine; skipped", "id", logger.SanitizeLogValue(id), "journal", logger.SanitizeLogValue(journal.ID))
+			mlog.Warn("combine: absorbed book vanished mid-combine; skipped id=%s journal=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(journal.ID))
 			if len(movedFiles[id]) > 0 {
 				journal.Warnings = append(journal.Warnings, fmt.Sprintf("absorbed book %s vanished after its files moved", id))
 				kept = append(kept, entry)
@@ -1051,15 +1051,15 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	if err := ms.putCombineJournal(journal); err != nil {
 		// The combine is done and cannot be failed now. Say plainly that this
 		// one has no undo, both in the log and to the caller.
-		slog.Error("combine applied but its undo journal could not be finalized; this combine is NOT undoable",
-			"journal", journal.ID, "survivor", survivor.ID, "err", err)
+		mlog.Error("combine applied but its undo journal could not be finalized; this combine is NOT undoable journal=%s survivor=%s err=%s",
+			journal.ID, logger.SanitizeLogValue(survivor.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
 		res.UndoUnavailable = err.Error()
 	} else {
 		res.JournalID = journal.ID
 	}
 
-	slog.Info("combined books into one", "survivor", survivor.ID, "journal", journal.ID,
-		"files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+	mlog.Info("combined books into one survivor=%s journal=%s files_moved=%d books_soft_deleted=%d",
+		logger.SanitizeLogValue(survivor.ID), journal.ID, res.FilesMoved, res.BooksDeleted)
 	return res, nil
 }
 
@@ -1107,8 +1107,8 @@ func (ms *Service) snapProgressPair(users []database.User, absorbedID, survivorI
 		s.survState, s.survPos, err = snapshotProgress(ms.db, users, survivorID)
 	}
 	if err != nil {
-		slog.Warn("combine: progress snapshot failed; undo will not restore listening progress for this book",
-			"absorbed", logger.SanitizeLogValue(absorbedID), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
+		mlog.Warn("combine: progress snapshot failed; undo will not restore listening progress for this book absorbed=%s err=%s",
+			logger.SanitizeLogValue(absorbedID), logger.SanitizeLogValue(fmt.Sprint(err)))
 		j.Warnings = append(j.Warnings, fmt.Sprintf("progress of %s not journaled: %v", absorbedID, err))
 		return progressSnap{}
 	}
@@ -1177,7 +1177,7 @@ func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverr
 			}
 		}
 	} else {
-		slog.Warn("combine override: could not read lock rows for undo journal", "id", logger.SanitizeLogValue(primaryID), "err", logger.SanitizeLogValue(fmt.Sprint(err)))
+		mlog.Warn("combine override: could not read lock rows for undo journal id=%s err=%s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(err)))
 	}
 
 	if override.Title != "" || override.Narrator != "" {
@@ -1255,7 +1255,7 @@ func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverr
 	if prior, aerr := ms.db.GetBookAuthors(primaryID); aerr == nil {
 		undo.AuthorsBefore = prior
 	} else {
-		slog.Warn("combine override: could not read prior authors for undo journal", "id", logger.SanitizeLogValue(primaryID), "err", logger.SanitizeLogValue(fmt.Sprint(aerr)))
+		mlog.Warn("combine override: could not read prior authors for undo journal id=%s err=%s", logger.SanitizeLogValue(primaryID), logger.SanitizeLogValue(fmt.Sprint(aerr)))
 	}
 	// Surface failures instead of swallowing them: a dropped write here
 	// silently discards the user's explicit author choice while Combine

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-09-13
 
@@ -284,7 +284,7 @@ func (h *Handler) UndoCombine(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "combine journal", journalID)
 		return
 	case errors.As(err, &refused):
-		slog.Warn("combine undo refused", "journal", logger.SanitizeLogValue(journalID), "reasons", logger.SanitizeLogValue(fmt.Sprint(refused.Reasons)))
+		logger.New("duplicates").Warn("combine undo refused journal=%s reasons=%s", logger.SanitizeLogValue(journalID), logger.SanitizeLogValue(fmt.Sprint(refused.Reasons)))
 		c.JSON(http.StatusConflict, gin.H{"error": refused.Error(), "reasons": refused.Reasons})
 		return
 	case err != nil:
