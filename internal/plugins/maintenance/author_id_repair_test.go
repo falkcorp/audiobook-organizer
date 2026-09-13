@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
 // last-edited: 2026-09-13
 
@@ -156,8 +156,8 @@ func TestAuthorIDRepair_DryRunWritesNothing(t *testing.T) {
 // this fixture is deliberately NOT the lowest id and NOT the row with most books.
 func TestAuthorIDRepair_ApplyRepointsAndMergesOntoIndexResolvedID(t *testing.T) {
 	s := newRepairPebble(t)
-	x := repairAuthor(t, s, "Jane Doe")   // lowest id, most books
-	y := repairAuthor(t, s, "jane twin")  // renamed below: takes the index
+	x := repairAuthor(t, s, "Jane Doe")  // lowest id, most books
+	y := repairAuthor(t, s, "jane twin") // renamed below: takes the index
 	z := repairAuthor(t, s, "Co Author")
 	w := repairAuthor(t, s, "Next Up")
 	if err := s.UpdateAuthorName(y.ID, "JANE DOE"); err != nil {
@@ -168,7 +168,7 @@ func TestAuthorIDRepair_ApplyRepointsAndMergesOntoIndexResolvedID(t *testing.T) 
 	}
 
 	dangling := 99999
-	repairBook(t, s, "overlap", &x.ID, x.ID, y.ID)     // both dup and canonical credited
+	repairBook(t, s, "overlap", &x.ID, x.ID, y.ID) // both dup and canonical credited
 	repairBook(t, s, "xonly1", &x.ID, x.ID)
 	repairBook(t, s, "xonly2", &x.ID, x.ID)
 	repairBook(t, s, "coauth", &z.ID, z.ID, x.ID)
