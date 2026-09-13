@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package audiobooks
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -52,12 +53,16 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 
 	meta := svc.extractBookFileMetadata(book, authorName)
 
-	// Backfill duration (and other media info) from file if DB fields are missing
+	// Backfill duration from the file when the stored row has none. Only the
+	// derived field is written, onto a row the store re-reads (fillMediaInfo),
+	// and the response is built from that row -- never UpdateBook(book): book
+	// was read before ffprobe and the tag read, and a whole-struct save of it
+	// reverted any apply or edit that landed in between.
 	if book.FilePath != "" && book.Duration == nil {
 		if mi, miErr := mediainfo.Extract(book.FilePath); miErr == nil && mi.Duration > 0 {
 			book.Duration = &mi.Duration
-			if _, updErr := svc.store.UpdateBook(book.ID, book); updErr != nil {
-				slog.Warn("GetAudiobook failed to backfill duration for", "book", book.ID, "updErr", updErr)
+			if fresh := svc.fillMediaInfo(book.ID, database.BookMediaInfoPatch{Duration: &mi.Duration}); fresh != nil {
+				book = fresh
 			}
 		}
 	}
@@ -108,33 +113,35 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 
 	meta := svc.extractBookFileMetadata(book, authorName)
 
-	// Backfill empty media_info from file if DB fields are missing
+	// Backfill empty media_info from the file when DB fields are missing. As
+	// in GetAudiobook, only the derived still-empty fields are written
+	// (fillMediaInfo), never the whole struct read before ffprobe.
 	if book.FilePath != "" && (book.Codec == nil || book.Bitrate == nil || book.SampleRate == nil) {
 		if mi, err := mediainfo.Extract(book.FilePath); err == nil {
-			needsUpdate := false
+			var patch database.BookMediaInfoPatch
 			if book.Codec == nil && mi.Codec != "" {
 				book.Codec = &mi.Codec
-				needsUpdate = true
+				patch.Codec = &mi.Codec
 			}
 			if book.Bitrate == nil && mi.Bitrate > 0 {
 				book.Bitrate = &mi.Bitrate
-				needsUpdate = true
+				patch.Bitrate = &mi.Bitrate
 			}
 			if book.SampleRate == nil && mi.SampleRate > 0 {
 				book.SampleRate = &mi.SampleRate
-				needsUpdate = true
+				patch.SampleRate = &mi.SampleRate
 			}
 			if book.Channels == nil && mi.Channels > 0 {
 				book.Channels = &mi.Channels
-				needsUpdate = true
+				patch.Channels = &mi.Channels
 			}
 			if book.Duration == nil && mi.Duration > 0 {
 				book.Duration = &mi.Duration
-				needsUpdate = true
+				patch.Duration = &mi.Duration
 			}
-			if needsUpdate {
-				if _, err := svc.store.UpdateBook(book.ID, book); err != nil {
-					slog.Warn("GetAudiobookTags failed to backfill media info for", "book", book.ID, "err", err)
+			if !patch.IsEmpty() {
+				if fresh := svc.fillMediaInfo(book.ID, patch); fresh != nil {
+					book = fresh
 				}
 				response["media_info"] = map[string]any{
 					"codec":       stringVal(book.Codec),
@@ -184,6 +191,27 @@ func (svc *AudiobookService) GetAudiobookTags(ctx context.Context, id string, co
 	response["tags"] = tags
 
 	return response, nil
+}
+
+// singleLog is the logger for this file's read-path backfill writes.
+var singleLog = logger.New("audiobooks")
+
+// fillMediaInfo writes a read path's derived media fields through
+// FillBookMediaInfo, which re-reads the row inside the store and fills only
+// fields that are still empty there, writing nothing if none is. It returns
+// the stored row as it stands afterwards -- a concurrent apply's changes
+// included -- or nil when the write failed or the book is gone, in which case
+// the caller keeps the row it has.
+func (svc *AudiobookService) fillMediaInfo(id string, patch database.BookMediaInfoPatch) *database.Book {
+	if patch.IsEmpty() {
+		return nil
+	}
+	fresh, err := svc.store.FillBookMediaInfo(id, patch)
+	if err != nil {
+		singleLog.Warn("failed to backfill media info for book %s: %v", id, err)
+		return nil
+	}
+	return fresh
 }
 
 func (svc *AudiobookService) extractBookFileMetadata(book *database.Book, authorName string) metadata.Metadata {
