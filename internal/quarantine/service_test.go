@@ -1,5 +1,5 @@
 // file: internal/quarantine/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c2e9d41-5a3b-4f86-b0e7-1d9a6c3f8e52
 // last-edited: 2026-09-12
 
@@ -618,6 +618,83 @@ func TestUnquarantineBook_UnrelatedFileAtOriginalPathIsNotAdopted(t *testing.T) 
 	requireRowsAt(t, store, book.ID, src[0], dst[1], src[2])
 	requireBody(t, src[1], "someone new")
 	requireQuarantined(t, store, book.ID, true)
+}
+
+// B1 for a directory book: the folder's move is on record, but the files in
+// the folder at the destination are not this book's (sizes differ). The book
+// path does not follow it, no row is repointed onto it, and the folder is
+// untouched.
+func TestQuarantineBook_RecordedDirectoryMoveOfDifferentFilesIsNotAdopted(t *testing.T) {
+	qs, store, root := newTestService(t)
+	dir := filepath.Join(root, "Author", "Book")
+	src := under(dir, three...)
+	for _, p := range src {
+		writeAudio(t, p, filepath.Base(p))
+	}
+	book := seedBook(t, store, dir, src)
+	qBookDir := filepath.Join(qdir(root, book.ID), "Book")
+	record(t, store, book.ID, changeQuarantine, dir, qBookDir)
+	require.NoError(t, os.RemoveAll(dir))
+	for _, n := range three {
+		writeAudio(t, filepath.Join(qBookDir, n), "a different, longer file")
+	}
+
+	err := qs.QuarantineBook(book.ID, "taglib failed")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not adopting")
+	got := requireQuarantined(t, store, book.ID, false)
+	require.Equal(t, dir, got.FilePath)
+	requireRowsAt(t, store, book.ID, src...)
+	requireBody(t, filepath.Join(qBookDir, "02.mp3"), "a different, longer file")
+}
+
+// A folder this pass renames carries the rows' own files, so a file edited
+// since the scan (its size no longer matches the row) is still repointed.
+// Blocking it would leave the row at a path that no longer exists: the
+// original bug.
+func TestQuarantineBook_DirectoryBookRepointsFileEditedSinceScan(t *testing.T) {
+	qs, store, root := newTestService(t)
+	dir := filepath.Join(root, "Author", "Book")
+	src := under(dir, three...)
+	for _, p := range src {
+		writeAudio(t, p, filepath.Base(p))
+	}
+	book := seedBook(t, store, dir, src)
+	writeAudio(t, src[1], "re-tagged since the scan, now longer")
+	qBookDir := filepath.Join(qdir(root, book.ID), "Book")
+
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	requireQuarantined(t, store, book.ID, true)
+	requireRowsAt(t, store, book.ID, under(qBookDir, three...)...)
+}
+
+// Reverse direction, book level: a quarantined directory vanished from
+// .failed and a folder now sits at the book's original path. Nothing records
+// an unquarantine move there, so the pass fails before touching the book row.
+func TestUnquarantineBook_MissingQuarantinedDirectoryDoesNotAdoptForeignFolder(t *testing.T) {
+	qs, store, root := newTestService(t)
+	dir := filepath.Join(root, "Author", "Book")
+	src := under(dir, three...)
+	for _, p := range src {
+		writeAudio(t, p, filepath.Base(p))
+	}
+	book := seedBook(t, store, dir, src)
+	qBookDir := filepath.Join(qdir(root, book.ID), "Book")
+	dst := under(qBookDir, three...)
+	require.NoError(t, qs.QuarantineBook(book.ID, "taglib failed"))
+	require.NoError(t, os.RemoveAll(qBookDir))
+	for _, p := range src {
+		writeAudio(t, p, "foreign")
+	}
+
+	err := qs.UnquarantineBook(book.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nothing records")
+	got := requireQuarantined(t, store, book.ID, true)
+	require.Equal(t, qBookDir, got.FilePath)
+	requireRowsAt(t, store, book.ID, dst...)
+	requireBody(t, src[1], "foreign")
+	require.Zero(t, countChanges(t, store, book.ID, changeUnquarantine))
 }
 
 // ---------------------------------------------------------------------------

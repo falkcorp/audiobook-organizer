@@ -19,8 +19,10 @@
   pass recorded, even if the title changed since, as long as the book is still
   at that pass's source or destination. A file an interrupted pass already
   moved is picked up only if its history entry and its size (and hash, when
-  known) show it is that file. An unrelated file sitting at a destination is
-  never taken over.
+  known) show it is that file. A book folder is picked up only if its move is
+  recorded and every file in it matches its row. An unrelated file or folder
+  sitting at a destination is never taken over. A folder the pass moves itself
+  always carries its rows along, even for a file edited since the last scan.
 - A row whose file was already missing before quarantine is left alone and
   logged instead of blocking the quarantine forever.
 - Unquarantine picks history by timestamp, so a book quarantined twice goes
