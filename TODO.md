@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.3 -->
+<!-- version: 10.73.4 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-13 -->
 
@@ -1664,7 +1664,8 @@ fine; the row simply predated it by 67 days and nothing ever buried it.
     `maintenance/intro_transcribe.go:971`/`:1003`/`:1032`/`:396`,
     `itunes/service/position_sync.go:86-140`, `scanner/chapter_consolidator.go:138`
     (shard the outer `dirOrder` loop), `itunes/relocate.go:83`,
-    `itunes/backfill.go:97` (the `TODO(PERF-5)` N+1 is still there),
+    ~~`itunes/backfill.go:97` (the `TODO(PERF-5)` N+1)~~ resolved: the marker
+    is gone from main, fixed by b20acff12 and 1eb4a141e,
     `acoustid/lsh_backfill.go:115` (~275K rows), `acoustid/reset_all.go:144`,
     `maintenance/{fs_regroup_xml,itunes_regroup,booksig_recovery_audit,title_backfill,cleanup_merged,rebuild}.go`,
     `dedup/{reembed_embeddings,build_isbn_index}.go`.
@@ -6175,7 +6176,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       duplicates sub-package calls, and that closure has no error return). Decide
       whether the preview endpoint should 500 on a failed listing.
 
-- [ ] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two
+- [x] **TODO-052-UNDOC** `docs/api/openapi.json` has no entry at all for two
       live, permission-gated routes discovered while TASK-052 triaged the 15
       stale `POST /maintenance/{job-name}` paths (PR for TODO L296):
       `GET /maintenance/jobs` (the maintenance job catalogue —
@@ -6188,6 +6189,8 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       description as the live source of truth for the job_id enum; that
       cross-reference is currently undocumented itself.
 
+      **Done 2026-09-13:** both paths documented from their handlers (#2844).
+
 - [x] **TODO-REVERTDEDUPE** `auto-revert.yml`'s own "File the bug" step
       (`.github/workflows/auto-revert.yml` ~L305, `gh issue create`) has no
       pre-check against an already-open issue for the same failing SHA —
@@ -6199,7 +6202,7 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       issues today, independent of the backstop. Add the same dedupe check to
       `auto-revert.yml`'s issue-filing step.
 
-- [ ] **TODO-051-UNDOC** `docs/api/openapi.json` is missing correctly-prefixed
+- [x] **TODO-051-UNDOC** `docs/api/openapi.json` is missing correctly-prefixed
       entries for 11 live routes that TASK-051 found undocumented while
       deleting group-relative duplicate paths (PR for TODO L296): `/users/invite`,
       `/users/invites`, `/users/invites/{token}`, `/auth/accept-invite`,
@@ -6209,6 +6212,9 @@ unrelated PR (#2888, scanner/metadata only — touches no file on that stack).
       group-relative stub at the wrong (bare) path today — do not delete those
       stubs until a correctly-prefixed replacement is written, per
       `.claude/skills/api-doc/SKILL.md`.
+
+      **Done 2026-09-13:** all 11 prefixed entries written from their handlers
+      and the 11 bare stubs removed in the same change (#2846).
 
 - [ ] **SCAN-PHASE** Restructure the library scan into discrete, resumable phases —
       owner report 2026-08-22: the scan "seems way too slow", and the proposal is
@@ -8945,7 +8951,7 @@ step 4 propagates to the server package with no edit there.
       `internal/database/pebble_store_playback.go:107` leaks a stale status index
       entry so a book can appear under two statuses at once.
 
-- [ ] **LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false
+- [x] **LEAKSCAN-SCOPE** `scripts/check-memory-leaks.py` reports a false
       `addEventListener without removeEventListener` when the add is nested more
       than one brace level deeper than the cleanup. Its look-ahead abandons the
       search once `scope_depth < -1`, so an add inside `if (x) { if (y) {...}
@@ -8963,6 +8969,9 @@ step 4 propagates to the server package with no edit there.
       of a running depth counter. Whatever is chosen, add a regression fixture
       with the add nested two levels below the remove so the heuristic cannot
       silently regress.
+
+      **Done 2026-09-13:** fixed by 750f5df14 (pairs listeners by handler
+      identity, not brace depth); #2665 closed.
 
 - [ ] **REVIEW-PREVIEW** Play the first ~2 minutes of audio directly from the
       metadata chooser. Requested 2026-08-11: *"I need a way to play the first 2
