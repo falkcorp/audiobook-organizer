@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -47,6 +47,78 @@ type fakeApplySvc struct {
 	checkpoints []func() error
 	// identityErr is what ValidateCachedIdentityForBook reports.
 	identityErr error
+	// preflightErr is what RenamePreflight reports; preflightIDs records calls.
+	preflightErr error
+	preflightIDs []string
+}
+
+func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate) error {
+	f.preflightIDs = append(f.preflightIDs, id)
+	return f.preflightErr
+}
+
+// The 2026-09-13 shape: the rename after the apply is known to fail. The apply
+// must be refused before the database is written, with its own reason, and no
+// file work may run.
+func TestApplyCachedCandidate_RenamePreflightRefusesBeforeAnyWrite(t *testing.T) {
+	blocked := errors.New("compute target paths failed: two files of one book plan the same target path")
+	svc := &fakeApplySvc{candidates: oneCandidate(t), preflightErr: blocked}
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", true, nil)
+
+	if out.Applied || out.Reason != applySkipFileWorkWouldFail || !errors.Is(out.Err, blocked) {
+		t.Fatalf("outcome = %+v, want refused with %q", out, applySkipFileWorkWouldFail)
+	}
+	if len(svc.appliedIDs) != 0 {
+		t.Errorf("ApplyMetadataCandidate ran for %v; the database must not be written", svc.appliedIDs)
+	}
+	if len(svc.invalidatedID) != 0 {
+		t.Errorf("cache invalidated for %v; the candidate must stay for a retry", svc.invalidatedID)
+	}
+	if len(svc.finishCalls) != 0 {
+		t.Errorf("file work ran %d times after a refused preflight", len(svc.finishCalls))
+	}
+}
+
+// Without write-back there is no rename, so the preflight is not consulted and
+// cannot block a database-only apply.
+func TestApplyCachedCandidate_NoWriteBackSkipsRenamePreflight(t *testing.T) {
+	svc := &fakeApplySvc{candidates: oneCandidate(t), preflightErr: errors.New("would fail")}
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", false, nil)
+	if !out.Applied {
+		t.Fatalf("outcome = %+v, want applied", out)
+	}
+	if len(svc.preflightIDs) != 0 {
+		t.Errorf("preflight consulted without write-back: %v", svc.preflightIDs)
+	}
+}
+
+// The dry run reports the same refusal the apply makes.
+func TestPreviewBulkApplyRow_BlockingRenameIsNotApply(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "A Title", Score: 0.95}
+	plan := cachedApplyPlan{Book: &database.Book{ID: "b", Title: "A Title"}, Candidate: &cand}
+	svc := blockingPreview{&fakeApplySvc{}}
+	row := previewBulkApplyRow(svc, "b", plan, true)
+	if row.Verdict != previewVerdictBlocked || row.Reason != applySkipFileWorkWouldFail {
+		t.Fatalf("verdict %q reason %q, want blocked/%s", row.Verdict, row.Reason, applySkipFileWorkWouldFail)
+	}
+	if row = previewBulkApplyRow(svc, "b", plan, false); row.Verdict != previewVerdictApply {
+		t.Fatalf("without write-back there is no rename to block: verdict %q", row.Verdict)
+	}
+}
+
+type blockingPreview struct{ *fakeApplySvc }
+
+func (blockingPreview) PreviewMetadataCandidate(string, metafetch.MetadataCandidate, bool) (*metafetch.ApplyPreview, error) {
+	return &metafetch.ApplyPreview{Rename: metafetch.RenamePreview{Blocking: "compute target paths failed"}}, nil
+}
+
+// A passing preflight changes nothing: the apply and its file work run as before.
+func TestApplyCachedCandidate_PassingPreflightApplies(t *testing.T) {
+	svc := &fakeApplySvc{candidates: oneCandidate(t)}
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", true, nil)
+	if !out.Applied || len(svc.preflightIDs) != 1 || len(svc.appliedIDs) != 1 || len(svc.finishCalls) != 1 {
+		t.Fatalf("outcome %+v preflight %v applied %v finish %d", out, svc.preflightIDs, svc.appliedIDs, len(svc.finishCalls))
+	}
 }
 
 func (f *fakeApplySvc) ValidateCachedIdentityForBook(*metafetch.MetadataCandidateCache, *database.Book) error {

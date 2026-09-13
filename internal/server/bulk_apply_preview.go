@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -183,6 +183,11 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 		row.Verdict, row.Reason, row.Detail = previewVerdictBlocked, "preview_failed", err.Error()
 	default:
 		row.Changes, row.SkippedLocked, row.Rename = pv.Changes, pv.SkippedLocked, &pv.Rename
+		// The real apply refuses this book before writing (RenamePreflight,
+		// same previewRename), so the dry run must not call it "apply".
+		if writeBack && pv.Rename.Blocking != "" {
+			row.Verdict, row.Reason, row.Detail = previewVerdictBlocked, applySkipFileWorkWouldFail, pv.Rename.Blocking
+		}
 	}
 	return row
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
@@ -53,7 +54,48 @@ type RenamePreview struct {
 	// library copy when the book lives under a protected (iTunes/import) path.
 	TargetBookID string       `json:"target_book_id,omitempty"`
 	Moves        []RenameMove `json:"moves,omitempty"`
+	// Blocking is set when the apply's file sequel is KNOWN to fail to land
+	// the rename: the post-apply plan cannot be computed (a broken pattern, or
+	// two files of the book on one target -- organizer.ErrDuplicateRenameTarget),
+	// or a planned target is held by a different file under a recorded,
+	// unresolved collision. An apply in that state writes the database and
+	// leaves the files behind, so RenamePreflight refuses it.
+	Blocking string `json:"blocking,omitempty"`
 }
+
+// ErrApplyFileWorkWouldFail is returned by RenamePreflight when the database
+// apply must not run because its file sequel cannot land.
+var ErrApplyFileWorkWouldFail = fmt.Errorf("apply refused before any write: the file rename cannot land")
+
+// RenamePreflight answers, BEFORE ApplyMetadataCandidate writes anything,
+// whether the write-back rename that follows the apply is known to fail.
+//
+// The apply is database-first by design (the file sequel is slow and runs
+// under its own locks), so a rename that fails after it leaves the database
+// holding the new metadata while the files keep their old names -- what
+// happened to three books on 2026-09-13. Rolling the database back afterwards
+// would have to unwind author/series rows, provenance, cover and the iTunes
+// enqueue; refusing up front unwinds nothing. The check is the same read-only
+// plan the bulk-apply dry run shows (previewRename), so the preview and the
+// refusal cannot disagree.
+//
+// A preview that cannot be built at all is not a refusal: ApplyMetadataCandidate
+// runs the same reads (book, policy tag, field locks) and reports its own error
+// for the same cause. It is logged so it is never silent.
+func (mfs *Service) RenamePreflight(id string, candidate MetadataCandidate) error {
+	pv, err := mfs.PreviewMetadataCandidate(id, candidate, true)
+	if err != nil {
+		preflightLog.Warn("rename preflight could not preview book %s; leaving the decision to the apply: %s",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
+		return nil
+	}
+	if pv.Rename.Blocking != "" {
+		return fmt.Errorf("%w: %s", ErrApplyFileWorkWouldFail, pv.Rename.Blocking)
+	}
+	return nil
+}
+
+var preflightLog = logger.New("metafetch.preflight")
 
 // ApplyPreview is what ApplyMetadataCandidate would do to one book.
 type ApplyPreview struct {
@@ -297,7 +339,9 @@ func (mfs *Service) previewRename(book *database.Book, after previewAfter, write
 
 	entries, err := newPathOrganizer(mfs.db).ComputeTargetPaths(&planned, files)
 	if err != nil {
-		return RenamePreview{TargetBookID: target.ID, Reason: "compute target paths failed: " + err.Error()}
+		// runApplyPipeline returns this same error after the DB apply.
+		reason := "compute target paths failed: " + err.Error()
+		return RenamePreview{TargetBookID: target.ID, Reason: reason, Blocking: reason}
 	}
 	entries = mfs.dropProtectedRenameEntries(target.ID, entries)
 	var moves []RenameMove
@@ -312,7 +356,11 @@ func (mfs *Service) previewRename(book *database.Book, after previewAfter, write
 	case hasCheckpoint(mfs.db, target.ID, phaseRename):
 		return RenamePreview{TargetBookID: target.ID, Reason: "rename checkpoint already set for this book", Moves: moves}
 	case organizer.ApplyRenameBlocked(mfs.db, target.ID, targetPathsOf(entries)):
-		return RenamePreview{TargetBookID: target.ID, Reason: "blocked by a recorded rename failure", Moves: moves}
+		// A different file holds a planned target under a collision the
+		// resolver could not settle, and it has not changed since. The rename
+		// would be skipped after the DB apply, so the names would never match.
+		reason := "blocked by a recorded rename failure"
+		return RenamePreview{TargetBookID: target.ID, Reason: reason, Moves: moves, Blocking: reason}
 	}
 	return RenamePreview{WouldRename: true, TargetBookID: target.ID, Moves: moves}
 }

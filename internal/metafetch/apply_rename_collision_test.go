@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_rename_collision_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b61d0e4-2f7a-4c38-a5e9-4d1c8f0b7e26
 // last-edited: 2026-09-13
 
@@ -96,4 +96,48 @@ func TestRunApplyPipeline_RepeatedTrackNumbersRenameToDistinctTargets(t *testing
 	assert.Equal(t, "disc two, longer", string(got2), "disc 2 keeps its bytes under its row")
 	assert.Equal(t, "Apocalypse Bringer Mynoghra, Volume 3 - 01.mp3", filepath.Base(files[0].FilePath))
 	assert.Equal(t, "Apocalypse Bringer Mynoghra, Volume 3 - 02.mp3", filepath.Base(files[1].FilePath))
+}
+
+// RenamePreflight refuses, before any write, a book whose post-apply rename
+// plan cannot be computed -- runApplyPipeline would return the same error only
+// AFTER ApplyMetadataCandidate had written the database. A malformed format
+// spec is the plan error reachable with a mock store; ErrDuplicateRenameTarget
+// takes the same branch.
+func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	root := t.TempDir()
+	config.AppConfig.RootDir = root
+	config.AppConfig.AutoRenameOnApply = true
+	config.AppConfig.FolderNamingPattern = "{author}/{title}"
+
+	dir := filepath.Join(root, "Someone", "Old")
+	a, b := filepath.Join(dir, "1.mp3"), filepath.Join(dir, "2.mp3")
+	writeFile(t, a, "one")
+	writeFile(t, b, "two")
+	book := &database.Book{ID: "b1", Title: "Old", FilePath: dir, Author: &database.Author{ID: 1, Name: "Someone"}}
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { c := *book; return &c, nil },
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{
+				{ID: "f1", BookID: "b1", FilePath: a, Format: "mp3", TrackNumber: 1},
+				{ID: "f2", BookID: "b1", FilePath: b, Format: "mp3", TrackNumber: 2},
+			}, nil
+		},
+	})
+	cand := MetadataCandidate{Title: "New Title", Author: "Someone"}
+
+	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	require.NoError(t, svc.RenamePreflight("b1", cand), "a plannable rename must not be refused")
+
+	config.AppConfig.FileNamingPattern = "{title} - {track:x}"
+	err := svc.RenamePreflight("b1", cand)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrApplyFileWorkWouldFail)
+
+	// Read-only: nothing moved.
+	for _, p := range []string{a, b} {
+		_, statErr := os.Stat(p)
+		assert.NoError(t, statErr, "preflight moved %s", p)
+	}
 }
