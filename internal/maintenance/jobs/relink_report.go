@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_report.go
-// version: 2.7.1
+// version: 2.7.2
 // guid: a1000022-0000-0000-0000-000000000022
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package jobs
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 func init() { maintenance.Register(&relinkReportJob{}) }
@@ -67,7 +68,10 @@ func (j *relinkReportJob) Run(ctx context.Context, store maintenance.JobStore, r
 		book := &allBooks[i]
 		fp := book.FilePath
 
-		if !strings.HasPrefix(fp, organizerRoot) {
+		// CutPathPrefix matches on a separator boundary: a bare HasPrefix
+		// counted a sibling such as "<root>2/..." as inside the organizer root.
+		rel, inRoot := pathutil.CutPathPrefix(fp, organizerRoot)
+		if !inRoot {
 			skipped++
 			reporter.Increment()
 			continue
@@ -78,7 +82,6 @@ func (j *relinkReportJob) Run(ctx context.Context, store maintenance.JobStore, r
 			continue
 		}
 
-		rel := strings.TrimPrefix(fp, organizerRoot)
 		rel = strings.TrimPrefix(rel, string(os.PathSeparator))
 		authorName, _, _ := strings.Cut(rel, string(os.PathSeparator))
 		if authorName == "" || authorName == filepath.Base(fp) {

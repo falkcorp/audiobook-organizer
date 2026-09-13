@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package jobs
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -74,7 +75,10 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 
 		core := &allBooks[i]
 		fp := core.FilePath
-		if !strings.HasPrefix(fp, organizerRoot) {
+		// CutPathPrefix matches on a separator boundary: a bare HasPrefix
+		// counted a sibling such as "<root>2/..." as inside the organizer root.
+		rel, inRoot := pathutil.CutPathPrefix(fp, organizerRoot)
+		if !inRoot {
 			skipped++
 			continue
 		}
@@ -95,7 +99,6 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 		}
 
 		// Derive author name from organizer path; fall back to DB.
-		rel := strings.TrimPrefix(fp, organizerRoot)
 		rel = strings.TrimPrefix(rel, string(os.PathSeparator))
 		authorName, _, _ := strings.Cut(rel, string(os.PathSeparator))
 		if authorName == "" || authorName == filepath.Base(fp) {
@@ -182,7 +185,7 @@ func rmt_updateBookFiles(store bookFileMutator, bookID, newFP string, fi os.File
 	}
 	for j := range bookFiles {
 		bf := &bookFiles[j]
-		if !strings.HasPrefix(bf.FilePath, organizerRoot) {
+		if !pathutil.IsWithin(bf.FilePath, organizerRoot) {
 			continue
 		}
 		bf.FilePath = newFP

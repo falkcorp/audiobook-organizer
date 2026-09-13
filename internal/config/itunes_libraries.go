@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2e9c47-1a08-4d63-8f92-3c7a0e6b1d54
-// last-edited: 2026-07-23
+// last-edited: 2026-09-12
 //
 // The 4-state iTunes library model + its config-load Resolve/Validate. Two physical
 // libraries (Original = the real hands-off tree under books/itunes/**; AO = the
@@ -19,6 +19,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // LibraryRef is one physical iTunes library: its live binary DB and its read-only
@@ -114,7 +116,9 @@ func pathCoveredByProtected(p string, protected []string) bool {
 		if pref == "" {
 			continue
 		}
-		if strings.HasPrefix(clean, strings.ReplaceAll(pref, "\\", "/")) {
+		// IsWithin matches on a separator boundary: a bare HasPrefix let a
+		// protected "/lib" cover an unprotected sibling "/lib2/...".
+		if pathutil.IsWithin(clean, strings.ReplaceAll(pref, "\\", "/")) {
 			return true
 		}
 	}

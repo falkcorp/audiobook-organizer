@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.19.0
+// version: 2.19.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-12
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/gin-gonic/gin"
 )
 
@@ -200,7 +201,9 @@ func (s *Server) handleWipe(c *gin.Context) {
 						continue
 					}
 					// Only remove files inside the organizer root dir — never iTunes paths.
-					if !strings.HasPrefix(filepath.Clean(bf.FilePath), filepath.Clean(rootDir)) {
+					// IsWithin matches on a separator boundary, so a sibling
+					// directory such as "<root>2" is not treated as inside root.
+					if !pathutil.IsWithin(filepath.Clean(bf.FilePath), filepath.Clean(rootDir)) {
 						continue
 					}
 					slog.Info("wipe files", "action", dryRunLabel(dryRun), "path", bf.FilePath)
