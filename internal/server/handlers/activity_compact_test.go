@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_compact_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2c7a9f3-4b61-4d0e-8f5a-6c3b9d1e7a48
 // last-edited: 2026-09-13
 
@@ -94,6 +94,8 @@ func TestCompactActivity_RejectsNegativeDays(t *testing.T) {
 func TestCompactActivity_DayCountValidation(t *testing.T) {
 	const wholeMsg = "older_than_days must be a whole number of days"
 	const negMsg = "older_than_days must be zero or positive"
+	const rangeMsg = "older_than_days must be between 0 and 36500"
+	const reqMsg = "older_than_days is required (0 compacts everything up to now)"
 	cases := []struct {
 		name     string
 		body     string
@@ -105,9 +107,16 @@ func TestCompactActivity_DayCountValidation(t *testing.T) {
 		{"string", `{"older_than_days": "3"}`, http.StatusBadRequest, wholeMsg, 0},
 		{"exponent", `{"older_than_days": 1e3}`, http.StatusBadRequest, wholeMsg, 0},
 		{"negative", `{"older_than_days": -1}`, http.StatusBadRequest, negMsg, 0},
+		{"above max", `{"older_than_days": 36501}`, http.StatusBadRequest, rangeMsg, 0},
+		{"AddDate wrap to now", `{"older_than_days": 213503982334601}`, http.StatusBadRequest, rangeMsg, 0},
+		{"int64 max", `{"older_than_days": 9223372036854775807}`, http.StatusBadRequest, rangeMsg, 0},
+		{"beyond int64", `{"older_than_days": 99999999999999999999}`, http.StatusBadRequest, rangeMsg, 0},
+		{"missing", `{}`, http.StatusBadRequest, reqMsg, 0},
+		{"null", `{"older_than_days": null}`, http.StatusBadRequest, reqMsg, 0},
 		{"malformed", `{"older_than_days":`, http.StatusBadRequest, "request body must be a JSON object", 0},
-		{"zero means everything", `{"older_than_days": 0}`, http.StatusAccepted, "", 0},
+		{"explicit zero means everything", `{"older_than_days": 0}`, http.StatusAccepted, "", 0},
 		{"whole", `{"older_than_days": 7}`, http.StatusAccepted, "", 7},
+		{"max", `{"older_than_days": 36500}`, http.StatusAccepted, "", 36500},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

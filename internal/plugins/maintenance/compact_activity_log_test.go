@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,64 @@ func TestCompactActivityLog_RejectsNegativeDays(t *testing.T) {
 	}
 	if !deps.gotCutoff.IsZero() {
 		t.Error("the store was called despite invalid params")
+	}
+}
+
+// TestCompactActivityLog_RejectsOutOfRangeAndMissingDays: a day count above
+// MaxCompactDays overflowed AddDate into a cutoff near now (compact
+// EVERYTHING), and a missing/null field decoded to 0 (also everything). Both
+// must fail before the store is touched.
+func TestCompactActivityLog_RejectsOutOfRangeAndMissingDays(t *testing.T) {
+	for _, raw := range []string{
+		`{"older_than_days": 36501}`,
+		`{"older_than_days": 213503982334601}`,
+		`{"older_than_days": 9223372036854775807}`,
+		`{}`,
+		`{"older_than_days": null}`,
+		``,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			deps := &compactDeps{}
+			p := New(deps)
+			err := p.runCompactActivityLog(context.Background(), json.RawMessage(raw), &resultReporter{})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !deps.gotCutoff.IsZero() {
+				t.Errorf("the store was called with cutoff %s despite invalid params", deps.gotCutoff)
+			}
+		})
+	}
+}
+
+func TestCompactActivityLog_AcceptsMaxDays(t *testing.T) {
+	deps := &compactDeps{}
+	p := New(deps)
+	before := time.Now()
+	err := p.runCompactActivityLog(context.Background(), json.RawMessage(`{"older_than_days": 36500}`), &resultReporter{})
+	if err != nil {
+		t.Fatalf("36500 days: %v", err)
+	}
+	want := before.AddDate(0, 0, -MaxCompactDays)
+	if d := deps.gotCutoff.Sub(want); d < -time.Minute || d > time.Minute {
+		t.Errorf("cutoff = %s, want about %s", deps.gotCutoff, want)
+	}
+}
+
+// TestCompactCutoff_RefusesWrappedCutoff pins the defensive check behind the
+// bound: AddDate wraps on overflow, and a wrapped cutoff must be refused.
+func TestCompactCutoff_RefusesWrappedCutoff(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	for _, days := range []int{213503982334601, math.MaxInt64} {
+		if got, err := compactCutoff(now, days); err == nil {
+			t.Errorf("days=%d: cutoff %s accepted; want an overflow error", days, got)
+		}
+	}
+	if got, err := compactCutoff(now, 7); err != nil || !got.Equal(now.AddDate(0, 0, -7)) {
+		t.Errorf("days=7: got %s, %v", got, err)
+	}
+	if got, err := compactCutoff(now, 0); err != nil || !got.Equal(now) {
+		t.Errorf("days=0 must mean everything up to now: got %s, %v", got, err)
 	}
 }
 
