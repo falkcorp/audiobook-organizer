@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-13
 
@@ -92,8 +92,10 @@ func TestCheckSequence(t *testing.T) {
 }
 
 func TestEvaluate(t *testing.T) {
-	book := &database.Book{Title: "Big Cats 1"}
-	good := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95}
+	// 10 h of files; a matching candidate carries the same runtime, so the
+	// evidence leg has its two agreements (runtime and title).
+	book := &database.Book{Title: "Big Cats 1", Duration: intp(36000)}
+	good := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
 
 	if v := Evaluate(book, &good, nil); !v.Allowed {
 		t.Fatalf("matching 0.95 candidate refused: %+v", v)

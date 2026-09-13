@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
 // last-edited: 2026-09-13
 //
@@ -34,7 +34,8 @@ func candidateJSON(t *testing.T, c metafetch.MetadataCandidate) []json.RawMessag
 // NOTHING for a refused candidate: no apply, no cache invalidation, no file
 // work. The first row is the owner's reported failure.
 func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
-	bigCats1 := fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", FilePath: "/lib/A/Big Cats/Big Cats 1.m4b"}}
+	tenHours := 36000
+	bigCats1 := fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", FilePath: "/lib/A/Big Cats/Big Cats 1.m4b", Duration: &tenHours}}
 	cases := []struct {
 		name     string
 		cand     metafetch.MetadataCandidate
@@ -64,7 +65,7 @@ func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
 	}
 
 	// And the matching volume at 0.95 goes through.
-	svc := &fakeApplySvc{candidates: candidateJSON(t, metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95})}
+	svc := &fakeApplySvc{candidates: candidateJSON(t, metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours})}
 	if out := applyCachedCandidateForBook(svc, bigCats1, &fakeITunes{}, "b1", false, nil); !out.Applied {
 		t.Fatalf("matching volume refused: reason=%q err=%v gate=%+v", out.Reason, out.Err, out.Gate)
 	}
@@ -73,7 +74,8 @@ func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
 // TestPlanOpResultApply_GateRefuses covers /metadata/batch-apply-candidates,
 // whose "matched" status had no floor behind it.
 func TestPlanOpResultApply_GateRefuses(t *testing.T) {
-	books := fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", Author: &database.Author{Name: "Ann Author"}}}
+	tenHours := 36000
+	books := fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", Author: &database.Author{Name: "Ann Author"}, Duration: &tenHours}}
 	cr := func(c metafetch.MetadataCandidate, fetchedTitle string) CandidateResult {
 		out := CandidateResult{Status: "matched", Candidate: &c}
 		out.Book.Title, out.Book.Author = fetchedTitle, "Ann Author"
@@ -85,7 +87,7 @@ func TestPlanOpResultApply_GateRefuses(t *testing.T) {
 	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.99}, "Big Cats One Old Title")); p.Reason != applySkipGateBlocked || p.Gate.Reason != applygate.ReasonIdentityStale {
 		t.Fatalf("title changed since fetch: reason=%q gate=%+v", p.Reason, p.Gate)
 	}
-	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95}, "Big Cats 1")); p.Reason != "" {
+	if p := planOpResultApply(books, "b1", cr(metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours}, "Big Cats 1")); p.Reason != "" {
 		t.Fatalf("matching volume refused: reason=%q err=%v", p.Reason, p.Err)
 	}
 }
