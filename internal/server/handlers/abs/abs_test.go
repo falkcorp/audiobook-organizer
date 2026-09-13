@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package abs_test
 
@@ -52,6 +52,7 @@ type fakeStore struct {
 	byHashErr        error
 	createSessionErr error
 	updateErr        error
+	revokeAllErr     error // returned alongside the revoked count, as a partial revoke
 	updatedUsers     []string
 }
 
@@ -239,7 +240,7 @@ func (f *fakeStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 			n++
 		}
 	}
-	return n, nil
+	return n, f.revokeAllErr
 }
 
 // ── fake CF verifier ────────────────────────────────────────────────────────
@@ -1179,6 +1180,37 @@ func TestLogout_AllDevicesRevokesEverySession(t *testing.T) {
 	if w, _ := h.do(t, request{method: http.MethodPost, path: "/auth/refresh",
 		headers: map[string]string{"x-refresh-token": str(t, stranger, "refreshToken")}}); w.Code != http.StatusOK {
 		t.Fatalf("allDevices logout must be scoped to the calling user, got %d", w.Code)
+	}
+}
+
+// A partial all-devices revoke (the store revoked what it could read and
+// reported the rest) must answer 200 with the counts and partial=true, not a
+// 500 that reads as "nothing happened" — the readable sessions ARE revoked.
+func TestLogout_AllDevicesPartialRevokeReportsPartial(t *testing.T) {
+	h := newHarness(t, "cf,jwt", nil)
+	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
+	a := userObj(t, h.login(t, "owner", "pw-pw-pw-pw"))
+	b := userObj(t, h.login(t, "owner", "pw-pw-pw-pw"))
+	h.store.revokeAllErr = &database.UnreadableMembersError{
+		Op: "RevokeAllABSSessionsForUser u1", IDs: []string{"s-bad"}, Errs: []error{errors.New("reading session s-bad: unmarshal")},
+	}
+
+	w, body := h.do(t, request{method: http.MethodPost, path: "/logout?allDevices=1",
+		headers: map[string]string{"Authorization": "Bearer " + str(t, a, "accessToken")}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("a partial revoke must answer 200 with counts, got %d", w.Code)
+	}
+	if body["partial"] != true || body["success"] != false {
+		t.Fatalf("want partial=true success=false, got %v", body)
+	}
+	if body["revoked"] != float64(2) || body["unreadable"] != float64(1) {
+		t.Fatalf("want revoked=2 unreadable=1, got %v", body)
+	}
+	for _, tok := range []string{str(t, a, "refreshToken"), str(t, b, "refreshToken")} {
+		if w, _ := h.do(t, request{method: http.MethodPost, path: "/auth/refresh",
+			headers: map[string]string{"x-refresh-token": tok}}); w.Code != http.StatusUnauthorized {
+			t.Fatalf("a partial revoke must still revoke the readable sessions: %d", w.Code)
+		}
 	}
 }
 

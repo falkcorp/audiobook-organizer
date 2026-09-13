@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
 // last-edited: 2026-09-12
 
@@ -150,15 +150,20 @@ func (p *PebbleStore) ListUserBookStatesByStatus(userID, status string, limit, o
 	}
 	prefix := []byte("idx:ubs:status:" + userID + ":" + status + ":")
 	upper := []byte("idx:ubs:status:" + userID + ":" + status + ":~")
-	// Only a missing record (the getter's (nil, nil)) is a stale index entry
-	// that may be skipped; any other read error fails the list. Until
-	// 2026-09-12 every error was skipped and the scan's own read error was
-	// never checked, so an unreadable member came back as a short list.
+	// A missing record (the getter's (nil, nil)) is a stale index entry and is
+	// skipped. An unreadable member is NOT skipped silently: the readable
+	// states come back together with an *UnreadableMembersError naming it (see
+	// that type); it still occupies its slot in the page, so the limit/offset
+	// window does not shift. An index-scan error is a hard failure with nil
+	// rows. Until 2026-09-12 every member error was skipped and the scan's own
+	// read error was never checked, so an unreadable member came back as a
+	// short list.
 	var out []UserBookState
+	unreadable := &UnreadableMembersError{Op: "ListUserBookStatesByStatus " + userID + "/" + status}
 	skipped := 0
 	prefixLen := len(prefix)
 	if err := forEachKeyInRange(p.db, prefix, upper, func(key, _ []byte) error {
-		if limit > 0 && len(out) >= limit {
+		if limit > 0 && len(out)+unreadable.Count() >= limit {
 			return errStopScan
 		}
 		bookID := string(key[prefixLen:])
@@ -168,7 +173,8 @@ func (p *PebbleStore) ListUserBookStatesByStatus(userID, status string, limit, o
 		}
 		state, err := p.GetUserBookState(userID, bookID)
 		if err != nil {
-			return fmt.Errorf("ListUserBookStatesByStatus %s/%s: reading state for book %s: %w", userID, status, bookID, err)
+			unreadable.add(bookID, fmt.Errorf("reading state for book %s: %w", bookID, err))
+			return nil
 		}
 		if state != nil {
 			out = append(out, *state)
@@ -177,7 +183,7 @@ func (p *PebbleStore) ListUserBookStatesByStatus(userID, status string, limit, o
 	}); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return out, unreadable.orNil()
 }
 
 func (p *PebbleStore) ListUserPositionsSince(userID string, t time.Time) ([]UserPosition, error) {

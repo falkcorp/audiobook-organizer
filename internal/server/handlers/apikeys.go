@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-07-03
+// last-edited: 2026-09-12
 
 package handlers
 
@@ -213,9 +213,16 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 	} else {
 		keys, err = h.store.ListAPIKeysForUser(caller.ID)
 	}
-	if err != nil {
+	// One unreadable key record must not turn the whole listing into a 500:
+	// serve the keys that read and report how many did not. Any other error
+	// (a failed index scan) is a hard failure.
+	unreadable, partial := database.UnreadableMemberCount(err)
+	if err != nil && !partial {
 		httputil.InternalError(c, "failed to list api keys", err)
 		return
+	}
+	if partial {
+		slog.Warn("apikey list: some keys could not be read", "caller", caller.ID, "all", showAll, "unreadable", unreadable, "err", err)
 	}
 	if keys == nil {
 		keys = []database.APIKey{}
@@ -236,7 +243,7 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 		}
 		results = append(results, buildAPIKeyResponse(k, username))
 	}
-	httputil.RespondWithOK(c, gin.H{"api_keys": results, "count": len(results)})
+	httputil.RespondWithOK(c, gin.H{"api_keys": results, "count": len(results), "unreadable": unreadable})
 }
 
 // Get handles GET /auth/api-keys/:id.

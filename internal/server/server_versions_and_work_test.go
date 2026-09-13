@@ -1,7 +1,7 @@
 // file: internal/server/server_versions_and_work_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3a4b5c6d-7e8f-9012-a345-678901234567
-// last-edited: 2026-09-02
+// last-edited: 2026-09-12
 
 package server
 
@@ -87,10 +87,12 @@ func TestWorkEndpoints_WithMockStore(t *testing.T) {
 	server, cleanup := setupTestServerWithStore(t, store)
 	defer cleanup()
 
+	// w2's books cannot be read. Since 2026-09-12 that fails the page rather
+	// than listing w2 as a work with no books (entities.ListWork).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work", nil)
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusInternalServerError, w.Code)
 
 	store2 := dbmocks.NewMockStore(t)
 	store2.EXPECT().SetRootDir(mock.Anything).Return()

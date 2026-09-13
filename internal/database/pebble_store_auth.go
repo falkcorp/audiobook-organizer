@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
 // last-edited: 2026-09-12
 
@@ -360,17 +360,21 @@ func (p *PebbleStore) GetAPIKeyByHash(hash string) (*APIKey, error) {
 }
 
 func (p *PebbleStore) ListAPIKeysForUser(userID string) ([]APIKey, error) {
-	// Only a missing record (the getter's (nil, nil)) is a stale index entry
-	// that may be skipped; any other read error fails the list. Until
-	// 2026-09-12 every error was skipped and the scan's own read error was
-	// never checked, so an unreadable member came back as a short list.
+	// A missing record (the getter's (nil, nil)) is a stale index entry and is
+	// skipped. An unreadable member is NOT skipped silently: the readable keys
+	// come back together with an *UnreadableMembersError naming it (see that
+	// type). An index-scan error is a hard failure with nil rows. Until
+	// 2026-09-12 every member error was skipped and the scan's own read error
+	// was never checked, so an unreadable member came back as a short list.
 	prefix := "idx:apikey:user:" + userID + ":"
 	var out []APIKey
+	unreadable := &UnreadableMembersError{Op: "ListAPIKeysForUser " + userID}
 	if err := forEachKeyInRange(p.db, []byte(prefix), []byte(prefix+"~"), func(key, _ []byte) error {
 		keyID := strings.TrimPrefix(string(key), prefix)
 		k, err := p.GetAPIKey(keyID)
 		if err != nil {
-			return fmt.Errorf("ListAPIKeysForUser %s: reading key %s: %w", userID, keyID, err)
+			unreadable.add(keyID, fmt.Errorf("reading key %s: %w", keyID, err))
+			return nil
 		}
 		if k != nil {
 			out = append(out, *k)
@@ -379,27 +383,31 @@ func (p *PebbleStore) ListAPIKeysForUser(userID string) ([]APIKey, error) {
 	}); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return out, unreadable.orNil()
 }
 
+// ListAllAPIKeys returns every API key. An undecodable record is reported in
+// an *UnreadableMembersError alongside the keys that did decode; an iterator
+// error fails the call. Until 2026-09-12 an undecodable record was dropped
+// silently and the iterator's own error was never checked, so a truncated scan
+// looked like a complete one.
 func (p *PebbleStore) ListAllAPIKeys() ([]APIKey, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("apikey:"),
-		UpperBound: []byte("apikey:~"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
+	const prefix = "apikey:"
 	var out []APIKey
-	for iter.First(); iter.Valid(); iter.Next() {
+	unreadable := &UnreadableMembersError{Op: "ListAllAPIKeys"}
+	if err := forEachKeyInRange(p.db, []byte(prefix), []byte(prefix+"~"), func(key, value []byte) error {
 		var k APIKey
-		if err := json.Unmarshal(iter.Value(), &k); err != nil {
-			continue
+		if err := json.Unmarshal(value, &k); err != nil {
+			id := strings.TrimPrefix(string(key), prefix)
+			unreadable.add(id, fmt.Errorf("decoding key %s: %w", id, err))
+			return nil
 		}
 		out = append(out, k)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("ListAllAPIKeys: %w", err)
 	}
-	return out, nil
+	return out, unreadable.orNil()
 }
 
 func (p *PebbleStore) RevokeAPIKey(id string) error {

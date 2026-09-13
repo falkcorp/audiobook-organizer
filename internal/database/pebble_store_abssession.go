@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_abssession.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8c04e7b1-52a9-4d38-b6f0-3a71c9e5d284
 // last-edited: 2026-09-12
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -222,16 +223,22 @@ func (p *PebbleStore) GetABSSessionByRefreshHash(hash string) (*ABSSession, erro
 // sessions.
 func (p *PebbleStore) ListABSSessionsForUser(userID string) ([]ABSSession, error) {
 	prefix := []byte(absSessionUserIdxPfx + userID + ":")
-	// Only a missing record (the getter's (nil, nil)) is a stale index entry
-	// that may be skipped; any other read error fails the list. Until
-	// 2026-09-12 every error was skipped and the scan's own read error was
-	// never checked, so an unreadable member came back as a short list.
+	// A missing record (the getter's (nil, nil)) is a stale index entry and is
+	// skipped. An unreadable member is NOT skipped silently: the readable
+	// sessions come back together with an *UnreadableMembersError naming it, so
+	// a listing can show what it has and say what it is missing, while any
+	// caller that checks err != nil first still fails. An index-scan error is a
+	// hard failure with nil rows. Until 2026-09-12 every member error was
+	// skipped and the scan's own read error was never checked, so an unreadable
+	// member came back as a short list with a nil error.
 	out := make([]ABSSession, 0, 4)
+	unreadable := &UnreadableMembersError{Op: "ListABSSessionsForUser " + userID}
 	if err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
 		id := strings.TrimPrefix(string(key), string(prefix))
 		s, err := p.GetABSSession(id)
 		if err != nil {
-			return fmt.Errorf("ListABSSessionsForUser %s: reading session %s: %w", userID, id, err)
+			unreadable.add(id, fmt.Errorf("reading session %s: %w", id, err))
+			return nil
 		}
 		if s != nil {
 			out = append(out, *s)
@@ -244,7 +251,7 @@ func (p *PebbleStore) ListABSSessionsForUser(userID string) ([]ABSSession, error
 	sort.SliceStable(out, func(a, b int) bool {
 		return out[a].CreatedAt.After(out[b].CreatedAt)
 	})
-	return out, nil
+	return out, unreadable.orNil()
 }
 
 // RevokeABSSession marks a session revoked and drops its refresh-token index
@@ -285,22 +292,44 @@ func (p *PebbleStore) revokeABSSessionRecord(s *ABSSession) error {
 
 // RevokeAllABSSessionsForUser implements POST /logout?allDevices=1. Returns the
 // number of sessions revoked.
+//
+// This is a security action, so it is best-effort per session, never
+// all-or-nothing: every session that can be read is revoked even when another
+// cannot be read, cannot be revoked, or the index scan fails partway. Every
+// such failure is joined into the returned error (unreadable members as an
+// *UnreadableMembersError), so the caller always learns the revoke was
+// partial. It walks the index itself rather than calling
+// ListABSSessionsForUser because a scan error there discards the rows it had
+// already read, and here those rows must still be revoked.
 func (p *PebbleStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
-	sessions, err := p.ListABSSessionsForUser(userID)
-	if err != nil {
-		return 0, err
-	}
+	prefix := []byte(absSessionUserIdxPfx + userID + ":")
+	unreadable := &UnreadableMembersError{Op: "RevokeAllABSSessionsForUser " + userID}
+	var errs []error
 	revoked := 0
-	for i := range sessions {
-		if sessions[i].Revoked {
-			continue
+	scanErr := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
+		id := strings.TrimPrefix(string(key), string(prefix))
+		s, err := p.GetABSSession(id)
+		if err != nil {
+			unreadable.add(id, fmt.Errorf("reading session %s: %w", id, err))
+			return nil
 		}
-		if err := p.revokeABSSessionRecord(&sessions[i]); err != nil {
-			return revoked, err
+		if s == nil || s.Revoked {
+			return nil
+		}
+		if err := p.revokeABSSessionRecord(s); err != nil {
+			errs = append(errs, fmt.Errorf("RevokeAllABSSessionsForUser %s: revoking session %s: %w", userID, id, err))
+			return nil
 		}
 		revoked++
+		return nil
+	})
+	if scanErr != nil {
+		errs = append(errs, fmt.Errorf("RevokeAllABSSessionsForUser %s: %w", userID, scanErr))
 	}
-	return revoked, nil
+	if u := unreadable.orNil(); u != nil {
+		errs = append(errs, u)
+	}
+	return revoked, errors.Join(errs...)
 }
 
 // DeleteExpiredABSSessions removes revoked and past-expiry sessions along with both

@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.38.1
+// version: 1.38.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-12
 
@@ -383,7 +383,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	}
 
 	// Filter books that need organizing
-	booksToOrganize, alreadyCorrect, placeholderSkipped := orgSvc.filterBooksNeedingOrganization(allBooks, log)
+	booksToOrganize, alreadyCorrect, heldBack := orgSvc.filterBooksNeedingOrganization(allBooks, log)
 
 	logMsg = fmt.Sprintf("Found %d books that need organizing, %d already correct (out of %d total)",
 		len(booksToOrganize), len(alreadyCorrect), len(allBooks))
@@ -392,9 +392,8 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 
 	// Perform organization
 	stats := orgSvc.organizeBooks(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID)
-	if placeholderSkipped > 0 {
-		stats.addCollision(OutcomePlaceholderSkipped, placeholderSkipped)
-	}
+	stats.addCollision(OutcomePlaceholderSkipped, heldBack.placeholderTitle)
+	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
 
 	// Post-organize auto write-back now rides the batcher.
 	if stats.Organized > 0 || stats.ReOrganized > 0 {
@@ -707,16 +706,24 @@ func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, 
 	return toOrganize, alreadyCorrect
 }
 
+// filterHeldBack counts books the organize filter held back for a reason the
+// run's summary must report, not just log: each becomes a Stats.Collisions
+// outcome, which the summary line's tally prints.
+type filterHeldBack struct {
+	placeholderTitle       int // OutcomePlaceholderSkipped
+	versionGroupUnreadable int // OutcomeVersionGroupUnreadable
+}
+
 // filterBooksNeedingOrganization is FilterBooksNeedingOrganization plus the
-// number of books held back for a placeholder title, which PerformOrganizeStats
-// reports as OutcomePlaceholderSkipped.
-func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, log logger.Logger) ([]database.Book, []database.Book, int) {
+// counts of books held back that PerformOrganizeStats reports as outcomes.
+func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, log logger.Logger) ([]database.Book, []database.Book, filterHeldBack) {
 	booksToOrganize := make([]database.Book, 0)
 	alreadyCorrect := make([]database.Book, 0)
 	skippedMissingFiles := 0
 	skippedDeleted := 0
 	skippedUnresolvedAuthor := 0
 	skippedPlaceholderTitle := 0
+	skippedVersionGroupUnreadable := 0
 	for i, book := range allBooks {
 		// Update progress during filtering so the UI doesn't show 0/0
 		if i%500 == 0 || i == len(allBooks)-1 {
@@ -738,7 +745,9 @@ func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, 
 					// Fail closed. An unreadable group is not "a group with no
 					// primary": organizing this row could add a second primary to a
 					// group that already has one. Until 2026-09-12 a read error fell
-					// through to organize. The next run retries.
+					// through to organize. The next run retries. Counted, so the
+					// run's summary reports it rather than only a log line.
+					skippedVersionGroupUnreadable++
 					log.Warn("Organize: skipping non-primary %s: could not read version group %s: %v",
 						book.ID, *book.VersionGroupID, vgErr)
 					continue
@@ -832,7 +841,13 @@ func (orgSvc *Service) filterBooksNeedingOrganization(allBooks []database.Book, 
 	if skippedMissingFiles > 0 {
 		log.Info("Organize: Skipped %d book(s) with missing book files", skippedMissingFiles)
 	}
-	return booksToOrganize, alreadyCorrect, skippedPlaceholderTitle
+	if skippedVersionGroupUnreadable > 0 {
+		log.Warn("Organize: Held back %d non-primary book(s) whose version group could not be read", skippedVersionGroupUnreadable)
+	}
+	return booksToOrganize, alreadyCorrect, filterHeldBack{
+		placeholderTitle:       skippedPlaceholderTitle,
+		versionGroupUnreadable: skippedVersionGroupUnreadable,
+	}
 }
 
 // bookNeedsReOrganize checks whether a book already in RootDir needs to be

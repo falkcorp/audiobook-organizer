@@ -1,11 +1,13 @@
 // file: internal/server/handlers/reading.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-08-18
+// last-edited: 2026-09-12
 
 package handlers
 
 import (
+	"log/slog"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -187,10 +189,18 @@ func (h *ReadingHandler) ListByStatus(c *gin.Context) {
 		return
 	}
 	p := httputil.ParsePaginationParams(c)
-	list, err := h.store.ListUserBookStatesByStatus(CallingUserID(c), status, p.Limit, p.Offset)
-	if err != nil {
+	userID := CallingUserID(c)
+	list, err := h.store.ListUserBookStatesByStatus(userID, status, p.Limit, p.Offset)
+	// One unreadable state record must not turn the whole page into a 500:
+	// serve the states that read and report how many did not. Any other error
+	// (a failed index scan) is a hard failure.
+	unreadable, partial := database.UnreadableMemberCount(err)
+	if err != nil && !partial {
 		httputil.InternalError(c, "failed to list states", err)
 		return
 	}
-	httputil.RespondWithOK(c, gin.H{"states": list, "count": len(list), "limit": p.Limit, "offset": p.Offset})
+	if partial {
+		slog.Warn("reading list: some states could not be read", "user", userID, "status", status, "unreadable", unreadable, "err", err)
+	}
+	httputil.RespondWithOK(c, gin.H{"states": list, "count": len(list), "limit": p.Limit, "offset": p.Offset, "unreadable": unreadable})
 }

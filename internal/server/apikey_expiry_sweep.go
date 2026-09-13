@@ -1,13 +1,15 @@
 // file: internal/server/apikey_expiry_sweep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 481f65a7-e54a-4be2-b43e-d6d992fcbd60
-// last-edited: 2026-08-30
+// last-edited: 2026-09-12
 
 package server
 
 import (
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 const (
@@ -61,7 +63,11 @@ func (s *Server) warnExpiringAPIKeys() {
 
 	sweep := func() {
 		keys, err := store.ListAllAPIKeys()
-		if err != nil {
+		if n, partial := database.UnreadableMemberCount(err); partial {
+			// Sweep the keys that did read; one bad record must not silence
+			// expiry warnings for every other key.
+			slog.Warn("apikey expiry sweep: some keys could not be read", "unreadable", n, "err", err)
+		} else if err != nil {
 			slog.Warn("apikey expiry sweep: failed to list keys", "err", err)
 			return
 		}
