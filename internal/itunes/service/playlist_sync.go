@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 1e9f0a8b-2c3d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-18
+// last-edited: 2026-09-13
 //
 // iTunes playlist sync (spec 3.4 tasks 5-6).
 //
@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
@@ -91,8 +92,8 @@ type PlaylistImportItem struct {
 	Title  string `json:"title"`
 	PID    string `json:"pid"`
 	Query  string `json:"query,omitempty"`
-	Status string `json:"status"` // "imported" | "would-import" | "already-imported" | "unparseable" | "create-failed"
-	Err    string `json:"err,omitempty"`
+	Status string `json:"status"`        // "imported" | "would-import" | "already-imported" | "unparseable" | "create-failed"
+	Err    string `json:"err,omitempty"` // for "would-import"/"imported" with an empty Query: why the criteria were untranslatable
 }
 
 // PlaylistImportResult is the full outcome of a migration run.
@@ -146,8 +147,14 @@ func (p *PlaylistSync) MigrateSmartPlaylists(lib *itunes.ITLLibrary, opts Playli
 			res.Items = append(res.Items, item)
 			continue
 		}
+		// TranslateSmartCriteria returns "" whenever the blob could not be
+		// decoded faithfully (ITUNES-SMARTCRIT-PARSE). Record why, so a dry
+		// run shows the reason instead of a bare empty query.
 		dslQuery := itunes.TranslateSmartCriteria(parsed)
 		item.Query = dslQuery
+		if dslQuery == "" && len(parsed.Unresolved) > 0 {
+			item.Err = "untranslatable smart criteria: " + strings.Join(parsed.Unresolved, "; ")
+		}
 
 		if opts.DryRun {
 			res.Imported++

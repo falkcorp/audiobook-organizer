@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -181,12 +181,15 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 
 	importer := itunesservice.NewPlaylistImporter(p.deps.PlaylistStore())
 
-	// ALWAYS dry-run first, even when applying. The criteria translator is
-	// currently producing empty queries (ITUNES-SMARTCRIT-PARSE): ParseSmartCriteria
-	// misreads the SLst format and returns rules with no field, no operator and
-	// no operands, WITHOUT erroring — so an apply run would happily create
-	// hundreds of playlists that are all empty. Importing 292 empty playlists is
-	// worse than importing none: it looks like it worked.
+	// ALWAYS dry-run first, even when applying. The Smart Criteria format is
+	// only partially mapped (ITUNES-SMARTCRIT-PARSE): ParseSmartCriteria now
+	// recovers string-operand rules correctly, but the AND/OR flag, the SLst
+	// container nesting, numeric/date rules and operator word 0x01000001 are
+	// not decoded. TranslateSmartCriteria therefore returns "" for any blob it
+	// cannot express exactly — never a partial or match-all query — and this
+	// guard refuses to apply while any importable playlist would be created
+	// with an empty query. Importing hundreds of empty playlists is worse than
+	// importing none: it looks like it worked.
 	probe := importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
 		OwnerUserID: strings.TrimSpace(params.OwnerUserID),
 		DryRun:      true,
