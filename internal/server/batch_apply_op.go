@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -354,6 +354,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			if claimErr != nil {
 				return fmt.Errorf("batch-apply-cached: %w", claimErr)
 			}
+			if n := claims.Unreadable(); n > 0 {
+				_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
+					slog.Int("unreadable", n))
+			}
 			runOne := func(ctx context.Context, id string) error {
 				// One timer per book, from before the gate wait to the end of
 				// its file work; FinishApplyFileWorkTimed logs it as the
@@ -585,10 +589,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (refused by certainty gate %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d)",
+				"applied %d of %d (refused by certainty gate %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
 				applied.Load(), total, gateBlocked.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), stillDeferred,
-				skippedLocked.Load())
+				skippedLocked.Load(), claims.Unreadable())
 			if priorDone > 0 {
 				// State the known ambiguity rather than implying a clean count.
 				// The watermark is the contiguous completed PREFIX, so a resumed

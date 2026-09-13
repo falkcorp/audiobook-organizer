@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-09-13
 
@@ -49,6 +49,14 @@ var (
 type ClaimIndex struct {
 	mu    sync.RWMutex
 	byKey map[string][]claim
+	// unreadable are books the index could not read, with whatever is still
+	// known about them (folder, ASIN). A row that looks like one of them is
+	// blocked for manual review; every other row proceeds.
+	unreadable []unreadableClaim
+}
+
+type unreadableClaim struct {
+	id, dir, asin string
 }
 
 type claim struct {
@@ -100,6 +108,49 @@ func (x *ClaimIndex) get(k string) []claim {
 	return x.byKey[k]
 }
 
+// AddUnreadable records a book the index could not read. filePath and asin
+// are whatever is still known about it ("" when nothing is). A book with
+// neither is only counted: it blocks nothing.
+func (x *ClaimIndex) AddUnreadable(id, filePath, asin string) {
+	if x == nil {
+		return
+	}
+	u := unreadableClaim{id: id, dir: bookDir(filePath), asin: strings.ToUpper(strings.TrimSpace(asin))}
+	x.mu.Lock()
+	x.unreadable = append(x.unreadable, u)
+	x.mu.Unlock()
+}
+
+// Unreadable is the number of books the index could not read.
+func (x *ClaimIndex) Unreadable() int {
+	if x == nil {
+		return 0
+	}
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return len(x.unreadable)
+}
+
+// unreadableLookAlike returns an unreadable book, other than bookID, whose
+// folder is related to dir (relatedDirs) or whose ASIN equals asin.
+func (x *ClaimIndex) unreadableLookAlike(bookID, dir, asin string) (string, bool) {
+	if x == nil {
+		return "", false
+	}
+	a := strings.ToUpper(strings.TrimSpace(asin))
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	for _, u := range x.unreadable {
+		if u.id == bookID {
+			continue
+		}
+		if relatedDirs(u.dir, dir) || (u.asin != "" && u.asin == a) {
+			return u.id, true
+		}
+	}
+	return "", false
+}
+
 // ClaimKey identifies "the same candidate": the ASIN when there is one, else
 // the normalized title plus the sorted author surnames. "" = no key.
 func ClaimKey(c *metafetch.MetadataCandidate) string {
@@ -131,10 +182,18 @@ func ClaimKey(c *metafetch.MetadataCandidate) string {
 // and the rename preflight already refuses two books renamed onto one target.
 func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runtimeOutcome string, claims *ClaimIndex) CheckResult {
 	r := CheckResult{Name: "partial_book", Outcome: OutcomeNeutral}
+	d := bookDir(book.FilePath)
+	// A book the index could not read may be exactly the sibling part this
+	// row collides with. Its look-alikes (related folder, same ASIN) go to
+	// manual review, whatever the runtime says; every other row proceeds.
+	if u, ok := claims.unreadableLookAlike(book.ID, d, c.ASIN); ok {
+		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
+		r.Detail = "sibling " + u + " unreadable; manual review"
+		return r
+	}
 	if runtimeOutcome == OutcomeAgree {
 		return r
 	}
-	d := bookDir(book.FilePath)
 	bside := bookSide(book.Title, book.FilePath)
 	cside := c.Title + " " + c.Subtitle
 	bp, bok := partOf(bside)

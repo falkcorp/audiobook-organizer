@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_claims.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0c6a9e42-7d1b-4f83-a5e2-9b3f1d7c4e60
 // last-edited: 2026-09-13
 
@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
-	"sync"
-	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
@@ -22,7 +20,9 @@ import (
 
 // claimLoader returns the book and the candidate a bulk apply would put on
 // it, nils when the book claims nothing, or an error when it could not be
-// read.
+// read. With an error it still returns whatever it did read (the book, for
+// its folder; the candidate, for its ASIN), so the index can block that
+// book's look-alikes.
 type claimLoader func(id string) (*database.Book, *metafetch.MetadataCandidate, error)
 
 // claimBookReader reads a book and its files: a sibling claim needs both.
@@ -38,18 +38,19 @@ type claimBookReader interface {
 // ids must be the whole candidate SOURCE, never the request's own book list:
 // every book with cached candidates (cachedClaimIndex) or every row of the
 // operation (keysOf on its results). The preview and the apply then build the
-// same index whatever subset each is asked about, so a book the preview
-// blocks for a sibling is blocked at apply too, on a resumed run as well.
+// same index whatever subset each is asked about.
 //
-// It reads only, bounded to runtime.NumCPU() workers. It fails CLOSED: a book
-// that could not be read, or a cancelled ctx, returns an error and no index,
-// because a smaller index would silently let a sibling part through. The
-// caller fails the op (or the request) before any write.
+// A book that cannot be read is not skipped and does not fail the run (owner
+// decision, 2026-09-13): it is recorded in the index with whatever is still
+// known (folder, ASIN), every row that looks like it (a related folder or the
+// same ASIN) is blocked for manual review, and every other row proceeds.
+// ClaimIndex.Unreadable is the count the caller reports. A book with nothing
+// known blocks nothing. A cancelled ctx still returns an error: the index is
+// then incomplete in an unknown way.
+//
+// It reads only, bounded to runtime.NumCPU() workers.
 func buildClaimIndex(ctx context.Context, ids []string, load claimLoader) (*applygate.ClaimIndex, error) {
 	idx := applygate.NewClaimIndex()
-	var failed atomic.Int64
-	var firstMu sync.Mutex
-	var first error
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for _, id := range ids {
@@ -59,12 +60,14 @@ func buildClaimIndex(ctx context.Context, ids []string, load claimLoader) (*appl
 		g.Go(func() error {
 			b, c, err := load(id)
 			if err != nil {
-				failed.Add(1)
-				firstMu.Lock()
-				if first == nil {
-					first = fmt.Errorf("book %s: %w", id, err)
+				var path, asin string
+				if b != nil {
+					path = b.FilePath
 				}
-				firstMu.Unlock()
+				if c != nil {
+					asin = c.ASIN
+				}
+				idx.AddUnreadable(id, path, asin)
 				return nil
 			}
 			if b != nil && c != nil {
@@ -76,9 +79,6 @@ func buildClaimIndex(ctx context.Context, ids []string, load claimLoader) (*appl
 	_ = g.Wait()
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("sibling-part index: %w", err)
-	}
-	if n := failed.Load(); n > 0 {
-		return nil, fmt.Errorf("sibling-part index: %d of %d books could not be read; first: %w", n, len(ids), first)
 	}
 	return idx, nil
 }
@@ -97,7 +97,8 @@ type cachedClaimSource interface {
 // cachedClaimIndex builds the claim index over EVERY book with cached
 // candidates, the universe both the cached batch op and the cache-backed
 // preview draw from. It takes no book list on purpose: see buildClaimIndex.
-// Built once per run. A listing error is returned, not skipped.
+// Built once per run. A LISTING error fails the run: without the list there
+// is no universe to index at all.
 func cachedClaimIndex(ctx context.Context, svc cachedClaimSource, books claimBookReader) (*applygate.ClaimIndex, error) {
 	sums, err := svc.ListCachedSummaries(ctx)
 	if err != nil {
@@ -131,6 +132,9 @@ func keysOf[V any](m map[string]V) []string {
 //   - every one of its file rows is missing: there is nothing on disk to be
 //     a sibling part. A book with no file rows at all still claims: nothing
 //     says its files are gone.
+//
+// When the files cannot be read it returns the book WITH the error, so the
+// caller still knows the folder.
 func claimBook(books claimBookReader, id string) (*database.Book, error) {
 	book, err := books.GetBookByID(id)
 	if err != nil {
@@ -141,7 +145,7 @@ func claimBook(books claimBookReader, id string) (*database.Book, error) {
 	}
 	files, err := books.GetBookFiles(id)
 	if err != nil {
-		return nil, fmt.Errorf("read book files: %w", err)
+		return book, fmt.Errorf("read book files: %w", err)
 	}
 	if len(files) > 0 {
 		for _, f := range files {
@@ -154,24 +158,36 @@ func claimBook(books claimBookReader, id string) (*database.Book, error) {
 	return book, nil
 }
 
+// bestEffortBook reads the book for its folder when another read failed.
+func bestEffortBook(books claimBookReader, id string) *database.Book {
+	b, err := books.GetBookByID(id)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // cachedClaimLoader loads the claim planCachedApply would act on: the top
 // cached candidate.
 func cachedClaimLoader(svc cachedCandidateGetter, books claimBookReader) claimLoader {
 	return func(id string) (*database.Book, *metafetch.MetadataCandidate, error) {
 		entry, _, err := svc.GetCachedCandidates(id)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read cached candidates: %w", err)
+			return bestEffortBook(books, id), nil, fmt.Errorf("read cached candidates: %w", err)
 		}
 		if entry == nil || len(entry.Candidates) == 0 {
 			return nil, nil, nil
 		}
 		var cand metafetch.MetadataCandidate
 		if err := json.Unmarshal(entry.Candidates[0], &cand); err != nil {
-			return nil, nil, fmt.Errorf("decode cached candidate: %w", err)
+			return bestEffortBook(books, id), nil, fmt.Errorf("decode cached candidate: %w", err)
 		}
 		book, err := claimBook(books, id)
-		if err != nil || book == nil {
-			return nil, nil, err
+		if err != nil {
+			return book, &cand, err
+		}
+		if book == nil {
+			return nil, nil, nil
 		}
 		return book, &cand, nil
 	}
@@ -184,14 +200,17 @@ func opResultClaimLoader(books claimBookReader, get func(id string) (CandidateRe
 	return func(id string) (*database.Book, *metafetch.MetadataCandidate, error) {
 		cr, ok, err := get(id)
 		if err != nil {
-			return nil, nil, err
+			return bestEffortBook(books, id), nil, err
 		}
 		if !ok || cr.Status != "matched" || cr.Candidate == nil {
 			return nil, nil, nil
 		}
 		book, err := claimBook(books, id)
-		if err != nil || book == nil {
-			return nil, nil, err
+		if err != nil {
+			return book, cr.Candidate, err
+		}
+		if book == nil {
+			return nil, nil, nil
 		}
 		return book, cr.Candidate, nil
 	}
