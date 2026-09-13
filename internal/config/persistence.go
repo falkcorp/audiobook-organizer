@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package config
 
@@ -637,6 +637,27 @@ func migrateAutoUpdateBlob(blob string) (string, bool) {
 
 // saveRawBlob writes a pre-marshaled JSON string directly as the config blob.
 // Used only by startup migration to persist migrated blobs without re-marshaling.
+// aiEndpointsSeedForLoad gathers what migrateAIEndpointsBlob needs that the
+// blob does not hold: whether an OpenAI key exists (the key is a secret row,
+// never in the blob, or env-supplied) and the env whisper settings, which
+// applyEnvAuthoritativeConfig applies after the migration chain runs.
+func aiEndpointsSeedForLoad(settingsMap map[string]*database.Setting) aiEndpointsSeed {
+	snap := Snapshot()
+	seed := aiEndpointsSeed{Base: snap.Clone(), HasOpenAIKey: snap.OpenAIAPIKey != ""}
+	if row, ok := settingsMap["openai_api_key"]; ok && row != nil && row.Value != "" {
+		seed.HasOpenAIKey = true
+	}
+	if viper.IsSet("whisper_endpoints") {
+		eps := ParseWhisperEndpoints(viper.GetString("whisper_endpoints"))
+		seed.EnvWhisperEndpoints = &eps
+	}
+	if viper.IsSet("whisper_remote_url") {
+		u := viper.GetString("whisper_remote_url")
+		seed.EnvWhisperRemoteURL = &u
+	}
+	return seed
+}
+
 func saveRawBlob(store database.SettingsStore, rawJSON string) error {
 	return store.SetSetting("config_blob", rawJSON, "json", false)
 }
@@ -715,6 +736,17 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated ai_backend blob", "err", saveErr)
+			}
+		}
+
+		// Derive the ai_endpoints server rows from the (now migrated) legacy
+		// AI fields (idempotent: skipped once the blob has the key). Needs the
+		// key presence and the env whisper overrides, which the blob lacks.
+		if migrated, changed := migrateAIEndpointsBlob(blobStr, aiEndpointsSeedForLoad(settingsMap)); changed {
+			slog.Info("config: derived ai_endpoints rows from legacy AI fields")
+			blobStr = migrated
+			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+				slog.Warn("config: failed to persist migrated ai_endpoints blob", "err", saveErr)
 			}
 		}
 

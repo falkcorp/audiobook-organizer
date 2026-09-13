@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-09-13
 
@@ -32,9 +32,10 @@ var protocolsFor = map[Kind][]Protocol{
 	KindWhisper: {ProtocolWhisperServer, ProtocolLocalProcess},
 }
 
-// Endpoint is one AI server as the dispatcher sees it (PLAN section 3). It is
-// an input type local to this package until PR 2 adds the config struct that
-// produces it.
+// Endpoint is one AI server as the dispatcher sees it (PLAN section 3). The
+// stored form is config.AIEndpoint (the ai_endpoints setting), converted by
+// config.AIEndpoint.DispatchEndpoint; this package imports no config so the
+// dependency runs one way.
 type Endpoint struct {
 	ID       string
 	Label    string
