@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/scan_standdown_renew_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2d8f41-9e37-4c05-a1f8-3d7e0b9c5a26
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package metadatahandler_test
 
@@ -74,6 +74,7 @@ func TestBulkFetchMetadata_LostHoldWritesNothing(t *testing.T) {
 }
 
 func expectApply(d testDeps) {
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)

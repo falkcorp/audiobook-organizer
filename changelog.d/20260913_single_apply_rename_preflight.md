@@ -1,0 +1,3 @@
+### Fixed
+
+- Applying a metadata candidate to one book (`POST /api/v1/audiobooks/:id/apply-metadata`) now refuses, before anything is written, when the file rename that follows the apply is known to fail. It answers 409 with `reason: file_work_would_fail` and the cause in `error`, which the apply dialog shows as its error toast. Until now only the batch apply ran this check, so a single-book apply could leave the book with its new metadata and its old file names. The check plans the same field subset the apply writes, and it runs even when `write_back` is false, because the single-book path renames files either way.

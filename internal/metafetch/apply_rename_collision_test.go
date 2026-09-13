@@ -143,6 +143,50 @@ func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
 	}
 }
 
+// The single-book apply sends a field subset, and the preflight must plan the
+// book the subset leaves, not the whole candidate: a subset without the title
+// keeps the old title, so the rename is planned under the old name.
+func TestRenamePreflight_PlansTheAppliedFieldSubset(t *testing.T) {
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	root := t.TempDir()
+	config.AppConfig.RootDir = root
+	config.AppConfig.AutoRenameOnApply = true
+	config.AppConfig.FolderNamingPattern = "{author}/{title}"
+	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+
+	dir := filepath.Join(root, "Someone", "Old")
+	a := filepath.Join(dir, "1.mp3")
+	writeFile(t, a, "one")
+	book := &database.Book{ID: "b1", Title: "Old", FilePath: dir, Author: &database.Author{ID: 1, Name: "Someone"}}
+	svc := NewService(&database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { c := *book; return &c, nil },
+		GetBookFilesFunc: func(string) ([]database.BookFile, error) {
+			return []database.BookFile{{ID: "f1", BookID: "b1", FilePath: a, Format: "mp3", TrackNumber: 1}}, nil
+		},
+	})
+	cand := MetadataCandidate{Title: "New Title", Author: "Someone", Description: "A description"}
+
+	whole, err := svc.previewMetadataCandidate("b1", cand, nil, true)
+	require.NoError(t, err)
+	subset, err := svc.previewMetadataCandidate("b1", cand, []string{"description"}, true)
+	require.NoError(t, err)
+
+	fieldsOf := func(pv *ApplyPreview) []string {
+		var out []string
+		for _, c := range pv.Changes {
+			out = append(out, c.Field)
+		}
+		return out
+	}
+	assert.Contains(t, fieldsOf(whole), "title", "the whole candidate changes the title")
+	assert.NotContains(t, fieldsOf(subset), "title", "a description-only apply must not plan the new title")
+	for _, m := range subset.Rename.Moves {
+		assert.NotContains(t, m.To, "New Title", "the subset's rename plan must use the title the apply leaves")
+	}
+	require.NoError(t, svc.RenamePreflight("b1", cand, []string{"description"}))
+}
+
 // RenamePreflight must not write, even when it meets a recorded rename failure
 // that has gone stale: clearing it is the real rename's job, and the apply this
 // check guards may yet be refused.
