@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-13
 
@@ -59,7 +59,14 @@ func TestAudiobookService_DeleteAudiobook_SoftDelete_EnqueuesITunesRemoves(t *te
 	pid := "0011223344556677"
 	book := &database.Book{ID: "sd-itl", Title: "Soft Delete Has Tracks"}
 	mockStore.EXPECT().GetBookByID("sd-itl").Return(book, nil)
-	mockStore.EXPECT().UpdateBook("sd-itl", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.EXPECT().ModifyBook("sd-itl", mock.Anything).RunAndReturn(
+		func(id string, fn func(*database.Book) error) (*database.Book, error) {
+			fresh := *book
+			if err := fn(&fresh); err != nil {
+				return nil, err
+			}
+			return &fresh, nil
+		})
 	mockStore.EXPECT().GetBookFiles("sd-itl").Return([]database.BookFile{
 		{ID: "f1", ITunesPersistentID: pid},
 	}, nil)
@@ -369,10 +376,29 @@ func TestAudiobookService_DeleteAudiobook_SoftDeleteSuccess(t *testing.T) {
 
 	book := &database.Book{ID: "sd-2", Title: "To Soft Delete"}
 	mockStore.EXPECT().GetBookByID("sd-2").Return(book, nil)
-	mockStore.EXPECT().UpdateBook("sd-2", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	// The soft delete is ModifyBook: the three deletion columns go onto the
+	// row as re-read under the stripe, so a field a concurrent writer set
+	// after the read above (Publisher) survives.
+	concurrentPublisher := "set by a concurrent writer"
+	var written *database.Book
+	mockStore.EXPECT().ModifyBook("sd-2", mock.Anything).RunAndReturn(
+		func(id string, fn func(*database.Book) error) (*database.Book, error) {
+			fresh := &database.Book{ID: "sd-2", Title: "To Soft Delete", Publisher: &concurrentPublisher}
+			if err := fn(fresh); err != nil {
+				return nil, err
+			}
+			written = fresh
+			return fresh, nil
+		})
 
 	result, err := svc.DeleteAudiobook(context.Background(), "sd-2", &DeleteAudiobookOptions{SoftDelete: true})
 	assert.NoError(t, err)
+	if assert.NotNil(t, written) {
+		assert.True(t, written.IsSoftDeleted(), "the soft delete did not mark the row")
+		if assert.NotNil(t, written.Publisher) {
+			assert.Equal(t, concurrentPublisher, *written.Publisher, "the soft delete reverted a concurrent write")
+		}
+	}
 	assert.NotNil(t, result)
 	assert.Equal(t, "audiobook soft deleted", result["message"])
 	assert.Equal(t, true, result["soft_delete"])

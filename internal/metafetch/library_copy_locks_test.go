@@ -1,7 +1,7 @@
 // file: internal/metafetch/library_copy_locks_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c2d6b03-7f18-4a54-b3e6-5d0a91c7e482
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -24,6 +24,15 @@ func libCopySyncFixture(states func(string) ([]database.MetadataFieldState, erro
 	authorWrites, narratorWrites := 0, 0
 	store := &database.MockStore{
 		GetMetadataFieldStatesFunc: states,
+		// The sync writes through ModifyBook, which re-reads the copy's row;
+		// serve the copy as libCopyPair builds it.
+		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			if id != "copy" {
+				return nil, nil
+			}
+			_, libCopy := libCopyPair()
+			return libCopy, nil
+		},
 		UpdateBookFunc: func(id string, b *database.Book) (*database.Book, error) {
 			clone := *b
 			written = &clone

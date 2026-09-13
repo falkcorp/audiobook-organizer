@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -358,14 +358,37 @@ func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookM
 // Fails closed: an unreadable lock set skips the whole sync rather than
 // overwriting the copy blind. The copy stays stale, which the next successful
 // apply fixes; an overwritten user edit is not recoverable.
+//
+// The copy is written with ModifyBook: the original's columns are laid onto
+// the copy's row as it stands under its write stripe, not onto the caller's
+// earlier read of it, so a concurrent write to a column this sync does not
+// own is kept. The lock rows are read inside the callback; that is a Pebble
+// read of lock keys, not a book write, so it is safe under the stripe.
 func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) {
-	restored, lockErr := database.ApplyRespectingLocks(mfs.db, libCopy, func(b *database.Book) {
-		mfs.copyMetadataColumns(original, b)
+	var restored []string
+	var lockErr error
+	updated, err := mfs.db.ModifyBook(libCopy.ID, func(row *database.Book) error {
+		restored, lockErr = database.ApplyRespectingLocks(mfs.db, row, func(b *database.Book) {
+			mfs.copyMetadataColumns(original, b)
+		})
+		return lockErr
 	})
 	if lockErr != nil {
 		slog.Warn("not syncing metadata to the library copy: its field locks are unreadable",
 			"libCopyID", libCopy.ID, "error", lockErr)
 		return
+	}
+	switch {
+	case err != nil:
+		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
+	case updated == nil:
+		slog.Warn("library copy vanished before the metadata sync", "id", libCopy.ID)
+		return
+	default:
+		// Keep the caller's struct in step with what was written, as the
+		// in-place mutation did before.
+		*libCopy = *updated
+		slog.Info("synced metadata from to library copy", "originalID", original.ID, "libCopyID", libCopy.ID)
 	}
 	lockedOnCopy := map[string]bool{}
 	for _, key := range restored {
@@ -374,12 +397,6 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	if len(restored) > 0 {
 		slog.Info("library-copy sync left the copy's user-locked fields alone",
 			"libCopyID", libCopy.ID, "fields", restored)
-	}
-
-	if _, err := mfs.db.UpdateBook(libCopy.ID, libCopy); err != nil {
-		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
-	} else {
-		slog.Info("synced metadata from to library copy", "originalID", original.ID, "libCopyID", libCopy.ID)
 	}
 
 	// Author/narrator associations are the join-table spelling of the
@@ -854,20 +871,22 @@ func (mfs *Service) saveCover(bookID, coverURL string, replace bool) {
 		slog.Info("cover art saved to", "path", logger.SanitizeLogValue(coverPath), "id", logger.SanitizeLogValue(bookID))
 	}
 
-	// Re-read rather than reusing the book the caller had: the apply path and the
-	// background file-IO job both write this row, and UpdateBook does a full
-	// column replacement, so writing a stale struct here would silently revert
-	// whatever landed in between.
-	book, err := mfs.db.GetBookByID(bookID)
-	if err != nil || book == nil {
-		slog.Warn("background cover art: book vanished before cover_url update", "id", logger.SanitizeLogValue(bookID), "error", err)
+	// Set only cover_url, on the row as it stands under the book's write
+	// stripe: the apply path and the background file-IO job both write this
+	// row, and a whole-struct UpdateBook of an earlier read would silently
+	// revert whatever landed in between. The download above runs before the
+	// lock is taken.
+	localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
+	updated, err := mfs.db.ModifyBook(bookID, func(row *database.Book) error {
+		row.CoverURL = &localCoverURL
+		return nil
+	})
+	if err != nil {
+		slog.Warn("background cover art: failed to update cover_url", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(err.Error()))
 		return
 	}
-
-	localCoverURL := "/api/v1/covers/local/" + filepath.Base(coverPath)
-	book.CoverURL = &localCoverURL
-	if _, err := mfs.db.UpdateBook(bookID, book); err != nil {
-		slog.Warn("background cover art: failed to update cover_url", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(err.Error()))
+	if updated == nil {
+		slog.Warn("background cover art: book vanished before cover_url update", "id", logger.SanitizeLogValue(bookID))
 	}
 }
 
@@ -988,15 +1007,20 @@ func (mfs *Service) ApplyMetadataSystemTags(bookID, sourceName, language string)
 
 // MarkNoMatch marks a book as having no metadata match.
 func (mfs *Service) MarkNoMatch(id string) error {
-	book, err := mfs.db.GetBookByID(id)
-	if err != nil || book == nil {
+	// One field, set on the row under the book's write stripe, so a concurrent
+	// writer's change is not reverted by a whole-struct replace.
+	status := "no_match"
+	updated, err := mfs.db.ModifyBook(id, func(row *database.Book) error {
+		row.MetadataReviewStatus = &status
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if updated == nil {
 		return fmt.Errorf("audiobook not found")
 	}
-
-	status := "no_match"
-	book.MetadataReviewStatus = &status
-	_, err = mfs.db.UpdateBook(id, book)
-	return err
+	return nil
 }
 
 // existingLibraryCopy resolves the row file work may touch WITHOUT creating

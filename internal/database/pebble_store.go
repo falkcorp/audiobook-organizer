@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.161.0
+// version: 1.162.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -3072,6 +3072,12 @@ func (p *PebbleStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
 }
 
 // RevertBookToVersion restores a book to a previous version snapshot.
+//
+// This is a whole-row UpdateBook ON PURPOSE, not a ModifyBook/merge: a revert
+// means "make the row what it was at ts", so every column, including any a
+// concurrent writer just set, is replaced by the snapshot's. UpdateBook still
+// holds the book's write stripe across its read and commit, so the revert is
+// serialized against other writers; it is only the merge that is omitted.
 func (p *PebbleStore) RevertBookToVersion(id string, ts time.Time) (*Book, error) {
 	oldBook, err := p.GetBookAtVersion(id, ts)
 	if err != nil {

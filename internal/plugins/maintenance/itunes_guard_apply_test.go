@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_guard_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2a7c90-4d1b-4f38-a6e2-9b3d0c8f1a57
 // last-edited: 2026-09-13
 
@@ -38,6 +38,9 @@ func (w *applyWriteTrap) trip(op string) error {
 }
 func (w *applyWriteTrap) UpdateBook(string, *database.Book) (*database.Book, error) {
 	return nil, w.trip("UpdateBook")
+}
+func (w *applyWriteTrap) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, w.trip("ModifyBook")
 }
 func (w *applyWriteTrap) DeleteBook(string) error { return w.trip("DeleteBook") }
 func (w *applyWriteTrap) MoveBookFilesToBook([]string, string, string) error {
