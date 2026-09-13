@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.114.0
+// version: 1.115.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-12
 
@@ -35,6 +35,7 @@ type MockStore struct {
 	GetBookByIDFunc       func(id string) (*Book, error)
 	GetBooksByIDsFunc     func(ids []string) ([]Book, error)
 	GetBookByFilePathFunc func(path string) (*Book, error)
+	LiveBookIDsAtPathFunc func(path string) ([]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
@@ -1012,6 +1013,15 @@ func (m *MockStore) GetBooksByIDs(ids []string) ([]Book, error) {
 func (m *MockStore) GetBookByFilePath(path string) (*Book, error) {
 	if m.GetBookByFilePathFunc != nil {
 		return m.GetBookByFilePathFunc(path)
+	}
+	return nil, nil
+}
+
+// LiveBookIDsAtPath returns nil, nil when unconfigured: "no live book at this
+// path". A test whose code path decides "is this path free?" must set the Func.
+func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	if m.LiveBookIDsAtPathFunc != nil {
+		return m.LiveBookIDsAtPathFunc(path)
 	}
 	return nil, nil
 }

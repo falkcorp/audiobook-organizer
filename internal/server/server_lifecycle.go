@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.4.0
+// version: 4.5.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-12
 
@@ -944,6 +944,35 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// book_atpath: multi-valued path index, one-time build gated by a
+	// sentinel (pebble_store_atpath_index.go). Until it completes,
+	// LiveBookIDsAtPath serves from a full scan, so nothing is wrong while it
+	// is pending — only slow. Waits for memdb warmup first so it does not
+	// compete with warmup's own full book scan. Resolved through
+	// AsCapability for the same reason as the version-group backfill above.
+	s.bgWG.Go("book-atpath-backfill", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		b, ok := resolveBookAtPathBackfiller(s.Ops())
+		if !ok {
+			slog.Warn("book-atpath-backfill: store does not implement BackfillBookAtPathIndex, index will NOT be built; LiveBookIDsAtPath stays on the full scan",
+				"store_type", fmt.Sprintf("%T", s.Ops()))
+			return
+		}
+		warm := make(chan struct{})
+		go func() { b.WaitForWarmup(); close(warm) }()
+		select {
+		case <-warm:
+		case <-s.bgCtx.Done():
+			slog.Info("book-atpath-backfill: shutdown before memdb warmup finished; will run next boot")
+			return
+		}
+		if _, err := b.BackfillBookAtPathIndex(s.bgCtx); err != nil {
+			slog.Warn("book-atpath-backfill", "err", err)
+		}
+	})
+
 	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
 	// classical-music atoms crash Apple Devices for Windows at sync.
 	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
@@ -1567,6 +1596,21 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 // path. A guard that cannot reach the production call site does not guard it.
 func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
+}
+
+// bookAtPathBackfiller is the book_atpath: index startup build plus the warmup
+// gate it waits on. Both are *PebbleStore methods outside database.Store.
+type bookAtPathBackfiller interface {
+	WaitForWarmup()
+	BackfillBookAtPathIndex(ctx context.Context) (database.BookAtPathBackfillResult, error)
+}
+
+// resolveBookAtPathBackfiller finds the book_atpath: backfill through the
+// indexedStore decorator (see resolveVGBackfiller for why a bare assertion
+// misses). A named function so TestIndexedStoreExposesBookAtPathBackfill can
+// exercise the production resolution path.
+func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
+	return database.AsCapability[bookAtPathBackfiller](s)
 }
 
 // expiredSessionPruner is the narrow slice of the ops store that the periodic

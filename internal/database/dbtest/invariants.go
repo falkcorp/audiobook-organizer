@@ -1,5 +1,5 @@
 // file: internal/database/dbtest/invariants.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b1d2f3a4-5c6e-7a8b-9c0d-invariantsdbt1
 // last-edited: 2026-09-12
 
@@ -178,6 +178,15 @@ func AssertStoreInvariants(tb testing.TB, store database.Store) {
 				tb.Errorf("invariant (b): path index for %q resolved to a book with path %q", b.FilePath, byPath.FilePath)
 			}
 		}
+		// (c) The multi-valued path lookup must list every live book at its
+		// own path. A miss here is a false "path is free".
+		atPath, err := store.LiveBookIDsAtPath(b.FilePath)
+		if err != nil {
+			tb.Fatalf("invariant: LiveBookIDsAtPath(%q): %v", b.FilePath, err)
+		}
+		if !containsString(atPath, id) {
+			tb.Errorf("invariant (c): live book %s absent from LiveBookIDsAtPath(%q) = %v", id, b.FilePath, atPath)
+		}
 		// (b) The iTunes-persistent-ID lookup must resolve to an existing book.
 		if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 			byPID, err := store.GetBookByITunesPersistentID(*b.ITunesPersistentID)
@@ -211,6 +220,15 @@ func assertListingLive(tb testing.TB, store database.Store, label string, got []
 			tb.Errorf("invariant (b): listing %s returned soft-deleted book %s as live", label, b.ID)
 		}
 	}
+}
+
+func containsString(ids []string, id string) bool {
+	for _, s := range ids {
+		if s == id {
+			return true
+		}
+	}
+	return false
 }
 
 func containsID(books []database.Book, id string) bool {

@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.15.1
+// version: 2.16.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-12
 
@@ -76,6 +76,15 @@ type BookBulkReader interface {
 // BookLookupReader resolves books by a natural key: path, hash, or external ID.
 type BookLookupReader interface {
 	GetBookByFilePath(path string) (*Book, error)
+	// LiveBookIDsAtPath returns the id of EVERY live (not soft-deleted) book
+	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
+	// whose single-owner key names at most one book (last writer wins), this
+	// is the answer to "is this path free?". Any read or decode error fails
+	// the call rather than returning a partial set.
+	//
+	// It is on Store, not a narrower capability, so every decorator that
+	// embeds Store (server.indexedStore in production) forwards it.
+	LiveBookIDsAtPath(path string) ([]string, error)
 	GetBookByITunesPersistentID(persistentID string) (*Book, error)
 	ListBooksByITunesPID(limit, offset int) ([]Book, error)
 	GetBookByFileHash(hash string) (*Book, error)
