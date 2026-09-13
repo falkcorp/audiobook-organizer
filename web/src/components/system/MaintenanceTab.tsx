@@ -1,7 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.9.2
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Alert,
@@ -1485,6 +1485,12 @@ export function MaintenanceTab() {
                               htmlInput: { min: 1 },
                             }}
                           />
+                        )}
+
+                        {task.daily_at && (
+                          <Typography variant="body2" color="text.secondary">
+                            Daily at {task.daily_at} (server time)
+                          </Typography>
                         )}
 
                         <FormControlLabel

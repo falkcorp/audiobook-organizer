@@ -72,8 +72,8 @@ func TestEveryEnabledTaskIsReachable(t *testing.T) {
 		if task.IsEnabled == nil || !task.IsEnabled() {
 			continue // deliberately off — an explicit, visible choice
 		}
-		if task.GetInterval != nil && task.GetInterval() > 0 {
-			continue // timer-driven
+		if task.selfScheduled() {
+			continue // timer-driven: an interval or a daily wall-clock time
 		}
 		// Deliberately inMaintenanceOrder, NOT reachableViaMaintenanceWindow.
 		//
@@ -99,6 +99,7 @@ func TestEveryEnabledTaskIsReachable(t *testing.T) {
 		t.Errorf("%d task(s) are ENABLED but can never run: %v\n"+
 			"Each needs exactly one of:\n"+
 			"  - a non-zero GetInterval (a ticker), or\n"+
+			"  - a DailyAt wall-clock time, or\n"+
 			"  - membership in maintenanceOrder AND RunInMaintenanceWindow() true, or\n"+
 			"  - IsEnabled() false, if it is manual/API-only.\n"+
 			"Declaring RunInMaintenanceWindow without adding the name to "+

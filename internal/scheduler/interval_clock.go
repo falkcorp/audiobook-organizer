@@ -1,7 +1,7 @@
 // file: internal/scheduler/interval_clock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c3d1f57-92ab-4e60-b1d4-7a5e0c9f2b83
-// last-edited: 2026-09-09
+// last-edited: 2026-09-13
 
 package scheduler
 
@@ -139,6 +139,33 @@ func (ts *TaskScheduler) stampIntervalTick(name string, t time.Time) {
 			"reset on the next restart and can be starved by frequent restarts",
 			"taskName", name, "err", err)
 	}
+}
+
+// claimIntervalRun is one due check of an interval task. It returns true when
+// the task should run now, and in that case has already stamped the clock.
+func (ts *TaskScheduler) claimIntervalRun(name string, interval time.Duration, now time.Time) bool {
+	last, ok := ts.loadIntervalLastTick(name)
+	if !ok {
+		// First observation of this task on this deployment. Seed the clock and
+		// decline, so the task becomes due one interval from now — what
+		// RunOnStart=false asks for. The seed MUST persist; if it does not,
+		// every boot re-seeds and the task never becomes due, which is the same
+		// silence this replaces.
+		ts.stampIntervalTick(name, now)
+		return false
+	}
+	if now.Sub(last) < interval {
+		return false
+	}
+	// Stamp BEFORE calling TriggerFn, and stamp on every due check rather than
+	// only on a successful enqueue. That is what reproduces ticker semantics: a
+	// task that legitimately declines (library_scan skips while a scan is
+	// active; library_scan_full declines 167 of every 168 due checks by design)
+	// is re-checked one interval later instead of on every poll. ts.lastRun
+	// keeps its own, different meaning — the last tick that actually enqueued —
+	// and runTask still stamps it only then.
+	ts.stampIntervalTick(name, now)
+	return true
 }
 
 // intervalPollFor returns how often to re-examine a task's durable clock: the
