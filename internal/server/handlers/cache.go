@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-08-24
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
@@ -195,7 +196,7 @@ func (h *CacheHandler) HandleCacheInvalidate(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "not invalidatable: "+req.Cache)
 			return
 		}
-		slog.Info("cache invalidated by operator", "cache", req.Cache, "dropped", dropped)
+		slog.Info("cache invalidated by operator", "cache", logger.SanitizeLogValue(req.Cache), "dropped", dropped)
 		httputil.RespondWithOK(c, CacheInvalidateResponse{
 			Dropped: map[string]int{req.Cache: dropped},
 			Total:   dropped,

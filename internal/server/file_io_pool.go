@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -183,10 +184,10 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
 		// the recovery mechanism, so the work is picked up on next start
 		// rather than silently lost.
 		<-p.overflow
-		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
+		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 		return false
 	}
-	slog.Warn("file I/O pool buffer full, running overflow for book (op)", "bookID", bookID, "opType", opType)
+	slog.Warn("file I/O pool buffer full, running overflow for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 	// wg.Go under the read lock. Stop cannot have reached wg.Wait(), because it
 	// sets stopped under the write lock and we have just read it as false.
 	p.wg.Go(func() {
@@ -207,7 +208,7 @@ func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) (done, accepted 
 	p.submitMu.RLock()
 	defer p.submitMu.RUnlock()
 	if p.stopped {
-		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", bookID, "opType", opType)
+		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 		return true, false
 	}
 	job := FileIOJob{BookID: bookID, OpType: opType, CreatedAt: time.Now()}

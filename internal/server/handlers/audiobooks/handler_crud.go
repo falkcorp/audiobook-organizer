@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -12,6 +12,7 @@ package audiobookshandler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
@@ -122,7 +124,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 				ChangedAt:     now,
 			}
 			if err := store.RecordMetadataChange(record); err != nil {
-				slog.Warn("failed to record manual metadata change for .", "id", id, "c", ch.field, "err", err)
+				slog.Warn("failed to record manual metadata change for .", "id", logger.SanitizeLogValue(id), "c", ch.field, "err", err)
 			}
 		}
 	}
@@ -175,15 +177,15 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		}
 		if len(tagMap) > 0 {
 			if h.isProtectedPath(updatedBook.FilePath) {
-				slog.Info("skipping write-back for protected path", "updatedBook", updatedBook.FilePath)
+				slog.Info("skipping write-back for protected path", "updatedBook", logger.SanitizeLogValue(updatedBook.FilePath))
 			} else {
 				opConfig := fileops.OperationConfig{VerifyChecksums: true}
 				if writeErr := metadata.WriteMetadataToFile(updatedBook.FilePath, tagMap, opConfig); writeErr != nil {
-					slog.Warn("write-back failed for", "updatedBook", updatedBook.FilePath, "writeErr", writeErr)
+					slog.Warn("write-back failed for", "updatedBook", logger.SanitizeLogValue(updatedBook.FilePath), "writeErr", logger.SanitizeLogValue(fmt.Sprint(writeErr)))
 				} else {
 					// Stamp last_written_at after successful write-back.
 					if stampErr := store.SetLastWrittenAt(updatedBook.ID, time.Now()); stampErr != nil {
-						slog.Warn("failed to stamp last_written_at for book", "updatedBook", updatedBook.ID, "stampErr", stampErr)
+						slog.Warn("failed to stamp last_written_at for book", "updatedBook", logger.SanitizeLogValue(updatedBook.ID), "stampErr", logger.SanitizeLogValue(fmt.Sprint(stampErr)))
 					}
 				}
 			}

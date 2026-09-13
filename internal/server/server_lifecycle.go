@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.6.0
+// version: 4.6.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-13
 
@@ -783,7 +783,7 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 				}
 				target += r.URL.RequestURI()
 
-				slog.Debug("HTTP->HTTPS redirect", "url", r.URL.String(), "target", target)
+				slog.Debug("HTTP->HTTPS redirect", "url", logger.SanitizeLogValue(r.URL.String()), "target", logger.SanitizeLogValue(target))
 				http.Redirect(w, r, target, http.StatusMovedPermanently)
 			})
 

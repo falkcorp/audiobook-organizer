@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-08-06
+// last-edited: 2026-09-13
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
@@ -213,18 +214,18 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 	if body.SkipScan != nil {
 		file.SkipScan = *body.SkipScan
 		slog.Info("file skip_scan toggled",
-			"book_id", bookID,
-			"file_id", fileID,
-			"skip_scan", *body.SkipScan,
+			"book_id", logger.SanitizeLogValue(bookID),
+			"file_id", logger.SanitizeLogValue(fileID),
+			"skip_scan", logger.SanitizeLogValue(fmt.Sprint(*body.SkipScan)),
 		)
 	}
 
 	if body.DownloadHash != nil {
 		file.DownloadHash = *body.DownloadHash
 		slog.Info("file download_hash set",
-			"book_id", bookID,
-			"file_id", fileID,
-			"download_hash", *body.DownloadHash,
+			"book_id", logger.SanitizeLogValue(bookID),
+			"file_id", logger.SanitizeLogValue(fileID),
+			"download_hash", logger.SanitizeLogValue(*body.DownloadHash),
 		)
 	}
 

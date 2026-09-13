@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package handlers
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
 )
@@ -42,7 +43,7 @@ func abortIfClientGone(c *gin.Context, err error, op string) bool {
 		return false
 	}
 	slog.Debug("[activity] request abandoned; scan cancelled",
-		"op", op, "path", c.Request.URL.Path, "error", err)
+		"op", op, "path", logger.SanitizeLogValue(c.Request.URL.Path), "error", err)
 	c.AbortWithStatus(statusClientClosedRequest)
 	return true
 }

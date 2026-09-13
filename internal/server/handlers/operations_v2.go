@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 )
@@ -444,12 +445,12 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 	defer gz.Close()
 	for _, log := range logs {
 		if _, err := fmt.Fprintf(gz, "%s %s %s\n", log.CreatedAt.UTC().Format(time.RFC3339Nano), strings.ToUpper(log.Level), log.Message); err != nil {
-			slog.Debug("operation log download interrupted", "op_id", id, "error", err)
+			slog.Debug("operation log download interrupted", "op_id", logger.SanitizeLogValue(id), "error", err)
 			return
 		}
 		if log.Attrs != "" && log.Attrs != "{}" {
 			if _, err := fmt.Fprintln(gz, log.Attrs); err != nil {
-				slog.Debug("operation log download interrupted", "op_id", id, "error", err)
+				slog.Debug("operation log download interrupted", "op_id", logger.SanitizeLogValue(id), "error", err)
 				return
 			}
 		}
@@ -513,7 +514,7 @@ func (h *OperationsV2Handler) CancelOperationV2(c *gin.Context) {
 		scans, err := h.scanLister.ListScans()
 		if err != nil {
 			slog.Warn("cancel: could not list AI scans; falling through to the registry",
-				"op_id", id, "error", err)
+				"op_id", logger.SanitizeLogValue(id), "error", err)
 		}
 		for _, scan := range scans {
 			if scan.OperationID != id {
@@ -752,7 +753,7 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 		}
 	}
 	slog.Info("retry: enqueued new run of finished operation",
-		"old_op_id", id, "old_status", row.Status, "new_op_id", newID, "def_id", row.DefID)
+		"old_op_id", logger.SanitizeLogValue(id), "old_status", row.Status, "new_op_id", newID, "def_id", row.DefID)
 	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
 		"id":     newID,
 		"def_id": row.DefID,

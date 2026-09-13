@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-08-22
+// last-edited: 2026-09-13
 
 package server
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
@@ -132,9 +133,9 @@ func (s *Server) startOLImport(c *gin.Context) {
 }
 
 func (s *Server) uploadOLDump(c *gin.Context) {
-	slog.Debug("uploadOLDump Content-Type, ContentLength", "contentType", c.ContentType(), "contentLength", c.Request.ContentLength)
+	slog.Debug("uploadOLDump Content-Type, ContentLength", "contentType", logger.SanitizeLogValue(c.ContentType()), "contentLength", c.Request.ContentLength)
 	dumpType := c.PostForm("type")
-	slog.Debug("uploadOLDump dumpType", "dumpType", dumpType)
+	slog.Debug("uploadOLDump dumpType", "dumpType", logger.SanitizeLogValue(dumpType))
 	if !metafetch.ValidDumpTypes[dumpType] {
 		httputil.RespondWithBadRequest(c, "type must be one of: editions, authors, works")
 		return
@@ -181,7 +182,7 @@ func (s *Server) uploadOLDump(c *gin.Context) {
 		return
 	}
 
-	slog.Info("OL dump uploaded ( bytes) ->", "header", header.Filename, "written", written, "sp", sp.String())
+	slog.Info("OL dump uploaded ( bytes) ->", "header", logger.SanitizeLogValue(header.Filename), "written", written, "sp", logger.SanitizeLogValue(sp.String()))
 	httputil.RespondWithOK(c, gin.H{
 		"message":  "dump file uploaded",
 		"type":     dumpType,
