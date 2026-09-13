@@ -10,7 +10,9 @@ None of it has run against the library yet.
   since is left as it is, the undo preview lists it as changed since, and the
   revert result counts it separately. A field that already holds the old value
   (a rescan that put a book back to "imported", say) counts as restored, so a
-  retried undo no longer reports it as partial every time.
+  retried undo no longer reports it as partial every time. This is the same
+  check series-rename undo uses, and a series renamed again since the
+  operation is counted in the same "changed since" total.
 - The apply now re-checks, under the merge lock, the conditions the dry run
   refused on. It skips a group when another live book sits in the book folder
   (every such book is checked, not only the one the path index names), a

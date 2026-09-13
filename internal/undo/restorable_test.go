@@ -1,5 +1,5 @@
 // file: internal/undo/restorable_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
 // last-edited: 2026-09-12
 
@@ -225,5 +225,27 @@ func TestCheckRestoreReferent(t *testing.T) {
 	}
 	if err := CheckRestoreReferent(store, row("title", "5")); err != nil {
 		t.Errorf("other field: %v", err)
+	}
+}
+
+// A metadata_update row's compare-and-set is the same three-way model as a
+// series_rename row's: the recorded new value is restorable, the recorded old
+// value is already restored (ErrAlreadyRestored), anything else changed since.
+func TestCheckBookFieldCurrent_ThreeWay(t *testing.T) {
+	row := &database.OperationChange{ChangeType: "metadata_update", BookID: "b1", FieldName: "title", OldValue: "Old", NewValue: "New"}
+
+	if err := CheckBookFieldCurrent(&database.Book{Title: "New"}, row); err != nil {
+		t.Errorf("current == new: %v, want nil", err)
+	}
+	if err := CheckBookFieldCurrent(&database.Book{Title: "Old"}, row); !errors.Is(err, ErrAlreadyRestored) {
+		t.Errorf("current == old: %v, want ErrAlreadyRestored", err)
+	}
+	if err := CheckBookFieldCurrent(&database.Book{Title: "Manual"}, row); RefusalReason(err) != ReasonChangedSince {
+		t.Errorf("current == other: %v, want ReferentError %q", err, ReasonChangedSince)
+	}
+	bad := *row
+	bad.FieldName = "not_a_field"
+	if err := CheckBookFieldCurrent(&database.Book{}, &bad); RefusalReason(err) != ReasonOldValueUnparsable {
+		t.Errorf("unknown field: %v, want ReferentError %q", err, ReasonOldValueUnparsable)
 	}
 }
