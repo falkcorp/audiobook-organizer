@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-13
 
@@ -106,6 +106,7 @@ func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioCon
 		checkTitle(book, c),
 		checkNarrator(book, c, runtime.Outcome),
 		checkASIN(book, c),
+		checkCastInAuthor(&nameSource{author: bookAuthor(book), narrator: bookNarrator(book)}, c.Author, c.Narrator),
 	)
 	audio := CheckResult{Name: "transcription", Outcome: OutcomeUnknown}
 	if audioConfirmed {
@@ -538,6 +539,13 @@ func nameWords(s string) []string {
 func bookAuthor(book *database.Book) string {
 	if book.Author != nil {
 		return strings.TrimSpace(book.Author.Name)
+	}
+	return ""
+}
+
+func bookNarrator(book *database.Book) string {
+	if book.Narrator != nil {
+		return strings.TrimSpace(*book.Narrator)
 	}
 	return ""
 }
