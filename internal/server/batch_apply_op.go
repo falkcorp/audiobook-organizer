@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -343,12 +343,17 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// Concurrency is writeBackWorkers() (disk/TagLib-bound), NOT the old
 			// batchApplyConcurrency=4, because this loop now does the file I/O
 			// rather than delegating it.
-			// The certainty gate's partial_book check needs every claim in the
-			// batch before the first apply. On a resumed run bookIDs is the
-			// unfinished tail, so books applied by an earlier attempt are not
-			// in the index; their rename already happened, and the rename
-			// preflight still refuses a collision with them.
-			claims := buildClaimIndex(ctx, bookIDs, cachedClaimLoader(svc, s.store))
+			// The certainty gate's partial_book check needs every sibling claim
+			// before the first apply. The index covers EVERY book with cached
+			// candidates, not bookIDs, so a subset batch or a resumed run (whose
+			// bookIDs is the unfinished tail) sees the same siblings the preview
+			// saw. A book applied by an earlier attempt has its cache entry
+			// invalidated and drops out; its rename already happened, and the
+			// rename preflight still refuses a collision with it.
+			claims, claimErr := cachedClaimIndex(ctx, svc, s.store)
+			if claimErr != nil {
+				return fmt.Errorf("batch-apply-cached: %w", claimErr)
+			}
 			runOne := func(ctx context.Context, id string) error {
 				// One timer per book, from before the gate wait to the end of
 				// its file work; FinishApplyFileWorkTimed logs it as the
