@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-13
 
@@ -9,14 +9,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
+
+// mlog is the merge package's logger. It is printf-style (format verbs, not
+// key/value pairs) and routes through internal/logger's log-injection barrier,
+// which the slog guard ratchet requires for new log calls.
+var mlog = logger.New("merge")
 
 // Combine undo journal.
 //
@@ -239,7 +245,7 @@ func (ms *Service) ListCombineJournals(limit int) ([]CombineJournal, error) {
 	for _, r := range rows {
 		var j CombineJournal
 		if err := json.Unmarshal(r.Value, &j); err != nil {
-			slog.Warn("combine journal: skipping undecodable row", "key", r.Key, "err", err)
+			mlog.Warn("combine journal: skipping undecodable row key=%s err=%s", logger.SanitizeLogValue(r.Key), logger.SanitizeLogValue(fmt.Sprint(err)))
 			continue
 		}
 		out = append(out, j)
@@ -381,7 +387,7 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 		j.Status = CombineJournalUndoFailed
 		j.LastError = applyErr.Error()
 		if perr := ms.putCombineJournal(j); perr != nil {
-			slog.Error("combine undo: could not record failure on journal", "journal", j.ID, "err", perr)
+			mlog.Error("combine undo: could not record failure on journal journal=%s err=%s", j.ID, logger.SanitizeLogValue(fmt.Sprint(perr)))
 		}
 		return nil, fmt.Errorf("undo combine %s: %w", j.ID, applyErr)
 	}
@@ -391,10 +397,10 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	if err := ms.putCombineJournal(j); err != nil {
 		// The undo itself is done; a stale "applied" status is caught by the
 		// preconditions (the absorbed books are live again) if retried.
-		slog.Error("combine undo: completed but journal status not updated", "journal", j.ID, "err", err)
+		mlog.Error("combine undo: completed but journal status not updated journal=%s err=%s", j.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
 	}
-	slog.Info("combine undone", "journal", j.ID, "survivor", j.SurvivorID,
-		"restored", res.RestoredBooks, "files_moved", res.FilesMoved, "warnings", len(res.Warnings))
+	mlog.Info("combine undone journal=%s survivor=%s restored=%d files_moved=%d warnings=%d",
+		j.ID, logger.SanitizeLogValue(j.SurvivorID), len(res.RestoredBooks), res.FilesMoved, len(res.Warnings))
 	return res, nil
 }
 
