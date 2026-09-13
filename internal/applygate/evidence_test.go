@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
 // last-edited: 2026-09-13
 
@@ -167,6 +167,13 @@ func TestCheckEvidence_OwnerExamples(t *testing.T) {
 				FilePath: "/lib/Jane Roe/Mage Academy 1.5"},
 			cand: metafetch.MetadataCandidate{Title: "Mage Academy 1.5", Author: "Jane Roe", DurationSec: 36000},
 		},
+		{
+			name: "slash-joined role credit is a role credit",
+			book: database.Book{Title: "Best Lesbian Romance 2009", Duration: intp(24900),
+				FilePath: "/lib/Radclyffe/Best Lesbian Romance 2009/Best Lesbian Romance 2009 - read by narrator.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Best Lesbian Romance 2009", Author: "Radclyffe - author/editor", DurationSec: 24720},
+			want: ReasonAuthorRoleCredit,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -236,6 +243,8 @@ func TestSurnames(t *testing.T) {
 		"Dan Sugralinov, Alix Merlin Williamson": "sugralinov williamson",
 		"Smith And Jones":                        "smith jones",
 		"Martin Luther King Jr.":                 "king",
+		"Radclyffe - author/editor":              "radclyffe",
+		"Jane Doe (editor)":                      "doe",
 	} {
 		if got := strings.Join(surnames(in), " "); got != want {
 			t.Errorf("surnames(%q) = %q, want %q", in, got, want)

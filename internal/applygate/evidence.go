@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-13
 
@@ -79,7 +79,7 @@ type EvidenceVerdict struct {
 // "John Joseph Adams - editor" was applied as an author on 2026-09-13.
 // "(ed)" is matched only inside parentheses: a bare "ed" is a first name
 // (Ed Greenwood). "with" is not a role: "Patterson with Paetro" is co-authorship.
-var roleCreditRe = regexp.MustCompile(`(?i)(^|[\s,(\-–—])(editor|editors|ed\.|eds\.|edited by|translator|translated by|translated|translation|trans\.|tr\.|hrsg\.|hrsg|herausgeber|herausgegeben|narrator|narrated by|read by|foreword|introduction|illustrator|illustrated by|contributor|compiler|compiled by|adapted by|adaptation)($|[\s,)\-–—.])|\(\s*(eds?|trans|tr)\.?\s*\)`)
+var roleCreditRe = regexp.MustCompile(`(?i)(^|[\s,(/\-–—])(editor|editors|ed\.|eds\.|edited by|translator|translated by|translated|translation|trans\.|tr\.|hrsg\.|hrsg|herausgeber|herausgegeben|narrator|narrated by|read by|foreword|introduction|illustrator|illustrated by|contributor|compiler|compiled by|adapted by|adaptation)($|[\s,)/\-–—.])|\(\s*(eds?|trans|tr)\.?\s*\)`)
 
 // titleStop are tokens that carry no identity in a title.
 var titleStop = map[string]bool{
@@ -511,13 +511,24 @@ func surnames(author string) []string {
 	return out
 }
 
-// nameWords is the name tokens of one credit, without initials or suffixes.
+// roleWord are credit labels, never a person's name. "Radclyffe - author/editor"
+// yielded the "surname" editor, which then matched "read by narrator"-style
+// words in a file path as author evidence (2026-09-13 prod preview).
+var roleWord = map[string]bool{
+	"author": true, "editor": true, "editors": true, "translator": true, "narrator": true,
+	"illustrator": true, "contributor": true, "compiler": true, "foreword": true,
+	"introduction": true, "adapter": true, "eds": true, "trans": true, "hrsg": true,
+	"read": true, "by": true, "edited": true, "translated": true, "narrated": true,
+}
+
+// nameWords is the name tokens of one credit, without initials, suffixes or
+// role labels.
 func nameWords(s string) []string {
 	var words []string
 	for _, w := range strings.FieldsFunc(normText(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
-		if len([]rune(w)) > 1 && !nameSuffix[w] {
+		if len([]rune(w)) > 1 && !nameSuffix[w] && !roleWord[w] {
 			words = append(words, w)
 		}
 	}
