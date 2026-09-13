@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
 // last-edited: 2026-09-13
 
@@ -219,53 +219,46 @@ func (h *Handler) PatchBookFile(c *gin.Context) {
 		return
 	}
 
-	file, err := store.GetBookFileByID(bookID, fileID)
+	// Field-level write: the store re-reads the row and sets only these
+	// fields, so a concurrent writer's column (enrich-book-files' Duration,
+	// say) is not put back to what this request would have read. It writes
+	// nothing when no value changes.
+	before, file, err := store.PatchBookFileFields(bookID, fileID, database.BookFileFieldPatch{
+		TrackNumber:  body.TrackNumber,
+		DiscNumber:   body.DiscNumber,
+		SkipScan:     body.SkipScan,
+		DownloadHash: body.DownloadHash,
+	})
 	if err != nil {
-		httputil.InternalError(c, "failed to get book file", err)
+		httputil.InternalError(c, "failed to update book file", err)
 		return
 	}
 	if file == nil {
 		httputil.RespondWithNotFound(c, "book file", fileID)
 		return
 	}
-
-	if body.SkipScan != nil {
-		file.SkipScan = *body.SkipScan
-		slog.Info("file skip_scan toggled",
-			"book_id", logger.SanitizeLogValue(bookID),
-			"file_id", logger.SanitizeLogValue(fileID),
-			"skip_scan", logger.SanitizeLogValue(fmt.Sprint(*body.SkipScan)),
-		)
+	if before.SkipScan != file.SkipScan {
+		filesLog.Info("book file %s: skip_scan set to %t (book %s)",
+			logger.SanitizeLogValue(fileID), file.SkipScan, logger.SanitizeLogValue(bookID))
 	}
-
-	if body.DownloadHash != nil {
-		file.DownloadHash = *body.DownloadHash
-		slog.Info("file download_hash set",
-			"book_id", logger.SanitizeLogValue(bookID),
-			"file_id", logger.SanitizeLogValue(fileID),
-			"download_hash", logger.SanitizeLogValue(*body.DownloadHash),
-		)
+	if before.DownloadHash != file.DownloadHash {
+		filesLog.Info("book file %s: download_hash set to %s (book %s)",
+			logger.SanitizeLogValue(fileID), logger.SanitizeLogValue(file.DownloadHash), logger.SanitizeLogValue(bookID))
 	}
 
 	// Position edits, recorded in the book's metadata change history AFTER the
 	// row is written, so the history never shows a change that did not land.
+	// Only values that actually changed are recorded.
 	type positionChange struct {
 		field    string
 		old, new int
 	}
 	var positions []positionChange
-	if body.TrackNumber != nil && *body.TrackNumber != file.TrackNumber {
-		positions = append(positions, positionChange{"track_number", file.TrackNumber, *body.TrackNumber})
-		file.TrackNumber = *body.TrackNumber
+	if before.TrackNumber != file.TrackNumber {
+		positions = append(positions, positionChange{"track_number", before.TrackNumber, file.TrackNumber})
 	}
-	if body.DiscNumber != nil && *body.DiscNumber != file.DiscNumber {
-		positions = append(positions, positionChange{"disc_number", file.DiscNumber, *body.DiscNumber})
-		file.DiscNumber = *body.DiscNumber
-	}
-
-	if err := store.UpsertBookFile(file); err != nil {
-		httputil.InternalError(c, "failed to update book file", err)
-		return
+	if before.DiscNumber != file.DiscNumber {
+		positions = append(positions, positionChange{"disc_number", before.DiscNumber, file.DiscNumber})
 	}
 
 	// The book_file row has no history of its own; its position edits go in
@@ -326,7 +319,9 @@ var errBookFilePositionChangedSince = errors.New("the file's position changed af
 // "book_file:..." that nothing reads, report "undo applied", and leave the
 // file's number where it was. handled is false for any other field.
 //
-// Compare-and-set: the row must still carry the recorded NewValue.
+// Compare-and-set inside the store (PatchBookFileFields' precondition): the
+// row must still carry the recorded NewValue, and only that column is
+// written.
 func revertBookFilePosition(store AudiobooksStore, bookID string, rec *database.MetadataChangeRecord) (handled bool, err error) {
 	fileID, column, ok := bookFilePositionField(rec.Field)
 	if !ok {
@@ -340,23 +335,19 @@ func revertBookFilePosition(store AudiobooksStore, bookID string, rec *database.
 	if perr != nil || serr != nil {
 		return true, fmt.Errorf("history row for %s does not hold numbers (%q -> %q)", rec.Field, *rec.PreviousValue, *rec.NewValue)
 	}
-	f, err := store.GetBookFileByID(bookID, fileID)
-	if err != nil {
-		return true, fmt.Errorf("load book file %s: %w", fileID, err)
-	}
-	if f == nil {
-		return true, fmt.Errorf("book file %s is no longer on book %s: %w", fileID, bookID, errBookFilePositionChangedSince)
-	}
-	cur := &f.TrackNumber
+	patch := database.BookFileFieldPatch{TrackNumber: &prev, IfTrackNumber: &set}
 	if column == "disc_number" {
-		cur = &f.DiscNumber
+		patch = database.BookFileFieldPatch{DiscNumber: &prev, IfDiscNumber: &set}
 	}
-	if *cur != set {
-		return true, fmt.Errorf("book file %s %s is %d, not the %d the edit set: %w", fileID, column, *cur, set, errBookFilePositionChangedSince)
+	_, after, err := store.PatchBookFileFields(bookID, fileID, patch)
+	if errors.Is(err, database.ErrBookFileChangedSince) {
+		return true, fmt.Errorf("book file %s: %v: %w", fileID, err, errBookFilePositionChangedSince)
 	}
-	*cur = prev
-	if err := store.UpsertBookFile(f); err != nil {
+	if err != nil {
 		return true, fmt.Errorf("restore %s of book file %s: %w", column, fileID, err)
+	}
+	if after == nil {
+		return true, fmt.Errorf("book file %s is no longer on book %s: %w", fileID, bookID, errBookFilePositionChangedSince)
 	}
 	return true, nil
 }

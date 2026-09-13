@@ -24515,6 +24515,88 @@ func (_c *MockStore_Optimize_Call) RunAndReturn(run func(ctx context.Context) er
 	return _c
 }
 
+// PatchBookFileFields provides a mock function for the type MockStore
+func (_mock *MockStore) PatchBookFileFields(bookID string, fileID string, patch database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error) {
+	ret := _mock.Called(bookID, fileID, patch)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PatchBookFileFields")
+	}
+
+	var r0 *database.BookFile
+	var r1 *database.BookFile
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error)); ok {
+		return returnFunc(bookID, fileID, patch)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, database.BookFileFieldPatch) *database.BookFile); ok {
+		r0 = returnFunc(bookID, fileID, patch)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, database.BookFileFieldPatch) *database.BookFile); ok {
+		r1 = returnFunc(bookID, fileID, patch)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).(*database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(2).(func(string, string, database.BookFileFieldPatch) error); ok {
+		r2 = returnFunc(bookID, fileID, patch)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockStore_PatchBookFileFields_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PatchBookFileFields'
+type MockStore_PatchBookFileFields_Call struct {
+	*mock.Call
+}
+
+// PatchBookFileFields is a helper method to define mock.On call
+//   - bookID string
+//   - fileID string
+//   - patch database.BookFileFieldPatch
+func (_e *MockStore_Expecter) PatchBookFileFields(bookID any, fileID any, patch any) *MockStore_PatchBookFileFields_Call {
+	return &MockStore_PatchBookFileFields_Call{Call: _e.mock.On("PatchBookFileFields", bookID, fileID, patch)}
+}
+
+func (_c *MockStore_PatchBookFileFields_Call) Run(run func(bookID string, fileID string, patch database.BookFileFieldPatch)) *MockStore_PatchBookFileFields_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 database.BookFileFieldPatch
+		if args[2] != nil {
+			arg2 = args[2].(database.BookFileFieldPatch)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_PatchBookFileFields_Call) Return(before *database.BookFile, after *database.BookFile, err error) *MockStore_PatchBookFileFields_Call {
+	_c.Call.Return(before, after, err)
+	return _c
+}
+
+func (_c *MockStore_PatchBookFileFields_Call) RunAndReturn(run func(bookID string, fileID string, patch database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error)) *MockStore_PatchBookFileFields_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PromoteToQueued provides a mock function for the type MockStore
 func (_mock *MockStore) PromoteToQueued(id string) error {
 	ret := _mock.Called(id)

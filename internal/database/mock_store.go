@@ -562,6 +562,7 @@ type MockStore struct {
 	DeleteBookFilesByIDsFunc                func(ids []string) error
 	DeleteBookFilesForBookFunc              func(bookID string) error
 	UpsertBookFileFunc                      func(file *BookFile) error
+	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
 	MoveBookFilesToBookBulkFunc             func(moves []BookFileMove, targetBookID string) error
@@ -3222,6 +3223,13 @@ func (m *MockStore) UpsertBookFile(file *BookFile) error {
 	}
 	return nil
 }
+func (m *MockStore) PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error) {
+	if m.PatchBookFileFieldsFunc != nil {
+		return m.PatchBookFileFieldsFunc(bookID, fileID, patch)
+	}
+	return nil, nil, nil
+}
+
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
 	if m.BatchUpsertBookFilesFunc != nil {
 		return m.BatchUpsertBookFilesFunc(files)
