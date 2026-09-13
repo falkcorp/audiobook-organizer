@@ -1,0 +1,3 @@
+### Added
+
+- `scripts/setup_mac_ai_worker.py` sets up an extra Apple Silicon Mac as an AI worker. It installs Ollama (qwen2.5:7b-instruct and bge-m3, with a 30m keep-alive set through Homebrew's `ollama.env`), runs 4 loopback MLX Whisper workers under launchd, and opens one reverse SSH tunnel. Each Mac gets its own block of server-side ports from `--host-index`: Ollama on 11434+N and Whisper from 19848+8N. This keeps a new Mac from colliding with the original one, and with `ExitOnForwardFailure` set, a collision would kill the whole tunnel. Without `--apply` it only prints the plan, including the `WHISPER_ENDPOINTS` entries to add on the server.
