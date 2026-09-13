@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-09-13
 
@@ -56,7 +56,16 @@ type missingFileRepointParams struct {
 	// PathPrefix scopes the sweep to one tree (e.g. only the organizer's tree).
 	// The match is on a folder boundary: "/lib" matches "/lib" and "/lib/…" but
 	// not "/lib2/…". Empty = no filter.
+	//
+	// Accepted as "pathPrefix" OR "path_prefix" (the latter lands in
+	// PathPrefixAlias and is folded in by decodeOpParams; both present with
+	// different values is an error). Unknown keys are rejected. Before this, a
+	// body of {"path_prefix": "/lib", "apply": true} left PathPrefix empty and
+	// the apply repointed across the WHOLE library.
 	PathPrefix string `json:"pathPrefix"`
+	// PathPrefixAlias is the "path_prefix" spelling of PathPrefix. Never read
+	// it directly: decodeOpParams folds it into PathPrefix and clears it.
+	PathPrefixAlias string `json:"path_prefix,omitempty"`
 	// Max bounds rewrites per run. <=0 uses missingFileRepointDefaultMax.
 	Max int `json:"max"`
 	// RequireSizeMatch, default TRUE, refuses to repoint unless the candidate file's
@@ -171,10 +180,8 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 
 func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params missingFileRepointParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("missing-file-repoint: decode params: %w", err)
-		}
+	if err := decodeOpParams(rawParams, &params); err != nil {
+		return fmt.Errorf("missing-file-repoint: decode params: %w", err)
 	}
 	store := p.deps.OpsStore()
 	if store == nil {
