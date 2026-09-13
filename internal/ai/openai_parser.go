@@ -1,5 +1,5 @@
 // file: internal/ai/openai_parser.go
-// version: 13.20.0
+// version: 13.21.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-13
 
@@ -1253,9 +1253,11 @@ func parseBatchMetadataFromJSON(content string, expected int) ([]*ParsedMetadata
 		// says which: results[2] could belong to filename 5. Positional
 		// assignment would silently write one book's title onto another, so
 		// this is an error and the batch's books are left for the next scan.
-		return nil, newReplyParseError(fmt.Errorf(
-			"got %d result(s) for %d filename(s), and results are matched to filenames by position",
-			len(items), expected), content)
+		//
+		// Typed (*ResultCountError, under the *ReplyParseError) so the scanner's
+		// AI phase can recognise exactly this failure and re-ask with smaller
+		// batches: the reply was well-formed, only its length was wrong.
+		return nil, newReplyParseError(&ResultCountError{Got: len(items), Expected: expected}, content)
 	}
 	return items, nil
 }
@@ -1548,6 +1550,28 @@ func (e *ReplyParseError) Error() string {
 
 func (e *ReplyParseError) Unwrap() error {
 	return e.Err
+}
+
+// ResultCountError is a batch reply that decoded cleanly but carried a
+// different number of results than filenames were sent. Results are matched to
+// filenames by position, so the whole reply is unusable -- but unlike every
+// other reply failure, the same filenames asked in smaller groups usually
+// succeed (qwen2.5:7b-instruct collapses some 6-8 filename batches into one
+// object). internal/scanner's AI phase splits on this type and on nothing else.
+//
+// It is always returned WRAPPED in a *ReplyParseError, never on its own: the
+// scanner's permanent-failure classifier refuses to read the text of anything
+// under a *ReplyParseError, and making this the outer type would put
+// model-written text back in front of it. Error() carries no excerpt for the
+// same reason; the wrapping ReplyParseError adds it.
+type ResultCountError struct {
+	Got      int
+	Expected int
+}
+
+func (e *ResultCountError) Error() string {
+	return fmt.Sprintf("got %d result(s) for %d filename(s), and results are matched to filenames by position",
+		e.Got, e.Expected)
 }
 
 func newReplyParseError(err error, content string) *ReplyParseError {
