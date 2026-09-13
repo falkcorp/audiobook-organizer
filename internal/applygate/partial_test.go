@@ -1,5 +1,5 @@
 // file: internal/applygate/partial_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a2d8f31-0b9e-4c74-8e15-c3f7a9d02b86
 // last-edited: 2026-09-13
 
@@ -47,6 +47,16 @@ func TestCheckPartialBook(t *testing.T) {
 				return x
 			},
 			want: ReasonPartialBook,
+		},
+		{
+			name: "part marker only in a single file's name",
+			book: database.Book{ID: "b1", Title: "Lonesome Dove", FilePath: "/lib/Larry McMurtry/Lonesome Dove/Lonesome Dove Part 1.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Lonesome Dove"}, runtime: OutcomeUnknown, want: ReasonPartialBook,
+		},
+		{
+			name: "a disc range is the whole book",
+			book: database.Book{ID: "b1", Title: "A Fall of Moondust", FilePath: "/lib/Arthur C. Clarke/Moondust (Disc 1-3)"},
+			cand: whole, runtime: OutcomeUnknown,
 		},
 		{
 			name: "same part on both sides",
