@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-09-12
 
@@ -699,9 +699,8 @@ func (h *Handler) MergeAuthors(c *gin.Context) {
 		MergeIDs: req.MergeIDs,
 		KeepName: keepAuthor.Name,
 	}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.author-merge", params)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
+	opID, ok := h.enqueueEntityOp(c, "entities.author-merge", params)
+	if !ok {
 		return
 	}
 	httputil.RespondWithSuccess(c, 202, entityOpResponse{
@@ -1021,9 +1020,8 @@ func (h *Handler) ResolveProductionAuthor(c *gin.Context) {
 		AuthorID:       authorID,
 		ProdAuthorName: author.Name,
 	}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "entities.resolve-production-author", params)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
+	opID, ok := h.enqueueEntityOp(c, "entities.resolve-production-author", params)
+	if !ok {
 		return
 	}
 	httputil.RespondWithSuccess(c, 202, gin.H{"operation": entityOpResponse{
@@ -1129,9 +1127,8 @@ func (h *Handler) enqueueSeriesRename(c *gin.Context, seriesID int, name string)
 		return
 	}
 	params := seriesRenameOpParams{SeriesID: seriesID, Name: name}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), seriesRenameOpID, params)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
+	opID, ok := h.enqueueEntityOp(c, seriesRenameOpID, params)
+	if !ok {
 		return
 	}
 	httputil.RespondWithSuccess(c, 202, entityOpResponse{
@@ -1139,6 +1136,23 @@ func (h *Handler) enqueueSeriesRename(c *gin.Context, seriesID int, name string)
 		Type:   seriesRenameOpID,
 		Status: "queued",
 	})
+}
+
+// enqueueEntityOp enqueues opType with params on the operations registry and
+// answers 500 itself when it cannot: when the handler was built without a
+// registry (a nil interface would otherwise panic on the call) or when the
+// enqueue fails. It returns the op id and true on success.
+func (h *Handler) enqueueEntityOp(c *gin.Context, opType string, params any) (string, bool) {
+	if h.registry == nil {
+		httputil.InternalError(c, "failed to enqueue operation", fmt.Errorf("%s: operations registry is not configured", opType))
+		return "", false
+	}
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), opType, params)
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue operation", err)
+		return "", false
+	}
+	return opID, true
 }
 
 // SplitSeries implements POST /series/:id/split.

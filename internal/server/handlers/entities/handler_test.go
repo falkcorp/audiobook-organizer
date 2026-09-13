@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-09-12
 
@@ -1222,4 +1222,15 @@ func TestReclassifyAuthorAsNarrator_RefusesDeleteWhileStillLinked(t *testing.T) 
 	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
 	h.ReclassifyAuthorAsNarrator(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// A handler built without an operations registry answers 500 from the
+// enqueue paths instead of panicking on the nil interface.
+func TestRenameSeries_NilRegistryIs500(t *testing.T) {
+	store := entitiesmocks.NewMockEntitiesStore(t)
+	store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "Old"}, nil)
+	h := entities.New(store, nil, nil, nil, nil, nil, nil, nil)
+	c, w := newCtx(http.MethodPut, "/series/5/name", `{"name":"New"}`, idParam("5"))
+	require.NotPanics(t, func() { h.RenameSeries(c) })
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
