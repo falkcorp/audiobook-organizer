@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-09-13
 
@@ -7,7 +7,6 @@ package metafetch
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -144,7 +143,7 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 //
 // It returns the stripped metadata (so callers persist provenance / tag against
 // what was applied, or the full candidate if they prefer) and the skipped keys.
-// source == "" skips history recording (ApplyMetadataToBook's contract).
+// source only labels the log lines.
 func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, error) {
 	if book == nil {
 		return meta, nil, fmt.Errorf("apply metadata: nil book")
@@ -162,16 +161,19 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 		// Strip should have made this unreachable; if it fires, a new write in
 		// applyMetadataUnguarded reaches a locked column by a route
 		// StripLockedFields does not know about.
-		slog.Warn("metadata apply: apply body reached a locked column after strip; restored",
-			"book_id", book.ID, "source", logger.SanitizeLogValue(source), "restored", restored)
+		fieldLockLog.Warn("metadata apply: apply body reached a locked column after strip; restored book_id=%s source=%s restored=%v",
+			book.ID, logger.SanitizeLogValue(source), restored)
 		skipped = mergeSkipped(skipped, restored)
 	}
 	if len(skipped) > 0 {
-		slog.Info("metadata apply: skipped user-locked fields",
-			"book_id", book.ID, "source", logger.SanitizeLogValue(source), "skipped_locked", skipped)
+		fieldLockLog.Info("metadata apply: skipped user-locked fields book_id=%s source=%s skipped_locked=%v",
+			book.ID, logger.SanitizeLogValue(source), skipped)
 	}
 	return meta, skipped, nil
 }
+
+// fieldLockLog is this file's logger.New printf-style logger.
+var fieldLockLog = logger.New("metafetch.fieldlocks")
 
 // mergeSkipped unions two skipped-key lists in vocabulary order.
 func mergeSkipped(a, b []string) []string {

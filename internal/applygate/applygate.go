@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-13
 
@@ -100,23 +100,47 @@ type Verdict struct {
 	ScoreReason string          `json:"score_reason,omitempty"`
 	Sequence    SequenceVerdict `json:"sequence"`
 	Evidence    EvidenceVerdict `json:"evidence"`
+	// TranscriptionAgreesOnReview is the shared matcher's result on its own
+	// (ReviewedTranscriptionAgrees). It is an annotation for an owner-reviewed
+	// row apply and decides nothing: no leg reads it.
+	TranscriptionAgreesOnReview bool `json:"transcription_agrees_on_review,omitempty"`
 }
 
-// TranscriptionConfirms reports whether the candidate's title/author
-// independently match the book's transcribed title/author. The rule is
-// util.TitleAgrees and util.AuthorAgrees (internal/util/transcript_match.go),
-// shared with auto-fetch and with the apply's audio_confirmed marker. Before
-// 2026-09-13 this demanded exact title equality and the noisy transcribed
-// author as a substring of the candidate's, which refused every real book on
-// the review lane (Whisper appends credits and misspells names). The shared
-// rule is strict (full-title equality, author from the transcribed author
-// field only) because metadata.upgrade and an unpinned batch apply trust it
-// with no human in the loop.
+// TranscriptionConfirms reports whether the candidate's title/author match
+// the book's transcribed title/author closely enough for a path with NOBODY
+// reviewing the result: the certainty gate's score leg (and so every
+// Evaluate/EvaluateInBatch, i.e. metadata.upgrade and an unpinned batch
+// apply) and metadata.upgrade's candidate ranking.
+//
+// It is origin/main's rule (util.MainTranscriptionConfirms: normalized title
+// equality, transcribed author as a substring of the candidate author) AND the
+// shared matcher (ReviewedTranscriptionAgrees). The AND makes it refuse every
+// pair main refused, on every input, so an unreviewed apply is never looser
+// than it was, and a confirmation can never lower the floor to
+// MinScoreAudioConfirmed where main would have kept MinScore. The looser
+// matcher on its own only annotates an owner-reviewed row apply, which a human
+// has already looked at.
 func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) bool {
 	if book == nil || c == nil || book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
 		return false
 	}
-	if !util.TitleAgrees(c.Title, *book.TranscribedTitle) {
+	if !util.MainTranscriptionConfirms(c.Title, c.Author, *book.TranscribedTitle, derefStr(book.TranscribedAuthor)) {
+		return false
+	}
+	return ReviewedTranscriptionAgrees(book, c)
+}
+
+// ReviewedTranscriptionAgrees is the shared matcher alone (util.TitleAgrees
+// with the candidate's series position, then util.AuthorAgrees against the
+// transcribed author field). It forgives what Whisper does to a real book
+// (credits after the author, a misspelled surname, a spoken series trailer)
+// and so is LOOSER than main in places. Use it only to annotate an apply an
+// owner reviewed; never to decide an unreviewed one (TranscriptionConfirms).
+func ReviewedTranscriptionAgrees(book *database.Book, c *metafetch.MetadataCandidate) bool {
+	if book == nil || c == nil || book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
+		return false
+	}
+	if !util.TitleAgrees(c.Title, c.SeriesPosition, *book.TranscribedTitle) {
 		return false
 	}
 	return util.AuthorAgrees(c.Author, derefStr(book.TranscribedAuthor))
@@ -164,6 +188,7 @@ func EvaluateInBatch(book *database.Book, c *metafetch.MetadataCandidate, identi
 	v := Verdict{Score: c.Score}
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
 	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
+	v.TranscriptionAgreesOnReview = ReviewedTranscriptionAgrees(book, c)
 	v.Sequence = CheckSequence(book, c)
 	v.Evidence = CheckEvidenceInBatch(book, c, audio, claims)
 

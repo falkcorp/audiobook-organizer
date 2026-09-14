@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-13
 
@@ -260,7 +260,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// high-scoring same-author / wrong-title candidate would overwrite good
 			// data ("matches the author but not the actual book"). Defer to the next
 			// source (and ultimately manual review) rather than apply a wrong book.
-			if th.title != "" && !transcribedTitleAgrees(meta.Title, th.title) {
+			if th.title != "" && !transcribedTitleAgrees(meta.Title, meta.SeriesPosition, th.title) {
 				slog.Debug("auto-fetch: candidate title disagrees with transcribed title; skipping auto-apply",
 					"name", src.Name(), "candidate_title", meta.Title, "transcribed_title", th.title)
 				continue

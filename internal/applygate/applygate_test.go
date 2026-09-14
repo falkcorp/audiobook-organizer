@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-13
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 func strp(s string) *string { return &s }
@@ -138,38 +139,106 @@ func TestEvaluate(t *testing.T) {
 
 // TestTranscriptionConfirms_RealReviewCases: seven books the owner clicked
 // Apply on in the review lane on 2026-09-13, verbatim. All seven were refused
-// as transcription_mismatch by the rule this replaced (the fail-before test is
-// util.TestTranscriptMatch_OldRuleRefusedAllSeven). The negatives are the
-// cases the gate exists for.
+// as transcription_mismatch by origin/main's rule (the fail-before test is
+// util.TestTranscriptMatch_OldRuleRefusedAllSeven).
+//
+// unreviewed is TranscriptionConfirms (the gate, metadata.upgrade, an
+// unpinned batch apply): it ANDs origin/main's rule, so it refuses all seven,
+// exactly as main did; each is applied by an owner clicking Apply on its row.
+// reviewed is ReviewedTranscriptionAgrees, the annotation on that row apply.
 func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 	cases := []struct {
 		name                    string
 		candTitle, candAuthor   string
 		heardTitle, heardAuthor string
-		want                    bool
+		unreviewed, reviewed    bool
 	}{
-		{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", true},
-		// The candidate's own title carries the series suffix; the strict
-		// matcher strips trailers from the transcribed side only, so this one
-		// is applied by a row review, not by the matcher.
-		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false},
-		{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true},
-		{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true},
-		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true},
-		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", true},
-		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", true},
-		{"same author, different title", "The Well of Ascension", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false},
-		{"different volume of the same series", "Big Cats 3", "Ann Author", "Big Cats 1", "Ann Author", false},
-		{"completely different author", "Blood of Elves", "Morgan Rice", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", false},
+		{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", false, true},
+		// The candidate's own title carries the series suffix; trailers are
+		// stripped from the transcribed side only.
+		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false, false},
+		{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", false, true},
+		{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", false, true},
+		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", false, true},
+		// Heard "book one"; the review row carried no series position.
+		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false, false},
+		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, true},
+		{"same author, different title", "The Well of Ascension", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, false},
+		{"different volume of the same series", "Big Cats 3", "Ann Author", "Big Cats 1", "Ann Author", false, false},
+		{"completely different author", "Blood of Elves", "Morgan Rice", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", false, false},
+		// Both rules agree on a clean exact match.
+		{"clean exact match", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			book := &database.Book{TranscribedTitle: strp(tc.heardTitle), TranscribedAuthor: strp(tc.heardAuthor)}
 			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
-			if got := TranscriptionConfirms(book, c); got != tc.want {
-				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.want)
+			if got := TranscriptionConfirms(book, c); got != tc.unreviewed {
+				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.unreviewed)
+			}
+			if got := ReviewedTranscriptionAgrees(book, c); got != tc.reviewed {
+				t.Errorf("ReviewedTranscriptionAgrees = %v, want %v", got, tc.reviewed)
 			}
 		})
+	}
+}
+
+// mainRefusedCorpus crosses candidate and heard titles/authors that exercise
+// every place the shared matcher is looser than origin/main: trailer strips,
+// number words, silent letters, one-typo titles and surnames, initials, and
+// credit text after the author.
+var mainRefusedCorpus = struct {
+	titles, authors []string
+}{
+	titles: []string{
+		"Blood of Elves", "Witness to a Trial", "Witness to a Trial A short story prequel to The Whistler",
+		"Knaves Over Queens", "Naves Over Queens", "Sojourn", "This Gilded Abyss",
+		"This Gilded Abyss, book one of the Gilded Abyss trilogy", "Ready Player One", "Ready Player 1",
+		"Children of Dune Messiah", "Chilren of Dune Messiah", "Dune", "Dune, book two of the Dune Chronicles",
+		"Harry Potter", "Harry Potter book 2", "The Expanse", "The Expanse, volume 3", "Mistborn",
+	},
+	authors: []string{
+		"Andrzej Sapkowski", "Andrzej Sapkowski Translated from the Polish", "George R. R. Martin",
+		"George R. R. Martin, assisted", "R. A. Salvatore", "R.A. Salvator", "Robert Salvatore",
+		"Brandon Sanderson", "Brandon Sanderson For Beth Sanderson, who's", "Frank Herbert", "",
+	},
+}
+
+// TestUnreviewedPathsRefuseEveryPairMainRefused: over the whole corpus, with
+// and without a series position, every pair origin/main's rule refused is
+// refused by TranscriptionConfirms and blocked by Evaluate/EvaluateInBatch
+// (the gate metadata.upgrade and an unpinned batch apply run) as
+// transcription_mismatch, and never earns the relaxed MinScoreAudioConfirmed
+// floor. A score of 0.99 keeps the score leg from being the reason.
+func TestUnreviewedPathsRefuseEveryPairMainRefused(t *testing.T) {
+	refused := 0
+	for _, ct := range mainRefusedCorpus.titles {
+		for _, ht := range mainRefusedCorpus.titles {
+			for _, ca := range mainRefusedCorpus.authors {
+				for _, ha := range mainRefusedCorpus.authors {
+					if util.MainTranscriptionConfirms(ct, ca, ht, ha) {
+						continue
+					}
+					for _, pos := range []string{"", "1", "2", "3"} {
+						refused++
+						book := &database.Book{TranscribedTitle: strp(ht), TranscribedAuthor: strp(ha)}
+						c := &metafetch.MetadataCandidate{Title: ct, Author: ca, SeriesPosition: pos, Score: 0.99}
+						if TranscriptionConfirms(book, c) {
+							t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
+						}
+						for _, v := range []Verdict{Evaluate(book, c, nil), EvaluateInBatch(book, c, nil, nil)} {
+							if v.Allowed || v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
+								t.Fatalf("gate on %q/%q (pos %q) ~ heard %q/%q: allowed=%v audio=%v floor=%v score_reason=%q; origin/main refused it",
+									ct, ca, pos, ht, ha, v.Allowed, v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if refused < 1000 {
+		t.Fatalf("corpus produced only %d refused pairs; it no longer exercises the rule", refused)
 	}
 }
 

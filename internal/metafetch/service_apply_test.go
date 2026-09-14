@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.4.1
+// version: 1.5.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
 // last-edited: 2026-09-13
 
@@ -96,6 +96,45 @@ var _ database.ActivityStorer = (*capturingActivityStore)(nil)
 
 // newChangeHistoryHarness wires a metafetch Service to a MockStore and an
 // activity.Service backed by a capturing store, then returns both.
+// An owner-reviewed override is applied past legs the certainty gate refused;
+// its change-history rows are the only record to audit or revert it from.
+// History is recorded after the commit (CommitApply), so a failed history
+// write cannot stop the write; it must instead come back with the response so
+// the op reports and counts it. An unreviewed apply keeps main's behaviour:
+// logged, the apply stands, no error.
+func TestApplyCandidate_HistoryFailureIsReturnedForOwnerReviewedApply(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		opts    ApplyOptions
+		wantErr bool
+	}{
+		{"owner-reviewed", ApplyOptions{GateOverride: "score_below_floor"}, true},
+		{"unreviewed", ApplyOptions{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pebble, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = pebble.Close() })
+			store := &historyFailStore{PebbleStore: pebble, failFetched: true}
+			svc := NewService(store)
+			book, err := store.CreateBook(&database.Book{Title: "track01", FilePath: "/library/a.m4b", Format: "m4b"})
+			require.NoError(t, err)
+
+			resp, err := svc.ApplyMetadataCandidateWithOptions(book.ID, MetadataCandidate{Title: "New Title", Source: "Audible"}, nil, tc.opts)
+			require.NotNil(t, resp, "the write committed, so the response is returned either way")
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrApplyHistoryIncomplete)
+				require.Contains(t, err.Error(), "change history not recorded")
+			} else {
+				require.NoError(t, err)
+			}
+			got, gerr := store.GetBookByID(book.ID)
+			require.NoError(t, gerr)
+			require.Equal(t, "New Title", got.Title, "the write stands; only its history is missing")
+		})
+	}
+}
+
 func newChangeHistoryHarness(t *testing.T) (*Service, *capturingActivityStore) {
 	t.Helper()
 	acts := &capturingActivityStore{}

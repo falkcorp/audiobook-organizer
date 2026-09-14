@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -82,6 +83,11 @@ type applyOutcome struct {
 	// !Applied: the database change is real and durable, and reporting the book
 	// as "not applied" would send someone re-applying work that succeeded.
 	WriteBackFailed bool
+	// HistoryFailed is true when an owner-reviewed apply WAS written but its
+	// change history was not recorded (metafetch.ErrApplyHistoryIncomplete).
+	// Applied stays true for the same reason as WriteBackFailed; the op counts
+	// and logs it, because that history is the only record of the override.
+	HistoryFailed bool
 	// SkippedLocked lists the lock keys (database.UserLockableFields) the apply
 	// left alone because the user has locked or overridden them. The apply
 	// still counts as Applied -- every other field landed -- but an op summary
@@ -300,6 +306,14 @@ func applyCachedCandidateForBookTimed(
 		opts.GateOverride = plan.Gate.OverrideSummary()
 	}
 	resp, aerr := svc.ApplyMetadataCandidateWithOptions(id, *plan.Candidate, nil, opts)
+	// A response with ErrApplyHistoryIncomplete means the write stands and
+	// only its history is missing: finish the apply (so the database and the
+	// files agree) and report the history failure, rather than calling a
+	// written book unapplied.
+	historyErr := error(nil)
+	if aerr != nil && resp != nil && errors.Is(aerr, metafetch.ErrApplyHistoryIncomplete) {
+		historyErr, aerr = aerr, nil
+	}
 	if aerr != nil {
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 	}
@@ -311,6 +325,9 @@ func applyCachedCandidateForBookTimed(
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
 	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+	if historyErr != nil {
+		out.HistoryFailed, out.Err = true, historyErr
+	}
 	pendingCover := ""
 	if resp != nil {
 		out.SkippedLocked = resp.SkippedLockedFields

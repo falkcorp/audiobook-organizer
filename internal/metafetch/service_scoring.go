@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-09-13
 
@@ -604,9 +604,13 @@ func transcriptionBoost(score float64, r metadata.BookMetadata, th transcription
 // shared matcher does. What it adds is refusals: the old raw-substring test
 // let a one-word title match any transcript containing the word, and
 // "Mistborn" match "Mistborn: The Hero of Ages".
-func transcribedTitleAgrees(candidateTitle, transcribedTitle string) bool {
+//
+// candidateSeriesPosition is required because the legacy substring test
+// accepts "Dune" inside "Dune, book two of the Dune Chronicles": the shared
+// matcher refuses that unless the candidate is volume 2.
+func transcribedTitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle string) bool {
 	return legacyTranscribedTitleAgrees(candidateTitle, transcribedTitle) &&
-		util.TitleAgrees(candidateTitle, transcribedTitle)
+		util.TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle)
 }
 
 // legacyTranscribedTitleAgrees is transcribedTitleAgrees as it stood on

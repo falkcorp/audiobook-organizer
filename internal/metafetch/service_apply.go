@@ -248,6 +248,43 @@ func displayOrNone(s string) string {
 	return s
 }
 
+// applyMarkerLog and historyLog replace direct slog calls in this file
+// (logger.New printf-style is the repo's logging API).
+var (
+	applyMarkerLog = logger.New("metafetch.apply")
+	historyLog     = logger.New("metafetch.history")
+)
+
+// audioConfirmedMarker decides the apply's audio_confirmed marker.
+//
+// With nobody reviewing (ownerReviewed false: auto-fetch, metadata.upgrade,
+// an unpinned batch apply, a manual apply) it is the marker's rule on
+// origin/main before 2026-09-13 (legacyAudioConfirmedMarker) AND the shared
+// matcher, so it never marks a pair main did not. On an owner-reviewed row
+// apply the shared matcher alone may annotate it: a human has looked at the
+// book, and the marker then records that the audio agrees with their choice.
+func audioConfirmedMarker(candidate MetadataCandidate, th transcriptionHints, ownerReviewed bool) bool {
+	if th.empty() || th.title == "" {
+		return false
+	}
+	shared := util.TitleAgrees(candidate.Title, candidate.SeriesPosition, th.title) &&
+		util.AuthorAgrees(candidate.Author, th.author)
+	if ownerReviewed {
+		return shared
+	}
+	return shared && legacyAudioConfirmedMarker(candidate, th)
+}
+
+// legacyAudioConfirmedMarker is the audio_confirmed rule as it stood on
+// origin/main: normalized title equality, then a transcribed author of more
+// than three characters as a case-insensitive substring of the candidate's.
+func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHints) bool {
+	if util.NormalizeTitle(th.title) != util.NormalizeTitle(candidate.Title) {
+		return false
+	}
+	return th.author == "" || len(th.author) <= 3 || containsCI(candidate.Author, th.author)
+}
+
 // syncMetadataToLibraryCopy copies metadata fields from the original book to
 // the library copy so that both DB records stay in sync. This is needed because
 // ApplyMetadataCandidate only updates the original book's DB record, leaving
@@ -611,20 +648,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	src := candidate.Source
 	book.MetadataSource = &src
 	th := hintsFromBook(book)
-	// The same strict title/author rule the certainty gate uses
-	// (internal/util/transcript_match.go); AuthorAgrees passes an empty or
-	// <=3-character transcribed author, as this did before. An owner-reviewed
-	// apply earns no audio_confirmed marker it did not match on its own.
-	audioConfirmed := !th.empty() &&
-		th.title != "" &&
-		util.TitleAgrees(candidate.Title, th.title)
-	if audioConfirmed {
-		if util.AuthorAgrees(candidate.Author, th.author) {
-			ac := "audio_confirmed"
-			book.MetadataReviewStatus = &ac
-			slog.Info("metadata apply: audio-confirmed match", "id", logger.SanitizeLogValue(id), "title", logger.SanitizeLogValue(candidate.Title))
-			appendMetadataVersionNote(book, "audio_confirmed")
-		}
+	if audioConfirmedMarker(candidate, th, opts.GateOverride != "") {
+		ac := "audio_confirmed"
+		book.MetadataReviewStatus = &ac
+		applyMarkerLog.Info("metadata apply: audio-confirmed match id=%s title=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Title))
+		appendMetadataVersionNote(book, "audio_confirmed")
 	}
 
 	// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
@@ -636,10 +664,6 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	}
 
 	// Write only what this apply changed, onto the row as it stands under the
-	// book's write lock. A whole-struct UpdateBook(id, book) here replaced every
-	// column with this apply's read, so a book-page save (or any other write)
-	// that committed during the apply was silently reverted.
-	// Write only what this apply changed, onto the row as it stands under the
 	// book's write lock, then record history from the committed row
 	// (CommitApply). A whole-struct UpdateBook(id, book) here replaced every
 	// column with this apply's read, so a book-page save (or any other write)
@@ -649,6 +673,16 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	updatedBook, updateErr := mfs.CommitApply(id, before, book, prevAuthors, historySource)
 	if updatedBook == nil {
 		return nil, updateErr
+	}
+	// An owner-reviewed apply went through past legs the certainty gate
+	// refused, and its change history is the only record to audit or revert
+	// it from. When that history did not land, the error is returned with the
+	// response (below) so the op reports and counts it. History is written
+	// after the commit, so the write itself stands; the rest of this apply
+	// still runs so the book is not left half-applied.
+	var historyErr error
+	if opts.GateOverride != "" && updateErr != nil {
+		historyErr = fmt.Errorf("owner-reviewed apply of %s: change history not recorded: %w", id, updateErr)
 	}
 
 	// Check whether any other book already carries the same hash — if so,
@@ -731,7 +765,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		Source:              candidate.Source,
 		PendingCoverURL:     pendingCover,
 		SkippedLockedFields: skippedLocked,
-	}, nil
+	}, historyErr
 }
 
 // DownloadPendingCover fetches a candidate's cover art and points the book at
