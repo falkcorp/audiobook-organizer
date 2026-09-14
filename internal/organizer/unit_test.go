@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package organizer
 
@@ -609,11 +609,15 @@ func TestBuildTagMetadata(t *testing.T) {
 		if meta["artist"] != "Author Name" {
 			t.Errorf("artist = %v", meta["artist"])
 		}
-		if meta["album_artist"] != "Narrator Name" {
-			t.Errorf("album_artist = %v", meta["album_artist"])
+		if meta["narrator"] != "Narrator Name" {
+			t.Errorf("narrator = %v", meta["narrator"])
 		}
-		if meta["composer"] != "Narrator Name" {
-			t.Errorf("composer = %v", meta["composer"])
+		// ALBUMARTIST is read as the author; COMPOSER may hold an owner value.
+		if _, ok := meta["album_artist"]; ok {
+			t.Error("organize must not write album_artist")
+		}
+		if _, ok := meta["composer"]; ok {
+			t.Error("organize must not write composer")
 		}
 	})
 
@@ -624,11 +628,8 @@ func TestBuildTagMetadata(t *testing.T) {
 		if _, ok := meta["artist"]; ok {
 			t.Error("artist should not be set for empty author")
 		}
-		if _, ok := meta["album_artist"]; ok {
-			t.Error("album_artist should not be set for empty narrator")
-		}
-		if _, ok := meta["composer"]; ok {
-			t.Error("composer should not be set for empty narrator")
+		if _, ok := meta["narrator"]; ok {
+			t.Error("narrator should not be set for empty narrator")
 		}
 	})
 
@@ -697,8 +698,8 @@ func TestComputeTagChanges(t *testing.T) {
 		if fieldMap["artist"] != "Author" {
 			t.Errorf("artist = %q", fieldMap["artist"])
 		}
-		if fieldMap["album_artist"] != "Narrator" {
-			t.Errorf("album_artist = %q", fieldMap["album_artist"])
+		if fieldMap["narrator"] != "Narrator" {
+			t.Errorf("narrator = %q", fieldMap["narrator"])
 		}
 		if fieldMap["genre"] != "Audiobook" {
 			t.Errorf("genre = %q", fieldMap["genre"])
