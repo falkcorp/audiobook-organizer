@@ -1,5 +1,5 @@
 // file: internal/metafetch/fetch_cache_identity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b1e9c42-8d3f-4a7e-b25c-0f9a3d7e41c8
 // last-edited: 2026-09-14
 
@@ -199,7 +199,9 @@ func TestApplyInvalidation_TitleChangeMakesFetchRowsMiss(t *testing.T) {
 // hook deletes every provider row for the book and only that book, because a
 // rejected result is wrong for an UNCHANGED identity that the stamp cannot
 // catch. Other books' rows, including an id that shares the prefix digit,
-// survive.
+// survive. It also clears the book's candidate cache, which is keyed on the
+// same unchanged search inputs and would otherwise keep offering the
+// rejected candidates in the review UI.
 func TestInvalidateFetchCacheForBook_RejectRemovesRows(t *testing.T) {
 	raw := map[string][]byte{
 		"metadata_fetch_cache:b1:audible":      []byte(`{}`),
@@ -214,5 +216,6 @@ func TestInvalidateFetchCacheForBook_RejectRemovesRows(t *testing.T) {
 	assert.NotContains(t, raw, "metadata_fetch_cache:b1:hardcover")
 	assert.Contains(t, raw, "metadata_fetch_cache:b2:audible", "another book's row must survive")
 	assert.Contains(t, raw, "metadata_fetch_cache:b10:openlibrary", "a book id sharing the prefix digit must survive")
-	assert.Empty(t, candidateDeleted, "the reject hook only clears the fetch cache")
+	assert.Equal(t, "b1", candidateDeleted,
+		"the reject hook must also clear the candidate cache: it is keyed on the unchanged search inputs, so it would keep offering the rejected candidates")
 }

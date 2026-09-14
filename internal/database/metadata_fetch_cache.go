@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-09-14
 
@@ -300,11 +300,12 @@ func CountCachedMetadataFetches(store RawKVStore) (int64, error) {
 }
 
 // InvalidateAllCachedMetadataFetchesForBook wipes every source's
-// cache entry for a single book. Called from
-// metafetch.Service.InvalidateCachedCandidates (manual edit, metadata apply,
-// organize rename): any cached candidate may now be stale because it was
-// queried against different search terms. The SearchIdentity stamp covers
-// identity changes on paths that never call this.
+// cache entry for a single book. Its only caller is
+// metafetch.Service.InvalidateFetchCacheForBook, on the reject ("no match")
+// path: a rejected result is wrong for the book's unchanged identity, so the
+// SearchIdentity stamp still matches and would replay it. Edit, apply and
+// rename paths do not call this; the stamp makes rows miss when one of the
+// five identity fields changes.
 func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) error {
 	if bookID == "" {
 		return nil

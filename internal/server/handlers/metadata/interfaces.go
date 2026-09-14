@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-14
 
@@ -179,9 +179,11 @@ type MetadataWriteBacker interface {
 // MetadataMatchMarker marks a book as having no acceptable match.
 type MetadataMatchMarker interface {
 	MarkNoMatch(id string) error
-	// InvalidateFetchCacheForBook deletes the book's provider fetch-cache rows.
-	// A rejected match is wrong for the book's UNCHANGED identity, so the
-	// rows' SearchIdentity stamp still matches and would replay it (A3#14).
+	// InvalidateFetchCacheForBook deletes the book's provider fetch-cache rows
+	// and its candidate cache. A rejected match is wrong for the book's
+	// UNCHANGED identity, so the rows' SearchIdentity stamp still matches and
+	// the candidate cache's input hash is unchanged; either would replay the
+	// rejected result (A3#14).
 	InvalidateFetchCacheForBook(bookID string) error
 }
 

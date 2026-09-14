@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-09-14
 //
@@ -264,12 +264,14 @@ func (mfs *Service) ListCachedSummaries(_ context.Context) ([]MetadataCacheSumma
 // apply, undo, revert, organize rename) so the next read fetches fresh.
 //
 // It deliberately does NOT touch the per-provider fetch cache. Every caller
-// is an apply/edit/undo/revert path, and on those the fetch rows are already
-// exact: each row carries the SearchIdentity (title, author, ASIN, ISBNs) it
-// was fetched for, so an edit that changes the identity makes the row miss,
-// and an edit that does not (narrator, series, a fill-only apply) leaves a
-// still-valid row that a wipe would throw away, forcing a provider refetch of
-// every applied book. A wipe here was tried and reverted in review of #3421.
+// is an apply/edit/undo/revert path. Each fetch row carries the
+// SearchIdentity it was fetched for, built from five fields: title, author,
+// ASIN, ISBN-13 and ISBN-10. Any change that writes one of those five
+// (including an apply that fills an empty ASIN or ISBN) makes the row miss
+// and the next fetch re-queries. Only a change that touches none of the five
+// (narrator, series, description and the like) keeps its rows, and those rows
+// are still valid for the unchanged identity, so wiping them would only force
+// a provider refetch. A wipe here was tried and reverted in review of #3421.
 // For a result that is wrong for an UNCHANGED identity (the user rejects the
 // match), use InvalidateFetchCacheForBook: the stamp cannot catch that case.
 func (mfs *Service) InvalidateCachedCandidates(bookID string) error {
@@ -279,20 +281,33 @@ func (mfs *Service) InvalidateCachedCandidates(bookID string) error {
 	return mfs.db.DeleteMetadataCache(bookID)
 }
 
-// InvalidateFetchCacheForBook deletes every provider's fetch-cache row for
-// bookID. Call it when the cached provider results are wrong for the book as
-// it is NOW, i.e. the user rejected the match ("no match") while the title,
-// author and IDs stay the same. The SearchIdentity stamp would still match, so
-// without this delete the rejected result would replay on the next fetch or
-// search. Identity changes do not need it (see InvalidateCachedCandidates).
+// InvalidateFetchCacheForBook deletes every cached metadata result for
+// bookID: every provider's fetch-cache row AND the book's candidate cache.
+// Call it when the cached results are wrong for the book as it is NOW, i.e.
+// the user rejected the match ("no match") while the five identity fields
+// stay the same. Neither cache would notice on its own: the fetch rows'
+// SearchIdentity stamp still matches, and the candidate cache is keyed on a
+// hash of the same unchanged search inputs, so without both deletes the
+// rejected result would replay on the next fetch and the review UI would keep
+// offering the rejected candidates. Both deletes are always attempted; their
+// errors are joined. Identity changes do not need this (see
+// InvalidateCachedCandidates).
+//
+// This only forces a fresh result. It does not stop a later fetch from
+// matching the book again: only FetchMetadataForBook refuses books whose
+// MetadataReviewStatus is "no_match".
 func (mfs *Service) InvalidateFetchCacheForBook(bookID string) error {
 	if mfs == nil || mfs.db == nil {
 		return nil
 	}
+	var errs []error
 	if err := database.InvalidateAllCachedMetadataFetchesForBook(mfs.db, bookID); err != nil {
-		return fmt.Errorf("invalidate metadata fetch cache: %w", err)
+		errs = append(errs, fmt.Errorf("invalidate metadata fetch cache: %w", err))
 	}
-	return nil
+	if err := mfs.db.DeleteMetadataCache(bookID); err != nil {
+		errs = append(errs, fmt.Errorf("invalidate metadata candidate cache: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // fetchCacheIdentity returns the database.MetadataSearchIdentity for a book
