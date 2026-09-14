@@ -1,5 +1,5 @@
 // file: internal/audiobooks/rename.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 //
@@ -11,6 +11,8 @@
 package audiobooks
 
 import (
+	"fmt"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -53,11 +55,34 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 	svc.ResolveAuthorAndSeriesNames = func(book *database.Book) (string, string) {
 		return resolveAuthorAndSeriesNames(db, book)
 	}
-	svc.FilterUnchangedTags = metafetch.FilterUnchangedTags
-	// The pre-write value each tag_write row records is read from the one
-	// file property the revert will write back (metadata.TagProperty), so the
-	// revert's compare-and-set and its write address the same property.
+	// The organize tag write, its unchanged-tag filter and the pre-write
+	// value each tag_write row records all address the one file property
+	// each key names (metadata.TagProperty) -- the same property the revert
+	// writes back. The organize write used the write-back map, which ignored
+	// album_artist and composer (their rows recorded writes that never
+	// happened) and fanned artist out to ALBUMARTIST and a blank COMPOSER
+	// (changes no row recorded, so undo could not put them back).
+	svc.FilterUnchangedTags = filterUnchangedTagProperties
 	svc.ReadCurrentTags = metadata.ReadTagProperties
+	svc.WriteTags = defaultRevertWriteTags
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
 	return svc
+}
+
+// filterUnchangedTagProperties drops each tag whose file property already
+// holds the value. When the file cannot be read everything is kept; the
+// organizer then fails to read the pre-write values too and writes nothing.
+func filterUnchangedTagProperties(path string, tags map[string]any) map[string]any {
+	current, err := metadata.ReadTagProperties(path)
+	if err != nil {
+		return tags
+	}
+	out := make(map[string]any, len(tags))
+	for k, v := range tags {
+		if cur, known := current[k]; known && cur == fmt.Sprint(v) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
