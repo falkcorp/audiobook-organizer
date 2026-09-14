@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
 // last-edited: 2026-09-13
 
@@ -74,10 +74,12 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	// that file's FOLDER (never the file's own path), once that folder is
 	// checked free.
 	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2").Return(nil, nil).Once()
-	store.EXPECT().GetBookByID("src").Return(&fresh, nil).Once()
-	store.EXPECT().UpdateBook("src", mock.MatchedBy(func(b *database.Book) bool {
-		return b.FilePath == "/lib/Omnibus/Book 2" && b.Duration != nil && *b.Duration == 300
-	})).Return(&fresh, nil)
+	var written *database.Book
+	store.EXPECT().ModifyBook("src", mock.Anything).RunAndReturn(func(id string, fn func(*database.Book) error) (*database.Book, error) {
+		b, err := modifyOn(fresh)(id, fn)
+		written = b
+		return b, err
+	})
 	store.EXPECT().GetBookByID("new").Return(&database.Book{ID: "new", Title: "Book One"}, nil)
 
 	c, w := splitReq(`{"segment_ids":["f1","f2","f1"],"as_one_book":true,"title":"Book One"}`)
@@ -88,6 +90,9 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 	}
 	if createdBook == nil {
 		t.Fatal("no book created")
+	}
+	if written == nil || written.FilePath != "/lib/Omnibus/Book 2" || written.Duration == nil || *written.Duration != 300 {
+		t.Fatalf("the path write must land on the post-move row, got %+v", written)
 	}
 	if createdBook.Title != "Book One" || createdBook.VersionGroupID != nil || createdBook.IsPrimaryVersion != nil {
 		t.Fatalf("new book must be standalone with the given title: %+v", createdBook)
@@ -182,8 +187,7 @@ func TestSplitSegmentsToBooks_AsOneBookSourcePathUpdateFailureIs207(t *testing.T
 	expectSplitThroughMove(store, "")
 	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil)
 	store.EXPECT().LiveBookIDsAtPath("/lib/Omnibus/Book 2").Return(nil, nil).Once()
-	store.EXPECT().GetBookByID("src").Return(splitSource(), nil).Once()
-	store.EXPECT().UpdateBook("src", mock.Anything).Return(nil, errors.New("disk full"))
+	store.EXPECT().ModifyBook("src", mock.Anything).Return(nil, errors.New("disk full"))
 
 	c, w := splitOneBookReq()
 	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)
@@ -215,8 +219,7 @@ func TestSplitSegmentsToBooks_AsOneBookExternalIDFailureIs207(t *testing.T) {
 	store.EXPECT().GetExternalIDsForBook("src").Return([]database.ExternalIDMapping{
 		{Source: "itunes", ExternalID: "PID1", BookID: "src", FilePath: "/lib/Omnibus/Book 1/01.mp3"},
 	}, nil)
-	store.EXPECT().DeleteRaw("ext_id:book:src:itunes:PID1").Return(nil)
-	store.EXPECT().CreateExternalIDMapping(mock.Anything).Return(errors.New("write refused"))
+	store.EXPECT().ReassignExternalID("itunes", "PID1", "new").Return(errors.New("write refused"))
 
 	c, w := splitOneBookReq()
 	handlers.NewVersionsHandler(store).SplitSegmentsToBooks(c)

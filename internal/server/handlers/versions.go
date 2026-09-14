@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -8,7 +8,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"log/slog"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -28,10 +28,15 @@ type VersionBookReader interface {
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
 
-// VersionBookWriter creates and updates books when splitting or merging groups.
+// VersionBookWriter creates books and changes them. Every change goes through
+// ModifyBook, a read-modify-write of the stored row under the book's lock, so
+// a write here can never put back fields another writer (or this handler's own
+// MoveBookFilesToBook aggregate recount) committed after the handler read the
+// row. There is deliberately no UpdateBook: a whole-row write of a copy read
+// earlier is exactly the lost update the split handlers used to make.
 type VersionBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // VersionBookFileStore reads book files and moves them between books.
@@ -46,16 +51,14 @@ type VersionBookAuthorStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
-// VersionExternalIDStore reads and creates external ID mappings.
+// VersionExternalIDStore reads external ID mappings and moves one to another
+// book. ReassignExternalID rewrites the primary key and both reverse keys in
+// one atomic batch, so a failure leaves the mapping where it was. It replaced
+// a DeleteRaw of the old reverse key followed by a separate create, where a
+// failed create left the ID indexed under neither book.
 type VersionExternalIDStore interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
-	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
-}
-
-// VersionRawKVDeleter deletes a raw key. The narrowest and most dangerous piece
-// here, which is exactly why it is its own declaration.
-type VersionRawKVDeleter interface {
-	DeleteRaw(key string) error
+	ReassignExternalID(source, externalID, newBookID string) error
 }
 
 // VersionBookPathChecker reports which live books sit at a path. The split
@@ -75,16 +78,16 @@ type VersionBookDeleter interface {
 // actually call, including the external-ID methods used by
 // reassignExternalIDsForFiles.
 //
-// Split into the 6 interfaces above on 2026-08-18. This name is retained as
-// their composition so the method set is byte-identical and no consumer moves; the
-// type checker proves it.
+// Split into the interfaces above on 2026-08-18; this name is their
+// composition. On 2026-09-13 UpdateBook, CreateExternalIDMapping and DeleteRaw
+// were replaced by ModifyBook and ReassignExternalID (see the two declarations
+// for why), which also removed the raw-key deleter from this handler entirely.
 type VersionsStore interface {
 	VersionBookReader
 	VersionBookWriter
 	VersionBookFileStore
 	VersionBookAuthorStore
 	VersionExternalIDStore
-	VersionRawKVDeleter
 	VersionBookPathChecker
 	VersionBookDeleter
 }
@@ -129,7 +132,25 @@ func (h *VersionsHandler) ListAudiobookVersions(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"versions": books})
 }
 
-// LinkAudiobookVersion links an audiobook as another version
+// LinkAudiobookVersion links two audiobooks as versions of one work.
+//
+// The result is one version group holding both books -- and, when both were
+// already grouped, every live member of both groups, since a sibling of either
+// book is a version of the same work -- with exactly one primary:
+//
+//   - the target group's (id's group's) existing primary, when it has one;
+//   - otherwise the incoming side's existing primary;
+//   - otherwise an election over every member.
+//
+// Each choice among several candidates takes the earliest-created, tie-broken
+// by ID (reconcile.electPrimaryFor's rule), so a rerun picks the same book.
+// The winner is written first and every other member is then written as
+// non-primary in the same ModifyBook that moves it into the group, so no
+// member ever joins the group still claiming to be primary.
+//
+// A soft-deleted book, or linking a book to itself, is refused before any
+// write. A member whose group changed after it was read, or that was deleted
+// meanwhile, stops the link with an error naming what was and was not written.
 func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 	id := c.Param("id")
 
@@ -146,45 +167,224 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
+	if req.OtherID == id {
+		httputil.RespondWithBadRequest(c, "cannot link an audiobook to itself")
+		return
+	}
 
 	book1, err := h.store.GetBookByID(id)
-	if err != nil {
+	if err != nil || book1 == nil {
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
-
 	book2, err := h.store.GetBookByID(req.OtherID)
-	if err != nil {
+	if err != nil || book2 == nil {
 		httputil.RespondWithNotFound(c, "audiobook", req.OtherID)
 		return
 	}
-
-	versionGroupID := ""
-	if book1.VersionGroupID != nil {
-		versionGroupID = *book1.VersionGroupID
-	} else if book2.VersionGroupID != nil {
-		versionGroupID = *book2.VersionGroupID
-	} else {
-		versionGroupID = ulid.Make().String()
+	for _, b := range []*database.Book{book1, book2} {
+		if b.IsSoftDeleted() {
+			httputil.RespondWithErrorFields(c, http.StatusBadRequest,
+				fmt.Sprintf("audiobook %s is deleted; restore it before linking it as a version", b.ID),
+				"link_deleted_book", map[string]any{"book_id": b.ID})
+			return
+		}
 	}
 
-	book1.VersionGroupID = &versionGroupID
-	book2.VersionGroupID = &versionGroupID
-
-	if _, err := h.store.UpdateBook(id, book1); err != nil {
-		httputil.RespondWithInternalError(c, "failed to update audiobook")
+	g1, g2 := versionGroupOf(book1), versionGroupOf(book2)
+	if g1 != "" && g1 == g2 {
+		httputil.RespondWithOK(c, gin.H{"version_group_id": g1})
 		return
 	}
 
-	if _, err := h.store.UpdateBook(req.OtherID, book2); err != nil {
-		httputil.RespondWithInternalError(c, "failed to update other audiobook")
+	// The target side keeps its group ID; the incoming side joins it.
+	targetGroup := g1
+	targetBook, incomingBook, incomingGroup := book1, book2, g2
+	if targetGroup == "" && g2 != "" {
+		targetGroup = g2
+		targetBook, incomingBook, incomingGroup = book2, book1, ""
+	}
+	if targetGroup == "" {
+		targetGroup = ulid.Make().String()
+	}
+
+	targetMembers, err := h.liveGroupMembers(versionGroupOf(targetBook), targetBook)
+	if err != nil {
+		httputil.InternalError(c, "failed to read the target version group; nothing was linked", err)
+		return
+	}
+	incomingMembers, err := h.liveGroupMembers(incomingGroup, incomingBook)
+	if err != nil {
+		httputil.InternalError(c, "failed to read the incoming version group; nothing was linked", err)
 		return
 	}
 
-	httputil.RespondWithOK(c, gin.H{"version_group_id": versionGroupID})
+	winner := electVersionPrimary(primariesOf(targetMembers))
+	if winner == nil {
+		winner = electVersionPrimary(primariesOf(incomingMembers))
+	}
+	all := append(append([]database.Book{}, targetMembers...), incomingMembers...)
+	if winner == nil {
+		winner = electVersionPrimary(all)
+	}
+
+	// The group each member was read in: a member whose stored group differs
+	// by the time its write runs has been moved by someone else, and is not
+	// ours to move.
+	readGroup := make(map[string]string, len(all))
+	for i := range all {
+		readGroup[all[i].ID] = versionGroupOf(&all[i])
+	}
+	order := []string{winner.ID}
+	var rest []string
+	for i := range all {
+		if all[i].ID != winner.ID {
+			rest = append(rest, all[i].ID)
+		}
+	}
+	slices.Sort(rest)
+	order = append(order, rest...)
+
+	var linked []string
+	for _, bid := range order {
+		wantPrimary := bid == winner.ID
+		_, mErr := h.modifyBook(bid, func(cur *database.Book) error {
+			if cur.IsSoftDeleted() {
+				return fmt.Errorf("book %s was deleted during the link", cur.ID)
+			}
+			if g := versionGroupOf(cur); g != readGroup[cur.ID] {
+				return fmt.Errorf("book %s moved from version group %q to %q during the link", cur.ID, readGroup[cur.ID], g)
+			}
+			if versionGroupOf(cur) == targetGroup && isPrimaryVersion(cur) == wantPrimary && cur.IsPrimaryVersion != nil {
+				return database.ErrSkipBookWrite
+			}
+			gid := targetGroup
+			cur.VersionGroupID = &gid
+			cur.IsPrimaryVersion = &wantPrimary
+			return nil
+		})
+		if mErr != nil {
+			notLinked := order[len(linked):]
+			versionsLog.Error("link %s + %s: stopped at book %s after linking %v: %v",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(req.OtherID), bid, linked, mErr)
+			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+				fmt.Sprintf("failed to link book %s into version group %s: %v", bid, targetGroup, mErr),
+				"link_partial", map[string]any{
+					"version_group_id": targetGroup,
+					"primary_book_id":  winner.ID,
+					"linked":           linked,
+					"not_linked":       notLinked,
+				})
+			return
+		}
+		linked = append(linked, bid)
+	}
+
+	httputil.RespondWithOK(c, gin.H{"version_group_id": targetGroup, "primary_book_id": winner.ID})
 }
 
-// SetAudiobookPrimary sets an audiobook as the primary version
+// liveGroupMembers returns the live members of groupID, always including
+// self (which the caller has checked is live). An empty groupID is a book
+// with no group: its only member is itself.
+func (h *VersionsHandler) liveGroupMembers(groupID string, self *database.Book) ([]database.Book, error) {
+	if groupID == "" {
+		return []database.Book{*self}, nil
+	}
+	members, err := h.store.GetBooksByVersionGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]database.Book, 0, len(members)+1)
+	hasSelf := false
+	for _, m := range members {
+		if m.IsSoftDeleted() {
+			continue
+		}
+		if m.ID == self.ID {
+			hasSelf = true
+		}
+		out = append(out, m)
+	}
+	if !hasSelf {
+		out = append(out, *self)
+	}
+	return out, nil
+}
+
+// versionGroupOf returns b's version group ID, "" for none.
+func versionGroupOf(b *database.Book) string {
+	if b == nil || b.VersionGroupID == nil {
+		return ""
+	}
+	return *b.VersionGroupID
+}
+
+// isPrimaryVersion keeps the codebase's reading of the *bool: nil is NOT
+// primary.
+func isPrimaryVersion(b *database.Book) bool {
+	return b != nil && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+}
+
+func primariesOf(books []database.Book) []database.Book {
+	var out []database.Book
+	for _, b := range books {
+		if isPrimaryVersion(&b) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// electVersionPrimary picks the earliest-created book, tie-broken by ID: the
+// rule reconcile.electPrimaryFor uses, so a rerun converges on the same book.
+// nil for no books.
+func electVersionPrimary(books []database.Book) *database.Book {
+	var best *database.Book
+	for i := range books {
+		b := &books[i]
+		if best == nil {
+			best = b
+			continue
+		}
+		switch {
+		case b.CreatedAt != nil && best.CreatedAt != nil && !b.CreatedAt.Equal(*best.CreatedAt):
+			if b.CreatedAt.Before(*best.CreatedAt) {
+				best = b
+			}
+		case b.CreatedAt != nil && best.CreatedAt == nil:
+			best = b
+		case b.CreatedAt == nil && best.CreatedAt != nil:
+		case b.ID < best.ID:
+			best = b
+		}
+	}
+	return best
+}
+
+// modifyBook is ModifyBook with a missing row reported as an error: the
+// store returns (nil, nil) for a book that does not exist, which a caller
+// must not read as a successful write.
+func (h *VersionsHandler) modifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	b, err := h.store.ModifyBook(id, fn)
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return nil, fmt.Errorf("book %s not found", id)
+	}
+	return b, nil
+}
+
+// SetAudiobookPrimary makes an audiobook the one primary of its version group.
+//
+// The new primary is promoted first and the others are then demoted, in book
+// ID order, each through ModifyBook on the stored row. If a demote fails, the
+// writes already made are undone in reverse (the demoted books promoted back,
+// the new primary restored to its old flag), so the group ends as it began --
+// one primary if it had one -- rather than with two, and the request fails.
+// If an undo write also fails the response names every book whose flag could
+// not be restored. A soft-deleted book is refused: a deleted row must never be
+// its group's only primary.
 func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 	id := c.Param("id")
 
@@ -194,35 +394,122 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 	}
 
 	book, err := h.store.GetBookByID(id)
-	if err != nil {
+	if err != nil || book == nil {
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
+	if book.IsSoftDeleted() {
+		httputil.RespondWithErrorFields(c, http.StatusBadRequest,
+			fmt.Sprintf("audiobook %s is deleted; a deleted book cannot be a primary version", id),
+			"primary_deleted_book", map[string]any{"book_id": id})
+		return
+	}
 
-	if book.VersionGroupID == nil {
-		primaryFlag := true
-		book.IsPrimaryVersion = &primaryFlag
-		if _, err := h.store.UpdateBook(id, book); err != nil {
-			httputil.RespondWithInternalError(c, "failed to update audiobook")
+	groupID := versionGroupOf(book)
+	if groupID == "" {
+		if _, err := h.modifyBook(id, func(cur *database.Book) error {
+			if isPrimaryVersion(cur) {
+				return database.ErrSkipBookWrite
+			}
+			t := true
+			cur.IsPrimaryVersion = &t
+			return nil
+		}); err != nil {
+			httputil.InternalError(c, "failed to update audiobook", err)
 			return
 		}
 		httputil.RespondWithOK(c, gin.H{"message": "audiobook set as primary"})
 		return
 	}
 
-	books, err := h.store.GetBooksByVersionGroup(*book.VersionGroupID)
+	books, err := h.store.GetBooksByVersionGroup(groupID)
 	if err != nil {
-		httputil.RespondWithInternalError(c, "failed to fetch versions")
+		httputil.InternalError(c, "failed to fetch versions; nothing was changed", err)
+		return
+	}
+	var others []string
+	for _, b := range books {
+		if b.ID != id {
+			others = append(others, b.ID)
+		}
+	}
+	slices.Sort(others)
+
+	// 1. Promote. The previous flag is kept for the undo.
+	var prevFlag *bool
+	promoted := false
+	if _, err := h.modifyBook(id, func(cur *database.Book) error {
+		if cur.IsSoftDeleted() {
+			return fmt.Errorf("book %s was deleted", cur.ID)
+		}
+		if versionGroupOf(cur) != groupID {
+			return fmt.Errorf("book %s left version group %s", cur.ID, groupID)
+		}
+		if isPrimaryVersion(cur) {
+			return database.ErrSkipBookWrite
+		}
+		if cur.IsPrimaryVersion != nil {
+			v := *cur.IsPrimaryVersion
+			prevFlag = &v
+		}
+		t := true
+		cur.IsPrimaryVersion = &t
+		promoted = true
+		return nil
+	}); err != nil {
+		httputil.InternalError(c, "failed to promote the audiobook; nothing was changed", err)
 		return
 	}
 
-	for i := range books {
-		primaryFlag := books[i].ID == id
-		books[i].IsPrimaryVersion = &primaryFlag
-		if _, err := h.store.UpdateBook(books[i].ID, &books[i]); err != nil {
-			httputil.RespondWithInternalError(c, "failed to update version")
-			return
+	// 2. Demote every other primary still in the group.
+	var demoted []string
+	for _, oid := range others {
+		changed := false
+		_, dErr := h.modifyBook(oid, func(cur *database.Book) error {
+			if versionGroupOf(cur) != groupID || !isPrimaryVersion(cur) {
+				return database.ErrSkipBookWrite
+			}
+			f := false
+			cur.IsPrimaryVersion = &f
+			changed = true
+			return nil
+		})
+		if dErr == nil {
+			if changed {
+				demoted = append(demoted, oid)
+			}
+			continue
 		}
+
+		// 3. Undo, newest write first.
+		var stuck []string
+		for i := len(demoted) - 1; i >= 0; i-- {
+			if _, uErr := h.modifyBook(demoted[i], func(cur *database.Book) error {
+				t := true
+				cur.IsPrimaryVersion = &t
+				return nil
+			}); uErr != nil {
+				versionsLog.Error("set-primary %s: undoing the demote of %s failed: %v", logger.SanitizeLogValue(id), demoted[i], uErr)
+				stuck = append(stuck, demoted[i])
+			}
+		}
+		if promoted {
+			if _, uErr := h.modifyBook(id, func(cur *database.Book) error {
+				cur.IsPrimaryVersion = prevFlag
+				return nil
+			}); uErr != nil {
+				versionsLog.Error("set-primary %s: undoing its promotion failed: %v", logger.SanitizeLogValue(id), uErr)
+				stuck = append(stuck, id)
+			}
+		}
+		msg := fmt.Sprintf("failed to demote book %s (%v); the change was rolled back and the group's primary is unchanged", oid, dErr)
+		if len(stuck) > 0 {
+			msg = fmt.Sprintf("failed to demote book %s (%v), and the rollback could not restore the primary flag of %s; the group may have more than one primary",
+				oid, dErr, strings.Join(stuck, ", "))
+		}
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError, msg, "set_primary_failed",
+			map[string]any{"version_group_id": groupID, "failed_book_id": oid, "unrestored_book_ids": stuck})
+		return
 	}
 
 	httputil.RespondWithOK(c, gin.H{"message": "audiobook set as primary"})
@@ -248,6 +535,23 @@ func (h *VersionsHandler) GetVersionGroup(c *gin.Context) {
 
 // SplitVersion moves selected segments from a book into a new version (a new book
 // in the same version group).
+//
+// Order, and why:
+//  1. Every check that can refuse happens before any write: the source is
+//     live, every segment ID is one of its files, and the group is readable.
+//  2. A source with no group gets one, as its primary (a group with no primary
+//     hides its books from the default library view).
+//  3. The new book is created and the rows are moved with ONE
+//     MoveBookFilesToBook, which recounts the aggregates (duration, size, file
+//     count) of both books. If the move fails nothing moved: the new book is
+//     deleted and a group minted in step 2 is taken off the source again.
+//  4. Only then are the two FilePaths settled, each in a ModifyBook closure
+//     that sets FilePath and nothing else, on the stored row. These writes
+//     used to be whole-row UpdateBook calls of the copies read before the
+//     move, which put the pre-move totals back over the recount.
+//
+// Every ModifyBook writes the store's copy-on-write version snapshot, so the
+// source's and the new book's rows before the split stay in their history.
 func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	id := c.Param("id")
 
@@ -268,96 +572,222 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 		return
 	}
 
-	// 1. Get source book
+	// 1. Source book, and the refusals.
 	sourceBook, err := h.store.GetBookByID(id)
-	if err != nil {
+	if err != nil || sourceBook == nil {
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
+	if sourceBook.IsSoftDeleted() {
+		httputil.RespondWithBadRequest(c, fmt.Sprintf("audiobook %s is deleted; restore it before splitting it", id))
+		return
+	}
+	sourceFiles, err := h.store.GetBookFiles(sourceBook.ID)
+	if err != nil {
+		httputil.InternalError(c, "failed to list book files; nothing was written", err)
+		return
+	}
+	segmentIDs, ok := selectSourceFiles(c, sourceBook.ID, sourceFiles, req.SegmentIDs)
+	if !ok {
+		return
+	}
 
-	// 2. Ensure source book has a version group
-	versionGroupID := ""
-	if sourceBook.VersionGroupID != nil && *sourceBook.VersionGroupID != "" {
-		versionGroupID = *sourceBook.VersionGroupID
-	} else {
-		versionGroupID = ulid.Make().String()
-		sourceBook.VersionGroupID = &versionGroupID
-		if _, err := h.store.UpdateBook(id, sourceBook); err != nil {
-			httputil.RespondWithInternalError(c, "failed to update source book version group")
+	versionGroupID := versionGroupOf(sourceBook)
+	existing := 1 // the source alone, when it has no group yet
+	if versionGroupID != "" {
+		existingVersions, err := h.store.GetBooksByVersionGroup(versionGroupID)
+		if err != nil {
+			// The member count names the new row ("Version N"). An unreadable
+			// group must fail the split, not number the row as if it were empty.
+			httputil.InternalError(c, "failed to read version group", err)
 			return
+		}
+		existing = len(existingVersions)
+	}
+
+	// 2. Give a groupless source a group, as its primary.
+	minted := ""
+	var prevPrimary *bool
+	if versionGroupID == "" {
+		newGID := ulid.Make().String()
+		updated, err := h.modifyBook(id, func(cur *database.Book) error {
+			if g := versionGroupOf(cur); g != "" {
+				// Grouped by someone else since the read: split into that group.
+				return database.ErrSkipBookWrite
+			}
+			if cur.IsPrimaryVersion != nil {
+				v := *cur.IsPrimaryVersion
+				prevPrimary = &v
+			}
+			gid := newGID
+			t := true
+			cur.VersionGroupID = &gid
+			cur.IsPrimaryVersion = &t
+			return nil
+		})
+		if err != nil {
+			httputil.InternalError(c, "failed to update source book version group", err)
+			return
+		}
+		versionGroupID = versionGroupOf(updated)
+		if versionGroupID == newGID {
+			minted = newGID
 		}
 	}
 
-	// 3. Count existing versions to determine suffix
-	existingVersions, err := h.store.GetBooksByVersionGroup(versionGroupID)
-	if err != nil {
-		// The member count names the new row ("Version N"). An unreadable
-		// group must fail the split, not number the row as if it were empty.
-		httputil.InternalError(c, "failed to read version group", err)
-		return
-	}
-	versionNum := len(existingVersions) + 1
-
-	// 4. Create new book entry (copy metadata from source, but NOT FilePath —
-	// the new version's path will be derived from its segments after they're moved)
-	newTitle := fmt.Sprintf("%s (Version %d)", sourceBook.Title, versionNum)
+	// 3. Create the new book, then move the rows into it.
+	newTitle := fmt.Sprintf("%s (Version %d)", sourceBook.Title, existing+1)
 	primaryFlag := false
-	newBook := &database.Book{
+	gid := versionGroupID
+	createdBook, err := h.store.CreateBook(&database.Book{
 		Title:            newTitle,
 		AuthorID:         sourceBook.AuthorID,
 		SeriesID:         sourceBook.SeriesID,
 		SeriesSequence:   sourceBook.SeriesSequence,
-		FilePath:         "", // Will be set from segments below
+		FilePath:         "", // Set from the moved rows in step 4.
 		Format:           sourceBook.Format,
 		WorkID:           sourceBook.WorkID,
 		Narrator:         sourceBook.Narrator,
 		Language:         sourceBook.Language,
 		Publisher:        sourceBook.Publisher,
-		VersionGroupID:   &versionGroupID,
+		VersionGroupID:   &gid,
 		IsPrimaryVersion: &primaryFlag,
-	}
-
-	createdBook, err := h.store.CreateBook(newBook)
+	})
 	if err != nil {
+		h.unmintSplitGroup(id, minted, prevPrimary)
 		httputil.InternalError(c, "failed to create new version", err)
 		return
 	}
-
-	// 5. Move files to the new book (DB-only, does NOT touch files on disk)
-	if err := h.store.MoveBookFilesToBook(req.SegmentIDs, sourceBook.ID, createdBook.ID); err != nil {
-		httputil.InternalError(c, "failed to move files", err)
+	if createdBook == nil {
+		h.unmintSplitGroup(id, minted, prevPrimary)
+		httputil.RespondWithInternalError(c, "failed to create new version: the store returned no book")
 		return
 	}
 
-	// 6. Derive the new book's FilePath from its files.
-	// For multi-file books, FilePath is the common parent directory.
-	// For single-file books, FilePath is the file path itself.
-	newFiles, _ := h.store.GetBookFiles(createdBook.ID)
-	if len(newFiles) > 0 {
-		if len(newFiles) == 1 {
-			createdBook.FilePath = newFiles[0].FilePath
-		} else {
-			createdBook.FilePath = filesCommonDir(newFiles)
+	// DB-only: nothing is touched on disk, so the iTunes guard has nothing to
+	// guard here.
+	if err := h.store.MoveBookFilesToBook(segmentIDs, sourceBook.ID, createdBook.ID); err != nil {
+		// The move batch is atomic: no row moved and no row names the new book.
+		dErr := h.store.DeleteBook(createdBook.ID)
+		h.unmintSplitGroup(id, minted, prevPrimary)
+		if dErr != nil {
+			versionsLog.Error("split-version: move into %s failed (%v) and deleting it failed: %v", createdBook.ID, err, dErr)
+			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+				fmt.Sprintf("failed to move files into the new version; no file was moved, and the empty new book %s could not be deleted (%v): %v",
+					createdBook.ID, dErr, err),
+				"split_move_failed", map[string]any{"created_book_id": createdBook.ID})
+			return
 		}
-		h.store.UpdateBook(createdBook.ID, createdBook)
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+			"failed to move files into the new version; no file was moved and the new book was deleted: "+err.Error(),
+			"split_move_failed", nil)
+		return
 	}
 
-	// 7. Also update the source book's FilePath from its remaining files
-	remainingFiles, _ := h.store.GetBookFiles(sourceBook.ID)
-	if len(remainingFiles) > 0 {
-		if len(remainingFiles) == 1 {
-			sourceBook.FilePath = remainingFiles[0].FilePath
-		} else {
-			sourceBook.FilePath = filesCommonDir(remainingFiles)
-		}
-		h.store.UpdateBook(sourceBook.ID, sourceBook)
+	// 4. The files have moved and that is not undone. A step that fails from
+	// here is reported in "warnings" with status 207.
+	var warnings []string
+	warn := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		warnings = append(warnings, msg)
+		versionsLog.Warn("split-version %s -> %s: %s", logger.SanitizeLogValue(id), createdBook.ID, logger.SanitizeLogValue(msg))
+	}
+	h.setPathFromFiles(createdBook.ID, "new book", warn)
+	h.setPathFromFiles(sourceBook.ID, "source book", warn)
+
+	// Re-read the new book: the recount and the path write happened after
+	// CreateBook returned.
+	if fresh, gErr := h.store.GetBookByID(createdBook.ID); gErr == nil && fresh != nil {
+		createdBook = fresh
 	}
 
-	httputil.RespondWithOK(c, gin.H{
+	body := gin.H{
 		"book":             createdBook,
 		"version_group_id": versionGroupID,
-		"segments_moved":   len(req.SegmentIDs),
-	})
+		"segments_moved":   len(segmentIDs),
+	}
+	if len(warnings) > 0 {
+		body["warnings"] = warnings
+		c.JSON(http.StatusMultiStatus, body)
+		return
+	}
+	httputil.RespondWithOK(c, body)
+}
+
+// selectSourceFiles checks that every requested segment ID is one of the
+// source's files and returns them de-duplicated in request order, or answers
+// the request with 400 naming the unknown IDs and returns ok=false.
+func selectSourceFiles(c *gin.Context, sourceID string, files []database.BookFile, segmentIDs []string) ([]string, bool) {
+	have := make(map[string]bool, len(files))
+	for _, f := range files {
+		have[f.ID] = true
+	}
+	seen := make(map[string]bool, len(segmentIDs))
+	var ids, unknown []string
+	for _, fid := range segmentIDs {
+		if seen[fid] {
+			continue
+		}
+		seen[fid] = true
+		if !have[fid] {
+			unknown = append(unknown, fid)
+			continue
+		}
+		ids = append(ids, fid)
+	}
+	if len(unknown) > 0 {
+		httputil.RespondWithBadRequest(c, fmt.Sprintf("segment_ids not on book %s: %s", sourceID, strings.Join(unknown, ", ")))
+		return nil, false
+	}
+	return ids, true
+}
+
+// unmintSplitGroup takes a version group SplitVersion gave the source off it
+// again after the split failed, restoring its primary flag. A no-op when no
+// group was minted, or when the source's group has changed since.
+func (h *VersionsHandler) unmintSplitGroup(sourceID, minted string, prevPrimary *bool) {
+	if minted == "" {
+		return
+	}
+	if _, err := h.modifyBook(sourceID, func(cur *database.Book) error {
+		if versionGroupOf(cur) != minted {
+			return database.ErrSkipBookWrite
+		}
+		cur.VersionGroupID = nil
+		cur.IsPrimaryVersion = prevPrimary
+		return nil
+	}); err != nil {
+		versionsLog.Error("split-version: could not take version group %s back off source %s after the failed split: %v",
+			minted, logger.SanitizeLogValue(sourceID), err)
+	}
+}
+
+// setPathFromFiles sets bookID's FilePath from the rows it now holds: the one
+// file's path, or the files' common folder. Only FilePath is written, on the
+// stored row, so the aggregate recount the move just wrote stays. No rows
+// means no write. Failures go to warn.
+func (h *VersionsHandler) setPathFromFiles(bookID, label string, warn func(string, ...any)) {
+	files, err := h.store.GetBookFiles(bookID)
+	if err != nil {
+		warn("could not list the %s's files to set its path: %v", label, err)
+		return
+	}
+	if len(files) == 0 {
+		return
+	}
+	path := files[0].FilePath
+	if len(files) > 1 {
+		path = filesCommonDir(files)
+	}
+	if _, err := h.modifyBook(bookID, func(cur *database.Book) error {
+		if cur.FilePath == path {
+			return database.ErrSkipBookWrite
+		}
+		cur.FilePath = path
+		return nil
+	}); err != nil {
+		warn("could not set the %s's path to %q: %v", label, path, err)
+	}
 }
 
 // SplitSegmentsToBooks splits selected segments out of a multi-file book into
@@ -401,24 +831,44 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		return
 	}
 
-	// Build a lookup of file ID → BookFile
+	// Every requested ID must be a file of the source: an unknown ID used to
+	// be skipped, so the split silently did less than asked.
 	allFiles, err := h.store.GetBookFiles(sourceBook.ID)
 	if err != nil {
-		httputil.RespondWithInternalError(c, "failed to list book files")
+		httputil.InternalError(c, "failed to list book files; nothing was written", err)
 		return
 	}
 	fileMap := make(map[string]database.BookFile, len(allFiles))
 	for _, f := range allFiles {
 		fileMap[f.ID] = f
 	}
+	segmentIDs, ok := selectSourceFiles(c, sourceBook.ID, allFiles, req.SegmentIDs)
+	if !ok {
+		return
+	}
+	authors, err := h.store.GetBookAuthors(sourceBook.ID)
+	if err != nil {
+		httputil.InternalError(c, "failed to read the source book's authors; nothing was written", err)
+		return
+	}
 
-	// Create one new book per selected file
+	// One new book per selected file. Each file is create -> move -> authors
+	// -> external IDs, and the first failure stops the split: later files are
+	// not touched, and the response is an error naming what was done, never a
+	// 200. A failed move deletes that file's new book (the move batch is
+	// atomic, so nothing points at it) and leaves its external IDs where they
+	// were; the reassign itself is atomic per mapping, so a failed one leaves
+	// that ID on the source rather than on neither book.
 	var createdBooks []any
-	for _, fileID := range req.SegmentIDs {
-		f, ok := fileMap[fileID]
-		if !ok {
-			continue
-		}
+	fail := func(fileID, msg string, extra map[string]any) {
+		fields := map[string]any{"created_books": createdBooks, "failed_file_id": fileID, "count": len(createdBooks)}
+		maps.Copy(fields, extra)
+		versionsLog.Error("split-to-books %s: stopped at file %s after %d book(s): %s",
+			logger.SanitizeLogValue(sourceBook.ID), logger.SanitizeLogValue(fileID), len(createdBooks), logger.SanitizeLogValue(msg))
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError, msg, "split_failed", fields)
+	}
+	for _, fileID := range segmentIDs {
+		f := fileMap[fileID]
 
 		// Extract title from file name
 		// e.g. "01 ASoIaF 1 - A Game of Thrones.m4b" → "A Game of Thrones"
@@ -446,44 +896,51 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		}
 
 		created, createErr := h.store.CreateBook(newBook)
-		if createErr != nil {
-			slog.Warn("splitSegmentsToBooks failed to create book for file", "fileID", logger.SanitizeLogValue(fileID), "createErr", createErr)
-			continue
+		if createErr != nil || created == nil {
+			fail(fileID, fmt.Sprintf("failed to create the book for file %s: %v", fileID, createErr), nil)
+			return
 		}
 
-		// Copy book_authors from source
-		if authors, aErr := h.store.GetBookAuthors(sourceBook.ID); aErr == nil && len(authors) > 0 {
-			var newAuthors []database.BookAuthor
-			for _, ba := range authors {
-				newAuthors = append(newAuthors, database.BookAuthor{
-					BookID:   created.ID,
-					AuthorID: ba.AuthorID,
-					Role:     ba.Role,
-				})
+		// Move the file to the new book (DB-only; nothing on disk moves).
+		if mErr := h.store.MoveBookFilesToBook([]string{fileID}, sourceBook.ID, created.ID); mErr != nil {
+			if dErr := h.store.DeleteBook(created.ID); dErr != nil {
+				fail(fileID, fmt.Sprintf("failed to move file %s into its new book (%v); the empty new book %s could not be deleted: %v",
+					fileID, mErr, created.ID, dErr), map[string]any{"created_book_id": created.ID})
+				return
 			}
-			_ = h.store.SetBookAuthors(created.ID, newAuthors)
+			fail(fileID, fmt.Sprintf("failed to move file %s into its new book; it was not moved and the new book was deleted: %v", fileID, mErr), nil)
+			return
 		}
+		createdBooks = append(createdBooks, created)
 
-		// Move the file to the new book
-		_ = h.store.MoveBookFilesToBook([]string{fileID}, sourceBook.ID, created.ID)
+		if len(authors) > 0 {
+			newAuthors := make([]database.BookAuthor, 0, len(authors))
+			for _, ba := range authors {
+				newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role})
+			}
+			if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
+				fail(fileID, fmt.Sprintf("file %s moved to book %s, but copying the authors failed: %v", fileID, created.ID, sErr), nil)
+				return
+			}
+		}
 
 		// Reassign external ID mappings (iTunes PIDs) that belong to the moved file
 		if xErr := h.reassignExternalIDsForFiles(sourceBook.ID, created.ID, []database.BookFile{f}); xErr != nil {
-			versionsLog.Warn("split-to-books: external IDs of file %s not all moved to %s: %v", f.ID, created.ID, xErr)
+			fail(fileID, fmt.Sprintf("file %s moved to book %s, but its external IDs were not all moved; those not moved stay on the source: %v",
+				fileID, created.ID, xErr), nil)
+			return
 		}
-
-		createdBooks = append(createdBooks, created)
 	}
 
-	// Update source book's FilePath from remaining files
-	remainingFiles, _ := h.store.GetBookFiles(sourceBook.ID)
-	if len(remainingFiles) > 0 {
-		if len(remainingFiles) == 1 {
-			sourceBook.FilePath = remainingFiles[0].FilePath
-		} else {
-			sourceBook.FilePath = filesCommonDir(remainingFiles)
-		}
-		h.store.UpdateBook(sourceBook.ID, sourceBook)
+	// Source path from its remaining files: FilePath only, on the stored row,
+	// so the moves' aggregate recounts stay.
+	var warnings []string
+	h.setPathFromFiles(sourceBook.ID, "source book", func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+	if len(warnings) > 0 {
+		fail("", strings.Join(warnings, "; "), nil)
+		return
 	}
 
 	httputil.RespondWithOK(c, gin.H{
@@ -647,9 +1104,9 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 // folder, never one file's path, and only when no other live book sits there.
 // Every failure is reported through warn.
 //
-// The source row is re-read before the write: the move's aggregate recompute
-// has just rewritten its Duration/FileSize, and writing back the row read
-// before the move would put the old totals back.
+// The write is a ModifyBook that sets FilePath alone on the stored row: the
+// move's aggregate recompute has just rewritten its Duration/FileSize, and
+// writing back the row read before the move would put the old totals back.
 func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, createdID string, warn func(string, ...any)) {
 	remaining, err := h.store.GetBookFiles(sourceBook.ID)
 	if err != nil {
@@ -679,13 +1136,10 @@ func (h *VersionsHandler) keepSplitSourceAFolder(sourceBook *database.Book, crea
 			sourceBook.FilePath, target, strings.Join(others, ", "))
 		return
 	}
-	fresh, err := h.store.GetBookByID(sourceBook.ID)
-	if err != nil || fresh == nil {
-		warn("source book path left at %q: could not re-read the source book to move it to %q: %v", sourceBook.FilePath, target, err)
-		return
-	}
-	fresh.FilePath = target
-	if _, err := h.store.UpdateBook(fresh.ID, fresh); err != nil {
+	if _, err := h.modifyBook(sourceBook.ID, func(cur *database.Book) error {
+		cur.FilePath = target
+		return nil
+	}); err != nil {
 		warn("source book path left at %q: could not update it to %q: %v", sourceBook.FilePath, target, err)
 	}
 }
@@ -864,8 +1318,8 @@ func (h *VersionsHandler) MoveSegments(c *gin.Context) {
 // server-package *Server.reassignExternalIDsForFiles, backed by the narrow
 // VersionsStore interface.
 //
-// It returns every read, delete and create failure joined, so a caller can
-// report them; the reassignment carries on past each one, as it always has.
+// It returns every read and reassign failure joined, so a caller can report
+// them; the reassignment carries on past each one. No failure loses a mapping.
 func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID string, files []database.BookFile) error {
 	if h.store == nil {
 		return nil
@@ -903,17 +1357,19 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 		return nil
 	}
 
-	// Reassign each mapping: delete old reverse key, update primary, add new reverse key
+	// Reassign each mapping with ReassignExternalID: one atomic batch that
+	// rewrites the primary key and swaps the reverse keys, so a failure leaves
+	// the mapping on the source. A mapping whose primary row names some other
+	// book is a stale reverse key; it is reported and left alone rather than
+	// taken from that book.
 	var errs []error
 	for _, m := range toMove {
-		oldReverseKey := fmt.Sprintf("ext_id:book:%s:%s:%s", sourceBookID, m.Source, m.ExternalID)
-		if dErr := h.store.DeleteRaw(oldReverseKey); dErr != nil {
-			errs = append(errs, fmt.Errorf("delete old reverse key for %s %s: %w", m.Source, m.ExternalID, dErr))
+		if m.BookID != sourceBookID {
+			errs = append(errs, fmt.Errorf("%s %s is indexed under book %s but belongs to book %s; left alone", m.Source, m.ExternalID, sourceBookID, m.BookID))
+			continue
 		}
-
-		m.BookID = targetBookID
-		if createErr := h.store.CreateExternalIDMapping(&m); createErr != nil {
-			errs = append(errs, fmt.Errorf("reassign %s %s to book %s: %w", m.Source, m.ExternalID, targetBookID, createErr))
+		if rErr := h.store.ReassignExternalID(m.Source, m.ExternalID, targetBookID); rErr != nil {
+			errs = append(errs, fmt.Errorf("reassign %s %s to book %s: %w", m.Source, m.ExternalID, targetBookID, rErr))
 		}
 	}
 

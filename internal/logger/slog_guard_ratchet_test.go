@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -8,8 +8,8 @@ package logger
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 327
-	slogRatchetCallCeiling = 1963
+	slogRatchetFileCeiling = 326
+	slogRatchetCallCeiling = 1962
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -290,7 +290,6 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/review/handler.go":                 1,
 	"internal/server/handlers/scheduler_admin.go":                1,
 	"internal/server/handlers/system/handler.go":                 11,
-	"internal/server/handlers/versions.go":                       1,
 	"internal/server/indexed_store.go":                           3,
 	"internal/server/itl_pid.go":                                 1,
 	"internal/server/itl_rebuild.go":                             2,
