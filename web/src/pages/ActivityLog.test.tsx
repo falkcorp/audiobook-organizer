@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -24,7 +24,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ActivityLog from './ActivityLog';
 import { COMPACT_DAYS_ERROR } from '../components/activity/compactDays';
-import { fetchActivity, fetchActivitySources, compactActivityLog } from '../services/activityApi';
+import { fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 import { cancelOperation, discardOperation, retryOperation, revertOperation } from '../services/api';
 import { getUndoPreflight } from '../services/versionApi';
@@ -33,8 +33,19 @@ import { getUndoPreflight } from '../services/versionApi';
 import { groupOperations } from '../stores/operationGrouping';
 import type { ActiveOperation } from '../stores/useOperationsStore';
 
+// The page makes TWO kinds of /activity request: the paged feed, and the
+// daily-digest list (tier=digest, no "since"). Route them to separate mocks so
+// the feed tests keep asserting on the feed alone and digest tests can
+// control digest responses independently.
+const { feedMock, digestMock } = vi.hoisted(() => ({
+  feedMock: vi.fn<typeof import('../services/activityApi').fetchActivity>(),
+  digestMock: vi.fn<typeof import('../services/activityApi').fetchActivity>(),
+}));
+
 vi.mock('../services/activityApi', () => ({
-  fetchActivity: vi.fn(),
+  fetchActivity: vi.fn((filter, opts) =>
+    filter?.tier === 'digest' ? digestMock(filter, opts) : feedMock(filter, opts)
+  ),
   fetchActivitySources: vi.fn(),
   compactActivityLog: vi.fn(),
 }));
@@ -90,7 +101,9 @@ vi.mock('../stores/useOperationsStore', () => ({
     selector(operationsStoreState),
 }));
 
-const mockedFetchActivity = vi.mocked(fetchActivity);
+// The FEED request only. Digest requests go to digestMock.
+const mockedFetchActivity = feedMock;
+const mockedFetchDigests = digestMock;
 const mockedFetchSources = vi.mocked(fetchActivitySources);
 const mockedCompact = vi.mocked(compactActivityLog);
 
@@ -125,6 +138,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   mockedFetchSources.mockResolvedValue({ sources: [] });
+  mockedFetchDigests.mockResolvedValue({ entries: [], total: 0 });
 });
 
 afterEach(() => {
@@ -241,6 +255,84 @@ describe('ActivityLog request amplification', () => {
     await waitFor(() => expect(mockedFetchActivity).toHaveBeenCalledTimes(1));
 
     expect(mockedFetchActivity.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+/**
+ * Daily digests are one row per UTC day stamped at 00:00. Inside the default
+ * 24h "Since" window only today's survived, so the owner saw one digest out of
+ * 97 (2026-09-14). Digests now come from their own query with no "since".
+ */
+describe('ActivityLog daily digests', () => {
+  const digest = (day: string): ActivityEntry =>
+    entry({
+      id: `digest-${day}`,
+      timestamp: `${day}T00:00:00Z`,
+      tier: 'digest',
+      type: 'daily_digest',
+      summary: `Digest for ${day}`,
+      details: { date: day, counts: { book_added: 3 } },
+    });
+
+  it('always excludes the digest tier from the paged feed query', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+
+    renderPage();
+    await waitFor(() => expect(mockedFetchActivity).toHaveBeenCalledTimes(1));
+
+    const excluded = (mockedFetchActivity.mock.calls[0][0]?.exclude_tiers ?? '').split(',');
+    expect(excluded).toContain('digest');
+  });
+
+  it('fetches digests with no "since" window', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+
+    renderPage();
+    await waitFor(() => expect(mockedFetchDigests).toHaveBeenCalledTimes(1));
+
+    const filter = mockedFetchDigests.mock.calls[0][0];
+    expect(filter?.tier).toBe('digest');
+    expect(filter?.since).toBeUndefined();
+    expect(filter?.limit).toBe(400);
+    expect(mockedFetchDigests.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+    // The feed itself is still bounded by the default window.
+    expect(mockedFetchActivity.mock.calls[0][0]?.since).toBeTruthy();
+  });
+
+  it('renders every digest below the feed, newest first, without counting them in the total', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedFetchDigests.mockResolvedValue({
+      entries: [digest('2026-09-11'), digest('2026-09-13'), digest('2026-09-12')],
+      total: 3,
+    });
+
+    renderPage();
+
+    const section = await screen.findByTestId('activity-digests');
+    expect(await within(section).findByText('Daily digests (3)')).toBeInTheDocument();
+    const summaries = within(section)
+      .getAllByText(/^Digest for /)
+      .map((el) => el.textContent?.match(/Digest for (\S+)/)?.[1]);
+    expect(summaries).toEqual(['2026-09-13', '2026-09-12', '2026-09-11']);
+    // The feed total is the raw feed's own count — digests are not added in.
+    expect(screen.getAllByText('1 entries').length).toBeGreaterThan(0);
+  });
+
+  it('hides the digest list and stops fetching digests when the digest tier is off', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedFetchDigests.mockResolvedValue({ entries: [digest('2026-09-13')], total: 1 });
+
+    renderPage();
+    expect(await screen.findByText('Daily digests (1)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByText('✓ digest')[0]);
+
+    await waitFor(() => expect(screen.queryByTestId('activity-digests')).not.toBeInTheDocument());
+    expect(screen.queryByText(/^Digest for /)).not.toBeInTheDocument();
+    expect(mockedFetchDigests).toHaveBeenCalledTimes(1);
+    // The feed still excludes digests with the tier off.
+    const lastFeed = mockedFetchActivity.mock.calls.at(-1)?.[0];
+    expect((lastFeed?.exclude_tiers ?? '').split(',')).toContain('digest');
   });
 });
 
