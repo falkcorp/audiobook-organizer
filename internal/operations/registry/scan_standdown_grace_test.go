@@ -1,5 +1,5 @@
 // file: internal/operations/registry/scan_standdown_grace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2d9a41-83c5-4b7e-a0d6-19e4c7b35f82
 // last-edited: 2026-09-13
 
@@ -57,6 +57,10 @@ func waitFor(t *testing.T, what string, timeout time.Duration, cond func() bool)
 // startup (2s here, ~57s in production) and the next acquire waited for it to
 // park, so N cycles cost about (N-1) startups. With the grace, only the first
 // acquire parks a running scan; the rest find nothing running.
+//
+// The assertion is structural (how many times the scan started), not
+// wall-clock, so a loaded CI runner cannot flake it. The grace is far longer
+// than the gaps between cycles so a stalled runner does not let it fire early.
 func TestScanStandDown_BurstDoesNotPayScanStartupPerCycle(t *testing.T) {
 	const (
 		startup = 2 * time.Second
@@ -65,7 +69,7 @@ func TestScanStandDown_BurstDoesNotPayScanStartupPerCycle(t *testing.T) {
 	ctx := t.Context()
 	store := newFakeStore()
 	r := registry.NewWithOptions(store, slog.Default(), 4,
-		registry.Options{ScanStandDownGrace: 1500 * time.Millisecond})
+		registry.Options{ScanStandDownGrace: 5 * time.Second})
 	var starts, readyRuns atomic.Int32
 	if err := r.RegisterOp(slowStartupScanDef(startup, &starts, &readyRuns)); err != nil {
 		t.Fatalf("RegisterOp: %v", err)
@@ -89,21 +93,17 @@ func TestScanStandDown_BurstDoesNotPayScanStartupPerCycle(t *testing.T) {
 		release()
 		time.Sleep(50 * time.Millisecond) // the owner moving to the next book
 	}
-	elapsed := time.Since(begin)
-	t.Logf("%d acquire/release cycles took %s (scan startup %s)", cycles, elapsed, startup)
-	if limit := startup; elapsed >= limit {
-		t.Fatalf("%d cycles took %s; want < %s (each cycle is paying the scan's restart, not ~%s total)",
-			cycles, elapsed, limit, time.Duration(cycles)*startup)
-	}
+	// Timing is logged for the record only; the checks below are counts.
+	t.Logf("%d acquire/release cycles took %s (scan startup %s)", cycles, time.Since(begin), startup)
 	if got := starts.Load(); got != 1 {
-		t.Fatalf("scan started %d times during the burst; want 1 (no re-queue inside the grace)", got)
+		t.Fatalf("scan started %d times during the burst; want 1 (each cycle is paying the scan's restart)", got)
 	}
 	if s := store.statusOf(scanID); s != "interrupted_quiesced" {
 		t.Fatalf("scan status during grace = %s; want interrupted_quiesced", s)
 	}
 
 	// The grace re-queues the scan exactly once after the burst.
-	awaitStatus(t, store, scanID, "running", 10*time.Second)
+	awaitStatus(t, store, scanID, "running", 20*time.Second)
 	time.Sleep(2 * time.Second)
 	if got := starts.Load(); got != 2 {
 		t.Fatalf("scan started %d times after the grace; want exactly 2 (one re-queue)", got)

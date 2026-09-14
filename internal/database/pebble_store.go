@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.165.0
+// version: 1.166.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -4857,11 +4857,15 @@ func (p *PebbleStore) CountByPrefix(prefix string) (int, error) {
 // Returns the total number of keys deleted.
 func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 	total := 0
+	// maybeApplied is set when a commit returned an error: a failed synced
+	// commit cannot be assumed not to have applied.
+	maybeApplied := false
 	// Any prefix may cover work: rows ("work:", "w", or ""), and an error part
 	// way through leaves earlier prefixes' deletes committed. Bump the works
-	// generation whenever anything was deleted, success or not.
+	// generation whenever anything was (or may have been) deleted, success or
+	// not. A spurious bump only costs the scanner one works reload.
 	defer func() {
-		if total > 0 {
+		if total > 0 || maybeApplied {
 			p.bumpWorksGeneration()
 		}
 	}()
@@ -4899,6 +4903,7 @@ func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 			}
 		}
 		if err := batch.Commit(pebble.Sync); err != nil {
+			maybeApplied = true
 			return total, fmt.Errorf("wipe prefix %q: commit: %w", prefix, err)
 		}
 		total += len(keys)
