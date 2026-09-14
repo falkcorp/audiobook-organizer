@@ -1,7 +1,6 @@
 // file: internal/matcher/matcher.go
-// version: 1.2.0
+// version: 1.1.0
 // guid: 1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-14
 
 package matcher
 
@@ -12,8 +11,6 @@ import (
 	"strings"
 
 	"github.com/lithammer/fuzzysearch/fuzzy"
-
-	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
 
 // Common series indicators in file names
@@ -35,15 +32,6 @@ func IdentifySeries(title, filePath string) (string, int) {
 		// Try to extract from filename if title is empty
 		title = filepath.Base(filePath)
 		title = strings.TrimSuffix(title, filepath.Ext(title))
-	}
-
-	// A multi-part rip's part number ("Rogue Lawyer - 001") is not a series
-	// position, and the words before it are the title, not a series. Without
-	// this, the "Series - Title" pattern below read "001" as its title group
-	// and Atoi'd it into series "Rogue Lawyer" #1, which the apply gate then
-	// defended as a real book number (2026-09-14 prod preview).
-	if _, stem, ok := seqnum.PartSuffix(title); ok {
-		title = stem
 	}
 
 	// First try pattern matching

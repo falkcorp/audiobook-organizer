@@ -1,7 +1,7 @@
 // file: internal/matcher/matcher_test.go
-// version: 1.1.0
+// version: 1.0.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-01-19
 
 package matcher
 
@@ -225,35 +225,5 @@ func TestIdentifySeries_ComplexPaths(t *testing.T) {
 			// Series can be empty or non-empty, both are valid
 			_ = series
 		})
-	}
-}
-
-// TestIdentifySeries_PartSuffixIsNotAPosition: "Rogue Lawyer - 001" is a
-// title plus the part number of a multi-part rip. The "Series - Title"
-// pattern used to Atoi its TITLE group, so "001" became series "Rogue Lawyer"
-// #1, and the apply gate later refused the book as "book is #1" (2026-09-14
-// prod preview). A bare part number after the dash means the title names no
-// series and no position.
-func TestIdentifySeries_PartSuffixIsNotAPosition(t *testing.T) {
-	for _, title := range []string{
-		"Rogue Lawyer - 001",
-		"All Tomorrow's Parties - 001",
-		"The Rooster Bar - 001",
-		"Witness to a Trial - 001",
-	} {
-		series, position := IdentifySeries(title, "/books/file.m4b")
-		if position != 0 || series != "" {
-			t.Errorf("IdentifySeries(%q) = (%q, %d), want (\"\", 0)", title, series, position)
-		}
-	}
-	// Controls: a real number before the dash still positions the book.
-	if s, p := IdentifySeries("Mistborn 01 - The Final Empire", "/books/file.m4b"); s != "Mistborn" || p != 1 {
-		t.Errorf("Mistborn = (%q, %d), want (\"Mistborn\", 1)", s, p)
-	}
-	if _, p := IdentifySeries("The Sorcerer's Ring - 04 - A Cry of Honor", "/books/file.m4b"); p != 4 {
-		t.Errorf("Sorcerer's Ring position = %d, want 4", p)
-	}
-	if s, p := IdentifySeries("Big Cats - 3", "/books/file.m4b"); s != "Big Cats" || p != 3 {
-		t.Errorf("Big Cats - 3 = (%q, %d), want (\"Big Cats\", 3)", s, p)
 	}
 }
