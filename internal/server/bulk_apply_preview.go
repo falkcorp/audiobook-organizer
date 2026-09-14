@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -196,7 +196,9 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	}
 	// Still the gate's own reason: no later step replaced it with a refusal
 	// an owner review does not lift.
-	row.OwnerReviewedWouldApply = plan.Reason == applySkipGateBlocked &&
+	// Only on the cache path: /metadata/batch-apply-candidates takes no pin,
+	// so nothing could apply the book that way.
+	row.OwnerReviewedWouldApply = plan.Pinnable && plan.Reason == applySkipGateBlocked &&
 		plan.Gate.OwnerReviewOverridable() && row.Reason == plan.Gate.Reason
 	return row
 }
