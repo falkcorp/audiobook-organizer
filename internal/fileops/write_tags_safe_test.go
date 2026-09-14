@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c5d6e7f8-a9b0-1c2d-3e4f-5a6b7c8d9e0f
-// last-edited: 2026-08-14
+// last-edited: 2026-09-13
 
 package fileops
 
@@ -21,7 +21,7 @@ type noopStore struct {
 	returnErr    error
 }
 
-func (s *noopStore) UpdateBookFileHashes(fileID, originalHash, postHash string) error {
+func (s *noopStore) UpdateBookFileHashes(fileID, originalHash, postHash, fileHash string) error {
 	s.called = true
 	s.lastOriginal = originalHash
 	s.lastPost = postHash

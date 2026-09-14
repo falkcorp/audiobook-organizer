@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_return_test.go
-// version: 1.1.0
+// version: 1.1.2
 // guid: 7f2b41c8-93ad-4e05-b6d1-8c0e5a72f394
-// last-edited: 2026-08-25
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -139,7 +139,8 @@ func TestCreateBookFilesForBookReportsNoMoveWhenUpdateBookFails(t *testing.T) {
 		ID: "book-1", Title: "Multi Part Book", FilePath: seg1,
 	}, nil)
 	store.EXPECT().GetBookFiles("book-1").Return(nil, nil)
-	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
+	store.EXPECT().GetBookFileByPath(mock.Anything).Return(nil, nil).Maybe() // no stored row owns the path, so no replaced-file probe
+	store.EXPECT().BatchUpsertScannedBookFiles(mock.Anything).Return(nil)
 	store.EXPECT().GetBookByID("book-1").Return(&database.Book{
 		ID: "book-1", Title: "Multi Part Book", FilePath: seg1,
 	}, nil)

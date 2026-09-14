@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-13
 
@@ -2322,11 +2322,17 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	// in the same statement group as bfs, never indexed by the loop counter, so
 	// a future `continue` in the loop cannot shift one slice against the other.
 	tagPlacements := make([]metadata.TagPlacement, 0, len(segmentFiles))
+	// present[i] is whether the os.Stat of bfs[i] succeeded. It is what lets the
+	// upsert clear a stored Missing=true: the scanner is the one writer that has
+	// just looked at the disk. Appended alongside bfs for the same reason as
+	// tagPlacements.
+	present := make([]bool, 0, len(segmentFiles))
 	for i, filePath := range segmentFiles {
 		trackNum := i + 1
 		ext := strings.ToLower(filepath.Ext(filePath))
 		var sizeBytes int64
-		if fi, serr := os.Stat(filePath); serr == nil {
+		fi, statErr := os.Stat(filePath)
+		if statErr == nil {
 			sizeBytes = fi.Size()
 		}
 
@@ -2369,15 +2375,38 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 			bf.FileHash = h
 			bf.OriginalFileHash = h
 		}
+		if bf.OriginalFileHash != "" {
+			// Both sources are filehash.BookFileHash (the segment hashes come
+			// from the same ComputeFileHash). The merge freezes a stored value
+			// of this kind; a legacy stored value of unknown kind is replaced.
+			bf.OriginalFileHashKind = database.FileHashKindSampled
+		}
+
+		// The upsert below merges with whatever row already owns this PATH.
+		// This book has no rows of its own (the early return above), so a
+		// stored row here belongs to another book. When its content hash
+		// differs, the file was replaced (our own tag writes record the new
+		// digest): probe its real duration and codec so the merge can tell a
+		// re-tag from a different recording; see probeReplacedFileAudio.
+		if statErr == nil && bf.FileHash != "" {
+			if prevHash := storedFileHashAt(filePath, scanLog); prevHash != "" && prevHash != bf.FileHash {
+				probeReplacedFileAudio(bf, filePath, scanLog)
+			}
+		}
 
 		bfs = append(bfs, bf)
 		tagPlacements = append(tagPlacements, placement)
+		present = append(present, statErr == nil)
 	}
 
 	applyTagPositionsIfTrusted(bfs, tagPlacements, bookFilePath, scanLog)
 
 	if len(bfs) > 0 {
-		if serr := getStore().BatchUpsertBookFiles(bfs); serr != nil {
+		rows := make([]database.ScannedBookFile, len(bfs))
+		for i, bf := range bfs {
+			rows[i] = database.ScannedBookFile{File: bf, Present: present[i]}
+		}
+		if serr := getStore().BatchUpsertScannedBookFiles(rows); serr != nil {
 			scanLog.Warn("failed to batch upsert book files for book %s: %v", dbBook.ID, serr)
 		}
 	}

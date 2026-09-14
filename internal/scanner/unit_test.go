@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.12.0
+// version: 1.12.2
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package scanner
 
@@ -1345,8 +1345,9 @@ func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
 	// pass just as happily if nothing had been written at all. Requiring this
 	// call gives it one real assertion: a genuinely single-file book gets
 	// exactly one book_file row, at its own path.
-	store.EXPECT().BatchUpsertBookFiles(mock.MatchedBy(func(bfs []*database.BookFile) bool {
-		return len(bfs) == 1 && bfs[0].FilePath == p && bfs[0].BookID == "b1"
+	store.EXPECT().GetBookFileByPath(mock.Anything).Return(nil, nil).Maybe() // no stored row owns the path, so no replaced-file probe
+	store.EXPECT().BatchUpsertScannedBookFiles(mock.MatchedBy(func(rows []database.ScannedBookFile) bool {
+		return len(rows) == 1 && rows[0].File.FilePath == p && rows[0].File.BookID == "b1"
 	})).Return(nil).Once()
 
 	books := []Book{{FilePath: p, Format: ".m4b"}}
@@ -1555,8 +1556,9 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 		Title:    "Test Book",
 		FilePath: bookPath,
 	}, nil)
-	store.EXPECT().GetBookFiles("book-1").Return(nil, nil) // no existing files
-	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
+	store.EXPECT().GetBookFiles("book-1").Return(nil, nil)                   // no existing files
+	store.EXPECT().GetBookFileByPath(mock.Anything).Return(nil, nil).Maybe() // no stored row owns the path, so no replaced-file probe
+	store.EXPECT().BatchUpsertScannedBookFiles(mock.Anything).Return(nil)
 
 	// The batch write recomputes and persists the book's aggregates, so the copy
 	// fetched at the top of createBookFilesForBook is stale by this point. The
@@ -1633,7 +1635,8 @@ func TestCreateBookFilesWithSegmentFiles(t *testing.T) {
 		FilePath: tmp,
 	}, nil)
 	store.EXPECT().GetBookFiles("book-2").Return(nil, nil)
-	store.EXPECT().BatchUpsertBookFiles(mock.Anything).Return(nil)
+	store.EXPECT().GetBookFileByPath(mock.Anything).Return(nil, nil).Maybe() // no stored row owns the path, so no replaced-file probe
+	store.EXPECT().BatchUpsertScannedBookFiles(mock.Anything).Return(nil)
 
 	createBookFilesForBook(tmp, []string{seg1, seg2}, defaultLog, normalizeToDirectory)
 }

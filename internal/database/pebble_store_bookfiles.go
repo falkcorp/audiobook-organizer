@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.23.0
+// version: 1.26.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -64,16 +64,18 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 		}
 	}
 
+	// The two content-hash indexes are NOT unique: identical files share a
+	// hash, and the entry holds whichever row wrote it last. Deleting it
+	// unconditionally on one row's update dropped the other row's lookup, so
+	// delete only an entry that points at this row.
 	if f.FileHash != "" {
-		hashKey := []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash))
-		if err := batch.Delete(hashKey, nil); err != nil {
+		if err := s.deleteHashIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash)), f); err != nil {
 			return err
 		}
 	}
 
 	if f.OriginalFileHash != "" && f.OriginalFileHash != f.FileHash {
-		origKey := []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash))
-		if err := batch.Delete(origKey, nil); err != nil {
+		if err := s.deleteHashIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash)), f); err != nil {
 			return err
 		}
 	}
@@ -94,6 +96,26 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 		return err
 	}
 	return nil
+}
+
+// deleteHashIndexIfOwned stages the deletion of a content-hash index entry only
+// when its committed value is f's "<bookID>:<fileID>" reference (the value
+// writeBookFileSecondaryIndexes stores). An entry owned by another row with the
+// same hash is left alone.
+func (s *PebbleStore) deleteHashIndexIfOwned(batch *pebble.Batch, key []byte, f *BookFile) error {
+	val, closer, err := s.db.Get(key)
+	if err == pebble.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	owned := string(val) == f.BookID+":"+f.ID
+	closer.Close()
+	if !owned {
+		return nil
+	}
+	return batch.Delete(key, nil)
 }
 
 // LookupAcoustIDCandidates returns BookFile IDs whose LSH subprints collide
@@ -517,6 +539,19 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 // UpdateBookFile replaces an existing BookFile, cleaning up stale secondary
 // indexes when the PID or path changes.
 func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
+	return s.updateBookFile(id, file, true, true)
+}
+
+// updateBookFile is UpdateBookFile's body. mergeStored=false is used only by
+// UpsertBookFile, which has already applied the upsert-mode merge: running the
+// replace-mode merge again would restore the memdb-stripped fingerprint and
+// transcript that a changed-content upsert deliberately dropped.
+//
+// recomputeAggregates is false only for a caller that changes nothing the
+// book aggregates read (UpdateBookFileHashes). Even then the recompute runs
+// if Duration, FileSize or BookID moved, so a mislabelled caller cannot leave
+// an aggregate stale.
+func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, recomputeAggregates bool) error {
 	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
 	// last write path that did not, while CreateBookFile, UpsertBookFile and
 	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
@@ -561,8 +596,13 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	// above; FingerprintFailedAt (which drives backfill's skip logic) is memdb-KEPT so
 	// correctness is unaffected, and the structural fix is those callers moving to a
 	// field-scoped update under the GetAllBookFiles->BookFileCore retype (STOREFID W3).
-	if len(file.AcoustIDFingerprint) == 0 {
-		file.AcoustIDFingerprint = old.AcoustIDFingerprint
+	//
+	// Both guards are now entries in bookFileFieldClasses (bfPreserveAlways) and
+	// are applied by the shared merge rule below — the same function the upsert
+	// paths use, in its full-row mode, which restores ONLY those two fields so
+	// every intentional clear written through this method still lands.
+	if mergeStored {
+		mergeBookFileFromStored(file, old, bookFileWriteReplace, presenceNotScanned)
 	}
 
 	// Preserve the memdb-stripped raw intro transcript on a slim round-trip, for
@@ -584,9 +624,7 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	// Only IntroTranscription needs this guard. The other seven per-file
 	// transcription fields survive the strip (they are on BookFileCore), so a slim
 	// round-trip carries their real values and writing them back is a no-op.
-	if file.IntroTranscription == nil {
-		file.IntroTranscription = old.IntroTranscription
-	}
+	// (Restored by the mergeBookFileFromStored call above.)
 
 	// T020: drop AcoustIDSeg0..6 from the stored value via a copy.
 	data, err := marshalBookFileDropSegs(file)
@@ -621,7 +659,9 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	s.UpsertBookFileToMemDB(file)
 	// Recompute book-level Duration/FileSize aggregates now that a file was updated.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
-	s.notifyBookFileChange(file.BookID)
+	if recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID {
+		s.notifyBookFileChange(file.BookID)
+	}
 	return nil
 }
 
@@ -1344,31 +1384,21 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	file.ID = existing.ID
 	file.BookID = existing.BookID
 
-	// Preserve heavy fingerprint fields stripped by stripBookFileForMemdb (PERF-7).
-	// Callers that read from the memdb projection (GetAllBookFiles etc.) get nil
-	// AcoustIDFingerprint and nil diagnostic strings. Without this guard, a memdb
-	// round-trip via UpsertBookFile would silently erase the stored fingerprint.
-	// The same guard exists in BatchUpsertBookFiles — keep both in sync.
-	if len(file.AcoustIDFingerprint) == 0 {
-		file.AcoustIDFingerprint = existing.AcoustIDFingerprint
-	}
-	if file.FingerprintFailureReason == nil {
-		file.FingerprintFailureReason = existing.FingerprintFailureReason
-	}
-	if file.FingerprintFailureDetail == nil {
-		file.FingerprintFailureDetail = existing.FingerprintFailureDetail
-	}
-	if file.FingerprintDiagnosticJSON == nil {
-		file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
-	}
-	// IntroTranscription is memdb-stripped too — same wipe risk. UpdateBookFile
-	// guards this again below; the double-guard is idempotent and mirrors the
-	// existing AcoustIDFingerprint pattern.
-	if file.IntroTranscription == nil {
-		file.IntroTranscription = existing.IntroTranscription
-	}
+	// An upsert row may be PARTIAL (a memdb-sourced slim row, or a bare row the
+	// scanner / iTunes sync built from what it observed). Every field the caller
+	// does not own keeps its stored value when the incoming one is zero/nil — the
+	// shared rule in bookfile_merge.go, identical to BatchUpsertBookFiles. Before
+	// it, only the fingerprint fields and IntroTranscription were restored and a
+	// rescan wiped 40 others (transcription state, Duration, media info, Missing,
+	// SkipScan, provenance). An intentional clear goes through UpdateBookFile.
+	// A changed FileHash drops the content-derived fields (see bookfile_merge.go).
+	// Missing is never cleared here: this caller has not stat'd the file.
+	mergeBookFileFromStored(file, existing, bookFileWriteUpsert, presenceNotScanned)
 
-	return s.UpdateBookFile(existing.ID, file)
+	// updateBookFile with mergeStored=false: the merge above is final. The
+	// replace-mode merge inside UpdateBookFile would put back a fingerprint and
+	// transcript that a changed-content upsert deliberately dropped.
+	return s.updateBookFile(existing.ID, file, false, true)
 }
 
 // BatchUpsertBookFiles upserts a slice of BookFile records using a single
@@ -1395,8 +1425,36 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 // refresh below iterates `files` in slice order, so the last element publishes
 // last — do not reorder that loop.
 func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
+	return s.batchUpsertBookFiles(files, nil)
+}
+
+// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library scanner:
+// a row whose Present flag is true (the scanner's own stat of its path
+// succeeded) is written with Missing=false, in the same pebble batch as the rest
+// of the row, so a file that comes back is visible again after one rescan. Rows
+// with Present=false keep a stored Missing=true, exactly as BatchUpsertBookFiles
+// does for every row.
+func (s *PebbleStore) BatchUpsertScannedBookFiles(rows []ScannedBookFile) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	files := make([]*BookFile, len(rows))
+	present := make([]bool, len(rows))
+	for i, r := range rows {
+		files[i] = r.File
+		present[i] = r.Present
+	}
+	return s.batchUpsertBookFiles(files, present)
+}
+
+// batchUpsertBookFiles is the shared body. present is nil (no row observed on
+// disk) or parallel to files.
+func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) error {
 	if len(files) == 0 {
 		return nil
+	}
+	if present != nil && len(present) != len(files) {
+		return fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
 
 	batch := s.db.NewBatch()
@@ -1441,7 +1499,7 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 	stagedByPID := make(map[string]*BookFile, len(files))
 
 	now := time.Now()
-	for _, file := range files {
+	for fileIdx, file := range files {
 		if file == nil {
 			continue
 		}
@@ -1493,36 +1551,26 @@ func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
 			file.CreatedAt = existing.CreatedAt
 			file.UpdatedAt = now
 
-			// Preserve memdb-stripped heavy fields. A caller that sourced `file`
-			// from the memdb view (GetAllBookFiles → stripBookFileForMemdb) carries
-			// a nil AcoustIDFingerprint + nil fingerprint diagnostics. Writing that
-			// back verbatim would WIPE the raw chromaprint (~230 KB/file, expensive
-			// to recompute) on every row — a mass data-loss on any whole-library
-			// round-trip (e.g. maintenance.tag-backfill). Restore from the stored
-			// row whenever the incoming value is empty. The fingerprint WRITE path
-			// (internal/plugins/acoustid/backfill.go) always supplies a fresh
-			// non-empty value via UpdateBookFile, so this never blocks a real update.
-			if len(file.AcoustIDFingerprint) == 0 {
-				file.AcoustIDFingerprint = existing.AcoustIDFingerprint
-			}
-			if file.FingerprintFailureReason == nil {
-				file.FingerprintFailureReason = existing.FingerprintFailureReason
-			}
-			if file.FingerprintFailureDetail == nil {
-				file.FingerprintFailureDetail = existing.FingerprintFailureDetail
-			}
-			if file.FingerprintDiagnosticJSON == nil {
-				file.FingerprintDiagnosticJSON = existing.FingerprintDiagnosticJSON
-			}
-			// IntroTranscription is memdb-stripped as well (~0.5-1.5 KB/file of
-			// Whisper output). Unlike UpsertBookFile, this method writes straight
-			// into the batch rather than delegating to UpdateBookFile, so THIS is
-			// the only guard on the batch path — a whole-library round-trip
-			// (maintenance.tag-backfill et al.) would otherwise wipe every
-			// transcript in one commit.
-			if file.IntroTranscription == nil {
-				file.IntroTranscription = existing.IntroTranscription
-			}
+			// The incoming row may be PARTIAL: the library scanner
+			// (createBookFilesForBook) and the iTunes sync hand this method bare
+			// rows carrying only what they observed, and memdb-sourced rows lack
+			// the stripped heavy fields (raw chromaprint, IntroTranscription).
+			// Every field the caller does not own keeps its stored value when the
+			// incoming one is zero/nil — the shared rule in bookfile_merge.go,
+			// identical to UpsertBookFile. Before it, only the fingerprint fields
+			// and IntroTranscription were restored and every rescan wiped 40
+			// others (transcription state, Duration, media info, Missing,
+			// SkipScan, provenance, scan cache). This method writes straight into
+			// the batch rather than delegating to UpdateBookFile, so THIS is the
+			// only merge on the batch path. An intentional clear goes through
+			// UpdateBookFile, whose full-row mode lets zero values land.
+			//
+			// Two further rules, both in the same table: a row the scanner has
+			// just stat'd (present[fileIdx]) writes Missing=false, and a row whose
+			// FileHash differs from the stored one drops the content-derived
+			// fields (duration, media info, tags, fingerprint, transcript) so the
+			// backfills recompute them for the new bytes.
+			mergeBookFileFromStored(file, existing, bookFileWriteUpsert, scanPresenceOf(present, fileIdx))
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {
 				batch.Close()
@@ -1807,9 +1855,20 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 	return nil
 }
 
-// UpdateBookFileHashes updates the original_file_hash and post_metadata_hash
-// fields on a BookFile record stored in PebbleDB.
-func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash string) error {
+// UpdateBookFileHashes records the hashes of a tag write on a BookFile row.
+//
+//   - originalHash is filehash.BookFileHash (sampled, the same kind as
+//     file_hash) of the bytes BEFORE the write. It fills original_file_hash
+//     only when the stored value is not already a frozen sampled digest, and
+//     marks it FileHashKindSampled. It must never be a whole-file SHA-256:
+//     that differs from the sampled digest of the same bytes for any large
+//     file, and the integrity check would report the pair as an outside change.
+//   - postMetadataHash is the whole-file SHA-256 after the write (unchanged).
+//   - fileHash is filehash.BookFileHash of the bytes just written; when
+//     non-empty it replaces file_hash. Without it a tag write left file_hash
+//     describing the OLD bytes, so the next rescan saw a different hash for
+//     the same audio and treated the file as replaced.
+func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
 	// Find the file across all books via the secondary id index.
 	val, closer, err := s.db.Get([]byte("book_file_id:" + id))
 	if err != nil {
@@ -1829,19 +1888,24 @@ func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash st
 	}
 	closer2.Close()
 
-	if bf.OriginalFileHash == "" && originalHash != "" {
+	if originalHash != "" && !originalHashFrozen(&bf) {
 		bf.OriginalFileHash = originalHash
+		bf.OriginalFileHashKind = FileHashKindSampled
 	}
 	if postMetadataHash != "" {
 		bf.PostMetadataHash = postMetadataHash
 	}
-	bf.UpdatedAt = time.Now()
-
-	data, err := json.Marshal(&bf)
-	if err != nil {
-		return fmt.Errorf("UpdateBookFileHashes: marshal: %w", err)
+	if fileHash != "" {
+		bf.FileHash = fileHash
 	}
-	return s.db.Set([]byte(bookFileKey), data, pebble.Sync)
+
+	// Through updateBookFile, not a raw Set. FileHash and OriginalFileHash are
+	// secondary-indexed (book_file_hash:), and the memdb projection must see the
+	// new hash too; the raw Set this replaced refreshed neither. The row is the
+	// stored row, so the replace-mode merge inside restores nothing it needs.
+	// Hashes feed no book aggregate, so the per-book recompute is skipped: a
+	// 50-chapter write-back used to recompute the book 50 times.
+	return s.updateBookFile(id, &bf, true, false)
 }
 
 // SetBookFileHash sets file_hash on a BookFile record in PebbleDB, and also
@@ -1867,7 +1931,10 @@ func (s *PebbleStore) SetBookFileHash(id, hash string) error {
 
 	bf.FileHash = hash
 	if bf.OriginalFileHash == "" {
+		// Both callers (backfill-file-hashes, extract-wav-clips) pass
+		// filehash.BookFileHash, the digest file_hash always holds.
 		bf.OriginalFileHash = hash
+		bf.OriginalFileHashKind = FileHashKindSampled
 	}
 	bf.UpdatedAt = time.Now()
 

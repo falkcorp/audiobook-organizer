@@ -1,5 +1,5 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.3.0
+// version: 1.6.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
 // last-edited: 2026-09-13
 
@@ -28,14 +28,18 @@ type BookFileReader interface {
 	GetBookFileByPath(filePath string) (*BookFile, error)
 }
 
-// BookFileWriter creates and updates book_file rows.
-type BookFileWriter interface {
+// BookFileCreator creates new book_file rows.
+type BookFileCreator interface {
 	CreateBookFile(file *BookFile) error
 	// BatchCreateBookFiles is CreateBookFile for many rows: every row is
 	// created, and the affected books' aggregates are recomputed once rather
 	// than once per row. It does NOT match existing rows — see
 	// BatchUpsertBookFiles for that.
 	BatchCreateBookFiles(files []*BookFile) error
+}
+
+// BookFileUpserter updates, patches and upserts existing book_file rows through the shared merge rule (bookfile_merge.go).
+type BookFileUpserter interface {
 	UpdateBookFile(id string, file *BookFile) error
 	UpsertBookFile(file *BookFile) error
 	// PatchBookFileFields sets only the fields named in patch on a fresh read
@@ -44,6 +48,17 @@ type BookFileWriter interface {
 	// pebble_store_bookfile_patch.go.
 	PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (before, after *BookFile, err error)
 	BatchUpsertBookFiles(files []*BookFile) error
+	// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library
+	// scanner. Each row carries whether the scanner's own stat of FilePath
+	// succeeded; for those rows the upsert writes Missing=false (the file is
+	// demonstrably present), in the same batch as the row. Every other caller —
+	// the iTunes sync above all, which never looks at the disk — uses
+	// BatchUpsertBookFiles, which keeps a stored Missing=true.
+	BatchUpsertScannedBookFiles(rows []ScannedBookFile) error
+}
+
+// BookFileMover reassigns book_file rows between books.
+type BookFileMover interface {
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	// MoveBookFilesToBookBulk moves rows from MANY source books into one target
 	// in one atomic batch, recomputing each distinct book's aggregates ONCE.
@@ -51,6 +66,18 @@ type BookFileWriter interface {
 	// recomputes both of its books on every call, so a per-file loop pays two
 	// full re-reads of the target's file set per file.
 	MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error
+}
+
+// BookFileWriter creates and updates book_file rows.
+//
+// Split into the 3 interfaces above on 2026-09-13, when
+// BatchUpsertScannedBookFiles took it to 9 methods (interfacebloat limit 8).
+// This name is retained as their composition so the method set is
+// byte-identical and no consumer moves; the type checker proves it.
+type BookFileWriter interface {
+	BookFileCreator
+	BookFileUpserter
+	BookFileMover
 }
 
 // BookFileDeleter removes book_file rows.
@@ -71,9 +98,13 @@ type BookFileDeleter interface {
 
 // BookFileHashStore covers content hashing and hash-based lookup.
 type BookFileHashStore interface {
-	// UpdateBookFileHashes is a surgical update that records pre-write and post-write
-	// SHA-256 hashes without touching any other BookFile fields.
-	UpdateBookFileHashes(id, originalHash, postMetadataHash string) error
+	// UpdateBookFileHashes is a surgical update that records a tag write's
+	// hashes without touching any other BookFile fields. originalHash is
+	// filehash.BookFileHash of the PRE-write bytes (the same sampled kind as
+	// file_hash) for original_file_hash; postMetadataHash is the whole-file
+	// SHA-256 after the write; fileHash, when non-empty, replaces file_hash with
+	// filehash.BookFileHash of the rewritten bytes.
+	UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error
 	// SetBookFileHash sets file_hash on a book_file row, mirroring what the
 	// scanner does on initial import. Also sets original_file_hash if it is
 	// currently empty. Used by the backfill handler to populate hashes for
@@ -170,11 +201,13 @@ type BookFileStore interface {
 }
 
 type BookFileHashUpdater interface {
-	// UpdateBookFileHashes records the SHA-256 fingerprints taken before and
-	// after a tag write. original_file_hash is written only if the row has
-	// no existing value (first-write semantics); post_metadata_hash is always
-	// overwritten with the latest post-write fingerprint.
-	UpdateBookFileHashes(fileID, originalHash, postHash string) error
+	// UpdateBookFileHashes records the hashes of a tag write. originalHash is
+	// filehash.BookFileHash of the pre-write bytes; it fills
+	// original_file_hash unless the row already holds a frozen sampled digest
+	// (first-write semantics). post_metadata_hash is always overwritten with
+	// the latest post-write whole-file SHA-256. fileHash, when non-empty,
+	// replaces file_hash so the next rescan recognises the bytes.
+	UpdateBookFileHashes(fileID, originalHash, postHash, fileHash string) error
 }
 
 // BookSegmentStore covers the deprecated segment surface, kept until

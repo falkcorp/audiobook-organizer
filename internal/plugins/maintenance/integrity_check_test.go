@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a9d1e2f-4b5c-4d6e-8f7a-1b2c3d4e5f6a
-// last-edited: 2026-07-06
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -19,13 +19,17 @@ import (
 func TestFindIntegrityMismatches_ReportOnly(t *testing.T) {
 	files := []database.BookFileCore{
 		// (a) matching hashes — not flagged.
-		{ID: "f1", FilePath: "/lib/a.m4b", FileHash: "hash-a", OriginalFileHash: "hash-a"},
+		{ID: "f1", FilePath: "/lib/a.m4b", FileHash: "hash-a", OriginalFileHash: "hash-a", OriginalFileHashKind: database.FileHashKindSampled},
 		// (b) mismatch with no AO write on record — flagged.
-		{ID: "f2", FilePath: "/lib/b.m4b", FileHash: "hash-b-new", OriginalFileHash: "hash-b-orig"},
+		{ID: "f2", FilePath: "/lib/b.m4b", FileHash: "hash-b-new", OriginalFileHash: "hash-b-orig", OriginalFileHashKind: database.FileHashKindSampled},
 		// (c) mismatch explained by an AO tag write — not flagged.
-		{ID: "f3", FilePath: "/lib/c.m4b", FileHash: "hash-c-new", OriginalFileHash: "hash-c-orig", PostMetadataHash: "hash-c-new"},
+		{ID: "f3", FilePath: "/lib/c.m4b", FileHash: "hash-c-new", OriginalFileHash: "hash-c-orig", OriginalFileHashKind: database.FileHashKindSampled, PostMetadataHash: "hash-c-new"},
 		// (d) no baseline hash — not flagged.
 		{ID: "f4", FilePath: "/lib/d.m4b", FileHash: "hash-d-new", OriginalFileHash: ""},
+		// (e) mismatch, but the baseline is of unknown kind (a legacy value,
+		// e.g. a whole-file SHA-256 from an old tag write, which never equals
+		// the sampled digest of a large file) — not compared, not flagged.
+		{ID: "f5", FilePath: "/lib/e.m4b", FileHash: "hash-e-sampled", OriginalFileHash: "hash-e-whole-file"},
 	}
 
 	var writeCalls, deleteCalls []string

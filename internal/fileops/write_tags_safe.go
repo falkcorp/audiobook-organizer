@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.6.1
+// version: 1.8.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
 // last-edited: 2026-09-13
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -81,6 +82,21 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 			return "", "", fmt.Errorf("WriteTagsSafe: hash original %s: %w", path, err)
 		}
 	}
+	// Step 1a: the identity digest of the pre-write bytes, for the row's
+	// original_file_hash. That column must hold the SAME kind of digest as
+	// file_hash (filehash.BookFileHash, sampled), never originalHash above (a
+	// whole-file SHA-256): the two differ for any large file, and a mixed pair
+	// reads as "changed outside the app" in the integrity check. Cheap: it reads
+	// two fixed-size windows, not the whole file.
+	var preIdentityHash string
+	if opts.BookFileID != "" && opts.Store != nil {
+		if h, herr := filehash.BookFileHash(path); herr == nil {
+			preIdentityHash = h
+		} else {
+			logger.New("fileops").Warn("WriteTagsSafe: pre-write identity hash not computed; original_file_hash left as is: book_file_id=%s path=%s error=%v",
+				logger.SanitizeLogValue(opts.BookFileID), logger.SanitizeLogValue(path), herr)
+		}
+	}
 
 	// Step 1b: record the pre-write state BEFORE touching anything. If the
 	// process dies during the write, this row is what survives — recording it
@@ -139,10 +155,23 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 		// the caller to retry and write the file twice. It must not be silent
 		// either: this used to be `_ =`, which is how the columns could drift
 		// from the files without anyone noticing.
+		//
+		// FileHash is updated too, with the canonical identity digest the
+		// scanner computes (filehash.BookFileHash, head+tail+size), NOT postHash
+		// (a whole-file SHA-256). Leaving FileHash on the old bytes made the next
+		// rescan see a different hash for the same audio and treat the file as
+		// replaced. A hashing failure leaves FileHash as it was: the merge then
+		// keeps the audio-derived fields and asks for a re-read.
 		if opts.BookFileID != "" && opts.Store != nil {
-			if uerr := opts.Store.UpdateBookFileHashes(opts.BookFileID, originalHash, postHash); uerr != nil {
-				slog.Warn("WriteTagsSafe: hash columns not updated; file was written and the ledger holds the record",
-					"book_file_id", opts.BookFileID, "path", logger.SanitizeLogValue(path), "error", uerr)
+			identityHash, herr := filehash.BookFileHash(path)
+			if herr != nil {
+				identityHash = ""
+				logger.New("fileops").Warn("WriteTagsSafe: identity hash not computed; file_hash left unchanged: book_file_id=%s path=%s error=%v",
+					logger.SanitizeLogValue(opts.BookFileID), logger.SanitizeLogValue(path), herr)
+			}
+			if uerr := opts.Store.UpdateBookFileHashes(opts.BookFileID, preIdentityHash, postHash, identityHash); uerr != nil {
+				logger.New("fileops").Warn("WriteTagsSafe: hash columns not updated; file was written and the ledger holds the record: book_file_id=%s path=%s error=%v",
+					logger.SanitizeLogValue(opts.BookFileID), logger.SanitizeLogValue(path), uerr)
 			}
 		}
 	}

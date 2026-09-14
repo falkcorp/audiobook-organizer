@@ -37,6 +37,10 @@ type scanBookLookup interface {
 	GetBookByFilePath(path string) (*database.Book, error)
 	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFileByPath finds the stored row a scanned file's upsert will
+	// merge with, so a changed content hash can be probed before the merge
+	// decides whether the audio-derived data still belongs to the file.
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	// Added 2026-08-24 for the queued library.ai-parse operation: a batch that
 	// runs after auto-organize must follow the version group to the primary
 	// rather than writing to the row organize demoted. See
@@ -47,7 +51,9 @@ type scanBookLookup interface {
 type scanBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	BatchUpsertBookFiles(files []*database.BookFile) error
+	// BatchUpsertScannedBookFiles, not BatchUpsertBookFiles: the scanner stats
+	// every file it writes, so it is the one caller allowed to clear Missing.
+	BatchUpsertScannedBookFiles(rows []database.ScannedBookFile) error
 }
 
 type scanEntityStore interface {
