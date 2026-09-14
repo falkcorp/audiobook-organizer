@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d7f1a92-6b4e-4c85-a0d3-e29b8c5f7146
 // last-edited: 2026-09-13
 
@@ -28,12 +28,14 @@ func (r *pathRecorder) GetBookFileByPath(p string) (*database.BookFile, error) {
 func (r *pathRecorder) UpdateBookFileHashes(string, string, string, string) error { return nil }
 
 // TestHashOptions_RedirectRecordsOnLibraryCopyRow pins the one rule every
-// tagger write follows: hashes go on the row of the file actually written. A
-// protected-path redirect writes the library copy, so the row the caller named
-// (the protected source, unchanged on disk) must not receive them and the
-// copy's row must. The native taglib writer already does this by resolving
-// first; before this rule tagger recorded nothing on a redirect, so the two
-// build variants disagreed.
+// tagger write follows: hashes go on the row found at the path actually
+// written. A protected-path redirect writes the library copy, so the row is
+// looked up there. In production ImportToLibrary has repointed the caller's
+// row to the copy, so the lookup returns that same row; the fixture gives the
+// copy's path a different row ID only so the test can tell a lookup at the
+// written path from reuse of the caller's ID. Before this rule tagger recorded
+// nothing on a redirect while the native taglib writer recorded at the
+// resolved path, so the two build variants disagreed.
 func TestHashOptions_RedirectRecordsOnLibraryCopyRow(t *testing.T) {
 	t.Parallel()
 	const src, dst = "/deluge/books/a.m4b", "/library/books/a.m4b"
@@ -49,9 +51,11 @@ func TestHashOptions_RedirectRecordsOnLibraryCopyRow(t *testing.T) {
 	}
 }
 
-// TestHashOptions_RedirectWithoutCopyRowRecordsNothing: an importer that made
-// no row for the copy leaves nothing to record on, and the source row must not
-// be used in its place.
+// TestHashOptions_RedirectWithoutCopyRowRecordsNothing is a contract guard,
+// not a case production reaches: ImportToLibrary always repoints the row to
+// the copy, so a redirected write finds it. It pins what hashOptions does if an
+// importer ever leaves the copy without a row: nothing is recorded, and the
+// row the caller named is not used in its place.
 func TestHashOptions_RedirectWithoutCopyRowRecordsNothing(t *testing.T) {
 	t.Parallel()
 	rec := &pathRecorder{rows: map[string]string{"/deluge/b.m4b": "bf-src"}}

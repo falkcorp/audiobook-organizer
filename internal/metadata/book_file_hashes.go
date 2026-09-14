@@ -1,5 +1,5 @@
 // file: internal/metadata/book_file_hashes.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5a9c3e71-2d48-4b06-9f15-c7e0b8d4a2f6
 // last-edited: 2026-09-13
 
@@ -9,9 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
@@ -66,45 +64,15 @@ func WithBookFileHashes(deps tagger.SafeWriteDeps) tagger.SafeWriteDeps {
 }
 
 // writeMetadataViaCLIRecordingHashes runs the CLI (ffmpeg) writers, which
-// rewrite the file outside fileops.WriteTagsSafe, and then records the same
-// three hashes WriteTagsSafe would: the sampled digest of the bytes before and
-// after, and the whole-file SHA-256 after. A hashing failure is logged and
-// leaves that column as it was; the write itself has already succeeded.
+// rewrite the file outside fileops.WriteTagsSafe, through fileops.RecordRewrite,
+// which records the same three hashes WriteTagsSafe would on the file's
+// book_file row.
 func writeMetadataViaCLIRecordingHashes(filePath string, md map[string]any, config fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		abs = filePath
 	}
-	opts := BookFileHashOptions(abs)
-	if opts.BookFileID == "" || opts.Store == nil {
+	return fileops.RecordRewrite(bookFileHashStore(), abs, func() error {
 		return writeMetadataViaCLI(filePath, md, config)
-	}
-	log := logger.New("metadata")
-
-	pre, preErr := filehash.BookFileHash(abs)
-	if preErr != nil {
-		pre = ""
-		log.Warn("pre-write identity hash not computed; original_file_hash left as is: path=%s error=%v",
-			logger.SanitizeLogValue(abs), preErr)
-	}
-	if err := writeMetadataViaCLI(filePath, md, config); err != nil {
-		return err
-	}
-	post, postErr := filehash.BookFileHash(abs)
-	if postErr != nil {
-		post = ""
-		log.Warn("identity hash not computed after CLI write; file_hash left unchanged: path=%s error=%v",
-			logger.SanitizeLogValue(abs), postErr)
-	}
-	full, _, fullErr := fileops.ComputeFileHashAndSize(abs)
-	if fullErr != nil {
-		full = ""
-		log.Warn("post-write SHA-256 not computed after CLI write: path=%s error=%v",
-			logger.SanitizeLogValue(abs), fullErr)
-	}
-	if uerr := opts.Store.UpdateBookFileHashes(opts.BookFileID, pre, full, post); uerr != nil {
-		log.Warn("hash columns not updated after CLI write; the file was written: book_file_id=%s path=%s error=%v",
-			logger.SanitizeLogValue(opts.BookFileID), logger.SanitizeLogValue(abs), uerr)
-	}
-	return nil
+	})
 }

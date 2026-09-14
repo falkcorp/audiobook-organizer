@@ -1,7 +1,7 @@
 // file: internal/server/malformed_m4b_wrappers.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-07-18
+// last-edited: 2026-09-13
 
 package server
 
@@ -18,6 +18,9 @@ import (
 // fatal setup problem instead of silently completing.
 func (s *Server) remuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
 	remuxer := remux.New(s.store)
+	// Every remuxed file's book_file row learns the new bytes' hashes, or the
+	// next rescan treats the file as replaced.
+	remuxer.SetBookFileStore(s.store)
 	return remuxer.RemuxMalformedFiles(ctx, progress)
 }
 
@@ -26,5 +29,7 @@ func (s *Server) remuxMalformedM4BFiles(ctx context.Context, progress func(proce
 // remuxMalformedM4BFiles for the progress/error threading rationale (C2).
 func (s *Server) transcodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
 	transcoder := remux.NewTranscoder(s.store)
+	// Hashes plus codec, bitrate and sample rate, which a transcode changes.
+	transcoder.SetBookFileStore(s.store)
 	return transcoder.TranscodeMalformedFiles(ctx, progress)
 }

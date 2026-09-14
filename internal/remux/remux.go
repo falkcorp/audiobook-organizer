@@ -1,7 +1,7 @@
 // file: internal/remux/remux.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-08-30
+// last-edited: 2026-09-13
 
 package remux
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	taglib "go.senan.xyz/taglib"
 )
@@ -30,9 +31,35 @@ type Store interface {
 	SetSetting(key, value, typ string, isSecret bool) error
 }
 
+// BookFileStore keeps a rewritten file's book_file row describing the bytes
+// on disk: the row is found by path, its hashes are recorded after the
+// rewrite, and after a transcode its audio properties are refreshed. The
+// server passes its store; without one nothing is recorded and the next
+// rescan treats every rewritten file as replaced.
+type BookFileStore interface {
+	fileops.BookFileHashRecorder
+	PatchBookFileFields(bookID, fileID string, patch database.BookFileFieldPatch) (before, after *database.BookFile, err error)
+}
+
 // Remuxer provides malformed M4B remux operations.
 type Remuxer struct {
 	store Store
+	files BookFileStore
+}
+
+// SetBookFileStore installs the store remuxed files' hashes are recorded
+// through. Nil disables recording.
+func (r *Remuxer) SetBookFileStore(files BookFileStore) { r.files = files }
+
+// remuxAndRecord rewrites path with remux and records the new bytes' hashes on
+// the file's book_file row. A remux rewrites the container, so every byte-level
+// hash of the file changes even though the audio does not.
+func (r *Remuxer) remuxAndRecord(path string, remux func(string) error) error {
+	var rec fileops.BookFileHashRecorder
+	if r.files != nil {
+		rec = r.files
+	}
+	return fileops.RecordRewrite(rec, path, func() error { return remux(path) })
 }
 
 // New creates a new Remuxer instance.
@@ -170,7 +197,7 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 		}
 
 		// taglib failed — attempt to remux with ffmpeg.
-		if err := RemuxFile(path); err != nil {
+		if err := r.remuxAndRecord(path, RemuxFile); err != nil {
 			slog.Warn("malformed M4B remux failed for", "path", path, "err", err)
 			failed++
 			return nil

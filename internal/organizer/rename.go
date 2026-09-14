@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 )
 
 // RenameService handles preview and execution of file rename + tag write operations.
@@ -239,6 +240,15 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 					bf.ITunesPath = rs.ComputeITunesPath(proposedPath)
 					if ufErr := rs.db.UpdateBookFile(bf.ID, &bf); ufErr != nil {
 						slog.Warn("rename failed to update book_file path", "bf", bf.ID, "ufErr", ufErr)
+					} else if tagsWritten > 0 && tagWriteTarget != oldPath {
+						// The tags went to the library copy of a protected
+						// source while no row named the copy, so that write's
+						// by-path lookup found nothing and recorded nothing,
+						// and the row just repointed still holds the source's
+						// file_hash. Record the copy's bytes now, or the next
+						// rescan treats the copy as a replaced file. Failures
+						// are logged inside and do not undo the rename.
+						_ = fileops.RecordCurrentHashes(rs.db, bf.ID, proposedPath)
 					}
 				}
 			}

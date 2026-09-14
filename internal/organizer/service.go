@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.38.4
+// version: 1.39.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package organizer
 
@@ -60,6 +60,10 @@ type OrganizerBookFileStore interface {
 	// BatchCreateBookFiles writes a book's copied file rows atomically, so a
 	// partial failure cannot leave the organized copy owning some of its audio.
 	BatchCreateBookFiles(files []*database.BookFile) error
+	// UpdateBookFileHashes records the hashes of a library copy whose tags
+	// were written before its row was repointed to it (ApplyRename with a
+	// protected source), when the write's own by-path lookup found no row.
+	database.BookFileHashUpdater
 }
 
 // OrganizerContributorStore reads the author/narrator/tag associations that the

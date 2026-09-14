@@ -1,5 +1,5 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
 // last-edited: 2026-09-13
 //
@@ -13,7 +13,6 @@ package deluge
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
@@ -53,11 +52,11 @@ func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath string)
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: look up BookFile for %s: %w", srcPath, err)
 	}
 	if bf == nil {
-		// File is protected but has no DB record yet. This can happen during
-		// scan/ingest before the record is committed. Log and skip — the write
-		// proceeds in-place rather than failing the entire operation.
-		slog.Warn("LibraryImporterAdapter no BookFile record found for protected path ; writing in-place", "srcPath", srcPath)
-		return srcPath, nil
+		// File is protected but has no DB record yet (scan/ingest before the
+		// record is committed). There is no row to repoint, so nothing can be
+		// imported -- and the write must not proceed in place on a protected
+		// file, which until 2026-09-13 it did. Refuse it.
+		return srcPath, fmt.Errorf("LibraryImporterAdapter: no BookFile record for protected path %s; refusing to write it in place", srcPath)
 	}
 
 	newPath, err := ImportToLibrary(a.cfg, a.delugeClient, a.store, bf)

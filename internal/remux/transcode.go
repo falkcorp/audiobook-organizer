@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-08-30
+// last-edited: 2026-09-13
 
 package remux
 
@@ -18,6 +18,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/diagnosis"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	taglib "go.senan.xyz/taglib"
 )
@@ -27,6 +31,65 @@ const TranscodeKey = "malformed_m4b_transcode_v1_done"
 // Transcoder provides malformed M4B transcode operations.
 type Transcoder struct {
 	store Store
+	files BookFileStore
+}
+
+// SetBookFileStore installs the store transcoded files' hashes and audio
+// properties are recorded through. Nil disables recording.
+func (t *Transcoder) SetBookFileStore(files BookFileStore) { t.files = files }
+
+// transcodeAndRecord re-encodes path with transcode, records the new bytes'
+// hashes on the file's book_file row, and refreshes the row's codec, bitrate
+// and sample rate from probe: a transcode can change all three, and a row
+// left with the old values reports the wrong format. A probe value that comes
+// back empty (no ffprobe, an unreadable stream) leaves the stored one. The
+// fields are set with PatchBookFileFields, under the row's stripe, so a
+// concurrent writer's columns are not reverted.
+func (t *Transcoder) transcodeAndRecord(ctx context.Context, path string, transcode func(string) error, probe func(context.Context, string) diagnosis.FileDiagnostic) error {
+	var rec fileops.BookFileHashRecorder
+	if t.files != nil {
+		rec = t.files
+	}
+	if err := fileops.RecordRewrite(rec, path, func() error { return transcode(path) }); err != nil {
+		return err
+	}
+	if t.files == nil {
+		return nil
+	}
+	log := logger.New("remux")
+	row, err := t.files.GetBookFileByPath(path)
+	if err != nil {
+		log.Warn("book_file lookup after transcode failed; codec, bitrate and sample rate left as stored: path=%s error=%v",
+			logger.SanitizeLogValue(path), err)
+		return nil
+	}
+	if row == nil {
+		return nil
+	}
+	d := probe(ctx, path)
+	var patch database.BookFileFieldPatch
+	if d.Codec != "" {
+		codec := d.Codec
+		patch.Codec = &codec
+	}
+	if d.BitrateKbps > 0 {
+		kbps := d.BitrateKbps
+		patch.BitrateKbps = &kbps
+	}
+	if d.SampleRateHz > 0 {
+		hz := d.SampleRateHz
+		patch.SampleRateHz = &hz
+	}
+	if patch.Codec == nil && patch.BitrateKbps == nil && patch.SampleRateHz == nil {
+		log.Warn("probe after transcode gave no audio properties; codec, bitrate and sample rate left as stored: path=%s",
+			logger.SanitizeLogValue(path))
+		return nil
+	}
+	if _, _, err := t.files.PatchBookFileFields(row.BookID, row.ID, patch); err != nil {
+		log.Warn("audio properties not updated after transcode; the file was written: book_file_id=%s path=%s error=%v",
+			logger.SanitizeLogValue(row.ID), logger.SanitizeLogValue(path), err)
+	}
+	return nil
 }
 
 // NewTranscoder creates a new Transcoder instance.
@@ -190,7 +253,7 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		}
 
 		// taglib failed — attempt full AAC transcode.
-		if err := TranscodeFile(path); err != nil {
+		if err := t.transcodeAndRecord(ctx, path, TranscodeFile, diagnosis.ProbeFile); err != nil {
 			slog.Warn("malformed M4B transcode failed for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
 			failed++
