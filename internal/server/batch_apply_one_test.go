@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-14
 //
@@ -54,6 +54,8 @@ type fakeApplySvc struct {
 	preflightOpts []metafetch.ApplyOptions
 	// applyOpts records the options each apply got, parallel to appliedIDs.
 	applyOpts []metafetch.ApplyOptions
+	// previewOpts records the options each dry-run preview got.
+	previewOpts []metafetch.ApplyOptions
 	// historyErr is returned WITH the response: the write stood, its history
 	// did not land (metafetch.ErrApplyHistoryIncomplete).
 	historyErr error
@@ -116,7 +118,7 @@ func TestPreviewBulkApplyRow_BlockingRenameIsNotApply(t *testing.T) {
 
 type blockingPreview struct{ *fakeApplySvc }
 
-func (blockingPreview) PreviewMetadataCandidate(string, metafetch.MetadataCandidate, bool) (*metafetch.ApplyPreview, error) {
+func (blockingPreview) PreviewMetadataCandidateWithOptions(string, metafetch.MetadataCandidate, bool, metafetch.ApplyOptions) (*metafetch.ApplyPreview, error) {
 	return &metafetch.ApplyPreview{Rename: metafetch.RenamePreview{Blocking: "compute target paths failed"}}, nil
 }
 

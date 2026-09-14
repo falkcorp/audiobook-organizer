@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // The certainty gate on both bulk-apply paths, and the dry run's read-only
 // contract.
@@ -234,6 +234,6 @@ func TestPreviewBulkApplyRow_PreviewErrorIsNotApply(t *testing.T) {
 
 type erroringPreview struct{ *fakeApplySvc }
 
-func (erroringPreview) PreviewMetadataCandidate(string, metafetch.MetadataCandidate, bool) (*metafetch.ApplyPreview, error) {
+func (erroringPreview) PreviewMetadataCandidateWithOptions(string, metafetch.MetadataCandidate, bool, metafetch.ApplyOptions) (*metafetch.ApplyPreview, error) {
 	return nil, errors.New("locks unavailable")
 }

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-14
 
@@ -144,6 +144,34 @@ type cachedApplyPlan struct {
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
 	// so its dry run must never claim an owner review would apply a book.
 	Pinnable bool
+}
+
+// ownerApproved reports whether the book goes through only as an owner
+// review: the plan already carries one (a matching row pin lifted the gate),
+// or, for the pinless dry run, the gate refused on legs a row review lifts on
+// a path that accepts a pin. The preview and the apply both derive their
+// ApplyOptions from it, so they cannot disagree about a row. Reason is checked
+// before Gate: Gate is nil on the early skip plans.
+func (p cachedApplyPlan) ownerApproved() bool {
+	return p.OwnerReviewed ||
+		(p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate.OwnerReviewOverridable())
+}
+
+// applyOptions is the ApplyOptions for plan, used by the apply, its rename
+// preflight and the dry-run preview alike. A row the owner approved is
+// hand-picked, so it may overwrite filled descriptive fields like the
+// single-book apply (owner decision 2026-09-14); every other batch row is
+// fill-only (owner decision A3#3).
+func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
+	opts := metafetch.ApplyOptions{FillOnly: !p.ownerApproved()}
+	if p.OwnerReviewed {
+		// OwnerReviewed, not a non-empty summary, is what makes the apply
+		// record the override and require its history: an empty
+		// RefusingReasons must not turn a reviewed apply into an ordinary one.
+		opts.OwnerReviewed = true
+		opts.GateOverride = cmp.Or(p.Gate.OverrideSummary(), applygate.ReasonOwnerReviewed)
+	}
+	return opts
 }
 
 // planCachedApply picks the top cached candidate and runs the certainty gate
@@ -301,25 +329,21 @@ func applyCachedCandidateForBookTimed(
 	// disk disagreeing. When the file side is known to fail, refuse here,
 	// before any write. Only with writeBack: without it there is no rename.
 	// An owner review does not lift this: it is not a certainty judgement.
+	//
+	// The preflight plans the apply's own options: a fill-only and an
+	// overwriting apply can rename to different targets.
+	opts := plan.applyOptions()
 	if writeBack {
-		if err := svc.RenamePreflightWithOptions(id, *plan.Candidate, nil, metafetch.ApplyOptions{FillOnly: true}); err != nil {
+		if err := svc.RenamePreflightWithOptions(id, *plan.Candidate, nil, opts); err != nil {
 			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 		}
 	}
 
-	// Field policy is identical for a reviewed and an unreviewed apply (fields
-	// nil: every field the candidate provides, minus the user's locks) and is
-	// fill-only: a batch apply never overwrites a filled descriptive field
-	// (owner decision A3#3). OwnerReviewed only records the override in the
-	// change history.
-	opts := metafetch.ApplyOptions{FillOnly: true}
-	if plan.OwnerReviewed {
-		// OwnerReviewed, not a non-empty summary, is what makes the apply
-		// record the override and require its history: an empty
-		// RefusingReasons must not turn a reviewed apply into an ordinary one.
-		opts.OwnerReviewed = true
-		opts.GateOverride = cmp.Or(plan.Gate.OverrideSummary(), applygate.ReasonOwnerReviewed)
-	}
+	// fields nil: every field the candidate provides, minus the user's locks.
+	// An unreviewed row is fill-only: it never overwrites a filled descriptive
+	// field (owner decision A3#3). An owner-reviewed row was hand-picked in the
+	// review lane, so it may overwrite, like the single-book apply (owner
+	// decision 2026-09-14). opts is the value the preflight above planned.
 	resp, aerr := svc.ApplyMetadataCandidateWithOptions(id, *plan.Candidate, nil, opts)
 	// A response with ErrApplyHistoryIncomplete means the write stands and
 	// only its history is missing: finish the apply (so the database and the

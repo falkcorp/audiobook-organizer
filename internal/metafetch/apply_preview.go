@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
 // last-edited: 2026-09-14
 //
@@ -169,14 +169,23 @@ func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 	}
 }
 
-// PreviewMetadataCandidate reports what the batch apply
+// PreviewMetadataCandidate reports what an unreviewed batch apply
 // (ApplyMetadataCandidateWithOptions with FillOnly, fields nil) would change,
 // after locked and already-filled fields are stripped, and whether the file
 // sequel would rename. writeBack is whether the caller's apply would run the
 // file sequel at all (the batch op's write_back); the rename additionally
 // requires auto_rename_on_apply, as in runApplyPipeline.
 func (mfs *Service) PreviewMetadataCandidate(id string, candidate MetadataCandidate, writeBack bool) (*ApplyPreview, error) {
-	return mfs.previewMetadataCandidate(id, candidate, nil, true, writeBack)
+	return mfs.PreviewMetadataCandidateWithOptions(id, candidate, writeBack, ApplyOptions{FillOnly: true})
+}
+
+// PreviewMetadataCandidateWithOptions is PreviewMetadataCandidate for
+// ApplyMetadataCandidateWithOptions(id, candidate, nil, opts). The bulk-apply
+// preview passes the options the apply itself would use, so an owner-approved
+// row (FillOnly false) previews the overwrite and every other row the fill.
+// Only opts.FillOnly changes what is written; the rest only labels history.
+func (mfs *Service) PreviewMetadataCandidateWithOptions(id string, candidate MetadataCandidate, writeBack bool, opts ApplyOptions) (*ApplyPreview, error) {
+	return mfs.previewMetadataCandidate(id, candidate, nil, opts.FillOnly, writeBack)
 }
 
 // previewMetadataCandidate is PreviewMetadataCandidate for

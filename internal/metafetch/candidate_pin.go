@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-14
 
@@ -98,8 +98,11 @@ type ApplyOptions struct {
 	GateOverride string
 	// FillOnly makes the apply fill the book's descriptive fields without
 	// overwriting any that already hold a value (StripFilledFields). Every
-	// batch and automatic apply sets it; only a hand-picked single-book apply
-	// leaves it false and may overwrite (owner decision A3#3).
+	// batch and automatic apply sets it (owner decision A3#3) except a
+	// hand-picked one: the single-book apply, and a batch row the owner
+	// approved in the review lane (owner decision 2026-09-14), leave it false
+	// and may overwrite. The rename preflight and the bulk-apply preview must
+	// get the same value the apply does.
 	FillOnly bool
 }
 

@@ -1,5 +1,5 @@
 // file: internal/metafetch/fill_only.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4e2c71-5a3d-4f08-b6e1-2d7c8a90f513
 // last-edited: 2026-09-14
 
@@ -14,8 +14,11 @@ import (
 
 // StripFilledFields is the fill-only apply policy (owner decision A3#3,
 // 2026-09-13): batch applies and auto-fetch FILL the book's descriptive fields,
-// they never overwrite one that already holds a value. Only a hand-picked
-// single-book apply may overwrite.
+// they never overwrite one that already holds a value. Only a hand-picked apply
+// may overwrite: the single-book apply, and a review-lane row the owner
+// approved (owner decision 2026-09-14), which the batch apply runs without
+// FillOnly. Unreviewed batch rows, batch-apply-candidates, auto-fetch and the
+// upgrade job stay fill-only.
 //
 // It blanks every descriptive field of meta whose book column is already
 // filled, so applyMetadataUnguarded (and previewFields, which mirrors it)
