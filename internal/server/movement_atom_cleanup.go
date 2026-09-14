@@ -1,5 +1,5 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-09-13
 
@@ -176,11 +176,10 @@ func removeMovementAtomsFromFile(path string, deps tagger.SafeWriteDeps) (bool, 
 		return false, nil
 	}
 
-	// The rewrite changes the bytes, so record the new hashes on the file's
-	// book_file row (looked up only for files that are actually rewritten).
-	if o := metadata.BookFileHashOptions(path); o.BookFileID != "" {
-		deps.BookFileID, deps.HashStore = o.BookFileID, o.Store
-	}
+	// The rewrite changes the bytes, so record the new hashes on the book_file
+	// row of the file written (looked up only for files actually rewritten,
+	// after any protected-path redirect).
+	deps = metadata.WithBookFileHashes(deps)
 	if err := tagger.WriteTagsSafe(context.Background(), path, tags, taglib.Clear, deps); err != nil {
 		return false, err
 	}

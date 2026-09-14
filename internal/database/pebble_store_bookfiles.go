@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-13
 
@@ -582,13 +582,21 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // an aggregate stale.
 func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, recomputeAggregates bool) error {
 	unlock := s.lockBookFile(id)
-	notify, err := s.updateBookFileLocked(id, file, mergeStored, recomputeAggregates)
-	unlock()
-	// After the unlock: the recompute writes the BOOK under lockBook, and no
-	// book_file stripe is held while a book stripe is taken.
-	if err == nil && notify {
-		s.notifyBookFileChange(file.BookID)
-	}
+	notify := false
+	// Deferred, so a panic in the merge (a reflection walk over every field)
+	// still releases the stripe: a stripe left held would block every later
+	// write to the ~1/256 of files that hash to it. The recompute runs after
+	// the unlock: it writes the BOOK under lockBook, and no book_file stripe is
+	// held while a book stripe is taken.
+	defer func() {
+		unlock()
+		if notify {
+			s.notifyBookFileChange(file.BookID)
+		}
+	}()
+	var err error
+	notify, err = s.updateBookFileLocked(id, file, mergeStored, recomputeAggregates)
+	notify = notify && err == nil
 	return err
 }
 
@@ -1917,11 +1925,21 @@ func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, f
 	// a SkipScan patch) was reverted by a write meant to change only hashes.
 	// Every single-row book_file writer takes the same stripe.
 	unlock := s.lockBookFile(id)
-	bookID, notify, err := s.updateBookFileHashesLocked(id, originalHash, postMetadataHash, fileHash)
-	unlock()
-	if err == nil && notify {
-		s.notifyBookFileChange(bookID)
-	}
+	var (
+		bookID string
+		notify bool
+	)
+	// Deferred for the same reason as in updateBookFile: a panic must not
+	// leave the stripe held.
+	defer func() {
+		unlock()
+		if notify {
+			s.notifyBookFileChange(bookID)
+		}
+	}()
+	var err error
+	bookID, notify, err = s.updateBookFileHashesLocked(id, originalHash, postMetadataHash, fileHash)
+	notify = notify && err == nil
 	return err
 }
 

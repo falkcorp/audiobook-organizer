@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_hash_concurrency_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7a9d14-6b3e-4c85-a0d9-8e1c5b7f3a26
 // last-edited: 2026-09-13
 
@@ -10,6 +10,45 @@ import (
 	"testing"
 	"time"
 )
+
+// A panic while the row's stripe is held must still release it. Unlocking
+// after the call instead of in a defer left the stripe held for good, so every
+// later write to the ~1/256 of files on that stripe blocked forever. The hook
+// panics inside the locked section; a second hash write on the same row must
+// then finish.
+func TestUpdateBookFileHashes_PanicReleasesStripe(t *testing.T) {
+	s := openRescanStore(t)
+	book, err := s.CreateBook(&Book{Title: "Panic"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	if err := s.CreateBookFile(&BookFile{BookID: book.ID, FilePath: "/lib/P/01.m4b", FileHash: "before"}); err != nil {
+		t.Fatalf("CreateBookFile: %v", err)
+	}
+	f := onlyBookFile(t, s, book.ID)
+
+	updateBookFileHashesReadHook = func() { panic("injected") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the injected panic did not propagate")
+			}
+		}()
+		_ = s.UpdateBookFileHashes(f.ID, "", "post", "mid")
+	}()
+	updateBookFileHashesReadHook = nil
+
+	done := make(chan error, 1)
+	go func() { done <- s.UpdateBookFileHashes(f.ID, "", "post", "after") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("UpdateBookFileHashes after the panic: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the book_file stripe was still held after a panic: the second write never finished")
+	}
+}
 
 // Review round 4, item 2: UpdateBookFileHashes read the row and then wrote
 // that row back whole, holding no lock, so a field another writer committed in

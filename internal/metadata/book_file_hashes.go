@@ -1,5 +1,5 @@
 // file: internal/metadata/book_file_hashes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a9c3e71-2d48-4b06-9f15-c7e0b8d4a2f6
 // last-edited: 2026-09-13
 
@@ -51,12 +51,15 @@ func BookFileHashOptions(path string) fileops.WriteTagsSafeOptions {
 	return fileops.HashOptionsForPath(store, path)
 }
 
-// safeWriteDepsFor is packageSafeWriteDeps with path's book_file row attached,
-// for the tagger.WriteTagsSafe calls of the default (WASM) writer.
-func safeWriteDepsFor(path string) tagger.SafeWriteDeps {
-	deps := packageSafeWriteDeps
-	o := BookFileHashOptions(path)
-	deps.BookFileID, deps.HashStore = o.BookFileID, o.Store
+// WithBookFileHashes returns deps with the installed hash store attached, so
+// a tagger write records the new hashes on the book_file row of the file it
+// actually wrote (tagger looks the row up after resolving any protected-path
+// redirect). deps is returned unchanged when no store is installed. Exported
+// for tagger writers outside this package (the server's movement-atom cleanup).
+func WithBookFileHashes(deps tagger.SafeWriteDeps) tagger.SafeWriteDeps {
+	if store := bookFileHashStore(); store != nil {
+		deps.HashStore = store
+	}
 	return deps
 }
 

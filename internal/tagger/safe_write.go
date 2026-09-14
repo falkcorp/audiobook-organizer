@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
 // last-edited: 2026-09-13
 //
@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	taglib "go.senan.xyz/taglib"
@@ -59,13 +58,17 @@ type SafeWriteDeps struct {
 	// the write still proceeds in-place — callers should always wire both.
 	Importer LibraryImporter
 
-	// BookFileID and HashStore, when both are set, make the write record the
-	// file's new hashes on that book_file row (fileops.WriteTagsSafe's
+	// HashStore, when set, makes the write record the file's new hashes on
+	// the book_file row of the file actually written (fileops.WriteTagsSafe's
 	// BookFileID/Store). A tag write changes the bytes, so a row left holding
 	// the old file_hash makes the next rescan treat the file as replaced.
-	// Callers that know only the path get both from fileops.HashOptionsForPath.
+	//
+	// BookFileID is optional: the row the caller already knows for path,
+	// which saves the by-path lookup. It is used only when the write lands on
+	// path; after a protected-path redirect the row is looked up at the
+	// library copy instead (see hashOptions).
 	BookFileID string
-	HashStore  database.BookFileHashUpdater
+	HashStore  fileops.BookFileHashRecorder
 }
 
 // WriteTagsSafe writes tags to path, importing first if the path is protected.
@@ -193,18 +196,26 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 }
 
 // hashOptions returns the fileops.WriteTagsSafe options that record this
-// write's hashes on deps.BookFileID's row. When the protected-path guard sent
-// the write to a library copy (effectivePath != path) nothing is recorded:
-// the row names the protected source, whose bytes this write did not change.
-// The copy's own row, if the importer made one, is re-hashed by its next scan.
+// write's hashes on the book_file row of the file actually written.
+//
+// When the write lands on path, that is deps.BookFileID if the caller gave one,
+// else the row at path. When the protected-path guard sent the write to a
+// library copy (effectivePath != path), deps.BookFileID names the protected
+// source, whose bytes this write did not change, so the row is looked up at
+// the copy; the importer has already run, so a row it made is found. This is
+// the same rule the native (cgo) taglib writer follows, which resolves the
+// redirect first and records against the resolved path.
 func (deps SafeWriteDeps) hashOptions(path, effectivePath string) fileops.WriteTagsSafeOptions {
-	if deps.BookFileID == "" || deps.HashStore == nil {
+	if deps.HashStore == nil {
 		return fileops.WriteTagsSafeOptions{}
 	}
-	if effectivePath != path {
-		logger.New("tagger").Info("safe_write: write went to library copy %s; book_file %s names the unchanged source, so its hashes are not updated",
-			logger.SanitizeLogValue(effectivePath), logger.SanitizeLogValue(deps.BookFileID))
-		return fileops.WriteTagsSafeOptions{}
+	if effectivePath == path && deps.BookFileID != "" {
+		return fileops.WriteTagsSafeOptions{BookFileID: deps.BookFileID, Store: deps.HashStore}
 	}
-	return fileops.WriteTagsSafeOptions{BookFileID: deps.BookFileID, Store: deps.HashStore}
+	o := fileops.HashOptionsForPath(deps.HashStore, effectivePath)
+	if effectivePath != path && o.BookFileID == "" {
+		logger.New("tagger").Info("safe_write: write went to library copy %s, which has no book_file row yet; its next scan hashes it",
+			logger.SanitizeLogValue(effectivePath))
+	}
+	return o
 }

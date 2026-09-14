@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.24.0
+// version: 5.25.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -468,9 +468,11 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		// The embed rewrites the whole file, so it records the new hashes on the
 		// file's book_file row; otherwise the next rescan saw a changed hash and
 		// treated the file as replaced.
+		// tagger looks the row up after resolving a protected-path redirect,
+		// so a write sent to a library copy records on the copy's row.
 		deps := mfs.safeWriteDeps
-		if o := mfs.bookFileWriteOpts(f); o.BookFileID != "" {
-			deps.BookFileID, deps.HashStore = o.BookFileID, o.Store
+		if mfs.db != nil {
+			deps.HashStore = mfs.db
 		}
 		if err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, deps); err != nil {
 			slog.Warn("cover art embedding failed for file",
