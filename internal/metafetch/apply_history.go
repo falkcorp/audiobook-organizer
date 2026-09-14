@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-14
 
@@ -77,15 +77,16 @@ func newApplyBatchID() string {
 // actually changed, from the committed diff: before is the row as read before
 // the apply (database.SnapshotBook), after is the row as written. It must run
 // AFTER the write commits, so a value the apply's IsBetter checks refused, or a
-// write that failed, is never recorded. prevAuthors is the book_authors join as
-// it stood before the apply (nil when unknown); undo restores it.
+// write that failed, is never recorded. credits is the book_authors join the
+// apply read and wrote under the store's lock (nil when unknown); undo removes
+// exactly the credits it added (undoAuthorCredits).
 //
 // Every row shares one batch id, which is returned ("" when nothing changed).
 //
 // A row that cannot be written is logged at Error; the batch is then marked
 // incomplete (markApplyIncomplete) and ErrApplyHistoryIncomplete returned, so
 // UndoLastApply refuses it instead of undoing part of it or an older apply.
-func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors []database.BookAuthor, source string) (string, error) {
+func (mfs *Service) RecordApplyHistory(before, after *database.Book, credits *AuthorCredits, source string) (string, error) {
 	if before == nil || after == nil {
 		return "", nil
 	}
@@ -96,14 +97,12 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		mfs.markApplyIncomplete(after.ID, batchID, source)
 		return batchID, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, err)
 	}
-	// A fill-only apply (applyAuthorCredit) can add an author credit without
+	// An add-only apply (applyAuthorCredit) can add an author credit without
 	// moving author_id, so the column diff alone would record nothing and the
 	// added credit could never be undone. Record the author row whenever the
-	// committed join differs from the join before the apply.
-	if prevAuthors != nil && !slices.Contains(changed, "author_id") {
-		if cur, aerr := mfs.db.GetBookAuthors(after.ID); aerr == nil && !sameAuthorCredits(prevAuthors, cur) {
-			changed = append(changed, "author_id")
-		}
+	// join this apply wrote differs from the join it read.
+	if credits != nil && !slices.Contains(changed, "author_id") && !sameAuthorCredits(credits.Before, credits.After) {
+		changed = append(changed, "author_id")
 	}
 	if len(changed) == 0 {
 		return "", nil
@@ -128,13 +127,21 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		switch jsonName {
 		case "author_id":
 			oldVal, newVal = mfs.authorName(before.AuthorID), mfs.authorName(after.AuthorID)
-			rec.PreviousRef = &database.MetadataChangeRef{AuthorID: before.AuthorID, BookAuthors: prevAuthors, BookAuthorsKnown: prevAuthors != nil}
-			newAuthors, aerr := mfs.db.GetBookAuthors(after.ID)
-			if oldVal == newVal && aerr == nil {
-				// Credits-only change (fill-only append): show the credit lists.
-				oldVal, newVal = mfs.authorCreditNames(prevAuthors), mfs.authorCreditNames(newAuthors)
+			// The joins are the ones applyAuthorCredit read and wrote under
+			// the store's book_authors lock, never a read taken around it: a
+			// "before" read outside the lock could miss another apply's
+			// credit, and undo would then remove it (#3410 review).
+			known := credits != nil
+			var prevJoin, newJoin []database.BookAuthor
+			if known {
+				prevJoin, newJoin = credits.Before, credits.After
+				if oldVal == newVal {
+					// Credits-only change (add-only append): show the lists.
+					oldVal, newVal = mfs.authorCreditNames(prevJoin), mfs.authorCreditNames(newJoin)
+				}
 			}
-			rec.NewRef = &database.MetadataChangeRef{AuthorID: after.AuthorID, BookAuthors: newAuthors, BookAuthorsKnown: aerr == nil}
+			rec.PreviousRef = &database.MetadataChangeRef{AuthorID: before.AuthorID, BookAuthors: prevJoin, BookAuthorsKnown: known}
+			rec.NewRef = &database.MetadataChangeRef{AuthorID: after.AuthorID, BookAuthors: newJoin, BookAuthorsKnown: known}
 		case "series_id":
 			oldVal, newVal = mfs.seriesName(before.SeriesID), mfs.seriesName(after.SeriesID)
 			rec.PreviousRef = &database.MetadataChangeRef{SeriesID: before.SeriesID}
@@ -166,6 +173,99 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		return batchID, fmt.Errorf("%w: %d of %d rows of %s not recorded", ErrApplyHistoryIncomplete, failed, len(changed), after.ID)
 	}
 	return batchID, nil
+}
+
+// AuthorCredits is the book_authors join an apply read and the join it wrote,
+// both taken inside the store's ModifyBookAuthors, under the book's
+// book_authors lock. History records these as the author row's refs, and undo
+// removes exactly After minus Before. A nil *AuthorCredits means the join is
+// unknown; undo then refuses the author row. A path that does not write the
+// join records Before == After, so undoing it removes no credit.
+type AuthorCredits struct {
+	Before []database.BookAuthor
+	After  []database.BookAuthor
+}
+
+// addedAuthorIDs is the set of author ids an author row's apply added to the
+// join (NewRef minus PreviousRef). Author apply is add-only, so this is the
+// whole of what undoing it may take away.
+func addedAuthorIDs(r *database.MetadataChangeRecord) map[int]bool {
+	out := map[int]bool{}
+	if r.PreviousRef == nil || r.NewRef == nil {
+		return out
+	}
+	prev := map[int]bool{}
+	for _, ba := range r.PreviousRef.BookAuthors {
+		prev[ba.AuthorID] = true
+	}
+	for _, ba := range r.NewRef.BookAuthors {
+		if !prev[ba.AuthorID] {
+			out[ba.AuthorID] = true
+		}
+	}
+	return out
+}
+
+// creditedElsewhere reports whether a live author row other than self (not an
+// undo row, and not in an undone batch) also added id. Undo leaves such an id
+// in place, since another change still depends on it.
+func creditedElsewhere(history []database.MetadataChangeRecord, self *database.MetadataChangeRecord, id int) bool {
+	undone := map[string]bool{}
+	for _, h := range history {
+		if h.ChangeType == ChangeTypeApplyUndo && h.BatchID != "" {
+			undone[h.BatchID] = true
+		}
+	}
+	for i := range history {
+		h := &history[i]
+		if h.Field != historyFieldAuthor || h.ChangeType == ChangeTypeApplyUndo {
+			continue
+		}
+		if h.BatchID != "" && undone[h.BatchID] {
+			continue
+		}
+		if h.BatchID == self.BatchID && h.ChangedAt.Equal(self.ChangedAt) {
+			continue
+		}
+		if addedAuthorIDs(h)[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// undoAuthorCredits removes the credits an author row's apply added, and
+// nothing else, inside ModifyBookAuthors so it cannot race another credit
+// write. It never overwrites the join with the row's PreviousRef: that list
+// was the join at the apply's moment, and writing it back deleted every credit
+// added since. A failure is logged and reported as AuthorCreditsLeft.
+func (mfs *Service) undoAuthorCredits(bookID string, r *database.MetadataChangeRecord, history []database.MetadataChangeRecord, res *UndoApplyResult) {
+	remove := addedAuthorIDs(r)
+	for id := range remove {
+		if creditedElsewhere(history, r, id) {
+			delete(remove, id)
+		}
+	}
+	if len(remove) == 0 {
+		return
+	}
+	_, err := mfs.db.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		kept := make([]database.BookAuthor, 0, len(cur))
+		for _, ba := range cur {
+			if !remove[ba.AuthorID] {
+				kept = append(kept, ba)
+			}
+		}
+		if len(kept) == len(cur) {
+			return nil, database.ErrSkipBookAuthorsWrite
+		}
+		return kept, nil
+	})
+	if err != nil {
+		applyHistoryLog.Error("undo: removing author credits added by %s on %s failed: %v",
+			logger.SanitizeLogValue(r.BatchID), logger.SanitizeLogValue(bookID), err)
+		res.AuthorCreditsLeft = true
+	}
 }
 
 // sameAuthorCredits reports whether two book_authors joins credit the same
@@ -393,17 +493,19 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 	}
 
 	// The book_authors join is a separate key, written after the row (kept out
-	// of the callback like every other write). dropUnrevertableAuthorRows has
-	// already refused an author_name row whose join is unknown or changed, so
-	// the column and the join move back together.
-	for _, r := range rows {
-		if r.Field != historyFieldAuthor || !slices.Contains(res.Reverted, historyFieldAuthor) {
+	// of the callback like every other write). Only the credits this apply
+	// ADDED are removed, atomically (undoAuthorCredits); a credit another
+	// apply or an edit added since stays. An add-only apply usually leaves
+	// author_id alone, so the column counts as already restored, and the
+	// credits are still undone then.
+	for i := range rows {
+		if rows[i].Field != historyFieldAuthor {
 			continue
 		}
-		if serr := mfs.db.SetBookAuthors(bookID, r.PreviousRef.BookAuthors); serr != nil {
-			applyHistoryLog.Warn("undo apply: restoring author credits of %s failed: %v", logger.SanitizeLogValue(bookID), serr)
-			res.AuthorCreditsLeft = true
+		if !slices.Contains(res.Reverted, historyFieldAuthor) && !slices.Contains(res.AlreadyRestored, historyFieldAuthor) {
+			continue
 		}
+		mfs.undoAuthorCredits(bookID, &rows[i], history, res)
 	}
 
 	now := time.Now()
@@ -507,17 +609,6 @@ func copyIntPtr(p *int) *int {
 	return &v
 }
 
-func sameAuthorIDs(a, b []database.BookAuthor) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].AuthorID != b[i].AuthorID || a[i].Role != b[i].Role {
-			return false
-		}
-	}
-	return true
-}
 
 // dropUnrevertableAuthorRows removes the author_name row from rows when the
 // author column cannot go back together with the book_authors join: the join
@@ -531,10 +622,17 @@ func (mfs *Service) dropUnrevertableAuthorRows(bookID string, rows []database.Me
 			out = append(out, r)
 			continue
 		}
+		// The refs must be known: they are the joins the apply read and wrote
+		// under the store's lock, and undo removes exactly their difference.
+		// This replaces an exact-match check of the current join against
+		// NewRef. That check guarded a wholesale SetBookAuthors(PreviousRef)
+		// which would have wiped any later credit. Undo now removes only this
+		// apply's own additions, inside ModifyBookAuthors, so a later credit
+		// survives and needs no refusal. An unreadable join still refuses.
 		ok := r.PreviousRef != nil && r.NewRef != nil && r.PreviousRef.BookAuthorsKnown && r.NewRef.BookAuthorsKnown
 		if ok {
-			cur, err := mfs.db.GetBookAuthors(bookID)
-			ok = err == nil && sameAuthorIDs(cur, r.NewRef.BookAuthors)
+			_, err := mfs.db.GetBookAuthors(bookID)
+			ok = err == nil
 		}
 		if !ok {
 			res.authorRefused = append(res.authorRefused, r.Field)
@@ -620,6 +718,10 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 	case outcome == undoAlready:
 		res.AlreadyRestored = []string{field}
 		res.RevertedTo = rows[0].PreviousValue
+		if field == historyFieldAuthor {
+			// An add-only apply leaves author_id alone; its credits still go.
+			mfs.undoAuthorCredits(bookID, &rows[0], history, res)
+		}
 		return res, nil
 	case outcome != undoReverted:
 		res.Failed = []string{field}
@@ -628,10 +730,7 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 	res.Reverted = []string{field}
 	res.RevertedTo = rows[0].PreviousValue
 	if field == historyFieldAuthor {
-		if serr := mfs.db.SetBookAuthors(bookID, rows[0].PreviousRef.BookAuthors); serr != nil {
-			applyHistoryLog.Error("undo: restoring author credits of %s failed: %v", logger.SanitizeLogValue(bookID), serr)
-			res.AuthorCreditsLeft = true
-		}
+		mfs.undoAuthorCredits(bookID, &rows[0], history, res)
 	}
 	if err := mfs.db.RecordMetadataChange(&database.MetadataChangeRecord{
 		BookID:        bookID,
@@ -659,7 +758,10 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 // A nil book means nothing was written. A non-nil book with an error means
 // the write committed and its history did not (ErrApplyHistoryIncomplete,
 // logged at Error): the batch is marked incomplete, so undo refuses it.
-func (mfs *Service) CommitApply(id string, before, book *database.Book, prevAuthors []database.BookAuthor, source string) (*database.Book, error) {
+//
+// credits is the author join the apply read and wrote under the store's
+// book_authors lock (guardedApply returns it); nil means unknown.
+func (mfs *Service) CommitApply(id string, before, book *database.Book, credits *AuthorCredits, source string) (*database.Book, error) {
 	var mergedFields []string
 	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
 		var mErr error
@@ -684,7 +786,7 @@ func (mfs *Service) CommitApply(id string, before, book *database.Book, prevAuth
 		mfs.markApplyIncomplete(id, newApplyBatchID(), source)
 		return updated, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, snapErr)
 	}
-	if _, herr := mfs.RecordApplyHistory(before, written, prevAuthors, source); herr != nil {
+	if _, herr := mfs.RecordApplyHistory(before, written, credits, source); herr != nil {
 		return updated, herr
 	}
 	return updated, nil

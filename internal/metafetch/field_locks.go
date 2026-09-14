@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-09-14
 
@@ -147,22 +147,26 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 //
 // An error from the apply body (the author join could not be read or written)
 // is returned; the caller must not persist the book then.
-func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, error) {
+//
+// It also returns the author join the apply read and wrote under the store's
+// book_authors lock (nil when no author was applied), for CommitApply's history.
+func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, *AuthorCredits, error) {
 	if book == nil {
-		return meta, nil, fmt.Errorf("apply metadata: nil book")
+		return meta, nil, nil, fmt.Errorf("apply metadata: nil book")
 	}
 	locks, err := mfs.loadFieldLocks(book.ID)
 	if err != nil {
-		return meta, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
+		return meta, nil, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
 	}
 	meta, skipped := StripLockedFields(meta, locks.Set())
 	// History is NOT recorded here: this runs before the apply body's IsBetter
 	// checks and before the caller commits, so it recorded changes the apply
 	// then refused. Callers record with RecordApplyHistory after the write.
 	var bodyErr error
-	restored := locks.Apply(book, func(b *database.Book) { bodyErr = mfs.applyMetadataUnguarded(b, meta) })
+	var credits *AuthorCredits
+	restored := locks.Apply(book, func(b *database.Book) { credits, bodyErr = mfs.applyMetadataUnguarded(b, meta) })
 	if bodyErr != nil {
-		return meta, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
+		return meta, nil, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
 	}
 	if len(restored) > 0 {
 		// Strip should have made this unreachable; if it fires, a new write in
@@ -176,7 +180,7 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 		fieldLockLog.Info("metadata apply: skipped user-locked fields book_id=%s source=%s skipped_locked=%v",
 			book.ID, logger.SanitizeLogValue(source), skipped)
 	}
-	return meta, skipped, nil
+	return meta, skipped, credits, nil
 }
 
 // fieldLockLog is this file's logger.New printf-style logger.

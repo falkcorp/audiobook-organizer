@@ -10,4 +10,9 @@
   manual edit. The add is one atomic read-merge-write in the store
   (`ModifyBookAuthors`), so two applies to the same book at once both keep
   their author. Author-join read/write errors are returned instead of
-  discarded, and an added credit gets a change-history row so it can be undone.
+  discarded.
+- Undoing a metadata apply no longer deletes another apply's author credit.
+  History now records the author list the apply read and wrote while holding
+  the store's lock, instead of a read taken before it. Undo removes only the
+  authors that apply added, atomically, rather than writing the old list back
+  over the book; any author added since, by another apply or an edit, stays.
