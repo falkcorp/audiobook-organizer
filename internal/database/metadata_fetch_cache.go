@@ -1,12 +1,15 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
-// last-edited: 2026-08-17
+// last-edited: 2026-09-14
 
 package database
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -51,6 +54,44 @@ type CachedMetadataEntry struct {
 	BestScore float64           `json:"best_score"`
 	CachedAt  time.Time         `json:"cached_at"`
 	Extra     map[string]string `json:"extra,omitempty"` // reserved for future use (language tag, TTL override, etc.)
+	// SearchIdentity stamps the book identity (title, author, ASIN, ISBNs)
+	// the results were fetched FOR. The key is only (book, provider), so
+	// without this a row fetched while the book carried a garbage title that
+	// matched the wrong book kept replaying after the user corrected the
+	// title/author, for the whole TTL window (audit A3#14). Reads treat a
+	// missing or different stamp as a miss; the normal write-back then
+	// overwrites the row at the same key, so nothing is orphaned.
+	SearchIdentity string `json:"search_identity,omitempty"`
+}
+
+// searchIdentityVersion prefixes every stamp so a future change to the
+// identity recipe invalidates old stamps instead of colliding with them.
+const searchIdentityVersion = "v1:"
+
+// ErrNoSearchIdentity is returned by PutCachedMetadataFetch when the caller
+// has no identity to stamp. Such a row could never be read back as a hit, so
+// writing it would only disable the cache silently.
+var ErrNoSearchIdentity = errors.New("metadata fetch cache: search identity is required")
+
+// MetadataSearchIdentity computes the identity stamp for a book row. Every
+// cache reader and writer MUST derive it from the book row through this one
+// function (not from per-path query terms such as a transcription fallback or
+// a chapter-stripped title): the fetch, search and bulk paths share rows, and
+// any divergence between them would turn every shared row into a permanent
+// miss and refetch the whole library. authorName is the book's resolved
+// author name as stored (no garbage filtering).
+func MetadataSearchIdentity(title, authorName string, asin, isbn13, isbn10 *string) string {
+	deref := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return util.NormalizeString(*p)
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s",
+		util.NormalizeString(title), util.NormalizeString(authorName),
+		deref(asin), deref(isbn13), deref(isbn10))
+	return searchIdentityVersion + hex.EncodeToString(h.Sum(nil))[:32]
 }
 
 // metadataFetchCacheKey formats the storage key for a
@@ -74,9 +115,12 @@ func metadataFetchCacheKey(bookID, source string) string {
 // legacy name, so existing rows stay reachable and converge to the id key as
 // books are refetched. That makes the switch free of a big-bang migration --
 // pass legacyDisplayName="" once no legacy rows remain.
-func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDisplayName string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
+//
+// identity is the book's current MetadataSearchIdentity; a row stamped for a
+// different identity (or not stamped at all) is a miss.
+func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDisplayName, identity string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
 	if providerID != "" {
-		entry, fresh, err := GetCachedMetadataFetchWithMaxAge(store, bookID, providerID, maxAge)
+		entry, fresh, err := GetCachedMetadataFetchWithMaxAge(store, bookID, providerID, identity, maxAge)
 		if err == nil && entry != nil {
 			return entry, fresh, nil
 		}
@@ -84,7 +128,7 @@ func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDispl
 	if legacyDisplayName == "" || util.NormalizeString(legacyDisplayName) == util.NormalizeString(providerID) {
 		return nil, false, nil
 	}
-	return GetCachedMetadataFetchWithMaxAge(store, bookID, legacyDisplayName, maxAge)
+	return GetCachedMetadataFetchWithMaxAge(store, bookID, legacyDisplayName, identity, maxAge)
 }
 
 // GetCachedMetadataFetchWithMaxAge looks up a cache entry and enforces
@@ -96,7 +140,12 @@ func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDispl
 // falls through to the API path. The entry is NOT deleted — it
 // remains available for diagnostics and will be overwritten on
 // the next successful fetch.
-func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
+//
+// identity must be the book's current MetadataSearchIdentity. A row with no
+// stamp (written before stamps existed) records reason="no_identity" and a
+// row stamped for another identity records reason="identity_mismatch"; both
+// are misses, never hits. An empty identity from the caller matches nothing.
+func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source, identity string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
 	if bookID == "" || source == "" {
 		return nil, false, nil
 	}
@@ -121,6 +170,14 @@ func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source string, m
 		metrics.RecordCacheMiss("metadata_fetch", "stale")
 		return nil, false, nil
 	}
+	if entry.SearchIdentity == "" {
+		metrics.RecordCacheMiss("metadata_fetch", "no_identity")
+		return nil, false, nil
+	}
+	if identity == "" || entry.SearchIdentity != identity {
+		metrics.RecordCacheMiss("metadata_fetch", "identity_mismatch")
+		return nil, false, nil
+	}
 	if maxAge > 0 {
 		age := time.Since(entry.CachedAt)
 		if age > maxAge {
@@ -138,9 +195,9 @@ func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source string, m
 // is responsible for unmarshalling it into its own type.
 //
 // Thin wrapper around GetCachedMetadataFetchWithMaxAge(maxAge=0)
-// kept for backward compatibility.
-func GetCachedMetadataFetch(store RawKVStore, bookID, source string) (*CachedMetadataEntry, error) {
-	entry, _, err := GetCachedMetadataFetchWithMaxAge(store, bookID, source, 0)
+// kept for backward compatibility. The identity check still applies.
+func GetCachedMetadataFetch(store RawKVStore, bookID, source, identity string) (*CachedMetadataEntry, error) {
+	entry, _, err := GetCachedMetadataFetchWithMaxAge(store, bookID, source, identity, 0)
 	return entry, err
 }
 
@@ -152,16 +209,24 @@ func GetCachedMetadataFetch(store RawKVStore, bookID, source string) (*CachedMet
 // the caller but never fails the outer fetch, per the same
 // principle as the embedding cache: the cache is an
 // optimization, not a correctness layer.
-func PutCachedMetadataFetch(store RawKVStore, bookID, source string, results json.RawMessage, bestScore float64) error {
+//
+// identity is the MetadataSearchIdentity of the book row the results were
+// fetched for; an empty identity returns ErrNoSearchIdentity and writes
+// nothing, because the row could never be read back.
+func PutCachedMetadataFetch(store RawKVStore, bookID, source, identity string, results json.RawMessage, bestScore float64) error {
 	if bookID == "" || source == "" {
 		return nil
 	}
+	if identity == "" {
+		return ErrNoSearchIdentity
+	}
 	entry := CachedMetadataEntry{
-		BookID:    bookID,
-		Source:    util.NormalizeString(source),
-		Results:   results,
-		BestScore: bestScore,
-		CachedAt:  time.Now().UTC(),
+		BookID:         bookID,
+		Source:         util.NormalizeString(source),
+		Results:        results,
+		BestScore:      bestScore,
+		CachedAt:       time.Now().UTC(),
+		SearchIdentity: identity,
 	}
 	blob, err := json.Marshal(entry)
 	if err != nil {
@@ -196,9 +261,11 @@ func CountCachedMetadataFetches(store RawKVStore) (int64, error) {
 }
 
 // InvalidateAllCachedMetadataFetchesForBook wipes every source's
-// cache entry for a single book. Called when the book's title
-// or author changes — any cached candidate is now stale because
-// it was queried against different search terms.
+// cache entry for a single book. Called from
+// metafetch.Service.InvalidateCachedCandidates (manual edit, metadata apply,
+// organize rename): any cached candidate may now be stale because it was
+// queried against different search terms. The SearchIdentity stamp covers
+// identity changes on paths that never call this.
 func InvalidateAllCachedMetadataFetchesForBook(store RawKVStore, bookID string) error {
 	if bookID == "" {
 		return nil

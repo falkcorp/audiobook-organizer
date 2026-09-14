@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
-// last-edited: 2026-09-05
+// last-edited: 2026-09-14
 
 package jobs
 
@@ -109,6 +109,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	type bookWork struct {
 		book       database.BookCore
 		authorName string
+		identity   string
 	}
 	var work []bookWork
 	for i := range allBooks {
@@ -116,11 +117,19 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		if done[b.ID] || strings.TrimSpace(b.Title) == "" {
 			continue
 		}
+		author := ""
+		if b.AuthorID != nil {
+			author = authorByID[*b.AuthorID]
+		}
+		// Resolved before the skip_cached probe: the probe must ask for the
+		// book's CURRENT search identity, or a row fetched for an older
+		// title/author would count as fresh and the book would never refresh.
+		identity := database.MetadataSearchIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
 		if skipCached {
 			maxAge := time.Duration(ttlDays) * 24 * time.Hour
 			hasFreshCache := false
 			for _, src := range sourceChain {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
 					hasFreshCache = true
 					break
 				}
@@ -129,11 +138,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 				continue
 			}
 		}
-		author := ""
-		if b.AuthorID != nil {
-			author = authorByID[*b.AuthorID]
-		}
-		work = append(work, bookWork{book: *b, authorName: author})
+		work = append(work, bookWork{book: *b, authorName: author, identity: identity})
 	}
 
 	totalBooks := len(existingResults) + len(work)
@@ -168,7 +173,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		bookID := w.book.ID
 		currentAuthor := w.authorName
 		out, werr := metafetch.WalkSourceChain(ctx, store, sourceChain, sem,
-			bookID, w.book.Title, currentAuthor, maxAge)
+			bookID, w.book.Title, currentAuthor, w.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -183,7 +188,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		case metafetch.FetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0)
 				}
 			}
 			found++

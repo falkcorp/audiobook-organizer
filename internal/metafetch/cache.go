@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -259,14 +259,45 @@ func (mfs *Service) ListCachedSummaries(_ context.Context) ([]MetadataCacheSumma
 	return mfs.db.ListMetadataCacheKeys()
 }
 
-// InvalidateCachedCandidates removes the cache entry for bookID. Used
+// InvalidateCachedCandidates removes the cached candidates for bookID. Used
 // when book metadata changes underneath us (manual edit, metadata
 // apply, organize rename) so the next read fetches fresh.
+//
+// It clears BOTH caches: the candidate cache (MetadataCache) and every
+// provider's raw fetch-cache row. Before A3#14 only the first was cleared, so
+// a wrong-book fetch result cached under a garbage title replayed after the
+// user corrected the title. The fetch rows also carry a SearchIdentity stamp
+// that covers identity changes on paths that never call this; the delete here
+// is the second layer. Both deletes are attempted even if one fails.
 func (mfs *Service) InvalidateCachedCandidates(bookID string) error {
 	if mfs == nil || mfs.db == nil {
 		return nil
 	}
-	return mfs.db.DeleteMetadataCache(bookID)
+	candErr := mfs.db.DeleteMetadataCache(bookID)
+	fetchErr := database.InvalidateAllCachedMetadataFetchesForBook(mfs.db, bookID)
+	if fetchErr != nil {
+		fetchErr = fmt.Errorf("invalidate metadata fetch cache: %w", fetchErr)
+	}
+	return errors.Join(candErr, fetchErr)
+}
+
+// fetchCacheIdentity returns the database.MetadataSearchIdentity for a book
+// row, resolving the author name the same way the bulk paths do (the stored
+// author's name, no garbage filtering). Every metafetch cache read and write
+// goes through this so the fetch, search and bulk paths agree on the stamp.
+func (mfs *Service) fetchCacheIdentity(book *database.Book) string {
+	if book == nil {
+		return ""
+	}
+	author := ""
+	if book.Author != nil {
+		author = book.Author.Name
+	} else if book.AuthorID != nil && mfs != nil && mfs.db != nil {
+		if a, err := mfs.db.GetAuthorByID(*book.AuthorID); err == nil && a != nil {
+			author = a.Name
+		}
+	}
+	return database.MetadataSearchIdentity(book.Title, author, book.ASIN, book.ISBN13, book.ISBN10)
 }
 
 // hashSearchInputs builds a short stable digest of the search inputs

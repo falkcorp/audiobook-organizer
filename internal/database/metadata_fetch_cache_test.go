@@ -1,6 +1,7 @@
 // file: internal/database/metadata_fetch_cache_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f5e4d3c-2b1a-0f9e-8d7c-6b5a4f3e2d1c
+// last-edited: 2026-09-14
 
 package database
 
@@ -31,10 +32,10 @@ func TestMetadataFetchCache_RoundTrip(t *testing.T) {
 	store := newCacheTestStore(t)
 
 	payload := json.RawMessage(`[{"title":"Dune","author":"Frank Herbert"}]`)
-	if err := PutCachedMetadataFetch(store, "book-1", "Hardcover", payload, 0.95); err != nil {
+	if err := PutCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity, payload, 0.95); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	entry, err := GetCachedMetadataFetch(store, "book-1", "Hardcover")
+	entry, err := GetCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestMetadataFetchCache_RoundTrip(t *testing.T) {
 func TestMetadataFetchCache_Miss(t *testing.T) {
 	store := newCacheTestStore(t)
 
-	entry, err := GetCachedMetadataFetch(store, "book-unknown", "Hardcover")
+	entry, err := GetCachedMetadataFetch(store, "book-unknown", "Hardcover", testFetchIdentity)
 	if err != nil {
 		t.Fatalf("unexpected error on miss: %v", err)
 	}
@@ -74,10 +75,10 @@ func TestMetadataFetchCache_CaseInsensitiveSource(t *testing.T) {
 	store := newCacheTestStore(t)
 
 	payload := json.RawMessage(`[]`)
-	if err := PutCachedMetadataFetch(store, "book-1", "Hardcover", payload, 0); err != nil {
+	if err := PutCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity, payload, 0); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := GetCachedMetadataFetch(store, "book-1", "hardcover")
+	entry, err := GetCachedMetadataFetch(store, "book-1", "hardcover", testFetchIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +92,11 @@ func TestMetadataFetchCache_CaseInsensitiveSource(t *testing.T) {
 func TestMetadataFetchCache_Invalidate(t *testing.T) {
 	store := newCacheTestStore(t)
 
-	_ = PutCachedMetadataFetch(store, "book-1", "Hardcover", json.RawMessage(`[]`), 0)
+	_ = PutCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity, json.RawMessage(`[]`), 0)
 	if err := InvalidateCachedMetadataFetch(store, "book-1", "Hardcover"); err != nil {
 		t.Fatalf("invalidate: %v", err)
 	}
-	entry, _ := GetCachedMetadataFetch(store, "book-1", "Hardcover")
+	entry, _ := GetCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity)
 	if entry != nil {
 		t.Errorf("expected miss after invalidate, got hit")
 	}
@@ -106,23 +107,23 @@ func TestMetadataFetchCache_Invalidate(t *testing.T) {
 func TestMetadataFetchCache_InvalidateAllForBook(t *testing.T) {
 	store := newCacheTestStore(t)
 
-	_ = PutCachedMetadataFetch(store, "book-1", "Hardcover", json.RawMessage(`[]`), 0)
-	_ = PutCachedMetadataFetch(store, "book-1", "Audible", json.RawMessage(`[]`), 0)
-	_ = PutCachedMetadataFetch(store, "book-2", "Hardcover", json.RawMessage(`[]`), 0)
+	_ = PutCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity, json.RawMessage(`[]`), 0)
+	_ = PutCachedMetadataFetch(store, "book-1", "Audible", testFetchIdentity, json.RawMessage(`[]`), 0)
+	_ = PutCachedMetadataFetch(store, "book-2", "Hardcover", testFetchIdentity, json.RawMessage(`[]`), 0)
 
 	if err := InvalidateAllCachedMetadataFetchesForBook(store, "book-1"); err != nil {
 		t.Fatalf("invalidate all: %v", err)
 	}
 
 	// book-1 entries gone.
-	if e, _ := GetCachedMetadataFetch(store, "book-1", "Hardcover"); e != nil {
+	if e, _ := GetCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity); e != nil {
 		t.Error("book-1 Hardcover should be gone")
 	}
-	if e, _ := GetCachedMetadataFetch(store, "book-1", "Audible"); e != nil {
+	if e, _ := GetCachedMetadataFetch(store, "book-1", "Audible", testFetchIdentity); e != nil {
 		t.Error("book-1 Audible should be gone")
 	}
 	// book-2 entry still there.
-	if e, _ := GetCachedMetadataFetch(store, "book-2", "Hardcover"); e == nil {
+	if e, _ := GetCachedMetadataFetch(store, "book-2", "Hardcover", testFetchIdentity); e == nil {
 		t.Error("book-2 Hardcover should have survived")
 	}
 }
@@ -137,7 +138,7 @@ func TestMetadataFetchCache_CorruptEntry_TreatedAsMiss(t *testing.T) {
 	// Hand-poison a cache key with non-JSON bytes.
 	_ = store.SetRaw(metadataFetchCacheKey("book-1", "Hardcover"), []byte("not json"))
 
-	entry, err := GetCachedMetadataFetch(store, "book-1", "Hardcover")
+	entry, err := GetCachedMetadataFetch(store, "book-1", "Hardcover", testFetchIdentity)
 	if err != nil {
 		t.Fatalf("unexpected error on corrupt entry: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestMetadataFetchCache_TTL_ZeroMeansInfinite(t *testing.T) {
 	store := newCacheTestStore(t)
 
 	payload := json.RawMessage(`[{"title":"Old Book"}]`)
-	require.NoError(t, PutCachedMetadataFetch(store, "book-1", "Audible", payload, 0.80))
+	require.NoError(t, PutCachedMetadataFetch(store, "book-1", "Audible", testFetchIdentity, payload, 0.80))
 
 	// Backdate the entry by 1 year by overwriting with a manipulated timestamp.
 	key := metadataFetchCacheKey("book-1", "audible")
@@ -172,7 +173,7 @@ func TestMetadataFetchCache_TTL_ZeroMeansInfinite(t *testing.T) {
 	require.NoError(t, store.SetRaw(key, updated))
 
 	// maxAge=0 → infinite TTL, must return hit.
-	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-1", "Audible", 0)
+	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-1", "Audible", testFetchIdentity, 0)
 	require.NoError(t, err)
 	require.True(t, hit, "expected hit when maxAge=0")
 	require.NotNil(t, got)
@@ -184,7 +185,7 @@ func TestMetadataFetchCache_TTL_ExpiredReturnsMiss(t *testing.T) {
 	store := newCacheTestStore(t)
 
 	payload := json.RawMessage(`[{"title":"Old Book"}]`)
-	require.NoError(t, PutCachedMetadataFetch(store, "book-2", "Audnexus", payload, 0.70))
+	require.NoError(t, PutCachedMetadataFetch(store, "book-2", "Audnexus", testFetchIdentity, payload, 0.70))
 
 	// Backdate to 8 days ago.
 	key := metadataFetchCacheKey("book-2", "audnexus")
@@ -199,7 +200,7 @@ func TestMetadataFetchCache_TTL_ExpiredReturnsMiss(t *testing.T) {
 	require.NoError(t, store.SetRaw(key, updated))
 
 	// maxAge=7d → entry is expired, must return miss.
-	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-2", "Audnexus", 7*24*time.Hour)
+	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-2", "Audnexus", testFetchIdentity, 7*24*time.Hour)
 	require.NoError(t, err)
 	require.False(t, hit, "expected miss for expired entry")
 	require.Nil(t, got)
@@ -211,7 +212,7 @@ func TestMetadataFetchCache_TTL_FreshReturnsHit(t *testing.T) {
 	store := newCacheTestStore(t)
 
 	payload := json.RawMessage(`[{"title":"Fresh Book"}]`)
-	require.NoError(t, PutCachedMetadataFetch(store, "book-3", "OpenLibrary", payload, 0.90))
+	require.NoError(t, PutCachedMetadataFetch(store, "book-3", "OpenLibrary", testFetchIdentity, payload, 0.90))
 
 	// Backdate to 1 day ago (within a 7d maxAge).
 	key := metadataFetchCacheKey("book-3", "openlibrary")
@@ -226,7 +227,7 @@ func TestMetadataFetchCache_TTL_FreshReturnsHit(t *testing.T) {
 	require.NoError(t, store.SetRaw(key, updated))
 
 	// maxAge=7d → entry is fresh, must return hit.
-	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-3", "OpenLibrary", 7*24*time.Hour)
+	got, hit, err := GetCachedMetadataFetchWithMaxAge(store, "book-3", "OpenLibrary", testFetchIdentity, 7*24*time.Hour)
 	require.NoError(t, err)
 	require.True(t, hit, "expected hit for fresh entry")
 	require.NotNil(t, got)
