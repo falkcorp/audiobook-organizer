@@ -1,5 +1,5 @@
 // file: internal/merge/itunes_guard_symlink_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f1d4b62-2e7a-4c85-b3f0-6a8c1e5d7b24
 // last-edited: 2026-09-13
 
@@ -102,5 +102,33 @@ func TestCheckITunesPath_DanglingLinkIntoFrozenTreeIsRefused(t *testing.T) {
 	mustSymlink(t, filepath.Join(dir, "books", "itunes", "Author", "missing.m4b"), link)
 	if err := GuardITunesProtectedLoaded([]*database.Book{{ID: "b", FilePath: link}}, nil); !errors.Is(err, ErrITunesProtected) {
 		t.Fatalf("err = %v, want ErrITunesProtected", err)
+	}
+}
+
+// Round 4: /lib/d links to a folder inside the iTunes root, and the dangling
+// link d/a.m4b has the relative target ../b.m4b. Its real target is
+// <root>/b.m4b, but joining the target to the link's folder as text gave
+// /lib/b.m4b, outside the root, and the path passed.
+func TestCheckITunesPath_RelativeDanglingLinkInSymlinkedFolderIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	realRoot := filepath.Join(dir, "media", "itunes-real")
+	x := filepath.Join(realRoot, "x")
+	for _, d := range []string{x, filepath.Join(dir, "lib")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withITunesConfig(t, func(c *config.ITunesConfig) {
+		c.MediaRoot = realRoot
+		c.LibraryReadPath = ""
+		c.SyncEnabled = false
+	})
+	d := filepath.Join(dir, "lib", "d")
+	mustSymlink(t, x, d)
+	mustSymlink(t, filepath.Join("..", "b.m4b"), filepath.Join(x, "a.m4b"))
+
+	p := filepath.Join(d, "a.m4b")
+	if err := GuardITunesProtectedLoaded([]*database.Book{{ID: "b", FilePath: p}}, nil); !errors.Is(err, ErrITunesProtected) {
+		t.Fatalf("err = %v, want ErrITunesProtected: %s really points at %s", err, p, filepath.Join(realRoot, "b.m4b"))
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-13
 
@@ -71,6 +71,16 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	reporter.SetTotal(len(allBooks))
 
 	deletedIDs := make(map[string]bool)
+	// skippedJunk holds phase-1 junk rows the job did NOT retire (refused, or a
+	// failed read or write). They stay out of phases 2-4: a junk row that
+	// shares a real book's path must never become that book's keeper -- the
+	// real book's rows would move onto the junk row and the real book would be
+	// retired -- nor be merged as anyone's dup.
+	skippedJunk := make(map[string]bool)
+	// refusedByPath counts phase-1 refusals per covering live path, so one
+	// live book whose FilePath is a whole author or root folder is visible
+	// when it blocks many junk rows.
+	refusedByPath := make(map[string]int)
 	// sim tracks retirements and promotions this run has made (or, in dry-run,
 	// would have made), so a later primary hand-off in the same run sees the
 	// group state apply would see.
@@ -108,13 +118,20 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		// through it. A junk row whose own book_file rows name a live book's
 		// file or lie under a live book's path is refused: retiring it would
 		// leave that file owned by a deleted row.
-		delErr := ddJunkSharesLivePath(store, book, livePaths)
+		hit, delErr := ddJunkSharesLivePath(store, book, livePaths)
 		if delErr == nil {
 			delErr = ddRetireBook(store, sim, book, nil, dryRun, true)
 		}
 		phase1.record(delErr)
 		if delErr != nil {
-			ddLog.Error("phase1 retire book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(delErr.Error()))
+			skippedJunk[book.ID] = true
+			if hit != "" {
+				refusedByPath[hit]++
+				ddLog.Warn("phase1 refused junk book=%s covering_live_path=%s: %s",
+					logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(hit), logger.SanitizeLogValue(delErr.Error()))
+			} else {
+				ddLog.Error("phase1 retire book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(delErr.Error()))
+			}
 			continue
 		}
 		deletedIDs[book.ID] = true
@@ -124,7 +141,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	pathGroups := make(map[string][]database.Book)
 	for i := range allBooks {
 		book := &allBooks[i]
-		if deletedIDs[book.ID] || book.FilePath == "" {
+		if deletedIDs[book.ID] || skippedJunk[book.ID] || book.FilePath == "" {
 			continue
 		}
 		pathGroups[book.FilePath] = append(pathGroups[book.FilePath], *book)
@@ -170,7 +187,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	taGroups := make(map[titleAuthorKey][]database.Book)
 	for i := range allBooks {
 		book := &allBooks[i]
-		if deletedIDs[book.ID] {
+		if deletedIDs[book.ID] || skippedJunk[book.ID] {
 			continue
 		}
 		normTitle := ddNormalizeDedupTitle(book.Title)
@@ -233,7 +250,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	vgGroups := make(map[string][]database.Book)
 	for i := range allBooks {
 		book := &allBooks[i]
-		if deletedIDs[book.ID] || book.VersionGroupID == nil || *book.VersionGroupID == "" {
+		if deletedIDs[book.ID] || skippedJunk[book.ID] || book.VersionGroupID == nil || *book.VersionGroupID == "" {
 			continue
 		}
 		vgGroups[*book.VersionGroupID] = append(vgGroups[*book.VersionGroupID], *book)
@@ -283,6 +300,11 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		phase3.done, phase3.refused, phase3.failed, phase4.done, phase4.failed)
 	reporter.Log("info", summary, nil)
 	ddLog.Info("done: %s", summary)
+	if len(refusedByPath) > 0 {
+		byPath := "phase1 junk refusals by covering live path: " + ddTopPathCounts(refusedByPath, 20)
+		reporter.Log("info", byPath, nil)
+		ddLog.Warn("%s", logger.SanitizeLogValue(byPath))
+	}
 	if failed := phase1.failed + phase2.failed + phase3.failed + phase4.failed; failed > 0 {
 		return fmt.Errorf("dedup-books: %d write(s) failed; those books were left unmerged (%s)", failed, summary)
 	}
@@ -335,11 +357,20 @@ func ddIsJunkReadByNarrator(book *database.Book) bool {
 // retiring the primary is the one choice that can leave a group without one.
 // Only an explicit true counts here; nil is ambiguous across readers (see
 // ddCountsAsPrimary), and the retire path handles the nil case by re-electing.
+//
+// A "read by narrator" junk row is never the keeper while a real book is in
+// the group, whatever its score or primary flag: it would absorb the real
+// book's rows and the real book would be the one retired.
 func ddPickKeeperIdx(books []database.Book) int {
 	best := 0
 	for i := 1; i < len(books); i++ {
+		iJunk, bestJunk := ddIsJunkReadByNarrator(&books[i]), ddIsJunkReadByNarrator(&books[best])
 		iPrim, bestPrim := ddExplicitPrimary(&books[i]), ddExplicitPrimary(&books[best])
 		switch {
+		case iJunk != bestJunk:
+			if !iJunk {
+				best = i
+			}
 		case iPrim && !bestPrim:
 			best = i
 		case iPrim == bestPrim && ddBookScore(&books[i]) > ddBookScore(&books[best]):
@@ -571,23 +602,54 @@ func ddLivePathIndex(store maintenance.JobStore, allBooks []database.Book) (map[
 
 // ddJunkSharesLivePath returns errDDRefused when one of junk's own book_file
 // rows names a path in livePaths or lies under one (a live book's FilePath
-// directory). A read error is returned as is, so the book fails rather than
-// being retired on a guess.
-func ddJunkSharesLivePath(store maintenance.JobStore, junk *database.Book, livePaths map[string]bool) error {
+// directory), along with the covering live path for the refusal log. A read
+// error is returned as is, so the book fails rather than being retired on a
+// guess.
+func ddJunkSharesLivePath(store maintenance.JobStore, junk *database.Book, livePaths map[string]bool) (string, error) {
 	files, err := store.GetBookFiles(junk.ID)
 	if err != nil {
-		return fmt.Errorf("read files of %s: %w", junk.ID, err)
+		return "", fmt.Errorf("read files of %s: %w", junk.ID, err)
 	}
 	for _, f := range files {
 		if f.FilePath == "" {
 			continue
 		}
 		if hit := ddCoveredBy(filepath.Clean(f.FilePath), livePaths); hit != "" {
-			return fmt.Errorf("%w: junk book %s owns %s, which is live path %s or lies under it",
+			return hit, fmt.Errorf("%w: junk book %s owns %s, which is live path %s or lies under it",
 				errDDRefused, junk.ID, f.FilePath, hit)
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// ddTopPathCounts formats the n highest counts as "path=count, ...".
+func ddTopPathCounts(counts map[string]int, n int) string {
+	type pc struct {
+		path  string
+		count int
+	}
+	all := make([]pc, 0, len(counts))
+	for p, c := range counts {
+		all = append(all, pc{p, c})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].count != all[j].count {
+			return all[i].count > all[j].count
+		}
+		return all[i].path < all[j].path
+	})
+	var b strings.Builder
+	for i, e := range all {
+		if i == n {
+			fmt.Fprintf(&b, ", ... %d more path(s)", len(all)-n)
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s=%d", e.path, e.count)
+	}
+	return b.String()
 }
 
 // ddCoveredBy returns the entry of paths that is p or an ancestor of p, or "".
@@ -612,13 +674,15 @@ type ddSim struct {
 	// joined holds books that joined a version group through the keeper
 	// field-fill, by group. In dry-run the store never sees the join.
 	joined map[string][]database.Book
+	// joinedVG is joined keyed by book, for overlay.
+	joinedVG map[string]string
 	// handoffs is the successor each retirement promoted ("" for none), in
 	// order: what a dry-run and an apply of the same plan must agree on.
 	handoffs []string
 }
 
 func newDDSim() *ddSim {
-	return &ddSim{retired: map[string]bool{}, promoted: map[string]bool{}, joined: map[string][]database.Book{}}
+	return &ddSim{retired: map[string]bool{}, promoted: map[string]bool{}, joined: map[string][]database.Book{}, joinedVG: map[string]string{}}
 }
 
 func (s *ddSim) join(b *database.Book, vg string) {
@@ -633,6 +697,24 @@ func (s *ddSim) join(b *database.Book, vg string) {
 	cp := *b
 	cp.VersionGroupID = &vg
 	s.joined[vg] = append(s.joined[vg], cp)
+	s.joinedVG[b.ID] = vg
+}
+
+// overlay applies what this run has recorded to b, a copy loaded before the
+// run's earlier merges: a group joined through the keeper fill and a
+// promotion. Dry-run's stand-in for re-reading the row.
+func (s *ddSim) overlay(b *database.Book) {
+	if s == nil || b == nil {
+		return
+	}
+	if vg, ok := s.joinedVG[b.ID]; ok && (b.VersionGroupID == nil || *b.VersionGroupID == "") {
+		v := vg
+		b.VersionGroupID = &v
+	}
+	if s.isPromoted(b.ID) {
+		t := true
+		b.IsPrimaryVersion = &t
+	}
 }
 
 func (s *ddSim) isRetired(id string) bool  { return s != nil && s.retired[id] }
@@ -699,6 +781,26 @@ func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *databa
 
 // ddMergeDuplicateBookSim is ddMergeDuplicateBook with the run's overlay.
 func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+	// The caller's copies were loaded before earlier merges in this run: a
+	// keeper that joined a group and was promoted in phase 2 can be phase 3's
+	// dup and still read as groupless and non-primary, so its group would be
+	// left with no primary. Apply re-reads both rows (fail closed); dry-run
+	// overlays what this run would have written, so the two modes agree.
+	if dryRun {
+		sim.overlay(keeper)
+		sim.overlay(dup)
+	} else {
+		for _, b := range []*database.Book{keeper, dup} {
+			fresh, err := store.GetBookByID(b.ID)
+			if err != nil {
+				return fmt.Errorf("re-read book %s: %w", b.ID, err)
+			}
+			if fresh == nil || fresh.IsSoftDeleted() {
+				return fmt.Errorf("%w: book %s is gone or already retired; not merging", errDDRefused, b.ID)
+			}
+			*b = *fresh
+		}
+	}
 	if err := merge.GuardITunesProtected(store, []string{keeper.ID, dup.ID}); err != nil {
 		return err
 	}
