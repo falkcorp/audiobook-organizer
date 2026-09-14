@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -29,6 +30,9 @@ const (
 	metadataBorderlineFloor    = 0.80
 	metadataBorderlineCeiling  = 0.88
 )
+
+// bookMergeLog is MergeBooks' logger.New printf-style logger.
+var bookMergeLog = logger.New("dedup.book-merge")
 
 // BookDupGroup is a group of books that are likely duplicates of each other.
 type BookDupGroup struct {
@@ -616,9 +620,9 @@ func MergeBooks(
 		// its retention clock, and reassigning its external IDs would strip the
 		// ones a restore brings back. Same rule as merge.Service.MergeBooks.
 		if mergeBook.IsSoftDeleted() {
-			slog.Debug("book merge: loser already soft-deleted; left as is", "loser_id", mergeID, "keep_id", keepID)
+			bookMergeLog.Debug("book merge: loser already soft-deleted; left as is loser_id=%s keep_id=%s", mergeID, keepID)
 		} else if err := retireMergedLoser(store, eidStore, keepID, mergeBook, keepAudioPaths); err != nil {
-			slog.Error("book merge left loser live", "loser_id", mergeID, "keep_id", keepID, "error", err)
+			bookMergeLog.Error("book merge left loser live loser_id=%s keep_id=%s: %v", mergeID, keepID, err)
 			result.Errors = append(result.Errors, fmt.Sprintf("book %s left live: %v", mergeID, err))
 		} else {
 			if err := store.CreateOperationChange(&database.OperationChange{
@@ -630,7 +634,7 @@ func MergeBooks(
 				OldValue:    fmt.Sprintf("%s (%s)", mergeBook.Title, mergeBook.FilePath),
 				NewValue:    fmt.Sprintf("merged_into:%s", keepID),
 			}); err != nil {
-				slog.Warn("book merge: could not journal the soft delete", "loser_id", mergeID, "keep_id", keepID, "error", err)
+				bookMergeLog.Warn("book merge: could not journal the soft delete loser_id=%s keep_id=%s: %v", mergeID, keepID, err)
 			}
 			result.MergedCount++
 		}
