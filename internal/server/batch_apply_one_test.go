@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -184,6 +184,37 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
 	if out.Applied || out.HistoryFailed || out.Reason != applySkipApplyFailed {
 		t.Fatalf("plain apply error: outcome %+v, want %s", out, applySkipApplyFailed)
+	}
+}
+
+// When an owner-reviewed apply's history write fails AND the file work after
+// it fails too, both must reach the outcome. The write-back error used to
+// overwrite the history error in out.Err, so the op log said only "write-back
+// failed" and the owner lost the one signal that the override has no record.
+func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.T) {
+	for _, writeBack := range []bool{false, true} {
+		books, cand := ownerReviewFixture()
+		svc := &fakeApplySvc{
+			candidates: candidateJSON(t, cand),
+			historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
+			finishErr:  errors.New("rename files: cross-device link"),
+		}
+		out := applyCachedCandidateForBookTimed(svc, books, &fakeITunes{}, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+		if !out.Applied || !out.HistoryFailed || !out.WriteBackFailed {
+			t.Fatalf("writeBack=%v: outcome %+v, want applied with history AND write-back flagged", writeBack, out)
+		}
+		if !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
+			t.Errorf("writeBack=%v: Err = %v, lost ErrApplyHistoryIncomplete", writeBack, out.Err)
+		}
+		if out.Err == nil || !strings.Contains(out.Err.Error(), "cross-device link") {
+			t.Errorf("writeBack=%v: Err = %v, lost the write-back error", writeBack, out.Err)
+		}
+		if !errors.Is(out.HistoryErr, metafetch.ErrApplyHistoryIncomplete) || strings.Contains(errText(out.HistoryErr), "cross-device") {
+			t.Errorf("writeBack=%v: HistoryErr = %v, want only the history error", writeBack, out.HistoryErr)
+		}
+		if !strings.Contains(errText(out.WriteBackErr), "cross-device link") || errors.Is(out.WriteBackErr, metafetch.ErrApplyHistoryIncomplete) {
+			t.Errorf("writeBack=%v: WriteBackErr = %v, want only the write-back error", writeBack, out.WriteBackErr)
+		}
 	}
 }
 

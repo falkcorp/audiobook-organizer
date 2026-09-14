@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -517,11 +517,14 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						slog.String("book_id", id),
 						slog.Any("skipped_locked", out.SkippedLocked))
 				}
+				// Each line logs its own error (HistoryErr / WriteBackErr), not
+				// the joined Err: a book can hit both, and each line should say
+				// exactly what it is about.
 				if out.HistoryFailed {
 					historyFailed.Add(1)
 					reporter.Log(slog.LevelError, "owner-reviewed apply written but change history not recorded",
 						slog.String("book_id", id),
-						slog.String("error", errText(out.Err)))
+						slog.String("error", errText(out.HistoryErr)))
 				}
 				if out.WriteBackFailed {
 					// Counted separately and logged, but NOT subtracted from
@@ -531,7 +534,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					writeFailed.Add(1)
 					reporter.Log(slog.LevelWarn, "applied to database but write-back to files failed",
 						slog.String("book_id", id),
-						slog.String("error", errText(out.Err)))
+						slog.String("error", errText(out.WriteBackErr)))
 				}
 				return nil
 			}
