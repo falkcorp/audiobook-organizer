@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package applygate
 
@@ -143,8 +143,10 @@ func TestEvaluate(t *testing.T) {
 // util.TestTranscriptMatch_OldRuleRefusedAllSeven).
 //
 // unreviewed is TranscriptionConfirms (the gate, metadata.upgrade, an
-// unpinned batch apply): it ANDs origin/main's rule, so it refuses all seven,
-// exactly as main did; each is applied by an owner clicking Apply on its row.
+// unpinned batch apply): it ANDs util.MainTranscriptionConfirms (origin/main's
+// rule plus the owner's 2026-09-14 initials fold), so it refuses six of the
+// seven as main did; only Sojourn, refused on initials spacing alone, now
+// confirms. The six are applied by an owner clicking Apply on their rows.
 // reviewed is ReviewedTranscriptionAgrees, the annotation on that row apply.
 func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 	cases := []struct {
@@ -159,7 +161,12 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false, false},
 		{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", false, true},
 		{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", false, true},
-		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", false, true},
+		// Owner decision 2026-09-14: initials spacing and punctuation are
+		// equal, so "R.A." ~ "R. A." and the unreviewed rule confirms (it
+		// was false). The surname still passes only the matcher's one typo.
+		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true, true},
+		{"different initials", "Sojourn", "R. A. Salvatore", "Sojourn", "J.R. Salvator", false, false},
+		{"initials folded, different surname", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Smith", false, false},
 		// Heard "book one"; the review row carried no series position.
 		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false, false},
 		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, true},

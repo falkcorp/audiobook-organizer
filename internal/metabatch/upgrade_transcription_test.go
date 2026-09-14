@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_transcription_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b3e1f64-2d9a-4c07-95e8-a4f6c0d71b39
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metabatch
 
@@ -48,10 +48,11 @@ func TestTranscriptionConfirmsCandidate_ReviewerFalsePositivesRefuse(t *testing.
 	}
 }
 
-// metadata.upgrade must refuse every pair origin/main's rule refused: the
-// real review cases (all seven refused on main) and the shapes where the
-// shared matcher is looser than main (a spoken series trailer, a silent
-// letter, a misspelled surname, credit text after the author, a heard volume).
+// metadata.upgrade must refuse every pair util.MainTranscriptionConfirms
+// refuses: the real review cases (Sojourn left this list on 2026-09-14, when
+// the owner decided initials spacing is equal; see the test below) and the
+// shapes where the shared matcher is looser than main (a spoken series
+// trailer, a silent letter, credit text after the author, a heard volume).
 func TestTranscriptionConfirmsCandidate_RefusesEveryPairMainRefused(t *testing.T) {
 	s := func(v string) *string { return &v }
 	pairs := []struct{ candTitle, candAuthor, pos, heardTitle, heardAuthor string }{
@@ -59,7 +60,6 @@ func TestTranscriptionConfirmsCandidate_RefusesEveryPairMainRefused(t *testing.T
 		{"A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "4", "A Cry of Honor", "Morgan Rice"},
 		{"Witness to a Trial", "John Grisham", "", "Witness to a Trial A short story prequel to The Whistler", "John Grisham"},
 		{"Knaves Over Queens", "George R. R. Martin", "", "Naves Over Queens", "George R. R. Martin, assisted"},
-		{"Sojourn", "R. A. Salvatore", "2", "Sojourn", "R.A. Salvator"},
 		{"This Gilded Abyss", "Rebecca Thorne", "1", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne"},
 		{"Mistborn", "Brandon Sanderson", "1", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's"},
 		{"Dune", "Frank Herbert", "2", "Dune, book two of the Dune Chronicles", "Frank Herbert"},
@@ -75,6 +75,29 @@ func TestTranscriptionConfirmsCandidate_RefusesEveryPairMainRefused(t *testing.T
 		c := &metafetch.MetadataCandidate{Title: p.candTitle, Author: p.candAuthor, SeriesPosition: p.pos}
 		if transcriptionConfirmsCandidate(book, c) {
 			t.Errorf("upgrade confirmed %q ~ heard %q/%q, which origin/main refused", p.candTitle, p.heardTitle, p.heardAuthor)
+		}
+	}
+}
+
+// Owner decision 2026-09-14: initials spacing and punctuation are equal, so
+// Sojourn (heard "R.A. Salvator", provider "R. A. Salvatore") confirms, and
+// different initials still refuse.
+func TestTranscriptionConfirmsCandidate_InitialsFold(t *testing.T) {
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		heardAuthor string
+		want        bool
+	}{
+		{"R.A. Salvator", true},
+		{"RA Salvatore", true},
+		{"J.R. Salvator", false},
+		{"R.A. Smith", false},
+	}
+	for _, tc := range cases {
+		book := &database.Book{TranscribedTitle: s("Sojourn"), TranscribedAuthor: s(tc.heardAuthor)}
+		c := &metafetch.MetadataCandidate{Title: "Sojourn", Author: "R. A. Salvatore", SeriesPosition: "2"}
+		if got := transcriptionConfirmsCandidate(book, c); got != tc.want {
+			t.Errorf("upgrade on heard %q = %v, want %v", tc.heardAuthor, got, tc.want)
 		}
 	}
 }

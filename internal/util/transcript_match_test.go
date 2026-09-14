@@ -1,7 +1,7 @@
 // file: internal/util/transcript_match_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0b6d3e92-4f18-4a7c-8e51-c2a7f9d0b364
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package util
 
@@ -19,23 +19,29 @@ import (
 // "(Book #4 in the Sorcerer's Ring)" and trailers are stripped from the
 // transcribed side only; "This Gilded Abyss" does not, because the heard
 // "book one" has no series position to agree with. No unreviewed path
-// confirms any of the seven: they AND origin/main's rule, which refused all.
-// Every one is applied by an owner clicking Apply on its review row.
+// confirms any of them except Sojourn: they AND MainTranscriptionConfirms,
+// which is origin/main's rule plus the owner's 2026-09-14 initials fold.
+// mainConfirms is that rule's answer. Sojourn was refused only because the
+// heard "R.A." was spaced differently from the provider's "R. A."; the owner
+// decided initials spacing and punctuation are equal, so it now confirms.
+// The other six stay refused and are applied by an owner clicking Apply.
 var realReviewCases = []struct {
 	name                    string
 	candTitle, candAuthor   string
 	heardTitle, heardAuthor string
 	confirms                bool
+	mainConfirms            bool
 }{
-	{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", true},
-	{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false},
-	{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true},
-	{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true},
-	{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true},
+	{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", true, false},
+	{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false, false},
+	{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true, false},
+	{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true, false},
+	// Owner decision 2026-09-14: mainConfirms was false (initials spacing).
+	{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true, true},
 	// Heard "book one" but the review row carried no series position, so
 	// nothing says this record is volume 1 (TestTitleAgrees_HeardVolume).
-	{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false},
-	{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", true},
+	{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false, false},
+	{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", true, false},
 }
 
 func TestTranscriptMatch_RealReviewCases(t *testing.T) {
@@ -46,9 +52,9 @@ func TestTranscriptMatch_RealReviewCases(t *testing.T) {
 				t.Errorf("confirms = %v, want %v (title %v, author %v)", got, tc.confirms,
 					TitleAgrees(tc.candTitle, "", tc.heardTitle), AuthorAgrees(tc.candAuthor, tc.heardAuthor))
 			}
-			// Unreviewed paths AND origin/main's rule, which refused all seven.
-			if MainTranscriptionConfirms(tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor) && got {
-				t.Errorf("an unreviewed path would confirm %s, which origin/main refused", tc.name)
+			// Unreviewed paths AND MainTranscriptionConfirms.
+			if m := MainTranscriptionConfirms(tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor); m != tc.mainConfirms {
+				t.Errorf("MainTranscriptionConfirms = %v, want %v", m, tc.mainConfirms)
 			}
 		})
 	}
@@ -168,20 +174,104 @@ func TestTitleAgrees_HeardVolume(t *testing.T) {
 	}
 }
 
-// MainTranscriptionConfirms must be origin/main's applygate rule verbatim.
-func TestMainTranscriptionConfirms_IsOldRule(t *testing.T) {
-	titles := []string{"Mistborn", "mistborn", "Mistborn: The Hero of Ages", "Dune", "Dune, book two of the Dune Chronicles", ""}
-	authors := []string{"", "Ki", "Brandon Sanderson", "Sanderson", "R.A. Salvator", "Frank Herbert"}
+// MainTranscriptionConfirms must be origin/main's applygate rule with only
+// the initials fold added: it confirms everything the old rule confirmed, and
+// every extra pair it confirms is an old-rule match once initials are written
+// the same way on both sides.
+func TestMainTranscriptionConfirms_IsOldRulePlusInitialsFold(t *testing.T) {
+	titles := []string{"Mistborn", "mistborn", "Mistborn: The Hero of Ages", "Dune", "Dune, book two of the Dune Chronicles", "Sojourn", ""}
+	authors := []string{"", "Ki", "Brandon Sanderson", "Sanderson", "R.A. Salvator", "R. A. Salvatore", "RA Salvatore",
+		"J.R. Salvatore", "R.A. Smith", "Debra Salvatore", "Frank Herbert", "George R. R. Martin", "George RR Martin"}
+	// initialsTwin is the same name with its initials undotted and unspaced.
+	initialsTwin := map[string]string{
+		"R.A. Salvator": "RA Salvator", "R. A. Salvatore": "RA Salvatore",
+		"J.R. Salvatore": "JR Salvatore", "R.A. Smith": "RA Smith", "George R. R. Martin": "George RR Martin",
+	}
+	twin := func(a string) string {
+		if v, ok := initialsTwin[a]; ok {
+			return v
+		}
+		return a
+	}
+	extra := 0
 	for _, ct := range titles {
 		for _, ht := range titles {
 			for _, ca := range authors {
 				for _, ha := range authors {
-					want := ht != "" && oldTranscriptionRule(ct, ca, ht, ha)
-					if got := MainTranscriptionConfirms(ct, ca, ht, ha); got != want {
-						t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) = %v, old rule %v", ct, ca, ht, ha, got, want)
+					old := ht != "" && oldTranscriptionRule(ct, ca, ht, ha)
+					got := MainTranscriptionConfirms(ct, ca, ht, ha)
+					if old && !got {
+						t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) refused a pair the old rule confirmed", ct, ca, ht, ha)
+					}
+					if got && !old {
+						extra++
+						if !oldTranscriptionRule(ct, twin(ca), ht, twin(ha)) {
+							t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) confirmed a pair that differs by more than initials", ct, ca, ht, ha)
+						}
 					}
 				}
 			}
+		}
+	}
+	if extra == 0 {
+		t.Fatal("the corpus exercises no initials fold")
+	}
+}
+
+func TestFoldInitials(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"R.A. Salvator", "ra salvator"},
+		{"R. A. Salvatore", "ra salvatore"},
+		{"R A Salvatore", "ra salvatore"},
+		{"RA Salvatore", "ra salvatore"},
+		{"r.a salvatore", "ra salvatore"},
+		{"George R. R. Martin, assisted", "george rr martin, assisted"},
+		{"J.R.R. Tolkien", "jrr tolkien"},
+		{"James S. A. Corey", "james sa corey"},
+		// Only initials change; words and other punctuation are kept.
+		{"Brandon Sanderson", "brandon sanderson"},
+		{"Andrzej  Sapkowski Translated", "andrzej sapkowski translated"},
+		{"Salvatore, R.", "salvatore, r"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := foldInitials(tc.in); got != tc.want {
+			t.Errorf("foldInitials(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Owner decision 2026-09-14: initials spacing and punctuation are equal, but
+// different initials or a different surname still refuse.
+func TestMainTranscriptionConfirms_InitialsFold(t *testing.T) {
+	cases := []struct {
+		cand, heard string
+		want        bool
+	}{
+		{"R. A. Salvatore", "R.A. Salvator", true},
+		{"R. A. Salvatore", "R. A. Salvatore", true},
+		{"R. A. Salvatore", "RA Salvatore", true},
+		{"R. A. Salvatore", "R A Salvatore", true},
+		{"R.A. Salvatore", "R. A. Salvator", true},
+		{"RA Salvatore", "R.A. Salvatore", true},
+		{"George R. R. Martin", "George RR Martin", true},
+		// Different initials.
+		{"R. A. Salvatore", "J.R. Salvatore", false},
+		{"R. A. Salvatore", "J. R. Salvator", false},
+		{"J.R. Salvatore", "R.A. Salvatore", false},
+		// Different surname.
+		{"R. A. Salvatore", "R.A. Smith", false},
+		{"R. A. Salvatore", "R.A. Salvadori", false},
+		// Folded initials must not match inside a word: "ra salvatore" is
+		// a substring of "debra salvatore", a different author. (Heard
+		// "RA Salvatore" against it is confirmed by origin/main's own raw
+		// substring leg, unchanged here and out of scope for the fold.)
+		{"Debra Salvatore", "R. A. Salvatore", false},
+		{"Debra Salvatore", "R.A. Salvatore", false},
+	}
+	for _, tc := range cases {
+		if got := MainTranscriptionConfirms("Sojourn", tc.cand, "Sojourn", tc.heard); got != tc.want {
+			t.Errorf("MainTranscriptionConfirms(Sojourn, %q, Sojourn, %q) = %v, want %v", tc.cand, tc.heard, got, tc.want)
 		}
 	}
 }

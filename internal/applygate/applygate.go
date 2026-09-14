@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-14
 
@@ -113,11 +113,13 @@ type Verdict struct {
 // apply) and metadata.upgrade's candidate ranking.
 //
 // It is origin/main's rule (util.MainTranscriptionConfirms: normalized title
-// equality, transcribed author as a substring of the candidate author) AND the
-// shared matcher (ReviewedTranscriptionAgrees). The AND makes it refuse every
-// pair main refused, on every input, so an unreviewed apply is never looser
-// than it was, and a confirmation can never lower the floor to
-// MinScoreAudioConfirmed where main would have kept MinScore. The looser
+// equality, transcribed author as a substring of the candidate author, with
+// initials spacing and punctuation folded per the owner's 2026-09-14
+// decision) AND the shared matcher (ReviewedTranscriptionAgrees). The AND
+// makes it refuse every pair main refused except those that differ only in
+// how initials are written ("R.A." vs "R. A."), so an unreviewed apply is
+// never otherwise looser than it was, and a confirmation can never lower the
+// floor to MinScoreAudioConfirmed where main would have kept MinScore. The looser
 // matcher on its own only annotates an owner-reviewed row apply, which a human
 // has already looked at.
 func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) bool {

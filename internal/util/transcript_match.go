@@ -1,7 +1,7 @@
 // file: internal/util/transcript_match.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package util
 
@@ -346,13 +346,20 @@ func TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle strin
 	return pos != "" && pos == canonicalSeriesNumber(heardNumber)
 }
 
-// MainTranscriptionConfirms is applygate.TranscriptionConfirms exactly as it
-// stood on origin/main before 2026-09-13: normalized title equality, then
-// (when the transcribed author is longer than three characters) the
-// normalized transcribed author as a substring of the normalized candidate
-// author. It is the UPPER BOUND for every unreviewed use: metadata.upgrade,
-// an unpinned batch apply and the certainty gate itself AND it with the
-// shared matcher, so they refuse every pair this refuses, by construction.
+// MainTranscriptionConfirms is applygate.TranscriptionConfirms as it stood on
+// origin/main before 2026-09-13 (normalized title equality, then, when the
+// transcribed author is longer than three characters, the normalized
+// transcribed author as a substring of the normalized candidate author) with
+// ONE owner-approved change (2026-09-14): both authors go through foldInitials
+// first, so initials compare equal however they are spaced or punctuated.
+// "R.A. Salvator" (Whisper) against "R. A. Salvatore" (provider) is the
+// motivating case: Sojourn was refused only because "r.a." != "r. a.". The
+// folded comparison is a substring test anchored at a token start, so the
+// surname tolerance is unchanged and folded initials never match mid-word.
+//
+// It is the UPPER BOUND for every unreviewed use: metadata.upgrade, an
+// unpinned batch apply and the certainty gate itself AND it with the shared
+// matcher, so they refuse every pair this refuses, by construction.
 func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle, transcribedAuthor string) bool {
 	if transcribedTitle == "" || NormalizeTitle(candidateTitle) != NormalizeTitle(transcribedTitle) {
 		return false
@@ -360,7 +367,92 @@ func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle
 	if len(transcribedAuthor) <= 3 {
 		return true
 	}
-	return strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor))
+	// Leg 1 is origin/main verbatim, so nothing it confirmed can refuse.
+	if strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor)) {
+		return true
+	}
+	// Leg 2: the folded forms, anchored at a token boundary. Without the
+	// anchor the dotless run "ra salvatore" would sit inside "debra
+	// salvatore", a different author main refused.
+	return containsAtTokenStart(foldInitials(candidateAuthor), foldInitials(transcribedAuthor))
+}
+
+// containsAtTokenStart reports whether sub occurs in s starting at the
+// beginning of s or right after a space. Every occurrence is tried.
+func containsAtTokenStart(s, sub string) bool {
+	if sub == "" {
+		return false
+	}
+	for off := 0; off <= len(s)-len(sub); {
+		i := strings.Index(s[off:], sub)
+		if i < 0 {
+			return false
+		}
+		at := off + i
+		if at == 0 || s[at-1] == ' ' {
+			return true
+		}
+		off = at + 1
+	}
+	return false
+}
+
+// foldInitials is NormalizeAuthor with every run of initials written as one
+// undotted token: "R.A." = "R. A." = "R A" = "RA" all become "ra", so
+// "R.A. Salvator" folds to "ra salvator" and "R. A. Salvatore" to
+// "ra salvatore". An initial is a whitespace-separated token made of single
+// letters each followed by a dot ("r.", "r.a.") or a lone letter ("r");
+// adjacent initial tokens are joined with no space. Every other token is left
+// exactly as NormalizeAuthor wrote it, punctuation included, so nothing but
+// initials spacing and punctuation is forgiven.
+//
+// Comparison only. NormalizeAuthor keys the Pebble name indexes and must never
+// change; do not use this for a key.
+func foldInitials(s string) string {
+	toks := strings.Split(NormalizeAuthor(s), " ")
+	out := make([]string, 0, len(toks))
+	inRun := false
+	for _, t := range toks {
+		letters, ok := initialLetters(t)
+		if !ok {
+			out = append(out, t)
+			inRun = false
+			continue
+		}
+		if inRun {
+			out[len(out)-1] += letters
+		} else {
+			out = append(out, letters)
+		}
+		inRun = true
+	}
+	return strings.Join(out, " ")
+}
+
+// initialLetters reports whether t is a token of initials ("r", "r.",
+// "r.a.", "r.a") and returns its letters without the dots ("ra").
+func initialLetters(t string) (string, bool) {
+	rs := []rune(t)
+	if len(rs) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 0; i < len(rs); i++ {
+		if !unicode.IsLetter(rs[i]) {
+			return "", false
+		}
+		b.WriteRune(rs[i])
+		switch {
+		case i+1 == len(rs):
+			// A lone letter, or the last letter of "r.a".
+		case rs[i+1] == '.':
+			i++
+		default:
+			// Two letters in a row: a word, not initials.
+			return "", false
+		}
+	}
+	return b.String(), true
 }
 
 // splitAuthors splits a candidate author field into individual authors on
