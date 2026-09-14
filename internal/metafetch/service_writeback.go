@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
@@ -453,24 +453,41 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 	// segment_title_format config key still fed, so the key is gone but the
 	// format survives as a constant — a book_file.Title is a database field and
 	// has nothing to do with where the file lives on disk.
+	//
+	// Each row is written with a field-level patch (track, track count, title)
+	// rather than a whole-row UpdateBookFile of the copy read above, which would
+	// revert any column another writer committed since (enrich-book-files'
+	// Duration, a hash backfill). IfTrackNumber pins the track the title was
+	// computed from: a row renumbered since the read is left alone.
 	for i := range bookFiles {
+		fileID := bookFiles[i].ID
+		readTrack := bookFiles[i].TrackNumber
 		// Auto-assign track numbers if zero
-		if bookFiles[i].TrackNumber == 0 {
-			bookFiles[i].TrackNumber = i + 1
+		track := readTrack
+		if track == 0 {
+			track = i + 1
 		}
-		bookFiles[i].TrackCount = totalTracks
+		title := organizer.FormatSegmentTitle(organizer.DefaultSegmentTitleFormat, bookTitle, track, totalTracks)
 
-		// Compute file title
-		title := organizer.FormatSegmentTitle(organizer.DefaultSegmentTitleFormat, bookTitle, bookFiles[i].TrackNumber, totalTracks)
-		bookFiles[i].Title = title
-
-		if err := mfs.db.UpdateBookFile(bookFiles[i].ID, &bookFiles[i]); err != nil {
-			slog.Warn("failed to update book file title for", "id", bookFiles[i].ID, "error", err)
+		_, _, err := mfs.db.PatchBookFileFields(bookID, fileID, database.BookFileFieldPatch{
+			TrackNumber:   &track,
+			TrackCount:    &totalTracks,
+			Title:         &title,
+			IfTrackNumber: &readTrack,
+		})
+		switch {
+		case errors.Is(err, database.ErrBookFileChangedSince):
+			segmentTitleLog.Info("segment title for file %s skipped: %v", fileID, err)
+		case err != nil:
+			segmentTitleLog.Warn("failed to update book file title for %s: %v", fileID, err)
 		}
 	}
 
 	return nil
 }
+
+// segmentTitleLog is generateSegmentTitles' logger.
+var segmentTitleLog = logger.New("metafetch.segment-titles")
 
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy

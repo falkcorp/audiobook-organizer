@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: 34290bd0-745e-4509-ad2d-e237785bb7ef
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -166,22 +166,48 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 			if isbn == "" {
 				continue
 			}
-			// Only one of the two ISBN columns may be locked here (both locked
-			// was handled above); Apply restores it if the hit lands there.
-			restored := locks.Apply(book, func(b *database.Book) {
-				if isbnLen == 13 {
-					b.ISBN13 = &isbn
-				} else {
-					b.ISBN10 = &isbn
+			// Written onto a FRESH copy inside ModifyBook, not onto the row read
+			// before the provider calls: a whole-row write of that copy would
+			// revert every field another writer committed during the search.
+			var restored any
+			restoredN := 0
+			isbnFilledMeanwhile := false
+			res, err := s.db.ModifyBook(bookID, func(fresh *database.Book) error {
+				if (fresh.ISBN10 != nil && *fresh.ISBN10 != "") || (fresh.ISBN13 != nil && *fresh.ISBN13 != "") {
+					isbnFilledMeanwhile = true
+					return database.ErrSkipBookWrite
 				}
+				// Only one of the two ISBN columns may be locked here (both locked
+				// was handled above); Apply restores it if the hit lands there.
+				r := locks.Apply(fresh, func(b *database.Book) {
+					if isbnLen == 13 {
+						b.ISBN13 = &isbn
+					} else {
+						b.ISBN10 = &isbn
+					}
+				})
+				restored, restoredN = r, len(r)
+				if restoredN > 0 {
+					return database.ErrSkipBookWrite
+				}
+				return nil
 			})
-			if len(restored) > 0 {
+			if err != nil {
+				return false, err
+			}
+			if res == nil {
+				logging.Info(ctx, "ISBN enrichment: book deleted during the search; nothing written", "id", bookID)
+				return false, nil
+			}
+			if isbnFilledMeanwhile {
+				logging.Info(ctx, "ISBN enrichment: an ISBN was filled by another writer during the search; left alone",
+					"id", bookID, "source", src.Name())
+				break
+			}
+			if restoredN > 0 {
 				logging.Info(ctx, "ISBN enrichment hit a user-locked column; not written",
 					"isbn", isbn, "title", title, "source", src.Name(), "locked", restored)
 				continue
-			}
-			if _, err := s.db.UpdateBook(bookID, book); err != nil {
-				return false, err
 			}
 			logging.Info(ctx, "ISBN enrichment found", "isbn", isbn, "title", title, "source", src.Name())
 			updated = true
@@ -208,9 +234,26 @@ func (s *ISBNService) EnrichBookISBN(ctx context.Context, bookID string) (bool, 
 			if asin == "" {
 				break
 			}
-			book.ASIN = &asin
-			if _, err := s.db.UpdateBook(bookID, book); err != nil {
+			// Same fresh-copy write as the ISBN pass above.
+			asinFilledMeanwhile := false
+			res, err := s.db.ModifyBook(bookID, func(fresh *database.Book) error {
+				if fresh.ASIN != nil && *fresh.ASIN != "" {
+					asinFilledMeanwhile = true
+					return database.ErrSkipBookWrite
+				}
+				fresh.ASIN = &asin
+				return nil
+			})
+			if err != nil {
 				return updated, err
+			}
+			if res == nil {
+				logging.Info(ctx, "ASIN enrichment: book deleted during the search; nothing written", "id", bookID)
+				return updated, nil
+			}
+			if asinFilledMeanwhile {
+				logging.Info(ctx, "ASIN enrichment: an ASIN was filled by another writer during the search; left alone", "id", bookID)
+				break
 			}
 			logging.Info(ctx, "ASIN enrichment found", "asin", asin, "title", title)
 			updated = true

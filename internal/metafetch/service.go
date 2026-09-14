@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.28.0
+// version: 5.29.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 
@@ -105,6 +105,9 @@ type metafetchBookStore interface {
 type metafetchFileStore interface {
 	metafetchFileReader
 	metafetchFileWriter
+	// PatchBookFileFields is the field-level book_file write the segment-titles
+	// pass uses instead of a whole-row UpdateBookFile of a stale read.
+	PatchBookFileFields(bookID, fileID string, patch database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error)
 }
 
 // metafetchFileReader looks up file rows and the import roots a destination
@@ -885,7 +888,9 @@ func truncateActivity(s string, maxLen int) string {
 type isbnEnrichmentStore interface {
 	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook, not UpdateBook: the enrichment writes after slow provider
+	// calls, so it must write onto a fresh copy under the book's lock.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetOperationState(opID string) ([]byte, error)

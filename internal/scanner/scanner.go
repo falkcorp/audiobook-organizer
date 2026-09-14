@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.96.0
+// version: 1.97.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-14
 
@@ -2980,13 +2980,37 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// find the existing record and update its path (handles file moves/renames).
 		if book.BookOrganizerID != "" {
 			existingByOrgID, orgErr := getStore().GetBookByID(book.BookOrganizerID)
-			if orgErr == nil && existingByOrgID != nil && existingByOrgID.FilePath != book.FilePath {
-				defaultLog.Info("re-linking book %s (moved from %s to %s)",
-					book.BookOrganizerID, existingByOrgID.FilePath, book.FilePath)
-				existingByOrgID.FilePath = book.FilePath
-				preserveExistingFields(dbBook, existingByOrgID)
-				_, err = getStore().UpdateBook(existingByOrgID.ID, existingByOrgID)
-				return err
+			if orgErr != nil {
+				defaultLog.Warn("organizer-ID relink: looking up book %s failed (%v); saving %s by path instead",
+					book.BookOrganizerID, orgErr, book.FilePath)
+			} else if existingByOrgID != nil && existingByOrgID.FilePath != book.FilePath {
+				oldPath := existingByOrgID.FilePath
+				relinked := false
+				// FilePath is the only field this relink owns. It is set on a
+				// FRESH copy inside ModifyBook, not via a whole-row UpdateBook of
+				// the row read above, which would revert every field another
+				// writer committed since that read. A row already at the new path
+				// (another scan relinked it first) is left alone.
+				res, merr := getStore().ModifyBook(existingByOrgID.ID, func(fresh *database.Book) error {
+					if fresh.FilePath == book.FilePath {
+						return database.ErrSkipBookWrite
+					}
+					fresh.FilePath = book.FilePath
+					relinked = true
+					return nil
+				})
+				if merr != nil {
+					return fmt.Errorf("re-link book %s to %s: %w", existingByOrgID.ID, book.FilePath, merr)
+				}
+				if res != nil {
+					if relinked {
+						defaultLog.Info("re-linked book %s (moved from %s to %s)",
+							existingByOrgID.ID, oldPath, book.FilePath)
+					}
+					return nil
+				}
+				defaultLog.Warn("organizer-ID relink: book %s deleted before the write; saving %s by path instead",
+					existingByOrgID.ID, book.FilePath)
 			}
 		}
 
