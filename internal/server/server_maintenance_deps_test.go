@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
 // last-edited: 2026-09-14
 
@@ -119,6 +119,7 @@ func TestApplyTranscriptionCandidate_NoRegression_SameCandidateBothReads(t *test
 	entry := mustCandidateCache(t, bookID, cand)
 
 	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
@@ -190,6 +191,7 @@ func TestApplyTranscriptionCandidateUnchangedStillApplies(t *testing.T) {
 	}
 
 	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 	ctx := context.Background()
 
@@ -216,6 +218,7 @@ func TestApplyTranscriptionCandidate_FillsOnlyEmptyTitleAndAuthor(t *testing.T) 
 	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", Score: 0.9, Source: "test"}
 	entry := mustCandidateCache(t, bookID, cand)
 	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
 	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
 
 	if err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author); err != nil {
@@ -246,5 +249,109 @@ func TestApplyTranscriptionCandidate_NothingToFillWritesNothing(t *testing.T) {
 	}
 	if len(*updateCalls) != 0 {
 		t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
+	}
+}
+
+// testCreatedAuthorID is the id withCreatableAuthors gives a created author.
+const testCreatedAuthorID = 42
+
+// withCreatableAuthors lets an apply resolve a candidate author: the lookup
+// misses and the create returns a row, so the author credit lands.
+func withCreatableAuthors(store *database.MockStore) {
+	store.GetAuthorByNameFunc = func(string) (*database.Author, error) { return nil, nil }
+	store.CreateAuthorFunc = func(name string) (*database.Author, error) {
+		return &database.Author{ID: testCreatedAuthorID, Name: name}, nil
+	}
+}
+
+// A partial fill (the author) under a kept title the audio never confirmed
+// must not mark the book matched/audio_confirmed, nor stamp the candidate's
+// source and source hash: the book does not hold the candidate's record.
+func TestApplyTranscriptionCandidate_PartialFillUnderKeptTitleStampsNothing(t *testing.T) {
+	bookID := "book-partial"
+	transcribed := "The Stable Book"
+	book := &database.Book{ID: bookID, Title: "Old Title", TranscribedTitle: &transcribed}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Jane Roe", ASIN: "B000TEST01", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	if err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author); err != nil {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v", err)
+	}
+	if len(*updateCalls) != 1 {
+		t.Fatalf("UpdateBook calls = %d, want 1 (the empty author is filled)", len(*updateCalls))
+	}
+	got := (*updateCalls)[0]
+	if got.Title != "Old Title" {
+		t.Fatalf("title = %q, want the filled title kept", got.Title)
+	}
+	if got.AuthorID == nil || *got.AuthorID != testCreatedAuthorID {
+		t.Fatalf("author id = %v, want %d (Jane Roe filled)", got.AuthorID, testCreatedAuthorID)
+	}
+	if got.MetadataReviewStatus != nil {
+		t.Errorf("MetadataReviewStatus = %q, want nil (the kept title is not the candidate's)", *got.MetadataReviewStatus)
+	}
+	if got.MetadataSource != nil {
+		t.Errorf("MetadataSource = %q, want nil", *got.MetadataSource)
+	}
+	if got.MetadataSourceHash != nil {
+		t.Errorf("MetadataSourceHash = %q, want nil", *got.MetadataSourceHash)
+	}
+}
+
+// When the kept title already is the candidate's, the partial fill leaves the
+// book holding the candidate's record, so the confirmation still applies.
+func TestApplyTranscriptionCandidate_PartialFillUnderMatchingTitleConfirms(t *testing.T) {
+	bookID := "book-partial-match"
+	transcribed := "The Stable Book"
+	book := &database.Book{ID: bookID, Title: "The Stable Book", TranscribedTitle: &transcribed}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Jane Roe", ASIN: "B000TEST02", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	if err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author); err != nil {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v", err)
+	}
+	if len(*updateCalls) != 1 {
+		t.Fatalf("UpdateBook calls = %d, want 1", len(*updateCalls))
+	}
+	got := (*updateCalls)[0]
+	if got.AuthorID == nil || *got.AuthorID != testCreatedAuthorID {
+		t.Fatalf("author id = %v, want %d (Jane Roe filled)", got.AuthorID, testCreatedAuthorID)
+	}
+	if got.MetadataReviewStatus == nil || *got.MetadataReviewStatus != "audio_confirmed" {
+		t.Fatalf("MetadataReviewStatus = %v, want audio_confirmed", got.MetadataReviewStatus)
+	}
+	if got.MetadataSourceHash == nil {
+		t.Fatalf("MetadataSourceHash = nil, want the candidate's hash")
+	}
+}
+
+// The allowlist is ["author"] but the candidate has no author: nothing may be
+// written, so the apply refuses with the quiet-skip sentinel and writes no
+// status, note or source stamp.
+func TestApplyTranscriptionCandidate_EmptyCandidateValueWritesNothing(t *testing.T) {
+	bookID := "book-empty-cand"
+	transcribed := "The Stable Book"
+	book := &database.Book{ID: bookID, Title: "Old Title", TranscribedTitle: &transcribed}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", ASIN: "B000TEST03", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, "")
+	if !errors.Is(err, maintenanceplugin.ErrTranscriptionNothingToFill) {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v, want ErrTranscriptionNothingToFill", err)
+	}
+	if len(*updateCalls) != 0 {
+		t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
+	}
+	if book.MetadataReviewStatus != nil || book.MetadataSource != nil || book.MetadataSourceHash != nil || book.VersionNotes != nil {
+		t.Fatalf("book stamped: status=%v source=%v hash=%v", book.MetadataReviewStatus, book.MetadataSource, book.MetadataSourceHash)
 	}
 }

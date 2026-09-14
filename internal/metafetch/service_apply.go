@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -718,6 +718,24 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	if err != nil {
 		return nil, err
 	}
+	// Nothing survived the allowlist, the fill-only strip and the locks (or
+	// the candidate had no value for what did). With no book column changed,
+	// no author was applied either: an applied author sets or keeps AuthorID
+	// and adds a book_authors credit, and on a book with no author (the only
+	// case the transcription allowlist leaves "author" in) that changes
+	// AuthorID. So returning here writes nothing: no review status, no
+	// version note, no source stamp. A caller that allows "author" on a book
+	// that already has one would get a credit written before this check;
+	// see ApplyOptions.RefuseEmptyWrite.
+	if opts.RefuseEmptyWrite {
+		changed, diffErr := database.ChangedBookFields(before, book)
+		if diffErr != nil {
+			return nil, diffErr
+		}
+		if len(changed) == 0 {
+			return nil, fmt.Errorf("book %s: %w", id, ErrNothingToApply)
+		}
+	}
 	if opts.OwnerReviewed {
 		appendOwnerReviewedNote(book, opts.overrideLabel(), time.Now())
 	}
@@ -726,25 +744,48 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// DownloadPendingCover repoints this at the local path when it completes.
 	book.CoverURL = renderableCoverURL(previousCoverURL, book.CoverURL, meta.CoverURL)
 
-	// Set review status and record which provider supplied the metadata
-	matched := "matched"
-	book.MetadataReviewStatus = &matched
-	src := candidate.Source
-	book.MetadataSource = &src
-	th := hintsFromBook(book)
-	if audioConfirmedMarker(candidate, th, opts.OwnerReviewed) {
-		ac := "audio_confirmed"
-		book.MetadataReviewStatus = &ac
-		applyMarkerLog.Info("metadata apply: audio-confirmed match id=%s title=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Title))
-		appendMetadataVersionNote(book, "audio_confirmed")
-	}
+	// Record the match (review status, provider, source hash) only when the
+	// book now holds the candidate's title. The status says the book IS the
+	// candidate's record (audio_confirmed compares the CANDIDATE's title to
+	// the transcript), so it must describe what the book holds after the
+	// allowlist, fill-only strip and locks, not what the candidate offered.
+	// An apply that kept a different title (a title-less allowlist, a locked
+	// title, or a candidate title applyMetadataUnguarded declined: garbage,
+	// "Untitled", or under 3 characters over a real title) writes its fields
+	// and leaves all three alone:
+	//   - MetadataReviewStatus stays as it was, so the book stays in its
+	//     review lane instead of reading as verified;
+	//   - MetadataSource is read by maintenance title repair
+	//     (title_repair.go) as "this book's title came from the provider" and
+	//     vetoes the repair on it, which is false for a kept title;
+	//   - MetadataSourceHash is the dedup key: checkMetadataSourceHashDuplicates
+	//     flags and elects a primary among books sharing it, so stamping it on
+	//     a book that does not hold the record is a false duplicate claim.
+	// The fields that were written keep their own provenance: the change
+	// history (historySource) and persistFetchedMetadata below.
+	if util.NormalizeTitle(book.Title) == util.NormalizeTitle(candidate.Title) {
+		matched := "matched"
+		book.MetadataReviewStatus = &matched
+		src := candidate.Source
+		book.MetadataSource = &src
+		th := hintsFromBook(book)
+		if audioConfirmedMarker(candidate, th, opts.OwnerReviewed) {
+			ac := "audio_confirmed"
+			book.MetadataReviewStatus = &ac
+			applyMarkerLog.Info("metadata apply: audio-confirmed match id=%s title=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Title))
+			appendMetadataVersionNote(book, "audio_confirmed")
+		}
 
-	// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
-	// dedup engine can later detect books sharing the exact same external record.
-	canonicalID := metadataCanonicalID(candidate)
-	if canonicalID != "" {
-		h := fmt.Sprintf("%x", sha256.Sum256([]byte(src+":"+canonicalID)))
-		book.MetadataSourceHash = &h
+		// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
+		// dedup engine can later detect books sharing the exact same external record.
+		canonicalID := metadataCanonicalID(candidate)
+		if canonicalID != "" {
+			h := fmt.Sprintf("%x", sha256.Sum256([]byte(src+":"+canonicalID)))
+			book.MetadataSourceHash = &h
+		}
+	} else {
+		applyMarkerLog.Info("metadata apply: kept title differs from candidate, match not recorded id=%s candidate=%s",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Title))
 	}
 
 	// Write only what this apply changed, onto the row as it stands under the
