@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4f2c83-6a1e-4b57-8c09-e3b7a5d16f42
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package applygate
 
@@ -43,7 +43,10 @@ const ReasonSeriesRenamed = "series_renamed"
 // A TRAILING number ("Title - 01", "Catch-22") is often a track number in a
 // file-derived title or part of a name, not a volume. It counts only when a
 // series position, the stored one or the result's, equals it; otherwise the
-// check is neutral.
+// check is neutral. A part suffix ("Rogue Lawyer - 001", seqnum.PartSuffix)
+// on a book with no series name of its own is neutral even when the stored
+// position equals it: that position was derived from the suffix at import
+// and corroborates nothing (see BookNumbers).
 //
 // The result series is the candidate's where it gives one, else the book's
 // own (an apply does not clear a series the candidate leaves blank). It
@@ -55,6 +58,10 @@ func checkSeriesNumberLost(book *database.Book, c *metafetch.MetadataCandidate, 
 	}
 	n, ok := seqnum.ParseTitle(book.Title)
 	if !ok {
+		return r
+	}
+	if pn, stem, part := seqnum.PartSuffix(book.Title); part && !hasRealSeries(book, []string{stem}) {
+		r.Detail = "trailing " + pn.Text + " in " + quote(book.Title) + " is a part number, not a volume"
 		return r
 	}
 	candText := c.Title + " " + c.Subtitle

@@ -1,7 +1,7 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package seqnum extracts a volume / sequence number ("Big Cats 3", "Vol. III",
 // "02 - Title", "Book 1.5") from free text, so a bulk metadata apply can refuse
@@ -153,6 +153,38 @@ func ParseTitle(s string) (Number, bool) {
 		return toNumber(m[1], "mid-title")
 	}
 	return Number{}, false
+}
+
+// rePartSuffix is a trailing, spaced-dash, three-digit zero-padded number:
+// "Rogue Lawyer - 001". Multi-part rips number their pieces this way (001,
+// 002, ...); a volume number in a title is written with one or two digits
+// ("Big Cats - 3", "Mistborn 01"), so "- 03" is NOT matched.
+var rePartSuffix = regexp.MustCompile(`^(.*\S)\s+[-–—]\s+(0\d\d)\s*$`)
+
+// PartSuffix reports whether s ends in a part-number suffix ("Rogue Lawyer -
+// 001") and carries no other sequence number. It returns the part number and
+// the text before the suffix. "Big Cats 3 - 001" is refused: the title has a
+// number of its own, so it is not only a part-numbered title.
+//
+// Parse still reads the suffix as a trailing number; PartSuffix only names
+// the shape. Whether a suffix counts is policy that needs the book's series,
+// which this leaf package deliberately cannot see (internal/applygate
+// decides).
+func PartSuffix(s string) (Number, string, bool) {
+	t := strings.TrimSpace(strings.ReplaceAll(s, "_", " "))
+	m := rePartSuffix.FindStringSubmatch(t)
+	if m == nil {
+		return Number{}, "", false
+	}
+	stem := strings.TrimSpace(m[1])
+	if _, has := ParseTitle(stem); has {
+		return Number{}, "", false
+	}
+	n, ok := toNumber(m[2], "part-suffix")
+	if !ok {
+		return Number{}, "", false
+	}
+	return n, stem, true
 }
 
 // ParsePosition extracts a number from a series-position FIELD ("3", "1.5",

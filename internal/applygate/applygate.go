@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -249,16 +249,49 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 	return v
 }
 
+// Forms of a book source that was found but is not counted as a book number.
+// They stay in BookNumbers so a dry-run report shows what was seen and why it
+// was set aside; agree skips them.
+const (
+	// FormPartSuffix: a title, file or folder name whose only number is a
+	// multi-part rip's part suffix ("Rogue Lawyer - 001"), on a book with no
+	// series name of its own.
+	FormPartSuffix = "part_suffix"
+	// FormDerivedPosition: a series position equal to that part number with
+	// no source independent of the suffix behind it. The importer used to
+	// turn "Rogue Lawyer - 001" into series "Rogue Lawyer" #1
+	// (matcher.IdentifySeries), so such a position is the suffix again, not
+	// a second piece of evidence.
+	FormDerivedPosition = "part_suffix_position"
+)
+
 // BookNumbers lists every number found on the book, one per source.
+//
+// A part suffix ("- 001", see seqnum.PartSuffix) is set aside, and so is a
+// series position that only repeats it, unless the book carries a series name
+// other than the title's own words (then the suffix may be a volume, and the
+// gate keeps refusing) or another source names the number independently. On
+// the 2026-09-14 prod preview "Rogue Lawyer - 001", "The Rooster Bar - 001"
+// and others were refused as "book is #1 (series_position=1, title=1)".
 func BookNumbers(book *database.Book) []SourceNumber {
 	if book == nil {
 		return nil
 	}
 	var out []SourceNumber
+	var stems []string
 	add := func(src string, n seqnum.Number, ok bool) {
 		if ok {
 			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form})
 		}
+	}
+	addText := func(src, text string) {
+		if n, stem, ok := seqnum.PartSuffix(text); ok {
+			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: FormPartSuffix})
+			stems = append(stems, stem)
+			return
+		}
+		n, ok := seqnum.Parse(text)
+		add(src, n, ok)
 	}
 	switch {
 	case book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "":
@@ -268,24 +301,89 @@ func BookNumbers(book *database.Book) []SourceNumber {
 		n, ok := seqnum.ParsePosition(itoa(*book.SeriesSequence))
 		add("series_position", n, ok)
 	}
-	n, ok := seqnum.Parse(book.Title)
-	add("title", n, ok)
+	addText("title", book.Title)
 
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
 		if ext := filepath.Ext(base); ext != "" && len(ext) <= 5 {
 			// A file: its name (sans extension) and its folder.
-			n, ok := seqnum.Parse(strings.TrimSuffix(base, ext))
-			add("file_name", n, ok)
-			n, ok = seqnum.Parse(filepath.Base(filepath.Dir(p)))
-			add("folder_name", n, ok)
+			addText("file_name", strings.TrimSuffix(base, ext))
+			addText("folder_name", filepath.Base(filepath.Dir(p)))
 		} else {
 			// A directory (multi-file book): its own name.
-			n, ok := seqnum.Parse(base)
-			add("folder_name", n, ok)
+			addText("folder_name", base)
+		}
+	}
+	return discountPartSuffix(book, out, stems)
+}
+
+// discountPartSuffix applies the BookNumbers rule to the sources a part
+// suffix was found in. stems are the texts before each suffix.
+func discountPartSuffix(book *database.Book, out []SourceNumber, stems []string) []SourceNumber {
+	if len(stems) == 0 {
+		return out
+	}
+	if hasRealSeries(book, stems) {
+		// A real series: "- 001" may be its volume. Count it as Parse reads it.
+		for i := range out {
+			if out[i].Form == FormPartSuffix {
+				out[i].Form = "trailing"
+			}
+		}
+		return out
+	}
+	parts := map[string]bool{}
+	independent := false
+	for _, s := range out {
+		switch {
+		case s.Form == FormPartSuffix:
+			parts[s.Number] = true
+		case s.Source != "series_position":
+			independent = true
+		}
+	}
+	if !independent {
+		for i := range out {
+			if out[i].Source == "series_position" && parts[out[i].Number] {
+				out[i].Form = FormDerivedPosition
+			}
 		}
 	}
 	return out
+}
+
+// hasRealSeries reports whether the book carries a series name that is not
+// just the words of a part-suffixed title ("Rogue Lawyer" for "Rogue Lawyer -
+// 001", which is what matcher.IdentifySeries used to invent at import).
+func hasRealSeries(book *database.Book, stems []string) bool {
+	s := strings.TrimSpace(seriesName(book))
+	if s == "" {
+		return false
+	}
+	st := tokens(s, true)
+	for _, stem := range stems {
+		if sameWords(st, tokens(stem, true)) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameWords(a, b map[string]bool) bool {
+	if len(a) != len(b) || len(a) == 0 {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// counted reports whether a source number takes part in agree.
+func counted(s SourceNumber) bool {
+	return s.Form != FormPartSuffix && s.Form != FormDerivedPosition
 }
 
 // CandidateNumbers lists every number found on the candidate, one per source.
@@ -307,9 +405,13 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 }
 
 // agree reduces a source list to one number. ok=false when the list is empty;
-// conflict=true when two sources name different numbers.
+// conflict=true when two sources name different numbers. Sources set aside by
+// BookNumbers (part suffixes) are skipped.
 func agree(src []SourceNumber) (n seqnum.Number, ok, conflict bool) {
 	for _, s := range src {
+		if !counted(s) {
+			continue
+		}
 		cur, _ := seqnum.ParsePosition(s.Number)
 		if !ok {
 			n, ok = cur, true
@@ -328,7 +430,11 @@ func itoa(i int) string     { return strconv.Itoa(i) }
 func describe(src []SourceNumber) string {
 	parts := make([]string, 0, len(src))
 	for _, s := range src {
-		parts = append(parts, s.Source+"="+s.Number)
+		p := s.Source + "=" + s.Number
+		if !counted(s) {
+			p += " (part number, not counted)"
+		}
+		parts = append(parts, p)
 	}
 	return strings.Join(parts, ", ")
 }
