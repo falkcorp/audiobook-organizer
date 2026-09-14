@@ -26,7 +26,9 @@
   are one locked write. State read errors are now logged and counted instead
   of dropped. A finished state that a merge carries onto another book, or that
   undoing a merge writes back, keeps its original finish time, so it is not
-  counted again (it used to add a play on every undo). A seeded finish is
+  counted again (it used to add a play on every undo). A merge that carries a
+  finish also carries the loser's "counted" mark, so one listen adds one play
+  across a merge, not one per iTunes track. A seeded finish is
   written only after its "already counted" mark is stored. A stored state that
   cannot be read no longer gets a finish dated now.
 - **Import no longer reverts edits made while it works.** The organize phase,

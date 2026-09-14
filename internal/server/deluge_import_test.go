@@ -1,7 +1,7 @@
 // file: internal/server/deluge_import_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: e1b5d8f2-3c7a-4091-a2e9-6f4d0c8b3a15
-// last-edited: 2026-05-11
+// last-edited: 2026-09-13
 //
 // Tests for ImportToLibrary — delegates to internal/deluge/import.go.
 
@@ -18,11 +18,19 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 
-// fakeStore is a minimal database.Store implementation for testing.
-// Only UpdateBookFile is implemented; all others panic or return nil.
+// fakeStore implements deluge.Store, the two methods ImportToLibrary calls,
+// over an otherwise nil database.Store: any other method panics.
 type fakeStore struct {
 	database.Store // embed the interface so we don't need to implement all methods
 	updated        *database.BookFile
+}
+
+// GetBookFileByPath matches PebbleStore's contract: (nil, nil) for a path no
+// row names. These tests' destinations are fresh temp paths, which no row
+// names. ImportToLibrary asks before it copies, to refuse a destination that
+// another book file row already owns.
+func (f *fakeStore) GetBookFileByPath(string) (*database.BookFile, error) {
+	return nil, nil
 }
 
 func (f *fakeStore) UpdateBookFile(id string, file *database.BookFile) error {

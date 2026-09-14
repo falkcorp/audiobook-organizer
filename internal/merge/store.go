@@ -1,5 +1,5 @@
 // file: internal/merge/store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
 // last-edited: 2026-09-13
 
@@ -9,7 +9,9 @@ import "github.com/falkcorp/audiobook-organizer/internal/database"
 
 // The store surface this package needs, measured with an empty-interface
 // compiler probe under -gcflags=-e: 19 methods, no forwarding constraints. It
-// was database.Store (398 methods) until 2026-08-19.
+// was database.Store (398 methods) until 2026-08-19. On 2026-09-13
+// playCountMarkStore added ModifyBook to the progress carry, making 20
+// (GetBookByID was already counted, through BookReader).
 //
 // Grouped rather than declared flat so each consumer can name the slice it uses:
 // the free functions in sync_follow.go need only user-progress methods, and
@@ -46,9 +48,18 @@ type mergeAuthorStore interface {
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 }
 
+// playCountMarkStore is the book leg of a progress carry. A carried finish
+// brings the loser's ITunesPlayCountBumpedAt with it (carryPlayCountMark).
+type playCountMarkStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
 // userPositionStore is what carrying one user's listening progress across a
 // merge requires. mergeUserProgressFor takes exactly this.
 type userPositionStore interface {
+	playCountMarkStore
+
 	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
 	SetUserBookState(state *database.UserBookState) error
 	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)

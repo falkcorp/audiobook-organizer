@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-13
 //
@@ -134,6 +134,11 @@ func ImportToLibrary(
 ) (newPath string, err error) {
 	if bookFile == nil {
 		return "", fmt.Errorf("ImportToLibrary: bookFile is nil")
+	}
+	if store == nil {
+		// Without a store there is no ownership check and no row to update:
+		// fail before touching the disk.
+		return "", fmt.Errorf("ImportToLibrary: store is nil")
 	}
 
 	// Idempotency guard: already imported.
