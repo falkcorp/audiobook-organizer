@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-14
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -111,7 +112,26 @@ type ApplyOptions struct {
 	// that must not replace a filled title drops "title" from its fields
 	// allowlist, as maintenance.auto-match-transcribed does.
 	FillOnly bool
+	// RefuseEmptyWrite makes the apply return ErrNothingToApply, writing
+	// nothing (no review status, version note or source stamp), when the
+	// fields allowlist, the fill-only strip and the field locks leave no
+	// column for the candidate to change. An automatic apply that narrows its
+	// allowlist sets it, so a match with nothing left to write is a skip
+	// rather than a book stamped as matched. A hand-picked apply leaves it
+	// false.
+	//
+	// The check compares book columns after the apply body ran, so "writes
+	// nothing" holds only when no author credit can land without changing a
+	// column: allow "author" only on a book with no author (as
+	// maintenance.auto-match-transcribed does). On a book that already has
+	// one, an applied co-author adds a book_authors credit, written under
+	// the store's lock, before this check sees no column change.
+	RefuseEmptyWrite bool
 }
+
+// ErrNothingToApply is returned by an apply with RefuseEmptyWrite when no
+// field would change. Nothing was written.
+var ErrNothingToApply = errors.New("metadata apply: no field left to write")
 
 // overrideLabel is the refusing-reasons label recorded for an owner-reviewed
 // apply, never empty.

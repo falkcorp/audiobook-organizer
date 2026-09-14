@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-14
 
@@ -12,6 +12,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -770,15 +771,30 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	// author, never replace a filled one. FillOnly alone does not do that:
 	// StripFilledFields strips descriptive fields and leaves title and author
 	// (identity fields) alone, so each filled one is dropped from the
-	// allowlist here, against the book as re-read above. A match with nothing
-	// left to fill returns ErrTranscriptionNothingToFill; the op logs it and
-	// skips the book. There is no queue for it: the book keeps
-	// MetadataReviewStatus nil, so it stays in the ordinary review lane.
+	// allowlist here, against the book as re-read above.
+	//
+	// A match with nothing left to fill returns ErrTranscriptionNothingToFill
+	// and writes nothing; the op logs it and skips the book. That covers both
+	// fields already filled (checked here) and a remaining field the apply
+	// cannot change: the candidate has no value for it, or it is locked
+	// (RefuseEmptyWrite, checked inside the apply after the lock strip).
+	//
+	// A partial fill (only the author, under a kept title) writes that field
+	// and does NOT mark the book matched/audio_confirmed or stamp
+	// MetadataSource/MetadataSourceHash unless the kept title is the
+	// candidate's (ApplyMetadataCandidateWithOptions). So in every case where
+	// the book does not end up holding the candidate's title, it keeps
+	// MetadataReviewStatus nil and stays in the ordinary review lane. There is
+	// no separate queue for it.
 	fields := fillableTranscriptionFields(book)
 	if len(fields) == 0 {
 		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
 	}
-	_, err = s.metadataFetchService.ApplyMetadataCandidateWithOptions(bookID, cand, fields, metafetch.ApplyOptions{FillOnly: true})
+	_, err = s.metadataFetchService.ApplyMetadataCandidateWithOptions(bookID, cand, fields,
+		metafetch.ApplyOptions{FillOnly: true, RefuseEmptyWrite: true})
+	if errors.Is(err, metafetch.ErrNothingToApply) {
+		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
+	}
 	return err
 }
 

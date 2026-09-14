@@ -13,6 +13,17 @@
 - `maintenance.auto-match-transcribed` is now fill-only: it may fill an empty
   title or author and never replaces a filled one. Books with both filled are
   skipped (and no longer counted as eligible in a dry run).
+- A metadata apply now records the match (review status `matched` or
+  `audio_confirmed`, `metadata_source` and `metadata_source_hash`) only when
+  the book ends up holding the candidate's title. An apply that keeps a
+  different title (a title-less field selection, a locked title, or the
+  auto-match filling only an empty author) writes its fields and leaves the
+  review status, source and dedup hash alone, so the book stays in the review
+  lane instead of reading as verified.
+- `maintenance.auto-match-transcribed` writes nothing when no field is left to
+  fill (the match has no value for the empty field, or it is locked): no
+  status, version note or source stamp. The book is skipped and not counted
+  as eligible.
 
 ### Removed
 
