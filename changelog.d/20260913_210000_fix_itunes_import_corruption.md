@@ -24,7 +24,11 @@
   counted (`itunes_play_count_bumped_at`), and a finish seeded from iTunes'
   own play count is recorded as already counted. The bookmark and the bump
   are one locked write. State read errors are now logged and counted instead
-  of dropped.
+  of dropped. A finished state that a merge carries onto another book, or that
+  undoing a merge writes back, keeps its original finish time, so it is not
+  counted again (it used to add a play on every undo). A seeded finish is
+  written only after its "already counted" mark is stored. A stored state that
+  cannot be read no longer gets a finish dated now.
 - **Import no longer reverts edits made while it works.** The organize phase,
   hash validation, the blocked-hash soft delete and the sync playback write all
   used to write back a copy of the row read before the slow step (file copy,

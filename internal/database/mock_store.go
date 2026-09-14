@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.119.0
+// version: 1.120.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 
@@ -1952,7 +1952,21 @@ func (m *MockStore) ClearUserPositions(userID, bookID string) error {
 	return nil
 }
 
+// SetUserBookState dates a finish the way PebbleStore does (stampFinishedAt),
+// using GetUserBookState as the stored row, before handing the state to
+// SetUserBookStateFunc. Without this, a mock-backed test never sees a
+// FinishedAt, so it can never observe an iTunes play-count bump. The stored
+// row is read only for a Finished write, because that is the only case
+// where the stamp depends on it.
 func (m *MockStore) SetUserBookState(state *UserBookState) error {
+	if state != nil {
+		var prev *UserBookState
+		var prevErr error
+		if state.Status == UserBookStatusFinished {
+			prev, prevErr = m.GetUserBookState(state.UserID, state.BookID)
+		}
+		stampFinishedAt(state, prev, prevErr, time.Now())
+	}
 	if m.SetUserBookStateFunc != nil {
 		return m.SetUserBookStateFunc(state)
 	}
