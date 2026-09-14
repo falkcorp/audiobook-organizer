@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-14
 //
@@ -1013,7 +1013,7 @@ func (s *Server) runBulkWriteBack(
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename refused before any move, tags not written: %v", bookID, pfErr), nil)
 				return
 			}
-			if renameErr := mfs.RunApplyPipelineRenameOnly(bookID, book); renameErr != nil {
+			if renameErr := mfs.RunApplyPipelineRenameOnly(ctx, bookID, book); renameErr != nil {
 				failed.Add(1)
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed, tags not written: %v", bookID, renameErr), nil)
 				return

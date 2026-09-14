@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-14
 
@@ -59,6 +59,10 @@ type opsBookWriter interface {
 	RecomputeBookAggregates(bookID string) error
 	ResolveTombstoneChains() (int, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the atomic read-check-write repoint-unrecorded-renames
+	// uses for a book row's FilePath, so the "row still holds old_path" check
+	// and the write cannot be split by a concurrent edit.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // opsFileAndPathReader reads book files and the configured import paths.

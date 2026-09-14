@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_writeback_rename_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4c6e8b-0d2f-4b1a-8e3c-5f7a9b1d3e25
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metadatahandler_test
 
@@ -44,7 +44,7 @@ func TestWriteBack_RenameDuplicateTarget409NoTags(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	d.mfs.EXPECT().RenameOnlyPreflight("b1").Return(nil)
-	d.mfs.EXPECT().RunApplyPipelineRenameOnly("b1", mock.Anything).
+	d.mfs.EXPECT().RunApplyPipelineRenameOnly(mock.Anything, "b1", mock.Anything).
 		Return(fmt.Errorf("compute target paths for book b1: %w", organizer.ErrDuplicateRenameTarget))
 
 	w := doReq(h.WriteBackAudiobookMetadata, http.MethodPost, "/audiobooks/b1/write-back", renameBody, idParam("b1"))
@@ -61,7 +61,7 @@ func TestWriteBack_RenameFailure500NoTags(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	d.mfs.EXPECT().RenameOnlyPreflight("b1").Return(nil)
-	d.mfs.EXPECT().RunApplyPipelineRenameOnly("b1", mock.Anything).
+	d.mfs.EXPECT().RunApplyPipelineRenameOnly(mock.Anything, "b1", mock.Anything).
 		Return(errors.New("rename files: link tmp dest: file exists"))
 
 	w := doReq(h.WriteBackAudiobookMetadata, http.MethodPost, "/audiobooks/b1/write-back", renameBody, idParam("b1"))
@@ -78,7 +78,7 @@ func TestWriteBack_RenameThenTags200(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	d.mfs.EXPECT().RenameOnlyPreflight("b1").Return(nil)
-	d.mfs.EXPECT().RunApplyPipelineRenameOnly("b1", mock.Anything).Return(nil)
+	d.mfs.EXPECT().RunApplyPipelineRenameOnly(mock.Anything, "b1", mock.Anything).Return(nil)
 	d.mfs.EXPECT().WriteBackMetadataForBook("b1").Return(3, nil)
 
 	w := doReq(h.WriteBackAudiobookMetadata, http.MethodPost, "/audiobooks/b1/write-back", renameBody, idParam("b1"))

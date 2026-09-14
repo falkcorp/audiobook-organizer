@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-14
 
@@ -163,7 +163,7 @@ type MetadataApplier interface {
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
 	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
-	RunApplyPipelineRenameOnly(id string, book *database.Book) error
+	RunApplyPipelineRenameOnly(ctx context.Context, id string, book *database.Book) error
 	// RenameOnlyPreflight reports, before RunApplyPipelineRenameOnly moves
 	// anything, that the rename is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail).

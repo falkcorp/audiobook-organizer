@@ -1,11 +1,12 @@
 // file: internal/metafetch/service_files.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-09-14
 
 package metafetch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -587,7 +588,11 @@ func (mfs *Service) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO,
 		return err
 	}
 	defer releaseCopy()
-	return mfs.finishFileWork(id, targetID, fileIO, writeTags, checkpoint, pt)
+	// context.Background: FinishApplyFileWork* takes no ctx yet, so the
+	// post-move path-write retry below it is bounded by its attempt count
+	// (0.7s), not by cancellation. Threading a ctx through this exported
+	// entry point and its callers is tracked separately.
+	return mfs.finishFileWork(context.Background(), id, targetID, fileIO, writeTags, checkpoint, pt)
 }
 
 // standDown runs a stand-down checkpoint before a file-writing step. A nil
@@ -669,14 +674,14 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 // made and locked any library copy the job needs and returned it as targetID.
 // Every step here writes that target (fileWorkTarget) and none can make or
 // switch to a copy outside that lock.
-func (mfs *Service) finishFileWork(id, targetID string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
+func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
 		if err := standDown(checkpoint, id, "the file I/O"); err != nil {
 			return err
 		}
-		tags, fileErr = mfs.applyMetadataFileIO(id, targetID, pt)
+		tags, fileErr = mfs.applyMetadataFileIO(ctx, id, targetID, pt)
 	}
 	if writeTags && !tags.handled {
 		if err := standDown(checkpoint, id, "the tag write"); err != nil {
@@ -764,14 +769,16 @@ func (mfs *Service) ApplyMetadataFileIO(id string) error {
 		return err
 	}
 	defer releaseCopy()
-	_, err = mfs.applyMetadataFileIO(id, targetID, nil)
+	// context.Background: ApplyMetadataFileIO takes no ctx yet; see
+	// FinishApplyFileWorkTimed.
+	_, err = mfs.applyMetadataFileIO(context.Background(), id, targetID, nil)
 	return err
 }
 
 // applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
 // pipeline did about tags, for FinishApplyFileWork's write-once guard. Its
 // callers have run lockLibraryCopy, and it writes the target that locked.
-func (mfs *Service) applyMetadataFileIO(id, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
+func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
@@ -790,7 +797,7 @@ func (mfs *Service) applyMetadataFileIO(id, targetID string, pt *ApplyPhaseTimin
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		tags, err := mfs.runApplyPipeline(id, book, targetID, pt)
+		tags, err := mfs.runApplyPipeline(ctx, id, book, targetID, pt)
 		if err != nil {
 			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}

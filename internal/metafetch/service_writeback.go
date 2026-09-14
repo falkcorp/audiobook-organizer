@@ -1,11 +1,12 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.19.1
+// version: 1.21.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
 package metafetch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -487,28 +488,53 @@ var renameSyncLog = logger.New("metafetch.rename")
 // used to UpdateBook the whole row they read before the (slow) disk rename,
 // which reverted any apply or edit that landed during it. book.FilePath is
 // updated too, for the caller's later steps.
-func (mfs *Service) persistRenamedBookPath(id string, book *database.Book, newPath string) error {
-	res, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
-		if fresh.FilePath == newPath {
-			return database.ErrSkipBookWrite
+//
+// The files have already moved when this runs, so the write is retried and,
+// if it still fails, the {oldPath, newPath} pair is recorded for
+// maintenance.repoint-unrecorded-renames (writeMovedPath). The error is still
+// returned. Re-running the ModifyBook closure is idempotent: a row already at
+// newPath is a skipped write, not a failure.
+func (mfs *Service) persistRenamedBookPath(ctx context.Context, id string, book *database.Book, oldPath, newPath string) error {
+	rec := organizer.RenamePathWriteFailure{BookID: id, OldPath: oldPath, NewPath: newPath}
+	err := mfs.writeMovedPath(ctx, rec, func() error {
+		res, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
+			if fresh.FilePath == newPath {
+				return database.ErrSkipBookWrite
+			}
+			fresh.FilePath = newPath
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		fresh.FilePath = newPath
+		if res == nil {
+			return fmt.Errorf("book %s no longer exists", id)
+		}
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("record renamed path %s for book %s: %w", newPath, id, err)
 	}
-	if res == nil {
-		return fmt.Errorf("record renamed path %s: book %s no longer exists", newPath, id)
-	}
 	book.FilePath = newPath
+	return nil
+}
+
+// writeMovedBookFile writes a book_file row whose file has already moved to
+// bf.FilePath, retrying and recording the pair on final failure.
+func (mfs *Service) writeMovedBookFile(ctx context.Context, bookID string, bf *database.BookFile, oldPath string) error {
+	rec := organizer.RenamePathWriteFailure{
+		BookID: bookID, BookFileID: bf.ID, OldPath: oldPath, NewPath: bf.FilePath, NewITunesPath: bf.ITunesPath,
+	}
+	if err := mfs.writeMovedPath(ctx, rec, func() error { return mfs.db.UpdateBookFile(bf.ID, bf) }); err != nil {
+		return fmt.Errorf("record moved file %s at %s: %w", bf.ID, bf.FilePath, err)
+	}
 	return nil
 }
 
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
+func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *database.Book, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy
 	// instead: targetID, the one its job locked (lockLibraryCopy). A book that
 	// now resolves to anything else is an error, not a switch to a copy the job
@@ -614,9 +640,8 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 			if bf, ok := bfMap[entry.SegmentID]; ok {
 				bf.FilePath = entry.TargetPath
 				bf.ITunesPath = ComputeITunesPath(entry.TargetPath)
-				if err := mfs.db.UpdateBookFile(bf.ID, bf); err != nil {
-					renameSyncLog.Error("book_file %s moved on disk to %s but its path was not recorded: %v", bf.ID, entry.TargetPath, err)
-					dbSyncErrs = append(dbSyncErrs, fmt.Errorf("record moved file %s at %s: %w", bf.ID, entry.TargetPath, err))
+				if err := mfs.writeMovedBookFile(ctx, id, bf, entry.SourcePath); err != nil {
+					dbSyncErrs = append(dbSyncErrs, err)
 				}
 			}
 			// Record path change for each successful rename
@@ -647,9 +672,7 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 		if len(renameResult.Succeeded) > 0 {
 			newBookPath := filepath.Dir(renameResult.Succeeded[0].TargetPath)
 			if newBookPath != book.FilePath {
-				if err := mfs.persistRenamedBookPath(id, book, newBookPath); err != nil {
-					renameSyncLog.Error("book %s moved on disk to %s but its path was not recorded: %v",
-						logger.SanitizeLogValue(id), newBookPath, logger.SanitizeLogValue(err.Error()))
+				if err := mfs.persistRenamedBookPath(ctx, id, book, book.FilePath, newBookPath); err != nil {
 					dbSyncErrs = append(dbSyncErrs, err)
 				} else {
 					renameSyncLog.Info("updated book path for %s to %s", logger.SanitizeLogValue(id), newBookPath)
