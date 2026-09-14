@@ -1,10 +1,12 @@
 // file: internal/work/service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f0g1h2i3-j4k5-6l7m-8n9o-0p1q2r3s4t5u
+// last-edited: 2026-09-13
 
 package work
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -83,6 +85,24 @@ func (m *MockWorkStore) GetBooksByWorkID(workID string) ([]database.Book, error)
 	return []database.Book{}, nil
 }
 func (m *MockWorkStore) GetAllWorkBookCounts() (map[string]int, error) { return nil, nil }
+
+func (m *MockWorkStore) ForEachWork(ctx context.Context, visit func(database.Work) error) error {
+	works, err := m.GetAllWorks()
+	if err != nil {
+		return err
+	}
+	for _, w := range works {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := visit(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MockWorkStore) WorksGeneration() uint64 { return 0 }
 
 // TestWorkService_ListWorks_Empty tests listing works when there are none
 func TestWorkService_ListWorks_Empty(t *testing.T) {
