@@ -329,8 +329,10 @@ func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 var (
 	dashSegment = regexp.MustCompile(`\s+[-–—]\s+`)
 	spacedColon = regexp.MustCompile(`\s+:\s+`)
-	hasDigit    = regexp.MustCompile(`\d`)
-	hasLetter   = regexp.MustCompile(`\pL`)
+	// seriesNumber is a standalone position token ("01", "Book 03"); "1984"
+	// or "11/22/63" is a title, so "1984 - George Orwell" is not a rip title.
+	seriesNumber = regexp.MustCompile(`(?:^|\s)#?\d{1,3}(?:\s|$)`)
+	hasLetter    = regexp.MustCompile(`\pL`)
 )
 
 // segmentVariant returns the book's own name out of a rip-style title as an
@@ -352,7 +354,7 @@ func segmentVariant(rawTitle string, seen map[string]bool) []titleVariant {
 		if len(parts) < 2 {
 			return nil
 		}
-		if len(parts) < 3 && !hasDigit.MatchString(strings.Join(parts[:len(parts)-1], " ")) {
+		if len(parts) < 3 && !seriesNumber.MatchString(strings.Join(parts[:len(parts)-1], " ")) {
 			return nil
 		}
 		field = parts[len(parts)-1]
@@ -395,14 +397,22 @@ func partSuffixVariant(rawTitle, searchTitle string) []titleVariant {
 func keepVariant(results []metadata.BookMetadata, v titleVariant, people string) []metadata.BookMetadata {
 	if v.Exact {
 		allowed := v.Anchor
+		var peopleWords map[string]bool
 		if v.Allowed != nil {
+			// A segment is searched only with a person of ours to vouch, and a
+			// title word naming that person ("Brandon Sanderson - …" puts the
+			// author in our title) is not a title word the result may carry.
+			if strings.TrimSpace(people) == "" {
+				return nil
+			}
 			allowed = v.Allowed
+			peopleWords = SignificantWords(people)
 		}
 		var exact []metadata.BookMetadata
 		for _, r := range results {
 			ok := strings.TrimSpace(r.Author) != ""
 			for w := range SignificantWords(r.Title) {
-				if !genericTitleWords[w] && !allowed[w] {
+				if !genericTitleWords[w] && (!allowed[w] || (peopleWords[w] && !v.Anchor[w])) {
 					ok = false
 					break
 				}

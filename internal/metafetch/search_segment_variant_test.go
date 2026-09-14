@@ -56,6 +56,8 @@ func TestSegmentVariant_RefusesTitlesWithNoBookField(t *testing.T) {
 		"Star Wars - Heir to the Empire", // two fields, no number
 		"Mistborn: The Final Empire",     // unspaced colon is a real subtitle
 		"A Plain Title",
+		"1984 - George Orwell",    // a numeric title is not a series position
+		"11/22/63 - Stephen King", // nor is a date
 	} {
 		if got := segmentVariant(raw, map[string]bool{}); got != nil {
 			t.Errorf("segmentVariant(%q) = %v, want nil", raw, queries(got))
@@ -76,6 +78,14 @@ func TestKeepVariant_SegmentAcceptsOwnTitleWordsOnly(t *testing.T) {
 	got := keepVariant(res, v, "Brandon Sanderson")
 	if len(got) != 2 || got[0].Title != "The Final Empire" || got[1].Title != "Mistborn: The Final Empire" {
 		t.Fatalf("kept %+v", got)
+	}
+	// Our author's name in our title is not a title word a result may carry.
+	if got := keepVariant([]metadata.BookMetadata{{Title: "Brandon Sanderson: The Final Empire", Author: "Brandon Sanderson"}}, v, "Brandon Sanderson"); len(got) != 0 {
+		t.Fatalf("author-named title kept: %+v", got)
+	}
+	// With no person of ours to vouch, a segment hit never stands.
+	if got := keepVariant(res[:1], v, " "); len(got) != 0 {
+		t.Fatalf("segment hit kept with no people: %+v", got)
 	}
 	// A one-word field needs our author to vouch.
 	s := segmentVariant("Legend of Drizzt Book 03 - The Dark Elf Trilogy - Sojourn", map[string]bool{})[0]
