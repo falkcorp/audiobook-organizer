@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f4a2b3c-9d1e-4f6a-8b5c-2e0d1f3a4b5c
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -72,6 +72,14 @@ func (p *Plugin) runIntegrityCheck(ctx context.Context, raw json.RawMessage, rep
 // or whose drift is explained by an AO-caused tag write (non-empty
 // PostMetadataHash) are not flagged.
 //
+// It compares like with like: only rows whose OriginalFileHashKind is
+// database.FileHashKindSampled — the same digest FileHash holds — are checked.
+// Legacy rows carry an OriginalFileHash of unknown kind (a tag write used to
+// store a whole-file SHA-256 there, which differs from the sampled digest of
+// the very same bytes for any large file), so comparing them would report a
+// change that never happened. They are skipped until the next scan replaces
+// the value with a sampled digest of known kind.
+//
 // This is the testable core of runIntegrityCheck. It is purely a scan — it
 // never calls any store write or delete method.
 func findIntegrityMismatches(ctx context.Context, store bookFileCoreScanner) (flagged []database.BookFileCore, totalFiles int, err error) {
@@ -88,6 +96,7 @@ func findIntegrityMismatches(ctx context.Context, store bookFileCoreScanner) (fl
 			return nil, 0, ctx.Err()
 		}
 		if f.FileHash != "" && f.OriginalFileHash != "" &&
+			f.OriginalFileHashKind == database.FileHashKindSampled &&
 			f.FileHash != f.OriginalFileHash && f.PostMetadataHash == "" {
 			flagged = append(flagged, f)
 		}

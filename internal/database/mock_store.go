@@ -553,7 +553,7 @@ type MockStore struct {
 	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
 	UpdateBookFileFunc                      func(id string, file *BookFile) error
-	UpdateBookFileHashesFunc                func(id, originalHash, postMetadataHash string) error
+	UpdateBookFileHashesFunc                func(id, originalHash, postMetadataHash, fileHash string) error
 	GetBookFilesFunc                        func(bookID string) ([]BookFile, error)
 	GetBookFileByIDFunc                     func(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPIDFunc                    func(itunesPID string) (*BookFile, error)
@@ -568,6 +568,7 @@ type MockStore struct {
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
+	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
 	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
 	MoveBookFilesToBookBulkFunc             func(moves []BookFileMove, targetBookID string) error
 	GetDuplicateFilesByHashFunc             func(limit int) ([]DuplicateFileGroup, error)
@@ -3309,6 +3310,12 @@ func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
 	}
 	return nil
 }
+func (m *MockStore) BatchUpsertScannedBookFiles(rows []ScannedBookFile) error {
+	if m.BatchUpsertScannedBookFilesFunc != nil {
+		return m.BatchUpsertScannedBookFilesFunc(rows)
+	}
+	return nil
+}
 func (m *MockStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
 	if m.MoveBookFilesToBookFunc != nil {
 		return m.MoveBookFilesToBookFunc(fileIDs, sourceBookID, targetBookID)
@@ -3444,9 +3451,9 @@ func (m *MockStore) ListAIJobs(typeFilter, statusFilter string, limit, offset in
 	return nil, nil
 }
 
-func (m *MockStore) UpdateBookFileHashes(id, originalHash, postMetadataHash string) error {
+func (m *MockStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
 	if m.UpdateBookFileHashesFunc != nil {
-		return m.UpdateBookFileHashesFunc(id, originalHash, postMetadataHash)
+		return m.UpdateBookFileHashesFunc(id, originalHash, postMetadataHash, fileHash)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-08-24
+// last-edited: 2026-09-13
 
 package database
 
@@ -48,18 +48,19 @@ type BookFileCore struct {
 	DiscCount          int    `json:"disc_count,omitempty"`
 	Title              string `json:"title,omitempty"`
 
-	RawTags          map[string]string `json:"raw_tags,omitempty"`
-	Format           string            `json:"format,omitempty"`
-	Codec            string            `json:"codec,omitempty"`
-	Duration         int               `json:"duration,omitempty"`
-	FileSize         int64             `json:"file_size,omitempty"`
-	BitrateKbps      int               `json:"bitrate_kbps,omitempty"`
-	SampleRateHz     int               `json:"sample_rate_hz,omitempty"`
-	Channels         int               `json:"channels,omitempty"`
-	BitDepth         int               `json:"bit_depth,omitempty"`
-	FileHash         string            `json:"file_hash,omitempty"`
-	OriginalFileHash string            `json:"original_file_hash,omitempty"`
-	PostMetadataHash string            `json:"post_metadata_hash,omitempty"`
+	RawTags              map[string]string `json:"raw_tags,omitempty"`
+	Format               string            `json:"format,omitempty"`
+	Codec                string            `json:"codec,omitempty"`
+	Duration             int               `json:"duration,omitempty"`
+	FileSize             int64             `json:"file_size,omitempty"`
+	BitrateKbps          int               `json:"bitrate_kbps,omitempty"`
+	SampleRateHz         int               `json:"sample_rate_hz,omitempty"`
+	Channels             int               `json:"channels,omitempty"`
+	BitDepth             int               `json:"bit_depth,omitempty"`
+	FileHash             string            `json:"file_hash,omitempty"`
+	OriginalFileHash     string            `json:"original_file_hash,omitempty"`
+	OriginalFileHashKind string            `json:"original_file_hash_kind,omitempty"`
+	PostMetadataHash     string            `json:"post_metadata_hash,omitempty"`
 	// Scan must live on Core, not in the stripped set. The stripped fields are
 	// heavy payloads (fingerprints, diagnostic JSON, the raw transcript); Scan is
 	// five small flags that the dedup and bulk-write paths FILTER on. If it were
@@ -146,6 +147,7 @@ func (f *BookFile) Core() BookFileCore {
 		BitDepth:                       f.BitDepth,
 		FileHash:                       f.FileHash,
 		OriginalFileHash:               f.OriginalFileHash,
+		OriginalFileHashKind:           f.OriginalFileHashKind,
 		PostMetadataHash:               f.PostMetadataHash,
 		Scan:                           f.Scan,
 		AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec,

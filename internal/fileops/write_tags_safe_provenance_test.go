@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_provenance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2f6b83-1e47-4a05-bc39-8f5a0d716e42
-// last-edited: 2026-08-21
+// last-edited: 2026-09-13
 
 package fileops
 
@@ -34,7 +34,7 @@ func (r *recorder) AppendFileEvent(e database.FileEvent) error {
 // failingHashUpdater reports an error from UpdateBookFileHashes.
 type failingHashUpdater struct{ called bool }
 
-func (f *failingHashUpdater) UpdateBookFileHashes(id, orig, post string) error {
+func (f *failingHashUpdater) UpdateBookFileHashes(id, orig, post, fileHash string) error {
 	f.called = true
 	return errors.New("column update exploded")
 }

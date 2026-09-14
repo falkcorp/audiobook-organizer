@@ -857,6 +857,11 @@ type BookFile struct {
 	BitDepth         int               `json:"bit_depth,omitempty"`
 	FileHash         string            `json:"file_hash,omitempty"`
 	OriginalFileHash string            `json:"original_file_hash,omitempty"`
+	// OriginalFileHashKind names the digest OriginalFileHash holds.
+	// FileHashKindSampled (filehash.BookFileHash, the same digest as FileHash)
+	// is the only kind the merge freezes and the only kind the integrity check
+	// compares against FileHash. Empty means a legacy value of unknown kind.
+	OriginalFileHashKind string `json:"original_file_hash_kind,omitempty"`
 	// Scan is the staged library scan's view of this file's completeness.
 	// omitzero, never omitempty: v1 and v2 disagree about what omitempty means
 	// for bools, ints and empty structs, so omitempty would change this row's

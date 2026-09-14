@@ -1,7 +1,7 @@
 // file: internal/database/extra_coverage_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0102030405
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package database — extra tests to lift coverage of 0%-covered functions.
 // Covers: APIKeyToken helpers, PebbleStore book/tag/user/activity/metadata
@@ -335,7 +335,7 @@ func TestSQLiteStore_UpdateAndSetBookFileHashes(t *testing.T) {
 	require.Len(t, files, 1)
 	fileID := files[0].ID
 
-	err = s.UpdateBookFileHashes(fileID, "orig-hash-1", "post-hash-1")
+	err = s.UpdateBookFileHashes(fileID, "orig-hash-1", "post-hash-1", "")
 	require.NoError(t, err)
 
 	err = s.SetBookFileHash(fileID, "current-hash-1")

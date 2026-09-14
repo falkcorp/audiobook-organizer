@@ -5658,6 +5658,57 @@ func (_c *MockStore_BatchUpsertBookFiles_Call) RunAndReturn(run func(files []*da
 	return _c
 }
 
+// BatchUpsertScannedBookFiles provides a mock function for the type MockStore
+func (_mock *MockStore) BatchUpsertScannedBookFiles(rows []database.ScannedBookFile) error {
+	ret := _mock.Called(rows)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BatchUpsertScannedBookFiles")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]database.ScannedBookFile) error); ok {
+		r0 = returnFunc(rows)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_BatchUpsertScannedBookFiles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BatchUpsertScannedBookFiles'
+type MockStore_BatchUpsertScannedBookFiles_Call struct {
+	*mock.Call
+}
+
+// BatchUpsertScannedBookFiles is a helper method to define mock.On call
+//   - rows []database.ScannedBookFile
+func (_e *MockStore_Expecter) BatchUpsertScannedBookFiles(rows any) *MockStore_BatchUpsertScannedBookFiles_Call {
+	return &MockStore_BatchUpsertScannedBookFiles_Call{Call: _e.mock.On("BatchUpsertScannedBookFiles", rows)}
+}
+
+func (_c *MockStore_BatchUpsertScannedBookFiles_Call) Run(run func(rows []database.ScannedBookFile)) *MockStore_BatchUpsertScannedBookFiles_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []database.ScannedBookFile
+		if args[0] != nil {
+			arg0 = args[0].([]database.ScannedBookFile)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BatchUpsertScannedBookFiles_Call) Return(err error) *MockStore_BatchUpsertScannedBookFiles_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_BatchUpsertScannedBookFiles_Call) RunAndReturn(run func(rows []database.ScannedBookFile) error) *MockStore_BatchUpsertScannedBookFiles_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BulkCreateExternalIDMappings provides a mock function for the type MockStore
 func (_mock *MockStore) BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error {
 	ret := _mock.Called(mappings)
@@ -28714,16 +28765,16 @@ func (_c *MockStore_UpdateBookFile_Call) RunAndReturn(run func(id string, file *
 }
 
 // UpdateBookFileHashes provides a mock function for the type MockStore
-func (_mock *MockStore) UpdateBookFileHashes(id string, originalHash string, postMetadataHash string) error {
-	ret := _mock.Called(id, originalHash, postMetadataHash)
+func (_mock *MockStore) UpdateBookFileHashes(id string, originalHash string, postMetadataHash string, fileHash string) error {
+	ret := _mock.Called(id, originalHash, postMetadataHash, fileHash)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateBookFileHashes")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string) error); ok {
-		r0 = returnFunc(id, originalHash, postMetadataHash)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, string) error); ok {
+		r0 = returnFunc(id, originalHash, postMetadataHash, fileHash)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -28739,11 +28790,12 @@ type MockStore_UpdateBookFileHashes_Call struct {
 //   - id string
 //   - originalHash string
 //   - postMetadataHash string
-func (_e *MockStore_Expecter) UpdateBookFileHashes(id any, originalHash any, postMetadataHash any) *MockStore_UpdateBookFileHashes_Call {
-	return &MockStore_UpdateBookFileHashes_Call{Call: _e.mock.On("UpdateBookFileHashes", id, originalHash, postMetadataHash)}
+//   - fileHash string
+func (_e *MockStore_Expecter) UpdateBookFileHashes(id any, originalHash any, postMetadataHash any, fileHash any) *MockStore_UpdateBookFileHashes_Call {
+	return &MockStore_UpdateBookFileHashes_Call{Call: _e.mock.On("UpdateBookFileHashes", id, originalHash, postMetadataHash, fileHash)}
 }
 
-func (_c *MockStore_UpdateBookFileHashes_Call) Run(run func(id string, originalHash string, postMetadataHash string)) *MockStore_UpdateBookFileHashes_Call {
+func (_c *MockStore_UpdateBookFileHashes_Call) Run(run func(id string, originalHash string, postMetadataHash string, fileHash string)) *MockStore_UpdateBookFileHashes_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -28757,10 +28809,15 @@ func (_c *MockStore_UpdateBookFileHashes_Call) Run(run func(id string, originalH
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -28771,7 +28828,7 @@ func (_c *MockStore_UpdateBookFileHashes_Call) Return(err error) *MockStore_Upda
 	return _c
 }
 
-func (_c *MockStore_UpdateBookFileHashes_Call) RunAndReturn(run func(id string, originalHash string, postMetadataHash string) error) *MockStore_UpdateBookFileHashes_Call {
+func (_c *MockStore_UpdateBookFileHashes_Call) RunAndReturn(run func(id string, originalHash string, postMetadataHash string, fileHash string) error) *MockStore_UpdateBookFileHashes_Call {
 	_c.Call.Return(run)
 	return _c
 }

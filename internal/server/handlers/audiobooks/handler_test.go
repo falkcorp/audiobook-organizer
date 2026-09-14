@@ -507,6 +507,22 @@ func TestPatchBookFile_SetsDownloadHash(t *testing.T) {
 	}
 }
 
+// Un-ticking skip_scan must reach the store as an explicit false. It goes
+// through the field-level PatchBookFileFields, never an upsert: the upsert paths
+// keep a stored true when the incoming value is the zero false.
+func TestPatchBookFile_ClearsSkipScanViaFieldPatch(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.MatchedBy(func(p database.BookFileFieldPatch) bool {
+		return p.SkipScan != nil && !*p.SkipScan
+	})).Return(&database.BookFile{ID: "f1", SkipScan: true}, &database.BookFile{ID: "f1"}, nil)
+	c, w := newCtx("PATCH", "/audiobooks/b1/files/f1", map[string]any{"skip_scan": false},
+		gin.Params{{Key: "id", Value: "b1"}, {Key: "file_id", Value: "f1"}})
+	h.PatchBookFile(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
 func TestExtractTrackInfo(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
