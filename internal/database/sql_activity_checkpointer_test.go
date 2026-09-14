@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_checkpointer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f6a1e-2b7c-4e90-9f15-6a4c0b8e7d23
 // last-edited: 2026-09-14
 
@@ -48,24 +48,6 @@ func bulkyEntry(i int, ts time.Time) ActivityEntry {
 	}
 }
 
-// recordHook installs a checkpoint observer and returns a snapshot function
-// listing the modes seen so far.
-func recordHook(s *SQLActivityStore) func() []string {
-	var mu sync.Mutex
-	var modes []string
-	fn := ckptHookFn(func(mode string, _ walCheckpointResult, _ error) {
-		mu.Lock()
-		modes = append(modes, mode)
-		mu.Unlock()
-	})
-	s.ckptr.hook.Store(&fn)
-	return func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), modes...)
-	}
-}
-
 // TestSQLActivityStore_ForegroundWritesNeverCheckpoint pins the 2026-09-14
 // outage's root cause: under SQLite's default wal_autocheckpoint=1000 the write
 // that crosses the threshold runs the checkpoint inline. With it off, 1,500
@@ -98,9 +80,36 @@ func TestSQLActivityStore_ForegroundWritesNeverCheckpoint(t *testing.T) {
 // TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle proves
 // the goroutine the constructor starts actually checkpoints, and resets the WAL
 // file to zero bytes once writes stop.
+//
+// It waits on the checkpoint hook, not on the file. The earlier version polled
+// for a 0-byte -wal and then asserted the hook had seen "TRUNCATE"; but the
+// file is already 0 bytes when the TRUNCATE statement returns and the hook runs
+// only after that, so a poll landing in between failed with a PASSIVE-only
+// list (2 of 300 runs under -race locally on 2026-09-14, and in CI). Waiting for the hook
+// to report a successful TRUNCATE, then checking the file, has no such window:
+// nothing writes after the loop, so the file stays at 0 bytes.
 func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *testing.T) {
 	s, path := openCkptTestStore(t, 20*time.Millisecond)
-	modes := recordHook(s)
+
+	var (
+		mu        sync.Mutex
+		passive   int
+		truncDone = make(chan struct{})
+		truncOnce sync.Once
+	)
+	fn := ckptHookFn(func(mode string, res walCheckpointResult, err error) {
+		switch mode {
+		case "PASSIVE":
+			mu.Lock()
+			passive++
+			mu.Unlock()
+		case "TRUNCATE":
+			if err == nil && res.Busy == 0 {
+				truncOnce.Do(func() { close(truncDone) })
+			}
+		}
+	})
+	s.ckptr.hook.Store(&fn)
 
 	base := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
 	for i := range 300 {
@@ -108,14 +117,18 @@ func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *test
 		require.NoError(t, err)
 	}
 
-	require.Eventually(t, func() bool {
-		st, err := os.Stat(path + "-wal")
-		return err == nil && st.Size() == 0 && s.ckptr.runs.Load() >= 2
-	}, 10*time.Second, 10*time.Millisecond, "background checkpointer never truncated the WAL")
+	select {
+	case <-truncDone:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("background checkpointer never ran a successful TRUNCATE (%d ticks)", s.ckptr.runs.Load())
+	}
 
-	seen := modes()
-	assert.Contains(t, seen, "PASSIVE")
-	assert.Contains(t, seen, "TRUNCATE")
+	st, err := os.Stat(path + "-wal")
+	require.NoError(t, err)
+	assert.Zero(t, st.Size(), "a successful TRUNCATE must leave a 0-byte -wal")
+	mu.Lock()
+	assert.Positive(t, passive, "the background loop must checkpoint PASSIVE")
+	mu.Unlock()
 }
 
 // TestSQLCompactByDay_CheckpointsBetweenChunks pins the incremental checkpoint:
