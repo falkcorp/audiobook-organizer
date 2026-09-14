@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-13
 
@@ -105,6 +105,11 @@ var (
 	// and the original code returned the same "" for both -- silently.
 	bookFileLookupErrCount     atomic.Int64 // book lookup failed: chapters and scan-cache write-back skipped for this book
 	bookFilePathRecoveredCount atomic.Int64 // no row at the segment path, but the row was found at the normalized directory
+
+	// A same-path replacement whose probe gave no real duration. The merge then
+	// drops the old recording's fingerprint and transcript: right for a real
+	// replacement, but with ffprobe missing it happens to every one of them.
+	replacedProbeNoAudioCount atomic.Int64
 )
 
 // Skip-decision counters. The skip decision used to return a bare bool with no
@@ -1320,6 +1325,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	readDirtyStart := readDirtyCount.Load()
 	readStatErrStart := readStatErrCount.Load()
 	readCacheOffStart := readCacheOffCount.Load()
+	replacedProbeNoAudioStart := replacedProbeNoAudioCount.Load()
 
 	// Computed ONCE for the run, not per file: a cutoff that drifts while the
 	// scan walks 40k files would make the gate's verdict depend on where in the
@@ -1831,6 +1837,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	}
 	if d := scanCacheRearmCount.Load() - scanCacheRearmStart; d > 0 {
 		scanLog.Info("scan summary: %d files re-armed for rescan because they are still inside the rescan-age window", d)
+	}
+	if d := replacedProbeNoAudioCount.Load() - replacedProbeNoAudioStart; d > 0 {
+		scanLog.Warn("scan summary: %d replaced files gave no real duration when probed (is ffprobe installed?); "+
+			"their fingerprints and transcripts were dropped and the backfills will rebuild them", d)
 	}
 
 	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters

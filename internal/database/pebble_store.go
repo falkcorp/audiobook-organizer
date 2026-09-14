@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.166.0
+// version: 1.167.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -125,7 +125,7 @@ type PebbleStore struct {
 	apiKeyMu                 sync.Mutex     // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
 	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
 	bookLocks                bookLocks      // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
-	bookFilePatchMu          sync.Mutex     // serializes PatchBookFileFields' read-set-write (pebble_store_bookfile_patch.go)
+	bookFileLocks            bookLocks      // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	opsLogSeq                atomic.Int64   // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string         // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex     // gates recompute to prevent stampede when N callers see dirty cache

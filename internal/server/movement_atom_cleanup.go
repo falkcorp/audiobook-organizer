@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-08-30
+// last-edited: 2026-09-13
 
 package server
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	taglib "go.senan.xyz/taglib"
@@ -175,6 +176,11 @@ func removeMovementAtomsFromFile(path string, deps tagger.SafeWriteDeps) (bool, 
 		return false, nil
 	}
 
+	// The rewrite changes the bytes, so record the new hashes on the file's
+	// book_file row (looked up only for files that are actually rewritten).
+	if o := metadata.BookFileHashOptions(path); o.BookFileID != "" {
+		deps.BookFileID, deps.HashStore = o.BookFileID, o.Store
+	}
 	if err := tagger.WriteTagsSafe(context.Background(), path, tags, taglib.Clear, deps); err != nil {
 		return false, err
 	}

@@ -985,6 +985,10 @@ func NewServer(store database.Store) *Server {
 			Importer:       importer,
 		}
 		metadata.SetSafeWriteDeps(deps)
+		// Every package-level tag write (the book PATCH write-back, tag
+		// reverts, the organizer's rename, single-tag fixes) records the file's
+		// new hashes on its book_file row, looked up by path.
+		metadata.SetBookFileHashStore(resolvedStore)
 		slog.Info("metadata.SetSafeWriteDeps wired (Deluge pre-flight guard active)")
 
 		// Also wire into the metafetch service so cover-art embeds use the guard.

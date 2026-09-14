@@ -996,7 +996,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				backupFileBeforeWrite(sib.FilePath)
 				if _, _, err := fileops.WriteTagsSafe(sib.FilePath, func(tmpPath string) error {
 					return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
-				}, fileops.WriteTagsSafeOptions{}); err != nil {
+				}, mfs.bookFileWriteOpts(sib.FilePath)); err != nil {
 					slog.Warn("write-back failed for version-linked", "path", sib.FilePath, "error", err)
 				} else {
 					writtenCount++

@@ -1,5 +1,5 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
 // last-edited: 2026-09-13
 
@@ -25,19 +25,27 @@ import (
 // When the probe yields no trustworthy duration (ffprobe missing or failing,
 // or only a filesize estimate), bf keeps Duration zero and the merge drops the
 // audio-derived fields: unverified data about a file that did change is not
-// kept.
+// kept. That outcome is logged at Warn (sampled) and counted in the scan
+// summary, because with ffprobe missing it happens to every replaced file and
+// silently discards fingerprints and transcripts the backfills must rebuild.
 func probeReplacedFileAudio(bf *database.BookFile, filePath string, scanLog logger.Logger) {
 	mi, err := mediainfo.Extract(filePath)
 	if err != nil || mi == nil {
-		scanLog.Debug("replaced-file probe failed for %s: %v (audio-derived fields will be dropped)", logger.SanitizeLogValue(filePath), err)
+		warnSampled(&replacedProbeNoAudioCount, scanLog,
+			"replaced-file probe failed for %s: %v (its fingerprint and transcript are dropped; the scan summary counts these)",
+			logger.SanitizeLogValue(filePath), err)
 		return
-	}
-	if mi.Duration > 0 && !mi.DurationEstimated {
-		bf.Duration = mi.Duration
 	}
 	if mi.Codec != "" {
 		bf.Codec = mi.Codec
 	}
+	if mi.Duration > 0 && !mi.DurationEstimated {
+		bf.Duration = mi.Duration
+		return
+	}
+	warnSampled(&replacedProbeNoAudioCount, scanLog,
+		"replaced-file probe of %s gave no real duration (estimated=%v; is ffprobe installed?): its fingerprint and transcript are dropped",
+		logger.SanitizeLogValue(filePath), mi.DurationEstimated)
 }
 
 // storedFileHashAt is the FileHash of the stored row that owns filePath, the

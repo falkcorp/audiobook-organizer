@@ -56,7 +56,7 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
-	}, fileops.WriteTagsSafeOptions{})
+	}, BookFileHashOptions(effectivePath))
 	if err != nil {
 		return fmt.Errorf("taglib write: %w", err)
 	}
@@ -110,7 +110,7 @@ func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeSingleTagToPath(effectivePath, tmpPath, tagName, value)
-	}, fileops.WriteTagsSafeOptions{})
+	}, BookFileHashOptions(effectivePath))
 	if err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
 	}

@@ -465,7 +465,14 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 
 		// EmbedCoverArtSafe imports the file from a Deluge-protected path before
 		// writing if the pre-flight guard is wired (mfs.safeWriteDeps).
-		if err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, mfs.safeWriteDeps); err != nil {
+		// The embed rewrites the whole file, so it records the new hashes on the
+		// file's book_file row; otherwise the next rescan saw a changed hash and
+		// treated the file as replaced.
+		deps := mfs.safeWriteDeps
+		if o := mfs.bookFileWriteOpts(f); o.BookFileID != "" {
+			deps.BookFileID, deps.HashStore = o.BookFileID, o.Store
+		}
+		if err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, deps); err != nil {
 			slog.Warn("cover art embedding failed for file",
 				"path", f, "error", err,
 				"book_id", book.ID, "book_title", book.Title,
