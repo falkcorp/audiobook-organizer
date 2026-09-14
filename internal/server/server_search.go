@@ -1,5 +1,5 @@
 // file: internal/server/server_search.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
 // last-edited: 2026-09-14
 
@@ -17,9 +17,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -32,16 +30,15 @@ func (s *Server) SearchIndex() *search.BleveIndex {
 // dependencies. Used by movement_atom_cleanup and any other server-package
 // code that calls tag-writing functions directly (outside the metadata
 // package path that has its own package-level deps).
+//
+// It carries no Importer, so a protected path is refused
+// (tagger.ErrProtectedPathWrite), never imported: an import copied a
+// Deluge-seeding file to RootDir/<basename> and repointed its row there.
 func (s *Server) safeWriteDeps() tagger.SafeWriteDeps {
 	if s.protectedPathCache == nil {
 		return tagger.SafeWriteDeps{}
 	}
-	store := s.storeForWiring()
-	importer := deluge.NewLibraryImporterAdapter(store, deluge.GetClient(), &config.AppConfig, s.protectedPathCache)
-	return tagger.SafeWriteDeps{
-		ProtectedCache: s.protectedPathCache,
-		Importer:       importer,
-	}
+	return tagger.SafeWriteDeps{ProtectedCache: s.protectedPathCache}
 }
 
 // protectedChecker returns the server's protected-path predicate, or a nil

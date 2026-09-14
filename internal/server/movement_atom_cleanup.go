@@ -1,5 +1,5 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-09-14
 
@@ -167,9 +167,12 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 // Returns (true, nil) if the file was modified, (false, nil) if it was
 // already clean, or (false, err) on failure.
 //
-// deps provides the pre-flight protection guard: if the path is protected
-// it is imported to the library before the write proceeds.
+// deps provides the pre-flight protection guard. A protected path is REFUSED
+// (tagger.ErrProtectedPathWrite, counted as skipped by the caller), never
+// imported: the walk covers files outside any book folder, and an import
+// copied a Deluge-seeding file to RootDir/<basename> and repointed its row.
 func removeMovementAtomsFromFile(path string, deps tagger.SafeWriteDeps) (bool, error) {
+	deps.Importer = nil
 	tags, err := taglib.ReadTags(path)
 	if err != nil {
 		return false, err
