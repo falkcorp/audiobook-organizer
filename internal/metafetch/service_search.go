@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-14
 
@@ -332,6 +332,11 @@ func (mfs *Service) searchMetadataForBook(
 		return nil, fmt.Errorf("audiobook not found")
 	}
 
+	// The fetch-cache stamp comes from the book ROW, not from this search's
+	// query or hints, so a row this path writes stays readable by the fetch
+	// and bulk paths and vice versa (A3#14).
+	searchIdentity := mfs.fetchCacheIdentity(book)
+
 	searchTitle := query
 	if searchTitle == "" {
 		searchTitle = book.Title
@@ -471,7 +476,7 @@ func (mfs *Service) searchMetadataForBook(
 			// 8000 times even for books we'd already matched with
 			// high confidence.
 			maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), maxAge); cerr == nil && cached != nil {
+			if cached, _, cerr := database.GetCachedMetadataFetchWithMaxAge(mfs.db, id, src.Name(), searchIdentity, maxAge); cerr == nil && cached != nil {
 				var cachedResults []metadata.BookMetadata
 				if jerr := json.Unmarshal(cached.Results, &cachedResults); jerr == nil {
 					// Keep the in-memory []BookMetadata internally consistent with the
@@ -613,7 +618,7 @@ func (mfs *Service) searchMetadataForBook(
 				// is logged but doesn't fail the outer search.
 				if len(allResults) > 0 {
 					if blob, merr := json.Marshal(allResults); merr == nil {
-						if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), blob, 0); perr != nil {
+						if perr := database.PutCachedMetadataFetch(mfs.db, id, src.Name(), searchIdentity, blob, 0); perr != nil {
 							slog.Warn("metadata-search cache put failed for ( )", "id", logger.SanitizeLogValue(id), "name", src.Name(), "error", perr)
 						}
 					}

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -229,6 +229,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	type bookWork struct {
 		book       database.BookCore
 		authorName string
+		identity   string
 	}
 	var work []bookWork
 	for i := range allBooks {
@@ -236,12 +237,20 @@ func (s *Server) runBulkMetadataFetchAll(
 		if done[b.ID] || strings.TrimSpace(b.Title) == "" {
 			continue
 		}
+		author := ""
+		if b.AuthorID != nil {
+			author = authorByID[*b.AuthorID]
+		}
+		// Resolved before the skip_cached probe: the probe must ask for the
+		// book's CURRENT search identity, or a row fetched for an older
+		// title/author would count as fresh and the book would never refresh.
+		identity := database.MetadataSearchIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
 		// skip_cached: skip books that already have a valid (non-expired) cache entry
 		// from any source so we only hit the API for books with no cached data.
 		if params.SkipCached {
 			hasFreshCache := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
 					hasFreshCache = true
 					break
 				}
@@ -250,11 +259,7 @@ func (s *Server) runBulkMetadataFetchAll(
 				continue
 			}
 		}
-		author := ""
-		if b.AuthorID != nil {
-			author = authorByID[*b.AuthorID]
-		}
-		work = append(work, bookWork{book: *b, authorName: author})
+		work = append(work, bookWork{book: *b, authorName: author, identity: identity})
 	}
 
 	totalBooks := len(existingResults) + len(work)
@@ -357,7 +362,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, currentAuthor, w.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -374,7 +379,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		case metafetch.FetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, out.SearchIdentity, blob, 0)
 				}
 			}
 			found.Add(1)
@@ -708,6 +713,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	type bookWork struct {
 		book       database.Book
 		authorName string
+		identity   string
 	}
 	var work []bookWork
 	for _, id := range bookIDs {
@@ -718,18 +724,6 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		if err != nil || b == nil || strings.TrimSpace(b.Title) == "" {
 			continue
 		}
-		if params.SkipCached {
-			hasFresh := false
-			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, id, metadata.ProviderIDOf(src), src.Name(), maxAge); cerr == nil && cached != nil {
-					hasFresh = true
-					break
-				}
-			}
-			if hasFresh {
-				continue
-			}
-		}
 		author := ""
 		if b.AuthorID != nil {
 			if authorByID != nil {
@@ -738,7 +732,23 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 				author = a.Name
 			}
 		}
-		work = append(work, bookWork{book: *b, authorName: author})
+		// Resolved before the skip_cached probe: the probe must ask for the
+		// book's CURRENT search identity, or a row fetched for an older
+		// title/author would count as fresh and the book would never refresh.
+		identity := database.MetadataSearchIdentity(b.Title, author, b.ASIN, b.ISBN13, b.ISBN10)
+		if params.SkipCached {
+			hasFresh := false
+			for _, src := range s.metadataFetchService.BuildSourceChain() {
+				if cached, _, cerr := database.CachedMetadataForProvider(store, id, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
+					hasFresh = true
+					break
+				}
+			}
+			if hasFresh {
+				continue
+			}
+		}
+		work = append(work, bookWork{book: *b, authorName: author, identity: identity})
 	}
 
 	alreadyDone := len(existingResults)
@@ -823,7 +833,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			return nil
 		}
 
-		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, maxAge)
+		out, werr := metafetch.WalkSourceChain(gctx, store, sourceChain, sem, bookID, w.book.Title, w.authorName, w.identity, maxAge)
 		if werr != nil {
 			return werr
 		}
@@ -840,7 +850,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		case metafetch.FetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, blob, 0)
+					_ = database.PutCachedMetadataFetch(store, bookID, providerKey, out.SearchIdentity, blob, 0)
 				}
 			}
 			found.Add(1)

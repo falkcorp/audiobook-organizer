@@ -1,5 +1,5 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
 // last-edited: 2026-09-14
 
@@ -122,6 +122,10 @@ type ChainOutcome struct {
 	// and the review UI show a human.
 	ProviderKey string
 	CacheHit    bool
+	// SearchIdentity is the book's database.MetadataSearchIdentity the walk
+	// read the cache with. Callers stamp their write-back with it, so the read
+	// and the write can never derive the identity two different ways.
+	SearchIdentity string
 
 	// err is the last live-call error seen while walking the chain, and
 	// errSource the provider that produced it.
@@ -184,10 +188,10 @@ func WalkSourceChain(
 	store database.RawKVStore,
 	sourceChain []metadata.MetadataSource,
 	sem *ProviderSemaphore,
-	bookID, bookTitle, author string,
+	bookID, bookTitle, author, identity string,
 	maxAge time.Duration,
 ) (ChainOutcome, error) {
-	var out ChainOutcome
+	out := ChainOutcome{SearchIdentity: identity}
 	searchTitle := stripChapterFromTitle(bookTitle)
 
 	// live counts sources that were actually callable this book; throttledAll
@@ -207,7 +211,7 @@ func WalkSourceChain(
 		slotKey := metadata.ProviderKey(src)
 		name := src.Name()
 
-		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, maxAge); cerr == nil && cached != nil {
+		if cached, _, cerr := database.CachedMetadataForProvider(store, bookID, slotKey, name, identity, maxAge); cerr == nil && cached != nil {
 			var cr []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &cr); jerr == nil && len(cr) > 0 {
 				out.Results, out.SourceName, out.ProviderKey, out.CacheHit = cr, name, slotKey, true

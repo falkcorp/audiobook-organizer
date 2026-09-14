@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-14
 
@@ -224,7 +224,7 @@ func TestWalkSourceChain_SeriesDecoratedTitleFallsBackToBookName(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestWalkSourceChain_VariantAnswerMustNameTheBook(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestWalkSourceChain_VariantAnswerMustMatchTheAuthor(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestWalkSourceChain_OneWordBookNameNeedsAnAuthor(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	if _, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", time.Hour); err != nil {
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", "", time.Hour); err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
 	for _, q := range src.queries {
@@ -302,7 +302,7 @@ func TestWalkSourceChain_OneWordBookNameNeedsAnAuthor(t *testing.T) {
 	src = &recordingSource{name: "audible"}
 	chain = []metadata.MetadataSource{src}
 	if _, err := WalkSourceChain(context.Background(), emptyKV{}, chain, NewProviderSemaphore(chain, 2),
-		"01BOOK", "The Expanse 04 - Cibola Burn", "", time.Hour); err != nil {
+		"01BOOK", "The Expanse 04 - Cibola Burn", "", "", time.Hour); err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
 	if len(src.queries) != 2 || src.queries[1] != "Cibola Burn" {
@@ -317,7 +317,7 @@ func TestWalkSourceChain_SeriesOnlyTitleGetsNoVariants(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	if _, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Path Of The Voidwalker - BK07", "", time.Hour); err != nil {
+		"01BOOK", "Path Of The Voidwalker - BK07", "", "", time.Hour); err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
 	for _, q := range src.queries {
@@ -335,7 +335,7 @@ func TestWalkSourceChain_LiteralHitSkipsVariants(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestWalkSourceChain_SentinelClosesTheLadderAndKeepsTheDiagnosis(t *testing.
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestWalkSourceChain_CancelStopsTheLadder(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	_, err := WalkSourceChain(ctx, emptyKV{}, chain, sem,
-		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", time.Hour)
+		"01BOOK", "Eternal Dominion, Book 04 - Assertions", "Bern Dean", "", time.Hour)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}

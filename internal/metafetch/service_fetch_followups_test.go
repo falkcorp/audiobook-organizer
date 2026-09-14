@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d9a2f6b-1c83-4e57-9b0a-7f2e6c1d8a34
-// last-edited: 2026-07-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -132,7 +132,8 @@ func TestFetchMetadataForBook_StaleCacheYearKindSelfCorrected(t *testing.T) {
 		PublishYearIsAudiobookRelease: false,
 	}})
 	require.NoError(t, err)
-	require.NoError(t, database.PutCachedMetadataFetch(mock, "b1", audibleName, blob, 1.0))
+	require.NoError(t, database.PutCachedMetadataFetch(mock, "b1", audibleName,
+		database.MetadataSearchIdentity("Mistborn", "", nil, nil, nil), blob, 1.0))
 
 	svc := NewService(mock)
 	svc.SetOverrideSources([]metadata.MetadataSource{

@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
-// last-edited: 2026-09-05
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -96,7 +96,7 @@ func TestWalkSourceChain_ErrorIsNotAMiss(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sem := NewProviderSemaphore(tc.chain, 2)
 			out, err := WalkSourceChain(context.Background(), emptyKV{}, tc.chain, sem,
-				"01BOOK", "Dune", "Frank Herbert", time.Hour)
+				"01BOOK", "Dune", "Frank Herbert", "", time.Hour)
 			if err != nil {
 				t.Fatalf("walkSourceChain returned a hard error: %v", err)
 			}
@@ -125,7 +125,7 @@ func TestWalkSourceChain_UntrimmedTitleRetry(t *testing.T) {
 	sem := NewProviderSemaphore(chain, 2)
 
 	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem,
-		"01BOOK", "01 Chapter 1 Dune", "", time.Hour)
+		"01BOOK", "01 Chapter 1 Dune", "", "", time.Hour)
 	if err != nil {
 		t.Fatalf("walkSourceChain: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestWalkSourceChain_AllThrottledIsReportedMidRun(t *testing.T) {
 	walkThrottle(t, "google-books", 429, walkQuotaBody)
 	walkThrottle(t, "hardcover", 401, "bad token")
 
-	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestWalkSourceChain_PartialThrottleIsNotAllThrottled(t *testing.T) {
 	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
 	walkThrottle(t, "google-books", 429, walkQuotaBody)
 
-	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestWalkSourceChain_NoResultsIsNotAllThrottled(t *testing.T) {
 	chain := []metadata.MetadataSource{metadata.NewChainSource(idSource{id: "google-books"})}
 	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
 
-	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestWalkSourceChain_SentinelDoesNotDisplaceTheDiagnosis(t *testing.T) {
 	chain := []metadata.MetadataSource{metadata.NewChainSource(idSource{id: "google-books", err: quotaErr})}
 	sem := NewProviderSemaphore(chain, DefaultPerProviderFetchCap)
 
-	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", time.Hour)
+	out, err := WalkSourceChain(context.Background(), emptyKV{}, chain, sem, "b1", "Dune", "Herbert", "", time.Hour)
 	if err != nil {
 		t.Fatalf("WalkSourceChain: %v", err)
 	}
