@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-13
 
@@ -130,8 +130,44 @@ func TestEvaluate(t *testing.T) {
 		t.Fatalf("audio-confirmed 0.86 refused: %+v", v)
 	}
 	// ... and a transcribed title the candidate does not match refuses outright.
-	other := metafetch.MetadataCandidate{Title: "Big Cats 1 Special Edition", SeriesPosition: "1", Score: 0.99}
+	// (A title that CONTAINS the transcribed one, "Big Cats 1 Special Edition",
+	// now agrees: see util.TitleAgrees.)
+	other := metafetch.MetadataCandidate{Title: "Small Dogs 1", SeriesPosition: "1", Score: 0.99}
 	if v := Evaluate(heard, &other, nil); v.Allowed || v.Reason != ReasonTranscriptionMismatch {
 		t.Fatalf("transcription mismatch: allowed=%v reason=%q", v.Allowed, v.Reason)
+	}
+}
+
+// TestTranscriptionConfirms_RealReviewCases: seven books the owner clicked
+// Apply on in the review lane on 2026-09-13, verbatim. All seven were refused
+// as transcription_mismatch by the rule this replaced (the fail-before test is
+// util.TestTranscriptMatch_OldRuleRefusedAllSeven). The negatives are the
+// cases the gate exists for.
+func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
+	cases := []struct {
+		name                    string
+		candTitle, candAuthor   string
+		heardTitle, heardAuthor string
+		want                    bool
+	}{
+		{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", true},
+		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", true},
+		{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true},
+		{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true},
+		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true},
+		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", true},
+		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", true},
+		{"same author, different title", "The Well of Ascension", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false},
+		{"different volume of the same series", "Big Cats 3", "Ann Author", "Big Cats 1", "Ann Author", false},
+		{"completely different author", "Blood of Elves", "Morgan Rice", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{TranscribedTitle: strp(tc.heardTitle), TranscribedAuthor: strp(tc.heardAuthor)}
+			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
+			if got := TranscriptionConfirms(book, c); got != tc.want {
+				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

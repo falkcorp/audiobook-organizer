@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-13
 
@@ -99,21 +99,27 @@ type Verdict struct {
 }
 
 // TranscriptionConfirms reports whether the candidate's title/author
-// independently match the book's transcribed title/author. The title must
-// match after normalization; a transcribed author longer than 3 characters
-// must appear in the candidate's author. A title-only match suffices when no
-// usable transcribed author exists.
+// independently match the book's transcribed title/author. The rule is
+// util.TitleAgrees and util.AuthorAgrees (internal/util/transcript_match.go),
+// shared with auto-fetch and with the apply's audio_confirmed marker. Before
+// 2026-09-13 this demanded exact title equality and the noisy transcribed
+// author as a substring of the candidate's, which refused every real book on
+// the review lane (Whisper appends credits and misspells names).
 func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) bool {
 	if book == nil || c == nil || book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
 		return false
 	}
-	if util.NormalizeTitle(c.Title) != util.NormalizeTitle(*book.TranscribedTitle) {
+	if !util.TitleAgrees(c.Title, *book.TranscribedTitle) {
 		return false
 	}
-	if book.TranscribedAuthor == nil || len(*book.TranscribedAuthor) <= 3 {
-		return true
+	return util.AuthorAgrees(c.Author, derefStr(book.TranscribedAuthor), derefStr(book.IntroTranscription))
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
 	}
-	return strings.Contains(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(*book.TranscribedAuthor))
+	return *p
 }
 
 // ScoreGate applies legs 1 of the gate: the transcription hard gate and the

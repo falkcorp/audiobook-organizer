@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -599,14 +599,18 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	src := candidate.Source
 	book.MetadataSource = &src
 	th := hintsFromBook(book)
+	// The same title/author rule the certainty gate and auto-fetch use
+	// (internal/util/transcript_match.go); AuthorAgrees passes an empty or
+	// <=3-character transcribed author, as this did before.
 	audioConfirmed := !th.empty() &&
 		th.title != "" &&
-		util.NormalizeTitle(th.title) == util.NormalizeTitle(candidate.Title)
+		util.TitleAgrees(candidate.Title, th.title)
 	if audioConfirmed {
-		// Also require author match if we have one, but only if the token is
-		// substantial (>3 chars) to avoid short fragments like "Ki" from
-		// over-constraining the match.
-		if th.author == "" || len(th.author) <= 3 || containsCI(candidate.Author, th.author) {
+		intro := ""
+		if book.IntroTranscription != nil {
+			intro = *book.IntroTranscription
+		}
+		if util.AuthorAgrees(candidate.Author, th.author, intro) {
 			ac := "audio_confirmed"
 			book.MetadataReviewStatus = &ac
 			slog.Info("metadata apply: audio-confirmed match", "id", logger.SanitizeLogValue(id), "title", logger.SanitizeLogValue(candidate.Title))
