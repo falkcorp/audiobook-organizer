@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
 // last-edited: 2026-09-13
 
@@ -108,8 +108,13 @@ func TestApplyCandidate_HistoryFailureIsReturnedForOwnerReviewedApply(t *testing
 		opts    ApplyOptions
 		wantErr bool
 	}{
-		{"owner-reviewed", ApplyOptions{GateOverride: "score_below_floor"}, true},
+		{"owner-reviewed", ApplyOptions{OwnerReviewed: true, GateOverride: "score_below_floor"}, true},
+		// An empty summary must not turn a reviewed apply into an ordinary
+		// one: OwnerReviewed alone requires the history and adds the note.
+		{"owner-reviewed, empty summary", ApplyOptions{OwnerReviewed: true}, true},
 		{"unreviewed", ApplyOptions{}, false},
+		// A label without the flag is not a review.
+		{"label only", ApplyOptions{GateOverride: "score_below_floor"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pebble, err := database.NewPebbleStore(t.TempDir())
@@ -131,8 +136,21 @@ func TestApplyCandidate_HistoryFailureIsReturnedForOwnerReviewedApply(t *testing
 			got, gerr := store.GetBookByID(book.ID)
 			require.NoError(t, gerr)
 			require.Equal(t, "New Title", got.Title, "the write stands; only its history is missing")
+			hasNote := got.VersionNotes != nil && strings.Contains(*got.VersionNotes, "owner_reviewed ")
+			require.Equal(t, tc.opts.OwnerReviewed, hasNote, "owner_reviewed note, notes %v", got.VersionNotes)
 		})
 	}
+}
+
+// The history label names the override for every reviewed apply, and falls
+// back to owner_reviewed rather than to the plain source when no reasons came.
+func TestApplyOptionsHistorySource(t *testing.T) {
+	require.Equal(t, "Audible", ApplyOptions{}.historySource("Audible"))
+	require.Equal(t, "Audible", ApplyOptions{GateOverride: "x"}.historySource("Audible"))
+	require.Equal(t, "Audible (owner-reviewed; certainty gate overridden: owner_reviewed)",
+		ApplyOptions{OwnerReviewed: true}.historySource("Audible"))
+	require.Equal(t, "Audible (owner-reviewed; certainty gate overridden: score_below_floor)",
+		ApplyOptions{OwnerReviewed: true, GateOverride: "score_below_floor"}.historySource("Audible"))
 }
 
 func newChangeHistoryHarness(t *testing.T) (*Service, *capturingActivityStore) {

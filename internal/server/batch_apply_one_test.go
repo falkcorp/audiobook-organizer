@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -52,6 +52,9 @@ type fakeApplySvc struct {
 	preflightIDs []string
 	// applyOpts records the options each apply got, parallel to appliedIDs.
 	applyOpts []metafetch.ApplyOptions
+	// historyErr is returned WITH the response: the write stood, its history
+	// did not land (metafetch.ErrApplyHistoryIncomplete).
+	historyErr error
 }
 
 func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate, _ []string) error {
@@ -156,7 +159,32 @@ func (f *fakeApplySvc) ApplyMetadataCandidateWithOptions(id string, _ metafetch.
 	}
 	f.appliedIDs = append(f.appliedIDs, id)
 	f.applyOpts = append(f.applyOpts, opts)
-	return &metafetch.FetchMetadataResponse{SkippedLockedFields: f.skippedLocked, PendingCoverURL: f.pendingCover}, nil
+	return &metafetch.FetchMetadataResponse{SkippedLockedFields: f.skippedLocked, PendingCoverURL: f.pendingCover}, f.historyErr
+}
+
+// An owner-reviewed apply whose change history did not land: the write
+// stands, so the book is applied and its file work still runs (the database
+// and the files must agree), but the outcome is flagged so the op counts it.
+func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T) {
+	books, cand := ownerReviewFixture()
+	svc := &fakeApplySvc{
+		candidates: candidateJSON(t, cand),
+		historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
+	}
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if !out.Applied || !out.OwnerReviewed || !out.HistoryFailed || !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
+		t.Fatalf("outcome %+v, want applied, owner-reviewed, history failed", out)
+	}
+	if len(svc.invalidatedID) != 1 || len(svc.finishCalls) != 1 {
+		t.Fatalf("the rest of the apply must still run: invalidated=%v finish=%v", svc.invalidatedID, svc.finishCalls)
+	}
+
+	// Any other apply error is still a failed apply.
+	svc = &fakeApplySvc{candidates: candidateJSON(t, cand), applyErr: errors.New("boom")}
+	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if out.Applied || out.HistoryFailed || out.Reason != applySkipApplyFailed {
+		t.Fatalf("plain apply error: outcome %+v, want %s", out, applySkipApplyFailed)
+	}
 }
 
 func (f *fakeApplySvc) InvalidateCachedCandidates(bookID string) error {

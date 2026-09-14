@@ -1,11 +1,12 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
 package server
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -303,7 +304,11 @@ func applyCachedCandidateForBookTimed(
 	// options only record the override in the change history.
 	var opts metafetch.ApplyOptions
 	if plan.OwnerReviewed {
-		opts.GateOverride = plan.Gate.OverrideSummary()
+		// OwnerReviewed, not a non-empty summary, is what makes the apply
+		// record the override and require its history: an empty
+		// RefusingReasons must not turn a reviewed apply into an ordinary one.
+		opts.OwnerReviewed = true
+		opts.GateOverride = cmp.Or(plan.Gate.OverrideSummary(), applygate.ReasonOwnerReviewed)
 	}
 	resp, aerr := svc.ApplyMetadataCandidateWithOptions(id, *plan.Candidate, nil, opts)
 	// A response with ErrApplyHistoryIncomplete means the write stands and

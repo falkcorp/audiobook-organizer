@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -634,8 +634,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	if err != nil {
 		return nil, err
 	}
-	if opts.GateOverride != "" {
-		appendOwnerReviewedNote(book, opts.GateOverride, time.Now())
+	if opts.OwnerReviewed {
+		appendOwnerReviewedNote(book, opts.overrideLabel(), time.Now())
 	}
 
 	// Keep serving the previous cover until the new one is actually on disk.
@@ -648,7 +648,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	src := candidate.Source
 	book.MetadataSource = &src
 	th := hintsFromBook(book)
-	if audioConfirmedMarker(candidate, th, opts.GateOverride != "") {
+	if audioConfirmedMarker(candidate, th, opts.OwnerReviewed) {
 		ac := "audio_confirmed"
 		book.MetadataReviewStatus = &ac
 		applyMarkerLog.Info("metadata apply: audio-confirmed match id=%s title=%s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Title))
@@ -681,7 +681,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// after the commit, so the write itself stands; the rest of this apply
 	// still runs so the book is not left half-applied.
 	var historyErr error
-	if opts.GateOverride != "" && updateErr != nil {
+	if opts.OwnerReviewed && updateErr != nil {
 		historyErr = fmt.Errorf("owner-reviewed apply of %s: change history not recorded: %w", id, updateErr)
 	}
 
