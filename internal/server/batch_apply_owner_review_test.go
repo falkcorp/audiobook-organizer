@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,
@@ -177,8 +177,73 @@ func TestOwnerReview_PreviewReportsWouldApply(t *testing.T) {
 
 type fakePreviewSvc struct{ *fakeApplySvc }
 
-func (fakePreviewSvc) PreviewMetadataCandidate(string, metafetch.MetadataCandidate, bool) (*metafetch.ApplyPreview, error) {
+func (f fakePreviewSvc) PreviewMetadataCandidateWithOptions(_ string, _ metafetch.MetadataCandidate, _ bool, opts metafetch.ApplyOptions) (*metafetch.ApplyPreview, error) {
+	f.previewOpts = append(f.previewOpts, opts)
 	return &metafetch.ApplyPreview{}, nil
+}
+
+// Owner decision 2026-09-14: a row the owner approved is hand-picked, so its
+// apply AND its rename preflight may overwrite filled fields (FillOnly false),
+// with one options value; an unreviewed row stays fill-only.
+func TestOwnerReview_ApprovedRowOverwritesUnreviewedFills(t *testing.T) {
+	books, cand := ownerReviewFixture()
+	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if !out.Applied || !out.OwnerReviewed || len(svc.applyOpts) != 1 || len(svc.preflightOpts) != 1 {
+		t.Fatalf("reviewed row: outcome %+v apply %+v preflight %+v", out, svc.applyOpts, svc.preflightOpts)
+	}
+	if svc.applyOpts[0].FillOnly || svc.preflightOpts[0].FillOnly {
+		t.Fatalf("owner-approved row must overwrite: apply %+v preflight %+v", svc.applyOpts[0], svc.preflightOpts[0])
+	}
+	if svc.applyOpts[0] != svc.preflightOpts[0] {
+		t.Fatalf("apply and preflight options differ: %+v vs %+v", svc.applyOpts[0], svc.preflightOpts[0])
+	}
+
+	plain := &fakeApplySvc{candidates: oneCandidate(t)}
+	out = applyCachedCandidateForBook(plain, fakeBooks{}, nil, "b1", true, nil)
+	if !out.Applied || out.OwnerReviewed || !plain.applyOpts[0].FillOnly || !plain.preflightOpts[0].FillOnly {
+		t.Fatalf("unreviewed row must be fill-only: outcome %+v apply %+v preflight %+v", out, plain.applyOpts, plain.preflightOpts)
+	}
+}
+
+// The dry run previews each row with the options its apply would use: the
+// overwrite for a row only an owner review can land (which is what the
+// reviewed apply writes), fill-only for an ordinary row and for the
+// op-results path, which takes no pin.
+func TestOwnerReview_PreviewUsesTheApplyOptions(t *testing.T) {
+	books, cand := ownerReviewFixture()
+	rec := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	svc := fakePreviewSvc{rec}
+	reviewable := planCachedApply(svc, books, "b1", nil, nil)
+	if row := previewBulkApplyRow(svc, "b1", reviewable, true); !row.OwnerReviewedWouldApply {
+		t.Fatalf("fixture row is not owner-reviewable: %+v", row)
+	}
+	pinned := planCachedApply(svc, books, "b1", nil, rowPin(cand))
+	previewBulkApplyRow(svc, "b1", pinned, true)
+
+	plain := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
+	ordinary := planCachedApply(plain, fakeBooks{}, "b1", nil, nil)
+	if ordinary.Reason != "" {
+		t.Fatalf("ordinary plan refused: %q", ordinary.Reason)
+	}
+	previewBulkApplyRow(plain, "b1", ordinary, true)
+
+	cr := CandidateResult{Status: "matched", Candidate: &cand}
+	cr.Book.Title = "Big Cats 1"
+	previewBulkApplyRow(plain, "b1", planOpResultApply(books, "b1", cr, nil), true)
+
+	if len(rec.previewOpts) != 2 || rec.previewOpts[0].FillOnly || rec.previewOpts[1].FillOnly {
+		t.Fatalf("owner-approved previews must overwrite: %+v", rec.previewOpts)
+	}
+	if got := plain.previewOpts; len(got) != 2 || !got[0].FillOnly || !got[1].FillOnly {
+		t.Fatalf("unreviewed previews must be fill-only: %+v", got)
+	}
+	// The preview of the pinned row and the apply of it use one value.
+	apply := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	applyCachedCandidateForBookTimed(apply, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if len(apply.applyOpts) != 1 || apply.applyOpts[0] != rec.previewOpts[1] {
+		t.Fatalf("preview %+v and apply %+v of the same reviewed row disagree", rec.previewOpts[1], apply.applyOpts)
+	}
 }
 
 // A queued run that absorbs a second request keeps both requests' pins; a

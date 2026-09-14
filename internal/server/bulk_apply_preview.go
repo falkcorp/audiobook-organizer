@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -80,7 +80,9 @@ type bulkApplyPreviewParams struct {
 // previewService is what the preview needs from *metafetch.Service.
 type previewService interface {
 	cachedApplyService
-	PreviewMetadataCandidate(id string, candidate metafetch.MetadataCandidate, writeBack bool) (*metafetch.ApplyPreview, error)
+	// PreviewMetadataCandidateWithOptions previews the apply with the same
+	// ApplyOptions the apply would use (cachedApplyPlan.applyOptions).
+	PreviewMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, writeBack bool, opts metafetch.ApplyOptions) (*metafetch.ApplyPreview, error)
 }
 
 // previewBook is the book as it is now.
@@ -120,7 +122,8 @@ type bulkApplyPreviewRow struct {
 	Reason    string             `json:"reason,omitempty"`
 	Detail    string             `json:"detail,omitempty"`
 	Gate      *applygate.Verdict `json:"gate,omitempty"`
-	// Changes is what the apply would write (after locks). Filled for blocked
+	// Changes is what the apply would write (after locks, and fill-only
+	// unless only an owner review could land the row). Filled for blocked
 	// books too, so a reviewer sees what the refusal prevented.
 	Changes       []metafetch.FieldChange  `json:"changes,omitempty"`
 	SkippedLocked []string                 `json:"skipped_locked,omitempty"`
@@ -178,7 +181,11 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 		return row
 	}
 
-	pv, err := svc.PreviewMetadataCandidate(id, *plan.Candidate, writeBack)
+	// The options the apply would use: fill-only for an ordinary row; for a
+	// row only an owner review can land, the overwriting options that
+	// reviewed apply (and its rename preflight) runs with. Changes and the
+	// rename check below therefore describe the apply that would happen.
+	pv, err := svc.PreviewMetadataCandidateWithOptions(id, *plan.Candidate, writeBack, plan.applyOptions())
 	switch {
 	case errors.Is(err, metafetch.ErrApplyPolicyBlocked):
 		// ApplyMetadataCandidate would refuse too.
@@ -198,8 +205,8 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	// an owner review does not lift.
 	// Only on the cache path: /metadata/batch-apply-candidates takes no pin,
 	// so nothing could apply the book that way.
-	row.OwnerReviewedWouldApply = plan.Pinnable && plan.Reason == applySkipGateBlocked &&
-		plan.Gate.OwnerReviewOverridable() && row.Reason == plan.Gate.Reason
+	row.OwnerReviewedWouldApply = plan.ownerApproved() && plan.Reason == applySkipGateBlocked &&
+		row.Reason == plan.Gate.Reason
 	return row
 }
 
