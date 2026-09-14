@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-13
 
@@ -547,16 +547,18 @@ func ddRetireBook(store ddRetireStore, sim *ddSim, book, heir *database.Book, dr
 		return err
 	}
 	if !dryRun {
-		// Promote before retiring: if the soft-delete then fails the group
-		// briefly has two primaries, which is visible and repairable; the
-		// other order can leave it with none.
+		// Promote before retiring: the other order can leave the group with
+		// no primary. If the soft-delete then fails or is refused, this run's
+		// promotion is undone (ddRetireFailed), so the group is left as it
+		// was rather than with two primaries.
+		promoted, prev := false, (*bool)(nil)
 		if successor != "" {
-			if err := ddPromotePrimary(store, successor); err != nil {
+			if promoted, prev, err = ddPromotePrimary(store, successor); err != nil {
 				return fmt.Errorf("promote %s before retiring primary %s: %w", successor, book.ID, err)
 			}
 		}
-		if err := ddSoftDeleteBook(store, book.ID, clearPath); err != nil {
-			return err
+		if err := ddSoftDeleteBook(store, book.ID, clearPath, ddRetireGuard(store, sim, book, successor)); err != nil {
+			return ddRetireFailed(store, successor, promoted, prev, err)
 		}
 	}
 	sim.retire(book.ID, successor)
@@ -731,22 +733,103 @@ func (s *ddSim) retire(id, successor string) {
 	}
 }
 
-func ddPromotePrimary(store ddBookModifier, id string) error {
+// ddPromotePrimary makes id an explicit primary. It reports whether it wrote
+// and the flag it replaced, so a caller whose retirement then fails can undo
+// exactly its own promotion (ddRetireFailed). A successor retired since the
+// hand-off was planned is refused with errDDRefused: promoting a deleted row
+// and then demoting the retiring book would leave no live primary.
+func ddPromotePrimary(store ddBookModifier, id string) (promoted bool, prev *bool, err error) {
 	b, err := store.ModifyBook(id, func(b *database.Book) error {
+		if b.IsSoftDeleted() {
+			return fmt.Errorf("%w: planned successor %s was retired after the hand-off was planned", errDDRefused, b.ID)
+		}
 		if ddExplicitPrimary(b) {
 			return database.ErrSkipBookWrite
 		}
+		if b.IsPrimaryVersion != nil {
+			v := *b.IsPrimaryVersion
+			prev = &v
+		}
 		t := true
 		b.IsPrimaryVersion = &t
+		promoted = true
 		return nil
 	})
 	if err != nil {
-		return err
+		return false, nil, err
 	}
 	if b == nil {
-		return fmt.Errorf("book %s not found", id)
+		return false, nil, fmt.Errorf("book %s not found", id)
 	}
-	return nil
+	return promoted, prev, nil
+}
+
+// ddRetireFailed is the error path after a retirement whose successor was
+// promoted first: it puts the successor's flag back when this run's promotion
+// wrote it, so the group keeps its one old primary instead of gaining a
+// second, and returns err (with the undo's own failure, if any).
+func ddRetireFailed(store ddBookModifier, successor string, promoted bool, prev *bool, err error) error {
+	if !promoted {
+		return err
+	}
+	if _, uErr := store.ModifyBook(successor, func(b *database.Book) error {
+		if !ddExplicitPrimary(b) {
+			return database.ErrSkipBookWrite
+		}
+		b.IsPrimaryVersion = prev
+		return nil
+	}); uErr != nil {
+		return fmt.Errorf("%w; undoing the promotion of %s also failed, so its group may have two primaries: %v", err, successor, uErr)
+	}
+	return err
+}
+
+// ddRetireGuard returns the check ddSoftDeleteBook runs on the retiring
+// book's stored row, under its lock, immediately before the write.
+//
+// The primary hand-off (ddPlanPrimaryHandoff) was planned from a read taken
+// outside that lock, so a concurrent writer can have changed what it was
+// planned on. Retiring on the stale plan leaves the group with two primaries
+// (the book was demoted and another member promoted meanwhile, and this run
+// then promotes its successor too) or with none (the book was promoted
+// meanwhile, no successor was planned, and the soft-delete demotes it). So the
+// write is refused with errDDRefused -- nothing written, nothing demoted --
+// when the row's version group or primary reading differs from the plan's,
+// or when the planned successor is no longer a live explicit primary (it was
+// retired or demoted after ddPromotePrimary ran). The caller then undoes its
+// own promotion. The successor check is a plain GetBookByID read, which the
+// LOCK RULES allow inside a ModifyBook closure.
+func ddRetireGuard(store merge.ITunesGuardStore, sim *ddSim, planned *database.Book, successor string) func(*database.Book) error {
+	plannedVG := ""
+	if planned.VersionGroupID != nil {
+		plannedVG = *planned.VersionGroupID
+	}
+	plannedPrimary := ddCountsAsPrimary(planned) || sim.isPromoted(planned.ID)
+	return func(cur *database.Book) error {
+		curVG := ""
+		if cur.VersionGroupID != nil {
+			curVG = *cur.VersionGroupID
+		}
+		if curVG != plannedVG {
+			return fmt.Errorf("%w: book %s moved from version group %q to %q after its primary hand-off was planned; not retiring it",
+				errDDRefused, cur.ID, plannedVG, curVG)
+		}
+		if plannedVG != "" && ddCountsAsPrimary(cur) != plannedPrimary {
+			return fmt.Errorf("%w: book %s's primary flag changed after its hand-off was planned (planned primary=%v); not retiring it",
+				errDDRefused, cur.ID, plannedPrimary)
+		}
+		if successor == "" {
+			return nil
+		}
+		heir, err := store.GetBookByID(successor)
+		if err != nil {
+			return fmt.Errorf("re-read planned successor %s of %s: %w", successor, cur.ID, err)
+		}
+		if heir == nil || heir.IsSoftDeleted() || !ddExplicitPrimary(heir) {
+			return fmt.Errorf("%w: planned successor %s of %s is no longer a live primary; not retiring it", errDDRefused, successor, cur.ID)
+		}
+		return nil
+	}
 }
 
 // ddMergeStore is ddMergeDuplicateBook's store: the job's whole surface.
@@ -787,6 +870,15 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 	// left with no primary. Apply re-reads both rows (fail closed); dry-run
 	// overlays what this run would have written, so the two modes agree.
 	if dryRun {
+		// Apply refuses a pair with a book already retired (the re-read
+		// below). A book this run would already have retired, or one the
+		// caller's copy shows retired, is refused the same way, so dry-run
+		// reports what apply would.
+		for _, b := range []*database.Book{keeper, dup} {
+			if sim.isRetired(b.ID) || b.IsSoftDeleted() {
+				return fmt.Errorf("%w: book %s is gone or already retired; not merging", errDDRefused, b.ID)
+			}
+		}
 		sim.overlay(keeper)
 		sim.overlay(dup)
 	} else {
@@ -906,17 +998,18 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		return fmt.Errorf("dup %s still owns %d file(s) after the move; not soft-deleting it", dup.ID, len(remaining))
 	}
 
+	promoted, prev := false, (*bool)(nil)
 	if successor != "" {
-		if err := ddPromotePrimary(store, successor); err != nil {
+		if promoted, prev, err = ddPromotePrimary(store, successor); err != nil {
 			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, dup.ID, err)
 		}
-		if successor == keeper.ID {
-			t := true
-			keeper.IsPrimaryVersion = &t
-		}
 	}
-	if err := ddSoftDeleteBook(store, dup.ID, true); err != nil {
-		return err
+	if err := ddSoftDeleteBook(store, dup.ID, true, ddRetireGuard(store, sim, dup, successor)); err != nil {
+		return ddRetireFailed(store, successor, promoted, prev, err)
+	}
+	if successor != "" && successor == keeper.ID {
+		t := true
+		keeper.IsPrimaryVersion = &t
 	}
 	sim.retire(dup.ID, successor)
 
@@ -1009,8 +1102,16 @@ func ddMergeBookFields(dst, src *database.Book) {
 //
 // A retired book is also demoted from primary, so no reader counts a deleted
 // row as its group's primary; the caller has already promoted a successor.
-func ddSoftDeleteBook(store bookSoftDeleter, bookID string, clearPath bool) error {
+//
+// guard, when non-nil, runs first on the stored row under the book's lock; an
+// error from it aborts with nothing written (see ddRetireGuard).
+func ddSoftDeleteBook(store bookSoftDeleter, bookID string, clearPath bool, guard func(*database.Book) error) error {
 	_, err := store.ModifyBook(bookID, func(current *database.Book) error {
+		if guard != nil {
+			if err := guard(current); err != nil {
+				return err
+			}
+		}
 		t := true
 		now := time.Now()
 		current.MarkedForDeletion = &t
