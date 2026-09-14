@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Read-only preview of ApplyMetadataCandidate, for the bulk-apply dry run.
 //
@@ -95,8 +95,20 @@ const ApplyRefusedReasonFileWorkWouldFail = "file_work_would_fail"
 // title or author plans a different rename than the whole candidate would, so
 // the preflight must plan the same subset or it refuses applies that would
 // have landed.
+//
+// RenamePreflight plans the hand-picked apply (ApplyMetadataCandidate), which
+// may overwrite filled fields. A batch apply plans with
+// RenamePreflightWithOptions and the apply's own options: a rename pattern can
+// use a descriptive field (narrator, year), so a fill-only apply renames to a
+// different target than an overwriting one.
 func (mfs *Service) RenamePreflight(id string, candidate MetadataCandidate, fields []string) error {
-	pv, err := mfs.previewMetadataCandidate(id, candidate, fields, true)
+	return mfs.RenamePreflightWithOptions(id, candidate, fields, ApplyOptions{})
+}
+
+// RenamePreflightWithOptions is RenamePreflight for
+// ApplyMetadataCandidateWithOptions(id, candidate, fields, opts).
+func (mfs *Service) RenamePreflightWithOptions(id string, candidate MetadataCandidate, fields []string, opts ApplyOptions) error {
+	pv, err := mfs.previewMetadataCandidate(id, candidate, fields, opts.FillOnly, true)
 	if err != nil {
 		preflightLog.Warn("rename preflight could not preview book %s; leaving the decision to the apply: %s",
 			logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
@@ -157,19 +169,22 @@ func CandidateMetadata(candidate MetadataCandidate) metadata.BookMetadata {
 	}
 }
 
-// PreviewMetadataCandidate reports what ApplyMetadataCandidate(id, candidate,
-// nil) would change, after locked fields are stripped, and whether the file
+// PreviewMetadataCandidate reports what the batch apply
+// (ApplyMetadataCandidateWithOptions with FillOnly, fields nil) would change,
+// after locked and already-filled fields are stripped, and whether the file
 // sequel would rename. writeBack is whether the caller's apply would run the
 // file sequel at all (the batch op's write_back); the rename additionally
 // requires auto_rename_on_apply, as in runApplyPipeline.
 func (mfs *Service) PreviewMetadataCandidate(id string, candidate MetadataCandidate, writeBack bool) (*ApplyPreview, error) {
-	return mfs.previewMetadataCandidate(id, candidate, nil, writeBack)
+	return mfs.previewMetadataCandidate(id, candidate, nil, true, writeBack)
 }
 
 // previewMetadataCandidate is PreviewMetadataCandidate for
-// ApplyMetadataCandidate(id, candidate, fields): the same field filter the
-// apply runs (FilterApplyFields) is applied before the diff and the rename plan.
-func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandidate, fields []string, writeBack bool) (*ApplyPreview, error) {
+// ApplyMetadataCandidateWithOptions(id, candidate, fields, {FillOnly:
+// fillOnly}): the same field filter (FilterApplyFields) and fill-only strip
+// (StripFilledFields) the apply runs are applied before the diff and the
+// rename plan.
+func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandidate, fields []string, fillOnly, writeBack bool) (*ApplyPreview, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -180,6 +195,9 @@ func (mfs *Service) previewMetadataCandidate(id string, candidate MetadataCandid
 
 	meta := FilterApplyFields(CandidateMetadata(candidate), fields)
 	NormalizeMetaSeries(&meta)
+	if fillOnly {
+		meta, _ = StripFilledFields(book, meta)
+	}
 	locks, err := mfs.loadFieldLocks(id)
 	if err != nil {
 		return nil, fmt.Errorf("refusing to preview metadata for %s: %w", id, err)

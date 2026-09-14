@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Background job that upgrades metadata from lower-quality sources
 // (primarily Google Books) to richer ones (Hardcover, Audible/Audnexus)
@@ -227,7 +227,8 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// never runs. The files keep their names until a later write-back or
 	// organize, which runs its own rename. If this op ever queues file work,
 	// add the preflight, gated the same way, before this call.
-	_, applyErr := s.Fetcher.ApplyMetadataCandidate(bookID, *bestCandidate, nil)
+	// Automatic apply: fill-only (owner decision A3#3).
+	_, applyErr := s.Fetcher.ApplyMetadataCandidateWithOptions(bookID, *bestCandidate, nil, metafetch.ApplyOptions{FillOnly: true})
 	if applyErr != nil {
 		return false, fmt.Errorf("apply failed: %w", applyErr)
 	}
