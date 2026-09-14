@@ -1,5 +1,5 @@
 // file: internal/database/metadata_fetch_cache.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-09-14
 
@@ -145,7 +145,45 @@ func CachedMetadataForProvider(store RawKVStore, bookID, providerID, legacyDispl
 // stamp (written before stamps existed) records reason="no_identity" and a
 // row stamped for another identity records reason="identity_mismatch"; both
 // are misses, never hits. An empty identity from the caller matches nothing.
+//
+// This is the REPLAY read: whatever it returns can be applied to the book, so
+// it never accepts an unstamped row. Only CachedMetadataCoversSkip does.
 func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source, identity string, maxAge time.Duration) (*CachedMetadataEntry, bool, error) {
+	return readFetchCacheRow(store, bookID, source, identity, maxAge, false)
+}
+
+// CachedMetadataCoversSkip answers the bulk "skip already cached" question
+// for one provider: is there a fresh row that means this book does not need
+// fetching again? It tries the provider id key, then the legacy display-name
+// key, like CachedMetadataForProvider.
+//
+// Rollout rule for A3#14 (owner decision 2026-09-14): a row with NO stamp
+// (written before stamps existed) counts as cached here, so deploying the
+// stamp does not trigger a whole-library refetch; the TTL still applies to it,
+// so legacy rows age out over MetadataFetchCacheTTLDays instead of all at
+// once. A row stamped for a DIFFERENT identity is not cached, because the
+// book's title/author/ASIN/ISBN really changed. The answer is a bool on
+// purpose: an unstamped row is never returned to a caller that could replay
+// and apply it. The replay paths (CachedMetadataForProvider, the chain walk)
+// still treat it as a miss and re-query.
+func CachedMetadataCoversSkip(store RawKVStore, bookID, providerID, legacyDisplayName, identity string, maxAge time.Duration) bool {
+	if providerID != "" {
+		if entry, _, err := readFetchCacheRow(store, bookID, providerID, identity, maxAge, true); err == nil && entry != nil {
+			return true
+		}
+	}
+	if legacyDisplayName == "" || util.NormalizeString(legacyDisplayName) == util.NormalizeString(providerID) {
+		return false
+	}
+	entry, _, err := readFetchCacheRow(store, bookID, legacyDisplayName, identity, maxAge, true)
+	return err == nil && entry != nil
+}
+
+// readFetchCacheRow is the shared row read. acceptUnstamped lets a row with
+// no SearchIdentity through the identity check (it is still subject to the
+// TTL and records a normal hit). Only CachedMetadataCoversSkip passes true;
+// a row stamped for a different identity is a miss either way.
+func readFetchCacheRow(store RawKVStore, bookID, source, identity string, maxAge time.Duration, acceptUnstamped bool) (*CachedMetadataEntry, bool, error) {
 	if bookID == "" || source == "" {
 		return nil, false, nil
 	}
@@ -171,10 +209,11 @@ func GetCachedMetadataFetchWithMaxAge(store RawKVStore, bookID, source, identity
 		return nil, false, nil
 	}
 	if entry.SearchIdentity == "" {
-		metrics.RecordCacheMiss("metadata_fetch", "no_identity")
-		return nil, false, nil
-	}
-	if identity == "" || entry.SearchIdentity != identity {
+		if !acceptUnstamped {
+			metrics.RecordCacheMiss("metadata_fetch", "no_identity")
+			return nil, false, nil
+		}
+	} else if identity == "" || entry.SearchIdentity != identity {
 		metrics.RecordCacheMiss("metadata_fetch", "identity_mismatch")
 		return nil, false, nil
 	}

@@ -14,7 +14,12 @@
   identity, so a book with a stale row is no longer skipped. New cache-miss
   reasons `no_identity` and `identity_mismatch` make the change visible in
   metrics.
-- **Rollout note:** every fetch-cache row written before this change has no
-  identity stamp, so all of them read as misses after deploy. The first bulk
-  metadata fetch after deploy re-queries every provider for every book it
-  covers.
+- **Rollout (no mass refetch):** fetch-cache rows written before this change
+  have no identity stamp. The bulk "skip already cached" checks count such a
+  row as cached, so deploying this does not re-query every provider for the
+  whole library; the TTL still applies, so legacy rows age out over
+  `MetadataFetchCacheTTLDays`. An unstamped row is never replayed or applied:
+  a single-book fetch, the search dialog and the bulk chain walk all treat it
+  as a miss and re-query. A row stamped for a different identity is a miss
+  everywhere, including the bulk skip, because the book's identity really
+  changed.
