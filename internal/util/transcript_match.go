@@ -1,11 +1,12 @@
 // file: internal/util/transcript_match.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
 // last-edited: 2026-09-13
 
 package util
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -228,18 +229,57 @@ var trailerPhrases = [][]string{
 // after the first token, so a title cannot be stripped to nothing. Applied to
 // the TRANSCRIBED side only: a candidate's title is the provider's record,
 // and its own "(Book #4 in the ...)" suffix is not something Whisper said.
-func stripTranscribedTrailer(toks []string) []string {
+//
+// number is the first number in the removed phrase ("1" for "book one of
+// ..."), "" when it had none. The heard volume number is identity, not noise:
+// "Dune, book two of the Dune Chronicles" is Dune Messiah, not Dune, so the
+// caller must check it against the candidate's series position.
+func stripTranscribedTrailer(toks []string) (kept []string, number string) {
 	for i := 1; i < len(toks); i++ {
-		if volumeWords[toks[i]] && i+1 < len(toks) && isNumeric(toks[i+1]) {
-			return toks[:i]
-		}
+		cut := volumeWords[toks[i]] && i+1 < len(toks) && isNumeric(toks[i+1])
 		for _, p := range trailerPhrases {
-			if hasPrefixSeq(toks[i:], p) {
-				return toks[:i]
+			if !cut && hasPrefixSeq(toks[i:], p) {
+				cut = true
 			}
 		}
+		if cut {
+			for _, t := range toks[i:] {
+				if isNumeric(t) {
+					return toks[:i], t
+				}
+			}
+			return toks[:i], ""
+		}
 	}
-	return toks
+	return toks, ""
+}
+
+// seriesNumberRe finds the first number (optionally decimal) in a series
+// position ("1", "1.0", "Book 4", "#4", "2.5").
+var seriesNumberRe = regexp.MustCompile(`[0-9]+(\.[0-9]+)?`)
+
+// numberWordRe matches a whole number word (numberWords' keys).
+var numberWordRe = regexp.MustCompile(`(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b`)
+
+// canonicalSeriesNumber reduces a number to a comparable form: leading zeros
+// and a zero fraction dropped ("01" -> "1", "1.0" -> "1"), a real fraction
+// kept ("2.5" stays "2.5", so it never equals a heard "2"). "" when s has no
+// number. Number words are read as digits first ("Book Four" -> "4").
+func canonicalSeriesNumber(s string) string {
+	s = numberWordRe.ReplaceAllStringFunc(s, func(w string) string { return numberWords[strings.ToLower(w)] })
+	m := seriesNumberRe.FindString(s)
+	if m == "" {
+		return ""
+	}
+	whole, frac, _ := strings.Cut(m, ".")
+	whole = strings.TrimLeft(whole, "0")
+	if whole == "" {
+		whole = "0"
+	}
+	if frac = strings.TrimRight(frac, "0"); frac != "" {
+		return whole + "." + frac
+	}
+	return whole
 }
 
 // numbersConflict is true when both sides carry numbers and share none:
@@ -278,12 +318,49 @@ func numbersConflict(a, b []string) bool {
 // three or more words. There is no containment: "Mistborn" does not agree
 // with "Mistborn: The Hero of Ages", nor "Foundation" with "Foundation and
 // Empire". Titles whose numbers disagree never agree.
-func TitleAgrees(candidateTitle, transcribedTitle string) bool {
+//
+// When the stripped trailer named a volume ("Harry Potter book 2"), that
+// number must equal candidateSeriesPosition; a candidate with no position
+// does not agree, because nothing says the heard volume is this record.
+//
+// This is the matcher an OWNER-REVIEWED row apply may annotate with. Paths
+// that apply with nobody reviewing must also pass MainTranscriptionConfirms
+// (see applygate.TranscriptionConfirms), so they are never looser than the
+// rule on origin/main before 2026-09-13.
+func TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle string) bool {
 	c, t := titleTokens(candidateTitle), titleTokens(transcribedTitle)
 	if len(c) == 0 || len(t) == 0 || numbersConflict(c, t) {
 		return false
 	}
-	return titleSeqEqual(c, t) || titleSeqEqual(c, stripTranscribedTrailer(t))
+	if titleSeqEqual(c, t) {
+		return true
+	}
+	kept, heardNumber := stripTranscribedTrailer(t)
+	if len(kept) == len(t) || !titleSeqEqual(c, kept) {
+		return false
+	}
+	if heardNumber == "" {
+		return true
+	}
+	pos := canonicalSeriesNumber(candidateSeriesPosition)
+	return pos != "" && pos == canonicalSeriesNumber(heardNumber)
+}
+
+// MainTranscriptionConfirms is applygate.TranscriptionConfirms exactly as it
+// stood on origin/main before 2026-09-13: normalized title equality, then
+// (when the transcribed author is longer than three characters) the
+// normalized transcribed author as a substring of the normalized candidate
+// author. It is the UPPER BOUND for every unreviewed use: metadata.upgrade,
+// an unpinned batch apply and the certainty gate itself AND it with the
+// shared matcher, so they refuse every pair this refuses, by construction.
+func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle, transcribedAuthor string) bool {
+	if transcribedTitle == "" || NormalizeTitle(candidateTitle) != NormalizeTitle(transcribedTitle) {
+		return false
+	}
+	if len(transcribedAuthor) <= 3 {
+		return true
+	}
+	return strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor))
 }
 
 // splitAuthors splits a candidate author field into individual authors on

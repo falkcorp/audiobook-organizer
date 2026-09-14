@@ -5,14 +5,23 @@
   transcribed title and the noisy Whisper author as a substring of the clean
   candidate author, so credits ("Translated from the Polish") and typos
   ("R.A. Salvator") failed all 11 books the owner applied on 2026-09-13. The
-  gate, metadata.upgrade, auto-fetch's transcribed-title check and the
-  apply's `audio_confirmed` marker now share one STRICT matcher
-  (`util.TitleAgrees` / `util.AuthorAgrees`):
+  owner's single-row Apply now goes through (next entry), and one shared
+  matcher (`util.TitleAgrees` / `util.AuthorAgrees`) replaces three
+  diverging copies. Every path that applies with nobody reviewing (the gate,
+  so metadata.upgrade and an unpinned batch apply; auto-fetch; the apply's
+  `audio_confirmed` marker) ANDs it with its own rule from before this
+  change, so none accepts a pair it refused before, and a confirmation never
+  lowers the score floor to 0.85 where it did not before. The matcher alone
+  only annotates an owner-reviewed row apply
+  (`transcription_agrees_on_review`). Its rules:
   - titles must be equal as whole word sequences (punctuation and
     "unabridged" ignored, number words read as digits); there is no
     containment, so "Mistborn" does not match "Mistborn: The Hero of Ages";
   - the transcribed side may drop a trailing series/volume phrase ("book one
-    of the X trilogy", ", book N", "a short story prequel to X");
+    of the X trilogy", ", book N", "a short story prequel to X"), but a
+    volume number it names must equal the candidate's series position, and a
+    candidate with no position does not agree ("Dune" is not "Dune, book two
+    of the Dune Chronicles");
   - one misheard word is forgiven only in titles of 3+ words: a silent first
     letter ("Naves" for "Knaves") or one inner edit in a 7+ letter word with
     the same first and last letter ("The Witches" never matches "The
@@ -21,14 +30,13 @@
     the intro), with one typo only in surnames of 6+ letters, and when both
     sides give a first name or initial it must agree (Stephen King does not
     match "Owen King").
-  Auto-fetch additionally keeps its previous rule as an upper bound, so it
-  accepts nothing it refused before.
 - Clicking Apply on a single review row is now treated as the owner's review.
   That row's request pins the candidate it showed (origin `row`, plus the
   `candidate_hash` the review list now serves per row); the server applies
   the book when the pin still matches the top cached candidate, even if the
   certainty gate's score, transcription, sequence or evidence legs refuse. The
-  override is recorded on every field's change history, as an
+  override is recorded on every field's change history (a failed history
+  write fails that apply, before anything is written, and the op counts it), as an
   `owner_reviewed <time>: <reasons>` version note added on every override,
   and at Info on the op log with the full verdict. A pin that no longer
   matches is refused as `stale_candidate`. Bulk buttons (Apply page, Apply

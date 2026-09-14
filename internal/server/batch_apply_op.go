@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -343,6 +343,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// refusing gate; staleCandidate counts pinned books whose cached
 			// candidate changed after the owner looked at it.
 			var ownerReviewed, staleCandidate atomic.Int64
+			// historyFailed counts owner-reviewed books written without their
+			// change history (the only record of the override).
+			var historyFailed atomic.Int64
 			// gateDeferred holds the IDS — not a count — of books never
 			// ATTEMPTED because the write-back gate stayed saturated past this
 			// item's own timeout. Kept separate from writeFailed: nothing was
@@ -514,6 +517,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						slog.String("book_id", id),
 						slog.Any("skipped_locked", out.SkippedLocked))
 				}
+				if out.HistoryFailed {
+					historyFailed.Add(1)
+					reporter.Log(slog.LevelError, "owner-reviewed apply written but change history not recorded",
+						slog.String("book_id", id),
+						slog.String("error", errText(out.Err)))
+				}
 				if out.WriteBackFailed {
 					// Counted separately and logged, but NOT subtracted from
 					// applied: the database change is real and durable. Reporting
@@ -669,9 +678,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
 				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load(), stillDeferred,
+				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
 			if priorDone > 0 {
 				// State the known ambiguity rather than implying a clean count.

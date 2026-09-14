@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0b6d3e92-4f18-4a7c-8e51-c2a7f9d0b364
 // last-edited: 2026-09-13
 
@@ -13,11 +13,14 @@ import (
 // realReviewCases are seven books from the production review lane on
 // 2026-09-13, verbatim: candidate title/author and Whisper's transcribed
 // title/author. The owner clicked Apply on all of them and every one was
-// refused as transcription_mismatch. confirms is what the STRICT matcher
-// says: six confirm; "A Cry of Honor" does not, because the candidate's own
-// title carries "(Book #4 in the Sorcerer's Ring)" and the matcher strips
-// trailers from the transcribed side only. That book is applied by an owner
-// clicking Apply on its review row.
+// refused as transcription_mismatch. confirms is what the shared matcher
+// alone says (the annotation on an owner-reviewed row apply): five confirm.
+// "A Cry of Honor" does not, because the candidate's own title carries
+// "(Book #4 in the Sorcerer's Ring)" and trailers are stripped from the
+// transcribed side only; "This Gilded Abyss" does not, because the heard
+// "book one" has no series position to agree with. No unreviewed path
+// confirms any of the seven: they AND origin/main's rule, which refused all.
+// Every one is applied by an owner clicking Apply on its review row.
 var realReviewCases = []struct {
 	name                    string
 	candTitle, candAuthor   string
@@ -29,17 +32,23 @@ var realReviewCases = []struct {
 	{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true},
 	{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true},
 	{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true},
-	{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", true},
+	// Heard "book one" but the review row carried no series position, so
+	// nothing says this record is volume 1 (TestTitleAgrees_HeardVolume).
+	{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false},
 	{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", true},
 }
 
 func TestTranscriptMatch_RealReviewCases(t *testing.T) {
 	for _, tc := range realReviewCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := TitleAgrees(tc.candTitle, tc.heardTitle) && AuthorAgrees(tc.candAuthor, tc.heardAuthor)
+			got := TitleAgrees(tc.candTitle, "", tc.heardTitle) && AuthorAgrees(tc.candAuthor, tc.heardAuthor)
 			if got != tc.confirms {
 				t.Errorf("confirms = %v, want %v (title %v, author %v)", got, tc.confirms,
-					TitleAgrees(tc.candTitle, tc.heardTitle), AuthorAgrees(tc.candAuthor, tc.heardAuthor))
+					TitleAgrees(tc.candTitle, "", tc.heardTitle), AuthorAgrees(tc.candAuthor, tc.heardAuthor))
+			}
+			// Unreviewed paths AND origin/main's rule, which refused all seven.
+			if MainTranscriptionConfirms(tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor) && got {
+				t.Errorf("an unreviewed path would confirm %s, which origin/main refused", tc.name)
 			}
 		})
 	}
@@ -78,7 +87,7 @@ var reviewerFalsePositiveTitles = [][2]string{
 
 func TestTitleAgrees_ReviewerFalsePositivesRefuse(t *testing.T) {
 	for _, p := range reviewerFalsePositiveTitles {
-		if TitleAgrees(p[0], p[1]) || TitleAgrees(p[1], p[0]) {
+		if TitleAgrees(p[0], "", p[1]) || TitleAgrees(p[1], "", p[0]) {
 			t.Errorf("TitleAgrees(%q, %q) confirmed in some order", p[0], p[1])
 		}
 	}
@@ -97,7 +106,9 @@ func TestTitleAgrees(t *testing.T) {
 		{"Ready Player One", "Ready Player 1", true},
 		{"Big Cats 1", "Big Cats, book three", false},
 		// Trailers are stripped from the transcribed side only.
-		{"Dune", "Dune, book one of the Dune Chronicles", true},
+		// ...but a heard volume number needs a candidate position (below).
+		{"Dune", "Dune, book one of the Dune Chronicles", false},
+		{"Witness to a Trial", "Witness to a Trial A short story prequel to The Whistler", true},
 		{"The Way of Kings (Stormlight 1)", "The Way of Kings", false},
 		// No containment in either direction.
 		{"The Way of Kings", "The Way of Kings and other stories", false},
@@ -119,8 +130,58 @@ func TestTitleAgrees(t *testing.T) {
 		{"Mistborn", "", false},
 	}
 	for _, tc := range cases {
-		if got := TitleAgrees(tc.cand, tc.heard); got != tc.want {
+		if got := TitleAgrees(tc.cand, "", tc.heard); got != tc.want {
 			t.Errorf("TitleAgrees(%q, %q) = %v, want %v", tc.cand, tc.heard, got, tc.want)
+		}
+	}
+}
+
+// A stripped trailer's volume number is identity: "Dune, book two of the
+// Dune Chronicles" is Dune Messiah. It must equal the candidate's series
+// position, and a candidate with no position does not agree.
+func TestTitleAgrees_HeardVolume(t *testing.T) {
+	cases := []struct {
+		cand, pos, heard string
+		want             bool
+	}{
+		{"Dune", "", "Dune, book two of the Dune Chronicles", false},
+		{"Dune", "1", "Dune, book two of the Dune Chronicles", false},
+		{"Dune", "2", "Dune, book two of the Dune Chronicles", true},
+		{"Dune", "Book Two", "Dune, book two of the Dune Chronicles", true},
+		{"Harry Potter", "", "Harry Potter book 2", false},
+		{"Harry Potter", "1", "Harry Potter book 2", false},
+		{"Harry Potter", "02", "Harry Potter book 2", true},
+		{"The Expanse", "", "The Expanse, volume 3", false},
+		{"The Expanse", "3.0", "The Expanse, volume 3", true},
+		{"The Expanse", "#3", "The Expanse, volume 3", true},
+		{"The Expanse", "2.5", "The Expanse, volume 2", false},
+		{"This Gilded Abyss", "1", "This Gilded Abyss, book one of the Gilded Abyss trilogy", true},
+		// A trailer with no number needs no position.
+		{"Witness to a Trial", "", "Witness to a Trial A short story prequel to The Whistler", true},
+		// An unstripped exact title ignores the position.
+		{"Big Cats 3", "", "Big Cats 3", true},
+	}
+	for _, tc := range cases {
+		if got := TitleAgrees(tc.cand, tc.pos, tc.heard); got != tc.want {
+			t.Errorf("TitleAgrees(%q, pos %q, %q) = %v, want %v", tc.cand, tc.pos, tc.heard, got, tc.want)
+		}
+	}
+}
+
+// MainTranscriptionConfirms must be origin/main's applygate rule verbatim.
+func TestMainTranscriptionConfirms_IsOldRule(t *testing.T) {
+	titles := []string{"Mistborn", "mistborn", "Mistborn: The Hero of Ages", "Dune", "Dune, book two of the Dune Chronicles", ""}
+	authors := []string{"", "Ki", "Brandon Sanderson", "Sanderson", "R.A. Salvator", "Frank Herbert"}
+	for _, ct := range titles {
+		for _, ht := range titles {
+			for _, ca := range authors {
+				for _, ha := range authors {
+					want := ht != "" && oldTranscriptionRule(ct, ca, ht, ha)
+					if got := MainTranscriptionConfirms(ct, ca, ht, ha); got != want {
+						t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) = %v, old rule %v", ct, ca, ht, ha, got, want)
+					}
+				}
+			}
 		}
 	}
 }
