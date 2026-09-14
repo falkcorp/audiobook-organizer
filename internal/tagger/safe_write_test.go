@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f2b5e3a-7d41-4c08-b9e1-6a3f0d2c8b74
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package tagger
 
@@ -29,7 +29,7 @@ type recordingImporter struct {
 	returnErr  error
 }
 
-func (r *recordingImporter) ImportPath(_ context.Context, srcPath string) (string, error) {
+func (r *recordingImporter) ImportPath(_ context.Context, srcPath, _ string) (string, error) {
 	r.calls = append(r.calls, srcPath)
 	if r.returnPath != "" {
 		return r.returnPath, r.returnErr

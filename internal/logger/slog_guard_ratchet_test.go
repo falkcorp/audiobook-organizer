@@ -1,15 +1,15 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package logger
 
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 325
-	slogRatchetCallCeiling = 1959
+	slogRatchetFileCeiling = 323
+	slogRatchetCallCeiling = 1945
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -108,9 +108,7 @@ var slogRatchet = map[string]int{
 	"internal/dedup/merge_journaled.go":                          1,
 	"internal/dedup/split_book_merge.go":                         2,
 	"internal/deluge/discovery.go":                               4,
-	"internal/deluge/import.go":                                  5,
 	"internal/deluge/integration.go":                             5,
-	"internal/deluge/protected_paths.go":                         2,
 	"internal/errhandling/errhandling.go":                        1,
 	"internal/fileops/safe_operations.go":                        5,
 	"internal/fileops/write_tags_safe.go":                        1,
@@ -192,14 +190,14 @@ var slogRatchet = map[string]int{
 	"internal/metafetch/lifecycle.go":                            2,
 	"internal/metafetch/metadata_state_service.go":               2,
 	"internal/metafetch/openlibrary.go":                          8,
-	"internal/metafetch/service.go":                              18,
+	"internal/metafetch/service.go":                              16,
 	"internal/metafetch/service_apply.go":                        29,
 	"internal/metafetch/service_fetch.go":                        12,
 	"internal/metafetch/service_files.go":                        7,
 	"internal/metafetch/service_normalize.go":                    2,
 	"internal/metafetch/service_scoring.go":                      9,
 	"internal/metafetch/service_search.go":                       16,
-	"internal/metafetch/service_writeback.go":                    29,
+	"internal/metafetch/service_writeback.go":                    28,
 	"internal/metafetch/source_chain_walk.go":                    1,
 	"internal/openlibrary/downloader.go":                         2,
 	"internal/openlibrary/store.go":                              4,
@@ -234,8 +232,8 @@ var slogRatchet = map[string]int{
 	"internal/reconcile/elect_primaries.go":                      6,
 	"internal/reconcile/itunes_heal.go":                          2,
 	"internal/reconcile/reconcile.go":                            24,
-	"internal/remux/remux.go":                                    6,
-	"internal/remux/transcode.go":                                8,
+	"internal/remux/remux.go":                                    5,
+	"internal/remux/transcode.go":                                7,
 	"internal/scheduler/extra_ops.go":                            6,
 	"internal/scheduler/full_sweep.go":                           2,
 	"internal/scheduler/interval_clock.go":                       3,
@@ -304,7 +302,7 @@ var slogRatchet = map[string]int{
 	"internal/server/middleware/absauthprobe.go":                 1,
 	"internal/server/middleware/auth.go":                         2,
 	"internal/server/middleware/cfaccess.go":                     2,
-	"internal/server/movement_atom_cleanup.go":                   12,
+	"internal/server/movement_atom_cleanup.go":                   10,
 	"internal/server/openlibrary_service.go":                     3,
 	"internal/server/plugins_init.go":                            1,
 	"internal/server/provider_throttle_wire.go":                  3,

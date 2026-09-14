@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.3
+// version: 4.4.4
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -965,11 +965,12 @@ func TestWriteBackMetadataForBook_SingleFile(t *testing.T) {
 	mockStore.On("GetAllImportPaths").Return([]database.ImportPath{}, nil).Maybe()
 
 	svc := metafetch.NewService(mockStore)
-	// WriteMetadataToFile will fail because the file doesn't exist, but the
-	// function should return (0, nil) — failures are logged not returned.
+	// The only file write fails (the file does not exist). A write-back in
+	// which every attempted write failed is a failure: until 2026-09-14 this
+	// returned (0, nil), and callers counted the book as written.
 	count, err := svc.WriteBackMetadataForBook(book.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "failed and none succeeded") {
+		t.Fatalf("err = %v, want the all-writes-failed error", err)
 	}
 	if count != 0 {
 		t.Errorf("expected written count 0, got %d", count)

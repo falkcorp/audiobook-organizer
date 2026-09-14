@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
 // last-edited: 2026-09-14
 
@@ -189,29 +189,28 @@ func (mfs *Service) runFileWrites(n int, fn func(i int)) {
 // optional backup, then an atomic temp-copy write. bookFileID/store, when set,
 // let WriteTagsSafe persist the file's before/after hashes.
 //
-// The write goes through the same protected-path guard as every other tag
-// write (tagger.ResolvePathForWrite with the service's safe-write deps): a
-// Deluge-protected file is imported to the library and the copy is written,
-// or, when there is no copy to write, the call returns an error wrapping
-// tagger.ErrProtectedPathWrite and the file is not touched. Until 2026-09-14
-// this path wrote the file it was given, so write-back rewrote files a torrent
-// client was seeding whenever mfs.isProtectedPath (import roots and the iTunes
-// library only) did not cover them.
+// A protected path is REFUSED here, never redirected: the tag-write guard
+// (tagger.ResolvePathForWrite) runs with the importer removed, so a protected
+// file -- or any file while the Deluge list has not loaded -- returns an error
+// wrapping tagger.ErrProtectedPathWrite and is not touched. Write-back deals
+// with a protected book at the book level instead: fileWorkTarget gives its
+// library copy, or nothing, and mfs.isProtectedPath (which includes the
+// Deluge list) skips each protected file before it gets here. Importing file
+// by file from here, as this did briefly on 2026-09-14, put each file at
+// RootDir/<basename> with no book folder: a multi-file book's files collided
+// or half-imported, a single-file book's row kept the seeding path, and with
+// DelugeMoveEnabled the torrent's storage was moved into the library root.
 func (mfs *Service) writeFileTagsSafe(path string, tagMap map[string]any, opts fileops.WriteTagsSafeOptions, opConfig fileops.OperationConfig) error {
-	target, err := tagger.ResolvePathForWrite(context.Background(), path, mfs.safeWriteDeps)
-	if err != nil {
+	deps := mfs.safeWriteDeps
+	deps.Importer = nil
+	if _, err := tagger.ResolvePathForWrite(context.Background(), path, deps); err != nil {
 		return err
 	}
-	if target != path && opts.Store != nil && mfs.db != nil {
-		// The write went to a library copy: record on the row of the file
-		// actually written (tagger.SafeWriteDeps.hashOptions, same rule).
-		opts = fileops.HashOptionsForPath(mfs.db, target)
-	}
 	if mfs.fileTagWrite != nil {
-		return mfs.fileTagWrite(target, tagMap)
+		return mfs.fileTagWrite(path, tagMap)
 	}
-	backupFileBeforeWrite(target)
-	_, _, err = fileops.WriteTagsSafe(target, func(tmpPath string) error {
+	backupFileBeforeWrite(path)
+	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
 		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 	}, opts)
 	return err

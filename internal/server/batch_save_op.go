@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -210,7 +210,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// and with the book lock now inside the call it would be
 				// path-then-book, the reverse of every apply's order: a deadlock
 				// against an apply of the same book.
-				_, wbErr := s.metadataFetchService.WriteBackMetadataForBook(id)
+				wroteFiles, wbErr := s.metadataFetchService.WriteBackMetadataForBook(id)
 				if wbErr != nil {
 					failed.Add(1)
 					detail := wbErr.Error()
@@ -218,8 +218,13 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 					return nil
 				}
 				written.Add(1)
-				// Stamp last_written_at on the book the user sees (may differ from library copy)
-				_ = store.SetLastWrittenAt(id, time.Now())
+				// Stamp last_written_at on the book the user sees (may differ from
+				// library copy) -- only when a file was written. A write-back
+				// that skipped every file (protected, or tags already matching)
+				// was stamped as written until 2026-09-14.
+				if wroteFiles > 0 {
+					_ = store.SetLastWrittenAt(id, time.Now())
+				}
 
 				// Organize in the file work's lock order: organizeAfterWriteBack
 				// takes the book's lock, then the lock on the path it re-reads

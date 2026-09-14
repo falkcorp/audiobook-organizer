@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -22,7 +22,14 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
+
+// protectedListLoaded reports whether the protected-path list the service
+// checks (the Deluge save paths) has loaded; true when none is wired.
+func (mfs *Service) protectedListLoaded() bool {
+	return mfs == nil || tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
+}
 
 func stripChapterFromTitle(title string) string {
 	cleaned := title
@@ -370,6 +377,20 @@ func keepDiagnosis(cur, next error) error {
 // (SERVER-GLOBAL-STORE-AUDIT phase 4).
 func (mfs *Service) isProtectedPath(filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
+
+	// Deluge save paths and the static protected prefixes: the same cache
+	// the tag-write guard uses. Until 2026-09-14 this checked only import
+	// roots and the iTunes library, so a book seeding from a Deluge save_path
+	// passed as unprotected here. An unloaded Deluge list answers "not
+	// protected" for everything, so it counts as protected: nothing is
+	// written or moved on that answer.
+	if mfs != nil {
+		if c := mfs.safeWriteDeps.ProtectedCache; c != nil {
+			if !tagger.ProtectedListLoaded(c) || c.IsProtected(absPath) {
+				return true
+			}
+		}
+	}
 
 	// Check import paths
 	if mfs != nil && mfs.db != nil {

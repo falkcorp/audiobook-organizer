@@ -1,5 +1,5 @@
 // file: internal/server/deluge_import_test.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: e1b5d8f2-3c7a-4091-a2e9-6f4d0c8b3a15
 // last-edited: 2026-09-14
 //
@@ -113,9 +113,10 @@ func TestImportToLibrary_SameSourceAndDest(t *testing.T) {
 	if newPath != srcFile {
 		t.Errorf("expected newPath = %q (same as src), got %q", srcFile, newPath)
 	}
-	// When source == dest, UpdateBookFile should NOT be called.
-	if store.updated != nil {
-		t.Error("UpdateBookFile was called even though source == dest; expected no-op")
+	// When source == dest nothing is copied, but the row is marked imported
+	// (path unchanged) so the discovery list stops offering it.
+	if store.updated == nil || store.updated.ImportedFromDelugeAt == nil || store.updated.FilePath != srcFile {
+		t.Errorf("row not marked imported in place: %+v", store.updated)
 	}
 	_ = time.Now() // keep time import used
 }

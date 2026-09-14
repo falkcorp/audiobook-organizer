@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -799,6 +799,17 @@ func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFil
 			len(dup), logger.SanitizeLogValue(msg))
 		result.Errors = append(result.Errors, msg)
 		return result, fmt.Errorf("%s: %w", msg, ErrDuplicateRenameTarget)
+	}
+
+	// A protected file (Deluge seeding, the iTunes library) is never moved.
+	// Refuse the whole plan before anything moves, so no book is left half
+	// renamed (SetRenameSourceGuard).
+	if prot := protectedRenameSources(entries); len(prot) > 0 {
+		msg := fmt.Sprintf("rename plan would move %d protected file(s), which are never moved: %s", len(prot), strings.Join(prot, "; "))
+		pipelineLog.Error("RenameFiles refusing a plan that moves protected files; nothing was moved: detail=%s",
+			logger.SanitizeLogValue(msg))
+		result.Errors = append(result.Errors, msg)
+		return result, fmt.Errorf("%s: %w", msg, ErrProtectedRenameSource)
 	}
 
 	// Pre-filter: skip entries where source doesn't exist — unless the file

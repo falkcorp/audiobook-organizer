@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.20.1
+// version: 2.21.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-14
 
@@ -474,6 +474,8 @@ type composerTagResult struct {
 	Narrator  string `json:"narrator,omitempty"`
 	WillWrite string `json:"will_write,omitempty"`
 	Applied   bool   `json:"applied,omitempty"`
+	// Protected: the fix was not written because the file is protected.
+	Protected bool   `json:"protected,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -603,9 +605,15 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 			continue
 		}
 		counts[r.Category]++
-		// "skipped_protected": the write guard refused a protected file. It
-		// is counted in by_category but is not a problem to fix.
-		if r.Category != "ok" && r.Category != "missing" && r.Category != "skipped_protected" {
+		// Protected: the write guard refused the file. Its category still says
+		// what is wrong with the tag; it is also counted as skipped_protected
+		// and is not listed as a problem, because it is never fixed here.
+		// "skipped_protected" as a category is what results written before
+		// 2026-09-14 carry.
+		if r.Protected {
+			counts["skipped_protected"]++
+		}
+		if r.Category != "ok" && r.Category != "missing" && r.Category != "skipped_protected" && !r.Protected {
 			problems = append(problems, r)
 		}
 	}

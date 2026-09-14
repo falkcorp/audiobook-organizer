@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-14
 //
@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -103,22 +103,57 @@ func (k *keyedMutex) lock(key string) (unlock func()) {
 	}
 }
 
-// ImportToLibrary copies a file from a Deluge-managed path into the library root,
+// ImportOptions configures ImportToLibraryWith.
+type ImportOptions struct {
+	// Protected is the protected-path predicate (the server's
+	// ProtectedPathCache). Nil disables the checks that need it.
+	Protected tagger.PathChecker
+	// ExpectedBookFileID, when set, is the caller's book_file row for the
+	// source. The import is refused when bookFile is another row, or when the
+	// row the path index holds for the source is another row: the index keeps
+	// one entry per path, so a second row naming the same file would
+	// otherwise be repointed on the first row's behalf.
+	ExpectedBookFileID string
+	// NoMoveStorage never asks Deluge to move the torrent's storage. Set for
+	// imports the tag-write guard triggers: those land at RootDir/<basename>,
+	// and moving a torrent's storage there makes the library root a Deluge
+	// save path, protecting every book in it.
+	NoMoveStorage bool
+}
+
+// ImportToLibrary is ImportToLibraryWith with only the protected-path
+// predicate set: the user-initiated import (the discovery endpoint).
+func ImportToLibrary(
+	cfg *config.Config,
+	delugeClient *Client,
+	store Store,
+	bookFile *database.BookFile,
+	protected tagger.PathChecker,
+) (newPath string, err error) {
+	return ImportToLibraryWith(cfg, delugeClient, store, bookFile, ImportOptions{Protected: protected})
+}
+
+// ImportToLibraryWith copies a file from a Deluge-managed path into the library root,
 // updates the BookFile record in the database, and optionally tells Deluge to move
 // the torrent storage to the new directory.
 //
 // Parameters:
-//   - cfg: app config (used for RootDir and DelugeMoveEnabled)
+//   - cfg: app config (used for RootDir, ProtectedPaths, the iTunes library and
+//     DelugeMoveEnabled)
 //   - delugeClient: Deluge JSON-RPC client (may be nil; if nil, MoveStorage is skipped)
 //   - store: database store (used to call UpdateBookFile)
 //   - bookFile: the BookFile to import; its FilePath must point to the source file.
 //     After a successful return, bookFile.FilePath is updated to the new path.
-//   - protected: the protected-path predicate (the server's ProtectedPathCache).
-//     Nil disables the two protected-path checks described below.
+//   - opts: see ImportOptions.
 //
 // Returns the new absolute file path and nil on success.
 // Returns an error if the source file cannot be read or the destination cannot be written.
 // A MoveStorage failure is NOT returned as an error — it is logged only.
+//
+// Only a Deluge save_path may be imported. A source under a static protected
+// prefix (config.ProtectedPaths, the iTunes library) is refused with an error
+// wrapping tagger.ErrProtectedPathWrite: those files are never copied out and
+// repointed, whatever asked.
 //
 // On a failed BookFile update the call leaves things as it found them:
 // bookFile's fields are restored and a copy this call created is removed, so
@@ -136,15 +171,15 @@ func (k *keyedMutex) lock(key string) (unlock func()) {
 //
 // A protected source whose library destination is the source itself (a
 // protected directory under RootDir) cannot be copied anywhere, so it is
-// refused with an error wrapping tagger.ErrProtectedPathWrite. Until 2026-09-14
-// the protected source was returned as the "library" path. An unprotected
-// source already at its destination is returned unchanged, with no row update.
-func ImportToLibrary(
+// refused with an error wrapping tagger.ErrProtectedPathWrite. An unprotected
+// source already at its destination is not copied; its row is marked imported
+// (so the discovery list stops offering it) and the source path is returned.
+func ImportToLibraryWith(
 	cfg *config.Config,
 	delugeClient *Client,
 	store Store,
 	bookFile *database.BookFile,
-	protected tagger.PathChecker,
+	opts ImportOptions,
 ) (newPath string, err error) {
 	if bookFile == nil {
 		return "", fmt.Errorf("ImportToLibrary: bookFile is nil")
@@ -154,10 +189,13 @@ func ImportToLibrary(
 		// fail before touching the disk.
 		return "", fmt.Errorf("ImportToLibrary: store is nil")
 	}
+	if opts.ExpectedBookFileID != "" && bookFile.ID != opts.ExpectedBookFileID {
+		return "", fmt.Errorf("ImportToLibrary: asked to import book file %s for caller's row %s; refusing to repoint a different row", bookFile.ID, opts.ExpectedBookFileID)
+	}
 
 	// Idempotency guard: already imported, and the row names a library file.
 	if bookFile.ImportedFromDelugeAt != nil {
-		if !isProtected(protected, bookFile.FilePath) {
+		if !isProtected(opts.Protected, bookFile.FilePath) {
 			importLog.Info("ImportToLibrary: %s already imported at %s, skipping",
 				logger.SanitizeLogValue(bookFile.FilePath), bookFile.ImportedFromDelugeAt.Format(time.RFC3339))
 			return bookFile.FilePath, nil
@@ -169,6 +207,22 @@ func ImportToLibrary(
 	src := bookFile.FilePath
 	if src == "" {
 		return "", fmt.Errorf("ImportToLibrary: bookFile.FilePath is empty")
+	}
+
+	// A static protected prefix (the iTunes library, config.ProtectedPaths)
+	// is never imported: only a Deluge save_path hit may be copied out.
+	if why := staticProtection(cfg, opts.Protected, src); why != "" {
+		return "", fmt.Errorf("ImportToLibrary: %s is under %s; only a Deluge save path may be imported: %w", src, why, tagger.ErrProtectedPathWrite)
+	}
+
+	// The row the path index holds for src must be this row. The index keeps
+	// one entry per path; importing on behalf of another row would repoint
+	// this one and leave that one naming the seeding file.
+	if atSrc, lookErr := store.GetBookFileByPath(src); lookErr != nil {
+		return "", fmt.Errorf("ImportToLibrary: look up the book file at %s: %w", src, lookErr)
+	} else if atSrc != nil && atSrc.ID != bookFile.ID {
+		return "", fmt.Errorf("ImportToLibrary: the path index names book file %s (book %s) for %s, not %s (book %s); refusing to import",
+			atSrc.ID, atSrc.BookID, src, bookFile.ID, bookFile.BookID)
 	}
 
 	// Determine destination path inside RootDir, validating with safepath.
@@ -197,10 +251,20 @@ func ImportToLibrary(
 	// protected source that means there is no library copy to write to, so
 	// refuse rather than hand the protected path back as the write target.
 	if src == dest {
-		if isProtected(protected, src) {
+		if isProtected(opts.Protected, src) {
 			return "", fmt.Errorf("ImportToLibrary: %s is protected and is its own library destination (a protected directory under RootDir), so there is nowhere to copy it: %w", src, tagger.ErrProtectedPathWrite)
 		}
-		importLog.Info("ImportToLibrary: source and destination are both %s, skipping copy", logger.SanitizeLogValue(src))
+		// Already in place: record that, or the discovery list offers this
+		// file again on every run (until 2026-09-14 it did).
+		prevImportedAt := bookFile.ImportedFromDelugeAt
+		now := time.Now()
+		bookFile.ImportedFromDelugeAt = &now
+		if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
+			bookFile.ImportedFromDelugeAt = prevImportedAt
+			return "", fmt.Errorf("ImportToLibrary: mark book file %s imported (already at its library destination %s): %w", bookFile.ID, src, err)
+		}
+		importLog.Info("ImportToLibrary: source and destination are both %s; nothing copied, row %s marked imported",
+			logger.SanitizeLogValue(src), logger.SanitizeLogValue(bookFile.ID))
 		return src, nil
 	}
 
@@ -280,20 +344,53 @@ func ImportToLibrary(
 		return "", updErr
 	}
 
-	slog.Info("ImportToLibrary copied ->", "src", src, "dest", dest)
+	importLog.Info("ImportToLibrary copied %s -> %s", logger.SanitizeLogValue(src), logger.SanitizeLogValue(dest))
 
-	// Best-effort: tell Deluge to move the torrent storage.
-	if cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
+	// Best-effort: tell Deluge to move the torrent storage. Never for an
+	// import the write guard triggered (opts.NoMoveStorage).
+	if !opts.NoMoveStorage && cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
 		moveErr := delugeClient.MoveStorage([]string{bookFile.DelugeHash}, filepath.Dir(dest))
 		if moveErr != nil {
-			slog.Warn("ImportToLibrary MoveStorage for hash failed (non-fatal)", "bookFile", bookFile.DelugeHash, "moveErr", moveErr)
+			importLog.Warn("ImportToLibrary MoveStorage for hash %s failed (non-fatal): %v", bookFile.DelugeHash, moveErr)
 			// Do NOT return this error. MoveStorage is best-effort.
 		} else {
-			slog.Info("ImportToLibrary MoveStorage for hash -> succeeded", "bookFile", bookFile.DelugeHash, "filepath", filepath.Dir(dest))
+			importLog.Info("ImportToLibrary MoveStorage for hash %s -> %s succeeded", bookFile.DelugeHash, filepath.Dir(dest))
 		}
 	}
 
 	return dest, nil
+}
+
+// protectionClassifier is implemented by *ProtectedPathCache: it says why a
+// path is protected.
+type protectionClassifier interface {
+	ProtectedBy(filePath string) string
+}
+
+// staticProtection names the static protected prefix path lies under -- the
+// checker's static list, config.ProtectedPaths, or the iTunes library -- or
+// returns "" when there is none. A Deluge save_path is not static.
+func staticProtection(cfg *config.Config, protected tagger.PathChecker, path string) string {
+	if pc, ok := protected.(protectionClassifier); ok && pc.ProtectedBy(path) == ProtectedByStatic {
+		return "a static protected path"
+	}
+	if cfg == nil {
+		return ""
+	}
+	for _, p := range cfg.ProtectedPaths {
+		if p != "" && pathutil.IsWithin(path, p) {
+			return "the configured protected path " + p
+		}
+	}
+	for _, lib := range []string{cfg.ITunes.LibraryReadPath, cfg.ITunes.LibraryWritePath} {
+		if lib == "" {
+			continue
+		}
+		if dir := filepath.Dir(lib); pathutil.IsWithin(path, dir) {
+			return "the iTunes library " + dir
+		}
+	}
+	return ""
 }
 
 // isProtected reports whether path is protected; a nil checker protects nothing.

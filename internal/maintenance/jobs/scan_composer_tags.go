@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-09-14
 
@@ -24,11 +24,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
-
-// sctCategorySkippedProtected is the result category for a file whose COMPOSER
-// write the guard refused because the file is protected. It is neither a
-// problem nor a failure: the file is left alone on purpose.
-const sctCategorySkippedProtected = "skipped_protected"
 
 func init() { maintenance.Register(&scanComposerTagsJob{}) }
 
@@ -208,7 +203,10 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 					}
 					if !dryRun && category != "ok" && willWrite != composer {
 						if writeErr := metadata.WriteSingleTag(w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
-							r.Category = sctCategorySkippedProtected
+							// Keep the category (what is wrong with the tag) and
+							// flag that the fix was not written because the file is
+							// protected. Overwriting the category lost the finding.
+							r.Protected = true
 							r.Error = writeErr.Error()
 							logger.New("scan-composer-tags").Info("op %s: skipping protected file %s: %v",
 								logger.SanitizeLogValue(opID), logger.SanitizeLogValue(w.filePath), writeErr)
@@ -259,6 +257,9 @@ type sct_result struct {
 	Narrator  string `json:"narrator,omitempty"`
 	WillWrite string `json:"will_write,omitempty"`
 	Applied   bool   `json:"applied,omitempty"`
+	// Protected is set when the fix was not written because the guard
+	// refused a protected file. Category still says what is wrong with the tag.
+	Protected bool   `json:"protected,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 

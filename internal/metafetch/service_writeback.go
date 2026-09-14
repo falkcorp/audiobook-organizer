@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
@@ -844,7 +844,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 	totalTracks := len(activeFiles)
 	// Counted from several writers at once (runFileWrites); read back into the
 	// plain ints below once every writer has returned.
-	var writtenN, skippedN atomic.Int64
+	var writtenN, skippedN, failedN atomic.Int64
 
 	// Embed cover art via TagLib (independent of tag writes — no ordering constraint).
 	pt.Since(PhaseTagPrep, prepStart)
@@ -912,6 +912,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 					"book_id", book.ID, "book_title", book.Title,
 					"book_file_id", bf.ID, "file_index", i+1, "file_count", len(activeFiles),
 					"tag_keys", sortedKeys(tagMap))
+				failedN.Add(1)
 			} else {
 				// Log successes as well as failures. Without this the multi-file
 				// branch was silent on success while the single-file branch below
@@ -965,6 +966,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 							"path", f, "error", err,
 							"book_id", book.ID, "book_title", book.Title,
 							"tag_keys", sortedKeys(fm))
+						failedN.Add(1)
 					} else {
 						slog.Info("wrote metadata back to", "path", f)
 						writtenN.Add(1)
@@ -983,6 +985,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 						"path", book.FilePath, "error", err,
 						"book_id", book.ID, "book_title", book.Title,
 						"tag_keys", sortedKeys(fm))
+					failedN.Add(1)
 				} else {
 					writtenN.Add(1)
 				}
@@ -992,6 +995,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 	pt.Since(PhaseTags, tagsStart)
 	writtenCount := int(writtenN.Load())
 	skippedProtected := int(skippedN.Load())
+	failedCount := 0 // sibling failures below; the per-file ones are added at the end
 
 	dbPostStart := time.Now()
 	// --- Write to version-linked copies in the library folder ---
@@ -1006,6 +1010,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 					continue // only write to library copies, leave import copies alone
 				}
 				if mfs.isProtectedPath(sib.FilePath) {
+					skippedProtected++ // left alone on purpose: counted, not silent
 					continue
 				}
 				tagMap := mfs.BuildTagMap(bookTitle, bookTitle, artistStr, narratorStr, year, "")
@@ -1020,6 +1025,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 					skippedProtected++
 				} else if err != nil {
 					slog.Warn("write-back failed for version-linked", "path", sib.FilePath, "error", err)
+					failedCount++
 				} else {
 					writtenCount++
 					slog.Info("wrote metadata to version-linked copy", "path", sib.FilePath)
@@ -1064,14 +1070,21 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 		_ = mfs.db.MarkNeedsRescan(book.ID)
 	}
 
-	if skippedProtected > 0 {
+	failedCount += int(failedN.Load())
+	if skippedProtected > 0 || failedCount > 0 {
 		// writtenCount already excludes skips; it used to be logged as
 		// writtenCount-skippedProtected, under-reporting the files written.
-		writeBackLog.Info("write-back for book %s wrote %d file(s), skipped %d protected file(s)",
-			logger.SanitizeLogValue(book.ID), writtenCount, skippedProtected)
+		writeBackLog.Info("write-back for book %s wrote %d file(s), skipped %d protected file(s), %d failed",
+			logger.SanitizeLogValue(book.ID), writtenCount, skippedProtected, failedCount)
 	}
 
 	pt.Since(PhaseDBPost, dbPostStart)
+	// Every write that was attempted failed: that is a failed write-back, not
+	// a success with zero files. Until 2026-09-14 it returned nil, so callers
+	// counted the book written (and batch save stamped last_written_at).
+	if failedCount > 0 && writtenCount == 0 {
+		return 0, fmt.Errorf("write-back for book %s: %d file write(s) failed and none succeeded", book.ID, failedCount)
+	}
 	return writtenCount, nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -35,6 +35,33 @@ type PathChecker interface {
 	IsProtected(filePath string) bool
 }
 
+// LoadReporter is implemented by a PathChecker whose protected list is
+// fetched from somewhere that can be down (*deluge.ProtectedPathCache and the
+// Deluge save_path list). Loaded is false until the list has been fetched.
+type LoadReporter interface {
+	Loaded() bool
+}
+
+// ProtectedListLoaded reports whether c's protected list is usable: true for
+// a nil checker (nothing is protected) or one that does not report loading,
+// else c.Loaded(). A caller that rewrites or moves files must not proceed on
+// false: an unloaded list reports "not protected" for every seeding file.
+func ProtectedListLoaded(c PathChecker) bool {
+	if c == nil {
+		return true
+	}
+	if lr, ok := c.(LoadReporter); ok {
+		return lr.Loaded()
+	}
+	return true
+}
+
+// ErrProtectedListNotLoaded means the protected-path list (the Deluge
+// save_paths) has never loaded, so whether a path is protected is unknown.
+// Errors carrying it also wrap ErrProtectedPathWrite: the file is left alone,
+// which callers count as a skip.
+var ErrProtectedListNotLoaded = errors.New("the protected-path list (Deluge save paths) has not loaded")
+
 // LibraryImporter copies a protected file into the library root and returns
 // the new path. Implementations are expected to be idempotent.
 //
@@ -42,8 +69,11 @@ type PathChecker interface {
 // context.Background() by well-behaved implementations.
 type LibraryImporter interface {
 	// ImportPath resolves src to a library path, copying if necessary.
-	// Returns the effective (possibly new) path to write to.
-	ImportPath(ctx context.Context, srcPath string) (libraryPath string, err error)
+	// Returns the effective (possibly new) path to write to. bookFileID is
+	// the caller's book_file row for srcPath, or "" when it does not know
+	// one; a non-empty ID that does not match the row found at srcPath must
+	// be refused (the path index holds one entry per path).
+	ImportPath(ctx context.Context, srcPath, bookFileID string) (libraryPath string, err error)
 }
 
 // SafeWriteDeps bundles the optional dependencies needed for the pre-flight
@@ -178,6 +208,12 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 		return path, nil
 	}
 
+	// An unloaded Deluge list says "not protected" for every seeding file.
+	// Refuse rather than write on that answer.
+	if !ProtectedListLoaded(deps.ProtectedCache) {
+		return "", fmt.Errorf("not writing %s: %w: %w", path, ErrProtectedListNotLoaded, ErrProtectedPathWrite)
+	}
+
 	if !deps.ProtectedCache.IsProtected(path) {
 		return path, nil
 	}
@@ -192,7 +228,7 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 		return "", fmt.Errorf("protected path %s has no library importer: %w", path, ErrProtectedPathWrite)
 	}
 
-	libraryPath, err := deps.Importer.ImportPath(ctx, path)
+	libraryPath, err := deps.Importer.ImportPath(ctx, path, deps.BookFileID)
 	if err != nil {
 		return "", fmt.Errorf("import protected path %s: %w", path, err)
 	}

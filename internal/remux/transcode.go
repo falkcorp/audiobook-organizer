@@ -1,5 +1,5 @@
 // file: internal/remux/transcode.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-14
 
@@ -164,6 +164,9 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("TranscodeMalformedFiles: ffmpeg not found: %w", err)
 	}
+	if !protectedListLoaded(t.protected) {
+		return fmt.Errorf("TranscodeMalformedFiles: %w", errProtectedListNotLoaded)
+	}
 
 	// Pre-mark files confirmed permanently unfixable by full transcode.
 	// These produce valid ffmpeg output but taglib still cannot parse them.
@@ -296,6 +299,11 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 	}
 
 	log.Info("Malformed M4B transcode complete: transcoded=%d clean=%d failed=%d skipped=%d skipped_protected=%d", transcoded, clean, failed, skipped, skippedProtected)
+	// Same rule as the remux pass: not done after a cancel or a protected skip.
+	if why := notDoneReason(ctx, skippedProtected); why != "" {
+		log.Info("Malformed M4B transcode not marked done (%s); it runs again next time", why)
+		return nil
+	}
 	_ = t.store.SetSetting(TranscodeKey, "true", "bool", false)
 	return nil
 }
