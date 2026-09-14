@@ -1,11 +1,13 @@
 // file: internal/scanner/store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
 // last-edited: 2026-09-13
 
 package scanner
 
 import (
+	"context"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -55,6 +57,11 @@ type scanEntityStore interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 	GetAllWorks() ([]database.Work, error)
+	// ForEachWork is the cancelable works load the works lookup cache uses.
+	ForEachWork(ctx context.Context, visit func(database.Work) error) error
+	// WorksGeneration lets the works lookup cache survive a scan restart: a
+	// cache whose generation still matches the store's is reused, not reloaded.
+	WorksGeneration() uint64
 	CreateWork(work *database.Work) (*database.Work, error)
 }
 

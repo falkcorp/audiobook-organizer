@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -432,6 +433,11 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 		// matters — without it the ops that record undo history recorded
 		// nothing.
 		s.opRegistry.SetRunContextDecorator(opRunContextDecorator)
+		// Coalesce metadata-apply bursts: the scan a stand-down parked is
+		// re-queued only after this grace (read live at each last release).
+		s.opRegistry.SetScanStandDownGraceFunc(func() time.Duration {
+			return time.Duration(config.AppConfig.ScanStandDownGraceSeconds) * time.Second
+		})
 	}
 	if hub, ok := serviceregistry.TryGet[*opsregistry.EventHub](c, serviceregistry.KeyOpHub); ok {
 		s.opHub = hub

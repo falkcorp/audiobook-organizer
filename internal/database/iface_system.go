@@ -1,7 +1,7 @@
 // file: internal/database/iface_system.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
-// last-edited: 2026-09-08
+// last-edited: 2026-09-13
 
 package database
 
@@ -55,9 +55,16 @@ type MaintenanceStore interface {
 	// long compaction is indistinguishable from a wedged one.
 	CompactionStats() CompactionStats
 	GetScanCacheMap() (map[string]ScanCacheEntry, error)
+	// GetScanCacheMapContext is GetScanCacheMap that stops with ctx's error
+	// once ctx is done. The scan's startup uses it so a stand-down cancel is
+	// seen mid-load instead of after it.
+	GetScanCacheMapContext(ctx context.Context) (map[string]ScanCacheEntry, error)
 	UpdateScanCache(bookID string, mtime int64, size int64) error
 	MarkNeedsRescan(bookID string) error
 	GetDirtyBookFolders() ([]string, error)
+	// GetDirtyBookFoldersContext is GetDirtyBookFolders that stops with ctx's
+	// error once ctx is done (same reason as GetScanCacheMapContext).
+	GetDirtyBookFoldersContext(ctx context.Context) ([]string, error)
 }
 
 // RawKVStore covers the low-level key-value escape hatch.

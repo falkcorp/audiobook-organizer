@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 package scanner
 
 import (
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -26,9 +27,33 @@ import (
 type scanServiceStore interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 	UpdateImportPath(id int, importPath *database.ImportPath) error
-	GetScanCacheMap() (map[string]database.ScanCacheEntry, error)
-	GetDirtyBookFolders() ([]string, error)
+	// The Context variants, not the plain ones: both walk a whole table in the
+	// scan's startup, and a stand-down cancel must be seen during the walk.
+	GetScanCacheMapContext(ctx context.Context) (map[string]database.ScanCacheEntry, error)
+	GetDirtyBookFoldersContext(ctx context.Context) ([]string, error)
 	CountBooksByPathPrefix(prefix string) (int, error)
+}
+
+// startupCanceled reports whether the scan was canceled during its startup
+// (the phases before the per-folder loop) and, if so, logs which phase saw it
+// and returns the error the scan exits with. Both stop signals are checked,
+// the same pair the per-folder loop checks: ctx (a stand-down or server
+// cancel) and the operation's own stop flag.
+//
+// Every startup phase checks this. Until 2026-09-13 none of them did: a
+// stand-down canceled the scan during the works load (156,952 works, ~57s on
+// production) and the apply op waiting for the scan to park waited the whole
+// load before the scan reached the folder loop's first check.
+func startupCanceled(ctx context.Context, log logger.Logger, phase string) error {
+	if err := ctx.Err(); err != nil {
+		log.Info("Scan canceled (context) during startup (%s): %v", phase, err)
+		return fmt.Errorf("scan canceled: %w", err)
+	}
+	if log.IsCanceled() {
+		log.Info("Scan canceled during startup (%s)", phase)
+		return fmt.Errorf("scan canceled")
+	}
+	return nil
 }
 
 // ScanService orchestrates multi-folder audiobook scanning.
@@ -216,21 +241,34 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 		return nil
 	}
 
+	if err := startupCanceled(ctx, log, "folders"); err != nil {
+		return err
+	}
+
 	// Pre-load scan cache for incremental skip checks.
 	var scanCache map[string]database.ScanCacheEntry
 	if !forceUpdate {
-		cache, err := ss.db.GetScanCacheMap()
+		loadStart := time.Now()
+		cache, err := ss.db.GetScanCacheMapContext(ctx)
+		if cerr := startupCanceled(ctx, log, "scan cache load"); cerr != nil {
+			return cerr
+		}
 		if err != nil {
 			log.Warn("Failed to load scan cache, running full scan: %v", err)
 		} else {
 			scanCache = cache
-			log.Info("Loaded scan cache with %d entries", len(cache))
+			log.Info("Loaded scan cache with %d entries in %s", len(cache), time.Since(loadStart).Round(time.Millisecond))
 		}
 	}
 
 	// Add any folders that have books flagged needs_rescan.
 	if !forceUpdate && scanCache != nil {
-		dirtyFolders, err := ss.db.GetDirtyBookFolders()
+		loadStart := time.Now()
+		dirtyFolders, err := ss.db.GetDirtyBookFoldersContext(ctx)
+		if cerr := startupCanceled(ctx, log, "dirty folders"); cerr != nil {
+			return cerr
+		}
+		log.Info("Dirty-folder check took %s", time.Since(loadStart).Round(time.Millisecond))
 		if err == nil && len(dirtyFolders) > 0 {
 			log.Info("Found %d folders with dirty books", len(dirtyFolders))
 			folderSet := make(map[string]bool)
@@ -282,9 +320,19 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 	// Build the per-scan works lookup cache so saveBookToDatabase does not
 	// run GetAllWorks() once per book (MAYDEPLOY-H6: 50K books × 50K works
 	// = 2.5B lookups → single load + map access). Reference-counted for the
-	// same R-4 concurrent-run reason as the scan cache above.
-	AcquireWorksLookupCache()
+	// same R-4 concurrent-run reason as the scan cache above. The load is
+	// cancelable, and a restarted scan reuses the previous run's map when no
+	// work row changed in between (see AcquireWorksLookupCache).
+	if err := AcquireWorksLookupCache(ctx); err != nil {
+		if cerr := startupCanceled(ctx, log, "works lookup load"); cerr != nil {
+			return cerr
+		}
+		return fmt.Errorf("scan startup: works lookup cache: %w", err)
+	}
 	defer ReleaseWorksLookupCache()
+	if err := startupCanceled(ctx, log, "startup complete"); err != nil {
+		return err
+	}
 
 	// Scan each folder
 	stats := &ScanStats{}

@@ -119,11 +119,12 @@ type MockStore struct {
 	ListSoftDeletedBooksFunc             func(limit, offset int, olderThan *time.Time) ([]Book, error)
 
 	// Work methods
-	GetAllWorksFunc func() ([]Work, error)
-	GetWorkByIDFunc func(id string) (*Work, error)
-	CreateWorkFunc  func(work *Work) (*Work, error)
-	UpdateWorkFunc  func(id string, work *Work) (*Work, error)
-	DeleteWorkFunc  func(id string) error
+	GetAllWorksFunc     func() ([]Work, error)
+	WorksGenerationFunc func() uint64
+	GetWorkByIDFunc     func(id string) (*Work, error)
+	CreateWorkFunc      func(work *Work) (*Work, error)
+	UpdateWorkFunc      func(id string, work *Work) (*Work, error)
+	DeleteWorkFunc      func(id string) error
 
 	// Author methods
 	GetAllAuthorsFunc   func() ([]Author, error)
@@ -933,6 +934,33 @@ func (m *MockStore) GetAllWorks() ([]Work, error) {
 		return m.GetAllWorksFunc()
 	}
 	return nil, nil
+}
+
+// ForEachWork visits GetAllWorks' result, honouring ctx between rows.
+func (m *MockStore) ForEachWork(ctx context.Context, visit func(Work) error) error {
+	works, err := m.GetAllWorks()
+	if err != nil {
+		return err
+	}
+	for _, w := range works {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := visit(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WorksGeneration returns WorksGenerationFunc's value, or 0 (a constant, so a
+// works cache built against the mock is always reusable unless a test sets
+// the func).
+func (m *MockStore) WorksGeneration() uint64 {
+	if m.WorksGenerationFunc != nil {
+		return m.WorksGenerationFunc()
+	}
+	return 0
 }
 
 func (m *MockStore) GetWorkByID(id string) (*Work, error) {
@@ -2681,6 +2709,22 @@ func (m *MockStore) GetDirtyBookFolders() ([]string, error) {
 		return m.GetDirtyBookFoldersFunc()
 	}
 	return nil, nil
+}
+
+// GetDirtyBookFoldersContext delegates to GetDirtyBookFolders after a ctx check.
+func (m *MockStore) GetDirtyBookFoldersContext(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.GetDirtyBookFolders()
+}
+
+// GetScanCacheMapContext delegates to GetScanCacheMap after a ctx check.
+func (m *MockStore) GetScanCacheMapContext(ctx context.Context) (map[string]ScanCacheEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.GetScanCacheMap()
 }
 
 func (m *MockStore) CreateDeferredITunesUpdate(bookID, persistentID, oldPath, newPath, updateType string) error {

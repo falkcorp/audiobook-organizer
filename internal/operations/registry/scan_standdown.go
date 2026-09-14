@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package registry
 
@@ -51,15 +51,36 @@ type scanStandDown struct {
 	// lease is reaped (and treated as absent) the next time the map is scanned.
 	holders map[string]time.Time
 	// scanOpID is the opID of the library.scan run this stand-down quiesced, if
-	// any. Cleared when the last holder releases; used to resume that exact run.
+	// any. Cleared when the scan is re-queued; used to resume that exact run.
 	scanOpID string
 	// dropped holds library.scan runs the worker pickup gate dropped as
-	// interrupted_quiesced while a holder was registered (a scan claimed before
-	// the holder arrived, picked up after). The last release re-queues them.
+	// interrupted_quiesced while the gate was held (a scan claimed before the
+	// holder arrived, picked up after). They are re-queued with scanOpID.
 	dropped []string
 	// lastPersist throttles the marker write RenewScanStandDown makes: holders
 	// renew per item, and the marker only needs to be roughly current.
 	lastPersist time.Time
+
+	// Re-queue grace (2026-09-13). The owner applies metadata one book at a
+	// time; each apply op stands the scan down, and the last release used to
+	// re-queue the scan at once. The scan restarted, spent its whole startup
+	// (a ~57s works load on production) and was canceled by the next click,
+	// which waited for it to park: every click cost about a minute and the scan
+	// never progressed. Now the last release starts a grace timer instead:
+	// while graceActive, library.scan still does not dispatch (Gate 3.5 and
+	// the pickup gate read scanStandDownActive), and an acquire during the
+	// grace cancels it and returns at once because no scan is running.
+	//
+	// graceActive is NOT a holder: it has no lease, holds no marker and is
+	// invisible to ScanStandDownValid/RenewScanStandDown. The marker is
+	// cleared at the last release exactly as before, so a crash during the
+	// grace leaves the scan row interrupted_quiesced with no marker, and the
+	// startup resume sweep re-queues it (resumeAfterStartup).
+	graceActive bool
+	graceTimer  *time.Timer
+	// graceEpoch invalidates a timer whose callback is already waiting on mu
+	// when the grace is canceled or restarted.
+	graceEpoch uint64
 }
 
 // scanStandDownMarker is the persisted (JSON) form of an active stand-down. Its
@@ -80,9 +101,14 @@ type scanStandDownMarker struct {
 // not start a new library.scan (Gate 3.5) and a scan already claimed-but-not-yet
 // -running is dropped as interrupted_quiesced at pickup.
 //
+// An acquire during the re-queue grace of an earlier holder cancels that grace
+// and inherits its quiesced scan: nothing is running, so it returns without
+// waiting, and the marker it persists names the inherited scan so a crash during
+// this holder's work still defers that scan at boot.
+//
 // The returned release closure is idempotent. Call it (deferred) when the apply
 // work is done: the last holder to release clears the marker and re-queues the
-// quiesced scan from its checkpoint.
+// quiesced scan from its checkpoint (after the grace, when one is configured).
 //
 // Lease semantics (fail-safe): a holder must renew via RenewScanStandDown on its
 // progress heartbeat and must treat ScanStandDownValid()==false as a HARD ABORT
@@ -96,11 +122,14 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 	expiry := time.Now().Add(lease)
 
 	// 1. Register the holder and persist the marker BEFORE quiescing, so a reboot
-	//    during the quiesce is visible to the boot resume sweep.
+	//    during the quiesce is visible to the boot resume sweep. The marker names
+	//    any scan already quiesced (by a live holder or a pending grace).
 	r.scanGate.mu.Lock()
 	r.scanGate.holders[holderOpID] = expiry
+	r.cancelScanStandDownGraceLocked(holderOpID)
+	inherited := r.scanGate.scanOpID
 	r.scanGate.mu.Unlock()
-	r.persistScanStandDown(holderOpID, "", expiry)
+	r.persistScanStandDown(holderOpID, inherited, expiry)
 
 	r.logger.Info("registry: scan stand-down acquired",
 		"holder_op_id", holderOpID, "reason", reason, "lease", lease)
@@ -112,6 +141,10 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 		scanHandle.cancelIfActive()
 
 		r.scanGate.mu.Lock()
+		if prev := r.scanGate.scanOpID; prev != "" && prev != scanOpID {
+			// Keep the earlier quiesced scan re-queueable too.
+			r.scanGate.dropped = append(r.scanGate.dropped, prev)
+		}
 		r.scanGate.scanOpID = scanOpID
 		r.scanGate.mu.Unlock()
 		r.persistScanStandDown(holderOpID, scanOpID, expiry)
@@ -144,6 +177,20 @@ func (r *Registry) leaseTTL() time.Duration {
 		return r.scanStandDownLease
 	}
 	return defaultScanStandDownLease
+}
+
+// scanStandDownGraceFor returns the re-queue grace to apply now: the live
+// func when one is installed, else Options.ScanStandDownGrace. Negative reads
+// as zero (no grace).
+func (r *Registry) scanStandDownGraceFor() time.Duration {
+	d := r.scanStandDownGrace
+	if fn := r.scanStandDownGraceFn.Load(); fn != nil && *fn != nil {
+		d = (*fn)()
+	}
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // RenewScanStandDown extends the caller's lease. Callers renew on their progress
@@ -187,18 +234,33 @@ func (r *Registry) ScanStandDownValid(holderOpID string) bool {
 	return ok && time.Now().Before(expiry)
 }
 
-// releaseScanStandDown removes a holder and, when it was the last live holder,
-// clears the persisted marker and re-queues the quiesced scan from its
-// checkpoint. Idempotent for a given holder via the AcquireScanStandDown once.
+// releaseScanStandDown removes a holder. When it was the last live holder it
+// clears the persisted marker and either re-queues the quiesced scan(s) from
+// their checkpoint at once (no grace configured, or shutting down) or starts the
+// re-queue grace, whose timer re-queues them unless another acquire cancels it
+// first. Idempotent for a given holder via the AcquireScanStandDown once.
 func (r *Registry) releaseScanStandDown(holderOpID string) {
+	grace := r.scanStandDownGraceFor()
+	deferToGrace := grace > 0 && !r.shuttingDown.Load()
+
 	r.scanGate.mu.Lock()
 	delete(r.scanGate.holders, holderOpID)
 	live := r.liveHoldersLocked()
-	scanOpID := r.scanGate.scanOpID
+	var scanOpID string
 	var dropped []string
 	if live == 0 {
-		r.scanGate.scanOpID = ""
-		dropped, r.scanGate.dropped = r.scanGate.dropped, nil
+		// Last holder out: its work is done, so the marker goes now — under
+		// scanGate.mu, so an acquire racing this release can never have its
+		// fresh marker wiped by this clear (the acquire registers under mu
+		// first, which makes live > 0 here, or persists after we unlock).
+		r.clearScanStandDown()
+		if deferToGrace {
+			r.startScanStandDownGraceLocked(grace)
+		} else {
+			scanOpID = r.scanGate.scanOpID
+			r.scanGate.scanOpID = ""
+			dropped, r.scanGate.dropped = r.scanGate.dropped, nil
+		}
 	}
 	r.scanGate.mu.Unlock()
 
@@ -209,8 +271,97 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 		// Other holders remain; keep the scanner down.
 		return
 	}
-	// Last holder out: clear the marker and resume the scan we quiesced.
-	r.clearScanStandDown()
+	if deferToGrace {
+		r.logger.Info("registry: scan stand-down re-queue deferred for grace",
+			"grace", grace, "holder_op_id", holderOpID)
+		return
+	}
+	r.resumeStoodDownScans(scanOpID, dropped)
+}
+
+// startScanStandDownGraceLocked arms the re-queue grace timer. Caller holds
+// r.scanGate.mu.
+func (r *Registry) startScanStandDownGraceLocked(grace time.Duration) {
+	if r.scanGate.graceTimer != nil {
+		r.scanGate.graceTimer.Stop()
+	}
+	r.scanGate.graceActive = true
+	r.scanGate.graceEpoch++
+	epoch := r.scanGate.graceEpoch
+	r.scanGate.graceTimer = time.AfterFunc(grace, func() { r.endScanStandDownGrace(epoch) })
+}
+
+// cancelScanStandDownGraceLocked ends a pending grace because a new holder
+// arrived: the quiesced scan stays parked (scanOpID/dropped are kept for that
+// holder's own last release). Caller holds r.scanGate.mu.
+func (r *Registry) cancelScanStandDownGraceLocked(holderOpID string) {
+	if !r.scanGate.graceActive {
+		return
+	}
+	r.scanGate.graceActive = false
+	r.scanGate.graceEpoch++
+	if r.scanGate.graceTimer != nil {
+		r.scanGate.graceTimer.Stop()
+		r.scanGate.graceTimer = nil
+	}
+	r.logger.Info("registry: scan stand-down grace canceled by a new holder; scan stays parked",
+		"holder_op_id", holderOpID, "scan_op_id", r.scanGate.scanOpID)
+}
+
+// endScanStandDownGrace is the grace timer's callback: the grace elapsed with no
+// new holder, so re-queue the quiesced scan(s) now.
+func (r *Registry) endScanStandDownGrace(epoch uint64) {
+	r.scanGate.mu.Lock()
+	if !r.scanGate.graceActive || r.scanGate.graceEpoch != epoch {
+		r.scanGate.mu.Unlock()
+		return
+	}
+	r.scanGate.graceActive = false
+	r.scanGate.graceTimer = nil
+	if r.liveHoldersLocked() > 0 {
+		// Unreachable while every acquire cancels the grace, kept as a guard:
+		// a live holder's own last release re-queues the scan.
+		r.scanGate.mu.Unlock()
+		return
+	}
+	scanOpID := r.scanGate.scanOpID
+	r.scanGate.scanOpID = ""
+	dropped := r.scanGate.dropped
+	r.scanGate.dropped = nil
+	r.scanGate.mu.Unlock()
+
+	if r.shuttingDown.Load() {
+		// The rows stay interrupted_quiesced (no marker); startup resumes them.
+		return
+	}
+	r.logger.Info("registry: scan stand-down grace elapsed; re-queuing quiesced scan",
+		"scan_op_id", scanOpID, "dropped", len(dropped))
+	r.resumeStoodDownScans(scanOpID, dropped)
+}
+
+// stopScanStandDownGrace cancels a pending grace for Shutdown without
+// re-queuing anything: a timer firing into a closing store is the "pebble:
+// closed" class. The quiesced rows stay interrupted_quiesced for the startup
+// resume sweep.
+func (r *Registry) stopScanStandDownGrace() {
+	r.scanGate.mu.Lock()
+	defer r.scanGate.mu.Unlock()
+	if !r.scanGate.graceActive {
+		return
+	}
+	r.scanGate.graceActive = false
+	r.scanGate.graceEpoch++
+	if r.scanGate.graceTimer != nil {
+		r.scanGate.graceTimer.Stop()
+		r.scanGate.graceTimer = nil
+	}
+	r.logger.Info("registry: shutdown during scan stand-down grace; the quiesced scan resumes at next startup",
+		"scan_op_id", r.scanGate.scanOpID)
+}
+
+// resumeStoodDownScans re-queues the quiesced scan and any dropped ones, then
+// wakes the dispatcher (which also dispatches a scan Gate 3.5 held back).
+func (r *Registry) resumeStoodDownScans(scanOpID string, dropped []string) {
 	if scanOpID != "" {
 		r.resumeQuiescedOp(scanOpID)
 	}
@@ -223,15 +374,16 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 }
 
 // resumeDroppedScanOnRelease is called by the worker pickup gate AFTER it has
-// recorded a dropped scan as interrupted_quiesced. If a holder is still live the
-// scan joins scanGate.dropped and the last release re-queues it. If every holder
-// released while the status was being written, that release has already run and
-// saw nothing to resume, so the scan is re-queued here. Both branches decide
-// under scanGate.mu, which releaseScanStandDown also takes, so exactly one of
-// them re-queues the scan.
+// recorded a dropped scan as interrupted_quiesced. If the gate is still held (a
+// live holder or a pending grace) the scan joins scanGate.dropped and the
+// holder's last release or the grace timer re-queues it. If the gate cleared
+// while the status was being written, that clear has already run and saw
+// nothing to resume, so the scan is re-queued here. Both branches decide under
+// scanGate.mu, which releaseScanStandDown and endScanStandDownGrace also take,
+// so exactly one of them re-queues the scan.
 func (r *Registry) resumeDroppedScanOnRelease(scanOpID string) {
 	r.scanGate.mu.Lock()
-	if r.liveHoldersLocked() > 0 {
+	if r.liveHoldersLocked() > 0 || r.scanGate.graceActive {
 		r.scanGate.dropped = append(r.scanGate.dropped, scanOpID)
 		r.scanGate.mu.Unlock()
 		return
@@ -241,13 +393,16 @@ func (r *Registry) resumeDroppedScanOnRelease(scanOpID string) {
 	r.pingDispatch()
 }
 
-// scanStandDownActive reports whether any holder currently holds the gate,
-// reaping expired leases as a side effect. Cheap enough for the dispatcher to
+// scanStandDownActive reports whether library.scan must not start: a holder
+// holds the gate, or the re-queue grace after the last release is pending.
+// Reaps expired leases as a side effect. Cheap enough for the dispatcher to
 // call per candidate (it is only taken for library.scan rows in practice).
+// Lease checks (ScanStandDownValid, RenewScanStandDown) read the holders map
+// directly and are not affected by the grace.
 func (r *Registry) scanStandDownActive() bool {
 	r.scanGate.mu.Lock()
 	defer r.scanGate.mu.Unlock()
-	return r.liveHoldersLocked() > 0
+	return r.liveHoldersLocked() > 0 || r.scanGate.graceActive
 }
 
 // liveHoldersLocked returns the number of holders with unexpired leases, reaping
@@ -287,9 +442,9 @@ func (r *Registry) findRunningScan() (string, *runHandle) {
 // persistScanStandDown, clearScanStandDown and readScanStandDownMarker read
 // r.scanStandDownStore WITHOUT taking r.mu. This is deliberate and required: the
 // dispatcher claim block calls scanStandDownActive() (which takes scanGate.mu)
-// while holding r.mu, and RenewScanStandDown calls persistScanStandDown while
-// holding scanGate.mu — taking r.mu here too would be an AB-BA inversion. The
-// lockless read is safe because scanStandDownStore is set once via
+// while holding r.mu, and RenewScanStandDown and releaseScanStandDown call into
+// the store while holding scanGate.mu — taking r.mu here too would be an AB-BA
+// inversion. The lockless read is safe because scanStandDownStore is set once via
 // SetScanStandDownStore BEFORE Start() (same set-once-before-Start contract as
 // depBookStore/runContextDecorator); Start()'s goroutine launch is the
 // happens-before edge that publishes it.
