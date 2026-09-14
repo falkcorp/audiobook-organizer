@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -89,6 +89,14 @@ type applyOutcome struct {
 	// Applied stays true for the same reason as WriteBackFailed; the op counts
 	// and logs it, because that history is the only record of the override.
 	HistoryFailed bool
+	// HistoryErr and WriteBackErr hold the error behind HistoryFailed and
+	// WriteBackFailed respectively. Both can be set on one book (the history
+	// write failed, then the file work failed too), so each flag keeps its own
+	// error and Err joins them: before 2026-09-14 the write-back error
+	// overwrote the history error in Err, and the owner lost the only signal
+	// that the override had no record.
+	HistoryErr   error
+	WriteBackErr error
 	// SkippedLocked lists the lock keys (database.UserLockableFields) the apply
 	// left alone because the user has locked or overridden them. The apply
 	// still counts as Applied -- every other field landed -- but an op summary
@@ -330,8 +338,14 @@ func applyCachedCandidateForBookTimed(
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
 	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
+	// Err is always errors.Join(HistoryErr, WriteBackErr): a later failure
+	// must never replace an earlier one, and errors.Is still finds either.
+	failWriteBack := func(err error) {
+		out.WriteBackFailed, out.WriteBackErr = true, err
+		out.Err = errors.Join(out.HistoryErr, out.WriteBackErr)
+	}
 	if historyErr != nil {
-		out.HistoryFailed, out.Err = true, historyErr
+		out.HistoryFailed, out.HistoryErr, out.Err = true, historyErr, historyErr
 	}
 	pendingCover := ""
 	if resp != nil {
@@ -345,7 +359,7 @@ func applyCachedCandidateForBookTimed(
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
 		if err := svc.FinishApplyFileWorkTimed(id, pendingCover, false, false, checkpoint, pt); err != nil {
-			out.WriteBackFailed, out.Err = true, err
+			failWriteBack(err)
 		}
 		return out
 	}
@@ -367,7 +381,7 @@ func applyCachedCandidateForBookTimed(
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
 	if err := svc.FinishApplyFileWorkTimed(id, pendingCover, true, true, checkpoint, pt); err != nil {
-		out.WriteBackFailed, out.Err = true, err
+		failWriteBack(err)
 	}
 	return out
 }
