@@ -1,7 +1,7 @@
 // file: internal/util/transcript_match.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package util
 
@@ -360,7 +360,32 @@ func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle
 	if len(transcribedAuthor) <= 3 {
 		return true
 	}
-	return strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor))
+	return strings.Contains(initialsFolded(candidateAuthor), initialsFolded(transcribedAuthor))
+}
+
+// initialsFolded is the author form the containment check compares: periods
+// read as spaces and a run of single-letter initials is joined, so the
+// catalog's "R. A. Salvatore" and Whisper's "R.A. Salvator" both start "ra
+// salvator". Local to this check on purpose: NormalizeAuthor keys the Pebble
+// author, series and narrator name indexes, and must not change.
+func initialsFolded(s string) string {
+	var out []string
+	run := ""
+	for _, f := range strings.Fields(strings.ReplaceAll(strings.ToLower(s), ".", " ")) {
+		if r := []rune(f); len(r) == 1 && unicode.IsLetter(r[0]) {
+			run += f
+			continue
+		}
+		if run != "" {
+			out = append(out, run)
+			run = ""
+		}
+		out = append(out, f)
+	}
+	if run != "" {
+		out = append(out, run)
+	}
+	return strings.Join(out, " ")
 }
 
 // splitAuthors splits a candidate author field into individual authors on
