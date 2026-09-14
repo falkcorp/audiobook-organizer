@@ -1,7 +1,7 @@
 // file: tools/cmd/itunes-group-preview/main.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-06-20
+// last-edited: 2026-09-14
 
 // Command itunes-group-preview parses an iTunes library XML and reports how many
 // BOOKS the (fixed) importer grouping would create from it — a DB-free dry-run
@@ -59,7 +59,7 @@ func main() {
 	fmt.Printf("\ntop %d multi-file books (tracks merged into one book):\n", *sample)
 	for i := 0; i < *sample && i < len(books); i++ {
 		b := books[i]
-		fmt.Printf("  %4d tracks  %-28.28s  %q\n", b.NumTracks, b.Artist, b.Title)
+		fmt.Printf("  %4d tracks  %-28.28s  %q\n", b.NumTracks, b.Author, b.Title)
 	}
 
 	// Distribution of book sizes.

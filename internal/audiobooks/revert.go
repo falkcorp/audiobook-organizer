@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package audiobooks
 
@@ -129,7 +129,7 @@ func NewRevertService(db revertServiceStore) *RevertService {
 	return rs
 }
 
-// It writes each key to its one file property and reads the file back
+// It writes each key to every file property it names and reads the file back
 // (metadata.WriteTagProperties): a key with no property, a value the writer
 // did not store, or a removal it did not make is an error, so the row fails
 // instead of being marked reverted. metadata.WriteMetadataToFile could not be
@@ -762,7 +762,7 @@ func renameRefusal(err error) error {
 // refuses them again rather than write "", which deletes the tag. A missing
 // file or a protected path fails the row.
 //
-// It is a compare-and-set on the one file property the tag key names
+// It is a compare-and-set on the file properties the tag key names
 // (metadata.TagProperty), under the per-path write lock: the file must still
 // hold what the organize wrote (NewValue). A later write-back or apply that
 // changed the tag is kept and the row refused as changed since. A file that
@@ -793,7 +793,7 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	// Checked after the book and file, so a row whose book is gone reports
 	// that reason; either way nothing is written and the row fails.
 	if _, writable := metadata.TagProperty(tag); !writable {
-		return fmt.Errorf("tag %s not restored: it maps to no single file property the revert can write", tag)
+		return fmt.Errorf("tag %s not restored: it maps to no file property the revert can write", tag)
 	}
 	target := bf.FilePath
 	release := rs.lockPaths(book.FilePath, target)

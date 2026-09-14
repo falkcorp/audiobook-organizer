@@ -1,7 +1,7 @@
 // file: internal/itunes/service/preview.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-06-20
+// last-edited: 2026-09-14
 
 package itunesservice
 
@@ -13,8 +13,10 @@ import (
 
 // PreviewBook is one book a fresh import would create from a library group.
 type PreviewBook struct {
-	Title     string `json:"title"`
-	Artist    string `json:"artist"`
+	Title string `json:"title"`
+	// Author is the author a fresh import would assign: Album Artist, else
+	// Artist (itunes.AuthorAndNarrator, owner decision 2026-09-14).
+	Author    string `json:"author"`
 	NumTracks int    `json:"num_tracks"`
 	Key       string `json:"key"`
 }
@@ -47,7 +49,7 @@ func PreviewGroups(library *itunes.Library) GroupPreview {
 		}
 		p.Books = append(p.Books, PreviewBook{
 			Title:     previewTitle(g),
-			Artist:    strings.TrimSpace(g.tracks[0].Artist),
+			Author:    previewAuthor(g.tracks[0]),
 			NumTracks: len(g.tracks),
 			Key:       g.key,
 		})
@@ -69,4 +71,11 @@ func previewTitle(g albumGroup) string {
 		}
 	}
 	return stripChapterSuffix(stripChapterPrefix(strings.TrimSpace(first.Name)))
+}
+
+// previewAuthor is the author the importer assigns from the group's first
+// track (assignAuthorAndSeries).
+func previewAuthor(t *itunes.Track) string {
+	author, _ := itunes.AuthorAndNarrator(t)
+	return author
 }

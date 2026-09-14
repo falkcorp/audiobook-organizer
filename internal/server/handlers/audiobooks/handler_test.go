@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -855,7 +855,7 @@ func TestUpdateAudiobook_ProtectedPathSkipsWriteBack(t *testing.T) {
 	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New", FilePath: "/protected/book.m4b"}, nil)
 	d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil).Maybe()
-	// The write-back tagMap gets "title" but no "artist"/"album_artist", so the
+	// The write-back tagMap gets "title" but no "artist"/"narrator", so the
 	// handler probes the author/narrator join tables; return ≤1 each so the
 	// multi-value join branch is skipped. (Protected-path short-circuits before
 	// any metadata.WriteMetadataToFile / SetLastWrittenAt.)
