@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package scanner
 
@@ -1658,7 +1658,15 @@ func TestSaveBookToDatabaseRelinkByOrgID(t *testing.T) {
 
 	existingBook := &database.Book{ID: "org-123", Title: "Moved Book", FilePath: "/old/path.m4b"}
 	store.EXPECT().GetBookByID("org-123").Return(existingBook, nil)
-	store.EXPECT().UpdateBook("org-123", mock.Anything).Return(existingBook, nil)
+	// The relink writes through ModifyBook on a fresh copy, not UpdateBook.
+	store.EXPECT().ModifyBook("org-123", mock.Anything).RunAndReturn(
+		func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			fresh := *existingBook
+			if err := fn(&fresh); err != nil {
+				return nil, err
+			}
+			return &fresh, nil
+		})
 	store.EXPECT().IsHashBlocked(mock.Anything).Return(false, nil).Maybe()
 
 	tmp := t.TempDir()

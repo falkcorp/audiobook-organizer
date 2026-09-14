@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -1239,10 +1239,7 @@ func TestGenerateSegmentTitles(t *testing.T) {
 					{ID: "f2", BookID: bookID, FilePath: "/a/2.m4b", TrackNumber: 0},
 				}, nil
 			},
-			UpdateBookFileFunc: func(id string, file *database.BookFile) error {
-				updatedFiles = append(updatedFiles, *file)
-				return nil
-			},
+			PatchBookFileFieldsFunc: recordSegmentPatch(&updatedFiles),
 		}
 		svc := NewService(mock)
 		err := svc.generateSegmentTitles("book-1", "My Book")
@@ -1264,10 +1261,7 @@ func TestGenerateSegmentTitles(t *testing.T) {
 					{ID: "f1", BookID: bookID, FilePath: "/a/1.m4b", TrackNumber: 1},
 				}, nil
 			},
-			UpdateBookFileFunc: func(id string, file *database.BookFile) error {
-				updatedFiles = append(updatedFiles, *file)
-				return nil
-			},
+			PatchBookFileFieldsFunc: recordSegmentPatch(&updatedFiles),
 		}
 		svc := NewService(mock)
 		err := svc.generateSegmentTitles("book-1", "My Book")
@@ -1291,10 +1285,7 @@ func TestGenerateSegmentTitles(t *testing.T) {
 					{ID: "f2dup", BookID: bookID, FilePath: "/a/2.m4b"},
 				}, nil
 			},
-			UpdateBookFileFunc: func(id string, file *database.BookFile) error {
-				updatedFiles = append(updatedFiles, *file)
-				return nil
-			},
+			PatchBookFileFieldsFunc: recordSegmentPatch(&updatedFiles),
 		}
 		svc := NewService(mock)
 

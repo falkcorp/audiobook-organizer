@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package scanner
 
@@ -51,6 +51,9 @@ type scanBookLookup interface {
 type scanBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the lost-update-safe write for a site that read the row
+	// earlier (the organizer-ID relink, the queued AI parse).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// BatchUpsertScannedBookFiles, not BatchUpsertBookFiles: the scanner stats
 	// every file it writes, so it is the one caller allowed to clear Missing.
 	BatchUpsertScannedBookFiles(rows []database.ScannedBookFile) error

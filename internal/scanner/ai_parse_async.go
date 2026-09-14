@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package scanner
 
@@ -362,6 +362,14 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 	}
 	locks := database.NewFieldLocks(row.ID, lockedKeys)
 
+	// before is the row as read; the gap-fills below are decided against it and
+	// staged on row, then re-applied onto a FRESH copy inside ModifyBook (see
+	// the write at the end), so nothing staged here is a write yet.
+	before, snapErr := database.SnapshotBook(row)
+	if snapErr != nil {
+		return "", snapErr
+	}
+
 	changed := false
 	if row.Title == "" && book.Title != "" && !locks.Locked(database.FieldKeyTitle) {
 		row.Title = book.Title
@@ -438,10 +446,59 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 	if !changed {
 		return row.FilePath, nil
 	}
-	if _, uerr := store.UpdateBook(row.ID, row); uerr != nil {
+
+	// The write goes onto a FRESH copy under the book's lock, not a whole-row
+	// UpdateBook of the copy read above: that would revert every field another
+	// writer committed while the author/series were resolved. Each field the AI
+	// filled is copied only if it is STILL empty on the fresh row -- a gap
+	// another writer filled meanwhile is theirs.
+	updated, uerr := store.ModifyBook(row.ID, func(fresh *database.Book) error {
+		wrote := false
+		if before.Title == "" && row.Title != "" && fresh.Title == "" {
+			fresh.Title, wrote = row.Title, true
+		}
+		if isBlankID(before.AuthorID) && !isBlankID(row.AuthorID) && isBlankID(fresh.AuthorID) {
+			fresh.AuthorID, wrote = row.AuthorID, true
+		}
+		if before.SeriesID == nil && row.SeriesID != nil && fresh.SeriesID == nil {
+			fresh.SeriesID, wrote = row.SeriesID, true
+		}
+		// The position belongs to the series it was resolved with: only filled
+		// when the fresh row carries that same series.
+		if before.SeriesSequence == nil && row.SeriesSequence != nil && fresh.SeriesSequence == nil &&
+			row.SeriesID != nil && fresh.SeriesID != nil && *fresh.SeriesID == *row.SeriesID {
+			fresh.SeriesSequence, wrote = row.SeriesSequence, true
+		}
+		if isBlankPtr(before.Narrator) && !isBlankPtr(row.Narrator) && isBlankPtr(fresh.Narrator) {
+			fresh.Narrator, wrote = row.Narrator, true
+		}
+		if isBlankPtr(before.Publisher) && !isBlankPtr(row.Publisher) && isBlankPtr(fresh.Publisher) {
+			fresh.Publisher, wrote = row.Publisher, true
+		}
+		if !hasReleaseYear(before) && hasReleaseYear(row) && !hasReleaseYear(fresh) {
+			fresh.AudiobookReleaseYear, wrote = row.AudiobookReleaseYear, true
+		}
+		if !wrote {
+			return database.ErrSkipBookWrite
+		}
+		return nil
+	})
+	if uerr != nil {
 		return "", uerr
 	}
+	if updated != nil {
+		return updated.FilePath, nil
+	}
+	// Deleted between the read and the write: nothing to fill, but the book
+	// was still attempted, so its path is still stamped.
+	aiParseLog.Warn("AI parse: book %s deleted before the write; parse discarded", row.ID)
 	return row.FilePath, nil
+}
+
+// isBlankID treats a nil ID and a zero ID as equally unset, the same test the
+// author gap-fill above applies.
+func isBlankID(id *int) bool {
+	return id == nil || *id == 0
 }
 
 // aiParseLog is the logger for the queued path's own diagnostics -- the ones

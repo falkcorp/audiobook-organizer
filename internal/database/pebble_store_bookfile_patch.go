@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_patch.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4e71a93-5b28-4f0d-8e6a-2d9f7b1c3a54
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -30,6 +30,11 @@ type BookFileFieldPatch struct {
 	Codec        *string
 	BitrateKbps  *int
 	SampleRateHz *int
+
+	// Per-file display title and the book's track count, written by the
+	// metafetch segment-titles pass. Neither is secondary-indexed.
+	Title      *string
+	TrackCount *int
 
 	// Preconditions: when set, the stored value must equal it, or nothing is
 	// written and ErrBookFileChangedSince is returned (compare-and-set).
@@ -119,6 +124,12 @@ func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileF
 	}
 	if patch.SampleRateHz != nil && row.SampleRateHz != *patch.SampleRateHz {
 		row.SampleRateHz, changed = *patch.SampleRateHz, true
+	}
+	if patch.Title != nil && row.Title != *patch.Title {
+		row.Title, changed = *patch.Title, true
+	}
+	if patch.TrackCount != nil && row.TrackCount != *patch.TrackCount {
+		row.TrackCount, changed = *patch.TrackCount, true
 	}
 	if !changed {
 		return &orig, &orig, nil

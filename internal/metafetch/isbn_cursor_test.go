@@ -1,7 +1,7 @@
 // file: internal/metafetch/isbn_cursor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1e7a02-9b64-4d38-8a1f-2e6c4b0d9f77
-// last-edited: 2026-09-10
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -274,7 +274,14 @@ func TestEnrichBookISBN_UsesTranscribedTitleWhenTitleBlank(t *testing.T) {
 	tr := "Neuromancer"
 	var wrote *database.Book
 	store := &database.MockStore{
+		// Stateful like a real store: a read after a write returns that write.
+		// The enrichment writes each identifier via ModifyBook, which re-reads
+		// the row before every write.
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
+			if wrote != nil {
+				cp := *wrote
+				return &cp, nil
+			}
 			return &database.Book{ID: id, Title: "", TranscribedTitle: &tr}, nil
 		},
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) { wrote = b; return b, nil },
