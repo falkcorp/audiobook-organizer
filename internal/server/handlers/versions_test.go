@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a9f6d21-7c84-4e0b-bd35-9f12a7c6e840
 // last-edited: 2026-09-13
 
@@ -178,6 +178,8 @@ func TestVersionsHandler_SplitVersion_Success(t *testing.T) {
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}}, nil)
 	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "b2", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1"}, "b1", "b2").Return(nil)
+	// The moved files' external IDs follow them; the source has none here.
+	store.EXPECT().GetExternalIDsForBook("b1").Return(nil, nil)
 	// New book gets one remaining file; source has none → only the new-book path write fires.
 	store.EXPECT().GetBookFiles("b2").Return([]database.BookFile{{ID: "f1", FilePath: "/x/f1.m4b"}}, nil)
 	store.EXPECT().ModifyBook("b2", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b2"}))
