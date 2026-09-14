@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
 // last-edited: 2026-09-14
 
@@ -371,9 +371,12 @@ func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle
 	if strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor)) {
 		return true
 	}
-	// Leg 2: the folded forms, anchored at a token boundary. Without the
-	// anchor a heard "A. Smith" ("a. smith") would sit inside "R.A. Smith"
-	// ("r.a. smith"), a different author main refused.
+	// Leg 2: the folded forms, anchored at a token boundary, so a folded run
+	// can never match from the middle of another token (a heard "a." inside
+	// a candidate's "r.a."). Leg 1 above is origin/main's raw substring check
+	// and is unchanged, so pairs it already confirmed (a heard "A. Smith"
+	// inside "R.A. Smith", for one) still confirm; the anchor only stops the
+	// fold from adding new mid-token matches.
 	return containsAtTokenStart(foldInitials(candidateAuthor), foldInitials(transcribedAuthor))
 }
 
