@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
 // last-edited: 2026-09-13
 
@@ -198,10 +198,9 @@ func (mfs *Service) writeFileTagsSafe(path string, tagMap map[string]any, opts f
 }
 
 // bookFileWriteOpts returns the WriteTagsSafe options that persist hashes
-// against f's book_file row, or none when f has no row.
+// against f's book_file row, or none when f has no row. A lookup error is
+// logged at Warn (it was dropped silently) and the write goes ahead without
+// recording.
 func (mfs *Service) bookFileWriteOpts(f string) fileops.WriteTagsSafeOptions {
-	if bff, err := mfs.db.GetBookFileByPath(f); err == nil && bff != nil {
-		return fileops.WriteTagsSafeOptions{BookFileID: bff.ID, Store: mfs.db}
-	}
-	return fileops.WriteTagsSafeOptions{}
+	return fileops.HashOptionsForPath(mfs.db, f)
 }

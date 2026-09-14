@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-13
 
@@ -49,6 +49,23 @@ func stripeFor(id string) int {
 // lockBook takes the write stripe for id and returns its unlock func.
 func (p *PebbleStore) lockBook(id string) func() {
 	mu := &p.bookLocks[stripeFor(id)]
+	mu.Lock()
+	return mu.Unlock
+}
+
+// lockBookFile takes the write stripe for a book_file ID and returns its
+// unlock func. UpdateBookFile, UpdateBookFileHashes, SetBookFileHash and
+// PatchBookFileFields hold it across their read of the stored row and their
+// commit, so none of them reverts a field another committed in between.
+//
+// It is a separate stripe set from bookLocks on purpose. UpdateBookFile's
+// post-commit aggregate recompute writes the book under lockBook; every
+// book_file writer releases its file stripe before that recompute, so a file
+// stripe is never held while a book stripe is taken and the two sets cannot
+// deadlock against each other. The batch paths (upserts, moves, deletes)
+// write many rows and do not take file stripes.
+func (p *PebbleStore) lockBookFile(fileID string) func() {
+	mu := &p.bookFileLocks[stripeFor(fileID)]
 	mu.Lock()
 	return mu.Unlock
 }

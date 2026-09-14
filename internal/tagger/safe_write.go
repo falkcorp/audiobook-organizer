@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-08-15
+// last-edited: 2026-09-13
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -56,6 +58,14 @@ type SafeWriteDeps struct {
 	// If nil (and ProtectedCache is set), a protected-path hit is logged but
 	// the write still proceeds in-place — callers should always wire both.
 	Importer LibraryImporter
+
+	// BookFileID and HashStore, when both are set, make the write record the
+	// file's new hashes on that book_file row (fileops.WriteTagsSafe's
+	// BookFileID/Store). A tag write changes the bytes, so a row left holding
+	// the old file_hash makes the next rescan treat the file as replaced.
+	// Callers that know only the path get both from fileops.HashOptionsForPath.
+	BookFileID string
+	HashStore  database.BookFileHashUpdater
 }
 
 // WriteTagsSafe writes tags to path, importing first if the path is protected.
@@ -75,7 +85,7 @@ func WriteTagsSafe(ctx context.Context, path string, tags map[string][]string, o
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return taglib.WriteTags(tmpPath, tags, opts)
-	}, fileops.WriteTagsSafeOptions{})
+	}, deps.hashOptions(path, effectivePath))
 	if err != nil {
 		return fmt.Errorf("WriteTagsSafe: %w", err)
 	}
@@ -134,7 +144,7 @@ func WriteImageSafe(ctx context.Context, path string, data []byte, deps SafeWrit
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return taglib.WriteImage(tmpPath, data)
-	}, fileops.WriteTagsSafeOptions{})
+	}, deps.hashOptions(path, effectivePath))
 	if err != nil {
 		return fmt.Errorf("WriteImageSafe: %w", err)
 	}
@@ -180,4 +190,21 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 
 	slog.Info("safe_write imported protected path before tag write", "src", path, "dest", libraryPath)
 	return libraryPath, nil
+}
+
+// hashOptions returns the fileops.WriteTagsSafe options that record this
+// write's hashes on deps.BookFileID's row. When the protected-path guard sent
+// the write to a library copy (effectivePath != path) nothing is recorded:
+// the row names the protected source, whose bytes this write did not change.
+// The copy's own row, if the importer made one, is re-hashed by its next scan.
+func (deps SafeWriteDeps) hashOptions(path, effectivePath string) fileops.WriteTagsSafeOptions {
+	if deps.BookFileID == "" || deps.HashStore == nil {
+		return fileops.WriteTagsSafeOptions{}
+	}
+	if effectivePath != path {
+		logger.New("tagger").Info("safe_write: write went to library copy %s; book_file %s names the unchanged source, so its hashes are not updated",
+			logger.SanitizeLogValue(effectivePath), logger.SanitizeLogValue(deps.BookFileID))
+		return fileops.WriteTagsSafeOptions{}
+	}
+	return fileops.WriteTagsSafeOptions{BookFileID: deps.BookFileID, Store: deps.HashStore}
 }

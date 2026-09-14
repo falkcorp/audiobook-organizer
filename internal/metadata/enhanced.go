@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-08-18
+// last-edited: 2026-09-13
 
 package metadata
 
@@ -378,7 +378,9 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 		// Native failed; continue with CLI fallback
 	}
 
-	return writeMetadataViaCLI(filePath, metadata, config)
+	// The CLI writers rewrite the file outside fileops.WriteTagsSafe, so the
+	// new hashes are recorded on the file's row separately.
+	return writeMetadataViaCLIRecordingHashes(filePath, metadata, config)
 }
 
 // writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared

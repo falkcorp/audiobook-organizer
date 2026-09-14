@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfile_patch.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4e71a93-5b28-4f0d-8e6a-2d9f7b1c3a54
 // last-edited: 2026-09-13
 
@@ -38,11 +38,11 @@ type BookFileFieldPatch struct {
 // It exists because the whole-row write it replaces (read the row, change
 // the track, UpsertBookFile the lot) put back whatever the row held at read
 // time, so a concurrent writer's field, such as enrich-book-files' Duration,
-// was reverted. Here the read and the write are one step under
-// bookFilePatchMu; the only window left is against a whole-row writer
-// (UpdateBookFile/UpsertBookFile) that read before this write and commits
-// after it. Closing that needs a per-book write lock shared by every book_file
-// writer.
+// was reverted. Here the read and the write are one step under the row's
+// lockBookFile stripe, which UpdateBookFile and UpdateBookFileHashes also hold
+// across their own read and commit. The window left is a caller that read the
+// row itself, earlier, and hands the whole stale row to UpdateBookFile or an
+// upsert: the stripe orders the two writes but cannot make the stale one fresh.
 //
 // before is the row as read, after as written (equal when nothing changed, in
 // which case nothing is written). Both are nil when the row does not exist.
@@ -57,8 +57,16 @@ type BookFileFieldPatch struct {
 //     the stored value. marshalBookFileDropSegs is the same encoder, so the
 //     AcoustID segment drop matches.
 func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (before, after *BookFile, err error) {
-	s.bookFilePatchMu.Lock()
-	defer s.bookFilePatchMu.Unlock()
+	unlock := s.lockBookFile(fileID)
+	notify := false
+	defer func() {
+		unlock()
+		// After the unlock, as in updateBookFile: the recompute takes the
+		// book's stripe, and no file stripe is held while one is taken.
+		if notify {
+			s.notifyBookFileChange(bookID)
+		}
+	}()
 
 	key := []byte(fmt.Sprintf("book_file:%s:%s", bookID, fileID))
 	value, closer, err := s.db.Get(key)
@@ -112,7 +120,7 @@ func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileF
 	}
 	s.UpsertBookFileToMemDB(&row)
 	// Same post-commit notification as UpdateBookFile, so every listener that
-	// saw the whole-row write sees this one.
-	s.notifyBookFileChange(bookID)
+	// saw the whole-row write sees this one (sent by the deferred unlock).
+	notify = true
 	return &orig, &row, nil
 }

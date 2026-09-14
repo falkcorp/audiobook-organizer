@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-13
 
@@ -99,23 +99,52 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 }
 
 // deleteHashIndexIfOwned stages the deletion of a content-hash index entry only
-// when its committed value is f's "<bookID>:<fileID>" reference (the value
+// when it holds f's "<bookID>:<fileID>" reference (the value
 // writeBookFileSecondaryIndexes stores). An entry owned by another row with the
 // same hash is left alone.
+//
+// The entry is read through the batch first. A multi-row batch (a batch
+// upsert, a bulk move or delete) can already have pointed the entry at another
+// row earlier in the same batch while the committed value still names f;
+// deleting on the committed value dropped that row's fresh entry at commit.
+// Every book_file batch that reaches here is an indexed batch for that reason.
+// Pebble's Batch.Get answers from the batch alone, so a key the batch has not
+// touched falls back to the committed state.
 func (s *PebbleStore) deleteHashIndexIfOwned(batch *pebble.Batch, key []byte, f *BookFile) error {
-	val, closer, err := s.db.Get(key)
-	if err == pebble.ErrNotFound {
-		return nil
-	}
-	if err != nil {
+	val, found, err := s.hashIndexValue(batch, key)
+	if err != nil || !found {
 		return err
 	}
-	owned := string(val) == f.BookID+":"+f.ID
-	closer.Close()
-	if !owned {
+	if val != f.BookID+":"+f.ID {
 		return nil
 	}
 	return batch.Delete(key, nil)
+}
+
+// hashIndexValue reads key through batch when it is indexed, then from the
+// committed state. found is false when neither holds the key.
+func (s *PebbleStore) hashIndexValue(batch *pebble.Batch, key []byte) (val string, found bool, err error) {
+	if batch.Indexed() {
+		v, closer, gerr := batch.Get(key)
+		if gerr == nil {
+			val = string(v)
+			closer.Close()
+			return val, true, nil
+		}
+		if gerr != pebble.ErrNotFound {
+			return "", false, gerr
+		}
+	}
+	v, closer, gerr := s.db.Get(key)
+	if gerr == pebble.ErrNotFound {
+		return "", false, nil
+	}
+	if gerr != nil {
+		return "", false, gerr
+	}
+	val = string(v)
+	closer.Close()
+	return val, true, nil
 }
 
 // LookupAcoustIDCandidates returns BookFile IDs whose LSH subprints collide
@@ -317,7 +346,7 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 	// separately, so the prior owner loses the PID only if this row is stored and
 	// takes it. It must run before writeBookFileSecondaryIndexes below, which sets
 	// the same book_file_pid key this deletes; see stagePIDTransfer.
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	priorPIDOwner, err := s.stagePIDTransfer(batch, file)
 	if err != nil {
@@ -402,7 +431,7 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 	}
 
 	now := time.Now()
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	// Books whose aggregates this batch invalidates, in first-touched order.
 	affectedBooks := make([]string, 0, len(files))
@@ -552,6 +581,22 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // if Duration, FileSize or BookID moved, so a mislabelled caller cannot leave
 // an aggregate stale.
 func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, recomputeAggregates bool) error {
+	unlock := s.lockBookFile(id)
+	notify, err := s.updateBookFileLocked(id, file, mergeStored, recomputeAggregates)
+	unlock()
+	// After the unlock: the recompute writes the BOOK under lockBook, and no
+	// book_file stripe is held while a book stripe is taken.
+	if err == nil && notify {
+		s.notifyBookFileChange(file.BookID)
+	}
+	return err
+}
+
+// updateBookFileLocked is updateBookFile's body; the caller holds
+// lockBookFile(id) across it, so the stored row it reads for the merge and the
+// row it commits are one step. It reports whether the book's aggregates need a
+// recompute, which the caller runs after releasing the stripe.
+func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, mergeStored, recomputeAggregates bool) (bool, error) {
 	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
 	// last write path that did not, while CreateBookFile, UpsertBookFile and
 	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
@@ -567,10 +612,10 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, rec
 	// We need the bookID to build the primary key; it must be set on file.
 	old, err := s.getBookFileByID(file.BookID, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if old == nil {
-		return fmt.Errorf("book file not found: %s", id)
+		return false, fmt.Errorf("book file not found: %s", id)
 	}
 
 	file.ID = id
@@ -629,40 +674,37 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, rec
 	// T020: drop AcoustIDSeg0..6 from the stored value via a copy.
 	data, err := marshalBookFileDropSegs(file)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	// Remove stale secondary indexes before writing new ones.
 	if err := s.deleteBookFileSecondaryIndexes(batch, old); err != nil {
 		batch.Close()
-		return err
+		return false, err
 	}
 
 	key := []byte(fmt.Sprintf("book_file:%s:%s", file.BookID, file.ID))
 	if err := batch.Set(key, data, nil); err != nil {
 		batch.Close()
-		return err
+		return false, err
 	}
 
 	if err := writeBookFileSecondaryIndexes(batch, file); err != nil {
 		batch.Close()
-		return err
+		return false, err
 	}
 
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return err
+		return false, err
 	}
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "update_book_file")
 	s.UpsertBookFileToMemDB(file)
 	// Recompute book-level Duration/FileSize aggregates now that a file was updated.
 	// Best-effort: the file write already committed; don't fail on aggregate errors.
-	if recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID {
-		s.notifyBookFileChange(file.BookID)
-	}
-	return nil
+	return recomputeAggregates || old.Duration != file.Duration || old.FileSize != file.FileSize || old.BookID != file.BookID, nil
 }
 
 // GetBookFiles returns all BookFile records for the given bookID by iterating
@@ -1093,7 +1135,7 @@ func (s *PebbleStore) DeleteBookFile(id string) error {
 		return nil // already gone
 	}
 
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	// Delete primary key.
 	primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", found.BookID, found.ID))
@@ -1131,7 +1173,7 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 		return nil
 	}
 
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	for i := range files {
 		f := &files[i]
@@ -1322,7 +1364,7 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 	}
 
 	// ── Pass 2: one batch, one Sync commit. ──
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 	for _, f := range resolved {
 		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
 		if err := batch.Delete(primaryKey, nil); err != nil {
@@ -1457,7 +1499,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 		return fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
 
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	// Books whose aggregates this batch invalidates, in first-touched order.
 	// Collected DURING the loop rather than derived from the caller's slice
@@ -1751,7 +1793,7 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 		return nil
 	}
 
-	batch := s.db.NewBatch()
+	batch := s.db.NewIndexedBatch()
 
 	// Retained so the post-commit memdb refresh can replay exactly the rows that
 	// were written, rather than re-reading them under their new keys.
@@ -1869,24 +1911,47 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 //     describing the OLD bytes, so the next rescan saw a different hash for
 //     the same audio and treated the file as replaced.
 func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
+	// The read and the write are one step under the row's stripe. The write
+	// puts back the whole row as read, so without the stripe a field another
+	// writer committed in between (a TranscribeStatus from a whole-row update,
+	// a SkipScan patch) was reverted by a write meant to change only hashes.
+	// Every single-row book_file writer takes the same stripe.
+	unlock := s.lockBookFile(id)
+	bookID, notify, err := s.updateBookFileHashesLocked(id, originalHash, postMetadataHash, fileHash)
+	unlock()
+	if err == nil && notify {
+		s.notifyBookFileChange(bookID)
+	}
+	return err
+}
+
+// updateBookFileHashesReadHook, when set, runs between UpdateBookFileHashes'
+// read of the row and its write, with the stripe held. A seam for the
+// concurrent-writer test; nil in production.
+var updateBookFileHashesReadHook func()
+
+func (s *PebbleStore) updateBookFileHashesLocked(id, originalHash, postMetadataHash, fileHash string) (string, bool, error) {
 	// Find the file across all books via the secondary id index.
 	val, closer, err := s.db.Get([]byte("book_file_id:" + id))
 	if err != nil {
-		return fmt.Errorf("UpdateBookFileHashes: lookup id index: %w", err)
+		return "", false, fmt.Errorf("UpdateBookFileHashes: lookup id index: %w", err)
 	}
 	bookFileKey := string(val)
 	closer.Close()
 
 	val2, closer2, err := s.db.Get([]byte(bookFileKey))
 	if err != nil {
-		return fmt.Errorf("UpdateBookFileHashes: get file: %w", err)
+		return "", false, fmt.Errorf("UpdateBookFileHashes: get file: %w", err)
 	}
 	var bf BookFile
 	if err := json.Unmarshal(val2, &bf); err != nil {
 		closer2.Close()
-		return fmt.Errorf("UpdateBookFileHashes: unmarshal: %w", err)
+		return "", false, fmt.Errorf("UpdateBookFileHashes: unmarshal: %w", err)
 	}
 	closer2.Close()
+	if updateBookFileHashesReadHook != nil {
+		updateBookFileHashesReadHook()
+	}
 
 	if originalHash != "" && !originalHashFrozen(&bf) {
 		bf.OriginalFileHash = originalHash
@@ -1899,18 +1964,22 @@ func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, f
 		bf.FileHash = fileHash
 	}
 
-	// Through updateBookFile, not a raw Set. FileHash and OriginalFileHash are
-	// secondary-indexed (book_file_hash:), and the memdb projection must see the
-	// new hash too; the raw Set this replaced refreshed neither. The row is the
-	// stored row, so the replace-mode merge inside restores nothing it needs.
-	// Hashes feed no book aggregate, so the per-book recompute is skipped: a
-	// 50-chapter write-back used to recompute the book 50 times.
-	return s.updateBookFile(id, &bf, true, false)
+	// Through updateBookFileLocked, not a raw Set. FileHash and
+	// OriginalFileHash are secondary-indexed (book_file_hash:), and the memdb
+	// projection must see the new hash too; the raw Set this replaced refreshed
+	// neither. The row is the stored row, so the replace-mode merge inside
+	// restores nothing it needs. Hashes feed no book aggregate, so the per-book
+	// recompute is skipped: a 50-chapter write-back used to recompute the book
+	// 50 times.
+	notify, err := s.updateBookFileLocked(id, &bf, true, false)
+	return bf.BookID, notify, err
 }
 
 // SetBookFileHash sets file_hash on a BookFile record in PebbleDB, and also
 // sets original_file_hash if it is currently empty, matching scanner behaviour.
 func (s *PebbleStore) SetBookFileHash(id, hash string) error {
+	unlock := s.lockBookFile(id)
+	defer unlock()
 	val, closer, err := s.db.Get([]byte("book_file_id:" + id))
 	if err != nil {
 		return fmt.Errorf("SetBookFileHash: lookup id index: %w", err)
