@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
 // last-edited: 2026-09-14
 
@@ -68,53 +68,70 @@ func realTagBook(t *testing.T, store *database.PebbleStore, op, path string, row
 // composer (their rows claimed writes that never happened) and fanned artist
 // out to ALBUMARTIST and a blank COMPOSER that no row recorded.
 func TestOrganizeTagWrite_RealFile_RowsMatchTheFileAndUndoRestoresIt(t *testing.T) {
-	store := newRevertPebble(t)
-	orig := map[string][]string{
-		"TITLE":       {"Orig Title"},
-		"ARTIST":      {"Orig Artist"},
-		"ALBUMARTIST": {"Orig AA"},
-		"COMPOSER":    {"Orig Composer"},
-		"GENRE":       {"Audiobook"},
+	cases := map[string]map[string][]string{
+		"ALBUMARTIST set before": {
+			"TITLE":       {"Orig Title"},
+			"ARTIST":      {"Orig Artist"},
+			"ALBUMARTIST": {"Orig AA"},
+			"COMPOSER":    {"Orig Composer"},
+			"GENRE":       {"Audiobook"},
+		},
+		"ALBUMARTIST absent before": {
+			"TITLE":    {"Orig Title"},
+			"ARTIST":   {"Orig Artist"},
+			"COMPOSER": {"Orig Composer"},
+			"GENRE":    {"Audiobook"},
+		},
 	}
-	path := makeRevertTestAudio(t, orig)
-	svc := NewRenameService(store)
-	meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
+	for name, orig := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newRevertPebble(t)
+			path := makeRevertTestAudio(t, orig)
+			svc := NewRenameService(store)
+			meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
 
-	filtered := svc.FilterUnchangedTags(path, meta)
-	assert.NotContains(t, filtered, "genre", "an unchanged tag is not written")
-	current, err := svc.ReadCurrentTags(path)
-	require.NoError(t, err)
-	write := svc.WriteTags
-	if write == nil { // the organizer's own default
-		write = func(p string, m map[string]any) error {
-			return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
-		}
-	}
-	require.NoError(t, write(path, filtered))
+			filtered := svc.FilterUnchangedTags(path, meta)
+			assert.NotContains(t, filtered, "genre", "an unchanged tag is not written")
+			current, err := svc.ReadCurrentTags(path)
+			require.NoError(t, err)
+			write := svc.WriteTags
+			if write == nil { // the organizer's own default
+				write = func(p string, m map[string]any) error {
+					return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
+				}
+			}
+			require.NoError(t, write(path, filtered))
 
-	after, err := metadata.ReadTagValues(path)
-	require.NoError(t, err)
-	assert.Equal(t, "Orig AA", after["album_artist"], "organize never writes ALBUMARTIST")
-	assert.Equal(t, "Orig Composer", after["composer"], "organize never writes COMPOSER")
-	var rows [][3]string
-	for k, v := range filtered {
-		assert.Equal(t, fmt.Sprint(v), after[k], "the %s row records %q; the file must hold it", k, v)
-		old, known := current[k]
-		if known && old == "" {
-			old = undo.TagAbsentValue
-		}
-		rows = append(rows, [3]string{k, old, fmt.Sprint(v)})
-	}
-	realTagBook(t, store, "op-organize-roundtrip", path, rows...)
+			written := diskTags(t, path)
+			assert.Equal(t, []string{"New Author"}, written["ALBUMARTIST"], "organize writes ALBUMARTIST = author")
+			assert.Equal(t, []string{"New Author"}, written["ARTIST"])
+			assert.Equal(t, []string{"Orig Composer"}, written["COMPOSER"], "organize never writes COMPOSER")
+			after, err := metadata.ReadTagValues(path)
+			require.NoError(t, err)
+			var rows [][3]string
+			for k, v := range filtered {
+				assert.Equal(t, fmt.Sprint(v), after[k], "the %s row records %q; the file must hold it", k, v)
+				old, known := current[k]
+				if known && old == "" {
+					old = undo.TagAbsentValue
+				}
+				rows = append(rows, [3]string{k, old, fmt.Sprint(v)})
+			}
+			realTagBook(t, store, "op-organize-roundtrip", path, rows...)
 
-	res, err := NewRevertService(store).RevertOperation("op-organize-roundtrip")
-	require.NoError(t, err, "result %+v", res)
-	assert.Equal(t, len(rows), res.Restored, "result %+v", res)
-	tags := diskTags(t, path)
-	for k, v := range orig {
-		assert.Equal(t, v, tags[k], "%s after undo", k)
+			res, err := NewRevertService(store).RevertOperation("op-organize-roundtrip")
+			require.NoError(t, err, "result %+v", res)
+			assert.Equal(t, len(rows), res.Restored, "result %+v", res)
+			tags := diskTags(t, path)
+			for k, v := range orig {
+				assert.Equal(t, v, tags[k], "%s after undo", k)
+			}
+			if _, had := orig["ALBUMARTIST"]; !had {
+				assert.NotContains(t, tags, "ALBUMARTIST", "undo removes the ALBUMARTIST organize added")
+			}
+			assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
+		})
 	}
-	assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
 }
 
 // After organize, the file reader must read the book's author back as the
@@ -147,7 +164,7 @@ func TestOrganizeTagWrite_RealFile_AuthorReadsBackAsAuthor(t *testing.T) {
 	assert.Equal(t, "New Author", md.Artist, "the author read back after organize")
 	tags := diskTags(t, path)
 	assert.Equal(t, []string{"Owner Composer"}, tags["COMPOSER"], "organize leaves COMPOSER alone")
-	assert.NotContains(t, tags, "ALBUMARTIST", "organize does not add ALBUMARTIST")
+	assert.Equal(t, []string{"New Author"}, tags["ALBUMARTIST"], "organize writes ALBUMARTIST = author")
 	assert.Equal(t, []string{"The Narrator"}, tags["NARRATOR"])
 }
 
@@ -173,8 +190,9 @@ func TestRevertTagWrite_RealFile_AbsentTagIsRemoved(t *testing.T) {
 	assert.Equal(t, 1, res.Restored, "result %+v", res)
 }
 
-// Reverting artist writes ARTIST only. The write map for a lone artist key also
-// set ALBUMARTIST and wrote COMPOSER="", which erased the narrator.
+// A plain (pre-snapshot) artist row, from an organize that wrote ARTIST only,
+// reverts ARTIST only. The write map for a lone artist key also set ALBUMARTIST
+// and wrote COMPOSER="", which erased the narrator.
 func TestRevertTagWrite_RealFile_ArtistKeepsComposerAndAlbum(t *testing.T) {
 	store := newRevertPebble(t)
 	path := makeRevertTestAudio(t, map[string][]string{

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.19.2
+// version: 1.19.3
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-14
 
@@ -796,11 +796,14 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return fmt.Errorf("tag %s not restored: it maps to no file property the revert can write", tag)
 	}
 	// A plain pre-write value for a key that now owns several properties was
-	// recorded before per-property snapshots. Artist rows still revert (that
-	// organize wrote ARTIST only, and a plain value still writes ARTIST only);
-	// narrator rows do not, since a plain revert now writes PERFORMER too.
-	if !metadata.IsTagSnapshot(c.OldValue) && !metadata.LegacyTagValueRestorable(tag) {
-		return fmt.Errorf("tag %s not restored: row %s was recorded before per-tag undo values, when the organize wrote only one of the tag's properties; writing it back now would also overwrite the others, so restore it by hand", tag, c.ID)
+	// recorded before per-property snapshots, by an organize that wrote artist
+	// to ARTIST only and narrator to NARRATOR only. It is compared and written
+	// back through that one property, so ALBUMARTIST, COMPOSER and PERFORMER
+	// are left as they are.
+	if !metadata.IsTagSnapshot(c.OldValue) {
+		if legacy, ok := metadata.LegacyTagKey(tag); ok {
+			tag = legacy
+		}
 	}
 	target := bf.FilePath
 	release := rs.lockPaths(book.FilePath, target)
