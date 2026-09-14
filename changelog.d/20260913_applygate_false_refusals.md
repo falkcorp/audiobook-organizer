@@ -35,8 +35,7 @@
   `candidate_hash` the review list now serves per row); the server applies
   the book when the pin still matches the top cached candidate, even if the
   certainty gate's score, transcription, sequence or evidence legs refuse. The
-  override is recorded on every field's change history (a failed history
-  write fails that apply, before anything is written, and the op counts it), as an
+  override is recorded on every field's change history, as an
   `owner_reviewed <time>: <reasons>` version note added on every override,
   and at Info on the op log with the full verdict. A pin that no longer
   matches is refused as `stale_candidate`. Bulk buttons (Apply page, Apply
@@ -46,7 +45,9 @@
   that book's pin. `identity_stale`, `partial_book`, `asin_conflict`, the
   rename preflight, `policy:no-metadata` and field locks still block a
   reviewed apply. The dry run reports `owner_reviewed_would_apply` per book.
-- Metadata change history now records every column an apply writes (ASIN,
-  ISBN-10/13, description, genre, subtitle, abridged, page count, secondary
-  series and position, Audible runtime), not only title, author, narrator,
-  publisher, language, series, position, cover and year.
+- An owner-reviewed apply now fails with "change history not recorded" when
+  the primary history store cannot record its change history. This is
+  intentional and is not a gate refusal. History is written after the
+  commit, so the write itself stands and the file work still runs; the op
+  logs the error at Error and counts the book under "owner-reviewed change
+  history not recorded", and undo refuses that apply.

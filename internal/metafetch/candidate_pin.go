@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-13
 
@@ -85,23 +85,40 @@ func (p CandidatePin) Matches(c MetadataCandidate) bool {
 // ApplyOptions adjusts how ApplyMetadataCandidateWithOptions records an apply.
 // The zero value is ApplyMetadataCandidate.
 type ApplyOptions struct {
-	// GateOverride, when non-empty, says the apply went through on an owner
-	// review although the bulk-apply certainty gate refused it, and names the
-	// refusing reasons. It is recorded on every field's change-history row (in
-	// its source), on the activity entries, and as an "owner_reviewed" version
-	// note added on every such apply. It changes nothing about which fields
-	// are written.
+	// OwnerReviewed says the apply went through on an owner review although
+	// the bulk-apply certainty gate refused it. It alone decides that the
+	// override is recorded on every field's change-history row (in its
+	// source), on the activity entries, and as an "owner_reviewed" version
+	// note, and that a failed history write is returned to the caller. It
+	// changes nothing about which fields are written.
+	OwnerReviewed bool
+	// GateOverride names the refusing reasons for those records. It is only a
+	// label: an empty value on a reviewed apply records "owner_reviewed"
+	// rather than skipping the history requirement or the note.
 	GateOverride string
 }
 
+// overrideLabel is the refusing-reasons label recorded for an owner-reviewed
+// apply, never empty.
+func (o ApplyOptions) overrideLabel() string {
+	if o.GateOverride == "" {
+		return ownerReviewedLabel
+	}
+	return o.GateOverride
+}
+
+// ownerReviewedLabel matches applygate.ReasonOwnerReviewed; metafetch does
+// not import applygate.
+const ownerReviewedLabel = "owner_reviewed"
+
 // historySource is the source label change history records for an apply.
 func (o ApplyOptions) historySource(candidateSource string) string {
-	if o.GateOverride == "" {
+	if !o.OwnerReviewed {
 		return candidateSource
 	}
 	src := candidateSource
 	if src == "" {
 		src = "unknown source"
 	}
-	return src + " (owner-reviewed; certainty gate overridden: " + o.GateOverride + ")"
+	return src + " (owner-reviewed; certainty gate overridden: " + o.overrideLabel() + ")"
 }

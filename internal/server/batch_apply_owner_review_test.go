@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-13
 //
@@ -94,6 +94,10 @@ func TestOwnerReview_MatchingPinAppliesAndRecordsOverride(t *testing.T) {
 	// runtime); the history must name both, not just the first.
 	if len(svc.applyOpts) != 1 {
 		t.Fatalf("applies: %+v", svc.applyOpts)
+	}
+	// The flag, not a non-empty summary, carries the review into the apply.
+	if !svc.applyOpts[0].OwnerReviewed {
+		t.Fatalf("owner-reviewed apply sent opts without OwnerReviewed: %+v", svc.applyOpts[0])
 	}
 	for _, want := range []string{applygate.ReasonSequenceMissingOnCandidate, applygate.ReasonRuntimeUnknownOverwrite} {
 		if !strings.Contains(svc.applyOpts[0].GateOverride, want) {
