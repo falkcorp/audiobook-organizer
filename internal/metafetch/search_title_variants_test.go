@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.2.1
+// version: 3.3.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-14
 
@@ -592,5 +592,52 @@ func TestKeepVariant_PartSuffixStemIsExact(t *testing.T) {
 	// Our own author disambiguates.
 	if got = keepVariant(two, r[0], "John Grisham"); len(got) != 1 || got[0].Author != "John Grisham" {
 		t.Fatalf("author did not pick the book: %+v", got)
+	}
+}
+
+// authorOnlySource answers only a title+author query naming its author, the
+// way Audible's catalog misses a decorated title it finds with the author.
+type authorOnlySource struct {
+	author  string
+	authors []string
+}
+
+func (a *authorOnlySource) Name() string { return "audible" }
+func (a *authorOnlySource) SearchByTitle(context.Context, string) ([]metadata.BookMetadata, error) {
+	return nil, nil
+}
+func (a *authorOnlySource) SearchByTitleAndAuthor(_ context.Context, title, author string) ([]metadata.BookMetadata, error) {
+	a.authors = append(a.authors, author)
+	if author == a.author {
+		return []metadata.BookMetadata{{Title: "Blood of Elves", Author: a.author}}, nil
+	}
+	return nil, nil
+}
+
+// The batch candidate fetch passes no author hint (GetBookByID leaves
+// book.Author unhydrated), so the ladder must search by the author the book's
+// AuthorID names, or Audible is never asked with an author at all.
+func TestSearchMetadataForBook_NoHintSearchesByTheBooksAuthor(t *testing.T) {
+	aid := 7
+	book := &database.Book{ID: "b1", Title: "Blood of Elves The Witcher, Book 1 (Unabridged)", AuthorID: &aid}
+	mock := &database.MockStore{
+		GetBookByIDFunc: func(string) (*database.Book, error) { return book, nil },
+		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
+			return &database.Author{ID: id, Name: "Andrzej Sapkowski"}, nil
+		},
+	}
+	src := &authorOnlySource{author: "Andrzej Sapkowski"}
+	svc := NewService(mock)
+	svc.SetOverrideSources([]metadata.MetadataSource{src})
+
+	resp, err := svc.searchMetadataForBook(context.Background(), nil, "b1", book.Title, "", "", "", SearchOptions{})
+	if err != nil {
+		t.Fatalf("searchMetadataForBook: %v", err)
+	}
+	if len(src.authors) == 0 {
+		t.Fatal("no title+author query was made for a book with an AuthorID")
+	}
+	if len(resp.Results) == 0 {
+		t.Fatalf("expected the author-found answer; author queries: %v", src.authors)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.17.2
+// version: 1.18.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-09-14
 
@@ -375,6 +375,15 @@ func (mfs *Service) searchMetadataForBook(
 	}
 	if IsGarbageValue(bookAuthor) {
 		bookAuthor = ""
+	}
+	// The provider ladder searches by the book's own author when no hint was
+	// passed. GetBookByID leaves book.Author unhydrated, so the batch
+	// candidate fetch always passed an empty hint and every provider was asked
+	// by title alone: Audible, which answers only exact titles, missed books
+	// it finds with the author ("Blood of Elves" + Sapkowski). The hint alone
+	// still decides the cache input hash; this changes only the queries.
+	if searchAuthor == "" {
+		searchAuthor = bookAuthor
 	}
 	bookNarrator := searchNarrator
 	if bookNarrator == "" && book.Narrator != nil && *book.Narrator != "" {
