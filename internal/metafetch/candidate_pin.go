@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.3.0
+// version: 1.2.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-09-14
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -96,15 +96,6 @@ type ApplyOptions struct {
 	// label: an empty value on a reviewed apply records "owner_reviewed"
 	// rather than skipping the history requirement or the note.
 	GateOverride string
-	// ReplaceAuthors makes the apply REPLACE the book's author credits with
-	// the candidate's author. It is an explicit, per-request choice: only a
-	// hand-picked single apply that asked for it (replace_authors in the
-	// request) sets it. Every other apply -- auto-fetch, batch-apply-one,
-	// batch-apply-candidates, the review lane -- leaves it false and is
-	// fill-only: existing author links are kept and the candidate's author is
-	// added if missing. A candidate carries ONE author string, so replacing
-	// by default silently dropped every co-author.
-	ReplaceAuthors bool
 }
 
 // overrideLabel is the refusing-reasons label recorded for an owner-reviewed

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply_signal_fields_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f2a6d13-4c9b-4e07-a1d5-6b3e9c2f70a8
 // last-edited: 2026-09-14
 
@@ -40,7 +40,7 @@ func TestApplyMetadataUnguarded_SignalFields(t *testing.T) {
 		DurationSec:             3600,
 	}
 	book := &database.Book{ID: "b1", Title: "Book"}
-	_ = svc.applyMetadataUnguarded(book, meta, false)
+	_ = svc.applyMetadataUnguarded(book, meta)
 
 	assertStrPtr(t, "ISBN10", book.ISBN10, "1111111111")
 	assertStrPtr(t, "ISBN13", book.ISBN13, "9781111111111")
@@ -71,14 +71,14 @@ func TestApplyMetadataUnguarded_SingleISBNFallback(t *testing.T) {
 	svc := NewService(&database.MockStore{})
 
 	book13 := &database.Book{ID: "b13", Title: "B"}
-	_ = svc.applyMetadataUnguarded(book13, metadata.BookMetadata{ISBN: "9782222222222"}, false)
+	_ = svc.applyMetadataUnguarded(book13, metadata.BookMetadata{ISBN: "9782222222222"})
 	assertStrPtr(t, "ISBN13 from single", book13.ISBN13, "9782222222222")
 	if book13.ISBN10 != nil {
 		t.Errorf("ISBN10 should be unset, got %v", *book13.ISBN10)
 	}
 
 	book10 := &database.Book{ID: "b10", Title: "B"}
-	_ = svc.applyMetadataUnguarded(book10, metadata.BookMetadata{ISBN: "2222222222"}, false)
+	_ = svc.applyMetadataUnguarded(book10, metadata.BookMetadata{ISBN: "2222222222"})
 	assertStrPtr(t, "ISBN10 from single", book10.ISBN10, "2222222222")
 	if book10.ISBN13 != nil {
 		t.Errorf("ISBN13 should be unset, got %v", *book10.ISBN13)

@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.121.0
+// version: 1.122.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -158,6 +158,8 @@ type MockStore struct {
 	// merge/relink must be able to observe writes here.
 	GetBookAuthorsFunc func(bookID string) ([]BookAuthor, error)
 	SetBookAuthorsFunc func(bookID string, authors []BookAuthor) error
+	// ModifyBookAuthorsFunc overrides the default Get -> fn -> Set composition.
+	ModifyBookAuthorsFunc func(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error)
 
 	// Author Alias methods
 	GetAuthorAliasesFunc    func(authorID int) ([]AuthorAlias, error)
@@ -1201,6 +1203,30 @@ func (m *MockStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
 		return m.SetBookAuthorsFunc(bookID, authors)
 	}
 	return nil
+}
+
+// ModifyBookAuthors defaults to GetBookAuthors -> fn -> SetBookAuthors through
+// the configured funcs, so a test that stubs only those two still observes the
+// write. It is not atomic; concurrency tests use a real PebbleStore.
+func (m *MockStore) ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error) {
+	if m.ModifyBookAuthorsFunc != nil {
+		return m.ModifyBookAuthorsFunc(bookID, fn)
+	}
+	current, err := m.GetBookAuthors(bookID)
+	if err != nil {
+		return nil, err
+	}
+	next, err := fn(append([]BookAuthor(nil), current...))
+	if err != nil {
+		if errors.Is(err, ErrSkipBookAuthorsWrite) {
+			return current, nil
+		}
+		return nil, err
+	}
+	if err := m.SetBookAuthors(bookID, next); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {

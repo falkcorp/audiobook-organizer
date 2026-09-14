@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.27.0
+// version: 1.26.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-14
+// last-edited: 2026-09-13
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -606,11 +606,6 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		Candidate metafetch.MetadataCandidate `json:"candidate"`
 		Fields    []string                    `json:"fields"`
 		WriteBack *bool                       `json:"write_back"`
-		// ReplaceAuthors asks for the book's author credits to be REPLACED by
-		// the candidate's author. Absent/false keeps every existing author
-		// link and adds the candidate's author if missing: a candidate carries
-		// one author, so replacing is only ever an explicit choice.
-		ReplaceAuthors bool `json:"replace_authors"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
@@ -645,8 +640,7 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, body.Candidate, body.Fields,
-		metafetch.ApplyOptions{ReplaceAuthors: body.ReplaceAuthors})
+	resp, err := h.metadataFetchService.ApplyMetadataCandidate(id, body.Candidate, body.Fields)
 	if err != nil {
 		httputil.InternalError(c, "failed to apply metadata", err)
 		return
