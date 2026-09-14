@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -498,7 +498,7 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 		}}}, nil)
 	var saved *database.Book
 	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Google Books").
-		Run(func(_ string, _ *database.Book, b *database.Book, _ []database.BookAuthor, _ string) { saved = b }).
+		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
 		Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Google Books", "").Return()
 

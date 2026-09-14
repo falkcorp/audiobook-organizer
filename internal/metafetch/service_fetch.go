@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -284,17 +284,14 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				meta.SeriesPosition = ""
 			}
 			previousCoverURL := book.CoverURL
-			// Snapshot and author join before the apply: history is recorded from the
+			// Snapshot before the apply: history is recorded from the
 			// committed diff after UpdateBook, never from the candidate.
 			historyBefore, snapErr := database.SnapshotBook(book)
 			if snapErr != nil {
 				return nil, snapErr
 			}
-			prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
-			if prevAuthorsErr != nil {
-				prevAuthors = nil
-			}
-			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+			// credits: the author join read and written under the store's lock.
+			meta, skippedLocked, credits, applyErr := mfs.guardedApply(book, meta, src.Name())
 			if applyErr != nil {
 				return nil, applyErr
 			}
@@ -310,7 +307,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// History is recorded from the committed row (CommitApply). A
 			// book with an error means the write stands and its history did
 			// not land; CommitApply logged it and undo refuses that apply.
-			updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, prevAuthors, src.Name())
+			updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, credits, src.Name())
 			if updatedBook == nil {
 				return nil, updateErr
 			}
@@ -425,17 +422,14 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		NormalizeMetaSeries(&meta)
 
 		fetched := meta
-		// Snapshot and author join before the apply: history is recorded from the
+		// Snapshot before the apply: history is recorded from the
 		// committed diff after UpdateBook, never from the candidate.
 		historyBefore, snapErr := database.SnapshotBook(book)
 		if snapErr != nil {
 			return nil, snapErr
 		}
-		prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
-		if prevAuthorsErr != nil {
-			prevAuthors = nil
-		}
-		meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+		// credits: the author join read and written under the store's lock.
+		meta, skippedLocked, credits, applyErr := mfs.guardedApply(book, meta, src.Name())
 		if applyErr != nil {
 			return nil, applyErr
 		}
@@ -446,7 +440,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		// History is recorded from the committed row (CommitApply). A book
 		// with an error means the write stands and its history did not land;
 		// CommitApply logged it and undo refuses that apply.
-		updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, prevAuthors, src.Name())
+		updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, credits, src.Name())
 		if updatedBook == nil {
 			return nil, updateErr
 		}

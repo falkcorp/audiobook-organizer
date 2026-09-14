@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -54,7 +54,7 @@ func renderableCoverURL(previous, applied *string, candidateRemote string) *stri
 // History recording is the caller's job (see guardedApply for the path that
 // records it); every other apply behavior lives in applyMetadataUnguarded.
 func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) ([]string, error) {
-	_, skipped, err := mfs.guardedApply(book, meta, "")
+	_, skipped, _, err := mfs.guardedApply(book, meta, "")
 	return skipped, err
 }
 
@@ -66,7 +66,10 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 // (see applyAuthorCredit). It returns an error only when the author join could
 // not be read or written; the book struct may then be partly mutated and the
 // caller must not persist it.
-func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata) error {
+// The returned credits are the author join applyAuthorCredit read and wrote
+// under the store's lock, nil when no author was applied.
+func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata) (*AuthorCredits, error) {
+	var credits *AuthorCredits
 	originalTitle := book.Title
 	if meta.Title != "" && meta.Title != "Untitled" && IsBetterValue(book.Title, meta.Title) {
 		// Don't replace a real title with something shorter/worse
@@ -135,9 +138,11 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			author, err = mfs.db.CreateAuthor(extractedAuthor)
 		}
 		if err == nil && author != nil {
-			if aerr := mfs.applyAuthorCredit(book, author.ID); aerr != nil {
-				return aerr
+			c, aerr := mfs.applyAuthorCredit(book, author.ID)
+			if aerr != nil {
+				return nil, aerr
 			}
+			credits = c
 		}
 	}
 
@@ -221,7 +226,7 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			book.SeriesSequence = &pos
 		}
 	}
-	return nil
+	return credits, nil
 }
 
 // applyAuthorCredit puts the candidate's resolved author onto the book.
@@ -239,14 +244,19 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 //
 // A read or write failure is returned, never discarded: the merge cannot tell
 // what it would drop without the current join, so it fails closed.
-func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) error {
+//
+// It returns the join it read and the join it left, both under the lock, for
+// history: undo removes exactly what this call added.
+func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) (*AuthorCredits, error) {
 	// The read-merge-write runs inside ModifyBookAuthors, under the store's
 	// book_authors stripe: two concurrent applies to one book each adding a
 	// different author both land. A caller-side Get -> merge -> Set lost one
 	// of them (TestApplyMetadataToBook_ConcurrentFillOnlyAppliesKeepBothAuthors).
 	primary := book.AuthorID
 	added, kept := false, 0
-	_, err := mfs.db.ModifyBookAuthors(book.ID, func(existing []database.BookAuthor) ([]database.BookAuthor, error) {
+	var before []database.BookAuthor
+	after, err := mfs.db.ModifyBookAuthors(book.ID, func(existing []database.BookAuthor) ([]database.BookAuthor, error) {
+		before = append([]database.BookAuthor(nil), existing...)
 		// A book whose primary author lives only in the author_id column (no
 		// join rows) keeps it as a credit: the append must not orphan it.
 		if len(existing) == 0 && primary != nil && *primary != authorID {
@@ -269,7 +279,7 @@ func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) error {
 		}), nil
 	})
 	if err != nil {
-		return fmt.Errorf("add author credit (fill-only): %w", err)
+		return nil, fmt.Errorf("add author credit (add-only): %w", err)
 	}
 	if added && kept > 0 {
 		applyAuthorLog.Info("fill-only apply added author %d to book %s alongside %d existing credit(s)",
@@ -278,7 +288,7 @@ func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) error {
 	if book.AuthorID == nil {
 		book.AuthorID = &authorID
 	}
-	return nil
+	return &AuthorCredits{Before: before, After: after}, nil
 }
 
 // applyAuthorLog is applyAuthorCredit's logger.New printf-style logger.
@@ -689,13 +699,12 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// candidate so provenance below still records what the provider said, which
 	// is exactly what the UI's "fetched vs override" panel exists to show.
 	fetched := meta
-	// The author join as it stood before the apply, so undo can put it back.
-	prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
-	if prevAuthorsErr != nil {
-		prevAuthors = nil
-	}
 	historySource := opts.historySource(candidate.Source)
-	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource)
+	// credits is the author join as read and written under the store's
+	// book_authors lock, so undo removes exactly what this apply added. It
+	// replaces a join read taken here, outside that lock, which could miss
+	// another apply's credit and so let undo delete it.
+	meta, skippedLocked, credits, err := mfs.guardedApply(book, meta, historySource)
 	if err != nil {
 		return nil, err
 	}
@@ -735,7 +744,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// that committed during the apply was silently reverted. A book with an
 	// error means the write stands and its history did not land; CommitApply
 	// logged it at Error and undo refuses that apply.
-	updatedBook, updateErr := mfs.CommitApply(id, before, book, prevAuthors, historySource)
+	updatedBook, updateErr := mfs.CommitApply(id, before, book, credits, historySource)
 	if updatedBook == nil {
 		return nil, updateErr
 	}

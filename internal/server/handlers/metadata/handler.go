@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -1044,6 +1044,14 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if prevAuthorsErr != nil {
 			prevAuthors = nil
 		}
+		// This path writes the author_id column, never the book_authors
+		// join, so the credits it records are the join unchanged
+		// (Before == After): undo then removes no credit and only puts the
+		// column back. Undo never writes this snapshot over the join.
+		var credits *metafetch.AuthorCredits
+		if prevAuthors != nil {
+			credits = &metafetch.AuthorCredits{Before: prevAuthors, After: prevAuthors}
+		}
 
 		if strings.TrimSpace(book.Title) == "" {
 			result.Message = "missing title"
@@ -1349,7 +1357,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			// before the provider search reverted any edit that committed
 			// during the search, and history was recorded from this in-memory
 			// book rather than the stored row.
-			updated, commitErr := h.metadataFetchService.CommitApply(bookID, historyBefore, book, prevAuthors, sourceName)
+			updated, commitErr := h.metadataFetchService.CommitApply(bookID, historyBefore, book, credits, sourceName)
 			if updated == nil {
 				result.Status = "error"
 				result.Message = fmt.Sprintf("failed to update book: %v", commitErr)
