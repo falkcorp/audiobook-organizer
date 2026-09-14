@@ -1,11 +1,12 @@
 // file: internal/server/server_startup_activity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2e8f4d-0c19-4a73-b5d8-9e1a7c3f6d42
 // last-edited: 2026-09-14
 
 package server
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -39,6 +40,11 @@ func (b *blockingActivityStore) Record(e database.ActivityEntry) (int64, error) 
 	return b.ActivityStorer.Record(e)
 }
 
+type built struct {
+	srv     *Server
+	cleanup func()
+}
+
 func (b *blockingActivityStore) summaries() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -52,7 +58,6 @@ func (b *blockingActivityStore) summaries() []string {
 func TestNewServer_DoesNotWriteActivitySynchronously(t *testing.T) {
 	actDB, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "activity.pebble"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = actDB.Close() })
 	inner := database.NewPebbleActivityStoreFromStore(actDB)
 	require.NotNil(t, inner)
 
@@ -61,31 +66,45 @@ func TestNewServer_DoesNotWriteActivitySynchronously(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(bs.gate) }) }
 
 	activityStoreOverrideForTest = bs
-	t.Cleanup(func() { activityStoreOverrideForTest = nil })
 
-	type built struct {
-		srv     *Server
-		cleanup func()
-	}
+	// ONE cleanup, in an explicit order, instead of several LIFO ones. actDB is
+	// the borrowed DB under the activity store, whose own Close is a no-op, so
+	// actDB.Close must run only after the gate is released, the server is torn
+	// down, and the activity service has drained every deferred write.
+	// Otherwise the flush goroutine's commit races actDB.Close and pebble
+	// panics "pebble: closed" (CI on #3416 and #3418).
+	var b built
+	t.Cleanup(func() {
+		release()
+		if b.cleanup != nil {
+			b.cleanup()
+		}
+		if b.srv != nil && b.srv.activityService != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := b.srv.activityService.Close(ctx); err != nil {
+				t.Errorf("activity service did not drain before closing its DB: %v", err)
+			}
+		}
+		activityStoreOverrideForTest = nil
+		_ = actDB.Close()
+	})
+
 	ch := make(chan built, 1)
 	go func() {
 		srv, cleanup := setupTestServer(t)
 		ch <- built{srv, cleanup}
 	}()
 
-	var b built
 	select {
 	case b = <-ch:
 	case <-time.After(45 * time.Second):
 		calls := bs.calls.Load()
 		release()
 		b = <-ch
-		b.cleanup()
 		t.Fatalf("NewServer did not return while activity writes were blocked "+
 			"(Record attempts: %d): something before the HTTP listener writes activity synchronously", calls)
 	}
-	t.Cleanup(release)
-	t.Cleanup(b.cleanup)
 
 	require.Zero(t, bs.calls.Load(), "NewServer must not call the activity store's Record")
 

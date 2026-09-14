@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.9.0
+// version: 4.9.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-14
 
@@ -130,6 +130,14 @@ func (s *Server) flushDeferredActivity() {
 // activity store through Service.Close, which never closes it under an
 // in-flight deferred write. On timeout the store is left open and the log
 // line counts the entries not yet confirmed written.
+//
+// "Left open" protects less than it sounds: the Pebble activity store borrows
+// the MAIN store's *pebble.DB and its Close is a no-op, so the DB is actually
+// closed by cmd's deferred closeStore after Start returns — which happens even
+// when this call timed out. A flush goroutine still writing at that point hits
+// a closed DB. PebbleActivityStore guards every s.db access with
+// recoverPebbleClosed, so that is an error wrapping pebble.ErrClosed that
+// Service.writeDeferred logs with a lost-entry count, not a process panic.
 func (s *Server) closeActivityStore() {
 	if s.activityService == nil {
 		return

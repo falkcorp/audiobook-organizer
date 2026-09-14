@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.22.0
+// version: 3.23.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -1097,13 +1097,16 @@ func (p *PebbleStore) ListFileCompletions(sub OpSubject, opType string) (res map
 // error — all registry callers already log-and-skip on error. Any other panic
 // is re-raised so real bugs are not masked. Precedent: HNSWEmbeddingStore
 // safeAdd (commit 5b90d2f6) containing library panics at the store boundary.
+//
+// Also reused by PebbleActivityStore, whose DB is borrowed from the main
+// PebbleStore and can be closed under an in-flight deferred activity flush.
 func recoverPebbleClosed(op string, errp *error) {
 	if rec := recover(); rec != nil {
 		recErr, ok := rec.(error)
 		if !ok || !errors.Is(recErr, pebble.ErrClosed) {
 			panic(rec)
 		}
-		slog.Warn("pebble: read on closed store; returning error instead of panicking (likely a registry torn down without Shutdown)",
+		slog.Warn("pebble: access on closed store; returning error instead of panicking (a background writer outlived the store's Close)",
 			"op", op, "error", recErr)
 		*errp = fmt.Errorf("%s: %w", op, recErr)
 	}

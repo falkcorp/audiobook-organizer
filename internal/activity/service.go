@@ -1,5 +1,5 @@
 // file: internal/activity/service.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-14
 
@@ -143,6 +143,12 @@ func (s *Service) FlushDeferred(ctx context.Context) error {
 // counts the entries not yet confirmed written, so a loss at process exit is
 // never silent. A later Close retries. Once Close has succeeded, further calls
 // return nil and RecordDeferred refuses new entries.
+//
+// The store may not own what it writes to: PebbleActivityStore borrows the
+// main store's DB and its Close is a no-op, so for that backend "left open"
+// does not keep the DB open — the main store's owner closes it regardless.
+// A flush still running then gets pebble.ErrClosed back as an error (the store
+// recovers the panic), and writeDeferred logs the lost count.
 func (s *Service) Close(ctx context.Context) error {
 	for {
 		s.mu.Lock()
