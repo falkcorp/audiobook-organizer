@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -94,17 +94,48 @@ func (p *PebbleStore) ClearUserPositions(userID, bookID string) error {
 	return b.Commit(pebble.Sync)
 }
 
+// stampFinishedAt maintains state.FinishedAt (see UserBookState) against the
+// stored prev, and mutates state in place so the caller sees the stamp. Every
+// writer of a UserBookState -- readstatus, the ABS handlers, merge, the iTunes
+// position backfill -- goes through SetUserBookState, so this is the one
+// place a finish is dated.
+//   - not Finished: no finish, the stamp is cleared.
+//   - still Finished: the original finish is kept, whatever the caller sent.
+//   - newly Finished: stamped now -- except a row with no stored state that
+//     arrives already stamped (a state carried over from another book by a
+//     merge), which keeps its finish rather than counting as a new one.
+func stampFinishedAt(state, prev *UserBookState, now time.Time) {
+	if state.Status != UserBookStatusFinished {
+		state.FinishedAt = nil
+		return
+	}
+	if prev != nil && prev.Status == UserBookStatusFinished {
+		state.FinishedAt = prev.FinishedAt
+		return
+	}
+	if prev == nil && state.FinishedAt != nil {
+		return
+	}
+	finished := now
+	state.FinishedAt = &finished
+}
+
 func (p *PebbleStore) SetUserBookState(state *UserBookState) error {
 	if state == nil || state.UserID == "" || state.BookID == "" {
 		return fmt.Errorf("user and book required")
 	}
-	state.UpdatedAt = time.Now()
+	now := time.Now()
+	state.UpdatedAt = now
+	// A prev that cannot be read is treated as absent: the state is still
+	// written (a row that fails to decode must stay rewritable), and the
+	// finish stamp falls back to the caller's value or now.
+	prev, _ := p.GetUserBookState(state.UserID, state.BookID)
+	stampFinishedAt(state, prev, now)
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
 
-	prev, _ := p.GetUserBookState(state.UserID, state.BookID)
 	b := p.db.NewBatch()
 	if err := b.Set([]byte("ubs:"+state.UserID+":"+state.BookID), data, nil); err != nil {
 		b.Close()

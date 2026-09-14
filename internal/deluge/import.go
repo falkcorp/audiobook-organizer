@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-13
 //
@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -27,18 +28,78 @@ import (
 
 var importLog = logger.New("deluge-import")
 
-// sameContent reports whether a and b hold the same bytes (size, then
-// SHA-256).
+// sameContent reports whether a and b hold the same bytes. Sizes are compared
+// first from a stat, so two files of different sizes -- the common case --
+// are told apart without reading either; only equal sizes are hashed
+// (SHA-256). This runs on the import request path, where hashing two whole
+// audiobooks just to learn their sizes differ was the cost.
 func sameContent(a, b string) (bool, error) {
-	ha, sa, err := fileops.ComputeFileHashAndSize(a)
+	ia, err := os.Stat(a)
 	if err != nil {
 		return false, err
 	}
-	hb, sb, err := fileops.ComputeFileHashAndSize(b)
+	ib, err := os.Stat(b)
 	if err != nil {
 		return false, err
 	}
-	return sa == sb && ha == hb, nil
+	if ia.Size() != ib.Size() {
+		return false, nil
+	}
+	ha, _, err := fileops.ComputeFileHashAndSize(a)
+	if err != nil {
+		return false, err
+	}
+	hb, _, err := fileops.ComputeFileHashAndSize(b)
+	if err != nil {
+		return false, err
+	}
+	return ha == hb, nil
+}
+
+// destLocks serializes the imports that target one destination path: from
+// the ownership check through the copy or adoption, the row update, and the
+// removal of a copy whose row update failed. Without it, import B could adopt
+// the copy import A made and was about to remove on its failure path -- B's
+// row then named a file A deleted. Process-local, which covers every caller:
+// all imports into the library run in this process.
+var destLocks keyedMutex
+
+// keyedMutex is a set of mutexes, one per key, created on first use and
+// dropped when nobody holds or waits on it.
+type keyedMutex struct {
+	mu    sync.Mutex
+	locks map[string]*refMutex
+}
+
+type refMutex struct {
+	sync.Mutex
+	refs int // holders + waiters; guarded by keyedMutex.mu
+}
+
+// lock blocks until key is free and returns the matching unlock.
+func (k *keyedMutex) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = make(map[string]*refMutex)
+	}
+	m := k.locks[key]
+	if m == nil {
+		m = &refMutex{}
+		k.locks[key] = m
+	}
+	m.refs++
+	k.mu.Unlock()
+
+	m.Lock()
+	return func() {
+		m.Unlock()
+		k.mu.Lock()
+		m.refs--
+		if m.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
 }
 
 // ImportToLibrary copies a file from a Deluge-managed path into the library root,
@@ -112,6 +173,24 @@ func ImportToLibrary(
 	if src == dest {
 		slog.Info("ImportToLibrary source and dest are the same (), skipping copy", "src", src)
 		return src, nil
+	}
+
+	// Everything from here to the end touches dest: hold its lock throughout
+	// (see destLocks), including the Deluge move, which only serializes
+	// imports into this one path.
+	unlock := destLocks.lock(dest)
+	defer unlock()
+
+	// A destination some other book_file row already names is that row's
+	// file. Adopting it would record two rows for one file, and a copy over
+	// it is refused anyway -- so refuse before touching the disk. This also
+	// covers a row whose file is missing: the path is still claimed.
+	owner, err := store.GetBookFileByPath(dest)
+	if err != nil {
+		return "", fmt.Errorf("ImportToLibrary: look up the book file at %s: %w", dest, err)
+	}
+	if owner != nil && owner.ID != bookFile.ID {
+		return "", fmt.Errorf("ImportToLibrary: destination %s is already recorded for book file %s (book %s); not adopting or replacing it for %s", dest, owner.ID, owner.BookID, bookFile.ID)
 	}
 
 	// Create destination directory if it does not exist.

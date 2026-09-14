@@ -1,5 +1,5 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-13
 //
@@ -125,19 +125,46 @@ func (p *PositionSync) pullBookmarks() int {
 	}
 
 	// Also seed "finished" from iTunes play_count > 0 with no existing state.
+	stateErrs := 0
 	for _, book := range books {
 		if book.ITunesPlayCount == nil || *book.ITunesPlayCount <= 0 {
 			continue
 		}
-		state, _ := p.store.GetUserBookState(adminUserID, book.ID)
+		state, err := p.store.GetUserBookState(adminUserID, book.ID)
+		if err != nil {
+			// Unreadable is not "no state": seeding here would write a
+			// fresh Finished over whatever the row holds.
+			stateErrs++
+			p.log.Warn("itunes position sync: read state for %s: %v; not seeding finished", book.ID, err)
+			continue
+		}
 		if state != nil {
 			continue
 		}
-		if _, err := readstatus.SetManualStatus(p.store, adminUserID, book.ID, database.UserBookStatusFinished); err != nil {
+		seededState, err := readstatus.SetManualStatus(p.store, adminUserID, book.ID, database.UserBookStatusFinished)
+		if err != nil {
 			p.log.Warn("itunes position sync: seed finished for %s: %v", book.ID, err)
 			continue
 		}
 		seeded++
+		// This finish came FROM iTunes' play count, so it is already
+		// counted there: record it as bumped, or the next push would add a
+		// play for it.
+		if seededState != nil && seededState.FinishedAt != nil {
+			finish := *seededState.FinishedAt
+			if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
+				if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
+					return database.ErrSkipBookWrite
+				}
+				b.ITunesPlayCountBumpedAt = &finish
+				return nil
+			}); err != nil {
+				p.log.Warn("itunes position sync: mark seeded finish of %s as counted: %v", book.ID, err)
+			}
+		}
+	}
+	if stateErrs > 0 {
+		p.log.Warn("itunes position sync: %d read-state errors while seeding finished status", stateErrs)
 	}
 
 	return seeded
@@ -170,6 +197,7 @@ func (p *PositionSync) pushPositions() int {
 	// so a store-level lookup problem is visible instead of just quietly
 	// reducing how many positions get pushed.
 	lookupErrs := 0
+	stateErrs := 0 // GetUserBookState failures; the bookmark still went out
 	seen := map[string]bool{}
 	for _, pos := range positions {
 		if seen[pos.BookID] {
@@ -179,7 +207,14 @@ func (p *PositionSync) pushPositions() int {
 
 		// Read the finish state first: ModifyBook's callback holds the
 		// book's write stripe and must stay a pure in-memory mutation.
-		state, _ := p.store.GetUserBookState(adminUserID, pos.BookID)
+		state, stateErr := p.store.GetUserBookState(adminUserID, pos.BookID)
+		if stateErr != nil {
+			// Without the state there is no knowing whether this is a new
+			// finish: push the bookmark, bump nothing.
+			stateErrs++
+			p.log.Warn("itunes position push: read state for %s: %v; pushing the bookmark without a play-count bump", pos.BookID, stateErr)
+			state = nil
+		}
 		bookmarkMs := int64(pos.PositionSeconds * 1000)
 
 		// One write for the bookmark and the play-count bump, on the row
@@ -222,6 +257,9 @@ func (p *PositionSync) pushPositions() int {
 	if lookupErrs > 0 {
 		p.log.Warn("itunes position push: %d book lookup/write errors across %d positions", lookupErrs, len(positions))
 	}
+	if stateErrs > 0 {
+		p.log.Warn("itunes position push: %d read-state errors across %d positions; those bookmarks were pushed without a play-count check", stateErrs, len(positions))
+	}
 
 	return pushed
 }
@@ -233,10 +271,13 @@ func (p *PositionSync) pushPositions() int {
 // that finishes again (moving LastActivityAt past the recorded time) is
 // counted again.
 func unbumpedFinish(state *database.UserBookState, book *database.Book) (time.Time, bool) {
-	if state == nil || state.Status != database.UserBookStatusFinished {
+	if state == nil || state.Status != database.UserBookStatusFinished || state.FinishedAt == nil {
+		// No stamp: a Finished row written before FinishedAt existed. Its
+		// finish was already counted (every sync counted it again, until
+		// 2026-09-13), so it is not counted once more.
 		return time.Time{}, false
 	}
-	finish := state.LastActivityAt
+	finish := *state.FinishedAt
 	if book.ITunesPlayCountBumpedAt != nil && !finish.After(*book.ITunesPlayCountBumpedAt) {
 		return time.Time{}, false
 	}

@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.98.0
+// version: 2.99.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-09-13
 
@@ -1026,14 +1026,22 @@ type UserPosition struct {
 // pointer, cached listened-seconds and progress percent. Recomputed
 // when positions change; can be manually overridden (status_manual).
 type UserBookState struct {
-	UserID               string    `json:"user_id"`
-	BookID               string    `json:"book_id"`
-	Status               string    `json:"status"` // see UserBookStatus* constants
-	StatusManual         bool      `json:"status_manual"`
-	LastActivityAt       time.Time `json:"last_activity_at"`
-	LastSegmentID        string    `json:"last_segment_id,omitempty"`
-	TotalListenedSeconds float64   `json:"total_listened_seconds,omitempty"`
-	ProgressPct          int       `json:"progress_pct"` // 0-100
+	UserID         string    `json:"user_id"`
+	BookID         string    `json:"book_id"`
+	Status         string    `json:"status"` // see UserBookStatus* constants
+	StatusManual   bool      `json:"status_manual"`
+	LastActivityAt time.Time `json:"last_activity_at"`
+	// FinishedAt is when the book last BECAME Finished. SetUserBookState
+	// stamps it on the transition into Finished and carries it forward
+	// while the status stays Finished, so writers neither maintain it nor
+	// clobber it with a fresh literal; it is nil whenever the status is not
+	// Finished. Unlike LastActivityAt, a later position write does not move
+	// it, which is what lets the iTunes push count one finish once. Finished
+	// rows written before 2026-09-13 have no stamp until they finish again.
+	FinishedAt           *time.Time `json:"finished_at,omitempty"`
+	LastSegmentID        string     `json:"last_segment_id,omitempty"`
+	TotalListenedSeconds float64    `json:"total_listened_seconds,omitempty"`
+	ProgressPct          int        `json:"progress_pct"` // 0-100
 	// HideFromContinueListening backs the Audiobookshelf surface's
 	// `mediaProgress[].hideFromContinueListening` flag — "remove this from Continue
 	// Listening" without discarding the position. Additive: rows written before this
