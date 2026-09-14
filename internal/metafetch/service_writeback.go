@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
@@ -489,6 +489,32 @@ func (mfs *Service) generateSegmentTitles(bookID string, bookTitle string) error
 // segmentTitleLog is generateSegmentTitles' logger.
 var segmentTitleLog = logger.New("metafetch.segment-titles")
 
+// renameSyncLog is the rename pipelines' DB-sync logger.
+var renameSyncLog = logger.New("metafetch.rename")
+
+// persistRenamedBookPath records a book's post-rename FilePath. It writes
+// ONLY FilePath, onto a fresh copy inside ModifyBook: the rename pipelines
+// used to UpdateBook the whole row they read before the (slow) disk rename,
+// which reverted any apply or edit that landed during it. book.FilePath is
+// updated too, for the caller's later steps.
+func (mfs *Service) persistRenamedBookPath(id string, book *database.Book, newPath string) error {
+	res, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
+		if fresh.FilePath == newPath {
+			return database.ErrSkipBookWrite
+		}
+		fresh.FilePath = newPath
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("record renamed path %s for book %s: %w", newPath, id, err)
+	}
+	if res == nil {
+		return fmt.Errorf("record renamed path %s: book %s no longer exists", newPath, id)
+	}
+	book.FilePath = newPath
+	return nil
+}
+
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
@@ -583,7 +609,13 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 				"missing_sources", skippedPaths)
 		}
 
-		// Update book file records with new paths (only for succeeded renames)
+		// Update book file records with new paths (only for succeeded renames).
+		// A DB write that fails here leaves a file that moved on disk recorded
+		// at its old path, so every such failure is logged with the new path and
+		// returned below, before the rename checkpoint. A later run does NOT
+		// repair it: the row's old path no longer exists, so RenameFiles reports
+		// it as a missing source and skips it.
+		var dbSyncErrs []error
 		bfMap := make(map[string]*database.BookFile, len(bookFiles))
 		for i := range bookFiles {
 			bfMap[bookFiles[i].ID] = &bookFiles[i]
@@ -593,7 +625,8 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 				bf.FilePath = entry.TargetPath
 				bf.ITunesPath = ComputeITunesPath(entry.TargetPath)
 				if err := mfs.db.UpdateBookFile(bf.ID, bf); err != nil {
-					slog.Warn("failed to update book_file path for", "id", bf.ID, "error", err)
+					renameSyncLog.Error("book_file %s moved on disk to %s but its path was not recorded: %v", bf.ID, entry.TargetPath, err)
+					dbSyncErrs = append(dbSyncErrs, fmt.Errorf("record moved file %s at %s: %w", bf.ID, entry.TargetPath, err))
 				}
 			}
 			// Record path change for each successful rename
@@ -624,13 +657,24 @@ func (mfs *Service) runApplyPipeline(id string, book *database.Book, targetID st
 		if len(renameResult.Succeeded) > 0 {
 			newBookPath := filepath.Dir(renameResult.Succeeded[0].TargetPath)
 			if newBookPath != book.FilePath {
-				book.FilePath = newBookPath
-				if _, err := mfs.db.UpdateBook(id, book); err != nil {
-					slog.Warn("failed to update book path for", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
+				if err := mfs.persistRenamedBookPath(id, book, newBookPath); err != nil {
+					renameSyncLog.Error("book %s moved on disk to %s but its path was not recorded: %v",
+						logger.SanitizeLogValue(id), newBookPath, logger.SanitizeLogValue(err.Error()))
+					dbSyncErrs = append(dbSyncErrs, err)
 				} else {
-					slog.Info("updated book path for", "id", logger.SanitizeLogValue(id), "path", newBookPath)
+					renameSyncLog.Info("updated book path for %s to %s", logger.SanitizeLogValue(id), newBookPath)
 				}
 			}
+		}
+
+		// A file that moved on disk but whose new path did not reach the
+		// database is a failed rename: return it before the checkpoint.
+		if len(dbSyncErrs) > 0 {
+			if renameErr != nil {
+				recordRenameCollisionFailure(mfs.db, id, renameResult, renameErr)
+			}
+			return tagWriteResult{}, fmt.Errorf("rename files: moved on disk but not recorded in the database: %w",
+				errors.Join(append(dbSyncErrs, renameErr)...))
 		}
 
 		// DB paths for every succeeded rename are persisted; now surface the
