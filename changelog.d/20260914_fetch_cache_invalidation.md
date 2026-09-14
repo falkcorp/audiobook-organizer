@@ -9,12 +9,18 @@
   fetched for (normalized title, author, ASIN, ISBN-13, ISBN-10). A row with a
   different identity, or with no identity, is treated as a miss and is
   overwritten by the fresh fetch at the same key. Marking a book "no match"
-  now also deletes its fetch-cache rows, because a rejected result is wrong
-  for the book's unchanged identity and its stamp would still match. Applies,
-  edits, undos and reverts do not delete them: an identity change already
-  makes the stamped rows miss, and an apply that leaves the identity alone
-  (narrator, series, fill-only) keeps rows that are still valid instead of
-  forcing a provider refetch of every applied book. The bulk "skip already cached" probes check the same
+  now also deletes its fetch-cache rows and its candidate cache, because a
+  rejected result is wrong for the book's unchanged identity: the stamp would
+  still match, and the candidate cache is keyed on the same unchanged search
+  inputs, so the review UI would keep offering the rejected candidates. This
+  only forces a fresh result on the next fetch; it does not enforce the
+  rejection. Only the single-book fetch refuses a "no match" book; the bulk
+  and batch-candidate paths do not check it yet. Applies, edits, undos and
+  reverts do not delete fetch rows. Any of them that writes one of the five
+  identity fields (including an apply that fills an empty ASIN or ISBN) makes
+  the stamped rows miss anyway. Only a change that touches none of the five
+  (narrator, series, description and the like) keeps its rows, which are
+  still valid for the unchanged identity. The bulk "skip already cached" probes check the same
   identity, so a book with a stale row is no longer skipped. New cache-miss
   reasons `no_identity` and `identity_mismatch` make the change visible in
   metrics.

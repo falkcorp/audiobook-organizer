@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-14
 
@@ -723,9 +723,9 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 	})
 }
 
-// markAudiobookNoMatch handles POST /api/v1/audiobooks/:id/mark-no-match.
 var noMatchLog = logger.New("metadata.nomatch")
 
+// markAudiobookNoMatch handles POST /api/v1/audiobooks/:id/mark-no-match.
 func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 	id := c.Param("id")
 	store := h.store
@@ -739,11 +739,13 @@ func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 	}
 	// The user rejected the match while the book's title/author/IDs stay the
 	// same, so the provider fetch-cache rows still carry a matching identity
-	// stamp and would replay the rejected result on the next fetch or search.
-	// Delete them. Apply/edit paths do not need this: an identity change
-	// already makes the stamped rows miss (A3#14).
+	// stamp and the candidate cache is keyed on the same unchanged search
+	// inputs: both would replay the rejected result. Delete both, so the next
+	// fetch or search starts from a fresh provider result (A3#14). This does
+	// NOT enforce the rejection: only FetchMetadataForBook refuses "no_match"
+	// books; the bulk and batch-candidate paths do not check it yet.
 	if ferr := h.metadataFetchService.InvalidateFetchCacheForBook(id); ferr != nil {
-		noMatchLog.Warn("markAudiobookNoMatch could not clear the fetch cache for %s: %v", logger.SanitizeLogValue(id), ferr)
+		noMatchLog.Warn("markAudiobookNoMatch could not clear the metadata caches for %s: %v", logger.SanitizeLogValue(id), ferr)
 	}
 	rejection := database.MetadataRejection{
 		ID:              ulid.Make().String(),
