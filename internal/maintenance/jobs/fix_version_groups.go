@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.2.0
+// version: 3.2.1
 // guid: a1000004-0000-0000-0000-000000000004
 // last-edited: 2026-09-13
 
@@ -260,7 +260,7 @@ func vgUnlinkOutliers(store bookModifier, group, outliers []database.BookCore) e
 		}
 		if !hasExplicit && len(remaining) > 0 {
 			sort.Slice(remaining, func(i, j int) bool { return remaining[i].ID < remaining[j].ID })
-			if err := ddPromotePrimary(store, remaining[0].ID); err != nil {
+			if _, _, err := ddPromotePrimary(store, remaining[0].ID); err != nil {
 				return fmt.Errorf("promote %s before unlinking the group's primary: %w", remaining[0].ID, err)
 			}
 		}

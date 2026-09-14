@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_jobs_guards_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3d1f62-47a9-4c05-9e1b-6f2a8d4c7e91
 // last-edited: 2026-09-13
 
@@ -91,7 +91,7 @@ func TestDDSoftDeleteBook_ClearPathDemotesPrimary(t *testing.T) {
 	yes := true
 	vg := "g"
 	p := &softDeleteProbe{book: &database.Book{ID: "d", FilePath: "/lib/x.m4b", VersionGroupID: &vg, IsPrimaryVersion: &yes}}
-	if err := ddSoftDeleteBook(p, "d", true); err != nil {
+	if err := ddSoftDeleteBook(p, "d", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	w := p.lastWrite

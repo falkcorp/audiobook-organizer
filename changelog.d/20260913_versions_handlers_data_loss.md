@@ -1,0 +1,8 @@
+### Fixed
+
+- Version split (`POST /audiobooks/:id/split-version`) no longer reverts the aggregate recount: the new book's and the source's path writes are `ModifyBook` closures that set `FilePath` alone, after `MoveBookFilesToBook`. A failed move deletes the new book and takes a newly minted group back off the source; unknown segment IDs are refused before any write; a newly minted group gets the source as its primary.
+- Split to books (`split-to-books`, one book per file) stops at the first failure and answers with an error naming what was done: a move error now stops the split before the file's iTunes PIDs are reassigned, and unknown segment IDs are refused up front. External IDs move with the atomic `ReassignExternalID`, so a failed reassign leaves the ID on the source instead of indexed under neither book; `DeleteRaw` is gone from the versions store.
+- Linking versions refuses deleted books and a self-link, merges both groups, and leaves exactly one primary: the target group's, else the incoming group's, else the earliest-created member.
+- Set-primary promotes first, demotes the others in ID order, and rolls every write back if a demote fails, so a partial failure no longer leaves a group with no primary or two.
+- Link, set-primary and split-version answer 404 for a missing book instead of dereferencing a nil row.
+- `dedup-books` re-checks, under the retiring book's lock, the primary flag and version group its hand-off was planned on, and that the planned successor is still a live primary; if either changed the retire is refused and this run's promotion is undone. A successor retired meanwhile is never promoted. Dry-run now refuses a pair with a retired book, as apply does.

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books_softdelete_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a1f3c5e-7b2d-4e64-a8f0-1c3e5a7b9d2f
 // last-edited: 2026-09-13
 
@@ -44,7 +44,7 @@ var _ bookSoftDeleter = (*softDeleteProbe)(nil)
 
 func TestDDSoftDeleteBook_SetsFlagAndTimestamp(t *testing.T) {
 	p := &softDeleteProbe{book: &database.Book{ID: "b1", Title: "x"}}
-	if err := ddSoftDeleteBook(p, "b1", false); err != nil {
+	if err := ddSoftDeleteBook(p, "b1", false, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if p.updates != 1 || p.lastWrite == nil {
@@ -61,7 +61,7 @@ func TestDDSoftDeleteBook_SetsFlagAndTimestamp(t *testing.T) {
 func TestDDSoftDeleteBook_UpdateFails_ReturnsWrappedError(t *testing.T) {
 	boom := errors.New("pebble: write stalled")
 	p := &softDeleteProbe{book: &database.Book{ID: "b2"}, failWrite: boom}
-	err := ddSoftDeleteBook(p, "b2", false)
+	err := ddSoftDeleteBook(p, "b2", false, nil)
 	if err == nil {
 		t.Fatal("a failed soft-delete must be reported, not returned as success")
 	}
@@ -72,7 +72,7 @@ func TestDDSoftDeleteBook_UpdateFails_ReturnsWrappedError(t *testing.T) {
 
 func TestDDSoftDeleteBook_AlreadyGone_IsNoop(t *testing.T) {
 	p := &softDeleteProbe{}
-	if err := ddSoftDeleteBook(p, "missing", false); err != nil {
+	if err := ddSoftDeleteBook(p, "missing", false, nil); err != nil {
 		t.Fatalf("missing row must be a no-op, got %v", err)
 	}
 	if p.updates != 0 {
