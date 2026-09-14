@@ -1,5 +1,5 @@
 // file: internal/applygate/partsuffix_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a7e2c91-3b6d-4f08-9e15-c2d8a0b7f364
 // last-edited: 2026-09-14
 
@@ -93,6 +93,21 @@ func TestCheckSequence_PartSuffix(t *testing.T) {
 			cand: metafetch.MetadataCandidate{Title: "A Cry of Honor"}, refuse: true,
 		},
 		{
+			name: "Wheel of Time - 003, candidate unnumbered: sequence leg passes",
+			book: database.Book{Title: "Wheel of Time - 003"},
+			cand: metafetch.MetadataCandidate{Title: "Wheel of Time"},
+		},
+		{
+			name: "Wheel of Time - 003, candidate #5: refuses",
+			book: database.Book{Title: "Wheel of Time - 003"},
+			cand: metafetch.MetadataCandidate{Title: "Wheel of Time", SeriesPosition: "5"}, refuse: true,
+		},
+		{
+			name: "Rogue Lawyer - 001, candidate with a different number: refuses",
+			book: database.Book{Title: "Rogue Lawyer - 001", SeriesSequence: one},
+			cand: metafetch.MetadataCandidate{Title: "Rogue Lawyer", SeriesPosition: "2"}, refuse: true,
+		},
+		{
 			name: "two-digit dash suffix still reads as a volume",
 			book: database.Book{Title: "Big Cats - 03"},
 			cand: metafetch.MetadataCandidate{Title: "Big Cats"}, refuse: true,
@@ -118,6 +133,13 @@ func TestCheckSeriesNumberLost_PartSuffix(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "Rogue Lawyer"}
 	if r := checkSeriesNumberLost(&book, &cand, []string{"title"}); r.Outcome == OutcomeBlock {
 		t.Fatalf("blocked %s: %s", r.Reason, r.Detail)
+	}
+	// A candidate with a different series number must still block, part
+	// suffix or not ("Wheel of Time - 003" -> #5).
+	wot := database.Book{Title: "Wheel of Time - 003", SeriesSequence: intp(3)}
+	five := metafetch.MetadataCandidate{Title: "Wheel of Time", Series: "Other", SeriesPosition: "5"}
+	if r := checkSeriesNumberLost(&wot, &five, []string{"title"}); r.Outcome != OutcomeBlock {
+		t.Fatalf("different series number must block, got %+v", r)
 	}
 	// Control: under a real series the suffix counts again, so a result that
 	// keeps #1 nowhere (other series, other position) must block.

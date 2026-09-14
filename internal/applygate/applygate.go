@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-14
 
@@ -228,8 +228,8 @@ func EvaluateInBatch(book *database.Book, c *metafetch.MetadataCandidate, identi
 //   - neither has one, or only the candidate has one → pass.
 func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) SequenceVerdict {
 	v := SequenceVerdict{BookNumbers: BookNumbers(book), CandidateNumbers: CandidateNumbers(c)}
-	bookNum, bookOK, bookConflict := agree(v.BookNumbers)
-	candNum, candOK, candConflict := agree(v.CandidateNumbers)
+	bookNum, bookOK, bookConflict := agree(v.BookNumbers, false)
+	candNum, candOK, candConflict := agree(v.CandidateNumbers, false)
 
 	switch {
 	case bookConflict:
@@ -240,6 +240,14 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 	case candConflict:
 		v.Reason, v.Detail = ReasonCandidateSequenceConflict, "candidate sources disagree: "+describe(v.CandidateNumbers)
 	case !candOK:
+		// Only here, where the candidate names no number, does a part suffix
+		// stand aside: "Rogue Lawyer - 001" and "Wheel of Time - 003" look the
+		// same, so a candidate with a DIFFERENT number still refuses below.
+		if _, ok, conflict := agree(v.BookNumbers, true); !ok && !conflict {
+			v.Pass = true
+			v.Detail = "book's only number is a part suffix (" + describe(v.BookNumbers) + "), candidate has no number"
+			break
+		}
 		v.Reason, v.Detail = ReasonSequenceMissingOnCandidate, "book is #"+bookNum.Text+" ("+describe(v.BookNumbers)+"), candidate has no number"
 	case !seqnum.Equal(bookNum, candNum):
 		v.Reason, v.Detail = ReasonSequenceMismatch, "book is #"+bookNum.Text+", candidate is #"+candNum.Text
@@ -249,17 +257,19 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 	return v
 }
 
-// Forms of a book source that was found but is not counted as a book number.
-// They stay in BookNumbers so a dry-run report shows what was seen and why it
-// was set aside; agree skips them.
+// Forms of a book source that may be only a part number. They count like any
+// other number, except when the candidate names no number at all: then
+// CheckSequence sets them aside (agree with skipPart). A part suffix and a
+// series "Wheel of Time - 003" look the same, so a candidate with a
+// different number must still refuse.
 const (
 	// FormPartSuffix: a title, file or folder name whose only number is a
 	// multi-part rip's part suffix ("Rogue Lawyer - 001"), on a book with no
 	// series name of its own.
 	FormPartSuffix = "part_suffix"
 	// FormDerivedPosition: a series position equal to that part number with
-	// no source independent of the suffix behind it. The importer used to
-	// turn "Rogue Lawyer - 001" into series "Rogue Lawyer" #1
+	// no source independent of the suffix behind it. The importer turns
+	// "Rogue Lawyer - 001" into series "Rogue Lawyer" #1
 	// (matcher.IdentifySeries), so such a position is the suffix again, not
 	// a second piece of evidence.
 	FormDerivedPosition = "part_suffix_position"
@@ -267,8 +277,9 @@ const (
 
 // BookNumbers lists every number found on the book, one per source.
 //
-// A part suffix ("- 001", see seqnum.PartSuffix) is set aside, and so is a
-// series position that only repeats it, unless the book carries a series name
+// A part suffix ("- 001", see seqnum.PartSuffix) is marked, and so is a
+// series position that only repeats it (set aside only when the candidate
+// has no number; see CheckSequence), unless the book carries a series name
 // other than the title's own words (then the suffix may be a volume, and the
 // gate keeps refusing) or another source names the number independently. On
 // the 2026-09-14 prod preview "Rogue Lawyer - 001", "The Rooster Bar - 001"
@@ -354,7 +365,7 @@ func discountPartSuffix(book *database.Book, out []SourceNumber, stems []string)
 
 // hasRealSeries reports whether the book carries a series name that is not
 // just the words of a part-suffixed title ("Rogue Lawyer" for "Rogue Lawyer -
-// 001", which is what matcher.IdentifySeries used to invent at import).
+// 001", which is what matcher.IdentifySeries invents at import).
 func hasRealSeries(book *database.Book, stems []string) bool {
 	s := strings.TrimSpace(seriesName(book))
 	if s == "" {
@@ -405,11 +416,11 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 }
 
 // agree reduces a source list to one number. ok=false when the list is empty;
-// conflict=true when two sources name different numbers. Sources set aside by
-// BookNumbers (part suffixes) are skipped.
-func agree(src []SourceNumber) (n seqnum.Number, ok, conflict bool) {
+// conflict=true when two sources name different numbers. With skipPart,
+// sources BookNumbers marked as part suffixes are skipped.
+func agree(src []SourceNumber, skipPart bool) (n seqnum.Number, ok, conflict bool) {
 	for _, s := range src {
-		if !counted(s) {
+		if skipPart && !counted(s) {
 			continue
 		}
 		cur, _ := seqnum.ParsePosition(s.Number)
@@ -432,7 +443,7 @@ func describe(src []SourceNumber) string {
 	for _, s := range src {
 		p := s.Source + "=" + s.Number
 		if !counted(s) {
-			p += " (part number, not counted)"
+			p += " (part number)"
 		}
 		parts = append(parts, p)
 	}
