@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b71e4d20-8f36-4c95-a1d7-52e0c6b93f84
-// last-edited: 2026-09-05
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -229,19 +229,19 @@ func WalkSourceChain(
 			// retries are appended only when trimming actually changed the
 			// title, so an unchanged title is not searched twice.
 			type attempt struct {
-				query  string
-				anchor map[string]bool // non-nil: a variant, results gated on it
-				run    func() ([]metadata.BookMetadata, error)
+				query   string
+				variant *titleVariant // non-nil: a variant, results gated on it
+				run     func() ([]metadata.BookMetadata, error)
 			}
 			attempts := make([]attempt, 0, 8)
-			add := func(title string, anchor map[string]bool, titleOnly bool) {
+			add := func(title string, variant *titleVariant, titleOnly bool) {
 				if author != "" {
-					attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
+					attempts = append(attempts, attempt{title, variant, func() ([]metadata.BookMetadata, error) {
 						return src.SearchByTitleAndAuthor(ctx, title, author)
 					}})
 				}
 				if titleOnly {
-					attempts = append(attempts, attempt{title, anchor, func() ([]metadata.BookMetadata, error) {
+					attempts = append(attempts, attempt{title, variant, func() ([]metadata.BookMetadata, error) {
 						return src.SearchByTitle(ctx, title)
 					}})
 				}
@@ -256,7 +256,7 @@ func WalkSourceChain(
 			// queries did not find, and their results are anchored on the
 			// book's own name so a series-name answer cannot be cached as it.
 			for _, v := range extraTitleVariants(bookTitle, searchTitle) {
-				add(v.Query, v.Anchor, v.titleOnlyAllowed())
+				add(v.Query, &v, v.titleOnlyAllowed())
 			}
 			for _, a := range attempts {
 				// A cancelled walk makes no further calls: each one would fail
@@ -279,12 +279,12 @@ func WalkSourceChain(
 					}
 					continue
 				}
-				if a.anchor != nil {
-					res = keepAnchored(res, a.anchor, author)
+				if a.variant != nil {
+					res = keepVariant(res, *a.variant, author)
 				}
 				if len(res) > 0 {
 					out.Results, out.SourceName, out.ProviderKey = res, name, slotKey
-					if a.anchor != nil {
+					if a.variant != nil {
 						out.Variant = a.query
 						slog.Info("metadata-fetch: hit on title variant",
 							"book_id", bookID, "provider", name, "variant", a.query, "count", len(res))

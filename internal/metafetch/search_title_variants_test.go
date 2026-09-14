@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
-// last-edited: 2026-09-05
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -113,6 +113,10 @@ func TestExtraTitleVariants_AreAnchoredOnTheBookName(t *testing.T) {
 		{"Eternal Dominion, Book 04 - A Novel", nil, nil},
 		{"A Plain Title", nil, nil},
 		{"Dune - Frank Herbert", nil, nil},
+		// A part-numbered rip is searched without its part number.
+		{"Rogue Lawyer - 001", []string{"Rogue Lawyer"}, []string{"rogue", "lawyer"}},
+		{"The Wheel of Time - 003", []string{"The Wheel of Time"}, []string{"wheel", "time"}},
+		{"Big Cats 3 - 001", nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
@@ -555,5 +559,28 @@ func TestSearchMetadataForBook_SentinelClosesTheLadderAndKeepsTheDiagnosis(t *te
 	got := resp.SourcesFailed["google"]
 	if !strings.Contains(got, "Queries per day") {
 		t.Fatalf("sources_failed[google] = %q, want the quota message the provider sent", got)
+	}
+}
+
+// A part-suffix stem may be a series name, so its variant is Exact: a result
+// titled with any further significant word is a different book.
+func TestKeepVariant_PartSuffixStemIsExact(t *testing.T) {
+	v := extraTitleVariants("The Wheel of Time - 003", "The Wheel of Time - 003")
+	if len(v) != 1 || !v[0].Exact {
+		t.Fatalf("variants = %+v, want one Exact variant", v)
+	}
+	res := []metadata.BookMetadata{
+		{Title: "The Wheel of Time Companion"},
+		{Title: "The Great Hunt: Book Two of The Wheel of Time"},
+		{Title: "The Wheel of Time: A Novel"},
+	}
+	got := keepVariant(res, v[0], "")
+	if len(got) != 1 || got[0].Title != "The Wheel of Time: A Novel" {
+		t.Fatalf("kept %+v, want only the exact title", got)
+	}
+	r := extraTitleVariants("Rogue Lawyer - 001", "Rogue Lawyer - 001")
+	got = keepVariant([]metadata.BookMetadata{{Title: "Rogue Lawyer", Author: "John Grisham"}}, r[0], "")
+	if len(got) != 1 {
+		t.Fatalf("Rogue Lawyer dropped: %+v", got)
 	}
 }
