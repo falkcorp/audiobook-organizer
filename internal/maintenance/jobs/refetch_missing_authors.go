@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: a1000012-0000-0000-0000-000000000012
 // last-edited: 2026-09-14
 
@@ -134,12 +134,11 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			return ""
 		}
 
-		// ALBUMARTIST is the author (owner decision 2026-09-14) unless it
-		// holds the file's own narrator and ARTIST names someone else.
+		// ALBUMARTIST is the author (owner decision 2026-09-14). There is no
+		// guard for an ALBUMARTIST that holds the narrator: only da064ef4c
+		// wrote that, and its fix c81b39801 shipped in the same push, while a
+		// guard drops the real author of a book its author narrates.
 		authorName := getRaw("ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST")
-		if metadata.AlbumArtistIsNarrator(authorName, getRaw("ARTIST"), getRaw("NARRATOR", "PERFORMER", "READER")) {
-			authorName = ""
-		}
 		if authorName == "" {
 			authorName = getRaw("ARTIST")
 		}

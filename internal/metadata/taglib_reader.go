@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_reader.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
 // last-edited: 2026-09-14
 
@@ -60,25 +60,28 @@ func BuildMetadataFromTaglibMap(tags map[string][]string, filePath string, metaL
 
 	// Author priority: ALBUMARTIST > ARTIST > COMPOSER (composer is
 	// narrator in audiobooks, so it's a last-ditch fallback).
-	// ALBUMARTIST is the author (owner decision 2026-09-14) unless it
-	// holds the file's own narrator and ARTIST names someone else
-	// (AlbumArtistIsNarrator).
+	// ALBUMARTIST is the author (owner decision 2026-09-14). There is no guard for an ALBUMARTIST that holds the
+	// narrator. The only code that ever wrote the narrator there was da064ef4c,
+	// and its fix c81b39801 landed in the same push (adjacent on main, same
+	// committer time, every release tag contains both), so no deployed build
+	// wrote that state. A guard cannot tell it apart from an author narrating
+	// their own book (ALBUMARTIST = NARRATOR = author, ARTIST = co-author), and
+	// dropped the real author in that case.
 	albumArtist := get("ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST")
 	artist := get("ARTIST")
 	composer := get("COMPOSER")
-	narratorTag := get("NARRATOR", "PERFORMER", "READER", "TXXX:NARRATOR", "TXXX:PERFORMER")
-	albumArtistIsNarrator := AlbumArtistIsNarrator(albumArtist, artist, narratorTag)
+	// Narrator precedence, shared with BuildMetadataFromTag: the explicit
+	// NARRATOR tag first, then PERFORMER, then READER (keys are matched
+	// case-insensitively).
+	narratorTag := get("NARRATOR", "TXXX:NARRATOR", "©NRT", "PERFORMER", "TXXX:PERFORMER", "READER", "TXXX:READER")
 	authorFromArtist := false
 	switch {
-	case albumArtist != "" && !albumArtistIsNarrator:
+	case albumArtist != "":
 		metadata.Artist = albumArtist
 		metadata.AuthorSource = "taglib.albumartist"
 	case artist != "":
 		metadata.Artist = artist
 		metadata.AuthorSource = "taglib.artist"
-		if albumArtistIsNarrator {
-			metadata.AuthorSource = "taglib.artist (albumartist is the narrator)"
-		}
 		authorFromArtist = true
 	case composer != "":
 		metadata.Artist = composer

@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package undo
 
@@ -116,7 +116,7 @@ const (
 // TagAbsentValue is the OldValue of a tag_write row whose tag the file did not
 // carry before the write. It is distinct from "", which means the pre-write
 // value is not known (every row written before 2026-09-13). Reverting a row
-// holding it removes the tag's property from the file and reads the file back
+// holding it removes the tag's properties from the file and reads the file back
 // to confirm it is gone (metadata.WriteTagProperties); a removal that did not
 // happen fails the row.
 const TagAbsentValue = "\x00tag-absent"

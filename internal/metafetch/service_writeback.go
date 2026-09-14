@@ -293,21 +293,17 @@ func currentTagValueMap(current metadata.Metadata) map[string]string {
 	}
 
 	currentVals := map[string]string{
-		"title":  current.Title,
-		"album":  current.Album,
-		"artist": current.Artist,
-		// album_artist is the author (owner decision 2026-09-14): the
-		// reader takes ALBUMARTIST first as current.Artist. Known keys
-		// compare against the file so an unchanged tag is not rewritten.
-		"album_artist": current.Artist,
-		"composer":     current.Narrator,
-		"narrator":     current.Narrator,
-		"genre":        current.Genre,
-		"year":         fmt.Sprintf("%d", current.Year),
-		"language":     current.Language,
-		"series":       current.Series,
-		"asin":         current.ASIN,
-		"description":  current.Comments, // description is stored in comments field
+		"title":       current.Title,
+		"album":       current.Album,
+		"artist":      current.Artist,
+		"composer":    current.Narrator,
+		"narrator":    current.Narrator,
+		"genre":       current.Genre,
+		"year":        fmt.Sprintf("%d", current.Year),
+		"language":    current.Language,
+		"series":      current.Series,
+		"asin":        current.ASIN,
+		"description": current.Comments, // description is stored in comments field
 		// Custom AUDIOBOOK_ORGANIZER_* tag mappings from metadata/custom_tags.go:
 		// These map input keys (e.g. "book_id") to Metadata struct fields.
 		"book_id":         current.BookOrganizerID,
@@ -990,10 +986,9 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 			// Filter out tags whose current on-disk value already
 			// matches the DB state, so a re-run of bulk write-back
 			// is near-free when nothing actually changed.
-			// filterUnchangedTags now covers album_artist and
-			// composer (both narrator-sourced in our convention),
-			// so the filter correctly no-ops on unchanged books
-			// instead of always-writing because of those keys.
+			// filterUnchangedTags covers composer (narrator-sourced
+			// in our convention), so the filter no-ops on unchanged
+			// books instead of always-writing because of that key.
 			// FilterUnchangedTags only READS fullTagMap and returns a new map
 			// (filterTagsAgainst), so the concurrent writers below can share it.
 			dirFiles := AudioFilesInDir(book.FilePath)

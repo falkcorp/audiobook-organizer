@@ -1,7 +1,7 @@
 // file: internal/audiobooks/rename.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/rename.go. This file provides type aliases and
@@ -56,7 +56,7 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 		return resolveAuthorAndSeriesNames(db, book)
 	}
 	// The organize tag write, its unchanged-tag filter and the pre-write
-	// value each tag_write row records all address the one file property
+	// value each tag_write row records all address the file properties
 	// each key names (metadata.TagProperty) -- the same property the revert
 	// writes back. The organize write used the write-back map, which fanned
 	// artist out to ALBUMARTIST and a blank COMPOSER (changes no row

@@ -1,5 +1,5 @@
 // file: internal/metadata/metadata.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
 // last-edited: 2026-09-14
 
@@ -236,19 +236,26 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 		fieldCandidate{value: m.Artist(), source: "tag.Artist"},
 		fieldCandidate{value: getRawString(raw, "TPE1", "artist", "\xa9ART", "©ART"), source: "raw.artist"},
 	)
-	// The dedicated narrator tags are read before the author so the author
-	// choice can see them.
+	// Narrator precedence, shared with BuildMetadataFromTaglibMap: the explicit
+	// NARRATOR tag (and its TXXX / ©nrt forms) first, then PERFORMER, then
+	// READER. The write-back map writes the narrator to both NARRATOR and
+	// PERFORMER; when they differ the explicit tag wins in both readers.
 	narratorValue, narratorSource := pickFirstNonEmpty(
-		fieldCandidate{value: getRawString(raw, "PERFORMER", "Performer", "TXXX:NARRATOR", "TXXX:Narrator", "NARRATOR", "Narrator", "©nrt", "\xa9nrt"), source: "raw.narrator"},
-		fieldCandidate{value: getRawString(raw, "TXXX:Reader", "READER"), source: "raw.reader"},
+		fieldCandidate{value: getRawString(raw, "NARRATOR", "Narrator", "TXXX:NARRATOR", "TXXX:Narrator", "©nrt", "\xa9nrt"), source: "raw.narrator"},
+		fieldCandidate{value: getRawString(raw, "PERFORMER", "Performer", "TXXX:PERFORMER", "TXXX:Performer"), source: "raw.performer"},
+		fieldCandidate{value: getRawString(raw, "READER", "Reader", "TXXX:READER", "TXXX:Reader"), source: "raw.reader"},
 	)
 	// Priority: album_artist > artist > composer. ALBUMARTIST is the author
-	// (owner decision 2026-09-14) unless it holds the file's own narrator and
-	// ARTIST names someone else (AlbumArtistIsNarrator).
+	// (owner decision 2026-09-14). There is no guard for an ALBUMARTIST that holds the
+	// narrator. The only code that ever wrote the narrator there was da064ef4c,
+	// and its fix c81b39801 landed in the same push (adjacent on main, same
+	// committer time, every release tag contains both), so no deployed build
+	// wrote that state. A guard cannot tell it apart from an author narrating
+	// their own book (ALBUMARTIST = NARRATOR = author, ARTIST = co-author), and
+	// dropped the real author in that case.
 	// Composer is used as fallback only — in audiobooks, composer typically
 	// contains the narrator, not the author.
-	albumArtistIsNarrator := AlbumArtistIsNarrator(cleanTagValue(albumArtistValue), cleanTagValue(artistValue), cleanTagValue(narratorValue))
-	if albumArtistValue != "" && !albumArtistIsNarrator {
+	if albumArtistValue != "" {
 		metadata.Artist = cleanTagValue(albumArtistValue)
 		if metadata.Artist != "" {
 			setFieldSource(fieldSources, "author", albumArtistSource+" (album_artist)")
@@ -256,11 +263,7 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 	} else if artistValue != "" {
 		metadata.Artist = cleanTagValue(artistValue)
 		if metadata.Artist != "" {
-			source := artistSource
-			if albumArtistIsNarrator {
-				source += " (album_artist is the narrator)"
-			}
-			setFieldSource(fieldSources, "author", source)
+			setFieldSource(fieldSources, "author", artistSource)
 			authorFromArtist = true
 		}
 	} else if composerValue != "" {
