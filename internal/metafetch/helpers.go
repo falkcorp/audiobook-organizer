@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-14
 
@@ -327,13 +327,15 @@ func partSuffixVariant(rawTitle, searchTitle string) []titleVariant {
 }
 
 // keepVariant returns the results v accepts: an Exact variant first drops any
-// result whose title has a significant, non-generic word outside the anchor,
-// then keepAnchored applies.
+// result whose title has a significant, non-generic word outside the anchor
+// or that names no author, then keepAnchored applies. With no person of the
+// book's own to vouch, an Exact hit stands only when every result names the
+// same author: two authors' books of one title are ambiguous, so none is kept.
 func keepVariant(results []metadata.BookMetadata, v titleVariant, people string) []metadata.BookMetadata {
 	if v.Exact {
 		var exact []metadata.BookMetadata
 		for _, r := range results {
-			ok := true
+			ok := strings.TrimSpace(r.Author) != ""
 			for w := range SignificantWords(r.Title) {
 				if !genericTitleWords[w] && !v.Anchor[w] {
 					ok = false
@@ -345,6 +347,13 @@ func keepVariant(results []metadata.BookMetadata, v titleVariant, people string)
 			}
 		}
 		results = exact
+		if strings.TrimSpace(people) == "" {
+			for _, r := range results[min(1, len(results)):] {
+				if !strings.EqualFold(strings.TrimSpace(r.Author), strings.TrimSpace(results[0].Author)) {
+					return nil
+				}
+			}
+		}
 	}
 	return keepAnchored(results, v.Anchor, people)
 }
