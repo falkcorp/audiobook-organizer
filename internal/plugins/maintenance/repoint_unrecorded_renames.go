@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
 // last-edited: 2026-09-14
 
@@ -11,8 +11,11 @@
 // keyspace. This op reads the records and, for each one, writes new_path into
 // the row when (a) new_path exists on disk as the right kind of entry and
 // (b) the row still holds old_path, checked and written as ONE step under the
-// row's store lock (ModifyBookFile / ModifyBook). Anything else is skipped and
-// the record is KEPT, so nothing is guessed. A record is blanked only after its
+// row's store lock (ModifyBookFile / ModifyBook), (c) old_path is GONE from
+// disk, and (d) no other row of the same kind already holds new_path. (c) and
+// (d) close the A->B->A hazard: a row put back at A with its files back at A
+// fails (c), and a B someone else now owns fails (d). Anything else is skipped
+// and the record is KEPT, so nothing is guessed. A record is blanked only after its
 // repoint write succeeded, or when the row already holds new_path.
 //
 // It never moves a file, never deletes a row, and refuses any record with a
@@ -49,27 +52,22 @@ const repointUnrecordedRenamesConcurrency = 4
 type repointUnrecordedRenamesParams struct {
 	// Apply must be explicitly true to write. Default false = report only.
 	Apply bool `json:"apply"`
-	// AllowModifiedSinceRecord repoints a book_file row even when it was
-	// written after the record was made (it still must hold old_path). Off by
-	// default: a later write means someone else touched the row, so an
-	// operator should look at those rows first (outcome
-	// skipped_modified_since_record).
-	AllowModifiedSinceRecord bool `json:"allow_modified_since_record"`
 }
 
 // Outcomes, one per record.
 const (
-	repointOutcomeRepointed     = "repointed"
-	repointOutcomeWouldRepoint  = "would_repoint"
-	repointOutcomeAlreadyAtNew  = "already_at_new_path"
-	repointOutcomeITunes        = "skipped_itunes"
-	repointOutcomeNewMissing    = "skipped_new_path_missing"
-	repointOutcomeNewWrongKind  = "skipped_new_path_wrong_kind"
-	repointOutcomeRowChanged    = "skipped_row_changed"
-	repointOutcomeModifiedSince = "skipped_modified_since_record"
-	repointOutcomeRowGone       = "skipped_row_gone"
-	repointOutcomeUnreadable    = "skipped_unreadable_record"
-	repointOutcomeError         = "error"
+	repointOutcomeRepointed    = "repointed"
+	repointOutcomeWouldRepoint = "would_repoint"
+	repointOutcomeAlreadyAtNew = "already_at_new_path"
+	repointOutcomeITunes       = "skipped_itunes"
+	repointOutcomeNewMissing   = "skipped_new_path_missing"
+	repointOutcomeNewWrongKind = "skipped_new_path_wrong_kind"
+	repointOutcomeRowChanged   = "skipped_row_changed"
+	repointOutcomeOldPresent   = "skipped_old_path_still_present"
+	repointOutcomeNewClaimed   = "skipped_new_path_claimed"
+	repointOutcomeRowGone      = "skipped_row_gone"
+	repointOutcomeUnreadable   = "skipped_unreadable_record"
+	repointOutcomeError        = "error"
 )
 
 type repointUnrecordedRenameRow struct {
@@ -200,6 +198,8 @@ func underITunes(p string, roots []string) bool {
 
 // unrecordedRenameStore is what one repoint needs of OpsStore.
 type unrecordedRenameStore interface {
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	SetUserPreferenceForUser(userID string, key string, value string) error
@@ -222,7 +222,6 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 	row := repointUnrecordedRenameRow{
 		Key: r.key, BookID: r.rec.BookID, BookFileID: r.rec.BookFileID, OldPath: r.rec.OldPath, NewPath: r.rec.NewPath,
 	}
-	recordedAt, tErr := time.Parse(time.RFC3339Nano, r.rec.RecordedAt)
 	switch {
 	case r.err != nil:
 		row.Outcome, row.Detail = repointOutcomeUnreadable, r.err.Error()
@@ -232,9 +231,6 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 		return row
 	case organizer.RenamePathWriteFailureKey(r.rec.BookID, r.rec.BookFileID) != r.key:
 		row.Outcome, row.Detail = repointOutcomeUnreadable, "record body does not match its key"
-		return row
-	case tErr != nil:
-		row.Outcome, row.Detail = repointOutcomeUnreadable, "recorded_at: "+tErr.Error()
 		return row
 	}
 	if underITunes(r.rec.OldPath, roots) || underITunes(r.rec.NewPath, roots) {
@@ -258,10 +254,16 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 		return row
 	}
 
+	blocked, err := repointBlockers(store, r.rec)
+	if err != nil {
+		row.Outcome, row.Detail = repointOutcomeError, err.Error()
+		return row
+	}
+
 	if r.rec.BookFileID == "" {
-		row = repointBookRow(store, r, row, params.Apply)
+		row = repointBookRow(store, r, row, blocked, params.Apply)
 	} else {
-		row = repointBookFileRow(store, r, row, recordedAt, params)
+		row = repointBookFileRow(store, r, row, blocked, params.Apply)
 	}
 	// Clear only after a successful write, or when the row already holds
 	// new_path (a write that committed but reported failure). Never in a dry run.
@@ -275,13 +277,57 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 	return row
 }
 
+// repointBlocker is a content precondition that refuses a repoint of a row
+// that still holds old_path. outcome is empty when nothing blocks.
+type repointBlocker struct {
+	outcome, detail string
+}
+
+// repointBlockers checks (c) and (d) of the file comment. They are read
+// before the row's compare-and-write rather than inside it: the callback runs
+// under the store's write lock, and a store read from inside it could
+// re-enter that lock. The disk check and the claim check are therefore a
+// snapshot taken just before the write; the old_path compare is the atomic
+// part. They are applied only to a row that still holds old_path, so a row
+// already at new_path still clears its record.
+func repointBlockers(store unrecordedRenameStore, rec organizer.RenamePathWriteFailure) (repointBlocker, error) {
+	// (c) Only "does not exist" counts as gone; a permission or I/O error
+	// proves nothing about the path and is returned as an error (record kept).
+	if _, err := os.Lstat(rec.OldPath); err == nil {
+		return repointBlocker{repointOutcomeOldPresent, "old path exists on disk too; the files may have been moved back"}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return repointBlocker{}, fmt.Errorf("stat old path: %w", err)
+	}
+	// (d) Another row of the same kind already at new_path.
+	if rec.BookFileID != "" {
+		// book_file_path is a single-owner index (last writer wins), so it
+		// names at most one row; it is the only by-path book_file read the
+		// store has.
+		other, err := store.GetBookFileByPath(rec.NewPath)
+		if err != nil {
+			return repointBlocker{}, fmt.Errorf("look up book_file at new path: %w", err)
+		}
+		if other != nil && other.ID != rec.BookFileID {
+			return repointBlocker{repointOutcomeNewClaimed, "book_file " + other.ID + " holds new path"}, nil
+		}
+		return repointBlocker{}, nil
+	}
+	ids, err := store.LiveBookIDsAtPath(rec.NewPath)
+	if err != nil {
+		return repointBlocker{}, fmt.Errorf("look up books at new path: %w", err)
+	}
+	for _, id := range ids {
+		if id != rec.BookID {
+			return repointBlocker{repointOutcomeNewClaimed, "book " + id + " holds new path"}, nil
+		}
+	}
+	return repointBlocker{}, nil
+}
+
 // repointBookFileRow is one atomic compare-and-write under the row's
-// book_file stripe: every precondition is checked on the row as stored at
-// write time, never on an earlier read.
-//
-// Modified-since uses BookFile.UpdatedAt, which every book_file write sets
-// (updateBookFileLocked, PatchBookFileFields).
-func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, recordedAt time.Time, params repointUnrecordedRenamesParams) repointUnrecordedRenameRow {
+// book_file stripe: the old_path compare is made on the row as stored at write
+// time, never on an earlier read.
+func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, blocked repointBlocker, apply bool) repointUnrecordedRenameRow {
 	ran := false
 	_, err := store.ModifyBookFile(r.rec.BookID, r.rec.BookFileID, func(bf *database.BookFile) error {
 		ran = true
@@ -292,10 +338,10 @@ func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repoin
 		case bf.FilePath != r.rec.OldPath:
 			row.Outcome, row.Detail = repointOutcomeRowChanged, "row holds "+bf.FilePath
 			return database.ErrSkipBookFileWrite
-		case !params.AllowModifiedSinceRecord && bf.UpdatedAt.After(recordedAt):
-			row.Outcome, row.Detail = repointOutcomeModifiedSince, "row updated_at "+bf.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		case blocked.outcome != "":
+			row.Outcome, row.Detail = blocked.outcome, blocked.detail
 			return database.ErrSkipBookFileWrite
-		case !params.Apply:
+		case !apply:
 			row.Outcome = repointOutcomeWouldRepoint
 			return database.ErrSkipBookFileWrite
 		}
@@ -316,12 +362,7 @@ func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repoin
 }
 
 // repointBookRow is the book-row twin, under the book's write stripe.
-//
-// No modified-since check here: Book.UpdatedAt is bumped by the aggregate
-// recompute that follows every book_file write and by any metadata edit, so a
-// later bump is routine after a rename and would strand every book-row
-// record. The old_path compare inside ModifyBook is the guard.
-func repointBookRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, apply bool) repointUnrecordedRenameRow {
+func repointBookRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, blocked repointBlocker, apply bool) repointUnrecordedRenameRow {
 	ran := false
 	_, err := store.ModifyBook(r.rec.BookID, func(fresh *database.Book) error {
 		ran = true
@@ -331,6 +372,9 @@ func repointBookRow(store unrecordedRenameStore, r repointRecord, row repointUnr
 			return database.ErrSkipBookWrite
 		case fresh.FilePath != r.rec.OldPath:
 			row.Outcome, row.Detail = repointOutcomeRowChanged, "row holds "+fresh.FilePath
+			return database.ErrSkipBookWrite
+		case blocked.outcome != "":
+			row.Outcome, row.Detail = blocked.outcome, blocked.detail
 			return database.ErrSkipBookWrite
 		case !apply:
 			row.Outcome = repointOutcomeWouldRepoint
