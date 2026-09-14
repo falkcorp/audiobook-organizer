@@ -1,6 +1,7 @@
 // file: internal/tagger/safe_write_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f2b5e3a-7d41-4c08-b9e1-6a3f0d2c8b74
+// last-edited: 2026-09-13
 
 package tagger
 
@@ -119,7 +120,7 @@ func TestResolvePath_NilDeps(t *testing.T) {
 }
 
 // TestResolvePath_NilImporterProtectedPath verifies that a protected path with
-// a nil Importer is returned in-place (with a warning) rather than failing.
+// a nil Importer is refused: a protected file is never written in place.
 func TestResolvePath_NilImporterProtectedPath(t *testing.T) {
 	t.Parallel()
 
@@ -128,13 +129,11 @@ func TestResolvePath_NilImporterProtectedPath(t *testing.T) {
 	deps := SafeWriteDeps{ProtectedCache: checker, Importer: nil}
 
 	got, err := resolvePath(context.Background(), protectedSrc, deps)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrProtectedPathWrite) {
+		t.Fatalf("err = %v, want ErrProtectedPathWrite", err)
 	}
-	// Should return the original path rather than erroring, since nil Importer
-	// is treated as a graceful no-op.
-	if got != protectedSrc {
-		t.Errorf("path = %q, want %q", got, protectedSrc)
+	if got != "" {
+		t.Errorf("path = %q, want none", got)
 	}
 }
 

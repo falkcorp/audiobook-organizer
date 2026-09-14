@@ -1,5 +1,5 @@
 // file: internal/tagger/safe_write.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
 // last-edited: 2026-09-13
 //
@@ -20,6 +20,7 @@ package tagger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -65,8 +66,9 @@ type SafeWriteDeps struct {
 	//
 	// BookFileID is optional: the row the caller already knows for path,
 	// which saves the by-path lookup. It is used only when the write lands on
-	// path; after a protected-path redirect the row is looked up at the
-	// library copy instead (see hashOptions).
+	// path; after a protected-path redirect the row is looked up at the path
+	// written (see hashOptions). With the Deluge importer that lookup finds
+	// this same row, which ImportToLibrary has repointed to the copy.
 	BookFileID string
 	HashStore  fileops.BookFileHashRecorder
 }
@@ -164,6 +166,11 @@ func ResolvePathForWrite(ctx context.Context, path string, deps SafeWriteDeps) (
 	return resolvePath(ctx, path, deps)
 }
 
+// ErrProtectedPathWrite is returned when a write would land on a protected
+// path: no importer is configured, or the import did not move the write off
+// the protected path. The file is not touched.
+var ErrProtectedPathWrite = errors.New("refusing to write a protected path in place")
+
 // resolvePath is the internal implementation used by WriteTagsSafe, WriteImageSafe,
 // and ResolvePathForWrite.
 func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, error) {
@@ -179,16 +186,22 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 	slog.Info("safe_write importing protected path before tag write", "path", path)
 
 	if deps.Importer == nil {
-		// Guard is incomplete — log a warning and proceed in-place rather than
-		// failing silently or corrupting a torrent file. This should not happen
-		// in production (both fields must be wired together).
-		slog.Warn("safe_write LibraryImporter is nil for protected path; writing in-place", "path", path)
-		return path, nil
+		// A protected file is never written in place. Until 2026-09-13 this
+		// logged a Warn and wrote anyway, changing a file a torrent client is
+		// seeding. Production wires both fields together.
+		return "", fmt.Errorf("protected path %s has no library importer: %w", path, ErrProtectedPathWrite)
 	}
 
 	libraryPath, err := deps.Importer.ImportPath(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("import protected path %s: %w", path, err)
+	}
+	// An importer can hand back a path that is still protected: ImportToLibrary
+	// returns the row's current path when the row is already marked imported,
+	// which is the protected source again if the row was pointed back at it.
+	// Writing there is the in-place write this guard exists to prevent.
+	if libraryPath == "" || deps.ProtectedCache.IsProtected(libraryPath) {
+		return "", fmt.Errorf("import of protected path %s left the write on %q: %w", path, libraryPath, ErrProtectedPathWrite)
 	}
 
 	slog.Info("safe_write imported protected path before tag write", "src", path, "dest", libraryPath)
@@ -200,11 +213,13 @@ func resolvePath(ctx context.Context, path string, deps SafeWriteDeps) (string, 
 //
 // When the write lands on path, that is deps.BookFileID if the caller gave one,
 // else the row at path. When the protected-path guard sent the write to a
-// library copy (effectivePath != path), deps.BookFileID names the protected
-// source, whose bytes this write did not change, so the row is looked up at
-// the copy; the importer has already run, so a row it made is found. This is
-// the same rule the native (cgo) taglib writer follows, which resolves the
-// redirect first and records against the resolved path.
+// library copy (effectivePath != path), the row is looked up at the copy. With
+// the Deluge importer that is the caller's own row: ImportToLibrary repoints
+// the existing row to the copy and creates no second row, so the lookup finds
+// deps.BookFileID's row, now naming the path written. Looking it up rather
+// than reusing the ID ties the rule to the file written, not to how an
+// importer records the copy. The native (cgo) taglib writer follows the same
+// rule: it resolves the redirect first and records at the resolved path.
 func (deps SafeWriteDeps) hashOptions(path, effectivePath string) fileops.WriteTagsSafeOptions {
 	if deps.HashStore == nil {
 		return fileops.WriteTagsSafeOptions{}
@@ -214,7 +229,7 @@ func (deps SafeWriteDeps) hashOptions(path, effectivePath string) fileops.WriteT
 	}
 	o := fileops.HashOptionsForPath(deps.HashStore, effectivePath)
 	if effectivePath != path && o.BookFileID == "" {
-		logger.New("tagger").Info("safe_write: write went to library copy %s, which has no book_file row yet; its next scan hashes it",
+		logger.New("tagger").Info("safe_write: write went to library copy %s, but no book_file row names it; its hashes are not recorded",
 			logger.SanitizeLogValue(effectivePath))
 	}
 	return o

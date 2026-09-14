@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-13
 
@@ -1997,7 +1997,16 @@ func (s *PebbleStore) updateBookFileHashesLocked(id, originalHash, postMetadataH
 // sets original_file_hash if it is currently empty, matching scanner behaviour.
 func (s *PebbleStore) SetBookFileHash(id, hash string) error {
 	unlock := s.lockBookFile(id)
-	defer unlock()
+	var (
+		bookID string
+		notify bool
+	)
+	defer func() {
+		unlock()
+		if notify {
+			s.notifyBookFileChange(bookID)
+		}
+	}()
 	val, closer, err := s.db.Get([]byte("book_file_id:" + id))
 	if err != nil {
 		return fmt.Errorf("SetBookFileHash: lookup id index: %w", err)
@@ -2025,11 +2034,17 @@ func (s *PebbleStore) SetBookFileHash(id, hash string) error {
 	}
 	bf.UpdatedAt = time.Now()
 
-	data, err := json.Marshal(&bf)
-	if err != nil {
-		return fmt.Errorf("SetBookFileHash: marshal: %w", err)
-	}
-	return s.db.Set([]byte(bookFileKey), data, pebble.Sync)
+	// Through updateBookFileLocked, as in UpdateBookFileHashes, not a raw Set:
+	// file_hash and original_file_hash are secondary-indexed (book_file_hash:,
+	// book_file_orig_hash:) and the memdb projection must see them. The raw
+	// Set this replaced refreshed neither, so GetBookBySegmentFileHash missed
+	// every hash backfill-file-hashes or extract-wav-clips recorded. Hashes
+	// feed no book aggregate, so the per-book recompute is skipped.
+	bookID = bf.BookID
+	var uerr error
+	notify, uerr = s.updateBookFileLocked(id, &bf, true, false)
+	notify = notify && uerr == nil
+	return uerr
 }
 
 // ClearAllAcoustIDFingerprints wipes AcoustIDSeg0..6 on every BookFile and

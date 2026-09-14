@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.8
+// version: 1.1.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -8,8 +8,8 @@ package logger
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 326
-	slogRatchetCallCeiling = 1962
+	slogRatchetFileCeiling = 325
+	slogRatchetCallCeiling = 1960
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -109,7 +109,6 @@ var slogRatchet = map[string]int{
 	"internal/dedup/split_book_merge.go":                         2,
 	"internal/deluge/discovery.go":                               4,
 	"internal/deluge/import.go":                                  5,
-	"internal/deluge/importer_adapter.go":                        1,
 	"internal/deluge/integration.go":                             5,
 	"internal/deluge/protected_paths.go":                         2,
 	"internal/errhandling/errhandling.go":                        1,
@@ -329,7 +328,7 @@ var slogRatchet = map[string]int{
 	"internal/sweep/archive_sweep.go":                            3,
 	"internal/sweep/sweeper.go":                                  3,
 	"internal/sweep/temp_cleanup.go":                             1,
-	"internal/tagger/safe_write.go":                              3,
+	"internal/tagger/safe_write.go":                              2,
 	"internal/tagger/tagger.go":                                  3,
 	"internal/telemetry/telemetry.go":                            1,
 	"internal/tools/embed_queue.go":                              2,

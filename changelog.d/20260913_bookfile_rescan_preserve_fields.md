@@ -8,6 +8,10 @@
 - Updating the hash of one of two identical files no longer drops the other file's entry in the hash lookup.
 - Every write that rewrites an audio file now records the file's new hash on its file record, so the next rescan recognises the file instead of treating it as replaced. Before this, only the metadata write-back did. Now the book edit write-back, cover embeds, tag reverts, the organizer's rename tag write, single-tag fixes, writes to version-linked copies and the movement-atom cleanup do too. The file record is found by path, and the ffmpeg fallback writer records the hashes as well. When a write to a protected download is sent to a library copy instead, the hash goes on the copy's record, in both tag-writer builds.
 - A crash inside a single-file write can no longer leave that file's lock held, which would have stalled every later write to the files sharing it.
+- Organizing a book whose file sits in a protected download folder now records the hash of the library copy it tags, so the next rescan no longer treats that copy as a replaced file.
+- The malformed-M4B remux and transcode passes now record each rewritten file's new hash, and the transcode pass also updates the file's codec, bitrate and sample rate.
+- Hashes recorded by the file-hash backfill and the WAV clip extractor can now be found by hash lookups.
+- A tag write never lands on a protected download file. When no library importer is configured, when a protected file has no file record, or when the import leaves the write on the protected path, the write is refused instead of done in place.
 - Recording a file's hashes no longer reverts a field another writer saved at the same moment, such as a transcription status or a skip-scan flag. Single-file writes now hold a per-file lock across their read and their write.
 - A batch that hands a shared content hash from one file to another no longer loses the new owner's hash lookup.
 - A scan now warns about replaced files whose probe gave no real duration, for example when ffprobe is missing, and counts them in its summary. Their fingerprints and transcripts are dropped, so the loss is no longer silent.
