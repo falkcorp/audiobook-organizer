@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -33,10 +33,16 @@ func (mfs *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
 	mfs.writeBackBatcher = b
 }
 
-// SetSafeWriteDeps installs the Deluge pre-flight guard for cover-art writes.
-// Must be called before any cover embedding occurs. Both fields of deps should
-// be non-nil for the guard to be fully effective.
+// SetSafeWriteDeps installs the Deluge pre-flight guard for cover-art and tag
+// writes. Must be called before any cover embedding occurs.
+//
+// The Importer is dropped: a cover embed or tag write on a protected path is
+// REFUSED (tagger.ErrProtectedPathWrite, counted as skipped_protected), never
+// imported. An import copied a Deluge-seeding file to RootDir/<basename>,
+// outside any book folder, and repointed its row there. A protected book's
+// files are written only on its library copy, which lockLibraryCopy resolves.
 func (mfs *Service) SetSafeWriteDeps(deps tagger.SafeWriteDeps) {
+	deps.Importer = nil
 	mfs.safeWriteDeps = deps
 }
 

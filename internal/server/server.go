@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.57.0
+// version: 2.58.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-14
 
@@ -977,13 +977,9 @@ func NewServer(store database.Store) *Server {
 
 		// Wire the pre-flight safe-write guard into the metadata package so that
 		// all taglib writes (metadata apply, single-tag patch) check for Deluge-
-		// protected paths before writing. This uses the same ProtectedPathCache
-		// and a LibraryImporterAdapter backed by the server's store.
-		importer := deluge.NewLibraryImporterAdapter(resolvedStore, dc, &config.AppConfig, server.protectedPathCache)
-		deps := tagger.SafeWriteDeps{
-			ProtectedCache: server.protectedPathCache,
-			Importer:       importer,
-		}
+		// protected paths before writing. No Importer: a protected path is
+		// refused (ErrProtectedPathWrite), never copied into RootDir.
+		deps := tagger.SafeWriteDeps{ProtectedCache: server.protectedPathCache}
 		metadata.SetSafeWriteDeps(deps)
 		// RenameFiles never moves a protected file (Deluge seeding, the
 		// iTunes library), and moves nothing while the Deluge list has not
