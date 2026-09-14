@@ -114,7 +114,7 @@ var slogRatchet = map[string]int{
 	"internal/deluge/protected_paths.go":                         2,
 	"internal/errhandling/errhandling.go":                        1,
 	"internal/fileops/safe_operations.go":                        5,
-	"internal/fileops/write_tags_safe.go":                        2,
+	"internal/fileops/write_tags_safe.go":                        1,
 	"internal/httputil/respond.go":                               3,
 	"internal/importer/service.go":                               6,
 	"internal/itunes/backfill.go":                                22,
