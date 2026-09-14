@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package audiobooks
 
@@ -136,7 +136,7 @@ func TestRevertOperation_DeletedBookFailsInsteadOfPanicking(t *testing.T) {
 		changes: []*database.OperationChange{
 			titleRow("c1", "title"),
 			seriesIDRow("c2", "", "9"),
-			{ID: "c3", OperationID: "op", BookID: "b1", ChangeType: "tag_write", FieldName: "TITLE", OldValue: "Old"},
+			{ID: "c3", OperationID: "op", BookID: "b1", ChangeType: "tag_write", FieldName: undo.TagWriteField("TITLE", "f1"), OldValue: "Old"},
 		},
 	}
 	result, err := NewRevertService(s).RevertOperation("op")

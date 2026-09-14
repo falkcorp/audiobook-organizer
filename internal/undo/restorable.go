@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package undo
 
@@ -100,6 +100,38 @@ const (
 	// NewValue.
 	ChangeTypeExternalIDReassign = "external_id_reassign"
 )
+
+// Organize change types.
+const (
+	// ChangeTypeTagWrite: the organizer wrote one tag to one book_file.
+	// FieldName is "<tag>|book_file:<id>" (see TagWriteField), OldValue the
+	// tag's value read from that file before the write, NewValue the value
+	// written. Restorable when OldValue is known; see NotRestorableLabel.
+	ChangeTypeTagWrite = "tag_write"
+	// ChangeTypeFileCopy: organize copied (or hardlinked) a protected source
+	// OldValue to NewValue and pointed the book at the copy. Record-only.
+	ChangeTypeFileCopy = "file_copy"
+)
+
+// TagWriteField is the FieldName of a tag_write row: the tag and the id of
+// the book_file it was written to. The id, not the path, is recorded because
+// the revert runs newest first, so a file_move of the same operation has
+// already moved the file back by the time the tag is restored; the row's
+// current path is read at revert time.
+func TagWriteField(tag, fileID string) string {
+	return tag + "|book_file:" + fileID
+}
+
+// TagWriteFromField splits a TagWriteField name. Rows written before
+// 2026-09-13 carry a bare tag name and report ok == false.
+func TagWriteFromField(field string) (tag, fileID string, ok bool) {
+	tag, rest, found := strings.Cut(field, "|")
+	if !found || tag == "" {
+		return "", "", false
+	}
+	fileID, ok = BookFileIDFromField(rest)
+	return tag, fileID, ok
+}
 
 // BookFileIDFromField returns the row id from a "book_file:<id>" field name.
 func BookFileIDFromField(field string) (string, bool) {
@@ -427,9 +459,37 @@ func CheckRestoreBook(store BookLookup, bookID string) (*database.Book, error) {
 // cannot restore.
 func NotRestorableLabel(c *database.OperationChange) string {
 	switch c.ChangeType {
-	case "file_move", "organize_rename", "tag_write",
+	case "file_move", "organize_rename",
 		"organize_failed", "organize_skipped", "organize_summary":
 		return ""
+	case ChangeTypeTagWrite:
+		// A tag_write row restores exactly OldValue into one book_file. Rows
+		// written before 2026-09-13 recorded OldValue "" for every tag (the
+		// organizer never read the pre-write value) and named no file, and
+		// writing "" deletes the tag (metadata/taglib_cgo.go). Such a row is a
+		// record of a write, not something the engine can reverse: counting it
+		// Restored would erase the tag the organize wrote and still claim an
+		// undo. An empty OldValue on a new row means the tag was absent or
+		// unreadable before the write; that is not restored either.
+		if c.OldValue == "" {
+			return ChangeTypeTagWrite + ":(no pre-write value)"
+		}
+		if _, _, ok := TagWriteFromField(c.FieldName); !ok {
+			return ChangeTypeTagWrite + ":(no book_file id)"
+		}
+		return ""
+	case ChangeTypeFileCopy:
+		// Organize with a protected source (an import path or the iTunes
+		// library) hardlinks or copies the file into the library and points
+		// the book at the copy; the source is never touched. Undoing that
+		// means deleting the copy, and the copy is the file the organize then
+		// wrote tags to -- and everything since (a write-back, an iTunes
+		// repoint, a user's edits) has used it too. A hardlink shares the
+		// source's inode, so it cannot be told apart from "the only copy" by
+		// looking at it. Deleting a file the library may be serving is not a
+		// reversal the engine can make safely, so the row is reported, not
+		// undone. The source is still in place, so nothing is lost.
+		return ChangeTypeFileCopy
 	case ChangeTypeSeriesRename:
 		if c.SeriesID != nil {
 			return ""

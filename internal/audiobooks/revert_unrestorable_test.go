@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package audiobooks
 
@@ -55,6 +55,29 @@ func (s *ledgerStub) UpdateBook(_ string, b *database.Book) (*database.Book, err
 	s.book = &cp
 	return b, nil
 }
+
+// ModifyBook mirrors PebbleStore.ModifyBook on the stub's single row: fn
+// mutates a copy, an error aborts without writing, ErrSkipBookWrite writes
+// nothing, and a missing book is (nil, nil).
+func (s *ledgerStub) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id != "" && id == s.failBook {
+		return nil, errors.New("book lookup failed")
+	}
+	if s.book == nil {
+		return nil, nil
+	}
+	cp := *s.book
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	s.book = &cp
+	return &cp, nil
+}
+
+func (s *ledgerStub) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
 func (s *ledgerStub) GetOperationChanges(string) ([]*database.OperationChange, error) {
 	return s.changes, nil
 }

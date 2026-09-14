@@ -1,10 +1,12 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
+// last-edited: 2026-09-13
 
 package audiobooks
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,4 +93,22 @@ func (s *stubStoreForRevert) GetBookByID(id string) (*database.Book, error) {
 func (s *stubStoreForRevert) UpdateBook(id string, b *database.Book) (*database.Book, error) {
 	s.book = b
 	return b, nil
+}
+
+// GetBookFiles: the book has no book_file rows to repoint.
+func (s *stubStoreForRevert) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+
+func (s *stubStoreForRevert) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.book == nil {
+		return nil, nil
+	}
+	cp := *s.book
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	s.book = &cp
+	return &cp, nil
 }

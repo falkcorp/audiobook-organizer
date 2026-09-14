@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.2
+// version: 4.4.3
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -617,7 +617,7 @@ func TestApplyMetadataToBook_NoDowngrade(t *testing.T) {
 	}
 }
 
-func TestRecordChangeHistory(t *testing.T) {
+func TestRecordApplyHistory(t *testing.T) {
 	var recorded []*database.MetadataChangeRecord
 	mockDB := &database.MockStore{
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
@@ -647,7 +647,12 @@ func TestRecordChangeHistory(t *testing.T) {
 		Publisher: "New Publisher",
 	}
 
-	mfs.RecordChangeHistory(book, meta, "TestSource")
+	_ = meta
+	after := *book
+	after.Title = "New Title"
+	after.AuthorID = new(3)
+	after.Publisher = new("New Publisher")
+	mfs.RecordApplyHistory(book, &after, nil, "TestSource")
 
 	if len(recorded) < 3 {
 		t.Fatalf("expected at least 3 change records, got %d", len(recorded))

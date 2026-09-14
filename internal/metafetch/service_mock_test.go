@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -632,10 +632,10 @@ func TestIntVal(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RecordChangeHistory (Service method with mock)
+// RecordApplyHistory (Service method with mock)
 // ---------------------------------------------------------------------------
 
-func TestRecordChangeHistory(t *testing.T) {
+func TestRecordApplyHistory(t *testing.T) {
 	var recorded []database.MetadataChangeRecord
 	mock := &database.MockStore{
 		GetAuthorByIDFunc: func(id int) (*database.Author, error) {
@@ -669,7 +669,12 @@ func TestRecordChangeHistory(t *testing.T) {
 		Series:   "New Series",
 	}
 
-	svc.RecordChangeHistory(book, meta, "hardcover")
+	_ = meta
+	after := *book
+	after.Title = "New Title"
+	after.Narrator = new("New Narrator")
+	after.AuthorID = new(3)
+	svc.RecordApplyHistory(book, &after, nil, "hardcover")
 
 	// Should record changes for title, author, narrator, series
 	assert.GreaterOrEqual(t, len(recorded), 3, "should record multiple field changes")

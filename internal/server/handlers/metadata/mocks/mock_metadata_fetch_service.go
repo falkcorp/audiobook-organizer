@@ -8,7 +8,6 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -577,55 +576,72 @@ func (_c *MockMetadataFetchService_MarkNoMatch_Call) RunAndReturn(run func(id st
 	return _c
 }
 
-// RecordChangeHistory provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string) {
-	_mock.Called(book, meta, sourceName)
-	return
+// RecordApplyHistory provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) RecordApplyHistory(before *database.Book, after *database.Book, prevAuthors []database.BookAuthor, source string) string {
+	ret := _mock.Called(before, after, prevAuthors, source)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RecordApplyHistory")
+	}
+
+	var r0 string
+	if returnFunc, ok := ret.Get(0).(func(*database.Book, *database.Book, []database.BookAuthor, string) string); ok {
+		r0 = returnFunc(before, after, prevAuthors, source)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	return r0
 }
 
-// MockMetadataFetchService_RecordChangeHistory_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecordChangeHistory'
-type MockMetadataFetchService_RecordChangeHistory_Call struct {
+// MockMetadataFetchService_RecordApplyHistory_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecordApplyHistory'
+type MockMetadataFetchService_RecordApplyHistory_Call struct {
 	*mock.Call
 }
 
-// RecordChangeHistory is a helper method to define mock.On call
-//   - book *database.Book
-//   - meta metadata.BookMetadata
-//   - sourceName string
-func (_e *MockMetadataFetchService_Expecter) RecordChangeHistory(book any, meta any, sourceName any) *MockMetadataFetchService_RecordChangeHistory_Call {
-	return &MockMetadataFetchService_RecordChangeHistory_Call{Call: _e.mock.On("RecordChangeHistory", book, meta, sourceName)}
+// RecordApplyHistory is a helper method to define mock.On call
+//   - before *database.Book
+//   - after *database.Book
+//   - prevAuthors []database.BookAuthor
+//   - source string
+func (_e *MockMetadataFetchService_Expecter) RecordApplyHistory(before any, after any, prevAuthors any, source any) *MockMetadataFetchService_RecordApplyHistory_Call {
+	return &MockMetadataFetchService_RecordApplyHistory_Call{Call: _e.mock.On("RecordApplyHistory", before, after, prevAuthors, source)}
 }
 
-func (_c *MockMetadataFetchService_RecordChangeHistory_Call) Run(run func(book *database.Book, meta metadata.BookMetadata, sourceName string)) *MockMetadataFetchService_RecordChangeHistory_Call {
+func (_c *MockMetadataFetchService_RecordApplyHistory_Call) Run(run func(before *database.Book, after *database.Book, prevAuthors []database.BookAuthor, source string)) *MockMetadataFetchService_RecordApplyHistory_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *database.Book
 		if args[0] != nil {
 			arg0 = args[0].(*database.Book)
 		}
-		var arg1 metadata.BookMetadata
+		var arg1 *database.Book
 		if args[1] != nil {
-			arg1 = args[1].(metadata.BookMetadata)
+			arg1 = args[1].(*database.Book)
 		}
-		var arg2 string
+		var arg2 []database.BookAuthor
 		if args[2] != nil {
-			arg2 = args[2].(string)
+			arg2 = args[2].([]database.BookAuthor)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
 }
 
-func (_c *MockMetadataFetchService_RecordChangeHistory_Call) Return() *MockMetadataFetchService_RecordChangeHistory_Call {
-	_c.Call.Return()
+func (_c *MockMetadataFetchService_RecordApplyHistory_Call) Return(s string) *MockMetadataFetchService_RecordApplyHistory_Call {
+	_c.Call.Return(s)
 	return _c
 }
 
-func (_c *MockMetadataFetchService_RecordChangeHistory_Call) RunAndReturn(run func(book *database.Book, meta metadata.BookMetadata, sourceName string)) *MockMetadataFetchService_RecordChangeHistory_Call {
-	_c.Run(run)
+func (_c *MockMetadataFetchService_RecordApplyHistory_Call) RunAndReturn(run func(before *database.Book, after *database.Book, prevAuthors []database.BookAuthor, source string) string) *MockMetadataFetchService_RecordApplyHistory_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

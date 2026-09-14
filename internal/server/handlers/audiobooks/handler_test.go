@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-09-13
 
@@ -32,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
@@ -604,7 +605,7 @@ func TestUndoMetadataChange_NoHistory(t *testing.T) {
 
 func TestUndoLastApply_NoHistory(t *testing.T) {
 	h, d := newHandler(t)
-	d.store.EXPECT().GetBookChangeHistory("b1", 50).Return([]database.MetadataChangeRecord{}, nil)
+	d.metaFetch.EXPECT().UndoLastApply("b1").Return(nil, metafetch.ErrNoApplyToUndo)
 	c, w := newCtx("POST", "/audiobooks/b1/undo-last-apply", nil, p("id", "b1"))
 	h.UndoLastApply(c)
 	if w.Code != http.StatusNotFound {

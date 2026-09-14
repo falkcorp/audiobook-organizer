@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-13
 
@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -181,7 +180,9 @@ type MetadataMatchMarker interface {
 
 // MetadataHistoryRecorder records applied metadata in the change history.
 type MetadataHistoryRecorder interface {
-	RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string)
+	// RecordApplyHistory records, after the write commits, one row per field
+	// that differs between before and after, all under one batch id.
+	RecordApplyHistory(before, after *database.Book, prevAuthors []database.BookAuthor, source string) string
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata

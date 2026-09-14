@@ -1,15 +1,15 @@
 // file: internal/audiobooks/revert.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package audiobooks
 
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -43,7 +43,10 @@ type revertServiceStore interface {
 // reads and writes the books those rows name.
 type revertLedgerStore interface {
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is every book write the revert makes: each restore is a
+	// compare-and-set on the row as read under the book's write stripe, never
+	// a whole-row UpdateBook of an earlier read.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 
@@ -68,11 +71,15 @@ type revertSeriesStore interface {
 // and an external id moved onto the survivor moves back one at a time.
 type revertBookFileStore interface {
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
+	// GetBookFiles finds the rows a file_move revert repoints.
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 	GetBookByExternalID(source, externalID string) (string, error)
 	ReassignExternalID(source, externalID, newBookID string) error
 }
+
+var revertLog = logger.New("revert")
 
 // RevertService handles reverting operations by undoing recorded changes.
 type RevertService struct {
@@ -211,9 +218,8 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}
 
 	if restorableTotal == 0 {
-		slog.Warn("revert refused: no restorable changes",
-			"operation", logger.SanitizeLogValue(operationID), "not_restorable", result.NotRestorable,
-			"types", formatTypeCounts(result.NotRestorableTypes))
+		revertLog.Warn("revert refused: no restorable changes: operation=%s not_restorable=%d types=%s",
+			logger.SanitizeLogValue(operationID), result.NotRestorable, formatTypeCounts(result.NotRestorableTypes))
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
 	}
 	if len(restorable) == 0 {
@@ -232,7 +238,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 				result.ChangedSince++
 			}
 			errMsgs = append(errMsgs, fmt.Sprintf("change %s: %v", c.ID, err))
-			slog.Warn("revert failed for change", "c", c.ID, "err", err)
+			revertLog.Warn("revert failed for change %s: %v", c.ID, err)
 			continue
 		}
 		restoredIDs = append(restoredIDs, c.ID)
@@ -250,9 +256,9 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}
 	result.Restored = len(restoredIDs)
 
-	slog.Info("revert finished", "operation", logger.SanitizeLogValue(operationID), "total", result.Total,
-		"restored", result.Restored, "failed", result.Failed,
-		"not_restorable", result.NotRestorable, "types", formatTypeCounts(result.NotRestorableTypes))
+	revertLog.Info("revert finished: operation=%s total=%d restored=%d failed=%d not_restorable=%d types=%s",
+		logger.SanitizeLogValue(operationID), result.Total, result.Restored, result.Failed,
+		result.NotRestorable, formatTypeCounts(result.NotRestorableTypes))
 
 	if len(errMsgs) > 0 {
 		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), errMsgs[0])
@@ -324,30 +330,112 @@ func (rs *RevertService) loadBook(id string) (*database.Book, error) {
 	return undo.CheckRestoreBook(rs.db, id)
 }
 
+// revertFileMove moves an organized file (or book folder) back from NewValue
+// to OldValue and points the book and every book_file row under it back too.
+//
+// The book's path is compare-and-set: the move runs only while the book still
+// points at NewValue, and the ModifyBook that writes OldValue checks it again
+// under the book's write stripe, moving the file back to NewValue if that
+// check fails. Nothing is moved when the file is gone from NewValue or
+// something now occupies OldValue; both fail the row instead of marking it
+// reverted. A book already pointing at OldValue (an earlier revert that moved
+// the file but failed on a book_file row) only has its book_file rows
+// finished.
+//
+// The file I/O and the book_file updates (UpdateBookFile recomputes the book's
+// aggregates, a book write) run outside the ModifyBook callback, per the LOCK
+// RULES in database/pebble_store_book_lock.go.
 func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
-	// Check file exists at new location
-	if _, err := os.Stat(c.NewValue); os.IsNotExist(err) {
-		slog.Warn("file no longer at , skipping revert", "c", c.NewValue)
-		return nil
-	}
-
-	// Load the book BEFORE moving anything: a missing book must fail the row
-	// with the file still where the operation left it, not after the move.
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
 	}
+	_, newErr := os.Lstat(c.NewValue)
+	_, oldErr := os.Lstat(c.OldValue)
+	newThere, oldThere := newErr == nil, oldErr == nil
+	switch {
+	case book.FilePath == c.OldValue && oldThere && !newThere:
+		return rs.repointBookFiles(c.BookID, c.NewValue, c.OldValue)
+	case book.FilePath != c.NewValue:
+		return driftRefusal("book %s path is %q, not %q as the operation left it", book.ID, book.FilePath, c.NewValue)
+	case !newThere:
+		return fmt.Errorf("file is no longer at %s; nothing moved back", c.NewValue)
+	case oldThere:
+		return fmt.Errorf("%s is occupied again; refusing to move %s over it", c.OldValue, c.NewValue)
+	}
 
-	// Move file back
+	if err := os.MkdirAll(filepath.Dir(c.OldValue), 0o775); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(c.OldValue), err)
+	}
 	if err := os.Rename(c.NewValue, c.OldValue); err != nil {
 		return fmt.Errorf("failed to move file back from %s to %s: %w", c.NewValue, c.OldValue, err)
 	}
-
-	book.FilePath = c.OldValue
-	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
-		return fmt.Errorf("failed to update book path: %w", err)
+	if err := rs.modifyBook(c.BookID, func(b *database.Book) error {
+		if b.FilePath != c.NewValue {
+			return driftRefusal("book %s path changed to %q during the revert", b.ID, b.FilePath)
+		}
+		b.FilePath = c.OldValue
+		return nil
+	}); err != nil {
+		if rbErr := os.Rename(c.OldValue, c.NewValue); rbErr != nil {
+			return fmt.Errorf("%w; moving the file back to %s also failed: %v", err, c.NewValue, rbErr)
+		}
+		return err
 	}
+	return rs.repointBookFiles(c.BookID, c.NewValue, c.OldValue)
+}
 
+// repointBookFiles points every book_file row of the book at from (a file) or
+// under from (a book folder) at the same place under to. Each row is re-read
+// in full before it is written: UpdateBookFile replaces the whole record.
+func (rs *RevertService) repointBookFiles(bookID, from, to string) error {
+	files, err := rs.db.GetBookFiles(bookID)
+	if err != nil {
+		return fmt.Errorf("list book_file rows of %s: %w", bookID, err)
+	}
+	var errs []error
+	for _, listed := range files {
+		if _, ok := repointPath(listed.FilePath, from, to); !ok {
+			continue
+		}
+		bf, gerr := rs.db.GetBookFileByID(bookID, listed.ID)
+		if gerr != nil || bf == nil {
+			errs = append(errs, fmt.Errorf("re-read book_file %s: %v", listed.ID, gerr))
+			continue
+		}
+		np, ok := repointPath(bf.FilePath, from, to)
+		if !ok {
+			continue
+		}
+		bf.FilePath = np
+		if uerr := rs.db.UpdateBookFile(bf.ID, bf); uerr != nil {
+			errs = append(errs, fmt.Errorf("repoint book_file %s: %w", bf.ID, uerr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// repointPath maps p from under from to under to. p == from maps to to.
+func repointPath(p, from, to string) (string, bool) {
+	if p == from {
+		return to, true
+	}
+	if rest, ok := strings.CutPrefix(p, strings.TrimSuffix(from, string(os.PathSeparator))+string(os.PathSeparator)); ok {
+		return filepath.Join(to, rest), true
+	}
+	return "", false
+}
+
+// modifyBook runs fn inside ModifyBook and turns "the book is gone" into the
+// same refusal loadBook gives.
+func (rs *RevertService) modifyBook(id string, fn func(*database.Book) error) error {
+	updated, err := rs.db.ModifyBook(id, fn)
+	if err != nil {
+		return err
+	}
+	if updated == nil {
+		return &undo.ReferentError{Reason: undo.ReasonBookMissing, Detail: fmt.Sprintf("book %s no longer exists", id)}
+	}
 	return nil
 }
 
@@ -416,43 +504,34 @@ func (rs *RevertService) revertBookFileTrack(c *database.OperationChange) error 
 
 // revertBookPathUpdate restores a book's file_path that was changed with
 // nothing moved on disk (unlike file_move, which moves the file back too), but
-// only while the path is still the one the operation set.
+// only while the path is still the one the operation set. The check and the
+// write both run on the row as read under the book's write stripe.
 func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	book, err := rs.loadBook(c.BookID)
-	if err != nil {
-		return err
-	}
-	if book.FilePath != c.NewValue {
-		return driftRefusal("book %s path changed since the operation", book.ID)
-	}
-	book.FilePath = c.OldValue
-	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
-		return fmt.Errorf("restore path of book %s: %w", book.ID, err)
-	}
-	return nil
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if book.FilePath != c.NewValue {
+			return driftRefusal("book %s path changed since the operation", book.ID)
+		}
+		book.FilePath = c.OldValue
+		return nil
+	})
 }
 
 // revertBookSoftDelete clears a book's deletion mark. A book purged since is
-// refused by loadBook; one already restored is left as it is.
+// refused; one already restored is left as it is.
 func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	book, err := rs.loadBook(c.BookID)
-	if err != nil {
-		return err
-	}
-	if !book.IsSoftDeleted() {
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if !book.IsSoftDeleted() {
+			return database.ErrSkipBookWrite
+		}
+		notMarked := false
+		book.MarkedForDeletion = &notMarked
+		book.MarkedForDeletionAt = nil
 		return nil
-	}
-	notMarked := false
-	book.MarkedForDeletion = &notMarked
-	book.MarkedForDeletionAt = nil
-	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
-		return fmt.Errorf("clear deletion mark on book %s: %w", book.ID, err)
-	}
-	return nil
+	})
 }
 
 // revertBookPrimaryDemote restores a retired shell's primary flag ("" is nil,
@@ -469,18 +548,13 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	book, err := rs.loadBook(c.BookID)
-	if err != nil {
-		return err
-	}
-	if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
-		return driftRefusal("book %s was made primary again since the operation", book.ID)
-	}
-	book.IsPrimaryVersion = restored
-	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
-		return fmt.Errorf("restore primary flag of book %s: %w", book.ID, err)
-	}
-	return nil
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if book.IsPrimaryVersion == nil || *book.IsPrimaryVersion {
+			return driftRefusal("book %s was made primary again since the operation", book.ID)
+		}
+		book.IsPrimaryVersion = restored
+		return nil
+	})
 }
 
 // revertExternalIDReassign moves one external id back from the book it was
@@ -512,41 +586,38 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
-	book, err := rs.loadBook(c.BookID)
-	if err != nil {
+	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
 	}
 
 	// Refuse before writing anything: a series_id whose series row the same
 	// operation deleted would be restored as a dangling reference. The
-	// preflight runs the same check, so it reports this row as a conflict.
+	// preflight runs the same check, so it reports this row as a conflict. It
+	// reads series rows, so it runs before the book's write stripe is taken.
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
-	// Compare-and-set, the same three-way check series_rename rows get:
-	// restore only while the field still holds what the operation wrote, so a
-	// user edit made since is never overwritten. A field that already holds
-	// OldValue (a rescan put library_state back, say) is already restored
-	// (undo.ErrAlreadyRestored): nothing is written and the row is marked
-	// reverted. Anything else changed since and is refused. The preflight
-	// runs the same check.
-	if err := undo.CheckBookFieldCurrent(book, c); err != nil {
-		if errors.Is(err, undo.ErrAlreadyRestored) {
-			return nil
+	// Compare-and-set, the same three-way check series_rename rows get, on the
+	// row as read under the book's write stripe: restore only while the field
+	// still holds what the operation wrote, so a user edit made since is never
+	// overwritten. A field that already holds OldValue (a rescan put
+	// library_state back, say) is already restored (undo.ErrAlreadyRestored):
+	// nothing is written and the row is marked reverted. Anything else changed
+	// since and is refused. The preflight runs the same check. Only this field
+	// is written; the rest of the row is whatever the store holds now.
+	return rs.modifyBook(c.BookID, func(book *database.Book) error {
+		if err := undo.CheckBookFieldCurrent(book, c); err != nil {
+			if errors.Is(err, undo.ErrAlreadyRestored) {
+				return database.ErrSkipBookWrite
+			}
+			return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 		}
-		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
-	}
-	// Exactly OldValue goes back, typed by the Book field it names; "" clears
-	// a pointer field to nil. An unparsable value is an error, not a no-op, so
-	// the row is counted Failed instead of being marked reverted.
-	if err := undo.RestoreBookField(book, c.FieldName, c.OldValue); err != nil {
-		return err
-	}
-
-	if _, err := rs.db.UpdateBook(book.ID, book); err != nil {
-		return fmt.Errorf("failed to update book: %w", err)
-	}
-	return nil
+		// Exactly OldValue goes back, typed by the Book field it names; ""
+		// clears a pointer field to nil. An unparsable value is an error, not
+		// a no-op, so the row is counted Failed instead of being marked
+		// reverted.
+		return undo.RestoreBookField(book, c.FieldName, c.OldValue)
+	})
 }
 
 // revertSeriesRename renames the series a series_rename row names back to
@@ -597,28 +668,39 @@ func renameRefusal(err error) error {
 	return err
 }
 
+// revertTagWrite writes one tag's pre-organize value back into the book_file
+// the organize wrote it to. The row names the file by id (undo.TagWriteField),
+// so the file is found at its current path. NotRestorableLabel has already set
+// aside rows with no pre-write value and legacy rows that name no file; this
+// refuses them again rather than write "", which deletes the tag. A missing
+// file or a protected path fails the row: it used to return nil there, which
+// marked a tag reverted that had not been touched.
 func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
-	book, err := rs.loadBook(c.BookID)
-	if err != nil {
+	tag, fileID, ok := undo.TagWriteFromField(c.FieldName)
+	if !ok || c.OldValue == "" {
+		return fmt.Errorf("tag_write row %s has no restorable pre-write value", c.ID)
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
 	}
-
-	if _, statErr := os.Stat(book.FilePath); os.IsNotExist(statErr) {
-		slog.Warn("file not found, skipping tag revert", "book", book.FilePath)
-		return nil
+	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil || bf == nil {
+		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
-
-	if isProtectedPath(rs.db, book.FilePath) {
-		slog.Info("skipping tag revert for protected path", "book", book.FilePath)
-		return nil
+	target := bf.FilePath
+	if _, statErr := os.Stat(target); statErr != nil {
+		return fmt.Errorf("tag %s not restored: %w", tag, statErr)
+	}
+	if isProtectedPath(rs.db, target) {
+		return fmt.Errorf("tag %s not restored: %s is a protected path", tag, target)
 	}
 
 	tagMap := map[string]any{
-		c.FieldName: c.OldValue,
+		tag: c.OldValue,
 	}
 	opConfig := fileops.OperationConfig{VerifyChecksums: true}
-	if err := metadata.WriteMetadataToFile(book.FilePath, tagMap, opConfig); err != nil {
-		return fmt.Errorf("failed to write tag %s back to %s: %w", c.FieldName, book.FilePath, err)
+	if err := metadata.WriteMetadataToFile(target, tagMap, opConfig); err != nil {
+		return fmt.Errorf("failed to write tag %s back to %s: %w", tag, target, err)
 	}
 
 	return nil

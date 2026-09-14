@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -14,14 +14,13 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/require"
 )
 
 // capturingActivityStore is a minimal database.ActivityStorer that keeps every
 // recorded entry in memory. activity.Service takes the store interface rather
 // than exposing what it recorded, so capturing here is the only way to see the
-// Summary string RecordChangeHistory builds. The conformance assertion below is
+// Summary string RecordApplyHistory builds. The conformance assertion below is
 // what proves this type satisfies the interface.
 type capturingActivityStore struct {
 	mu      sync.Mutex
@@ -37,7 +36,7 @@ func (c *capturingActivityStore) Record(e database.ActivityEntry) (int64, error)
 
 // summaryForField returns the Summary of the single captured entry whose
 // Details["field"] equals field. Selecting by field rather than by index keeps
-// the assertion stable: RecordChangeHistory emits one entry per changed field
+// the assertion stable: RecordApplyHistory emits one entry per changed field
 // and the set of changed fields differs between the cases below.
 func (c *capturingActivityStore) summaryForField(t *testing.T, field string) string {
 	t.Helper()
@@ -53,7 +52,7 @@ func (c *capturingActivityStore) summaryForField(t *testing.T, field string) str
 	return found[0]
 }
 
-// Remaining ActivityStorer methods — unused by RecordChangeHistory, present
+// Remaining ActivityStorer methods — unused by RecordApplyHistory, present
 // only to satisfy the interface.
 func (c *capturingActivityStore) Query(context.Context, database.ActivityFilter) ([]database.ActivityEntry, int, error) {
 	return nil, 0, nil
@@ -105,10 +104,10 @@ func newChangeHistoryHarness(t *testing.T) (*Service, *capturingActivityStore) {
 	return svc, acts
 }
 
-// RecordChangeHistory_SummaryLeadsWithBookTitle is the anti-over-suppression
+// RecordApplyHistory_SummaryLeadsWithBookTitle is the anti-over-suppression
 // case: an ordinary change with a non-empty old value must still render its
 // full before/after line, now prefixed with the book title.
-func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
+func TestRecordApplyHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 	svc, acts := newChangeHistoryHarness(t)
 
 	book := &database.Book{
@@ -116,7 +115,9 @@ func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 		Title:    "The Whispering Night",
 		Narrator: new("Alex Kozlowski"),
 	}
-	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
+	after := *book
+	after.Narrator = new("Grant Cartwright")
+	svc.RecordApplyHistory(book, &after, nil, "audible")
 
 	summary := acts.summaryForField(t, "narrator")
 	require.True(t, strings.HasPrefix(summary, "The Whispering Night: Applied"),
@@ -124,9 +125,9 @@ func TestRecordChangeHistory_SummaryLeadsWithBookTitle(t *testing.T) {
 	require.Equal(t, "The Whispering Night: Applied narrator: Alex Kozlowski → Grant Cartwright", summary)
 }
 
-// RecordChangeHistory_EmptyOldValueRendersNone covers a first-ever value: the
+// RecordApplyHistory_EmptyOldValueRendersNone covers a first-ever value: the
 // from-side must read "(none)" rather than leaving a dangling arrow.
-func TestRecordChangeHistory_EmptyOldValueRendersNone(t *testing.T) {
+func TestRecordApplyHistory_EmptyOldValueRendersNone(t *testing.T) {
 	svc, acts := newChangeHistoryHarness(t)
 
 	book := &database.Book{
@@ -134,10 +135,9 @@ func TestRecordChangeHistory_EmptyOldValueRendersNone(t *testing.T) {
 		Title:                "The Whispering Night",
 		AudiobookReleaseYear: nil, // no prior value -> oldVal is ""
 	}
-	svc.RecordChangeHistory(book, metadata.BookMetadata{
-		PublishYear:                   2021,
-		PublishYearIsAudiobookRelease: true,
-	}, "audible")
+	after := *book
+	after.AudiobookReleaseYear = new(2021)
+	svc.RecordApplyHistory(book, &after, nil, "audible")
 
 	summary := acts.summaryForField(t, "audiobook_release_year")
 	require.Contains(t, summary, "(none) → ", "empty old value must render as (none), got %q", summary)
@@ -145,9 +145,9 @@ func TestRecordChangeHistory_EmptyOldValueRendersNone(t *testing.T) {
 	require.Equal(t, "The Whispering Night: Applied audiobook_release_year: (none) → 2021", summary)
 }
 
-// RecordChangeHistory_EmptyTitleFallsBackToID covers the edge case where the
+// RecordApplyHistory_EmptyTitleFallsBackToID covers the edge case where the
 // book has no title: the line must not start with a bare ": Applied ...".
-func TestRecordChangeHistory_EmptyTitleFallsBackToID(t *testing.T) {
+func TestRecordApplyHistory_EmptyTitleFallsBackToID(t *testing.T) {
 	svc, acts := newChangeHistoryHarness(t)
 
 	book := &database.Book{
@@ -155,7 +155,9 @@ func TestRecordChangeHistory_EmptyTitleFallsBackToID(t *testing.T) {
 		Title:    "",
 		Narrator: new("Alex Kozlowski"),
 	}
-	svc.RecordChangeHistory(book, metadata.BookMetadata{Narrator: "Grant Cartwright"}, "audible")
+	after := *book
+	after.Narrator = new("Grant Cartwright")
+	svc.RecordApplyHistory(book, &after, nil, "audible")
 
 	summary := acts.summaryForField(t, "narrator")
 	require.False(t, strings.HasPrefix(summary, ": Applied"), "summary must not start with a bare ': Applied', got %q", summary)

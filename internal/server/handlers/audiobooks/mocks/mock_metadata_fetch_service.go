@@ -5,6 +5,7 @@
 package audiobooksmocks
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -82,6 +83,68 @@ func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) Return(err e
 }
 
 func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) RunAndReturn(run func(bookID string) error) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UndoLastApply provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) UndoLastApply(bookID string) (*metafetch.UndoApplyResult, error) {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UndoLastApply")
+	}
+
+	var r0 *metafetch.UndoApplyResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*metafetch.UndoApplyResult, error)); ok {
+		return returnFunc(bookID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *metafetch.UndoApplyResult); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*metafetch.UndoApplyResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(bookID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_UndoLastApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UndoLastApply'
+type MockMetadataFetchService_UndoLastApply_Call struct {
+	*mock.Call
+}
+
+// UndoLastApply is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataFetchService_Expecter) UndoLastApply(bookID any) *MockMetadataFetchService_UndoLastApply_Call {
+	return &MockMetadataFetchService_UndoLastApply_Call{Call: _e.mock.On("UndoLastApply", bookID)}
+}
+
+func (_c *MockMetadataFetchService_UndoLastApply_Call) Run(run func(bookID string)) *MockMetadataFetchService_UndoLastApply_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_UndoLastApply_Call) Return(undoApplyResult *metafetch.UndoApplyResult, err error) *MockMetadataFetchService_UndoLastApply_Call {
+	_c.Call.Return(undoApplyResult, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_UndoLastApply_Call) RunAndReturn(run func(bookID string) (*metafetch.UndoApplyResult, error)) *MockMetadataFetchService_UndoLastApply_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.6
+// version: 1.0.8
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -48,7 +48,6 @@ var slogRatchet = map[string]int{
 	"internal/aidispatch/inflight.go":                            2,
 	"internal/aiscan/pipeline.go":                                50,
 	"internal/audiobooks/helpers.go":                             2,
-	"internal/audiobooks/revert.go":                              6,
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
 	"internal/audiobooks/service_mutation.go":                    14,
@@ -196,7 +195,7 @@ var slogRatchet = map[string]int{
 	"internal/metafetch/metadata_state_service.go":               2,
 	"internal/metafetch/openlibrary.go":                          8,
 	"internal/metafetch/service.go":                              18,
-	"internal/metafetch/service_apply.go":                        31,
+	"internal/metafetch/service_apply.go":                        30,
 	"internal/metafetch/service_fetch.go":                        12,
 	"internal/metafetch/service_files.go":                        7,
 	"internal/metafetch/service_normalize.go":                    2,
@@ -216,7 +215,7 @@ var slogRatchet = map[string]int{
 	"internal/organizer/move.go":                                 4,
 	"internal/organizer/organizer.go":                            16,
 	"internal/organizer/pipeline.go":                             8,
-	"internal/organizer/rename.go":                               8,
+	"internal/organizer/rename.go":                               6,
 	"internal/organizer/saferename.go":                           4,
 	"internal/playlist/playlist.go":                              1,
 	"internal/plugin/events.go":                                  2,
@@ -271,7 +270,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/apikeys.go":                        5,
 	"internal/server/handlers/audiobooks/handler_crud.go":        4,
 	"internal/server/handlers/audiobooks/handler_files.go":       2,
-	"internal/server/handlers/audiobooks/handler_metadata.go":    4,
+	"internal/server/handlers/audiobooks/handler_metadata.go":    1,
 	"internal/server/handlers/cache.go":                          2,
 	"internal/server/handlers/dedup/handler.go":                  19,
 	"internal/server/handlers/dedup/label_capture.go":            8,

@@ -1,7 +1,7 @@
 // file: internal/organizer/rename.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package organizer
 
@@ -15,8 +15,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	enhanced "github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // RenameService handles preview and execution of file rename + tag write operations.
@@ -39,6 +37,15 @@ type RenameService struct {
 	// ComputeITunesPath computes the iTunes-compatible path for a file.
 	// Breaks the metafetch import cycle.
 	ComputeITunesPath func(filePath string) string
+
+	// ReadCurrentTags returns a file's current tag values under the same keys
+	// FilterUnchangedTags compares (metafetch.CurrentTagValues). ApplyRename
+	// records them as each tag_write row's OldValue before it writes, and does
+	// not write to a file it cannot read. Nil means no file is written.
+	ReadCurrentTags func(filePath string) (map[string]string, error)
+
+	// WriteTags writes tags to one file. Nil uses metadata.WriteMetadataToFile.
+	WriteTags func(filePath string, tags map[string]any) error
 }
 
 // NewRenameService creates a new RenameService.
@@ -168,32 +175,9 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 	// current file's tags, compares each key, and drops matches.
 	// When nothing remains we skip the write entirely.
 	if len(tagMeta) > 0 && !rs.IsProtectedPath(tagWriteTarget) {
-		filtered := rs.FilterUnchangedTags(tagWriteTarget, tagMeta)
-		if len(filtered) == 0 {
-			slog.Debug("rename all tags match, skipping write for", "tagWriteTarget", tagWriteTarget)
-		} else {
-			opConfig := fileops.OperationConfig{VerifyChecksums: true}
-			if err := enhanced.WriteMetadataToFile(tagWriteTarget, filtered, opConfig); err != nil {
-				slog.Warn("rename tag write failed for", "bookID", bookID, "err", err)
-				// Tag write failure is non-fatal; continue with rename
-			} else {
-				tagsWritten = len(filtered)
-				// Record tag write changes for undo (only the
-				// fields we actually wrote).
-				if operationID != "" {
-					for field, val := range filtered {
-						_ = rs.db.CreateOperationChange(&database.OperationChange{
-							OperationID: operationID,
-							BookID:      bookID,
-							ChangeType:  "tag_write",
-							FieldName:   field,
-							OldValue:    "", // original tag values not easily recoverable
-							NewValue:    fmt.Sprintf("%v", val),
-						})
-					}
-				}
-			}
-		}
+		// Per book_file, with each tag's pre-write value recorded for undo
+		// (rename_tags.go).
+		tagsWritten = rs.writeTagsRecordingOld(bookID, operationID, oldPath, tagWriteTarget, tagMeta)
 	} else if rs.IsProtectedPath(tagWriteTarget) {
 		slog.Info("rename skipping tag write for protected path", "tagWriteTarget", tagWriteTarget)
 	}
