@@ -1,7 +1,7 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // TagLib WASM writer (default, no CGO required).
 // For native CGO performance, build with -tags native_taglib.
@@ -28,8 +28,8 @@ var taglibAvailable = true
 // no pre-write file copy is needed. The optional WriteBackupBeforeTagWrite
 // config flag handles backups at the call-site layer (backupFileBeforeWrite).
 //
-// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
-// imported into the library before the write proceeds.
+// If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
+// refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeMetadataWithTaglib(filePath string, metadata map[string]any, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
@@ -74,8 +74,8 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]any, _ 
 // writeSingleTagWithTaglib writes one tag property without touching others.
 // Pass value="" to clear the property from the file.
 //
-// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
-// imported into the library before the write proceeds.
+// If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
+// refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
