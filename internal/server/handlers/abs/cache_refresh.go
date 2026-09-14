@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/cache_refresh.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e4a91-5b3d-4f08-9e6a-2d1b8c7f4e30
 // last-edited: 2026-09-13
 
@@ -17,6 +17,10 @@ import (
 // while a rebuild runs behind it. Past this age a request waits for the rebuild
 // and receives its error, so a store that keeps failing surfaces as a failure
 // rather than as a library view that silently stops changing.
+//
+// Applies to the contributor index and series grouping. /filterdata is exempt:
+// it has no error to surface and serves its last good document by design (see
+// filterDataCached).
 const absCacheStaleMax = 30 * time.Minute
 
 var cacheLog = logger.New("abs-cache")
