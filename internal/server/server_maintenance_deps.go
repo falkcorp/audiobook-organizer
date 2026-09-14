@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.30.2
+// version: 1.31.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -765,8 +765,42 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	// is ever queued after this apply, add
 	// RenamePreflight(bookID, cand, transcriptionApplyFields) before this call,
 	// gated the way that file work is.
-	_, err = s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, transcriptionApplyFields)
+	//
+	// FILL-ONLY (owner ruling 2026-09-14): this op may fill an empty title or
+	// author, never replace a filled one. FillOnly alone does not do that:
+	// StripFilledFields strips descriptive fields and leaves title and author
+	// (identity fields) alone, so each filled one is dropped from the
+	// allowlist here, against the book as re-read above. A match with nothing
+	// left to fill returns ErrTranscriptionNothingToFill; the op logs it and
+	// skips the book. There is no queue for it: the book keeps
+	// MetadataReviewStatus nil, so it stays in the ordinary review lane.
+	fields := fillableTranscriptionFields(book)
+	if len(fields) == 0 {
+		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
+	}
+	_, err = s.metadataFetchService.ApplyMetadataCandidateWithOptions(bookID, cand, fields, metafetch.ApplyOptions{FillOnly: true})
 	return err
+}
+
+// fillableTranscriptionFields is transcriptionApplyFields minus every field
+// the book already holds, in the same order. Author counts as filled when
+// the book carries an author ID or a named author.
+func fillableTranscriptionFields(book *database.Book) []string {
+	out := make([]string, 0, len(transcriptionApplyFields))
+	for _, f := range transcriptionApplyFields {
+		switch f {
+		case "title":
+			if strings.TrimSpace(book.Title) != "" {
+				continue
+			}
+		case "author":
+			if book.AuthorID != nil || (book.Author != nil && strings.TrimSpace(book.Author.Name) != "") {
+				continue
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // transcriptionApplyFields is the allowlist for auto-applied transcription

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -9,6 +9,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -656,3 +657,10 @@ func (a *sdkToOpsAdapter) IsCanceled() bool {
 
 // _ ensures the time import is used (used for Timeout fields in defs).
 var _ = time.Duration(0)
+
+// ErrTranscriptionNothingToFill is what ApplyTranscriptionCandidate returns
+// when the book's title and author are both already filled. The op is
+// fill-only for those two fields (owner ruling 2026-09-14), so there is
+// nothing it may write: the book is skipped, not failed, and stays unreviewed
+// for the ordinary review lane.
+var ErrTranscriptionNothingToFill = errors.New("title and author already filled: nothing to fill")

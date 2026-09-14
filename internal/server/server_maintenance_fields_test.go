@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_fields_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c4e1b58-2a93-4f60-9d17-5b8e03c2a7f4
-// last-edited: 2026-08-03
+// last-edited: 2026-09-14
 
 package server
 
@@ -29,7 +29,11 @@ import (
 // This asserts the write is narrowed to what was actually checked.
 func TestApplyTranscriptionCandidate_AppliesOnlyGatedFields(t *testing.T) {
 	bookID := "book-fields"
-	book := &database.Book{ID: bookID, Title: "Old Title"}
+	// An empty title and no author: since the owner ruling of 2026-09-14 the op
+	// is fill-only, so the gated fields land only on a book that lacks them
+	// (TestApplyTranscriptionCandidate_FillsOnlyEmptyTitleAndAuthor pins that
+	// a filled title is kept).
+	book := &database.Book{ID: bookID, Title: ""}
 
 	// A candidate rich in ungated fields. Only Title and Author were gated.
 	cand := metafetch.MetadataCandidate{
@@ -64,7 +68,7 @@ func TestApplyTranscriptionCandidate_AppliesOnlyGatedFields(t *testing.T) {
 
 	got := (*updateCalls)[len(*updateCalls)-1]
 
-	// The gated fields SHOULD land.
+	// The gated fields SHOULD land (the book lacked them).
 	if got.Title != cand.Title {
 		t.Errorf("title = %q, want %q — the gated field must still be written", got.Title, cand.Title)
 	}

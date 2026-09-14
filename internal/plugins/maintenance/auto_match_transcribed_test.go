@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package maintenance
 
@@ -193,5 +193,32 @@ func TestAutoMatchTranscribed_AlreadyReviewedSkipped(t *testing.T) {
 	}
 	if deps.applyCalled != 0 {
 		t.Errorf("already-reviewed books must be skipped: got %d apply calls", deps.applyCalled)
+	}
+}
+
+// Owner ruling 2026-09-14: the op is fill-only for title and author. A book
+// whose title and author are both filled has nothing it may write, so it is
+// skipped before the search and never counted as eligible; a dry run must not
+// promise an apply the real run would refuse.
+func TestAutoMatchTranscribed_FilledTitleAndAuthorSkipped(t *testing.T) {
+	trans := "The Name of the Wind"
+	author := "Patrick Rothfuss"
+	authorID := 3
+	books := []database.Book{{
+		ID: "b1", Title: "Name Wind", AuthorID: &authorID,
+		Author:           &database.Author{ID: authorID, Name: author},
+		TranscribedTitle: new(trans), TranscribedAuthor: new(author),
+	}}
+	deps := &autoMatchDeps{
+		searchFn: func(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
+			return trans, author, 1.8, true, nil
+		},
+	}
+	p := newAutoMatchPlugin(books, deps)
+	if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(false, 0), &fakeReporter{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps.searchCalled != 0 || deps.applyCalled != 0 {
+		t.Fatalf("filled book: search %d apply %d, want 0/0", deps.searchCalled, deps.applyCalled)
 	}
 }
