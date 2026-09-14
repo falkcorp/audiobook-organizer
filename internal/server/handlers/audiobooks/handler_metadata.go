@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
 // last-edited: 2026-09-13
 
@@ -10,12 +10,10 @@
 package audiobookshandler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -130,25 +128,14 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 			httputil.InternalError(c, "failed to apply undo", revErr)
 			return
 		}
-	} else if latest.PreviousValue != nil {
-		// Apply the previous value back via metadata state service
-		var prevValue any
-		if err := json.Unmarshal([]byte(*latest.PreviousValue), &prevValue); err != nil {
-			prevValue = *latest.PreviousValue
-		}
-		if err := h.metadataStateService.SetOverride(id, field, prevValue, false); err != nil {
-			httputil.InternalError(c, "failed to apply undo", err)
-			return
-		}
 	} else {
-		// Previous value was nil, so clear the override
-		if err := h.metadataStateService.ClearOverride(id, field); err != nil {
-			// Ignore "not found" errors when clearing
-			if !strings.Contains(err.Error(), "not found") {
-				httputil.InternalError(c, "failed to clear override", err)
-				return
-			}
-		}
+		// Every other field is put back on the book row, compare-and-set
+		// inside ModifyBook (metafetch.Service.UndoFieldChange). It used to
+		// store the previous value as a user override: the book row kept the
+		// changed value, and the override froze the field against every
+		// later fetch.
+		h.undoBookFieldChange(c, id, field, latest.PreviousValue)
+		return
 	}
 
 	// Record the undo itself
@@ -174,6 +161,40 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "undo applied", "field": field, "reverted_to": latest.PreviousValue})
 }
 
+// undoBookFieldChange is UndoMetadataChange for a field of the book row. A
+// field changed since its last change is refused with 409, not overwritten.
+func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string, revertedTo *string) {
+	if h.metadataFetchService == nil {
+		httputil.RespondWithInternalError(c, "metadata service not initialized")
+		return
+	}
+	res, err := h.metadataFetchService.UndoFieldChange(id, field)
+	switch {
+	case errors.Is(err, metafetch.ErrNoApplyToUndo):
+		httputil.RespondWithNotFound(c, "change history", field)
+		return
+	case errors.Is(err, metafetch.ErrFieldChangedSince), errors.Is(err, metafetch.ErrFieldNotUndoable):
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	case err != nil:
+		httputil.InternalError(c, "failed to apply undo", err)
+		return
+	}
+	if len(res.Reverted) > 0 {
+		if wb := h.resolveWriteBack(); wb != nil {
+			wb.Enqueue(id)
+		}
+		// METADATA-CACHED-MATCHER: undo rewrites book identity.
+		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
+	}
+	httputil.RespondWithOK(c, gin.H{
+		"message":          "undo applied",
+		"field":            field,
+		"reverted_to":      revertedTo,
+		"already_restored": len(res.AlreadyRestored) > 0,
+	})
+}
+
 // UndoLastApply reverts the most recent metadata apply for a book.
 // POST /audiobooks/:id/undo-last-apply.
 //
@@ -196,7 +217,7 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	case errors.Is(err, metafetch.ErrNoApplyToUndo):
 		httputil.RespondWithNotFound(c, "changes", "none")
 		return
-	case errors.Is(err, metafetch.ErrApplyPredatesBatches):
+	case errors.Is(err, metafetch.ErrApplyPredatesBatches), errors.Is(err, metafetch.ErrApplyAlreadyUndone):
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	case err != nil:

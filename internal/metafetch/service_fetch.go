@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-13
 
@@ -290,7 +290,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if snapErr != nil {
 				return nil, snapErr
 			}
-			prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+			prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
 			if prevAuthorsErr != nil {
 				prevAuthors = nil
 			}
@@ -304,11 +304,14 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// leave a blank cover.
 			book.CoverURL = renderableCoverURL(previousCoverURL, book.CoverURL, meta.CoverURL)
 
-			updatedBook, updateErr := mfs.db.UpdateBook(id, book)
+			// Only the fields this apply changed land, on the row as it stands
+			// now: the provider search above is slow, and a whole-row UpdateBook
+			// of the earlier read reverted any write that landed meanwhile.
+			// History is recorded from the committed row (commitApply).
+			updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, prevAuthors, src.Name())
 			if updateErr != nil {
-				return nil, fmt.Errorf("failed to update book: %w", updateErr)
+				return nil, updateErr
 			}
-			mfs.RecordApplyHistory(historyBefore, book, prevAuthors, src.Name())
 
 			mfs.persistFetchedMetadata(id, fetched)
 
@@ -426,7 +429,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if snapErr != nil {
 			return nil, snapErr
 		}
-		prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+		prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
 		if prevAuthorsErr != nil {
 			prevAuthors = nil
 		}
@@ -435,11 +438,14 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 			return nil, applyErr
 		}
 
-		updatedBook, updateErr := mfs.db.UpdateBook(id, book)
+		// Only the fields this apply changed land, on the row as it stands
+		// now: the provider search above is slow, and a whole-row UpdateBook
+		// of the earlier read reverted any write that landed meanwhile.
+		// History is recorded from the committed row (commitApply).
+		updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, prevAuthors, src.Name())
 		if updateErr != nil {
-			return nil, fmt.Errorf("failed to update book: %w", updateErr)
+			return nil, updateErr
 		}
-		mfs.RecordApplyHistory(historyBefore, book, prevAuthors, src.Name())
 
 		mfs.persistFetchedMetadata(id, fetched)
 

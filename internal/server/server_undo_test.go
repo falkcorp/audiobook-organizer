@@ -1,5 +1,5 @@
 // file: internal/server/server_undo_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-13
 
@@ -226,6 +226,58 @@ func TestUndoLastApply_UndoesOnlyTheLatestApply(t *testing.T) {
 	assert.Empty(t, derefStr(got.Description), "the second apply is undone")
 	require.NotNil(t, got.Publisher, "the first apply is kept")
 	assert.Equal(t, "Pub One", *got.Publisher)
+}
+
+// A second undo does not walk back to the apply before the last one: the
+// newest apply is already undone, so it is refused and the older apply stays.
+// It used to skip undone batches and revert the previous apply.
+func TestUndoLastApply_SecondCallIsRefused(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	book := createApplyBook(t, "undo-twice")
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Pub One", Source: "Open Library"})
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Description: "Desc two", Source: "Audible"})
+
+	code, resp := postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusOK, code, "resp %v", resp)
+	code, resp = postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusConflict, code, "the second undo must be refused, resp %v", resp)
+
+	got := mustGetBook(t, book.ID)
+	assert.Empty(t, derefStr(got.Description))
+	require.NotNil(t, got.Publisher, "the older apply must be kept")
+	assert.Equal(t, "Pub One", *got.Publisher)
+}
+
+// An author row whose book_authors join was not recorded is refused: putting
+// author_id back alone would leave the join naming the applied author.
+func TestUndoLastApply_AuthorNeverRevertedAlone(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	store := database.GetGlobalStore()
+	author, err := store.CreateAuthor("Applied Author")
+	require.NoError(t, err)
+	book := createApplyBook(t, "undo-author-alone")
+	book.AuthorID = &author.ID
+	_, err = store.UpdateBook(book.ID, book)
+	require.NoError(t, err)
+	oldVal, newVal := `""`, `"Applied Author"`
+	require.NoError(t, store.RecordMetadataChange(&database.MetadataChangeRecord{
+		BookID: book.ID, Field: "author_name", PreviousValue: &oldVal, NewValue: &newVal,
+		PreviousRef: &database.MetadataChangeRef{}, NewRef: &database.MetadataChangeRef{AuthorID: &author.ID},
+		ChangeType: "fetched", Source: "Open Library", ChangedAt: time.Now(), BatchID: "apply-authoralone",
+	}))
+
+	code, resp := postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusOK, code, "resp %v", resp)
+	assert.Contains(t, resp["failed_fields"], "author_name")
+	got := mustGetBook(t, book.ID)
+	require.NotNil(t, got.AuthorID, "author_id must not be reverted without its join")
+	assert.Equal(t, author.ID, *got.AuthorID)
 }
 
 // History rows written before batch ids existed cannot be grouped into one

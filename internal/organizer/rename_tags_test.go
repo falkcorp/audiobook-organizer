@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_tags_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f7b3d19-2a6e-4c84-9d05-1e8a4c6b2f73
 // last-edited: 2026-09-13
 
@@ -79,9 +79,10 @@ func TestWriteTagsRecordingOld_PerFileWithPreWriteValues(t *testing.T) {
 			require.Equal(t, "Orig "+base, c.OldValue, "the pre-write title must be recorded")
 			require.Equal(t, "", undo.NotRestorableLabel(c))
 		case "artist":
-			// The file had no artist: nothing to put back, so not restorable.
-			require.Equal(t, "", c.OldValue)
-			require.NotEqual(t, "", undo.NotRestorableLabel(c))
+			// The file had no artist: recorded as absent (not ""), so the
+			// revert can remove it again.
+			require.Equal(t, undo.TagAbsentValue, c.OldValue)
+			require.Equal(t, "", undo.NotRestorableLabel(c))
 		}
 	}
 	require.Equal(t, 2, titles)
@@ -105,4 +106,43 @@ func TestWriteTagsRecordingOld_UnreadableFileIsNotWritten(t *testing.T) {
 	changes, err := store.GetOperationChanges("op-x")
 	require.NoError(t, err)
 	require.Empty(t, changes)
+}
+
+// A multi-file book copied out of a protected source: the book_file rows still
+// carry the source folder, and the tags go to the same files under the copy.
+// Matching only rows under the copy found none, so no tag was written.
+func TestWriteTagsRecordingOld_ProtectedSourceCopyMultiFile(t *testing.T) {
+	store := newTagTestStore(t)
+	root := t.TempDir()
+	src := filepath.Join(root, "itunes", "Book")
+	dst := filepath.Join(root, "library", "Author", "Book")
+	for _, d := range []string{src, dst} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+	}
+	book, err := store.CreateBook(&database.Book{Title: "Book", FilePath: dst, Format: "mp3"})
+	require.NoError(t, err)
+	for _, n := range []string{"01.mp3", "02.mp3"} {
+		require.NoError(t, os.WriteFile(filepath.Join(src, n), []byte(n), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dst, n), []byte(n), 0o644))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(src, n), Format: "mp3"}))
+	}
+
+	var wrote []string
+	rs := NewRenameService(store)
+	rs.ReadCurrentTags = func(string) (map[string]string, error) { return map[string]string{"title": "Orig"}, nil }
+	rs.WriteTags = func(p string, _ map[string]any) error { wrote = append(wrote, p); return nil }
+
+	require.Equal(t, 2, rs.writeTagsRecordingOld(book.ID, "op-copy", src, dst, map[string]any{"title": "Book"}))
+	sort.Strings(wrote)
+	require.Equal(t, []string{filepath.Join(dst, "01.mp3"), filepath.Join(dst, "02.mp3")}, wrote,
+		"tags go to the copy, never to the protected source")
+
+	changes, err := store.GetOperationChanges("op-copy")
+	require.NoError(t, err)
+	require.Len(t, changes, 2)
+	for _, c := range changes {
+		_, fileID, ok := undo.TagWriteFromField(c.FieldName)
+		require.True(t, ok)
+		require.NotEmpty(t, fileID)
+	}
 }

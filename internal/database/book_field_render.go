@@ -1,5 +1,5 @@
 // file: internal/database/book_field_render.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e4b2a-93d5-4f60-8a1b-5e2d9c0f7a34
 // last-edited: 2026-09-13
 

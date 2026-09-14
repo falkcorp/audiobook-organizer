@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-13
 
@@ -14,12 +14,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
@@ -81,14 +83,80 @@ type revertBookFileStore interface {
 
 var revertLog = logger.New("revert")
 
+// revertPathLocker is the server's per-path file-write lock
+// (writeBackPathLocks, the table organize write-back and metafetch share).
+var revertPathLocker atomic.Pointer[func(path string) func()]
+
+// SetRevertPathLocker wires the process-wide per-path write lock into every
+// RevertService made afterwards. A revert that renames a file or rewrites its
+// tags then never runs at the same moment as a write-back or apply on the
+// same path. nil removes it.
+func SetRevertPathLocker(lock func(path string) func()) {
+	if lock == nil {
+		revertPathLocker.Store(nil)
+		return
+	}
+	revertPathLocker.Store(&lock)
+}
+
 // RevertService handles reverting operations by undoing recorded changes.
 type RevertService struct {
 	db revertServiceStore
+	// ReadTags reads a file's current tag values by write key (the same map
+	// the organizer recorded its pre-write values from). A tag revert is a
+	// compare-and-set against it.
+	ReadTags func(path string) (map[string]string, error)
+	// WriteTags writes tags into one file.
+	WriteTags func(path string, tags map[string]any) error
+	// LockPath takes the per-path write lock and returns its release. It is
+	// a leaf lock, taken before the book's write stripe, the order write-back
+	// uses. nil takes none.
+	LockPath func(path string) func()
+	// ComputeITunesPath recomputes a repointed book_file's iTunes path.
+	ComputeITunesPath func(localPath string) string
 }
 
 // NewRevertService creates a new RevertService.
 func NewRevertService(db revertServiceStore) *RevertService {
-	return &RevertService{db: db}
+	rs := &RevertService{
+		db:                db,
+		ReadTags:          metafetch.CurrentTagValues,
+		WriteTags:         defaultRevertWriteTags,
+		ComputeITunesPath: metafetch.ComputeITunesPath,
+	}
+	if lock := revertPathLocker.Load(); lock != nil {
+		rs.LockPath = *lock
+	}
+	return rs
+}
+
+func defaultRevertWriteTags(path string, tags map[string]any) error {
+	return metadata.WriteMetadataToFile(path, tags, fileops.OperationConfig{VerifyChecksums: true})
+}
+
+// lockPaths takes the per-path lock on each distinct non-empty path, in
+// sorted order so two reverts can never take them in opposite orders, and
+// returns one release for all of them.
+func (rs *RevertService) lockPaths(paths ...string) func() {
+	if rs.LockPath == nil {
+		return func() {}
+	}
+	var keys []string
+	for _, p := range paths {
+		if p != "" && !slices.Contains(keys, p) {
+			keys = append(keys, p)
+		}
+	}
+	sort.Strings(keys)
+	releases := make([]func(), 0, len(keys))
+	for _, k := range keys {
+		releases = append(releases, rs.LockPath(k))
+	}
+	return func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
 }
 
 // RevertResult reports what RevertOperation did with each row of the
@@ -346,6 +414,11 @@ func (rs *RevertService) loadBook(id string) (*database.Book, error) {
 // aggregates, a book write) run outside the ModifyBook callback, per the LOCK
 // RULES in database/pebble_store_book_lock.go.
 func (rs *RevertService) revertFileMove(c *database.OperationChange) error {
+	// Both paths are held from the checks through the rename, the book write
+	// (and its rollback rename) and the book_file repoint, so no write-back
+	// or apply writes into either place mid-move.
+	release := rs.lockPaths(c.NewValue, c.OldValue)
+	defer release()
 	book, err := rs.loadBook(c.BookID)
 	if err != nil {
 		return err
@@ -408,6 +481,12 @@ func (rs *RevertService) repointBookFiles(bookID, from, to string) error {
 			continue
 		}
 		bf.FilePath = np
+		// An iTunes-linked row's location follows the file back.
+		if bf.ITunesPath != "" && rs.ComputeITunesPath != nil {
+			if ip := rs.ComputeITunesPath(np); ip != "" {
+				bf.ITunesPath = ip
+			}
+		}
 		if uerr := rs.db.UpdateBookFile(bf.ID, bf); uerr != nil {
 			errs = append(errs, fmt.Errorf("repoint book_file %s: %w", bf.ID, uerr))
 		}
@@ -673,14 +752,26 @@ func renameRefusal(err error) error {
 // so the file is found at its current path. NotRestorableLabel has already set
 // aside rows with no pre-write value and legacy rows that name no file; this
 // refuses them again rather than write "", which deletes the tag. A missing
-// file or a protected path fails the row: it used to return nil there, which
-// marked a tag reverted that had not been touched.
+// file or a protected path fails the row.
+//
+// It is a compare-and-set, under the per-path write lock: the file must still
+// hold what the organize wrote (NewValue). A later write-back or apply that
+// changed the tag is kept and the row refused as changed since. A file that
+// already reads as the pre-organize value is written again, which is a no-op
+// for the file as read: album_artist, composer and narrator all read back
+// through one narrator value, so once one of them is restored the others
+// read as restored too. A tag that was absent before (undo.TagAbsentValue)
+// is removed.
 func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	tag, fileID, ok := undo.TagWriteFromField(c.FieldName)
 	if !ok || c.OldValue == "" {
 		return fmt.Errorf("tag_write row %s has no restorable pre-write value", c.ID)
 	}
-	if _, err := rs.loadBook(c.BookID); err != nil {
+	if rs.ReadTags == nil || rs.WriteTags == nil {
+		return fmt.Errorf("tag %s not restored: no tag reader or writer is configured", tag)
+	}
+	book, err := rs.loadBook(c.BookID)
+	if err != nil {
 		return err
 	}
 	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
@@ -688,6 +779,8 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
 	}
 	target := bf.FilePath
+	release := rs.lockPaths(book.FilePath, target)
+	defer release()
 	if _, statErr := os.Stat(target); statErr != nil {
 		return fmt.Errorf("tag %s not restored: %w", tag, statErr)
 	}
@@ -695,13 +788,23 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 		return fmt.Errorf("tag %s not restored: %s is a protected path", tag, target)
 	}
 
-	tagMap := map[string]any{
-		tag: c.OldValue,
+	restore := c.OldValue
+	if restore == undo.TagAbsentValue {
+		restore = ""
 	}
-	opConfig := fileops.OperationConfig{VerifyChecksums: true}
-	if err := metadata.WriteMetadataToFile(target, tagMap, opConfig); err != nil {
+	current, err := rs.ReadTags(target)
+	if err != nil {
+		return fmt.Errorf("tag %s not restored: the current tags of %s cannot be read: %w", tag, target, err)
+	}
+	cur, known := current[tag]
+	switch {
+	case !known:
+		return driftRefusal("tag %s of %s cannot be read back, so whether it still holds what the organize wrote is unknown", tag, target)
+	case cur != c.NewValue && cur != restore:
+		return driftRefusal("tag %s of %s is %q, not %q as the organize wrote it; the later value is kept", tag, target, cur, c.NewValue)
+	}
+	if err := rs.WriteTags(target, map[string]any{tag: restore}); err != nil {
 		return fmt.Errorf("failed to write tag %s back to %s: %w", tag, target, err)
 	}
-
 	return nil
 }

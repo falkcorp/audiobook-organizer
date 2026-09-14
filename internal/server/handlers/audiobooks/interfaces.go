@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-09-13
 
@@ -219,6 +219,9 @@ type MetadataFetchService interface {
 	// UndoLastApply reverts the book's most recent metadata apply, field by
 	// field, with a compare-and-set on the value the apply wrote.
 	UndoLastApply(bookID string) (*metafetch.UndoApplyResult, error)
+	// UndoFieldChange undoes the newest recorded change to one field of the
+	// book row (compare-and-set; ErrFieldChangedSince when edited since).
+	UndoFieldChange(bookID, field string) (*metafetch.UndoApplyResult, error)
 }
 
 // BatchService is the narrow *batch.BatchService subset used by

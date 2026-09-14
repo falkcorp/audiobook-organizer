@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.55.0
+// version: 2.56.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-13
 
@@ -996,6 +996,9 @@ func NewServer(store database.Store) *Server {
 		// which shares writeBackPathLocks -- touch one set of files at once.
 		// Auto-fetch's file work also goes through the file-I/O pool.
 		server.metadataFetchService.SetPathLocker(writeBackPathLocks.lock)
+		// Operation reverts move files back and rewrite tags; they take the
+		// same table, so a revert never races a write-back on one path.
+		audiobookspkg.SetRevertPathLocker(writeBackPathLocks.lock)
 		// Extra per-file tag writers within one book take free slots of the
 		// same process-wide gate every write-back op acquires, non-blocking,
 		// so overlapping ops never exceed maxWriteBackWorkers writers.

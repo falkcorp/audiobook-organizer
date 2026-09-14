@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8f5a13-7b4c-4d91-a6e0-3c9d1b7f5e28
 // last-edited: 2026-09-13
 
@@ -59,18 +59,36 @@ func (rs *RenameService) tagWriteTargets(bookID, oldPath, target string) []tagTa
 		}
 		return []tagTarget{t}
 	}
-	prefix := strings.TrimSuffix(target, string(os.PathSeparator)) + string(os.PathSeparator)
+	prefix := dirPrefix(target)
+	// In the protected-source copy case the rows still carry the source
+	// folder (oldPath); the files tags go to are the same names under the
+	// copy. Matching only rows under target found none, so a multi-file book
+	// copied out of a protected source got no tags at all.
+	oldPrefix := ""
+	if oldPath != "" && filepath.Clean(oldPath) != filepath.Clean(target) {
+		oldPrefix = dirPrefix(oldPath)
+	}
 	var out []tagTarget
 	for _, bf := range files {
-		if !strings.HasPrefix(filepath.Clean(bf.FilePath), prefix) {
+		p := filepath.Clean(bf.FilePath)
+		switch {
+		case strings.HasPrefix(p, prefix):
+		case oldPrefix != "" && strings.HasPrefix(p, oldPrefix):
+			p = filepath.Join(target, strings.TrimPrefix(p, oldPrefix))
+		default:
 			continue
 		}
-		if st, serr := os.Stat(bf.FilePath); serr != nil || st.IsDir() {
+		if st, serr := os.Stat(p); serr != nil || st.IsDir() {
 			continue
 		}
-		out = append(out, tagTarget{path: bf.FilePath, fileID: bf.ID})
+		out = append(out, tagTarget{path: p, fileID: bf.ID})
 	}
 	return out
+}
+
+// dirPrefix is dir with exactly one trailing separator.
+func dirPrefix(dir string) string {
+	return strings.TrimSuffix(filepath.Clean(dir), string(os.PathSeparator)) + string(os.PathSeparator)
 }
 
 // writeTagsRecordingOld writes the changed tags to every target file and
@@ -110,6 +128,9 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			continue
 		}
 		written += len(filtered)
+		// Post-write bookkeeping for this file (t.path, row t.fileID) goes
+		// here, after the write succeeded and before the ledger rows: the
+		// book_file FileHash refresh from #3394 slots in at this point.
 		if operationID == "" {
 			continue
 		}
@@ -118,12 +139,19 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			if t.fileID != "" {
 				name = undo.TagWriteField(field, t.fileID)
 			}
+			// A tag the reader knows but the file does not carry is recorded
+			// as absent, so the revert removes it. A tag the reader does not
+			// know keeps "": its pre-write value is unknown, not restorable.
+			old, known := current[field]
+			if known && old == "" {
+				old = undo.TagAbsentValue
+			}
 			_ = rs.db.CreateOperationChange(&database.OperationChange{
 				OperationID: operationID,
 				BookID:      bookID,
 				ChangeType:  undo.ChangeTypeTagWrite,
 				FieldName:   name,
-				OldValue:    current[field],
+				OldValue:    old,
 				NewValue:    fmt.Sprintf("%v", val),
 			})
 		}
