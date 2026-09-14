@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 552d8ccc-ffc7-41f3-8cef-f00ba6d70608
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -147,6 +147,32 @@ func lockStore(t *testing.T, locked ...string) *database.MockStore {
 	}
 }
 
+// captureAuthorCredits records every SetBookAuthors write on store and returns
+// a pointer to the latest join written (nil until one is).
+func captureAuthorCredits(store *database.MockStore) *[]database.BookAuthor {
+	var last []database.BookAuthor
+	store.SetBookAuthorsFunc = func(_ string, authors []database.BookAuthor) error {
+		last = append([]database.BookAuthor(nil), authors...)
+		return nil
+	}
+	return &last
+}
+
+// assertFillOnlyAuthorApplied checks an unlocked author_name apply on a book
+// that already has a primary author: fill-only (2026-09-14) credits the
+// fetched author without repointing AuthorID or dropping the existing one, so
+// the join table, not the column, is where the apply is observable.
+func assertFillOnlyAuthorApplied(t *testing.T, curated, got any, credited []database.BookAuthor) {
+	t.Helper()
+	assert.Equal(t, curated, got, "fill-only must not repoint the primary author")
+	ids := make([]int, 0, len(credited))
+	for _, ba := range credited {
+		ids = append(ids, ba.AuthorID)
+	}
+	assert.Contains(t, ids, fetchedAuthorID, "fixture cannot observe the apply: fetched author was not credited with nothing locked")
+	assert.Contains(t, ids, curated, "fill-only dropped the existing author")
+}
+
 // columnValue reads Book.<column> by name, dereferencing pointer columns so
 // the comparison is on values. A missing column is a test bug, not a pass.
 func columnValue(t *testing.T, book *database.Book, column string) any {
@@ -214,9 +240,15 @@ func TestApplyMetadataToBook_HonorsEveryLockKey(t *testing.T) {
 
 		t.Run(f.Key+"/unlocked applies", func(t *testing.T) {
 			book := curatedBook()
-			skipped, err := NewService(lockStore(t)).ApplyMetadataToBook(book, fetchedMetaFor(f.Key))
+			store := lockStore(t)
+			credited := captureAuthorCredits(store)
+			skipped, err := NewService(store).ApplyMetadataToBook(book, fetchedMetaFor(f.Key))
 			require.NoError(t, err)
 			assert.Empty(t, skipped)
+			if f.Key == database.FieldKeyAuthorName {
+				assertFillOnlyAuthorApplied(t, curated, columnValue(t, book, f.Column), *credited)
+				return
+			}
 			assert.NotEqual(t, curated, columnValue(t, book, f.Column),
 				"fixture cannot observe the bug: Book.%s did not change with nothing locked", f.Column)
 		})
@@ -310,10 +342,15 @@ func TestApplyMetadataCandidate_HonorsEveryLockKey(t *testing.T) {
 
 		t.Run(f.Key+"/unlocked applies", func(t *testing.T) {
 			store, updated := candidateStore(t)
+			credited := captureAuthorCredits(store)
 			resp, err := NewService(store).ApplyMetadataCandidate("b-locks", candidateFor(f.Key), nil)
 			require.NoError(t, err)
 			require.NotNil(t, updated(), "UpdateBook was not called")
 			assert.Empty(t, resp.SkippedLockedFields)
+			if f.Key == database.FieldKeyAuthorName {
+				assertFillOnlyAuthorApplied(t, curated, columnValue(t, updated(), f.Column), *credited)
+				return
+			}
 			assert.NotEqual(t, curated, columnValue(t, updated(), f.Column),
 				"fixture cannot observe the bug: Book.%s did not change with nothing locked", f.Column)
 		})

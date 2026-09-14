@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -307,7 +307,7 @@ func TestApplyAudiobookMetadata_RenamePreflightRefusesBeforeAnyWrite(t *testing.
 // preflight is not called (the strict mock has no expectation for it).
 func TestApplyAudiobookMetadata_NoFileSequelSkipsRenamePreflight(t *testing.T) {
 	h, d := newHandler(t, noPool)
-	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
+	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()
@@ -335,7 +335,7 @@ func TestApplyAudiobookMetadata_WriteBackOffStillRunsRenamePreflight(t *testing.
 func TestApplyAudiobookMetadata(t *testing.T) {
 	h, d := newHandler(t)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(nil)
-	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
+	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()

@@ -39,48 +39,49 @@ func (_m *MockMetadataFetchService) EXPECT() *MockMetadataFetchService_Expecter 
 	return &MockMetadataFetchService_Expecter{mock: &_m.Mock}
 }
 
-// ApplyMetadataCandidate provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error) {
-	ret := _mock.Called(id, candidate, fields)
+// ApplyMetadataCandidateWithOptions provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error) {
+	ret := _mock.Called(id, candidate, fields, opts)
 
 	if len(ret) == 0 {
-		panic("no return value specified for ApplyMetadataCandidate")
+		panic("no return value specified for ApplyMetadataCandidateWithOptions")
 	}
 
 	var r0 *metafetch.FetchMetadataResponse
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) (*metafetch.FetchMetadataResponse, error)); ok {
-		return returnFunc(id, candidate, fields)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)); ok {
+		return returnFunc(id, candidate, fields, opts)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string) *metafetch.FetchMetadataResponse); ok {
-		r0 = returnFunc(id, candidate, fields)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) *metafetch.FetchMetadataResponse); ok {
+		r0 = returnFunc(id, candidate, fields, opts)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*metafetch.FetchMetadataResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, metafetch.MetadataCandidate, []string) error); ok {
-		r1 = returnFunc(id, candidate, fields)
+	if returnFunc, ok := ret.Get(1).(func(string, metafetch.MetadataCandidate, []string, metafetch.ApplyOptions) error); ok {
+		r1 = returnFunc(id, candidate, fields, opts)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockMetadataFetchService_ApplyMetadataCandidate_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyMetadataCandidate'
-type MockMetadataFetchService_ApplyMetadataCandidate_Call struct {
+// MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyMetadataCandidateWithOptions'
+type MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call struct {
 	*mock.Call
 }
 
-// ApplyMetadataCandidate is a helper method to define mock.On call
+// ApplyMetadataCandidateWithOptions is a helper method to define mock.On call
 //   - id string
 //   - candidate metafetch.MetadataCandidate
 //   - fields []string
-func (_e *MockMetadataFetchService_Expecter) ApplyMetadataCandidate(id any, candidate any, fields any) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
-	return &MockMetadataFetchService_ApplyMetadataCandidate_Call{Call: _e.mock.On("ApplyMetadataCandidate", id, candidate, fields)}
+//   - opts metafetch.ApplyOptions
+func (_e *MockMetadataFetchService_Expecter) ApplyMetadataCandidateWithOptions(id any, candidate any, fields any, opts any) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
+	return &MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call{Call: _e.mock.On("ApplyMetadataCandidateWithOptions", id, candidate, fields, opts)}
 }
 
-func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string)) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) Run(run func(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions)) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -94,21 +95,26 @@ func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) Run(run func(id 
 		if args[2] != nil {
 			arg2 = args[2].([]string)
 		}
+		var arg3 metafetch.ApplyOptions
+		if args[3] != nil {
+			arg3 = args[3].(metafetch.ApplyOptions)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
 }
 
-func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) Return(fetchMetadataResponse *metafetch.FetchMetadataResponse, err error) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) Return(fetchMetadataResponse *metafetch.FetchMetadataResponse, err error) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
 	_c.Call.Return(fetchMetadataResponse, err)
 	return _c
 }
 
-func (_c *MockMetadataFetchService_ApplyMetadataCandidate_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_ApplyMetadataCandidate_Call {
+func (_c *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call) RunAndReturn(run func(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)) *MockMetadataFetchService_ApplyMetadataCandidateWithOptions_Call {
 	_c.Call.Return(run)
 	return _c
 }

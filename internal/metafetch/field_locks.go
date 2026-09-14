@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -144,7 +144,10 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 // It returns the stripped metadata (so callers persist provenance / tag against
 // what was applied, or the full candidate if they prefer) and the skipped keys.
 // source only labels the log lines.
-func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, error) {
+//
+// replaceAuthors is ApplyOptions.ReplaceAuthors: false (every automated and
+// batch path) keeps existing author links, true replaces them.
+func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string, replaceAuthors bool) (metadata.BookMetadata, []string, error) {
 	if book == nil {
 		return meta, nil, fmt.Errorf("apply metadata: nil book")
 	}
@@ -156,7 +159,11 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 	// History is NOT recorded here: this runs before the apply body's IsBetter
 	// checks and before the caller commits, so it recorded changes the apply
 	// then refused. Callers record with RecordApplyHistory after the write.
-	restored := locks.Apply(book, func(b *database.Book) { mfs.applyMetadataUnguarded(b, meta) })
+	var bodyErr error
+	restored := locks.Apply(book, func(b *database.Book) { bodyErr = mfs.applyMetadataUnguarded(b, meta, replaceAuthors) })
+	if bodyErr != nil {
+		return meta, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
+	}
 	if len(restored) > 0 {
 		// Strip should have made this unreachable; if it fires, a new write in
 		// applyMetadataUnguarded reaches a locked column by a route
