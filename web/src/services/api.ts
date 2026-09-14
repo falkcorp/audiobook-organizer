@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.108.0
+// version: 2.109.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-13
 
@@ -4025,6 +4025,12 @@ export interface CandidateBookInfo {
 export interface CandidateResult {
   book: CandidateBookInfo;
   candidate?: MetadataCandidate;
+  /**
+   * Server hash of `candidate` (metafetch.CandidateHash), served by the cache
+   * review list. A single-row Apply echoes it in its pin so the server can
+   * tell the reviewed record from any other. Absent on non-cache paths.
+   */
+  candidate_hash?: string;
   status: 'matched' | 'no_match' | 'error' | 'rejected' | 'applied';
   error_message?: string;
   /** When the cached candidate was written. Absent on paths not served from cache. */
@@ -4322,13 +4328,18 @@ export interface BatchApplyDispatch {
 // is the only description of what happened that cannot go stale.
 /**
  * Identifies the cached candidate a reviewer was LOOKING AT when they clicked
- * Apply (server: metafetch.CandidatePin). The server applies the top cached
- * candidate; a pin that still matches it makes the apply owner-reviewed (the
- * certainty gate reports but does not refuse on its certainty legs), and a pin
- * that no longer matches -- the cache was refetched after the page loaded -- is
- * refused as stale_candidate. A book sent without a pin gets the hard gate.
+ * Apply on ONE review row (server: metafetch.CandidatePin). Only the lane's
+ * single-row Apply sends pins; bulk buttons send none and stay fully gated.
+ * The server applies the top cached candidate; a row pin whose content_hash
+ * (CandidateResult.candidate_hash, served by the review list) and identity
+ * fields still match it makes the apply owner-reviewed (the certainty gate
+ * reports but does not refuse on its certainty legs), and a pin that no longer
+ * matches -- the cache was refetched after the page loaded -- is refused as
+ * stale_candidate.
  */
 export interface CandidatePin {
+  origin: 'row';
+  content_hash: string;
   source: string;
   title: string;
   author?: string;

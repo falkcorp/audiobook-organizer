@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 //
@@ -67,6 +67,10 @@ type CandidateResult struct {
 	// three-month-old candidate needs to be able to tell those apart.
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
 	IsFresh   *bool      `json:"is_fresh,omitempty"`
+	// CandidateHash is metafetch.CandidateHash(*Candidate), served by the
+	// cache review list so a single-row Apply can pin exactly the record the
+	// owner looked at (metafetch.CandidatePin.ContentHash). Empty elsewhere.
+	CandidateHash string `json:"candidate_hash,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.

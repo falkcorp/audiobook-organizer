@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-13
 
@@ -614,6 +614,9 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			Status:    page[i].status,
 			FetchedAt: &fetchedAt,
 			IsFresh:   &isFresh,
+			// The same hash the apply recomputes from the same cache row: a
+			// single-row Apply echoes it back in its pin.
+			CandidateHash: metafetch.CandidateHash(cand),
 		})
 	}
 
@@ -738,11 +741,13 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// applied. The web UI's Apply button sends dry_run:false.
 		DryRun *bool `json:"dry_run"`
 		// Pins maps book id -> the candidate the reviewer was looking at when
-		// they clicked Apply (the review lane sends one per book). A book with
-		// a pin that still matches the top cached candidate is applied as
-		// owner-reviewed; one whose pin no longer matches is refused as
-		// stale_candidate; a book with no pin gets the ordinary hard gate. The
-		// dry run ignores pins.
+		// they clicked Apply. Only the review lane's single-row Apply sends
+		// one (origin "row", with the candidate_hash the review list served);
+		// bulk buttons send none. A row pin that still matches the top cached
+		// candidate is applied as owner-reviewed; any pin that no longer
+		// matches is refused as stale_candidate; a book with no pin, or a pin
+		// of another origin, gets the ordinary hard gate. The dry run ignores
+		// pins.
 		Pins map[string]metafetch.CandidatePin `json:"pins"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {

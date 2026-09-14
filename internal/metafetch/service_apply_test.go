@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.3.1
+// version: 1.4.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
 // last-edited: 2026-09-13
 
@@ -162,4 +162,73 @@ func TestRecordApplyHistory_EmptyTitleFallsBackToID(t *testing.T) {
 	summary := acts.summaryForField(t, "narrator")
 	require.False(t, strings.HasPrefix(summary, ": Applied"), "summary must not start with a bare ': Applied', got %q", summary)
 	require.Equal(t, "01J0BOOKID000000000000000: Applied narrator: Alex Kozlowski → Grant Cartwright", summary)
+}
+
+// RecordApplyHistory_RecordsEveryWrittenField: an apply (an owner-reviewed
+// one above all) must leave a history row for every column the apply body
+// writes, not only the original nine. Before 2026-09-13 an apply that
+// replaced a book's ASIN, ISBNs or description left no old value to undo from.
+// RecordApplyHistory diffs the whole row, so this pins the columns an
+// owner-reviewed apply most often replaces.
+func TestRecordApplyHistory_RecordsEveryWrittenField(t *testing.T) {
+	svc, acts := newChangeHistoryHarness(t)
+	abridged := false
+	book := &database.Book{
+		ID:                "01J0BOOKID000000000000000",
+		Title:             "Big Cats",
+		ASIN:              new("B00OLD"),
+		ISBN13:            new("9780000000001"),
+		Description:       new("Old blurb."),
+		PageCount:         new(100),
+		AudibleRuntimeMin: new(300),
+	}
+	after := *book
+	after.ASIN = new("B00NEW")
+	after.ISBN13 = new("9780000000002")
+	after.ISBN10 = new("0000000002")
+	after.Description = new("New blurb.")
+	after.Genre = new("Fantasy")
+	after.Subtitle = new("A Tale")
+	after.Abridged = &abridged
+	after.PageCount = new(240)
+	after.SeriesSecondary = new("Cats Universe")
+	after.SeriesSecondaryPosition = new("2")
+	after.AudibleRuntimeMin = new(600)
+	_, err := svc.RecordApplyHistory(book, &after, nil, "Audible (owner-reviewed; certainty gate overridden: sequence_missing_on_candidate)")
+	require.NoError(t, err)
+
+	want := map[string]string{
+		"asin":                      "B00OLD → B00NEW",
+		"isbn13":                    "9780000000001 → 9780000000002",
+		"isbn10":                    "(none) → 0000000002",
+		"description":               "Old blurb. → New blurb.",
+		"genre":                     "(none) → Fantasy",
+		"subtitle":                  "(none) → A Tale",
+		"abridged":                  "(none) → false",
+		"page_count":                "100 → 240",
+		"series_secondary":          "(none) → Cats Universe",
+		"series_secondary_position": "(none) → 2",
+		"audible_runtime_min":       "300 → 600",
+	}
+	for field, change := range want {
+		summary := acts.summaryForField(t, field)
+		require.True(t, strings.HasSuffix(summary, field+": "+change), "field %s: summary %q, want suffix %q", field, summary, change)
+	}
+}
+
+// An owner-reviewed note is added on EVERY override, never deduplicated into
+// the first: each is a separate decision.
+func TestAppendOwnerReviewedNote_AddsOnEveryOverride(t *testing.T) {
+	book := &database.Book{VersionNotes: new("audio_confirmed")}
+	t1 := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	appendOwnerReviewedNote(book, "sequence_missing_on_candidate", t1)
+	appendOwnerReviewedNote(book, "sequence_missing_on_candidate", t1)
+	appendOwnerReviewedNote(book, "runtime_unknown_on_overwrite", t1.Add(time.Hour))
+	lines := strings.Split(*book.VersionNotes, "\n")
+	require.Equal(t, []string{
+		"audio_confirmed",
+		"owner_reviewed 2026-09-13T10:00:00Z: sequence_missing_on_candidate",
+		"owner_reviewed 2026-09-13T10:00:00Z: sequence_missing_on_candidate",
+		"owner_reviewed 2026-09-13T11:00:00Z: runtime_unknown_on_overwrite",
+	}, lines)
 }

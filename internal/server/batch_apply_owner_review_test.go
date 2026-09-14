@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-13
 //
@@ -39,11 +39,51 @@ func TestOwnerReview_NoPinIsHardGated(t *testing.T) {
 	}
 }
 
+// rowPin is the pin the review lane's single-row Apply sends.
+func rowPin(c metafetch.MetadataCandidate) *metafetch.CandidatePin {
+	p := metafetch.PinOf(c)
+	p.Origin = metafetch.PinOriginRow
+	return &p
+}
+
+// A pin that is not from a single-row review (a script, a future bulk path)
+// is checked for staleness but earns no override.
+func TestOwnerReview_NonRowPinIsHardGated(t *testing.T) {
+	books, cand := ownerReviewFixture()
+	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	pin := metafetch.PinOf(cand) // no origin
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
+		t.Fatalf("non-row pin: outcome %+v, want gate_blocked", out)
+	}
+	pin.Origin = "bulk"
+	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
+		t.Fatalf("bulk-origin pin: outcome %+v, want gate_blocked", out)
+	}
+}
+
+// asin_conflict is a record identity, not a certainty judgement: a row
+// review does not lift it.
+func TestOwnerReview_ASINConflictStillBlocks(t *testing.T) {
+	books, cand := ownerReviewFixture()
+	cand.ASIN = "B00NEWASIN"
+	b := *books["b1"]
+	old := "B00OLDASIN"
+	b.ASIN = &old
+	books["b1"] = &b
+	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
+		t.Fatalf("asin conflict with a row pin: outcome %+v, want gate_blocked", out)
+	}
+}
+
 func TestOwnerReview_MatchingPinAppliesAndRecordsOverride(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	pin := metafetch.PinOf(cand)
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	pin := rowPin(cand)
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin)
 	if !out.Applied || !out.OwnerReviewed {
 		t.Fatalf("matching pin: outcome %+v, want applied as owner-reviewed", out)
 	}
@@ -65,7 +105,7 @@ func TestOwnerReview_MatchingPinAppliesAndRecordsOverride(t *testing.T) {
 func TestOwnerReview_StalePinRefusesAndWritesNothing(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	shown := metafetch.PinOf(cand)
+	shown := *rowPin(cand)
 	shown.Title = "Big Cats (a different record)"
 	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown)
 	if out.Applied || out.Reason != applySkipStaleCandidate {
@@ -82,8 +122,7 @@ func TestOwnerReview_StalePinRefusesAndWritesNothing(t *testing.T) {
 func TestOwnerReview_StaleIdentityStillBlocks(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand), identityErr: metafetch.ErrStaleMetadataCache}
-	pin := metafetch.PinOf(cand)
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
 	if out.Applied || out.Reason != applySkipGateBlocked || out.Gate == nil || out.Gate.Reason != applygate.ReasonIdentityStale {
 		t.Fatalf("stale identity with a pin: outcome %+v", out)
 	}
@@ -94,8 +133,7 @@ func TestOwnerReview_StaleIdentityStillBlocks(t *testing.T) {
 func TestOwnerReview_RenamePreflightStillBlocks(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand), preflightErr: metafetch.ErrApplyFileWorkWouldFail}
-	pin := metafetch.PinOf(cand)
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
 	if out.Applied || out.Reason != applySkipFileWorkWouldFail || !out.OwnerReviewed {
 		t.Fatalf("preflight with a pin: outcome %+v", out)
 	}
@@ -160,6 +198,39 @@ func TestOwnerReview_QueuedMergeKeepsPins(t *testing.T) {
 	}
 }
 
+// A newer request that names a book WITHOUT pinning it (a bulk button pressed
+// after a row review) drops that book's older pin: unpinned wins, so the book
+// gets the hard gate the latest request asked for.
+func TestOwnerReview_QueuedMergeUnpinnedDropsPin(t *testing.T) {
+	a := metafetch.CandidatePin{Origin: metafetch.PinOriginRow, Source: "Audible", Title: "A"}
+	b := metafetch.CandidatePin{Origin: metafetch.PinOriginRow, Source: "Audible", Title: "B"}
+	cur, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"a", "b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"a": a, "b": b}})
+	next, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b", "c"}, WriteBack: true})
+	raw, ok, err := mergeBatchApplyQueuedParams(cur, next)
+	if err != nil || !ok {
+		t.Fatalf("merge: ok=%v err=%v", ok, err)
+	}
+	var got batchApplyOpParams
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Pins) != 1 || got.Pins["a"] != a {
+		t.Fatalf("merged pins %+v, want only a (b was re-requested unpinned)", got.Pins)
+	}
+	if got.pinOf("b") != nil || got.pinOf("c") != nil {
+		t.Fatalf("pinOf: b=%v c=%v, want both nil", got.pinOf("b"), got.pinOf("c"))
+	}
+
+	// All pins dropped: the field goes away rather than serialising {}.
+	onlyB, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"b": b}})
+	raw, _, _ = mergeBatchApplyQueuedParams(onlyB, next)
+	got = batchApplyOpParams{}
+	_ = json.Unmarshal(raw, &got)
+	if got.Pins != nil {
+		t.Fatalf("pins %+v, want nil", got.Pins)
+	}
+}
+
 // The checkpoint carries the pins of the books still owed, so a resumed run
 // is still owner-reviewed.
 func TestOwnerReview_CheckpointCarriesPins(t *testing.T) {
@@ -189,5 +260,19 @@ func TestCandidatePin_Matches(t *testing.T) {
 	other.ASIN = "B00Y"
 	if metafetch.PinOf(c).Matches(other) {
 		t.Fatal("a different ASIN is a different record")
+	}
+
+	// Two ID-less records from one source with one title: only the content
+	// hash tells them apart.
+	x := metafetch.MetadataCandidate{Source: "Google Books", Title: "Big Cats", Author: "Ann Author", Description: "Book one."}
+	y := x
+	y.Description = "The omnibus."
+	if metafetch.PinOf(x).Matches(y) {
+		t.Fatal("two ID-less records with the same source/title satisfied each other's pin")
+	}
+	noHash := metafetch.PinOf(x)
+	noHash.ContentHash = ""
+	if noHash.Matches(x) {
+		t.Fatal("a pin without a content hash must never match")
 	}
 }

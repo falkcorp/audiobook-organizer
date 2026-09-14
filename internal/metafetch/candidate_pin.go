@@ -1,42 +1,82 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-13
 
 package metafetch
 
-import "strings"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+)
+
+// PinOriginRow is the only pin origin that earns an owner-review override:
+// the owner clicked Apply on ONE review row, looking at that row's candidate.
+// Bulk buttons (Apply page, Apply high confidence, group Apply All, Apply
+// selected) send no pins at all, and a pin with any other origin is checked
+// for staleness but gets the ordinary hard gate.
+const PinOriginRow = "row"
 
 // CandidatePin identifies the cached candidate a reviewer was LOOKING AT when
 // they clicked Apply. The review lane shows the top cached candidate
 // (Candidates[0], GetCacheReviewResults) and the batch apply applies the top
 // cached candidate, so they are the same row unless the cache was refetched
-// in between. The pin is how the server tells: it carries the fields that
-// identify a provider record, and every one must still match.
+// in between. The pin is how the server tells.
+//
+// ContentHash (CandidateHash of the candidate the review list served) is what
+// makes the pin strong: two provider records with no ASIN/ISBN, the same
+// source and the same title would otherwise satisfy each other's pin. The
+// identity fields are kept alongside so a refusal can say what changed.
 //
 // A refetch replaces the cache row wholesale, so strict equality is the right
-// test: a different record, or the same record with different identity
-// fields, is not what the owner reviewed.
+// test: a different record, or the same record with any field changed, is not
+// what the owner reviewed.
 type CandidatePin struct {
-	Source string `json:"source"`
-	Title  string `json:"title"`
-	Author string `json:"author,omitempty"`
-	ASIN   string `json:"asin,omitempty"`
-	ISBN   string `json:"isbn,omitempty"`
-	ISBN10 string `json:"isbn10,omitempty"`
-	ISBN13 string `json:"isbn13,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Source      string `json:"source"`
+	Title       string `json:"title"`
+	Author      string `json:"author,omitempty"`
+	ASIN        string `json:"asin,omitempty"`
+	ISBN        string `json:"isbn,omitempty"`
+	ISBN10      string `json:"isbn10,omitempty"`
+	ISBN13      string `json:"isbn13,omitempty"`
 }
 
-// PinOf is the pin that identifies c.
+// CandidateHash is the hex SHA-256 of c's canonical JSON: encoding/json over
+// the decoded struct, which emits fields in declaration order and map keys
+// sorted, so the review list (which serves it) and the apply (which checks
+// it) compute the same value from the same cache row. "" only if c cannot be
+// encoded, which a decoded candidate always can.
+func CandidateHash(c MetadataCandidate) string {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// PinOf is the pin that identifies c, content hash included. Origin is left
+// empty: only the review lane's single-row Apply sets PinOriginRow.
 func PinOf(c MetadataCandidate) CandidatePin {
-	return CandidatePin{Source: c.Source, Title: c.Title, Author: c.Author,
+	return CandidatePin{ContentHash: CandidateHash(c), Source: c.Source, Title: c.Title, Author: c.Author,
 		ASIN: c.ASIN, ISBN: c.ISBN, ISBN10: c.ISBN10, ISBN13: c.ISBN13}
 }
 
-// Matches reports whether c is the candidate p was taken from. Whitespace at
-// the ends is ignored; everything else must be equal.
+// IsRowReview reports whether p records a single-row owner review.
+func (p CandidatePin) IsRowReview() bool { return p.Origin == PinOriginRow }
+
+// Matches reports whether c is the candidate p was taken from: the content
+// hash must be present and equal, and so must every identity field
+// (whitespace at the ends ignored). A pin without a hash never matches.
 func (p CandidatePin) Matches(c MetadataCandidate) bool {
 	q := PinOf(c)
+	if p.ContentHash == "" || p.ContentHash != q.ContentHash {
+		return false
+	}
 	eq := func(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) }
 	return eq(p.Source, q.Source) && eq(p.Title, q.Title) && eq(p.Author, q.Author) &&
 		eq(p.ASIN, q.ASIN) && eq(p.ISBN, q.ISBN) && eq(p.ISBN10, q.ISBN10) && eq(p.ISBN13, q.ISBN13)
@@ -49,7 +89,8 @@ type ApplyOptions struct {
 	// review although the bulk-apply certainty gate refused it, and names the
 	// refusing reasons. It is recorded on every field's change-history row (in
 	// its source), on the activity entries, and as an "owner_reviewed" version
-	// note. It changes nothing about which fields are written.
+	// note added on every such apply. It changes nothing about which fields
+	// are written.
 	GateOverride string
 }
 

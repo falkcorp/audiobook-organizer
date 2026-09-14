@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -167,7 +167,9 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true}
 	if !v.Allowed {
-		if pin != nil && v.OwnerReviewOverridable() {
+		// Only a single-row review earns the override. A pin of any other
+		// origin was still checked for staleness above, and gets the hard gate.
+		if pin != nil && pin.IsRowReview() && v.OwnerReviewOverridable() {
 			plan.OwnerReviewed = true
 			return plan
 		}

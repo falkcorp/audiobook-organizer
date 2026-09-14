@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-09-13
 //
@@ -523,7 +523,7 @@ describe('dispatch', () => {
   it('batches rapid single applies into one call', async () => {
     // Applying five rows in a row must not fire five requests.
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload(['a', 'b', 'c'].map((id) => makeResult(id)))
+      reviewPayload(['a', 'b', 'c'].map((id) => makeResult(id, { candidate_hash: `h-${id}` })))
     );
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op1',
@@ -555,18 +555,20 @@ describe('dispatch', () => {
     });
 
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
-    // Each row carries a pin of the candidate it showed: clicking Apply is the
-    // owner's review, and the server checks the pin against the cache.
+    // Each single-row click carries a row pin of the candidate it showed:
+    // clicking Apply on a row is the owner's review, and the server checks the
+    // pin (content hash included) against the cache. Debounced clicks share
+    // one request; pins are per book.
     expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
-      a: { source: 'audible', title: 'Cand a', author: 'A' },
-      b: { source: 'audible', title: 'Cand b', author: 'A' },
+      a: { origin: 'row', content_hash: 'h-a', source: 'audible', title: 'Cand a', author: 'A' },
+      b: { origin: 'row', content_hash: 'h-b', source: 'audible', title: 'Cand b', author: 'A' },
     });
     vi.useRealTimers();
   });
 
   it('pins the candidate the row showed when Apply was clicked, not the one after a refresh', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', {}, { title: 'Shown', asin: 'B001' })])
+      reviewPayload([makeResult('a', { candidate_hash: 'h-shown' }, { title: 'Shown', asin: 'B001' })])
     );
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-pin',
@@ -587,14 +589,49 @@ describe('dispatch', () => {
     });
 
     expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a'], undefined, {
-      a: { source: 'audible', title: 'Shown', author: 'A', asin: 'B001' },
+      a: {
+        origin: 'row',
+        content_hash: 'h-shown',
+        source: 'audible',
+        title: 'Shown',
+        author: 'A',
+        asin: 'B001',
+      },
     });
     vi.useRealTimers();
   });
 
-  it('sends pins for a selected batch', async () => {
+  it('sends no pin for a row the server served without a candidate hash', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('a')]));
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-nohash',
+    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    vi.useFakeTimers();
+    act(() => {
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a'], undefined, {});
+    vi.useRealTimers();
+  });
+
+  // Bulk buttons (Apply page, Apply high confidence, group Apply All, Apply
+  // selected) all dispatch applySelected. Nobody looked at each row, so they
+  // send NO pins and every book gets the full certainty gate.
+  it('sends no pins for a selected batch, even for rows that carry a hash', async () => {
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(
-      reviewPayload([makeResult('a', {}, { isbn13: '9780000000001' }), makeResult('b')])
+      reviewPayload([
+        makeResult('a', { candidate_hash: 'h-a' }, { isbn13: '9780000000001' }),
+        makeResult('b', { candidate_hash: 'h-b' }),
+      ])
     );
     vi.mocked(api.batchApplyFromCache).mockResolvedValue({
       op_id: 'op-sel-pins',
@@ -610,10 +647,7 @@ describe('dispatch', () => {
       result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a', 'b'] });
     });
 
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
-      a: { source: 'audible', title: 'Cand a', author: 'A', isbn13: '9780000000001' },
-      b: { source: 'audible', title: 'Cand b', author: 'A' },
-    });
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, undefined);
   });
 
   it('hides a dispatched selected batch immediately', async () => {
@@ -635,10 +669,7 @@ describe('dispatch', () => {
     );
 
     await waitFor(() =>
-      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
-        a: { source: 'audible', title: 'Cand a', author: 'A' },
-        b: { source: 'audible', title: 'Cand b', author: 'A' },
-      })
+      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, undefined)
     );
     // The server accepted the operation, so the default "Hide applied" filter
     // must remove it immediately; waiting for the worker to finish leaves stale

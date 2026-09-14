@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
 // last-edited: 2026-09-13
 
@@ -25,6 +25,16 @@ import (
 //   - ApplyMetadataCandidate's audio_confirmed marker had a third inline copy
 //     of the first rule.
 //
+// The rule is deliberately STRICT, because the unreviewed paths (auto-fetch,
+// metadata.upgrade, an unpinned batch apply) trust it without a human. A
+// first version accepted word-boundary containment and found the author's
+// surname anywhere in the intro; a review measured what that let through:
+// "Mistborn: The Hero of Ages" ~ "Mistborn", "Foundation" ~ "Foundation and
+// Empire", "The Witches" ~ "The Witcher", Stephen King ~ "Owen King", and a
+// surname read out of "Return of the King". All of those refuse now. A book
+// the strict rule cannot confirm is not lost: an owner clicking Apply on its
+// review row applies it (applygate.OwnerReviewOverridable).
+//
 // It lives in util because applygate imports metafetch (and must never be
 // imported by it), so the shared code has to be a leaf both already use.
 
@@ -32,19 +42,37 @@ import (
 // the edition, not the book.
 var titleNoise = map[string]bool{"unabridged": true}
 
-// stopTokens carry no identity on their own. A token is SIGNIFICANT when it is
-// not one of these and is not purely numeric.
+// numberWords are read as their digits, so "book one" and "book 1" are the
+// same title and "Book One" never agrees with "Book 3".
+var numberWords = map[string]string{
+	"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+	"six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+	"eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14",
+	"fifteen": "15", "sixteen": "16", "seventeen": "17", "eighteen": "18",
+	"nineteen": "19", "twenty": "20",
+}
+
+// stopTokens carry no identity on their own.
 var stopTokens = map[string]bool{
 	"a": true, "an": true, "the": true, "of": true, "in": true, "to": true,
 	"and": true, "on": true, "for": true, "at": true, "by": true, "or": true,
+	"with": true, "from": true,
+}
+
+// creditTokens are words Whisper's author field carries around a name
+// ("Written by", "Translated from the Polish", "assisted"). They end a name.
+var creditTokens = map[string]bool{
+	"written": true, "read": true, "narrated": true, "translated": true,
+	"author": true, "authors": true, "assisted": true, "presented": true,
+	"performed": true, "introduced": true, "edited": true, "copyright": true,
 }
 
 // nameSuffixes are ignored when picking an author's surname.
 var nameSuffixes = map[string]bool{"jr": true, "sr": true, "ii": true, "iii": true, "iv": true}
 
-// introWindow is how much of the raw intro transcript is searched for an
-// author's surname: the credits are read in the first sentences.
-const introWindow = 500
+// silentPrefixes are onsets whose first letter is silent. Whisper transcribes
+// by sound, so "Knaves" comes back as "Naves"; see titleTokenFuzzy.
+var silentPrefixes = []string{"kn", "wr", "gn", "pn", "ps"}
 
 // matchTokens lower-cases s, turns every non-letter/non-digit into a space
 // and splits. Apostrophes split too ("Sorcerer's" -> "sorcerer", "s"), which
@@ -55,12 +83,18 @@ func matchTokens(s string) []string {
 	})
 }
 
+// titleTokens is matchTokens without titleNoise and with number words as
+// digits.
 func titleTokens(s string) []string {
 	var out []string
 	for _, t := range matchTokens(s) {
-		if !titleNoise[t] {
-			out = append(out, t)
+		if titleNoise[t] {
+			continue
 		}
+		if d, ok := numberWords[t]; ok {
+			t = d
+		}
+		out = append(out, t)
 	}
 	return out
 }
@@ -72,25 +106,6 @@ func isNumeric(t string) bool {
 		}
 	}
 	return t != ""
-}
-
-// significant reports whether a token carries identity (see stopTokens).
-func significant(t string) bool {
-	return !stopTokens[t] && !isNumeric(t)
-}
-
-// tokenEqual is token equality with one typo of slack for tokens of five or
-// more letters: "naves" ~ "knaves", "salvator" ~ "salvatore". Short tokens
-// and numbers must match exactly, so "1" never equals "3".
-func tokenEqual(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, rb := []rune(a), []rune(b)
-	if len(ra) < 5 || len(rb) < 5 || isNumeric(a) || isNumeric(b) {
-		return false
-	}
-	return withinOneEdit(ra, rb)
 }
 
 // withinOneEdit reports whether a and b differ by at most one insertion,
@@ -121,48 +136,110 @@ func withinOneEdit(a, b []rune) bool {
 	return edits+(len(b)-j)+(len(a)-i) <= 1
 }
 
-// seqEqual compares two token sequences with tokenEqual.
-func seqEqual(a, b []string) bool {
-	if len(a) != len(b) {
+// dropSilent removes the silent first letter of a silentPrefixes onset.
+func dropSilent(t string) string {
+	for _, p := range silentPrefixes {
+		if strings.HasPrefix(t, p) {
+			return t[1:]
+		}
+	}
+	return t
+}
+
+// titleTokenFuzzy reports whether two unequal title tokens are the same word
+// misheard. Two shapes only:
+//
+//   - a silent first letter: "knaves" ~ "naves", "wrath" ~ "rath" (both
+//     tokens at least 4 letters once the silent letter is gone). Whisper
+//     cannot hear the letter, so this is the one case where the first letter
+//     may differ.
+//   - one edit inside a long word: both tokens 7+ letters, the same first
+//     letter AND the same last letter. The last-letter condition is what
+//     keeps "witches" != "witcher" and "kingdom" != "kingdoms": a changed
+//     ending is usually a different word, not a typo.
+//
+// Numbers never fuzz.
+func titleTokenFuzzy(a, b string) bool {
+	if isNumeric(a) || isNumeric(b) {
 		return false
 	}
+	if sa, sb := dropSilent(a), dropSilent(b); (sa != a || sb != b) && sa == sb && len([]rune(sa)) >= 4 {
+		return true
+	}
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) < 7 || len(rb) < 7 || ra[0] != rb[0] || ra[len(ra)-1] != rb[len(rb)-1] {
+		return false
+	}
+	return withinOneEdit(ra, rb)
+}
+
+// titleSeqEqual is full-sequence equality with at most ONE fuzzy token, and
+// fuzz only in titles of three or more tokens: a one- or two-word title has
+// too little context to forgive a misheard word ("The Night" is not "The
+// Knight").
+func titleSeqEqual(a, b []string) bool {
+	if len(a) != len(b) || len(a) == 0 {
+		return false
+	}
+	fuzzy := 0
 	for i := range a {
-		if !tokenEqual(a[i], b[i]) {
+		if a[i] == b[i] {
+			continue
+		}
+		if len(a) < 3 || !titleTokenFuzzy(a[i], b[i]) {
+			return false
+		}
+		fuzzy++
+		if fuzzy > 1 {
 			return false
 		}
 	}
 	return true
 }
 
-// containsSeq reports whether needle appears contiguously in hay.
-func containsSeq(hay, needle []string) bool {
-	if len(needle) == 0 || len(needle) > len(hay) {
+// hasPrefixSeq reports whether toks starts with p.
+func hasPrefixSeq(toks, p []string) bool {
+	if len(p) > len(toks) {
 		return false
 	}
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		if seqEqual(hay[i:i+len(needle)], needle) {
-			return true
+	for i := range p {
+		if toks[i] != p[i] {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
-// strongEnoughToContain is the guard on containment: the contained side needs
-// two significant tokens or six letters, so "It" does not match every long
-// transcript that happens to contain the word.
-func strongEnoughToContain(tokens []string) bool {
-	sig, letters := 0, 0
-	for _, t := range tokens {
-		if significant(t) {
-			sig++
+// volumeWords introduce a trailing volume phrase when a number follows.
+var volumeWords = map[string]bool{"book": true, "volume": true, "vol": true, "part": true}
+
+// trailerPhrases introduce a trailing description of the book.
+var trailerPhrases = [][]string{
+	{"a", "short", "story"},
+	{"a", "prequel"},
+	{"prequel", "to"},
+	{"a", "novella"},
+}
+
+// stripTranscribedTrailer removes a trailing series/volume phrase Whisper
+// read after the title: "This Gilded Abyss, book one of the Gilded Abyss
+// trilogy" -> "this gilded abyss"; "Witness to a Trial A short story prequel
+// to The Whistler" -> "witness to a trial". It cuts at the first such phrase
+// after the first token, so a title cannot be stripped to nothing. Applied to
+// the TRANSCRIBED side only: a candidate's title is the provider's record,
+// and its own "(Book #4 in the ...)" suffix is not something Whisper said.
+func stripTranscribedTrailer(toks []string) []string {
+	for i := 1; i < len(toks); i++ {
+		if volumeWords[toks[i]] && i+1 < len(toks) && isNumeric(toks[i+1]) {
+			return toks[:i]
 		}
-		for _, r := range t {
-			if unicode.IsLetter(r) {
-				letters++
+		for _, p := range trailerPhrases {
+			if hasPrefixSeq(toks[i:], p) {
+				return toks[:i]
 			}
 		}
 	}
-	return sig >= 2 || letters >= 6
+	return toks
 }
 
 // numbersConflict is true when both sides carry numbers and share none:
@@ -193,26 +270,20 @@ func numbersConflict(a, b []string) bool {
 }
 
 // TitleAgrees reports whether a candidate title matches a transcribed
-// (audio-derived) title. Both are lower-cased, stripped of punctuation and of
-// "unabridged", and tokenized. They agree when the token sequences are equal,
-// or when one side's sequence appears contiguously, on word boundaries, in the
-// other's ("A Cry of Honor" in "A Cry of Honor (Book #4 in the Sorcerer's
-// Ring)", "Witness to a Trial" in "Witness to a Trial A short story prequel
-// to The Whistler"). Tokens of five or more letters tolerate one typo. The
-// contained side must pass strongEnoughToContain, and titles whose numbers
-// disagree never match.
+// (audio-derived) title. Both sides are lower-cased, stripped of punctuation
+// and "unabridged", number words read as digits, and tokenized. The
+// transcribed side may additionally lose a trailing series/volume phrase
+// (stripTranscribedTrailer). They agree only when the WHOLE token sequences
+// are equal, with at most one misheard word (titleTokenFuzzy) in a title of
+// three or more words. There is no containment: "Mistborn" does not agree
+// with "Mistborn: The Hero of Ages", nor "Foundation" with "Foundation and
+// Empire". Titles whose numbers disagree never agree.
 func TitleAgrees(candidateTitle, transcribedTitle string) bool {
 	c, t := titleTokens(candidateTitle), titleTokens(transcribedTitle)
 	if len(c) == 0 || len(t) == 0 || numbersConflict(c, t) {
 		return false
 	}
-	if seqEqual(c, t) {
-		return true
-	}
-	if len(c) < len(t) {
-		return strongEnoughToContain(c) && containsSeq(t, c)
-	}
-	return strongEnoughToContain(t) && containsSeq(c, t)
+	return titleSeqEqual(c, t) || titleSeqEqual(c, stripTranscribedTrailer(t))
 }
 
 // splitAuthors splits a candidate author field into individual authors on
@@ -243,55 +314,109 @@ func splitOnAnd(s string) []string {
 	}
 }
 
-// surname is the last significant token of one author's name, ignoring
-// jr/sr/ii/iii/iv and single-letter initials. "" when the name has none.
-func surname(name string) string {
+// nameLike is a token that can be part of a person's name.
+func nameLike(t string) bool {
+	return !stopTokens[t] && !creditTokens[t] && !isNumeric(t)
+}
+
+// splitName returns one author's surname (the last name token, ignoring
+// jr/sr/ii/iii/iv and initials) and first given name or initial ("" when the
+// name has none). "R. A. Salvatore" -> ("salvatore", "r").
+func splitName(name string) (surname, given string) {
 	toks := matchTokens(name)
+	si := -1
 	for i := len(toks) - 1; i >= 0; i-- {
 		t := toks[i]
-		if nameSuffixes[t] || len([]rune(t)) < 2 || !significant(t) {
+		if nameSuffixes[t] || len([]rune(t)) < 2 || !nameLike(t) {
 			continue
 		}
-		return t
+		si = i
+		break
 	}
-	return ""
+	if si < 0 {
+		return "", ""
+	}
+	for _, t := range toks[:si] {
+		if nameLike(t) && !nameSuffixes[t] {
+			return toks[si], t
+		}
+	}
+	return toks[si], ""
+}
+
+// surnameEqual allows one typo only in surnames of six or more letters with
+// the same first letter: "salvatore" ~ "salvator", "gaiman" ~ "gayman", but
+// "king" never ~ "kind" and "weir" never ~ "weil".
+func surnameEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) < 6 || len(rb) < 6 || ra[0] != rb[0] {
+		return false
+	}
+	return withinOneEdit(ra, rb)
+}
+
+// givenEqual compares first names: equal, an initial against a name with the
+// same first letter ("r" ~ "robert"), or one typo in names of six or more
+// letters with the same first letter.
+func givenEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) == 1 || len(rb) == 1 {
+		return ra[0] == rb[0]
+	}
+	return surnameEqual(a, b)
 }
 
 // AuthorAgrees reports whether any author in candidateAuthor matches the
-// transcribed author: the candidate author's surname must fuzzily equal a
-// token of the transcribed author ("R.A. Salvator" confirms "R. A.
-// Salvatore"; "Andrzej Sapkowski Translated from the Polish" confirms
-// "Andrzej Sapkowski"). When introTranscription is non-empty, the surname
-// appearing in its first 500 characters also counts.
+// transcribed author field (and ONLY that field: never the intro transcript,
+// which also names narrators, translators and titles like "Return of the
+// King"). For some candidate author:
+//
+//   - their surname must equal a token of the transcribed author
+//     (surnameEqual), and
+//   - when both sides carry a given name or initial, the first one must agree
+//     too (givenEqual): Stephen King does not agree with "Owen King". The
+//     transcribed given name is the first name-like token of the run of
+//     name-like tokens ending at the surname, so "Written by Stephen King"
+//     reads "stephen".
+//   - when the transcription has no given name before the surname, the
+//     surname must END a name (be followed by nothing or a credit/stop word):
+//     "Patterson Joseph" is Joseph Patterson's first name read backwards or a
+//     different person, not a surname match for James Patterson.
 //
 // A transcribed author of three characters or fewer (after trimming) carries
 // too little to judge and agrees by default, as the rule always has: the
 // title match then stands alone.
-func AuthorAgrees(candidateAuthor, transcribedAuthor, introTranscription string) bool {
+func AuthorAgrees(candidateAuthor, transcribedAuthor string) bool {
 	if len(strings.TrimSpace(transcribedAuthor)) <= 3 {
 		return true
 	}
 	heard := matchTokens(transcribedAuthor)
-	var intro []string
-	if introTranscription != "" {
-		r := []rune(introTranscription)
-		if len(r) > introWindow {
-			r = r[:introWindow]
-		}
-		intro = matchTokens(string(r))
-	}
 	for _, name := range splitAuthors(candidateAuthor) {
-		sn := surname(name)
+		sn, given := splitName(name)
 		if sn == "" {
 			continue
 		}
-		for _, t := range heard {
-			if tokenEqual(sn, t) {
+		for j, h := range heard {
+			if !surnameEqual(sn, h) {
+				continue
+			}
+			start := j
+			for start > 0 && nameLike(heard[start-1]) {
+				start--
+			}
+			if start == j {
+				if j+1 < len(heard) && nameLike(heard[j+1]) {
+					continue
+				}
 				return true
 			}
-		}
-		for _, t := range intro {
-			if tokenEqual(sn, t) {
+			if given == "" || givenEqual(given, heard[start]) {
 				return true
 			}
 		}

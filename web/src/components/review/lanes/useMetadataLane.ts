@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-09-13
 //
@@ -48,13 +48,19 @@ import type { MetadataAction } from '../reviewActions';
 const APPLY_INFLIGHT_MAX_MS = 60 * 60 * 1000;
 
 /**
- * The pin for the candidate a row is showing. Clicking Apply on a row IS the
- * owner's review of this candidate, and the pin is how the server knows the
- * candidate it applies is the one that was reviewed (see api.CandidatePin).
- * Only identity fields: the server compares every one of them.
+ * The pin for the candidate ONE row is showing. Clicking Apply on a single row
+ * IS the owner's review of that candidate, and the pin is how the server knows
+ * the candidate it applies is the one that was reviewed (see api.CandidatePin).
+ * contentHash is the row's server-issued candidate_hash; the identity fields
+ * ride along so a refusal can name what changed. Bulk buttons never pin.
  */
-export function pinOfCandidate(c: MetadataCandidate): CandidatePin {
-  const pin: CandidatePin = { source: c.source, title: c.title };
+export function pinOfCandidate(c: MetadataCandidate, contentHash: string): CandidatePin {
+  const pin: CandidatePin = {
+    origin: 'row',
+    content_hash: contentHash,
+    source: c.source,
+    title: c.title,
+  };
   if (c.author) pin.author = c.author;
   if (c.asin) pin.asin = c.asin;
   if (c.isbn) pin.isbn = c.isbn;
@@ -912,16 +918,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // replace the row's candidate, and the pin must be what the owner saw.
   const applyPinsRef = useRef<Map<string, CandidatePin>>(new Map());
 
-  // Pins for the candidates the rows are showing right now. A row with no
-  // candidate gets no pin, and the server hard-gates it.
-  const pinsFor = useCallback(
-    (ids: string[]): Record<string, CandidatePin> => {
-      const wanted = new Set(ids);
-      const pins: Record<string, CandidatePin> = {};
-      for (const r of results) {
-        if (wanted.has(r.book.id) && r.candidate) pins[r.book.id] = pinOfCandidate(r.candidate);
-      }
-      return pins;
+  // The pin for the candidate one row is showing right now. A row with no
+  // candidate, or no server-issued candidate_hash, gets no pin, and the server
+  // hard-gates it.
+  const rowPinFor = useCallback(
+    (id: string): CandidatePin | undefined => {
+      const r = results.find((x) => x.book.id === id);
+      if (!r?.candidate || !r.candidate_hash) return undefined;
+      return pinOfCandidate(r.candidate, r.candidate_hash);
     },
     [results]
   );
@@ -972,7 +976,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   const runApplyOp = useCallback(
     async (
       requestedIds: string[],
-      pins: Record<string, CandidatePin>,
+      pins?: Record<string, CandidatePin>,
       writeBack?: boolean
     ): Promise<void> => {
       const dispatched = await api.batchApplyFromCache(requestedIds, writeBack, pins);
@@ -1049,13 +1053,16 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       retainInFlight([bookId]);
       clearServerDerived([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
-      const pin = pinsFor([bookId])[bookId];
+      // A single-row Apply is the owner's review of that row: pin what it
+      // shows. Several quick clicks share one debounced request, which is
+      // fine because pins are per book.
+      const pin = rowPinFor(bookId);
       if (pin) applyPinsRef.current.set(bookId, pin);
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue, retainInFlight, clearServerDerived, pinsFor]
+    [flushApplyQueue, retainInFlight, clearServerDerived, rowPinFor]
   );
 
   const applyMany = useCallback(
@@ -1064,10 +1071,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       setApplying(true);
       retainInFlight(bookIds);
       clearServerDerived(bookIds);
-      // Pinned before the await, from the rows as the owner selected them.
-      const pins = pinsFor(bookIds);
       try {
-        await runApplyOp(bookIds, pins);
+        // NO pins. Apply page, Apply high confidence, group Apply All and Apply
+        // selected are bulk actions: nobody looked at each row, so every book
+        // gets the server's full certainty gate, exactly as before pins existed.
+        await runApplyOp(bookIds);
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1092,7 +1100,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, pinsFor]
+    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived]
   );
 
   const reject = useCallback(
