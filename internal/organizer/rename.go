@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -312,10 +312,10 @@ func (rs *RenameService) computeTagChanges(book *database.Book, authorName, narr
 		})
 	}
 
-	// Album artist / composer (narrator)
+	// Narrator (written to NARRATOR only; see BuildTagMetadata)
 	if narratorStr != "" {
 		changes = append(changes, TagChange{
-			Field:    "album_artist",
+			Field:    "narrator",
 			Current:  "",
 			Proposed: narratorStr,
 		})
@@ -356,9 +356,12 @@ func (rs *RenameService) BuildTagMetadata(book *database.Book, authorName, narra
 	if authorName != "" {
 		meta["artist"] = authorName
 	}
+	// The narrator goes to NARRATOR only. Never ALBUMARTIST or COMPOSER: the
+	// file reader takes ALBUMARTIST first as the book's author (then ARTIST,
+	// then COMPOSER), so a narrator there is read back as the author on the
+	// next scan, and those tags may hold values the owner set.
 	if narratorStr != "" {
-		meta["album_artist"] = narratorStr
-		meta["composer"] = narratorStr
+		meta["narrator"] = narratorStr
 	}
 	year := 0
 	if book.AudiobookReleaseYear != nil && *book.AudiobookReleaseYear > 0 {

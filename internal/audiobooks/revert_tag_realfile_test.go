@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
 // last-edited: 2026-09-13
 
@@ -94,6 +94,8 @@ func TestOrganizeTagWrite_RealFile_RowsMatchTheFileAndUndoRestoresIt(t *testing.
 
 	after, err := metadata.ReadTagProperties(path)
 	require.NoError(t, err)
+	assert.Equal(t, "Orig AA", after["album_artist"], "organize never writes ALBUMARTIST")
+	assert.Equal(t, "Orig Composer", after["composer"], "organize never writes COMPOSER")
 	var rows [][3]string
 	for k, v := range filtered {
 		assert.Equal(t, fmt.Sprint(v), after[k], "the %s row records %q; the file must hold it", k, v)
@@ -113,6 +115,40 @@ func TestOrganizeTagWrite_RealFile_RowsMatchTheFileAndUndoRestoresIt(t *testing.
 		assert.Equal(t, v, tags[k], "%s after undo", k)
 	}
 	assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
+}
+
+// After organize, the file reader must read the book's author back as the
+// author. Its author priority is ALBUMARTIST > ARTIST > COMPOSER, so an
+// organize that put the narrator into ALBUMARTIST made the next scan take the
+// narrator as the author. A COMPOSER the owner set is left alone.
+func TestOrganizeTagWrite_RealFile_AuthorReadsBackAsAuthor(t *testing.T) {
+	store := newRevertPebble(t)
+	path := makeRevertTestAudio(t, map[string][]string{
+		"TITLE":    {"Orig Title"},
+		"ARTIST":   {"Orig Artist"},
+		"COMPOSER": {"Owner Composer"},
+	})
+	svc := NewRenameService(store)
+	meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
+	assert.NotContains(t, meta, "album_artist")
+	assert.NotContains(t, meta, "composer")
+
+	filtered := svc.FilterUnchangedTags(path, meta)
+	write := svc.WriteTags
+	if write == nil {
+		write = func(p string, m map[string]any) error {
+			return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
+		}
+	}
+	require.NoError(t, write(path, filtered))
+
+	md, err := metadata.ExtractMetadata(path, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "New Author", md.Artist, "the author read back after organize")
+	tags := diskTags(t, path)
+	assert.Equal(t, []string{"Owner Composer"}, tags["COMPOSER"], "organize leaves COMPOSER alone")
+	assert.NotContains(t, tags, "ALBUMARTIST", "organize does not add ALBUMARTIST")
+	assert.Equal(t, []string{"The Narrator"}, tags["NARRATOR"])
 }
 
 func diskTags(t *testing.T, path string) map[string][]string {

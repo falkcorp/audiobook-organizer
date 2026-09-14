@@ -1,5 +1,5 @@
 // file: internal/audiobooks/rename.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 //
@@ -58,10 +58,10 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 	// The organize tag write, its unchanged-tag filter and the pre-write
 	// value each tag_write row records all address the one file property
 	// each key names (metadata.TagProperty) -- the same property the revert
-	// writes back. The organize write used the write-back map, which ignored
-	// album_artist and composer (their rows recorded writes that never
-	// happened) and fanned artist out to ALBUMARTIST and a blank COMPOSER
-	// (changes no row recorded, so undo could not put them back).
+	// writes back. The organize write used the write-back map, which fanned
+	// artist out to ALBUMARTIST and a blank COMPOSER (changes no row
+	// recorded, so undo could not put them back). Organize writes ARTIST
+	// and NARRATOR only (organizer.BuildTagMetadata).
 	svc.FilterUnchangedTags = filterUnchangedTagProperties
 	svc.ReadCurrentTags = metadata.ReadTagProperties
 	svc.WriteTags = defaultRevertWriteTags
