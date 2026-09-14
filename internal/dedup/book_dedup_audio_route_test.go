@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_audio_route_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e8415b62-fc53-4bd4-abd2-7f2306af7da7
-// last-edited: 2026-09-10
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -17,11 +17,13 @@ import (
 )
 
 // TestMergeBooks_RefusesFilelessKeeperWithFileBearingLoser is the regression
-// test for TODO.md:2304. This package's MergeBooks HARD-deletes every loser
-// (store.DeleteBook, not a soft delete), so it took keepID exactly as the
-// caller handed it over: a keeper with no book_file rows and an empty
-// FilePath collapsed a loser whose book_file rows were the only route to the
-// audio, and the rows that reached it were gone for good.
+// test for TODO.md:2304. This package's MergeBooks HARD-deleted every loser
+// (store.DeleteBook, not a soft delete) until A1#11, and it took keepID
+// exactly as the caller handed it over: a keeper with no book_file rows and an
+// empty FilePath collapsed a loser whose book_file rows were the only route to
+// the audio, and the rows that reached it were gone for good. Losers are now
+// soft-deleted, but a file-less keeper would still put the only audio on the
+// purge clock, so the refusal stays.
 //
 // merge.Service.MergeBooks has refused that shape since the #3053 review
 // (FilelessPrimaryError, elected with HasAudioRoute); this asserts the legacy
@@ -91,9 +93,10 @@ func TestMergeBooks_AllowsMergeWhenNoParticipantHasAudioRoute(t *testing.T) {
 	require.Equal(t, 1, res.MergedCount)
 	require.Empty(t, res.Errors)
 
-	gone, err := store.GetBookByID(loserID)
+	loser, err := store.GetBookByID(loserID)
 	require.NoError(t, err)
-	require.Nil(t, gone, "with no audio to lose, the hard collapse still runs")
+	require.NotNil(t, loser, "the loser is soft-deleted, not hard-deleted")
+	require.True(t, loser.IsSoftDeleted(), "with no audio to lose, the collapse still runs")
 }
 
 // TestMergeBooks_AllowsFilePathOnlyKeeper covers the 20.4% of prod books that

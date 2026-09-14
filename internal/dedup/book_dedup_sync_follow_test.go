@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_sync_follow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 993dc044-1180-490b-a583-a67b30067e92
-// last-edited: 2026-07-30
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -15,12 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMergeBooks_SyncIdentityFollowsHardDelete is the highest-stakes case in
-// the identity layer: this package's MergeBooks HARD-deletes losers (it is
-// still live via internal/reconcile/itunes_heal.go), so an unrecorded redirect
-// leaves nothing behind to repoint later -- the device's listening position is
-// gone permanently.
-func TestMergeBooks_SyncIdentityFollowsHardDelete(t *testing.T) {
+// TestMergeBooks_SyncIdentityFollowsRetiredLoser: this package's MergeBooks
+// (live via internal/reconcile/itunes_heal.go) retires losers, and the
+// device's listening position must follow to the kept book rather than stay
+// under a row that is on the purge clock. It HARD-deleted losers until A1#11
+// (2026-09-14), when an unrecorded redirect would have lost the position for
+// good; the follow is still what moves it.
+func TestMergeBooks_SyncIdentityFollowsRetiredLoser(t *testing.T) {
 	store := newConcurrentTestStore(t)
 	ids := database.AsSyncIdentityStore(store)
 	require.NotNil(t, ids)
@@ -51,14 +52,15 @@ func TestMergeBooks_SyncIdentityFollowsHardDelete(t *testing.T) {
 	require.Equal(t, 1, res.MergedCount)
 	require.Empty(t, res.Errors)
 
-	// The loser row really is gone — this is the hard-delete path.
-	gone, err := store.GetBookByID(loserID)
+	// The loser is soft-deleted, not hard-deleted (A1#11).
+	retired, err := store.GetBookByID(loserID)
 	require.NoError(t, err)
-	require.Nil(t, gone)
+	require.NotNil(t, retired)
+	require.True(t, retired.IsSoftDeleted())
 
 	resolved, err := ids.ResolveSyncItem(loserSync)
 	require.NoError(t, err)
-	require.NotNil(t, resolved, "the loser's sync item must still resolve after a hard delete")
+	require.NotNil(t, resolved, "the loser's sync item must resolve to the kept book")
 	require.Equal(t, keepSync, resolved.SyncID)
 
 	state, err := store.GetUserBookState(user.ID, keepID)
@@ -73,11 +75,11 @@ func TestMergeBooks_SyncIdentityFollowsHardDelete(t *testing.T) {
 
 	orphaned, err := store.ListUserPositionsForBook(user.ID, loserID)
 	require.NoError(t, err)
-	require.Empty(t, orphaned, "no position may remain under the hard-deleted book id")
+	require.Empty(t, orphaned, "no position may remain under the retired book id")
 }
 
 // TestMergeBooks_SyncIdentityIdempotent re-runs the same merge (the second
-// call finds the loser already deleted) and asserts the redirect chain is not
+// call finds the loser already soft-deleted) and asserts the redirect chain is not
 // corrupted and MergedFrom does not grow.
 func TestMergeBooks_SyncIdentityIdempotent(t *testing.T) {
 	store := newConcurrentTestStore(t)
