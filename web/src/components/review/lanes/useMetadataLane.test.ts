@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -555,8 +555,65 @@ describe('dispatch', () => {
     });
 
     expect(api.batchApplyFromCache).toHaveBeenCalledTimes(1);
-    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined);
+    // Each row carries a pin of the candidate it showed: clicking Apply is the
+    // owner's review, and the server checks the pin against the cache.
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+      a: { source: 'audible', title: 'Cand a', author: 'A' },
+      b: { source: 'audible', title: 'Cand b', author: 'A' },
+    });
     vi.useRealTimers();
+  });
+
+  it('pins the candidate the row showed when Apply was clicked, not the one after a refresh', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('a', {}, { title: 'Shown', asin: 'B001' })])
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-pin',
+    } as unknown as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    vi.useFakeTimers();
+
+    act(() => {
+      result.current.dispatch({ lane: 'metadata', type: 'apply', id: 'a' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a'], undefined, {
+      a: { source: 'audible', title: 'Shown', author: 'A', asin: 'B001' },
+    });
+    vi.useRealTimers();
+  });
+
+  it('sends pins for a selected batch', async () => {
+    vi.mocked(api.getCachedReviewResults).mockResolvedValue(
+      reviewPayload([makeResult('a', {}, { isbn13: '9780000000001' }), makeResult('b')])
+    );
+    vi.mocked(api.batchApplyFromCache).mockResolvedValue({
+      op_id: 'op-sel-pins',
+    } as Awaited<ReturnType<typeof api.batchApplyFromCache>>);
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof api.pollOperationV2>
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.filteredResults).toHaveLength(2));
+
+    await act(async () => {
+      result.current.dispatch({ lane: 'metadata', type: 'applySelected', ids: ['a', 'b'] });
+    });
+
+    expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+      a: { source: 'audible', title: 'Cand a', author: 'A', isbn13: '9780000000001' },
+      b: { source: 'audible', title: 'Cand b', author: 'A' },
+    });
   });
 
   it('hides a dispatched selected batch immediately', async () => {
@@ -578,7 +635,10 @@ describe('dispatch', () => {
     );
 
     await waitFor(() =>
-      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined)
+      expect(api.batchApplyFromCache).toHaveBeenCalledWith(['a', 'b'], undefined, {
+        a: { source: 'audible', title: 'Cand a', author: 'A' },
+        b: { source: 'audible', title: 'Cand b', author: 'A' },
+      })
     );
     // The server accepted the operation, so the default "Hide applied" filter
     // must remove it immediately; waiting for the worker to finish leaves stale

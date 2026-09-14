@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -52,6 +52,37 @@ type batchApplyOpParams struct {
 	// resumed run reports "applied 120 of 352" for a job the user started as 699
 	// books, which reads as the op having silently lost work.
 	OriginalTotal int `json:"original_total,omitempty"`
+	// Pins maps book id -> the candidate the owner was looking at when they
+	// clicked Apply in the review lane (see planCachedApply). Books without a
+	// pin get the hard certainty gate. Carried by the checkpoint and by the
+	// queued-run merge: dropping it there would silently turn a reviewed
+	// apply back into a gated one that refuses everything.
+	Pins map[string]metafetch.CandidatePin `json:"pins,omitempty"`
+}
+
+// pinsFor keeps the pins of the books in ids, nil when none remain.
+func pinsFor(ids []string, pins map[string]metafetch.CandidatePin) map[string]metafetch.CandidatePin {
+	if len(pins) == 0 {
+		return nil
+	}
+	out := make(map[string]metafetch.CandidatePin)
+	for _, id := range ids {
+		if pin, ok := pins[id]; ok {
+			out[id] = pin
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// pinOf returns the pin for id, nil when the request carried none.
+func (p batchApplyOpParams) pinOf(id string) *metafetch.CandidatePin {
+	if pin, ok := p.Pins[id]; ok {
+		return &pin
+	}
+	return nil
 }
 
 // completed is how many books earlier attempts of this run already finished,
@@ -170,6 +201,17 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	}
 	seen := make(map[string]struct{}, len(current.BookIDs)+len(next.BookIDs))
 	merged := batchApplyOpParams{WriteBack: current.WriteBack}
+	// Pins union too, the newer request winning for a book in both: its pin is
+	// the candidate the owner looked at most recently.
+	if len(current.Pins)+len(next.Pins) > 0 {
+		merged.Pins = make(map[string]metafetch.CandidatePin, len(current.Pins)+len(next.Pins))
+		for id, pin := range current.Pins {
+			merged.Pins[id] = pin
+		}
+		for id, pin := range next.Pins {
+			merged.Pins[id] = pin
+		}
+	}
 	// Books an earlier attempt already finished, inferred before BookIDs is
 	// rewritten. Preserving it across the merge is what keeps a resumed-then-
 	// extended run reporting absolute progress instead of appearing to restart.
@@ -287,6 +329,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
 
 			var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing, fileWorkBlocked atomic.Int64
+			// ownerReviewed counts books APPLIED on an owner review over a
+			// refusing gate; staleCandidate counts pinned books whose cached
+			// candidate changed after the owner looked at it.
+			var ownerReviewed, staleCandidate atomic.Int64
 			// gateDeferred holds the IDS — not a count — of books never
 			// ATTEMPTED because the write-back gate stayed saturated past this
 			// item's own timeout. Kept separate from writeFailed: nothing was
@@ -396,7 +442,20 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					defer releaseFileWrite()
 				}
 				out := applyCachedCandidateForBookTimed(svc, s.store, itunes, id, p.WriteBack,
-					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims)
+					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id))
+
+				if out.OwnerReviewed && out.Gate != nil {
+					// The gate refused and the owner's review overrode it. The
+					// full verdict goes on the op log at Info, applied or not,
+					// so every override is visible next to the refusal it
+					// replaced.
+					verdict, _ := json.Marshal(out.Gate)
+					reporter.Log(slog.LevelInfo, "owner-reviewed apply: certainty gate overridden",
+						slog.String("book_id", id),
+						slog.String("overridden", out.Gate.OverrideSummary()),
+						slog.Bool("applied", out.Applied),
+						slog.String("gate_verdict", string(verdict)))
+				}
 
 				if !out.Applied {
 					switch out.Reason {
@@ -418,6 +477,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 						// apply was refused before any write: the database and
 						// the files still agree.
 						fileWorkBlocked.Add(1)
+					case applySkipStaleCandidate:
+						// The owner reviewed a candidate the cache has since
+						// replaced; nothing was written.
+						staleCandidate.Add(1)
 					}
 					attrs := []slog.Attr{
 						slog.String("book_id", id),
@@ -432,6 +495,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				}
 
 				applied.Add(1)
+				if out.OwnerReviewed {
+					ownerReviewed.Add(1)
+				}
 				if len(out.SkippedLocked) > 0 {
 					skippedLocked.Add(1)
 					reporter.Log(slog.LevelInfo, "applied; user-locked fields left unchanged",
@@ -522,9 +588,13 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				// through, re-applying the entire batch. That is why BookIDs
 				// carries no omitempty and OriginalTotal does.
 				CheckpointStateFn: func(_ context.Context, watermark int) error {
-					return reporter.Checkpoint(batchApplyCheckpointState(
+					st := batchApplyCheckpointState(
 						bookIDs, p.WriteBack, originalTotal, watermark,
-						snapshotGateDeferred()))
+						snapshotGateDeferred())
+					// The owner's pins travel with the books still owed; a
+					// resumed run without them would hard-gate every one.
+					st.Pins = pinsFor(st.BookIDs, p.Pins)
+					return reporter.Checkpoint(st)
 				},
 			})
 			// Return BEFORE the "complete" row, so a canceled batch does not report
@@ -589,8 +659,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (refused by certainty gate %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, gateBlocked.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
 			if priorDone > 0 {

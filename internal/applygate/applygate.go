@@ -88,14 +88,18 @@ type SequenceVerdict struct {
 
 // Verdict is the whole gate's decision for one book/candidate pair.
 type Verdict struct {
-	Allowed        bool            `json:"allowed"`
-	Reason         string          `json:"reason,omitempty"`
-	Detail         string          `json:"detail,omitempty"`
-	Score          float64         `json:"score"`
-	ScoreFloor     float64         `json:"score_floor"`
-	AudioConfirmed bool            `json:"audio_confirmed"`
-	Sequence       SequenceVerdict `json:"sequence"`
-	Evidence       EvidenceVerdict `json:"evidence"`
+	Allowed        bool    `json:"allowed"`
+	Reason         string  `json:"reason,omitempty"`
+	Detail         string  `json:"detail,omitempty"`
+	Score          float64 `json:"score"`
+	ScoreFloor     float64 `json:"score_floor"`
+	AudioConfirmed bool    `json:"audio_confirmed"`
+	// ScoreReason is the score leg's own refusal (transcription_mismatch or
+	// score_below_floor), set even when an earlier leg is the one Reason
+	// reports, so an owner-review override can name every leg it overrode.
+	ScoreReason string          `json:"score_reason,omitempty"`
+	Sequence    SequenceVerdict `json:"sequence"`
+	Evidence    EvidenceVerdict `json:"evidence"`
 }
 
 // TranscriptionConfirms reports whether the candidate's title/author
@@ -156,7 +160,7 @@ func Evaluate(book *database.Book, c *metafetch.MetadataCandidate, identityErr e
 func EvaluateInBatch(book *database.Book, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex) Verdict {
 	v := Verdict{Score: c.Score}
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
-	v.ScoreFloor, v.AudioConfirmed = floor, audio
+	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
 	v.Sequence = CheckSequence(book, c)
 	v.Evidence = CheckEvidenceInBatch(book, c, audio, claims)
 

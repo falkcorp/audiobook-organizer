@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -35,7 +35,7 @@
 // deliberate drop rather than leaving the row to rot.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CandidateResult, MetadataCandidate } from '../../../services/api';
+import type { CandidatePin, CandidateResult, MetadataCandidate } from '../../../services/api';
 import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
@@ -46,6 +46,22 @@ import type { MetadataAction } from '../reviewActions';
 // Upper bound on how long a dispatched apply keeps its rows protected from
 // reconciliation. See runApplyOp for why this is bounded at all.
 const APPLY_INFLIGHT_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * The pin for the candidate a row is showing. Clicking Apply on a row IS the
+ * owner's review of this candidate, and the pin is how the server knows the
+ * candidate it applies is the one that was reviewed (see api.CandidatePin).
+ * Only identity fields: the server compares every one of them.
+ */
+export function pinOfCandidate(c: MetadataCandidate): CandidatePin {
+  const pin: CandidatePin = { source: c.source, title: c.title };
+  if (c.author) pin.author = c.author;
+  if (c.asin) pin.asin = c.asin;
+  if (c.isbn) pin.isbn = c.isbn;
+  if (c.isbn10) pin.isbn10 = c.isbn10;
+  if (c.isbn13) pin.isbn13 = c.isbn13;
+  return pin;
+}
 
 /** Stable identity for "no un-groupings on this page" -- see `ungroupedIds`. */
 const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
@@ -891,6 +907,24 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
 
   const applyQueueRef = useRef<string[]>([]);
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The pin of each queued single apply, captured when the row is MARKED, not
+  // when the debounced flush runs: a refresh inside the 500ms window can
+  // replace the row's candidate, and the pin must be what the owner saw.
+  const applyPinsRef = useRef<Map<string, CandidatePin>>(new Map());
+
+  // Pins for the candidates the rows are showing right now. A row with no
+  // candidate gets no pin, and the server hard-gates it.
+  const pinsFor = useCallback(
+    (ids: string[]): Record<string, CandidatePin> => {
+      const wanted = new Set(ids);
+      const pins: Record<string, CandidatePin> = {};
+      for (const r of results) {
+        if (wanted.has(r.book.id) && r.candidate) pins[r.book.id] = pinOfCandidate(r.candidate);
+      }
+      return pins;
+    },
+    [results]
+  );
   // Every in-flight apply arms an hour-long bound (see runApplyOp). They are
   // cleared when their race settles, but an unmount while an op is still
   // running would otherwise leave one armed for the rest of the hour.
@@ -936,8 +970,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // Dispatches the background apply and returns; the bell owns progress.
   // Re-reads the list when the op finishes rather than diffing a client guess.
   const runApplyOp = useCallback(
-    async (requestedIds: string[], writeBack?: boolean): Promise<void> => {
-      const dispatched = await api.batchApplyFromCache(requestedIds, writeBack);
+    async (
+      requestedIds: string[],
+      pins: Record<string, CandidatePin>,
+      writeBack?: boolean
+    ): Promise<void> => {
+      const dispatched = await api.batchApplyFromCache(requestedIds, writeBack, pins);
       toast(
         `Metadata apply queued for ${requestedIds.length.toLocaleString()} book(s) — watch the bell for progress.`,
         'success'
@@ -987,8 +1025,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     const ids = [...applyQueueRef.current];
     applyQueueRef.current = [];
     if (ids.length === 0) return;
+    const pins: Record<string, CandidatePin> = {};
+    for (const id of ids) {
+      const pin = applyPinsRef.current.get(id);
+      if (pin) pins[id] = pin;
+      applyPinsRef.current.delete(id);
+    }
     try {
-      await runApplyOp(ids);
+      await runApplyOp(ids, pins);
     } catch (err) {
       handleApplyError(err, ids);
     }
@@ -1005,11 +1049,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       retainInFlight([bookId]);
       clearServerDerived([bookId]);
       setRowStates((prev) => new Map(prev).set(bookId, 'applied'));
+      const pin = pinsFor([bookId])[bookId];
+      if (pin) applyPinsRef.current.set(bookId, pin);
       applyQueueRef.current.push(bookId);
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => void flushApplyQueue(), 500);
     },
-    [flushApplyQueue, retainInFlight, clearServerDerived]
+    [flushApplyQueue, retainInFlight, clearServerDerived, pinsFor]
   );
 
   const applyMany = useCallback(
@@ -1018,8 +1064,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       setApplying(true);
       retainInFlight(bookIds);
       clearServerDerived(bookIds);
+      // Pinned before the await, from the rows as the owner selected them.
+      const pins = pinsFor(bookIds);
       try {
-        await runApplyOp(bookIds);
+        await runApplyOp(bookIds, pins);
         // Dispatch acceptance is the point at which this batch belongs to the
         // background worker. Mark each row now so the default Hide applied
         // filter clears it immediately; the terminal poll then refreshes and
@@ -1044,7 +1092,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         setApplying(false);
       }
     },
-    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived]
+    [runApplyOp, handleApplyError, retainInFlight, clearServerDerived, pinsFor]
   );
 
   const reject = useCallback(

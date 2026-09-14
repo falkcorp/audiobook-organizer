@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_claims_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e4b9c7a2-1f36-4d80-b5c9-8a0d2e6f3b71
 // last-edited: 2026-09-13
 
@@ -73,11 +73,11 @@ func TestBuildClaimIndex_FeedsPlan(t *testing.T) {
 	if err != nil || claims.Len() != 2 {
 		t.Fatalf("claims = %d, err %v, want 2", claims.Len(), err)
 	}
-	p := planCachedApply(svc, books, "b1", claims)
+	p := planCachedApply(svc, books, "b1", claims, nil)
 	if p.Reason != applySkipGateBlocked || p.Gate == nil || p.Gate.Evidence.Reason != applygate.ReasonPartialBook {
 		t.Fatalf("with claims: reason=%q gate=%+v", p.Reason, p.Gate)
 	}
-	if p := planCachedApply(svc, books, "b1", nil); p.Gate != nil && p.Gate.Evidence.Reason == applygate.ReasonPartialBook {
+	if p := planCachedApply(svc, books, "b1", nil, nil); p.Gate != nil && p.Gate.Evidence.Reason == applygate.ReasonPartialBook {
 		t.Fatalf("without claims the sibling test must be skipped: %+v", p.Gate.Evidence)
 	}
 
@@ -100,7 +100,7 @@ func TestClaimIndex_SubsetApplySeesSibling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := planCachedApply(svc, books, "b1", claims); p.Reason != applySkipGateBlocked || p.Gate == nil || p.Gate.Evidence.Reason != applygate.ReasonPartialBook {
+	if p := planCachedApply(svc, books, "b1", claims, nil); p.Reason != applySkipGateBlocked || p.Gate == nil || p.Gate.Evidence.Reason != applygate.ReasonPartialBook {
 		t.Fatalf("cached subset apply of b1: reason=%q gate=%+v", p.Reason, p.Gate)
 	}
 
@@ -146,7 +146,7 @@ func TestClaimIndex_SkipsRowsThatAreNotParts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := planCachedApply(svc, books, "b1", claims)
+			p := planCachedApply(svc, books, "b1", claims, nil)
 			blocked := p.Gate != nil && p.Gate.Evidence.Reason == applygate.ReasonPartialBook
 			if blocked != tc.blocks {
 				t.Fatalf("partial_book blocked=%v, want %v (reason=%q gate=%+v)", blocked, tc.blocks, p.Reason, p.Gate)
@@ -177,7 +177,7 @@ func TestClaimIndex_UnreadableBlocksOnlyLookAlikes(t *testing.T) {
 	books["b3"] = &database.Book{ID: "b3", Title: "Rendezvous with Rama", FilePath: "/other/Rips/Rama/Rama.m4b", Author: &database.Author{Name: "Arthur C. Clarke"}}
 	base := listingSvc{fakeApplySvc: &fakeApplySvc{candidates: candidateJSON(t, cand)}, ids: []string{"b1", "b2", "b3"}}
 	partial := func(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex) (bool, string) {
-		p := planCachedApply(svc, books, id, claims)
+		p := planCachedApply(svc, books, id, claims, nil)
 		if p.Gate != nil && p.Gate.Evidence.Reason == applygate.ReasonPartialBook {
 			return true, p.Gate.Evidence.Detail
 		}
