@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
 // last-edited: 2026-09-13
 
@@ -264,4 +264,60 @@ func TestRevertFileMove_TakesPathLocks(t *testing.T) {
 	got, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.Equal(t, oldPath, got.FilePath)
+}
+
+// An iTunes-linked book_file row's iTunes path follows the file back; a row
+// with none stays without one. The repoint used to leave the organized
+// location in ITunesPath.
+func TestRevertFileMove_RecomputesITunesPath(t *testing.T) {
+	store := newRevertPebble(t)
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "import", "Book")
+	newDir := filepath.Join(root, "library", "Book")
+	require.NoError(t, os.MkdirAll(newDir, 0o755))
+	for _, n := range []string{"01.mp3", "02.mp3"} {
+		require.NoError(t, os.WriteFile(filepath.Join(newDir, n), []byte(n), 0o644))
+	}
+	book, err := store.CreateBook(&database.Book{Title: "Book", FilePath: newDir, Format: "mp3"})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(newDir, "01.mp3"), Format: "mp3", ITunesPath: "itunes:" + filepath.Join(newDir, "01.mp3")}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(newDir, "02.mp3"), Format: "mp3"}))
+	require.NoError(t, store.CreateOperationChange(&database.OperationChange{
+		OperationID: "op-itunes", BookID: book.ID, ChangeType: "file_move", FieldName: "file_path", OldValue: oldDir, NewValue: newDir,
+	}))
+
+	rs := NewRevertService(store)
+	rs.ComputeITunesPath = func(p string) string { return "itunes:" + p }
+	res, err := rs.RevertOperation("op-itunes")
+	require.NoError(t, err, "result %+v", res)
+
+	files, err := store.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	for _, f := range files {
+		switch filepath.Base(f.FilePath) {
+		case "01.mp3":
+			require.Equal(t, "itunes:"+filepath.Join(oldDir, "01.mp3"), f.ITunesPath)
+		case "02.mp3":
+			require.Empty(t, f.ITunesPath, "a row with no iTunes link must not gain one")
+		}
+	}
+}
+
+// A file that already reads as the pre-organize value is written again and the
+// row succeeds. album_artist, composer and narrator read back through one
+// narrator value, so once one is restored the others read as restored; they
+// must not be refused as changed since.
+func TestRevertTagWrite_AlreadyReadsPreOrganizeValue(t *testing.T) {
+	store := newRevertPebble(t)
+	_, p := tagWriteBook(t, store, "op-alias", "title", "Orig", "Organized")
+	file := &fakeTagFile{tags: map[string]string{"title": "Orig"}, locked: map[string]bool{}}
+
+	rs := NewRevertService(store)
+	file.wire(rs, p)
+	res, err := rs.RevertOperation("op-alias")
+	require.NoError(t, err, "result %+v", res)
+	require.Equal(t, 0, res.ChangedSince)
+	require.Equal(t, "Orig", file.tags["title"])
+	require.Equal(t, []bool{true}, file.heldDuringWrite, "the value is written again, under the path lock")
 }
