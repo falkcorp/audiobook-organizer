@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_startup_cancel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8e6c14-5d97-4f30-9a1e-c7f04d82b6a3
 // last-edited: 2026-09-13
 
@@ -157,6 +157,30 @@ func TestWorksLookupCache_InvalidatedByWorkWrite(t *testing.T) {
 	worksLookupMu.RUnlock()
 	if ready {
 		t.Fatal("retained works map is live for lookups with no scan run holding it")
+	}
+}
+
+// TestWorksLookupCache_MixedOwnAndForeignWritesReload: one foreign work write
+// plus one scanner CreateWork is two generation bumps against one counted
+// own-write. The map reflects only the scanner's write, so the next run must
+// reload it rather than reuse a map missing the foreign change.
+func TestWorksLookupCache_MixedOwnAndForeignWritesReload(t *testing.T) {
+	s := installSlowWorksStore(t, 0)
+	ctx := context.Background()
+	if err := AcquireWorksLookupCache(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.gen.Add(1)                                                  // foreign write (merge, works API edit, delete)
+	s.gen.Add(1)                                                  // the scanner's own CreateWork...
+	rememberCreatedWork(&database.Work{ID: "w3", Title: "Mixed"}) // ...recorded
+	ReleaseWorksLookupCache()
+
+	if err := AcquireWorksLookupCache(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ReleaseWorksLookupCache()
+	if got := s.loads.Load(); got != 2 {
+		t.Fatalf("loads = %d after a foreign write mixed with an own write; want 2 (reload)", got)
 	}
 }
 
