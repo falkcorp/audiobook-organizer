@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 
@@ -363,13 +363,19 @@ func (rs *RenameService) BuildTagMetadata(book *database.Book, authorName, narra
 		"album": book.Title,
 		"genre": "Audiobook",
 	}
+	// The artist key is written to ARTIST and ALBUMARTIST
+	// (metadata.WriteTagProperties). Album Artist is the author (owner
+	// decision 2026-09-14), and every reader takes ALBUMARTIST first, so an
+	// organize that left a stale ALBUMARTIST had the next scan read the old
+	// author back. That reverses the ALBUMARTIST half of c81b39801, which
+	// wrote ARTIST only.
 	if authorName != "" {
 		meta["artist"] = authorName
 	}
-	// The narrator goes to NARRATOR only. Never ALBUMARTIST or COMPOSER: the
-	// file reader takes ALBUMARTIST first as the book's author (then ARTIST,
-	// then COMPOSER), so a narrator there is read back as the author on the
-	// next scan, and those tags may hold values the owner set.
+	// The narrator goes to NARRATOR and PERFORMER only. Never ALBUMARTIST or
+	// COMPOSER: the file reader takes ALBUMARTIST first as the book's author,
+	// so a narrator there is read back as the author on the next scan, and
+	// COMPOSER may hold a value the owner set.
 	if narratorStr != "" {
 		meta["narrator"] = narratorStr
 	}

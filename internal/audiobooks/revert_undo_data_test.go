@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
 // last-edited: 2026-09-14
 
@@ -229,14 +229,15 @@ func TestRevertTagWrite_RestoresUnderPathLock(t *testing.T) {
 // to be recorded as "", which cannot be told apart from "unknown".
 func TestRevertTagWrite_AbsentBeforeIsRemoved(t *testing.T) {
 	store := newRevertPebble(t)
+	// A plain (pre-snapshot) artist row reverts through ARTIST alone.
 	_, p := tagWriteBook(t, store, "op-absent", "artist", undo.TagAbsentValue, "Someone")
-	file := &fakeTagFile{tags: map[string]string{"artist": "Someone"}, locked: map[string]bool{}}
+	file := &fakeTagFile{tags: map[string]string{"artist_tag_only": "Someone"}, locked: map[string]bool{}}
 
 	rs := NewRevertService(store)
 	file.wire(rs, p)
 	res, err := rs.RevertOperation("op-absent")
 	require.NoError(t, err, "result %+v", res)
-	_, still := file.tags["artist"]
+	_, still := file.tags["artist_tag_only"]
 	require.False(t, still, "the tag the organize added must be removed")
 }
 
@@ -321,18 +322,18 @@ func TestRevertTagWrite_AlreadyReadsPreOrganizeValue(t *testing.T) {
 }
 
 // A narrator row recorded before per-tag undo values holds one plain value,
-// from an organize that wrote NARRATOR only. Writing it back now would also
-// overwrite PERFORMER, so the row is refused with a message and nothing is
-// written.
-func TestRevertTagWrite_LegacyNarratorRowIsRefused(t *testing.T) {
+// from an organize that wrote NARRATOR only. It reverts through NARRATOR alone
+// (the narrator_tag_only key), so PERFORMER is left as it is.
+func TestRevertTagWrite_LegacyNarratorRowRevertsNarratorOnly(t *testing.T) {
 	store := newRevertPebble(t)
 	_, p := tagWriteBook(t, store, "op-legacy-narr", "narrator", "Old Narrator", "New Narrator")
-	file := &fakeTagFile{tags: map[string]string{"narrator": "New Narrator"}, locked: map[string]bool{}}
+	file := &fakeTagFile{tags: map[string]string{"narrator_tag_only": "New Narrator"}, locked: map[string]bool{}}
 
 	rs := NewRevertService(store)
 	file.wire(rs, p)
 	res, err := rs.RevertOperation("op-legacy-narr")
-	require.Error(t, err)
-	require.Equal(t, 1, res.Failed)
-	require.Equal(t, "New Narrator", file.tags["narrator"], "nothing is written")
+	require.NoError(t, err, "result %+v", res)
+	require.Equal(t, "Old Narrator", file.tags["narrator_tag_only"])
+	_, wroteBoth := file.tags["narrator"]
+	require.False(t, wroteBoth, "a legacy row must not be written through the two-tag narrator key")
 }
