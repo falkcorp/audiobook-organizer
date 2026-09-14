@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 //
@@ -41,7 +41,7 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]any, _ fileops
 		return fmt.Errorf("no writable metadata supplied")
 	}
 
-	if err := tagger.WriteTagsSafe(context.Background(), abs, tags, 0, safeWriteDepsFor(abs)); err != nil {
+	if err := tagger.WriteTagsSafe(context.Background(), abs, tags, 0, WithBookFileHashes(packageSafeWriteDeps)); err != nil {
 		return fmt.Errorf("taglib write: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 	if err != nil {
 		return fmt.Errorf("taglib abs: %w", err)
 	}
-	return tagger.WriteTagsSafe(context.Background(), abs, map[string][]string{tagName: {value}}, 0, safeWriteDepsFor(abs))
+	return tagger.WriteTagsSafe(context.Background(), abs, map[string][]string{tagName: {value}}, 0, WithBookFileHashes(packageSafeWriteDeps))
 }
 
 // writePropertiesWithTaglib writes tags as given, property by property, through
