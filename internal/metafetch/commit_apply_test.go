@@ -1,5 +1,5 @@
 // file: internal/metafetch/commit_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e4a92-3b5d-4f60-8e27-9d0a6b3c1f48
 // last-edited: 2026-09-13
 
@@ -39,7 +39,7 @@ func TestCommitApply_KeepsAConcurrentWriteAndRecordsTheStoredRow(t *testing.T) {
 	_, err = store.UpdateBook(book.ID, other)
 	require.NoError(t, err)
 
-	_, err = svc.commitApply(book.ID, before, working, nil, "Open Library")
+	_, err = svc.CommitApply(book.ID, before, working, nil, "Open Library")
 	require.NoError(t, err)
 
 	stored, err := store.GetBookByID(book.ID)

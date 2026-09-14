@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8f5a13-7b4c-4d91-a6e0-3c9d1b7f5e28
 // last-edited: 2026-09-13
 
@@ -98,9 +98,9 @@ func dirPrefix(dir string) string {
 //
 // A file whose current tags cannot be read is not written: a write that
 // cannot be undone is not made silently. It returns the number of tags
-// written across all files.
-func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, target string, tagMeta map[string]any) int {
-	written := 0
+// written across all files, and the number whose undo record could not be
+// saved (each logged at Error): those writes happened and cannot be undone.
+func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, target string, tagMeta map[string]any) (written, undoLost int) {
 	for _, t := range rs.tagWriteTargets(bookID, oldPath, target) {
 		if rs.IsProtectedPath(t.path) {
 			continue
@@ -146,15 +146,19 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			if known && old == "" {
 				old = undo.TagAbsentValue
 			}
-			_ = rs.db.CreateOperationChange(&database.OperationChange{
+			if err := rs.db.CreateOperationChange(&database.OperationChange{
 				OperationID: operationID,
 				BookID:      bookID,
 				ChangeType:  undo.ChangeTypeTagWrite,
 				FieldName:   name,
 				OldValue:    old,
 				NewValue:    fmt.Sprintf("%v", val),
-			})
+			}); err != nil {
+				undoLost++
+				renameTagLog.Error("undo record for tag %s of %s (book %s, operation %s) was not saved; this tag write cannot be undone: %v",
+					field, t.path, logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(operationID), err)
+			}
 		}
 	}
-	return written
+	return written, undoLost
 }

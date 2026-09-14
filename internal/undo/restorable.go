@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-09-13
 
@@ -116,7 +116,9 @@ const (
 // TagAbsentValue is the OldValue of a tag_write row whose tag the file did not
 // carry before the write. It is distinct from "", which means the pre-write
 // value is not known (every row written before 2026-09-13). Reverting a row
-// holding it removes the tag again: TagLib deletes a tag written empty.
+// holding it removes the tag's property from the file and reads the file back
+// to confirm it is gone (metadata.WriteTagProperties); a removal that did not
+// happen fails the row.
 const TagAbsentValue = "\x00tag-absent"
 
 // TagWriteField is the FieldName of a tag_write row: the tag and the id of
@@ -471,8 +473,8 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	case ChangeTypeTagWrite:
 		// A tag_write row restores exactly OldValue into one book_file. Rows
 		// written before 2026-09-13 recorded OldValue "" for every tag (the
-		// organizer never read the pre-write value) and named no file, and
-		// writing "" deletes the tag (metadata/taglib_cgo.go). Such a row is a
+		// organizer never read the pre-write value) and named no file, so ""
+		// there means unknown, not absent. Such a row is a
 		// record of a write, not something the engine can reverse: counting it
 		// Restored would erase the tag the organize wrote and still claim an
 		// undo. A tag the file did not carry is recorded as TagAbsentValue,

@@ -1,6 +1,7 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
+// last-edited: 2026-09-13
 //
 // TagLib WASM writer (default, no CGO required).
 // For native CGO performance, build with -tags native_taglib.
@@ -81,6 +82,13 @@ func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 		return fmt.Errorf("taglib abs: %w", err)
 	}
 	return tagger.WriteTagsSafe(context.Background(), abs, map[string][]string{tagName: {value}}, 0, packageSafeWriteDeps)
+}
+
+// writePropertiesWithTaglib writes tags as given, property by property, through
+// the same safe copy-and-rename write; a property with no values is removed.
+// WriteTagProperties is the caller and verifies the result.
+func writePropertiesWithTaglib(abs string, tags map[string][]string) error {
+	return tagger.WriteTagsSafe(context.Background(), abs, tags, 0, packageSafeWriteDeps)
 }
 
 // readTagsWithTaglib reads tags from a file via the TagLib WASM runtime.

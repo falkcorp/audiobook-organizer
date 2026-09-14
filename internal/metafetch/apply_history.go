@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-13
 
@@ -49,6 +49,19 @@ func jsonToHistory(jsonName string) string {
 // ChangeTypeApplyUndo is the change_type of the rows UndoLastApply records.
 const ChangeTypeApplyUndo = "undo"
 
+// ChangeTypeApplyIncomplete marks an apply whose history rows were not all
+// recorded. UndoLastApply refuses that batch, rather than undo part of it or
+// reach past it to the apply before.
+const ChangeTypeApplyIncomplete = "apply_incomplete"
+
+// ErrApplyHistoryIncomplete: an apply's write committed but its history rows
+// were not all recorded, so undo is refused for it.
+var ErrApplyHistoryIncomplete = errors.New("the apply's change history was not fully recorded; it cannot be undone")
+
+// ErrFieldAlreadyUndone: the newest change to the field is an undo. Treating
+// that undo as a change to undo put the provider value back on a second click.
+var ErrFieldAlreadyUndone = errors.New("the field's last change has already been undone")
+
 // newApplyBatchID returns a random id shared by every history row one apply
 // writes, so "undo last apply" can find exactly that apply's rows.
 func newApplyBatchID() string {
@@ -67,19 +80,26 @@ func newApplyBatchID() string {
 // it stood before the apply (nil when unknown); undo restores it.
 //
 // Every row shares one batch id, which is returned ("" when nothing changed).
-func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors []database.BookAuthor, source string) string {
+//
+// A row that cannot be written is logged at Error; the batch is then marked
+// incomplete (markApplyIncomplete) and ErrApplyHistoryIncomplete returned, so
+// UndoLastApply refuses it instead of undoing part of it or an older apply.
+func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors []database.BookAuthor, source string) (string, error) {
 	if before == nil || after == nil {
-		return ""
+		return "", nil
 	}
 	changed, err := database.ChangedBookFields(before, after)
 	if err != nil {
-		applyHistoryLog.Warn("apply history for %s not recorded: %v", logger.SanitizeLogValue(after.ID), err)
-		return ""
+		batchID := newApplyBatchID()
+		applyHistoryLog.Error("apply history for %s not recorded: %v", logger.SanitizeLogValue(after.ID), err)
+		mfs.markApplyIncomplete(after.ID, batchID, source)
+		return batchID, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, err)
 	}
 	if len(changed) == 0 {
-		return ""
+		return "", nil
 	}
 	batchID := newApplyBatchID()
+	failed := 0
 	now := time.Now()
 	activityTitle := after.Title
 	if activityTitle == "" {
@@ -112,7 +132,8 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		oldJSON, newJSON := jsonEncodeString(oldVal), jsonEncodeString(newVal)
 		rec.PreviousValue, rec.NewValue = &oldJSON, &newJSON
 		if err := mfs.db.RecordMetadataChange(rec); err != nil {
-			applyHistoryLog.Warn("failed to record metadata change for %s.%s: %v", logger.SanitizeLogValue(after.ID), rec.Field, err)
+			failed++
+			applyHistoryLog.Error("failed to record metadata change for %s.%s: %v", logger.SanitizeLogValue(after.ID), rec.Field, err)
 		}
 		if mfs.activityService != nil {
 			_ = mfs.activityService.Record(database.ActivityEntry{
@@ -126,7 +147,28 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 			})
 		}
 	}
-	return batchID
+	if failed > 0 {
+		mfs.markApplyIncomplete(after.ID, batchID, source)
+		return batchID, fmt.Errorf("%w: %d of %d rows of %s not recorded", ErrApplyHistoryIncomplete, failed, len(changed), after.ID)
+	}
+	return batchID, nil
+}
+
+// markApplyIncomplete records that batchID's history is not complete, so
+// UndoLastApply refuses the batch. If even this row cannot be written the
+// apply leaves no trace in history, and undo could reach the apply before it;
+// that is logged at Error.
+func (mfs *Service) markApplyIncomplete(bookID, batchID, source string) {
+	if err := mfs.db.RecordMetadataChange(&database.MetadataChangeRecord{
+		BookID:     bookID,
+		Field:      "apply",
+		ChangeType: ChangeTypeApplyIncomplete,
+		Source:     source,
+		ChangedAt:  time.Now(),
+		BatchID:    batchID,
+	}); err != nil {
+		applyHistoryLog.Error("apply %s on %s: neither its history nor the incomplete marker was recorded; undo last apply may reach an older apply: %v", batchID, logger.SanitizeLogValue(bookID), err)
+	}
 }
 
 // KnownBookAuthors normalises a GetBookAuthors result for RecordApplyHistory,
@@ -207,6 +249,9 @@ type UndoApplyResult struct {
 	// book_authors join changed since the apply (or was not recorded), so the
 	// join was left as it is.
 	AuthorCreditsLeft bool `json:"author_credits_left,omitempty"`
+	// RevertedTo is the history row's pre-change value that UndoFieldChange
+	// put back, or found already back. Nil when nothing was restored.
+	RevertedTo *string `json:"reverted_to,omitempty"`
 
 	authorRefused []string
 }
@@ -252,9 +297,15 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 	}
 	var rows []database.MetadataChangeRecord
 	for _, r := range history {
-		if r.BatchID == latest.BatchID && r.ChangeType != ChangeTypeApplyUndo {
-			rows = append(rows, r)
+		if r.BatchID != latest.BatchID || r.ChangeType == ChangeTypeApplyUndo {
+			continue
 		}
+		// Some of this apply's rows were never written: undoing the rest
+		// would leave the book half undone, so the apply is refused whole.
+		if r.ChangeType == ChangeTypeApplyIncomplete {
+			return nil, ErrApplyHistoryIncomplete
+		}
+		rows = append(rows, r)
 	}
 
 	res := &UndoApplyResult{BatchID: latest.BatchID, Source: latest.Source}
@@ -488,6 +539,11 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 	if latest == nil {
 		return nil, ErrNoApplyToUndo
 	}
+	// The newest change is an undo: the field is already back. Undoing that
+	// row would put the undone value back, which a second click must not do.
+	if latest.ChangeType == ChangeTypeApplyUndo {
+		return nil, ErrFieldAlreadyUndone
+	}
 	rows := []database.MetadataChangeRecord{*latest}
 	res := &UndoApplyResult{BatchID: latest.BatchID, Source: latest.Source}
 	rows = mfs.dropUnrevertableAuthorRows(bookID, rows, res)
@@ -525,14 +581,17 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 		return res, ErrFieldChangedSince
 	case outcome == undoAlready:
 		res.AlreadyRestored = []string{field}
+		res.RevertedTo = rows[0].PreviousValue
 		return res, nil
 	case outcome != undoReverted:
 		res.Failed = []string{field}
 		return res, ErrFieldNotUndoable
 	}
 	res.Reverted = []string{field}
+	res.RevertedTo = rows[0].PreviousValue
 	if field == historyFieldAuthor {
 		if serr := mfs.db.SetBookAuthors(bookID, rows[0].PreviousRef.BookAuthors); serr != nil {
+			applyHistoryLog.Error("undo: restoring author credits of %s failed: %v", logger.SanitizeLogValue(bookID), serr)
 			res.AuthorCreditsLeft = true
 		}
 	}
@@ -552,12 +611,17 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 	return res, nil
 }
 
-// commitApply writes an apply's changes onto the row as it stands under the
+// CommitApply writes an apply's changes onto the row as it stands under the
 // book's write stripe (only the fields the apply changed relative to before,
 // via MergeBookChanges) and then records history from the committed row. It
-// is the write every apply path uses, so none of them replaces the whole row
-// with a read taken before slow provider work.
-func (mfs *Service) commitApply(id string, before, book *database.Book, prevAuthors []database.BookAuthor, source string) (*database.Book, error) {
+// is the write every apply path uses, the bulk-fetch handler included, so
+// none of them replaces the whole row with a read taken before slow provider
+// work.
+//
+// A nil book means nothing was written. A non-nil book with an error means
+// the write committed and its history did not (ErrApplyHistoryIncomplete,
+// logged at Error): the batch is marked incomplete, so undo refuses it.
+func (mfs *Service) CommitApply(id string, before, book *database.Book, prevAuthors []database.BookAuthor, source string) (*database.Book, error) {
 	var mergedFields []string
 	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
 		var mErr error
@@ -573,10 +637,17 @@ func (mfs *Service) commitApply(id string, before, book *database.Book, prevAuth
 	// The new values are read from the committed row, so a value the store
 	// normalised on write is recorded as stored and undo's compare-and-set
 	// matches it.
-	if written, snapErr := database.SnapshotBook(before); snapErr == nil {
-		if cErr := database.CopyBookFields(written, updated, mergedFields); cErr == nil {
-			mfs.RecordApplyHistory(before, written, prevAuthors, source)
-		}
+	written, snapErr := database.SnapshotBook(before)
+	if snapErr == nil {
+		snapErr = database.CopyBookFields(written, updated, mergedFields)
+	}
+	if snapErr != nil {
+		applyHistoryLog.Error("apply history for %s not recorded: %v", logger.SanitizeLogValue(id), snapErr)
+		mfs.markApplyIncomplete(id, newApplyBatchID(), source)
+		return updated, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, snapErr)
+	}
+	if _, herr := mfs.RecordApplyHistory(before, written, prevAuthors, source); herr != nil {
+		return updated, herr
 	}
 	return updated, nil
 }

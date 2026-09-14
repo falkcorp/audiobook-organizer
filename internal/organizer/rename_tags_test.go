@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_tags_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f7b3d19-2a6e-4c84-9d05-1e8a4c6b2f73
 // last-edited: 2026-09-13
 
@@ -53,7 +53,8 @@ func TestWriteTagsRecordingOld_PerFileWithPreWriteValues(t *testing.T) {
 		return nil
 	}
 
-	n := rs.writeTagsRecordingOld(book.ID, "op-tags", dir, dir, map[string]any{"title": "Book", "artist": "Someone"})
+	n, lost := rs.writeTagsRecordingOld(book.ID, "op-tags", dir, dir, map[string]any{"title": "Book", "artist": "Someone"})
+	require.Zero(t, lost)
 	require.Equal(t, 4, n)
 	sort.Strings(wrote)
 	require.Equal(t, []string{filepath.Join(dir, "01.mp3"), filepath.Join(dir, "02.mp3")}, wrote)
@@ -101,7 +102,8 @@ func TestWriteTagsRecordingOld_UnreadableFileIsNotWritten(t *testing.T) {
 	wrote := 0
 	rs.WriteTags = func(string, map[string]any) error { wrote++; return nil }
 
-	require.Equal(t, 0, rs.writeTagsRecordingOld(book.ID, "op-x", p, p, map[string]any{"title": "A"}))
+	written, _ := rs.writeTagsRecordingOld(book.ID, "op-x", p, p, map[string]any{"title": "A"})
+	require.Equal(t, 0, written)
 	require.Equal(t, 0, wrote)
 	changes, err := store.GetOperationChanges("op-x")
 	require.NoError(t, err)
@@ -132,7 +134,8 @@ func TestWriteTagsRecordingOld_ProtectedSourceCopyMultiFile(t *testing.T) {
 	rs.ReadCurrentTags = func(string) (map[string]string, error) { return map[string]string{"title": "Orig"}, nil }
 	rs.WriteTags = func(p string, _ map[string]any) error { wrote = append(wrote, p); return nil }
 
-	require.Equal(t, 2, rs.writeTagsRecordingOld(book.ID, "op-copy", src, dst, map[string]any{"title": "Book"}))
+	written, _ := rs.writeTagsRecordingOld(book.ID, "op-copy", src, dst, map[string]any{"title": "Book"})
+	require.Equal(t, 2, written)
 	sort.Strings(wrote)
 	require.Equal(t, []string{filepath.Join(dst, "01.mp3"), filepath.Join(dst, "02.mp3")}, wrote,
 		"tags go to the copy, never to the protected source")

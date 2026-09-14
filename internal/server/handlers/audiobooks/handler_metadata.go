@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
 // last-edited: 2026-09-13
 
@@ -134,7 +134,7 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 		// store the previous value as a user override: the book row kept the
 		// changed value, and the override froze the field against every
 		// later fetch.
-		h.undoBookFieldChange(c, id, field, latest.PreviousValue)
+		h.undoBookFieldChange(c, id, field)
 		return
 	}
 
@@ -162,8 +162,11 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 }
 
 // undoBookFieldChange is UndoMetadataChange for a field of the book row. A
-// field changed since its last change is refused with 409, not overwritten.
-func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string, revertedTo *string) {
+// field changed since its last change, or whose last change is already an
+// undo, is refused with 409, not overwritten. reverted_to is the value the
+// undo actually restored (UndoApplyResult.RevertedTo), not a value read
+// before it ran.
+func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string) {
 	if h.metadataFetchService == nil {
 		httputil.RespondWithInternalError(c, "metadata service not initialized")
 		return
@@ -173,7 +176,7 @@ func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string, reverted
 	case errors.Is(err, metafetch.ErrNoApplyToUndo):
 		httputil.RespondWithNotFound(c, "change history", field)
 		return
-	case errors.Is(err, metafetch.ErrFieldChangedSince), errors.Is(err, metafetch.ErrFieldNotUndoable):
+	case errors.Is(err, metafetch.ErrFieldChangedSince), errors.Is(err, metafetch.ErrFieldNotUndoable), errors.Is(err, metafetch.ErrFieldAlreadyUndone):
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	case err != nil:
@@ -190,7 +193,7 @@ func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string, reverted
 	httputil.RespondWithOK(c, gin.H{
 		"message":          "undo applied",
 		"field":            field,
-		"reverted_to":      revertedTo,
+		"reverted_to":      res.RevertedTo,
 		"already_restored": len(res.AlreadyRestored) > 0,
 	})
 }
@@ -217,7 +220,7 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	case errors.Is(err, metafetch.ErrNoApplyToUndo):
 		httputil.RespondWithNotFound(c, "changes", "none")
 		return
-	case errors.Is(err, metafetch.ErrApplyPredatesBatches), errors.Is(err, metafetch.ErrApplyAlreadyUndone):
+	case errors.Is(err, metafetch.ErrApplyPredatesBatches), errors.Is(err, metafetch.ErrApplyAlreadyUndone), errors.Is(err, metafetch.ErrApplyHistoryIncomplete):
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	case err != nil:

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-13
 
@@ -307,9 +307,11 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// Only the fields this apply changed land, on the row as it stands
 			// now: the provider search above is slow, and a whole-row UpdateBook
 			// of the earlier read reverted any write that landed meanwhile.
-			// History is recorded from the committed row (commitApply).
-			updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, prevAuthors, src.Name())
-			if updateErr != nil {
+			// History is recorded from the committed row (CommitApply). A
+			// book with an error means the write stands and its history did
+			// not land; CommitApply logged it and undo refuses that apply.
+			updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, prevAuthors, src.Name())
+			if updatedBook == nil {
 				return nil, updateErr
 			}
 
@@ -441,9 +443,11 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		// Only the fields this apply changed land, on the row as it stands
 		// now: the provider search above is slow, and a whole-row UpdateBook
 		// of the earlier read reverted any write that landed meanwhile.
-		// History is recorded from the committed row (commitApply).
-		updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, prevAuthors, src.Name())
-		if updateErr != nil {
+		// History is recorded from the committed row (CommitApply). A book
+		// with an error means the write stands and its history did not land;
+		// CommitApply logged it and undo refuses that apply.
+		updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, prevAuthors, src.Name())
+		if updatedBook == nil {
 			return nil, updateErr
 		}
 

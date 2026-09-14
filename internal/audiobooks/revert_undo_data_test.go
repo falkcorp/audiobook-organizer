@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
 // last-edited: 2026-09-13
 
@@ -304,10 +304,8 @@ func TestRevertFileMove_RecomputesITunesPath(t *testing.T) {
 	}
 }
 
-// A file that already reads as the pre-organize value is written again and the
-// row succeeds. album_artist, composer and narrator read back through one
-// narrator value, so once one is restored the others read as restored; they
-// must not be refused as changed since.
+// A file that already holds the pre-organize value is not written and the row
+// succeeds: it must not be refused as changed since.
 func TestRevertTagWrite_AlreadyReadsPreOrganizeValue(t *testing.T) {
 	store := newRevertPebble(t)
 	_, p := tagWriteBook(t, store, "op-alias", "title", "Orig", "Organized")
@@ -319,5 +317,5 @@ func TestRevertTagWrite_AlreadyReadsPreOrganizeValue(t *testing.T) {
 	require.NoError(t, err, "result %+v", res)
 	require.Equal(t, 0, res.ChangedSince)
 	require.Equal(t, "Orig", file.tags["title"])
-	require.Equal(t, []bool{true}, file.heldDuringWrite, "the value is written again, under the path lock")
+	require.Empty(t, file.heldDuringWrite, "the file already holds the pre-organize value; nothing is written")
 }

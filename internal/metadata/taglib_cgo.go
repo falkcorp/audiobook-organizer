@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.6.0
-// last-edited: 2026-08-15
+// version: 1.7.0
+// last-edited: 2026-09-13
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -113,6 +113,23 @@ func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 	}, fileops.WriteTagsSafeOptions{})
 	if err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
+	}
+	return nil
+}
+
+// writePropertiesWithTaglib writes tags as given, property by property, through
+// the safe copy-and-rename write. WriteTagProperties is the caller and reads
+// the file back, so a property this writer does not remove fails there.
+func writePropertiesWithTaglib(abs string, tags map[string][]string) error {
+	effectivePath, err := resolvePathForWrite(abs)
+	if err != nil {
+		return fmt.Errorf("taglib properties resolve: %w", err)
+	}
+	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
+		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
+	}, fileops.WriteTagsSafeOptions{})
+	if err != nil {
+		return fmt.Errorf("taglib properties: %w", err)
 	}
 	return nil
 }

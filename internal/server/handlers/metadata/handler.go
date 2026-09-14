@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -1343,16 +1343,24 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		}
 
 		if didUpdate {
-			if _, err := store.UpdateBook(bookID, book); err != nil {
+			// Write only the fields this apply changed, onto the row as it
+			// stands now, and record history from the committed row
+			// (metafetch CommitApply). A whole-row UpdateBook of the read taken
+			// before the provider search reverted any edit that committed
+			// during the search, and history was recorded from this in-memory
+			// book rather than the stored row.
+			updated, commitErr := h.metadataFetchService.CommitApply(bookID, historyBefore, book, prevAuthors, sourceName)
+			if updated == nil {
 				result.Status = "error"
-				result.Message = fmt.Sprintf("failed to update book: %v", err)
+				result.Message = fmt.Sprintf("failed to update book: %v", commitErr)
 				setResult(i, result)
 				return nil
 			}
-			// Record what the write changed, now that it has committed. This
-			// used to run before the write, on a book already mutated above,
-			// so it compared the new values with themselves.
-			h.metadataFetchService.RecordApplyHistory(historyBefore, book, prevAuthors, sourceName)
+			if commitErr != nil {
+				// The write stands; its history did not land, so undo last
+				// apply refuses this apply. Say so in the result.
+				result.Message = commitErr.Error()
+			}
 			result.Status = "updated"
 
 			// System tag the source and language so the review UI
