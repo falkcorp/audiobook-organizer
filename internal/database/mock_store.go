@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.122.0
+// version: 1.123.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-14
 
@@ -569,6 +569,7 @@ type MockStore struct {
 	DeleteBookFilesForBookFunc              func(bookID string) error
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
+	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
 	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
@@ -3328,6 +3329,36 @@ func (m *MockStore) PatchBookFileFields(bookID, fileID string, patch BookFileFie
 		return m.PatchBookFileFieldsFunc(bookID, fileID, patch)
 	}
 	return nil, nil, nil
+}
+
+// ModifyBookFile uses ModifyBookFileFunc when set; otherwise it composes the
+// mock's own GetBookFiles and UpdateBookFile (no atomicity), so a test that
+// stubs those two keeps working against a caller converted to ModifyBookFile.
+func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileFunc != nil {
+		return m.ModifyBookFileFunc(bookID, fileID, fn)
+	}
+	files, err := m.GetBookFiles(bookID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range files {
+		if files[i].ID != fileID {
+			continue
+		}
+		row := files[i]
+		if err := fn(&row); err != nil {
+			if errors.Is(err, ErrSkipBookFileWrite) {
+				return &files[i], nil
+			}
+			return nil, err
+		}
+		if err := m.UpdateBookFile(fileID, &row); err != nil {
+			return nil, err
+		}
+		return &row, nil
+	}
+	return nil, nil
 }
 
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {

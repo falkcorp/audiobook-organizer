@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_path_failure.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b1f52-9c47-4a06-b2d1-7f5c0e9a4d18
 // last-edited: 2026-09-14
 
@@ -36,7 +36,9 @@ type RenamePathWriteFailure struct {
 	// location, so the repair writes the same row the rename meant to.
 	NewITunesPath string `json:"new_itunes_path,omitempty"`
 	Error         string `json:"error"`
-	RecordedAt    string `json:"recorded_at"`
+	// RecordedAt is RFC3339Nano UTC. The repair op compares it against the
+	// row's UpdatedAt, so it needs sub-second precision.
+	RecordedAt string `json:"recorded_at"`
 }
 
 // RenamePathWriteFailureKey is the record's key. It includes the book_file ID:
@@ -60,7 +62,7 @@ func RecordRenamePathWriteFailure(store DurableSkipStore, f RenamePathWriteFailu
 		return fmt.Errorf("record rename path write failure: empty book id")
 	}
 	if f.RecordedAt == "" {
-		f.RecordedAt = time.Now().UTC().Format(time.RFC3339)
+		f.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	blob, err := json.Marshal(f)
 	if err != nil {
@@ -69,11 +71,37 @@ func RecordRenamePathWriteFailure(store DurableSkipStore, f RenamePathWriteFailu
 	return store.SetUserPreferenceForUser("_system", RenamePathWriteFailureKey(f.BookID, f.BookFileID), string(blob))
 }
 
+// RenamePathRecordClearer is the one preference method an unconditional
+// clear needs.
+type RenamePathRecordClearer interface {
+	SetUserPreferenceForUser(userID, key, value string) error
+}
+
 // ClearRenamePathWriteFailure blanks a record (the keyspace's clear
-// convention); readers treat a blank value as no record.
-func ClearRenamePathWriteFailure(store DurableSkipStore, bookID, bookFileID string) error {
+// convention); readers treat a blank value as no record. For a caller that
+// knows the record exists (the repair op).
+func ClearRenamePathWriteFailure(store RenamePathRecordClearer, bookID, bookFileID string) error {
 	if store == nil {
 		return fmt.Errorf("clear rename path write failure: no store")
 	}
 	return store.SetUserPreferenceForUser("_system", RenamePathWriteFailureKey(bookID, bookFileID), "")
+}
+
+// ClearRenamePathWriteFailureIfPresent blanks the record only when a live one
+// exists. The rename pipelines call it after every successful path write, so a
+// stale record cannot outlive a later move of the same row (an ABA hazard for
+// the repair op); reading first keeps that from writing an empty key for every
+// file ever renamed.
+func ClearRenamePathWriteFailureIfPresent(store DurableSkipStore, bookID, bookFileID string) error {
+	if store == nil {
+		return nil
+	}
+	pref, err := store.GetUserPreferenceForUser("_system", RenamePathWriteFailureKey(bookID, bookFileID))
+	if err != nil {
+		return fmt.Errorf("read rename path write failure: %w", err)
+	}
+	if pref == nil || strings.TrimSpace(pref.Value) == "" {
+		return nil
+	}
+	return ClearRenamePathWriteFailure(store, bookID, bookFileID)
 }

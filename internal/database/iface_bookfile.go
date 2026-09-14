@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -47,6 +47,12 @@ type BookFileUpserter interface {
 	// read-whole-row, UpsertBookFile write-back does. See
 	// pebble_store_bookfile_patch.go.
 	PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (before, after *BookFile, err error)
+	// ModifyBookFile reads the stored row and writes fn's changes to it under
+	// the row's write stripe, so a precondition fn checks cannot be invalidated
+	// between the read and the write. (nil, nil) when the row does not exist;
+	// fn returning ErrSkipBookFileWrite writes nothing. See
+	// pebble_store_bookfile_modify.go.
+	ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFiles(files []*BookFile) error
 	// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library
 	// scanner. Each row carries whether the scanner's own stat of FilePath
