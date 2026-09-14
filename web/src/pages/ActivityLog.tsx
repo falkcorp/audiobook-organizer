@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.35.0
+// version: 2.36.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -153,6 +153,8 @@ const displayTags = (tags?: string[]): string[] =>
 
 /** How far back the feed looks when the user has not chosen a range. */
 const DEFAULT_SINCE_HOURS = 24;
+// Daily digests are one row per UTC day, so 400 covers more than a year.
+const DIGEST_LIMIT = 400;
 
 /** Format a Date as the `YYYY-MM-DDTHH:mm` local string a datetime-local input wants. */
 const toDateTimeLocal = (d: Date): string => {
@@ -323,6 +325,14 @@ export default function ActivityLog() {
   // found." message, so a hard failure was indistinguishable from success.
   const [error, setError] = useState<string | null>(null);
 
+  // Daily digests. Fetched separately from the paged feed because they are
+  // one row per UTC day stamped at 00:00, so the default 24h "Since" window
+  // hid every digest but today's. They ignore "Since" (but honour "Until"),
+  // are never paged, and never count toward `total`.
+  const [digests, setDigests] = useState<ActivityEntry[]>([]);
+  const [digestsLoading, setDigestsLoading] = useState(false);
+  const [digestsError, setDigestsError] = useState<string | null>(null);
+
   // Auto-refresh
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -370,6 +380,9 @@ export default function ActivityLog() {
   const sourcesInFlightRef = useRef(false);
   const sourcesAbortRef = useRef<AbortController | null>(null);
   const sourcesSeqRef = useRef(0);
+  const digestsInFlightRef = useRef(false);
+  const digestsAbortRef = useRef<AbortController | null>(null);
+  const digestsSeqRef = useRef(0);
 
   // Cancel anything outstanding on unmount — otherwise navigating away leaves
   // the server finishing a query nobody will ever read.
@@ -377,6 +390,7 @@ export default function ActivityLog() {
     () => () => {
       feedAbortRef.current?.abort();
       sourcesAbortRef.current?.abort();
+      digestsAbortRef.current?.abort();
     },
     []
   );
@@ -586,10 +600,12 @@ export default function ActivityLog() {
       try {
         const excludeStr = excludedSources.size > 0 ? [...excludedSources].join(',') : undefined;
 
-        // Server-side tier filtering via exclude_tiers
-        const allTiers = ['audit', 'change', 'debug', 'digest'];
-        const inactiveTiers = allTiers.filter((t) => !tiers.has(t));
-        const excludeTiersStr = inactiveTiers.length > 0 ? inactiveTiers.join(',') : undefined;
+        // Server-side tier filtering via exclude_tiers. The digest tier is
+        // ALWAYS excluded here: digests come from loadDigests, which ignores
+        // the "Since" window. Letting them into this query too would show
+        // today's digest twice and count it in `total`.
+        const rawTiers = ['audit', 'change', 'debug'];
+        const excludeTiersStr = [...rawTiers.filter((t) => !tiers.has(t)), 'digest'].join(',');
 
         const result = await fetchActivity(
           {
@@ -651,6 +667,76 @@ export default function ActivityLog() {
       pageSize,
     ]
   );
+
+  const showDigests = tiers.has('digest');
+
+  // Load daily digests: tier=digest, NO "since" (one row per day, so the 24h
+  // default window would hide all but today's), "until" honoured, and the
+  // text/tag filters that apply to a digest row. Same in-flight / abort /
+  // sequence bookkeeping as loadFeed so a stale answer never lands and a
+  // silent poll never stacks.
+  const loadDigests = useCallback(
+    async (silent = false) => {
+      if (!showDigests) {
+        digestsAbortRef.current?.abort();
+        digestsAbortRef.current = null;
+        digestsInFlightRef.current = false;
+        ++digestsSeqRef.current;
+        setDigests([]);
+        setDigestsError(null);
+        setDigestsLoading(false);
+        return;
+      }
+      if (silent) {
+        if (digestsInFlightRef.current) return;
+      } else {
+        digestsAbortRef.current?.abort();
+      }
+      const controller = new AbortController();
+      digestsAbortRef.current = controller;
+      digestsInFlightRef.current = true;
+      const seq = ++digestsSeqRef.current;
+      const isCurrent = () => seq === digestsSeqRef.current;
+
+      if (!silent) setDigestsLoading(true);
+      try {
+        const result = await fetchActivity(
+          {
+            tier: 'digest',
+            limit: DIGEST_LIMIT,
+            until: toRFC3339(untilFilter),
+            search: search.trim() || undefined,
+            tags: tagFilter.length > 0 ? tagFilter.join(',') : undefined,
+          },
+          { signal: controller.signal }
+        );
+        if (!isCurrent()) return;
+        const rows = [...(result.entries || [])].sort((a, b) =>
+          b.timestamp.localeCompare(a.timestamp)
+        );
+        setDigests(rows);
+        setDigestsError(null);
+      } catch (err) {
+        if (isAbortError(err) || !isCurrent()) return;
+        console.error('Failed to load digests', err);
+        setDigestsError(describeError(err));
+        // Same rule as the feed: a failed background refresh keeps what is on
+        // screen; only a failed foreground load clears it.
+        if (!silent) setDigests([]);
+      } finally {
+        if (isCurrent()) {
+          digestsInFlightRef.current = false;
+          digestsAbortRef.current = null;
+          setDigestsLoading(false);
+        }
+      }
+    },
+    [showDigests, untilFilter, search, tagFilter]
+  );
+
+  useEffect(() => {
+    loadDigests();
+  }, [loadDigests]);
 
   // Initial load + polling for active ops (3s when Activity page is mounted or
   // bell is open). The interval was unconditional before — toggling
@@ -714,13 +800,14 @@ export default function ActivityLog() {
         // full-scan query on top of the first.
         loadFeed(page, true);
         loadSources(true);
+        loadDigests(true);
       }, refreshInterval);
     }
     return () => {
       if (feedIntervalRef.current) window.clearInterval(feedIntervalRef.current);
       feedIntervalRef.current = null;
     };
-  }, [autoRefresh, page, refreshInterval, loadFeed, loadSources]);
+  }, [autoRefresh, page, refreshInterval, loadFeed, loadSources, loadDigests]);
 
   // Close sources dropdown on outside click
   useEffect(() => {
@@ -739,6 +826,7 @@ export default function ActivityLog() {
     loadFeed(page);
     loadActiveOpsFromServer();
     loadSources();
+    loadDigests();
   };
 
   // Cancel and Discard both report a server refusal in the toast. They used to
@@ -1192,6 +1280,419 @@ export default function ActivityLog() {
       )}
     </Box>
   );
+
+  // One feed row. Shared by the paged raw feed and the daily-digest list
+  // below it, so a digest renders identically in both places.
+  const renderEntryRow = (entry: ActivityEntry): React.ReactNode => {
+    // Batched entries: collapsed/expanded list view
+    if ((entry.details as any)?.batched === true) {
+      return (
+        <BatchActivityEntry
+          key={entry.id}
+          entry={entry}
+          tierColor={TIER_COLORS[entry.tier] ?? '#757575'}
+        />
+      );
+    }
+    if (entry.tier === 'digest') {
+      const isExpanded = expandedDigests.has(String(entry.id));
+      const details = entry.details as
+        | {
+            date?: string;
+            original_count?: number;
+            counts?: Record<string, number>;
+            tag_counts?: Record<string, Record<string, number>>;
+            items?: Array<{
+              type: string;
+              tier?: string;
+              book?: string;
+              book_id?: string;
+              operation_id?: string;
+              summary: string;
+              details?: string;
+              timestamp?: string;
+              tags?: string[];
+            }>;
+            truncated?: boolean;
+            truncated_count?: number;
+          }
+        | undefined;
+      // Pre-2026-05-20 digests won't have per-item timestamps or tags
+      // because the source rows were already destroyed before this
+      // field was added. Detect by checking the first item's timestamp.
+      const isLegacyDigest = (() => {
+        if (!details?.date) return false;
+        const cutoff = new Date('2026-05-20');
+        const digestDate = new Date(details.date);
+        return digestDate < cutoff && !details?.items?.[0]?.timestamp;
+      })();
+      const rawCounts = details?.counts || {};
+      // Fall back to tag_counts.action when Counts is sparse (only
+      // the single legacy "system_log" key) so old digests show a
+      // meaningful breakdown rather than one undifferentiated chip.
+      const countsKeys = Object.keys(rawCounts);
+      const isLegacySparse = countsKeys.length === 1 && countsKeys[0] === 'system_log';
+      const counts: Record<string, number> = isLegacySparse
+        ? (details?.tag_counts?.action ?? rawCounts)
+        : rawCounts;
+      const items = details?.items || [];
+
+      return (
+        <React.Fragment key={entry.id}>
+          <TableRow
+            hover
+            sx={{ bgcolor: 'rgba(0, 137, 123, 0.06)', cursor: 'pointer' }}
+            onClick={() => {
+              setExpandedDigests((prev) => {
+                const next = new Set(prev);
+                const key = String(entry.id);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              });
+            }}
+          >
+            <TableCell
+              sx={{
+                whiteSpace: 'nowrap',
+                color: 'text.secondary',
+                fontSize: '0.75rem',
+              }}
+            >
+              {details?.date || entry.timestamp}
+            </TableCell>
+            <TableCell>
+              <Chip size="small" label="digest" sx={{ bgcolor: '#00897b', color: 'white' }} />
+            </TableCell>
+            <TableCell>
+              <Stack
+                direction="row"
+                spacing={0.5}
+                sx={{
+                  flexWrap: 'wrap',
+                }}
+              >
+                {Object.entries(counts)
+                  .slice(0, 6)
+                  .map(([type, count]) => (
+                    <Chip
+                      key={type}
+                      size="small"
+                      variant="outlined"
+                      label={`${count} ${type.replace(/_/g, ' ')}`}
+                    />
+                  ))}
+              </Stack>
+            </TableCell>
+            <TableCell colSpan={isMobile ? 1 : 2}>
+              <Typography variant="body2">
+                {entry.summary} {isExpanded ? '▾' : '▸'}
+              </Typography>
+            </TableCell>
+            {!isMobile && <TableCell />}
+            <TableCell />
+          </TableRow>
+          {isExpanded && (
+            <TableRow>
+              <TableCell colSpan={isMobile ? 5 : 7} sx={{ py: 0, px: 2 }}>
+                <Box sx={{ maxHeight: 400, overflow: 'auto', py: 1 }}>
+                  {isLegacyDigest && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                        display: 'block',
+                        mb: 1,
+                        fontStyle: 'italic',
+                      }}
+                    >
+                      Pre-2026-05-20 digest — per-item timestamps and tags unavailable (source rows
+                      already compacted away)
+                    </Typography>
+                  )}
+                  {items.map((item, idx) => (
+                    <Stack
+                      key={idx}
+                      direction="row"
+                      spacing={1}
+                      sx={[
+                        {
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                        },
+                        {
+                          py: 0.5,
+                          borderBottom: '1px solid',
+                          borderColor: 'divider',
+                        },
+                        item.type === 'error'
+                          ? {
+                              color: 'error.main',
+                            }
+                          : {
+                              color: 'text.primary',
+                            },
+                      ]}
+                    >
+                      {item.timestamp && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                            fontFamily: 'monospace',
+                            minWidth: 70,
+                          }}
+                        >
+                          {formatItemTime(item.timestamp)}
+                        </Typography>
+                      )}
+                      <Chip
+                        size="small"
+                        label={item.type.replace(/_/g, ' ')}
+                        sx={{ minWidth: 100 }}
+                      />
+                      {item.tier === 'audit' && (
+                        <Chip
+                          size="small"
+                          label="audit"
+                          sx={{
+                            bgcolor: '#7c4dff',
+                            color: 'white',
+                            fontSize: '0.65rem',
+                          }}
+                        />
+                      )}
+                      {item.book_id ? (
+                        <Typography
+                          variant="body2"
+                          component="span"
+                          sx={{
+                            cursor: 'pointer',
+                            color: 'primary.main',
+                            fontWeight: 500,
+                          }}
+                          onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            navigate(`/library/${item.book_id}`);
+                          }}
+                        >
+                          {item.book || item.book_id}
+                        </Typography>
+                      ) : (
+                        <Typography variant="body2" component="span" sx={{ fontWeight: 500 }}>
+                          {item.book || '—'}
+                        </Typography>
+                      )}
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                          flex: 1,
+                        }}
+                      >
+                        {item.summary}
+                      </Typography>
+                      {item.operation_id && (
+                        <Chip
+                          size="small"
+                          label={item.operation_id.slice(0, 12)}
+                          title={`op:${item.operation_id} — click to filter`}
+                          color="info"
+                          variant="outlined"
+                          sx={{
+                            cursor: 'pointer',
+                            fontFamily: 'monospace',
+                            fontSize: '0.65rem',
+                          }}
+                          clickable
+                          onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            toggleTagFilter(`op:${item.operation_id}`);
+                          }}
+                        />
+                      )}
+                      {item.details && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'error.main',
+                          }}
+                        >
+                          {item.details}
+                        </Typography>
+                      )}
+                      {displayTags(item.tags).length > 0 && (
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          {displayTags(item.tags).map((tag) => {
+                            const { color, sx: tagSx, label } = tagChipProps(tag);
+                            return (
+                              <Chip
+                                key={tag}
+                                size="small"
+                                label={label}
+                                color={color}
+                                sx={[
+                                  {
+                                    cursor: 'pointer',
+                                    fontSize: '0.65rem',
+                                  },
+                                  tagSx ?? {},
+                                ]}
+                                variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
+                                clickable
+                                onClick={(e: React.MouseEvent) => {
+                                  e.stopPropagation();
+                                  toggleTagFilter(tag);
+                                }}
+                              />
+                            );
+                          })}
+                        </Stack>
+                      )}
+                    </Stack>
+                  ))}
+                  {details?.truncated && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                        pt: 1,
+                        display: 'block',
+                      }}
+                    >
+                      … and {details.truncated_count?.toLocaleString()} more entries not shown
+                    </Typography>
+                  )}
+                </Box>
+              </TableCell>
+            </TableRow>
+          )}
+        </React.Fragment>
+      );
+    }
+
+    // Regular entry
+    return (
+      <TableRow
+        key={entry.id}
+        hover
+        sx={[
+          {
+            bgcolor: rowBgColor(entry),
+          },
+          entry.tier === 'debug'
+            ? {
+                opacity: 0.6,
+              }
+            : {
+                opacity: 1,
+              },
+        ]}
+      >
+        <TableCell
+          sx={{
+            whiteSpace: 'nowrap',
+            color: 'text.secondary',
+            fontSize: '0.75rem',
+          }}
+        >
+          {isMobile ? formatTimestampCompact(entry.timestamp) : formatTimestamp(entry.timestamp)}
+        </TableCell>
+        <TableCell>{levelChip(entry.level)}</TableCell>
+        <TableCell>
+          <Chip size="small" label={(entry.type || '').replace(/_/g, ' ')} />
+        </TableCell>
+        <TableCell sx={isMobile ? { wordBreak: 'break-word', minWidth: 0 } : { maxWidth: 400 }}>
+          <Typography variant="body2" noWrap={!isMobile} title={entry.summary}>
+            {entry.summary}
+          </Typography>
+          {entry.operation_id && !operationId && (
+            <Typography
+              variant="caption"
+              sx={{ cursor: 'pointer', color: 'primary.main' }}
+              onClick={() => setOperationId(entry.operation_id!)}
+            >
+              view operation &rarr;
+            </Typography>
+          )}
+          {entry.book_id && (
+            <Typography
+              variant="caption"
+              sx={{ cursor: 'pointer', color: 'primary.main', ml: 1 }}
+              onClick={() => navigate(`/library/${entry.book_id}`)}
+            >
+              book &rarr;
+            </Typography>
+          )}
+        </TableCell>
+        {!isMobile && (
+          <TableCell>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
+              {entry.source}
+            </Typography>
+          </TableCell>
+        )}
+        {!isMobile && (
+          <TableCell>
+            {displayTags(entry.tags).length > 0 ? (
+              <Stack
+                direction="row"
+                spacing={0.5}
+                sx={{
+                  flexWrap: 'wrap',
+                }}
+              >
+                {displayTags(entry.tags).map((tag) => {
+                  const { color, sx, label } = tagChipProps(tag);
+                  return (
+                    <Chip
+                      key={tag}
+                      size="small"
+                      label={label}
+                      color={color}
+                      sx={[
+                        {
+                          cursor: 'pointer',
+                        },
+                        sx ?? {},
+                      ]}
+                      variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
+                      clickable
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleTagFilter(tag);
+                      }}
+                    />
+                  );
+                })}
+              </Stack>
+            ) : null}
+          </TableCell>
+        )}
+        <TableCell>
+          {entry.operation_id &&
+            (entry.type === 'organize_completed' || entry.type === 'metadata_applied') && (
+              <Tooltip title="Revert operation">
+                <IconButton size="small" onClick={() => void openRevert(entry)}>
+                  <UndoIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+        </TableCell>
+      </TableRow>
+    );
+  };
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', p: 2 }}>
@@ -2604,437 +3105,7 @@ export default function ActivityLog() {
                     <TableCell />
                   </TableRow>
                 </TableHead>
-                <TableBody>
-                  {entries.map((entry) => {
-                    // Batched entries: collapsed/expanded list view
-                    if ((entry.details as any)?.batched === true) {
-                      return (
-                        <BatchActivityEntry
-                          key={entry.id}
-                          entry={entry}
-                          tierColor={TIER_COLORS[entry.tier] ?? '#757575'}
-                        />
-                      );
-                    }
-                    if (entry.tier === 'digest') {
-                      const isExpanded = expandedDigests.has(String(entry.id));
-                      const details = entry.details as
-                        | {
-                            date?: string;
-                            original_count?: number;
-                            counts?: Record<string, number>;
-                            tag_counts?: Record<string, Record<string, number>>;
-                            items?: Array<{
-                              type: string;
-                              tier?: string;
-                              book?: string;
-                              book_id?: string;
-                              operation_id?: string;
-                              summary: string;
-                              details?: string;
-                              timestamp?: string;
-                              tags?: string[];
-                            }>;
-                            truncated?: boolean;
-                            truncated_count?: number;
-                          }
-                        | undefined;
-                      // Pre-2026-05-20 digests won't have per-item timestamps or tags
-                      // because the source rows were already destroyed before this
-                      // field was added. Detect by checking the first item's timestamp.
-                      const isLegacyDigest = (() => {
-                        if (!details?.date) return false;
-                        const cutoff = new Date('2026-05-20');
-                        const digestDate = new Date(details.date);
-                        return digestDate < cutoff && !details?.items?.[0]?.timestamp;
-                      })();
-                      const rawCounts = details?.counts || {};
-                      // Fall back to tag_counts.action when Counts is sparse (only
-                      // the single legacy "system_log" key) so old digests show a
-                      // meaningful breakdown rather than one undifferentiated chip.
-                      const countsKeys = Object.keys(rawCounts);
-                      const isLegacySparse =
-                        countsKeys.length === 1 && countsKeys[0] === 'system_log';
-                      const counts: Record<string, number> = isLegacySparse
-                        ? (details?.tag_counts?.action ?? rawCounts)
-                        : rawCounts;
-                      const items = details?.items || [];
-
-                      return (
-                        <React.Fragment key={entry.id}>
-                          <TableRow
-                            hover
-                            sx={{ bgcolor: 'rgba(0, 137, 123, 0.06)', cursor: 'pointer' }}
-                            onClick={() => {
-                              setExpandedDigests((prev) => {
-                                const next = new Set(prev);
-                                const key = String(entry.id);
-                                if (next.has(key)) next.delete(key);
-                                else next.add(key);
-                                return next;
-                              });
-                            }}
-                          >
-                            <TableCell
-                              sx={{
-                                whiteSpace: 'nowrap',
-                                color: 'text.secondary',
-                                fontSize: '0.75rem',
-                              }}
-                            >
-                              {details?.date || entry.timestamp}
-                            </TableCell>
-                            <TableCell>
-                              <Chip
-                                size="small"
-                                label="digest"
-                                sx={{ bgcolor: '#00897b', color: 'white' }}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Stack
-                                direction="row"
-                                spacing={0.5}
-                                sx={{
-                                  flexWrap: 'wrap',
-                                }}
-                              >
-                                {Object.entries(counts)
-                                  .slice(0, 6)
-                                  .map(([type, count]) => (
-                                    <Chip
-                                      key={type}
-                                      size="small"
-                                      variant="outlined"
-                                      label={`${count} ${type.replace(/_/g, ' ')}`}
-                                    />
-                                  ))}
-                              </Stack>
-                            </TableCell>
-                            <TableCell colSpan={isMobile ? 1 : 2}>
-                              <Typography variant="body2">
-                                {entry.summary} {isExpanded ? '▾' : '▸'}
-                              </Typography>
-                            </TableCell>
-                            {!isMobile && <TableCell />}
-                            <TableCell />
-                          </TableRow>
-                          {isExpanded && (
-                            <TableRow>
-                              <TableCell colSpan={isMobile ? 5 : 7} sx={{ py: 0, px: 2 }}>
-                                <Box sx={{ maxHeight: 400, overflow: 'auto', py: 1 }}>
-                                  {isLegacyDigest && (
-                                    <Typography
-                                      variant="caption"
-                                      sx={{
-                                        color: 'text.secondary',
-                                        display: 'block',
-                                        mb: 1,
-                                        fontStyle: 'italic',
-                                      }}
-                                    >
-                                      Pre-2026-05-20 digest — per-item timestamps and tags
-                                      unavailable (source rows already compacted away)
-                                    </Typography>
-                                  )}
-                                  {items.map((item, idx) => (
-                                    <Stack
-                                      key={idx}
-                                      direction="row"
-                                      spacing={1}
-                                      sx={[
-                                        {
-                                          alignItems: 'center',
-                                          flexWrap: 'wrap',
-                                        },
-                                        {
-                                          py: 0.5,
-                                          borderBottom: '1px solid',
-                                          borderColor: 'divider',
-                                        },
-                                        item.type === 'error'
-                                          ? {
-                                              color: 'error.main',
-                                            }
-                                          : {
-                                              color: 'text.primary',
-                                            },
-                                      ]}
-                                    >
-                                      {item.timestamp && (
-                                        <Typography
-                                          variant="caption"
-                                          sx={{
-                                            color: 'text.secondary',
-                                            fontFamily: 'monospace',
-                                            minWidth: 70,
-                                          }}
-                                        >
-                                          {formatItemTime(item.timestamp)}
-                                        </Typography>
-                                      )}
-                                      <Chip
-                                        size="small"
-                                        label={item.type.replace(/_/g, ' ')}
-                                        sx={{ minWidth: 100 }}
-                                      />
-                                      {item.tier === 'audit' && (
-                                        <Chip
-                                          size="small"
-                                          label="audit"
-                                          sx={{
-                                            bgcolor: '#7c4dff',
-                                            color: 'white',
-                                            fontSize: '0.65rem',
-                                          }}
-                                        />
-                                      )}
-                                      {item.book_id ? (
-                                        <Typography
-                                          variant="body2"
-                                          component="span"
-                                          sx={{
-                                            cursor: 'pointer',
-                                            color: 'primary.main',
-                                            fontWeight: 500,
-                                          }}
-                                          onClick={(e: React.MouseEvent) => {
-                                            e.stopPropagation();
-                                            navigate(`/library/${item.book_id}`);
-                                          }}
-                                        >
-                                          {item.book || item.book_id}
-                                        </Typography>
-                                      ) : (
-                                        <Typography
-                                          variant="body2"
-                                          component="span"
-                                          sx={{ fontWeight: 500 }}
-                                        >
-                                          {item.book || '—'}
-                                        </Typography>
-                                      )}
-                                      <Typography
-                                        variant="body2"
-                                        sx={{
-                                          color: 'text.secondary',
-                                          flex: 1,
-                                        }}
-                                      >
-                                        {item.summary}
-                                      </Typography>
-                                      {item.operation_id && (
-                                        <Chip
-                                          size="small"
-                                          label={item.operation_id.slice(0, 12)}
-                                          title={`op:${item.operation_id} — click to filter`}
-                                          color="info"
-                                          variant="outlined"
-                                          sx={{
-                                            cursor: 'pointer',
-                                            fontFamily: 'monospace',
-                                            fontSize: '0.65rem',
-                                          }}
-                                          clickable
-                                          onClick={(e: React.MouseEvent) => {
-                                            e.stopPropagation();
-                                            toggleTagFilter(`op:${item.operation_id}`);
-                                          }}
-                                        />
-                                      )}
-                                      {item.details && (
-                                        <Typography
-                                          variant="caption"
-                                          sx={{
-                                            color: 'error.main',
-                                          }}
-                                        >
-                                          {item.details}
-                                        </Typography>
-                                      )}
-                                      {displayTags(item.tags).length > 0 && (
-                                        <Stack
-                                          direction="row"
-                                          spacing={0.5}
-                                          sx={{
-                                            flexWrap: 'wrap',
-                                          }}
-                                        >
-                                          {displayTags(item.tags).map((tag) => {
-                                            const { color, sx: tagSx, label } = tagChipProps(tag);
-                                            return (
-                                              <Chip
-                                                key={tag}
-                                                size="small"
-                                                label={label}
-                                                color={color}
-                                                sx={[
-                                                  {
-                                                    cursor: 'pointer',
-                                                    fontSize: '0.65rem',
-                                                  },
-                                                  tagSx ?? {},
-                                                ]}
-                                                variant={
-                                                  tagFilter.includes(tag) ? 'filled' : 'outlined'
-                                                }
-                                                clickable
-                                                onClick={(e: React.MouseEvent) => {
-                                                  e.stopPropagation();
-                                                  toggleTagFilter(tag);
-                                                }}
-                                              />
-                                            );
-                                          })}
-                                        </Stack>
-                                      )}
-                                    </Stack>
-                                  ))}
-                                  {details?.truncated && (
-                                    <Typography
-                                      variant="caption"
-                                      sx={{
-                                        color: 'text.secondary',
-                                        pt: 1,
-                                        display: 'block',
-                                      }}
-                                    >
-                                      … and {details.truncated_count?.toLocaleString()} more entries
-                                      not shown
-                                    </Typography>
-                                  )}
-                                </Box>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </React.Fragment>
-                      );
-                    }
-
-                    // Regular entry
-                    return (
-                      <TableRow
-                        key={entry.id}
-                        hover
-                        sx={[
-                          {
-                            bgcolor: rowBgColor(entry),
-                          },
-                          entry.tier === 'debug'
-                            ? {
-                                opacity: 0.6,
-                              }
-                            : {
-                                opacity: 1,
-                              },
-                        ]}
-                      >
-                        <TableCell
-                          sx={{
-                            whiteSpace: 'nowrap',
-                            color: 'text.secondary',
-                            fontSize: '0.75rem',
-                          }}
-                        >
-                          {isMobile
-                            ? formatTimestampCompact(entry.timestamp)
-                            : formatTimestamp(entry.timestamp)}
-                        </TableCell>
-                        <TableCell>{levelChip(entry.level)}</TableCell>
-                        <TableCell>
-                          <Chip size="small" label={(entry.type || '').replace(/_/g, ' ')} />
-                        </TableCell>
-                        <TableCell
-                          sx={
-                            isMobile ? { wordBreak: 'break-word', minWidth: 0 } : { maxWidth: 400 }
-                          }
-                        >
-                          <Typography variant="body2" noWrap={!isMobile} title={entry.summary}>
-                            {entry.summary}
-                          </Typography>
-                          {entry.operation_id && !operationId && (
-                            <Typography
-                              variant="caption"
-                              sx={{ cursor: 'pointer', color: 'primary.main' }}
-                              onClick={() => setOperationId(entry.operation_id!)}
-                            >
-                              view operation &rarr;
-                            </Typography>
-                          )}
-                          {entry.book_id && (
-                            <Typography
-                              variant="caption"
-                              sx={{ cursor: 'pointer', color: 'primary.main', ml: 1 }}
-                              onClick={() => navigate(`/library/${entry.book_id}`)}
-                            >
-                              book &rarr;
-                            </Typography>
-                          )}
-                        </TableCell>
-                        {!isMobile && (
-                          <TableCell>
-                            <Typography
-                              variant="caption"
-                              sx={{
-                                color: 'text.secondary',
-                              }}
-                            >
-                              {entry.source}
-                            </Typography>
-                          </TableCell>
-                        )}
-                        {!isMobile && (
-                          <TableCell>
-                            {displayTags(entry.tags).length > 0 ? (
-                              <Stack
-                                direction="row"
-                                spacing={0.5}
-                                sx={{
-                                  flexWrap: 'wrap',
-                                }}
-                              >
-                                {displayTags(entry.tags).map((tag) => {
-                                  const { color, sx, label } = tagChipProps(tag);
-                                  return (
-                                    <Chip
-                                      key={tag}
-                                      size="small"
-                                      label={label}
-                                      color={color}
-                                      sx={[
-                                        {
-                                          cursor: 'pointer',
-                                        },
-                                        sx ?? {},
-                                      ]}
-                                      variant={tagFilter.includes(tag) ? 'filled' : 'outlined'}
-                                      clickable
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        toggleTagFilter(tag);
-                                      }}
-                                    />
-                                  );
-                                })}
-                              </Stack>
-                            ) : null}
-                          </TableCell>
-                        )}
-                        <TableCell>
-                          {entry.operation_id &&
-                            (entry.type === 'organize_completed' ||
-                              entry.type === 'metadata_applied') && (
-                              <Tooltip title="Revert operation">
-                                <IconButton size="small" onClick={() => void openRevert(entry)}>
-                                  <UndoIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
+                <TableBody>{entries.map((entry) => renderEntryRow(entry))}</TableBody>
               </Table>
             </TableContainer>
           </>
@@ -3076,6 +3147,51 @@ export default function ActivityLog() {
           </TextField>
         </Stack>
       </Paper>
+
+      {/* Daily digests — outside the paged feed. They ignore the "Since"
+          window (one row per UTC day), so every digest is listed, newest
+          first. Paging above applies to the raw feed only. */}
+      {showDigests && (
+        <Paper sx={{ mt: 2 }} data-testid="activity-digests">
+          <Typography variant="subtitle2" sx={{ px: 2, pt: 1.5, pb: 1 }}>
+            Daily digests ({digests.length})
+          </Typography>
+          {digestsLoading ? (
+            <Box
+              data-testid="activity-digests-loading"
+              sx={{ display: 'flex', justifyContent: 'center', py: 3 }}
+            >
+              <CircularProgress size={24} />
+            </Box>
+          ) : digestsError && digests.length === 0 ? (
+            <Alert severity="error" data-testid="activity-digests-error" sx={{ m: 1 }}>
+              Could not load daily digests. {digestsError}
+            </Alert>
+          ) : digests.length === 0 ? (
+            <Typography
+              variant="body2"
+              data-testid="activity-digests-empty"
+              sx={{ px: 2, pb: 2, color: 'text.secondary' }}
+            >
+              No daily digests match the current filters.
+            </Typography>
+          ) : (
+            <>
+              {digestsError && (
+                <Alert severity="warning" data-testid="activity-digests-stale-error" sx={{ m: 1 }}>
+                  Showing the last successful digest list — the most recent refresh failed.{' '}
+                  {digestsError}
+                </Alert>
+              )}
+              <TableContainer>
+                <Table size="small">
+                  <TableBody>{digests.map((entry) => renderEntryRow(entry))}</TableBody>
+                </Table>
+              </TableContainer>
+            </>
+          )}
+        </Paper>
+      )}
 
       {/* Revert Confirmation Dialog */}
       <Dialog open={!!revertEntry} onClose={() => setRevertEntry(null)}>
