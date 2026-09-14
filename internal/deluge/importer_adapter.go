@@ -1,5 +1,5 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
 // last-edited: 2026-09-14
 //
@@ -49,7 +49,14 @@ func NewLibraryImporterAdapter(store Store, delugeClient *Client, cfg *config.Co
 // If no matching record exists, it synthesises a minimal one so the copy
 // still happens (the DB update step within ImportToLibrary will then fail
 // and surface an error, which the caller should handle).
-func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath string) (string, error) {
+//
+// bookFileID is the caller's row for srcPath ("" when it knows none). A
+// non-empty ID that is not the row found at srcPath is refused: the path
+// index holds one entry per path, and importing would repoint that other row.
+// The import never asks Deluge to move the torrent's storage (NoMoveStorage):
+// a guard-triggered copy lands at RootDir/<basename>, and moving storage there
+// would make the library root a Deluge save path.
+func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath, bookFileID string) (string, error) {
 	if a == nil || a.store == nil || a.cfg == nil {
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: not fully initialised")
 	}
@@ -68,7 +75,16 @@ func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath string)
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: no BookFile record for protected path %s, so there is no row to repoint to a library copy: %w", srcPath, tagger.ErrProtectedPathWrite)
 	}
 
-	newPath, err := ImportToLibrary(a.cfg, a.delugeClient, a.store, bf, a.protected)
+	if bookFileID != "" && bf.ID != bookFileID {
+		return srcPath, fmt.Errorf("LibraryImporterAdapter: the path index names book file %s (book %s) for %s, not the caller's row %s; refusing to import",
+			bf.ID, bf.BookID, srcPath, bookFileID)
+	}
+
+	newPath, err := ImportToLibraryWith(a.cfg, a.delugeClient, a.store, bf, ImportOptions{
+		Protected:          a.protected,
+		ExpectedBookFileID: bookFileID,
+		NoMoveStorage:      true,
+	})
 	if err != nil {
 		if newPath != "" {
 			// The copy could not be recorded AND could not be removed: name

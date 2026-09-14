@@ -1,5 +1,5 @@
 // file: internal/remux/remux.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-14
 
@@ -7,6 +7,7 @@ package remux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -54,6 +55,36 @@ type ProtectedChecker interface {
 func isProtected(c ProtectedChecker, path string) bool {
 	return c != nil && c.IsProtected(path)
 }
+
+// protectedListLoaded reports whether c's protected list is usable. A checker
+// with a Loaded method (the Deluge cache) that has never loaded answers "not
+// protected" for every seeding file, so no pass may rewrite on it.
+func protectedListLoaded(c ProtectedChecker) bool {
+	if c == nil {
+		return true
+	}
+	if lr, ok := c.(interface{ Loaded() bool }); ok {
+		return lr.Loaded()
+	}
+	return true
+}
+
+// notDoneReason says why a pass must not set its done flag, or "" when it
+// may: a canceled walk stopped part-way, and a protected file was never
+// probed, so marking either done would leave those files unconsidered forever.
+func notDoneReason(ctx context.Context, skippedProtected int) string {
+	switch {
+	case ctx.Err() != nil:
+		return "the walk was canceled"
+	case skippedProtected > 0:
+		return fmt.Sprintf("%d protected file(s) were skipped", skippedProtected)
+	}
+	return ""
+}
+
+// errProtectedListNotLoaded is returned by both passes when the protected
+// list has never loaded. Nothing is rewritten and no done flag is set.
+var errProtectedListNotLoaded = errors.New("the protected-path list (Deluge save paths) has not loaded, so no file can be rewritten safely; the pass runs again once it has")
 
 // Remuxer provides malformed M4B remux operations.
 type Remuxer struct {
@@ -144,6 +175,9 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("RemuxMalformedFiles: ffmpeg not found: %w", err)
+	}
+	if !protectedListLoaded(r.protected) {
+		return fmt.Errorf("RemuxMalformedFiles: %w", errProtectedListNotLoaded)
 	}
 
 	// Pre-count candidates so progress can report an accurate "X/Y" instead
@@ -251,6 +285,14 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 	}
 
 	log.Info("Malformed M4B remux complete: remuxed=%d clean=%d failed=%d skipped_protected=%d", remuxed, clean, failed, skippedProtected)
+	// The done flag means every candidate was considered. A canceled walk
+	// stopped part-way and a protected file was never probed; marking either
+	// done stops the pass from ever reaching the files it left. Until
+	// 2026-09-14 the flag was set after both.
+	if why := notDoneReason(ctx, skippedProtected); why != "" {
+		log.Info("Malformed M4B remux not marked done (%s); it runs again next time", why)
+		return nil
+	}
 	_ = r.store.SetSetting(RemuxKey, "true", "bool", false)
 	return nil
 }

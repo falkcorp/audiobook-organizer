@@ -1,5 +1,5 @@
 // file: internal/deluge/import_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
 // last-edited: 2026-09-14
 //
@@ -86,8 +86,10 @@ func TestImportToLibrary_SamePath_NoOp(t *testing.T) {
 	if newPath != srcFile {
 		t.Errorf("newPath = %q, want %q (same as src)", newPath, srcFile)
 	}
-	if store.updated != nil {
-		t.Error("UpdateBookFile should not be called when src == dest")
+	// Nothing is copied, but the row is marked imported so discovery stops
+	// offering it; its path is unchanged.
+	if store.updated == nil || store.updated.ImportedFromDelugeAt == nil || store.updated.FilePath != srcFile {
+		t.Errorf("row not marked imported in place: %+v", store.updated)
 	}
 }
 

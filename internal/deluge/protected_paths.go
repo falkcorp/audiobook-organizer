@@ -1,20 +1,32 @@
 // file: internal/deluge/protected_paths.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d5b8e2a1-3c9f-4076-b7d4-0e8a2c5f1b93
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Package deluge provides integration with the Deluge BitTorrent client.
 package deluge
 
 import (
-	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 const protectedPathTTL = 5 * time.Minute
+
+var protectedLog = logger.New("deluge-protected")
+
+// Protection sources reported by ProtectedBy.
+const (
+	// ProtectedByStatic: under a configured static prefix (config.ProtectedPaths,
+	// e.g. the iTunes library). Never imported, moved or rewritten.
+	ProtectedByStatic = "static"
+	// ProtectedByDeluge: under the save_path of a Deluge torrent. May be
+	// copied into the library; the seeding file itself is never touched.
+	ProtectedByDeluge = "deluge"
+)
 
 // ProtectedPathCache maintains a set of filesystem path prefixes that must
 // not be moved, renamed, or deleted. Paths come from two sources:
@@ -22,39 +34,81 @@ const protectedPathTTL = 5 * time.Minute
 //  1. The SavePath of every active Deluge torrent (refreshed every 5 min).
 //  2. Extra paths supplied at construction time (e.g. config.ProtectedPaths).
 //
+// The static paths are always consulted, whatever state Deluge is in. Until
+// 2026-09-14 they were merged into the Deluge list only after a successful
+// ListTorrents, so while Deluge was unreachable from startup IsProtected
+// returned false for everything, the iTunes library included.
+//
+// Loaded reports whether the Deluge list has ever been fetched. A caller that
+// rewrites or moves files must not proceed on a false Loaded: an empty Deluge
+// list then means "unknown", not "nothing is seeding".
+//
 // Thread-safe. If Deluge is unreachable on refresh, the last-known set is kept.
 type ProtectedPathCache struct {
 	mu          sync.RWMutex
-	paths       []string
+	delugePaths []string
 	extraPaths  []string
 	client      *Client
 	lastRefresh time.Time
+	// loaded is true once the Deluge list has been fetched successfully, or
+	// immediately when there is no client (no list to load).
+	loaded bool
 }
 
 // NewProtectedPathCache creates a cache backed by the given Deluge client.
 // extraPaths is a static list of additional protected prefixes (e.g. from config).
-// The cache is empty until the first call to IsProtected triggers a refresh.
+// The Deluge list is empty until the first call to IsProtected triggers a refresh.
 func NewProtectedPathCache(client *Client, extraPaths []string) *ProtectedPathCache {
-	extra := make([]string, len(extraPaths))
-	copy(extra, extraPaths)
+	extra := make([]string, 0, len(extraPaths))
+	for _, p := range extraPaths {
+		if p != "" {
+			extra = append(extra, p)
+		}
+	}
 	return &ProtectedPathCache{
 		client:     client,
 		extraPaths: extra,
 	}
 }
 
-// IsProtected returns true if filePath has any cached path as a prefix.
-// It lazily refreshes the cache when the TTL has expired.
+// IsProtected returns true if filePath lies under a static prefix or a known
+// Deluge save_path. It lazily refreshes the Deluge list when the TTL has
+// expired.
 func (c *ProtectedPathCache) IsProtected(filePath string) bool {
+	return c.ProtectedBy(filePath) != ""
+}
+
+// ProtectedBy says why filePath is protected: ProtectedByStatic,
+// ProtectedByDeluge, or "" when it is not (as far as the loaded list knows;
+// see Loaded). A path under both is reported static, the stricter of the two.
+func (c *ProtectedPathCache) ProtectedBy(filePath string) string {
+	if filePath == "" {
+		return ""
+	}
 	c.maybeRefresh()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, prefix := range c.paths {
-		if prefix != "" && pathutil.IsWithin(filePath, prefix) {
-			return true
+	for _, prefix := range c.extraPaths {
+		if pathutil.IsWithin(filePath, prefix) {
+			return ProtectedByStatic
 		}
 	}
-	return false
+	for _, prefix := range c.delugePaths {
+		if prefix != "" && pathutil.IsWithin(filePath, prefix) {
+			return ProtectedByDeluge
+		}
+	}
+	return ""
+}
+
+// Loaded reports whether the Deluge save_path list has been fetched at least
+// once (always true with no Deluge client). It tries a refresh first, so a
+// Deluge that has come back is picked up.
+func (c *ProtectedPathCache) Loaded() bool {
+	c.maybeRefresh()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.loaded
 }
 
 // Invalidate forces the next IsProtected call to refresh from Deluge immediately.
@@ -77,7 +131,8 @@ func (c *ProtectedPathCache) maybeRefresh() {
 }
 
 // refresh fetches current torrent save paths from Deluge and rebuilds the
-// path list. If Deluge is unreachable, the existing list is kept unchanged.
+// Deluge list. If Deluge is unreachable, the existing list is kept unchanged
+// (and, if it never loaded, Loaded stays false).
 func (c *ProtectedPathCache) refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -87,26 +142,13 @@ func (c *ProtectedPathCache) refresh() {
 		return
 	}
 
-	// No Deluge client (deluge not configured): serve the static extraPaths
-	// only. NewServer explicitly builds this cache with a nil client in that
-	// case ("the cache still works for the static paths") — without this
+	// No Deluge client (deluge not configured): there is no list to load, and
+	// the static paths are consulted directly by ProtectedBy. Without this
 	// guard, c.client.ListTorrents() → Login() dereferences the nil receiver
-	// and every tag write's IsProtected pre-flight panics (500 on the update
-	// endpoints; latent in the test suite because a leaked deluge client
-	// singleton from an earlier test masked it until the leak was fixed).
+	// and every tag write's IsProtected pre-flight panics.
 	if c.client == nil {
-		fresh := make([]string, 0, len(c.extraPaths))
-		seenStatic := make(map[string]struct{}, len(c.extraPaths))
-		for _, p := range c.extraPaths {
-			if p == "" {
-				continue
-			}
-			if _, dup := seenStatic[p]; !dup {
-				seenStatic[p] = struct{}{}
-				fresh = append(fresh, p)
-			}
-		}
-		c.paths = fresh
+		c.delugePaths = nil
+		c.loaded = true
 		c.lastRefresh = time.Now()
 		return
 	}
@@ -115,11 +157,16 @@ func (c *ProtectedPathCache) refresh() {
 	if err != nil {
 		// Deluge unreachable — keep stale data, do not update lastRefresh
 		// so the next call will try again.
-		slog.Warn("ProtectedPathCache failed to refresh from Deluge (using stale data)", "err", err)
+		protectedLog.Warn("ProtectedPathCache failed to refresh from Deluge (loaded=%v, using last-known list of %d save paths): %v",
+			c.loaded, len(c.delugePaths), err)
 		return
 	}
+	c.setDelugePathsLocked(torrents)
+}
 
-	// Collect unique save paths from all torrents.
+// setDelugePathsLocked replaces the Deluge list with the unique save paths of
+// torrents and marks the cache loaded. Caller holds c.mu.
+func (c *ProtectedPathCache) setDelugePathsLocked(torrents map[string]TorrentStatus) {
 	seen := make(map[string]struct{})
 	var fresh []string
 	for _, t := range torrents {
@@ -131,19 +178,8 @@ func (c *ProtectedPathCache) refresh() {
 			fresh = append(fresh, t.SavePath)
 		}
 	}
-
-	// Merge in extra (static) paths.
-	for _, p := range c.extraPaths {
-		if p == "" {
-			continue
-		}
-		if _, dup := seen[p]; !dup {
-			seen[p] = struct{}{}
-			fresh = append(fresh, p)
-		}
-	}
-
-	c.paths = fresh
+	c.delugePaths = fresh
+	c.loaded = true
 	c.lastRefresh = time.Now()
-	slog.Debug("ProtectedPathCache refreshed protected path prefixes", "count", len(c.paths))
+	protectedLog.Debug("ProtectedPathCache refreshed: %d Deluge save paths, %d static paths", len(c.delugePaths), len(c.extraPaths))
 }

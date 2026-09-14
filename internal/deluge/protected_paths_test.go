@@ -1,6 +1,7 @@
 // file: internal/deluge/protected_paths_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e6c9f3b2-4d0a-5187-c8e5-2b9f4e1c0d74
+// last-edited: 2026-09-14
 
 package deluge
 
@@ -51,28 +52,9 @@ func populateCacheForTest(c *ProtectedPathCache, lf listFunc) {
 		c.lastRefresh = time.Now()
 		return
 	}
-	seen := make(map[string]struct{})
-	var fresh []string
-	for _, t := range torrents {
-		if t.SavePath == "" {
-			continue
-		}
-		if _, dup := seen[t.SavePath]; !dup {
-			seen[t.SavePath] = struct{}{}
-			fresh = append(fresh, t.SavePath)
-		}
-	}
-	for _, p := range c.extraPaths {
-		if p == "" {
-			continue
-		}
-		if _, dup := seen[p]; !dup {
-			seen[p] = struct{}{}
-			fresh = append(fresh, p)
-		}
-	}
-	c.paths = fresh
-	c.lastRefresh = time.Now()
+	c.mu.Lock()
+	c.setDelugePathsLocked(torrents)
+	c.mu.Unlock()
 }
 
 // Test 1: IsProtected returns true when filePath has a cached prefix.

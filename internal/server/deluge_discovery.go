@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
 // last-edited: 2026-09-14
 //
@@ -192,9 +192,10 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath, Error: importErr.Error()})
 			failed++
 		case newPath == srcPath:
-			// Source and destination are the same file: no copy, no row
-			// update. Until 2026-09-14 this was counted as imported.
-			results = append(results, result{FileID: f.ID, Path: f.FilePath, SkippedReason: "file is already at its library destination; nothing was copied"})
+			// Source and destination are the same file: no copy. The row is
+			// marked imported so it stops coming back as pending. Until
+			// 2026-09-14 this was counted as imported, with no row update.
+			results = append(results, result{FileID: f.ID, Path: f.FilePath, SkippedReason: "file is already at its library destination; nothing was copied, and the row is marked imported"})
 			skipped++
 		default:
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath})

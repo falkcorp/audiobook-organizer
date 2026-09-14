@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-08-19
+// last-edited: 2026-09-14
 
 package server
 
@@ -120,6 +120,16 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 // when GetGlobalStore returned nil).
 func (s *Server) isProtectedPath(filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
+
+	// Deluge save paths and the static protected prefixes (the cache the
+	// tag-write guard uses). Until 2026-09-14 this knew only import roots and
+	// the iTunes library, so the book PATCH write-back and the organizer
+	// treated a seeding file as unprotected. An unloaded Deluge list is NOT
+	// treated as protected here, because this also steers organize between
+	// move and copy; the writers and RenameFiles refuse on it themselves.
+	if s.protectedPathCache != nil && s.protectedPathCache.IsProtected(absPath) {
+		return true
+	}
 
 	// Check import paths
 	if store := s.Ops(); store != nil {

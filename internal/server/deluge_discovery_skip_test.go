@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discovery_skip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7b9d05-8c21-4a6f-b0d4-5f92e1c6a738
 // last-edited: 2026-09-14
 
@@ -52,5 +52,8 @@ func TestHandleDiscoveryImport_SourceIsDestination_ReportedSkippedNotImported(t 
 	require.Len(t, resp.Data.Results, 1)
 	assert.Empty(t, resp.Data.Results[0].Error)
 	assert.Empty(t, resp.Data.Results[0].NewPath, "a skipped file has no new path")
-	assert.Nil(t, updated, "no row update happens when source == destination")
+	// The row is marked imported in place, so it stops coming back as pending.
+	require.NotNil(t, updated, "the row must be marked imported")
+	assert.NotNil(t, updated.ImportedFromDelugeAt)
+	assert.Equal(t, src, updated.FilePath, "nothing moved")
 }

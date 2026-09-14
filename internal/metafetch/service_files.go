@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // AudioFilesInDir returns the library audio files directly inside dir, sorted
@@ -431,6 +432,12 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 	target, ok := mfs.existingLibraryCopy(fresh)
 	if ok || policy != createLibraryCopy {
 		return target, nil
+	}
+	// With the Deluge list unloaded every book outside root_dir looks
+	// protected (isProtectedPath), so a copy made now could be a copy of a
+	// book that needs none. Refuse until the list loads.
+	if !mfs.protectedListLoaded() {
+		return nil, fmt.Errorf("apply file work for book %s: not creating a library copy: %w", id, tagger.ErrProtectedListNotLoaded)
 	}
 	if err := standDown(checkpoint, id, "creating the library copy"); err != nil {
 		return nil, err

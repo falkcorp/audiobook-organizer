@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metadata
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // metadataBulkOpConcurrency bounds the worker pool for BatchUpdateMetadata and
@@ -367,20 +368,40 @@ func WriteMetadataToFileInPlace(filePath string, metadata map[string]any, config
 	return writeMetadataViaCLI(filePath, metadata, config)
 }
 
+// The protected-path guard runs FIRST, for every writer below: the path is
+// resolved once (tagger.ResolvePathForWrite with the package's safe-write
+// deps) and the native writer and the CLI fallback both write the resolved
+// path. A refusal (tagger.ErrProtectedPathWrite) is returned at once. Until
+// 2026-09-14 the guard ran only inside the native writer, and its refusal
+// was treated as a native failure: the CLI writers (AtomicParsley
+// --overWrite, ffmpeg) then rewrote the ORIGINAL protected file.
 func WriteMetadataToFile(filePath string, metadata map[string]any, config fileops.OperationConfig) error {
+	target := filePath
+	if abs, err := filepath.Abs(filePath); err == nil {
+		target = abs
+	}
+	target, err := tagger.ResolvePathForWrite(context.Background(), target, packageSafeWriteDeps)
+	if err != nil {
+		return fmt.Errorf("write metadata to %s: %w", filePath, err)
+	}
+
 	// Attempt native writer first if compiled in.
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
 	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
 	if taglibAvailable {
-		if err := writeMetadataWithTaglib(filePath, metadata, config); err == nil {
+		nativeErr := writeMetadataWithTaglib(target, metadata, config)
+		if nativeErr == nil {
 			return nil
+		}
+		if errors.Is(nativeErr, tagger.ErrProtectedPathWrite) {
+			return nativeErr
 		}
 		// Native failed; continue with CLI fallback
 	}
 
 	// The CLI writers rewrite the file outside fileops.WriteTagsSafe, so the
 	// new hashes are recorded on the file's row separately.
-	return writeMetadataViaCLIRecordingHashes(filePath, metadata, config)
+	return writeMetadataViaCLIRecordingHashes(target, metadata, config)
 }
 
 // writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared
