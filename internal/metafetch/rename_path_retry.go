@@ -1,5 +1,5 @@
 // file: internal/metafetch/rename_path_retry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c2d6a41-0f93-4e7b-a5c8-1b9e3d7f6204
 // last-edited: 2026-09-14
 
@@ -51,9 +51,17 @@ func retryPathWrite(ctx context.Context, write func() error) error {
 // retries write; if every attempt fails it durably records the {old, new}
 // pair for maintenance.repoint-unrecorded-renames and returns the write
 // error. The record is for repair: the rename still fails.
+//
+// On success it clears any earlier record for the same row, so a record never
+// describes a move that a later rename has since superseded.
 func (mfs *Service) writeMovedPath(ctx context.Context, rec organizer.RenamePathWriteFailure, write func() error) error {
 	err := retryPathWrite(ctx, write)
 	if err == nil {
+		if clrErr := organizer.ClearRenamePathWriteFailureIfPresent(mfs.db, rec.BookID, rec.BookFileID); clrErr != nil {
+			renameSyncLog.Warn("book %s file %s: path written, but an earlier repair record could not be cleared: %v",
+				logger.SanitizeLogValue(rec.BookID), logger.SanitizeLogValue(rec.BookFileID),
+				logger.SanitizeLogValue(clrErr.Error()))
+		}
 		return nil
 	}
 	rec.Error = err.Error()

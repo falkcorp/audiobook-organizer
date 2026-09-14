@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-14
 
@@ -80,6 +80,9 @@ type opsBookFileMutator interface {
 	BatchCreateBookFiles(files []*database.BookFile) error
 	SetBookFileHash(id string, hash string) error
 	UpdateBookFile(id string, file *database.BookFile) error
+	// ModifyBookFile is the atomic compare-and-write repoint-unrecorded-renames
+	// uses, so "row still holds old_path" and the repoint are one step.
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // opsBookFileDeleter removes book_file rows.

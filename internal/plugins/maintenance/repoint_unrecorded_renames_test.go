@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f41c2d7-6e08-4a53-b19c-2d7e5a0f8c36
 // last-edited: 2026-09-14
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -79,6 +80,9 @@ func (fx *repointFixture) plugin() *Plugin {
 
 func (fx *repointFixture) record(t *testing.T, rec organizer.RenamePathWriteFailure) string {
 	t.Helper()
+	if rec.RecordedAt == "" {
+		rec.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +105,12 @@ func touch(t *testing.T, p string) {
 func runRepoint(t *testing.T, p *Plugin, apply bool) {
 	t.Helper()
 	raw, _ := json.Marshal(repointUnrecordedRenamesParams{Apply: apply})
-	if err := p.runRepointUnrecordedRenames(context.Background(), raw, &fakeReporter{}); err != nil {
+	runRepointParams(t, p, string(raw))
+}
+
+func runRepointParams(t *testing.T, p *Plugin, raw string) {
+	t.Helper()
+	if err := p.runRepointUnrecordedRenames(context.Background(), json.RawMessage(raw), &fakeReporter{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }

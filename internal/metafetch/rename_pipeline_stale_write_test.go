@@ -1,5 +1,5 @@
 // file: internal/metafetch/rename_pipeline_stale_write_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a7c2e91-6b3d-4f08-9d15-e8b0c6a3f752
 // last-edited: 2026-09-14
 
@@ -28,6 +28,9 @@ type renameFixture struct {
 	stored      database.Book
 	files       []database.BookFile
 	onFileWrite func(n int) error
+	// onBookWrite, when set, runs inside each UpdateBook (the book-row path
+	// write) and may fail it.
+	onBookWrite func() error
 	fileWrites  int
 }
 
@@ -67,6 +70,11 @@ func newRenameFixture(t *testing.T) (*renameFixture, *Service) {
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
 			fx.mu.Lock()
 			defer fx.mu.Unlock()
+			if fx.onBookWrite != nil {
+				if err := fx.onBookWrite(); err != nil {
+					return nil, err
+				}
+			}
 			fx.stored = *b
 			return b, nil
 		},
