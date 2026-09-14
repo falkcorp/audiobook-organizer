@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-08-22
+// last-edited: 2026-09-14
 
 package server
 
@@ -70,12 +70,6 @@ type metadataResultsReader interface {
 // rawKVWriter: FileIOPool persists pending file ops under a raw key prefix and
 // scans them back on recovery. database.RawKVStore is exactly that surface.
 type rawKVWriter = database.RawKVStore
-
-// bookRerouteStore: applyBookMergeReroute.
-type bookRerouteStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-}
 
 // delugeAdapterStore is a pure forward into the deluge package's own interface.
 type delugeAdapterStore = deluge.Store

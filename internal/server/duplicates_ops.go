@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -192,7 +192,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				// are skipped in that mode (tests / iTunes write-back disabled).
 				ms = merge.NewService(store)
 			}
-			if err := applyBookMergeReroute(ctx, store, ms, p.KeepID, p.MergeIDs); err != nil {
+			if err := applyBookMergeReroute(ms, p.KeepID, p.MergeIDs); err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
 				return err
@@ -220,17 +220,26 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 }
 
 // applyBookMergeReroute performs the F6-rerouted book merge for the
-// dedup.book-merge op. It (1) copies the losers' iTunes stats onto the keep book
-// first-win (merge.Service.MergeBooks reassigns external-ID mappings but does
-// NOT carry these Book-level iTunes fields, and after soft-delete they would
-// otherwise survive only on the loser row and vanish on a later purge/archive
-// sweep), persisting the copy BEFORE the merge — Service re-reads books fresh
-// and writes the full keep object back, so the copy survives its own
-// version-group UpdateBook — then (2) merges via merge.Service.MergeBooks, which
-// reassigns external IDs to the winner, enqueues ITL removals, and soft-deletes
-// losers. Extracted from the op Run body so the reroute (soft-delete +
-// external-ID reassignment, NOT hard delete) is unit-testable on a real store.
-func applyBookMergeReroute(ctx context.Context, store bookRerouteStore, ms *merge.Service, keepID string, mergeIDs []string) error {
+// dedup.book-merge op through merge.Service.MergeBooksWithOptions, which
+// reassigns external IDs to the winner, enqueues ITL removals, soft-deletes
+// losers, and (CarryITunesFields) copies the losers' Book-level iTunes stats
+// onto the keep book first-win. ReassignExternalIDs does not carry those
+// fields, so without the carry they would survive only on the loser row and
+// vanish on a later purge/archive sweep.
+//
+// The carry used to happen HERE: a GetBookByID + full-row UpdateBook of the
+// keep book before the merge, outside mergeSerializeMu, with a write failure
+// only logged (A1#10). That (a) let the merge soft-delete the losers after the
+// stats failed to land, (b) reverted any write to the keep book made between
+// the read and the UpdateBook, and (c) copied stats from a loser another merge
+// had already consumed onto a keeper whose own merge was then refused. Inside
+// the Service all three go away: the carry is read and written under the lock,
+// in the same ModifyBook that marks the survivor primary, and after the
+// soft-deleted-input guard.
+//
+// Extracted from the op Run body so the reroute (soft-delete + external-ID
+// reassignment, NOT hard delete) is unit-testable on a real store.
+func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) error {
 	// Build the loser set once, excluding the keep book and de-duping. Callers
 	// (the handler binds keep_id/merge_ids without validation) may include the
 	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a
@@ -252,22 +261,9 @@ func applyBookMergeReroute(ctx context.Context, store bookRerouteStore, ms *merg
 		return nil // nothing to merge (every id was the keep book / duplicate)
 	}
 
-	if keepBook, err := store.GetBookByID(keepID); err == nil && keepBook != nil {
-		changed := false
-		for _, mid := range losers {
-			if mb, mErr := store.GetBookByID(mid); mErr == nil && mb != nil {
-				dedup.TransferITunesMetadataFirstWin(keepBook, mb)
-				changed = true
-			}
-		}
-		if changed {
-			if _, uErr := store.UpdateBook(keepBook.ID, keepBook); uErr != nil {
-				logging.Warn(ctx, "book merge: iTunes-field transfer write failed", "err", uErr)
-			}
-		}
-	}
 	// Service takes ALL ids (losers + winner) and the winner id.
-	_, err := ms.MergeBooks(append(append([]string{}, losers...), keepID), keepID)
+	_, err := ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
+		merge.MergeOptions{CarryITunesFields: true})
 	return err
 }
 

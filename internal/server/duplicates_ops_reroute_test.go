@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4a9c1f27-8b3e-4d05-9a61-2f7c0d3e6b58
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 // F6 regression test: the dedup.book-merge op (POST /audiobooks/merge) was
 // rerouted from the legacy dedup.MergeBooks hard-delete path to
@@ -16,7 +16,6 @@
 package server
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -59,7 +58,7 @@ func TestApplyBookMergeReroute_SoftDeletesAndReassignsExternalIDs(t *testing.T) 
 	}
 
 	ms := merge.NewService(store)
-	if err := applyBookMergeReroute(context.Background(), store, ms, keepID, []string{loserID}); err != nil {
+	if err := applyBookMergeReroute(ms, keepID, []string{loserID}); err != nil {
 		t.Fatalf("applyBookMergeReroute: %v", err)
 	}
 
@@ -126,7 +125,7 @@ func TestApplyBookMergeReroute_KeepIDInMergeIDs(t *testing.T) {
 
 	ms := merge.NewService(store)
 	// keepID deliberately included in mergeIDs (and duplicated).
-	if err := applyBookMergeReroute(context.Background(), store, ms, keepID, []string{keepID, loserID, loserID}); err != nil {
+	if err := applyBookMergeReroute(ms, keepID, []string{keepID, loserID, loserID}); err != nil {
 		t.Fatalf("applyBookMergeReroute: %v", err)
 	}
 

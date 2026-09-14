@@ -1,7 +1,7 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package merge
 
@@ -27,6 +27,19 @@ func newBook(id, title, format, path string) *database.Book {
 		Format:   format,
 		FilePath: path,
 	}
+}
+
+// expectModifyBook stubs the version-group write, which goes through
+// ModifyBook (not a full-row UpdateBook of the row read at the top of the
+// merge): it runs the merge's mutation against b and returns b.
+func expectModifyBook(m *mocks.MockStore, b *database.Book) {
+	m.EXPECT().ModifyBook(b.ID, mock.Anything).RunAndReturn(
+		func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			if err := fn(b); err != nil {
+				return nil, err
+			}
+			return b, nil
+		})
 }
 
 // ---------- MergeBooks error paths ----------
@@ -75,7 +88,7 @@ func TestUnit_MergeBooks_PrimaryIDNotInList(t *testing.T) {
 	assert.Contains(t, err.Error(), "primary_id book-999 not in book_ids")
 }
 
-func TestUnit_MergeBooks_UpdateBookFails(t *testing.T) {
+func TestUnit_MergeBooks_VersionGroupWriteFails(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewService(mockStore)
 
@@ -90,7 +103,7 @@ func TestUnit_MergeBooks_UpdateBookFails(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
 	// The loop iterates in order: book-1 then book-2. Fail on the first.
-	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, fmt.Errorf("disk full"))
+	mockStore.EXPECT().ModifyBook("book-1", mock.Anything).Return(nil, fmt.Errorf("disk full"))
 
 	_, err := svc.MergeBooks([]string{"book-1", "book-2"}, "")
 	require.Error(t, err)
@@ -112,9 +125,9 @@ func TestUnit_MergeBooks_AutoSelectM4B(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
-	// UpdateBook called for both books in the version-group loop
-	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(book1, nil)
-	mockStore.EXPECT().UpdateBook("book-2", mock.Anything).Return(book2, nil)
+	// ModifyBook called for both books in the version-group loop
+	expectModifyBook(mockStore, book1)
+	expectModifyBook(mockStore, book2)
 
 	// Loser cleanup: GetExternalIDsForBook, ReassignExternalIDs, then SoftDeleteBook
 	mockStore.EXPECT().GetExternalIDsForBook("book-1").Return(nil, nil)
@@ -143,9 +156,9 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
-	// Both books updated in version-group loop
-	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(book1, nil)
-	mockStore.EXPECT().UpdateBook("book-2", mock.Anything).Return(book2, nil)
+	// Both books written in the version-group loop
+	expectModifyBook(mockStore, book1)
+	expectModifyBook(mockStore, book2)
 
 	// Loser is book-2 (explicit override)
 	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
