@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-14
 
@@ -267,6 +267,13 @@ type titleVariant struct {
 	// "Rogue Lawyer - 001"): the stem may be a series name ("Wheel of Time -
 	// 003"), and "The Wheel of Time Companion" carries every anchor word.
 	Exact bool
+	// Allowed, when set, widens what Exact accepts: a result title may carry
+	// any word of the book's full title, not only the anchor's. Set for a
+	// title segment ("The Final Empire" from "Brandon Sanderson - Mistborn 01 -
+	// The Final Empire"), where the provider's title may keep the series word
+	// ("Mistborn: The Final Empire") but a sibling's never names only words
+	// our own title has.
+	Allowed map[string]bool
 }
 
 // titleOnlyAllowed reports whether the variant may be searched WITHOUT an
@@ -287,7 +294,13 @@ func (v titleVariant) titleOnlyAllowed() bool { return len(v.Anchor) >= 2 }
 func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 	base, series, bookName, found := splitSeriesDecoration(rawTitle)
 	if !found {
-		return partSuffixVariant(rawTitle, searchTitle)
+		if v := partSuffixVariant(rawTitle, searchTitle); v != nil {
+			return v
+		}
+		return segmentVariant(rawTitle, map[string]bool{
+			strings.ToLower(strings.TrimSpace(searchTitle)): true,
+			strings.ToLower(strings.TrimSpace(rawTitle)):    true,
+		})
 	}
 	if bookName == "" {
 		return nil
@@ -307,7 +320,55 @@ func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 		seen[key] = true
 		out = append(out, titleVariant{Query: q, Anchor: anchor})
 	}
-	return out
+	return append(out, segmentVariant(rawTitle, seen)...)
+}
+
+// dashSegment and spacedColon split a rip-style title into its fields. A
+// spaced colon ("Knaves over Queens : Wild Cards") is the rip convention for
+// "Title : Series"; an unspaced one is a real subtitle and is left alone.
+var (
+	dashSegment = regexp.MustCompile(`\s+[-–—]\s+`)
+	spacedColon = regexp.MustCompile(`\s+:\s+`)
+	hasDigit    = regexp.MustCompile(`\d`)
+	hasLetter   = regexp.MustCompile(`\pL`)
+)
+
+// segmentVariant returns the book's own name out of a rip-style title as an
+// Exact variant: the last dash field of "Legend of Drizzt Book 03 - The Dark
+// Elf Trilogy - Sojourn", "The Sorcerer's Ring - 04 - A Cry of Honor" or
+// "Brandon Sanderson - Mistborn 01 - The Final Empire", and the field before a
+// spaced colon. A dash title qualifies only with three or more fields or a
+// number before the last one, so "Dune - Frank Herbert" is not searched as
+// "Frank Herbert". The result must carry every word of the field and nothing
+// our full title lacks, so a sibling ("The Well of Ascension") never passes;
+// one that keeps the series word ("Mistborn: The Final Empire") does.
+func segmentVariant(rawTitle string, seen map[string]bool) []titleVariant {
+	title := stripChapterFromTitle(rawTitle)
+	var field string
+	if parts := spacedColon.Split(title, 2); len(parts) == 2 {
+		field = parts[0]
+	} else {
+		parts := dashSegment.Split(title, -1)
+		if len(parts) < 2 {
+			return nil
+		}
+		if len(parts) < 3 && !hasDigit.MatchString(strings.Join(parts[:len(parts)-1], " ")) {
+			return nil
+		}
+		field = parts[len(parts)-1]
+	}
+	field = strings.Trim(strings.TrimSpace(field), " -–—:,")
+	key := strings.ToLower(field)
+	anchor := anchorWords(field, "")
+	if len(field) < 3 || !hasLetter.MatchString(field) || len(anchor) == 0 || seen[key] {
+		return nil
+	}
+	seen[key] = true
+	allowed := SignificantWords(title)
+	for w := range anchor {
+		allowed[w] = true
+	}
+	return []titleVariant{{Query: field, Anchor: anchor, Exact: true, Allowed: allowed}}
 }
 
 // partSuffixVariant returns the title without its part number ("Rogue Lawyer -
@@ -333,11 +394,15 @@ func partSuffixVariant(rawTitle, searchTitle string) []titleVariant {
 // same author: two authors' books of one title are ambiguous, so none is kept.
 func keepVariant(results []metadata.BookMetadata, v titleVariant, people string) []metadata.BookMetadata {
 	if v.Exact {
+		allowed := v.Anchor
+		if v.Allowed != nil {
+			allowed = v.Allowed
+		}
 		var exact []metadata.BookMetadata
 		for _, r := range results {
 			ok := strings.TrimSpace(r.Author) != ""
 			for w := range SignificantWords(r.Title) {
-				if !genericTitleWords[w] && !v.Anchor[w] {
+				if !genericTitleWords[w] && !allowed[w] {
 					ok = false
 					break
 				}
