@@ -1,5 +1,5 @@
 // file: internal/server/handlers/versions.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
 // last-edited: 2026-09-13
 
@@ -8,12 +8,14 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"maps"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -96,6 +98,46 @@ type VersionsStore interface {
 // setting primary, fetching a group, and split/move operations on segments.
 type VersionsHandler struct {
 	store VersionsStore
+	// groupLocks serializes the set-primary and link calls that touch the
+	// same version group; see lockGroups. The server builds one handler, so
+	// every request shares them.
+	groupLocks [versionGroupLockStripes]sync.Mutex
+}
+
+// versionGroupLockStripes is how many locks the version-group IDs hash onto.
+// Striping keeps the set fixed-size; two groups sharing a stripe only
+// serialize with each other, which is harmless.
+const versionGroupLockStripes = 64
+
+// lockGroups locks the stripes of the given version groups ("" is skipped) in
+// stripe order, so two calls locking overlapping sets cannot deadlock, and
+// returns the unlock.
+//
+// It serializes this handler's own writers of a group: two set-primary calls
+// on one group each read the members, promote their book and demote the rest,
+// and interleaved they demoted each other's promotion and left no primary.
+// Writers outside this handler (maintenance jobs, reconcile) do not take these
+// locks; against them the per-row checks inside each ModifyBook are the guard.
+func (h *VersionsHandler) lockGroups(groupIDs ...string) func() {
+	var idx []int
+	for _, g := range groupIDs {
+		if g == "" {
+			continue
+		}
+		f := fnv.New32a()
+		_, _ = f.Write([]byte(g))
+		idx = append(idx, int(f.Sum32()%versionGroupLockStripes))
+	}
+	slices.Sort(idx)
+	idx = slices.Compact(idx)
+	for _, i := range idx {
+		h.groupLocks[i].Lock()
+	}
+	return func() {
+		for j := len(idx) - 1; j >= 0; j-- {
+			h.groupLocks[idx[j]].Unlock()
+		}
+	}
 }
 
 // NewVersionsHandler constructs a VersionsHandler backed by the given store.
@@ -150,7 +192,12 @@ func (h *VersionsHandler) ListAudiobookVersions(c *gin.Context) {
 //
 // A soft-deleted book, or linking a book to itself, is refused before any
 // write. A member whose group changed after it was read, or that was deleted
-// meanwhile, stops the link with an error naming what was and was not written.
+// meanwhile, stops the link: every member already written is put back into
+// the group and primary flag it had, newest first, so a failure part-way can
+// not strand an incoming member's old group without its primary. A member
+// the undo cannot restore is named in the response.
+//
+// Links and set-primary calls on the same groups are serialized (lockGroups).
 func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 	id := c.Param("id")
 
@@ -192,6 +239,7 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 	}
 
 	g1, g2 := versionGroupOf(book1), versionGroupOf(book2)
+	defer h.lockGroups(g1, g2)()
 	if g1 != "" && g1 == g2 {
 		httputil.RespondWithOK(c, gin.H{"version_group_id": g1})
 		return
@@ -219,9 +267,9 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 		return
 	}
 
-	winner := electVersionPrimary(primariesOf(targetMembers))
+	winner := electVersionPrimary(primaryCandidates(targetMembers))
 	if winner == nil {
-		winner = electVersionPrimary(primariesOf(incomingMembers))
+		winner = electVersionPrimary(primaryCandidates(incomingMembers))
 	}
 	all := append(append([]database.Book{}, targetMembers...), incomingMembers...)
 	if winner == nil {
@@ -245,42 +293,98 @@ func (h *VersionsHandler) LinkAudiobookVersion(c *gin.Context) {
 	slices.Sort(rest)
 	order = append(order, rest...)
 
-	var linked []string
+	var written []versionFlagWrite
 	for _, bid := range order {
 		wantPrimary := bid == winner.ID
+		var w *versionFlagWrite
 		_, mErr := h.modifyBook(bid, func(cur *database.Book) error {
+			w = nil
 			if cur.IsSoftDeleted() {
 				return fmt.Errorf("book %s was deleted during the link", cur.ID)
 			}
 			if g := versionGroupOf(cur); g != readGroup[cur.ID] {
 				return fmt.Errorf("book %s moved from version group %q to %q during the link", cur.ID, readGroup[cur.ID], g)
 			}
-			if versionGroupOf(cur) == targetGroup && isPrimaryVersion(cur) == wantPrimary && cur.IsPrimaryVersion != nil {
+			if versionGroupOf(cur) == targetGroup && cur.IsPrimaryVersion != nil && *cur.IsPrimaryVersion == wantPrimary {
 				return database.ErrSkipBookWrite
 			}
+			w = &versionFlagWrite{id: cur.ID, prevGroup: cloneStringPtr(cur.VersionGroupID), prevFlag: cloneBoolPtr(cur.IsPrimaryVersion)}
 			gid := targetGroup
 			cur.VersionGroupID = &gid
 			cur.IsPrimaryVersion = &wantPrimary
 			return nil
 		})
-		if mErr != nil {
-			notLinked := order[len(linked):]
-			versionsLog.Error("link %s + %s: stopped at book %s after linking %v: %v",
-				logger.SanitizeLogValue(id), logger.SanitizeLogValue(req.OtherID), bid, linked, mErr)
-			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
-				fmt.Sprintf("failed to link book %s into version group %s: %v", bid, targetGroup, mErr),
-				"link_partial", map[string]any{
-					"version_group_id": targetGroup,
-					"primary_book_id":  winner.ID,
-					"linked":           linked,
-					"not_linked":       notLinked,
-				})
-			return
+		if mErr == nil {
+			if w != nil {
+				written = append(written, *w)
+			}
+			continue
 		}
-		linked = append(linked, bid)
+
+		stuck := h.undoLinkWrites(targetGroup, written)
+		versionsLog.Error("link %s + %s: stopped at book %s: %v (unrestored: %v)",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(req.OtherID), bid, mErr, stuck)
+		msg := fmt.Sprintf("failed to link book %s into version group %s (%v); every book already written was put back into its old group", bid, targetGroup, mErr)
+		if len(stuck) > 0 {
+			msg = fmt.Sprintf("failed to link book %s into version group %s (%v), and %s could not be put back into their old groups",
+				bid, targetGroup, mErr, strings.Join(stuck, ", "))
+		}
+		httputil.RespondWithErrorFields(c, http.StatusInternalServerError, msg, "link_failed", map[string]any{
+			"version_group_id":    targetGroup,
+			"failed_book_id":      bid,
+			"unrestored_book_ids": stuck,
+		})
+		return
 	}
 
 	httputil.RespondWithOK(c, gin.H{"version_group_id": targetGroup, "primary_book_id": winner.ID})
+}
+
+// versionFlagWrite is one book's version group and primary flag as they were
+// before a handler wrote them, for the undo.
+type versionFlagWrite struct {
+	id        string
+	prevGroup *string
+	prevFlag  *bool
+}
+
+// undoLinkWrites puts every book a failed link wrote back into the group and
+// primary flag it had, newest first. A book that has left targetGroup since
+// was moved by someone else and is left alone. It returns the IDs it could
+// not restore.
+func (h *VersionsHandler) undoLinkWrites(targetGroup string, written []versionFlagWrite) []string {
+	var stuck []string
+	for i := len(written) - 1; i >= 0; i-- {
+		w := written[i]
+		if _, err := h.modifyBook(w.id, func(cur *database.Book) error {
+			if versionGroupOf(cur) != targetGroup {
+				return fmt.Errorf("book %s left version group %s after the link wrote it", cur.ID, targetGroup)
+			}
+			cur.VersionGroupID = w.prevGroup
+			cur.IsPrimaryVersion = w.prevFlag
+			return nil
+		}); err != nil {
+			versionsLog.Error("link: undoing the write of book %s failed: %v", w.id, err)
+			stuck = append(stuck, w.id)
+		}
+	}
+	return stuck
+}
+
+func cloneStringPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func cloneBoolPtr(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // liveGroupMembers returns the live members of groupID, always including
@@ -319,20 +423,43 @@ func versionGroupOf(b *database.Book) string {
 	return *b.VersionGroupID
 }
 
-// isPrimaryVersion keeps the codebase's reading of the *bool: nil is NOT
-// primary.
-func isPrimaryVersion(b *database.Book) bool {
+// The *bool is_primary_version flag has two readings, and this file needs
+// both:
+//
+//   - isExplicitPrimary: set and true. Used to skip a write that would change
+//     nothing ("already primary").
+//   - countsAsPrimary: nil or true. This is how the store and memdb read the
+//     flag when they decide what the library shows as a primary
+//     (PebbleStore's summary filter, the memdb summaries and reads, stats,
+//     series and iTunes paths), so a member with a nil flag IS a primary to
+//     the rest of the system. Anything that must leave a group with one
+//     primary -- the set-primary demotes, the link election -- uses this
+//     reading, or a nil member survives as a second primary.
+func isExplicitPrimary(b *database.Book) bool {
 	return b != nil && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
 }
 
-func primariesOf(books []database.Book) []database.Book {
-	var out []database.Book
+func countsAsPrimary(b *database.Book) bool {
+	return b != nil && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion)
+}
+
+// primaryCandidates returns a group's members that are primaries: the
+// explicit ones when there are any (an explicit flag is the stronger claim),
+// else the ones the store counts as primary because their flag is nil.
+func primaryCandidates(books []database.Book) []database.Book {
+	var explicit, implicit []database.Book
 	for _, b := range books {
-		if isPrimaryVersion(&b) {
-			out = append(out, b)
+		switch {
+		case isExplicitPrimary(&b):
+			explicit = append(explicit, b)
+		case countsAsPrimary(&b):
+			implicit = append(implicit, b)
 		}
 	}
-	return out
+	if len(explicit) > 0 {
+		return explicit
+	}
+	return implicit
 }
 
 // electVersionPrimary picks the earliest-created book, tie-broken by ID: the
@@ -378,13 +505,20 @@ func (h *VersionsHandler) modifyBook(id string, fn func(*database.Book) error) (
 // SetAudiobookPrimary makes an audiobook the one primary of its version group.
 //
 // The new primary is promoted first and the others are then demoted, in book
-// ID order, each through ModifyBook on the stored row. If a demote fails, the
-// writes already made are undone in reverse (the demoted books promoted back,
-// the new primary restored to its old flag), so the group ends as it began --
-// one primary if it had one -- rather than with two, and the request fails.
+// ID order, each through ModifyBook on the stored row. Every member whose flag
+// is not an explicit false is demoted: the store counts a nil flag as primary
+// (see countsAsPrimary), so skipping nil members left a second primary.
+//
+// If a demote fails, the writes already made are undone in reverse (each
+// demoted book gets back the exact flag it had, nil included, and the new
+// primary its old flag), so the group ends as it began and the request fails.
 // If an undo write also fails the response names every book whose flag could
-// not be restored. A soft-deleted book is refused: a deleted row must never be
-// its group's only primary.
+// not be restored, and the group can be left in between.
+//
+// Calls on the same group are serialized (lockGroups): two concurrent calls
+// used to demote each other's promotion and leave no primary. Writers outside
+// this handler do not take that lock. A soft-deleted book is refused: a
+// deleted row must never be its group's only primary.
 func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 	id := c.Param("id")
 
@@ -408,7 +542,7 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 	groupID := versionGroupOf(book)
 	if groupID == "" {
 		if _, err := h.modifyBook(id, func(cur *database.Book) error {
-			if isPrimaryVersion(cur) {
+			if isExplicitPrimary(cur) {
 				return database.ErrSkipBookWrite
 			}
 			t := true
@@ -422,6 +556,7 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		return
 	}
 
+	defer h.lockGroups(groupID)()
 	books, err := h.store.GetBooksByVersionGroup(groupID)
 	if err != nil {
 		httputil.InternalError(c, "failed to fetch versions; nothing was changed", err)
@@ -445,13 +580,10 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		if versionGroupOf(cur) != groupID {
 			return fmt.Errorf("book %s left version group %s", cur.ID, groupID)
 		}
-		if isPrimaryVersion(cur) {
+		if isExplicitPrimary(cur) {
 			return database.ErrSkipBookWrite
 		}
-		if cur.IsPrimaryVersion != nil {
-			v := *cur.IsPrimaryVersion
-			prevFlag = &v
-		}
+		prevFlag = cloneBoolPtr(cur.IsPrimaryVersion)
 		t := true
 		cur.IsPrimaryVersion = &t
 		promoted = true
@@ -461,36 +593,39 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 		return
 	}
 
-	// 2. Demote every other primary still in the group.
-	var demoted []string
+	// 2. Demote every other member the store counts as primary: an explicit
+	// true, or a nil flag.
+	var demoted []versionFlagWrite
 	for _, oid := range others {
-		changed := false
+		var d *versionFlagWrite
 		_, dErr := h.modifyBook(oid, func(cur *database.Book) error {
-			if versionGroupOf(cur) != groupID || !isPrimaryVersion(cur) {
+			d = nil
+			if versionGroupOf(cur) != groupID || !countsAsPrimary(cur) {
 				return database.ErrSkipBookWrite
 			}
+			d = &versionFlagWrite{id: cur.ID, prevFlag: cloneBoolPtr(cur.IsPrimaryVersion)}
 			f := false
 			cur.IsPrimaryVersion = &f
-			changed = true
 			return nil
 		})
 		if dErr == nil {
-			if changed {
-				demoted = append(demoted, oid)
+			if d != nil {
+				demoted = append(demoted, *d)
 			}
 			continue
 		}
 
-		// 3. Undo, newest write first.
+		// 3. Undo, newest write first, restoring each flag exactly (nil stays
+		// nil).
 		var stuck []string
 		for i := len(demoted) - 1; i >= 0; i-- {
-			if _, uErr := h.modifyBook(demoted[i], func(cur *database.Book) error {
-				t := true
-				cur.IsPrimaryVersion = &t
+			prev := demoted[i].prevFlag
+			if _, uErr := h.modifyBook(demoted[i].id, func(cur *database.Book) error {
+				cur.IsPrimaryVersion = cloneBoolPtr(prev)
 				return nil
 			}); uErr != nil {
-				versionsLog.Error("set-primary %s: undoing the demote of %s failed: %v", logger.SanitizeLogValue(id), demoted[i], uErr)
-				stuck = append(stuck, demoted[i])
+				versionsLog.Error("set-primary %s: undoing the demote of %s failed: %v", logger.SanitizeLogValue(id), demoted[i].id, uErr)
+				stuck = append(stuck, demoted[i].id)
 			}
 		}
 		if promoted {
@@ -545,10 +680,16 @@ func (h *VersionsHandler) GetVersionGroup(c *gin.Context) {
 //     MoveBookFilesToBook, which recounts the aggregates (duration, size, file
 //     count) of both books. If the move fails nothing moved: the new book is
 //     deleted and a group minted in step 2 is taken off the source again.
-//  4. Only then are the two FilePaths settled, each in a ModifyBook closure
+//  4. The moved files' external IDs (iTunes PIDs) move to the new book, as
+//     the other three move paths do, so a PID does not keep naming a book that
+//     no longer holds its file.
+//  5. Only then are the two FilePaths settled, each in a ModifyBook closure
 //     that sets FilePath and nothing else, on the stored row. These writes
 //     used to be whole-row UpdateBook calls of the copies read before the
 //     move, which put the pre-move totals back over the recount.
+//
+// A failure in steps 4-5 does not undo the move; it is reported in
+// "warnings" with status 207.
 //
 // Every ModifyBook writes the store's copy-on-write version snapshot, so the
 // source's and the new book's rows before the split stay in their history.
@@ -691,6 +832,19 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 		msg := fmt.Sprintf(format, args...)
 		warnings = append(warnings, msg)
 		versionsLog.Warn("split-version %s -> %s: %s", logger.SanitizeLogValue(id), createdBook.ID, logger.SanitizeLogValue(msg))
+	}
+	moving := make(map[string]bool, len(segmentIDs))
+	for _, fid := range segmentIDs {
+		moving[fid] = true
+	}
+	var movedFiles []database.BookFile
+	for _, f := range sourceFiles {
+		if moving[f.ID] {
+			movedFiles = append(movedFiles, f)
+		}
+	}
+	if xErr := h.reassignExternalIDsForFiles(sourceBook.ID, createdBook.ID, movedFiles); xErr != nil {
+		warn("not every external ID (iTunes PID) of the moved files was moved to the new book; the ones that failed still name the source: %v", xErr)
 	}
 	h.setPathFromFiles(createdBook.ID, "new book", warn)
 	h.setPathFromFiles(sourceBook.ID, "source book", warn)
@@ -1360,12 +1514,18 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 	// Reassign each mapping with ReassignExternalID: one atomic batch that
 	// rewrites the primary key and swaps the reverse keys, so a failure leaves
 	// the mapping on the source. A mapping whose primary row names some other
-	// book is a stale reverse key; it is reported and left alone rather than
-	// taken from that book.
+	// book is a stale reverse key: the ID already belongs to that book, so
+	// there is nothing of the source's to move. It is logged and skipped, not
+	// returned -- the caller has already moved the files, and failing the
+	// request over a mapping that was never the source's turned a correct
+	// split into a 500. Only a real write failure is returned.
 	var errs []error
+	skipped := 0
 	for _, m := range toMove {
 		if m.BookID != sourceBookID {
-			errs = append(errs, fmt.Errorf("%s %s is indexed under book %s but belongs to book %s; left alone", m.Source, m.ExternalID, sourceBookID, m.BookID))
+			skipped++
+			versionsLog.Warn("external ID %s %s is indexed under book %s but belongs to book %s; left alone",
+				logger.SanitizeLogValue(m.Source), logger.SanitizeLogValue(m.ExternalID), logger.SanitizeLogValue(sourceBookID), logger.SanitizeLogValue(m.BookID))
 			continue
 		}
 		if rErr := h.store.ReassignExternalID(m.Source, m.ExternalID, targetBookID); rErr != nil {
@@ -1373,8 +1533,8 @@ func (h *VersionsHandler) reassignExternalIDsForFiles(sourceBookID, targetBookID
 		}
 	}
 
-	versionsLog.Info("reassigned %d external ID mapping(s) from book %s to %s (%d failed)",
-		len(toMove), logger.SanitizeLogValue(sourceBookID), logger.SanitizeLogValue(targetBookID), len(errs))
+	versionsLog.Info("reassigned external ID mappings from book %s to %s: %d matched, %d skipped as another book's, %d failed",
+		logger.SanitizeLogValue(sourceBookID), logger.SanitizeLogValue(targetBookID), len(toMove), skipped, len(errs))
 	return errors.Join(errs...)
 }
 

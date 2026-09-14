@@ -6,3 +6,8 @@
 - Set-primary promotes first, demotes the others in ID order, and rolls every write back if a demote fails, so a partial failure no longer leaves a group with no primary or two.
 - Link, set-primary and split-version answer 404 for a missing book instead of dereferencing a nil row.
 - `dedup-books` re-checks, under the retiring book's lock, the primary flag and version group its hand-off was planned on, and that the planned successor is still a live primary; if either changed the retire is refused and this run's promotion is undone. A successor retired meanwhile is never promoted. Dry-run now refuses a pair with a retired book, as apply does.
+- Set-primary demotes every member the store counts as primary, including a member whose primary flag is unset (the store and memdb read unset as primary), so a group no longer keeps a second primary; a rollback restores each flag exactly. Set-primary and link calls on the same group are now serialized, so two concurrent calls can no longer demote each other and leave no primary.
+- A link that fails part-way puts every member it already moved back into its old group with its old flag, so an incoming group is no longer left without its primary.
+- Version split now moves the moved files' iTunes PIDs to the new book, like the other move paths.
+- A split no longer fails with a 500 after moving the files because an external ID indexed under the source actually belongs to another book; that mapping is logged and skipped.
+- `dedup-books` plans a duplicate's primary hand-off again from a fresh read right before retiring it, after its files have moved. A retire still refused after that leaves the duplicate live and empty and is counted as a failure naming it, not a refusal.

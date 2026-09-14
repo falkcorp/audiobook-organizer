@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-13
 
@@ -799,6 +799,12 @@ func ddRetireFailed(store ddBookModifier, successor string, promoted bool, prev 
 // retired or demoted after ddPromotePrimary ran). The caller then undoes its
 // own promotion. The successor check is a plain GetBookByID read, which the
 // LOCK RULES allow inside a ModifyBook closure.
+//
+// This narrows the cross-book window; it does not close it. Only the retiring
+// book's row is locked: the successor is read, not locked, so a writer can
+// still change the successor, or another member of the group, between this
+// check and the commit. Closing it needs a group-level lock the store does
+// not have.
 func ddRetireGuard(store merge.ITunesGuardStore, sim *ddSim, planned *database.Book, successor string) func(*database.Book) error {
 	plannedVG := ""
 	if planned.VersionGroupID != nil {
@@ -835,6 +841,70 @@ func ddRetireGuard(store merge.ITunesGuardStore, sim *ddSim, planned *database.B
 // ddMergeStore is ddMergeDuplicateBook's store: the job's whole surface.
 type ddMergeStore = maintenance.JobStore
 
+// ddRetireMergedDupAttempts is how many fresh plans ddRetireMergedDup tries
+// before giving up on a dup whose retire keeps being refused.
+const ddRetireMergedDupAttempts = 2
+
+// ddRetireMergedDup soft-deletes dup, whose files, external IDs and user tags
+// have already moved to keeper, and returns the successor it promoted ("" for
+// none).
+//
+// The primary hand-off is planned from a fresh read of the dup immediately
+// before each attempt, not from the read taken before the merge wrote
+// anything: a writer that changed the dup's group or primary flag during the
+// move is then planned around rather than refused. The retire guard
+// (ddRetireGuard) still re-checks the plan under the dup's lock; if it
+// refuses, this run's promotion is undone and the plan is made again from a
+// new read.
+//
+// A dup that is still refused after the last attempt -- or whose retire fails
+// for any other reason -- is left live and empty. That is returned as a
+// failure, not a refusal: the merge has already written, so declining here is
+// not "nothing happened", and the error names the emptied book. A dup another
+// writer retired or deleted meanwhile needs nothing more.
+func ddRetireMergedDup(store ddMergeStore, sim *ddSim, keeper, dup *database.Book) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < ddRetireMergedDupAttempts; attempt++ {
+		fresh, err := store.GetBookByID(dup.ID)
+		if err != nil {
+			lastErr = fmt.Errorf("re-read dup %s: %w", dup.ID, err)
+			break
+		}
+		if fresh == nil || fresh.IsSoftDeleted() {
+			ddLog.Info("dup was retired by another writer after the merge moved its files dup=%s", logger.SanitizeLogValue(dup.ID))
+			return "", nil
+		}
+		successor, err := ddPlanPrimaryHandoff(store, sim, fresh, keeper)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		promoted, prev := false, (*bool)(nil)
+		if successor != "" {
+			if promoted, prev, err = ddPromotePrimary(store, successor); err != nil {
+				lastErr = fmt.Errorf("promote %s before retiring primary %s: %w", successor, dup.ID, err)
+				if errors.Is(err, errDDRefused) {
+					continue
+				}
+				break
+			}
+		}
+		err = ddSoftDeleteBook(store, dup.ID, true, ddRetireGuard(store, sim, fresh, successor))
+		if err == nil {
+			*dup = *fresh
+			return successor, nil
+		}
+		lastErr = ddRetireFailed(store, successor, promoted, prev, err)
+		if !errors.Is(err, errDDRefused) {
+			break
+		}
+	}
+	// %v, not %w: the refusal inside must not make the tally count this as
+	// refused.
+	return "", fmt.Errorf("dup %s: its files, external IDs and user tags were moved to keeper %s, but retiring it failed, so it is left live and empty: %v",
+		dup.ID, keeper.ID, lastErr)
+}
+
 // ddMergeDuplicateBook folds dup into keeper and soft-deletes dup.
 //
 // Order, and why:
@@ -857,7 +927,11 @@ type ddMergeStore = maintenance.JobStore
 //
 // The primary hand-off is written only after the move and the zero-rows
 // check, immediately before the soft-delete. Promoting the keeper earlier
-// (in the field-fill) left two primaries whenever a later step failed.
+// (in the field-fill) left two primaries whenever a later step failed. Step
+// 1's plan is a pre-check (and dry-run's answer); apply plans again from a
+// fresh read of the dup right before the retire (ddRetireMergedDup), because
+// by then steps 2-4 have written and a refusal can no longer leave "nothing
+// happened".
 func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
 	return ddMergeDuplicateBookSim(store, nil, keeper, dup, dryRun, enqueuer)
 }
@@ -998,14 +1072,9 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		return fmt.Errorf("dup %s still owns %d file(s) after the move; not soft-deleting it", dup.ID, len(remaining))
 	}
 
-	promoted, prev := false, (*bool)(nil)
-	if successor != "" {
-		if promoted, prev, err = ddPromotePrimary(store, successor); err != nil {
-			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, dup.ID, err)
-		}
-	}
-	if err := ddSoftDeleteBook(store, dup.ID, true, ddRetireGuard(store, sim, dup, successor)); err != nil {
-		return ddRetireFailed(store, successor, promoted, prev, err)
+	successor, err = ddRetireMergedDup(store, sim, keeper, dup)
+	if err != nil {
+		return err
 	}
 	if successor != "" && successor == keeper.ID {
 		t := true
