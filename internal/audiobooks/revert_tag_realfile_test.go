@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package audiobooks
 
@@ -92,7 +92,7 @@ func TestOrganizeTagWrite_RealFile_RowsMatchTheFileAndUndoRestoresIt(t *testing.
 	}
 	require.NoError(t, write(path, filtered))
 
-	after, err := metadata.ReadTagProperties(path)
+	after, err := metadata.ReadTagValues(path)
 	require.NoError(t, err)
 	assert.Equal(t, "Orig AA", after["album_artist"], "organize never writes ALBUMARTIST")
 	assert.Equal(t, "Orig Composer", after["composer"], "organize never writes COMPOSER")

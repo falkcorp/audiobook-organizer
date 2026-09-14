@@ -1,5 +1,5 @@
 // file: internal/audiobooks/rename.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 //
@@ -73,7 +73,7 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 // holds the value. When the file cannot be read everything is kept; the
 // organizer then fails to read the pre-write values too and writes nothing.
 func filterUnchangedTagProperties(path string, tags map[string]any) map[string]any {
-	current, err := metadata.ReadTagProperties(path)
+	current, err := metadata.ReadTagValues(path)
 	if err != nil {
 		return tags
 	}

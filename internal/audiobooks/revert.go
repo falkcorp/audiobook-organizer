@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-14
 
@@ -119,7 +119,7 @@ type RevertService struct {
 func NewRevertService(db revertServiceStore) *RevertService {
 	rs := &RevertService{
 		db:                db,
-		ReadTags:          metadata.ReadTagProperties,
+		ReadTags:          metadata.ReadTagValues,
 		WriteTags:         defaultRevertWriteTags,
 		ComputeITunesPath: metafetch.ComputeITunesPath,
 	}
@@ -794,6 +794,13 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	// that reason; either way nothing is written and the row fails.
 	if _, writable := metadata.TagProperty(tag); !writable {
 		return fmt.Errorf("tag %s not restored: it maps to no file property the revert can write", tag)
+	}
+	// A plain pre-write value for a key that now owns several properties was
+	// recorded before per-property snapshots. Artist rows still revert (that
+	// organize wrote ARTIST only, and a plain value still writes ARTIST only);
+	// narrator rows do not, since a plain revert now writes PERFORMER too.
+	if !metadata.IsTagSnapshot(c.OldValue) && !metadata.LegacyTagValueRestorable(tag) {
+		return fmt.Errorf("tag %s not restored: row %s was recorded before per-tag undo values, when the organize wrote only one of the tag's properties; writing it back now would also overwrite the others, so restore it by hand", tag, c.ID)
 	}
 	target := bf.FilePath
 	release := rs.lockPaths(book.FilePath, target)
