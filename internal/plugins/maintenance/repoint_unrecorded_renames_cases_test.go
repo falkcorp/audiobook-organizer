@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames_cases_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9a0e63-d8b2-47f1-9e05-b3a6f2d7c814
 // last-edited: 2026-09-14
 
@@ -49,9 +49,13 @@ func TestRepointUnrecordedRenames_Outcomes(t *testing.T) {
 	third := filepath.Join(dir, "new", "03.mp3")
 	touch(t, third)
 	k3 := fx.record(t, organizer.RenamePathWriteFailure{BookID: "b1", BookFileID: "f3", OldPath: "/old/03.mp3", NewPath: third, RecordedAt: stamp})
-	// A book-row record whose new path is a FILE while the old one is a
-	// directory: wrong kind.
-	kb := fx.record(t, organizer.RenamePathWriteFailure{BookID: "b1", OldPath: "/old/dir", NewPath: newFile, RecordedAt: stamp})
+	// A book-row record whose new path is a symlink: wrong kind (a book row
+	// accepts a directory or a regular file, never a link).
+	link := filepath.Join(dir, "new", "link")
+	if err := os.Symlink(filepath.Join(dir, "new"), link); err != nil {
+		t.Fatal(err)
+	}
+	kb := fx.record(t, organizer.RenamePathWriteFailure{BookID: "b1", OldPath: "/old/dir", NewPath: link, RecordedAt: stamp})
 
 	p := fx.plugin()
 
@@ -73,7 +77,7 @@ func TestRepointUnrecordedRenames_Outcomes(t *testing.T) {
 		t.Error("row modified since the record: must be skipped and kept")
 	}
 	if fx.prefs[kb] == "" || fx.book.FilePath != "/old/dir" {
-		t.Error("book row with a file where a directory belongs: must be skipped and kept")
+		t.Error("book row whose new path is a symlink: must be skipped and kept")
 	}
 	if fx.fileWrite != 0 || fx.bookWrite != 0 {
 		t.Fatalf("rows written: files=%d books=%d", fx.fileWrite, fx.bookWrite)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
 // last-edited: 2026-09-14
 
@@ -205,13 +205,17 @@ type unrecordedRenameStore interface {
 	SetUserPreferenceForUser(userID string, key string, value string) error
 }
 
-// expectRegularFile reports whether the record's new path must be a regular
-// file rather than a directory. A book_file is always a file. A book row
-// holds a file for a single-file book and a directory for a multi-file one;
-// the old path's extension tells them apart, the same test virtualBookFiles
-// uses to decide a book is single-file.
-func expectRegularFile(rec organizer.RenamePathWriteFailure) bool {
-	return rec.BookFileID != "" || filepath.Ext(rec.OldPath) != ""
+// newPathKindOK reports whether what is on disk at the new path can back the
+// row. A book_file row needs a regular file. A book row holds a regular file
+// for a single-file book and a directory for a multi-file one, and the record
+// cannot tell which from the path alone (a directory name such as
+// "Vol. 2" has an extension), so either is accepted there. A symlink, device
+// or socket never is.
+func newPathKindOK(rec organizer.RenamePathWriteFailure, fi fs.FileInfo) bool {
+	if rec.BookFileID != "" {
+		return fi.Mode().IsRegular()
+	}
+	return fi.Mode().IsRegular() || fi.IsDir()
 }
 
 func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string, r repointRecord, params repointUnrecordedRenamesParams) repointUnrecordedRenameRow {
@@ -245,8 +249,7 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 	case err != nil:
 		row.Outcome, row.Detail = repointOutcomeError, err.Error()
 		return row
-	case expectRegularFile(r.rec) && !fi.Mode().IsRegular(),
-		!expectRegularFile(r.rec) && !fi.IsDir():
+	case !newPathKindOK(r.rec, fi):
 		row.Outcome, row.Detail = repointOutcomeNewWrongKind, "new path is "+fi.Mode().Type().String()
 		return row
 	}
