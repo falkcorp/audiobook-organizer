@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-07-07
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -202,7 +202,9 @@ func TestMergeBooks_BasicMerge(t *testing.T) {
 	keepBook := &database.Book{ID: "KEEP", Title: "Keep Me"}
 	mergeBook := &database.Book{ID: "MERGE1", Title: "Merge Me"}
 
-	deleted := []string{}
+	hardDeleted := []string{}
+	softDeleted := []string{}
+	reassigned := [][2]string{}
 	var updatedBook *database.Book
 
 	mock := &database.MockStore{}
@@ -216,10 +218,17 @@ func TestMergeBooks_BasicMerge(t *testing.T) {
 		return nil, nil
 	}
 	mock.DeleteBookFunc = func(id string) error {
-		deleted = append(deleted, id)
+		hardDeleted = append(hardDeleted, id)
+		return nil
+	}
+	mock.ReassignExternalIDsFunc = func(oldBookID, newBookID string) error {
+		reassigned = append(reassigned, [2]string{oldBookID, newBookID})
 		return nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
+		if book.IsSoftDeleted() {
+			softDeleted = append(softDeleted, id)
+		}
 		updatedBook = book
 		return book, nil
 	}
@@ -229,7 +238,9 @@ func TestMergeBooks_BasicMerge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.MergedCount)
 	assert.Empty(t, result.Errors)
-	assert.Contains(t, deleted, "MERGE1")
+	assert.Empty(t, hardDeleted, "the loser is soft-deleted, never hard-deleted")
+	assert.Equal(t, []string{"MERGE1"}, softDeleted)
+	assert.Equal(t, [][2]string{{"MERGE1", "KEEP"}}, reassigned, "the loser's external IDs move to the kept book")
 	assert.NotNil(t, updatedBook)
 	assert.Equal(t, "KEEP", updatedBook.ID)
 }
@@ -290,11 +301,14 @@ func TestMergeBooks_SkipsSelfMerge(t *testing.T) {
 		return nil
 	}
 	mock.UpdateBookFunc = func(id string, book *database.Book) (*database.Book, error) {
+		if book.IsSoftDeleted() {
+			deleted = append(deleted, id)
+		}
 		return book, nil
 	}
 
 	result, err := MergeBooks(context.Background(), mock, "op3", "KEEP", []string{"KEEP"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.MergedCount, "self-merge should be skipped")
-	assert.Empty(t, deleted)
+	assert.Empty(t, deleted, "the kept book must be neither hard- nor soft-deleted")
 }

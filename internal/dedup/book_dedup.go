@@ -1,5 +1,5 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-09-14
 
@@ -13,10 +13,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -410,6 +413,79 @@ func guardKeeperAudioRoute(store Store, keepID string, keepBook *database.Book, 
 	return nil
 }
 
+// bookAudioPaths returns the cleaned set of paths a book reaches audio
+// through: its own FilePath and every book_file FilePath.
+func bookAudioPaths(store Store, b *database.Book) (map[string]bool, error) {
+	files, err := store.GetBookFiles(b.ID)
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]bool, len(files)+1)
+	add := func(p string) {
+		if p != "" {
+			paths[filepath.Clean(p)] = true
+		}
+	}
+	add(b.FilePath)
+	for _, f := range files {
+		add(f.FilePath)
+	}
+	return paths, nil
+}
+
+// retireMergedLoser retires one live loser of dedup.MergeBooks in the order
+// merge.Service.MergeBooks uses, and returns an error (leaving the loser LIVE)
+// if any step fails, so a retried heal re-enters it:
+//
+//  1. Shared-path check. A purge with delete-files removes a soft-deleted
+//     book's own FilePath (os.Remove when it is not a directory) and its
+//     book_file paths. If any loser path equals, or lies inside, one of the
+//     kept book's audio paths, soft-deleting the loser would put audio the
+//     kept book reaches on the purge clock, so it is refused. "Inside" matters
+//     for the ~20% of books whose FilePath is a directory with no book_file
+//     rows: a loser file under that directory is the kept book's audio too.
+//     The reverse direction (a loser directory above the kept files) is also
+//     refused; purge would only rmdir it once empty, so this is conservative.
+//  2. Reassign the loser's external IDs to the kept book. Done before the
+//     soft delete: purge tombstones every ext_id still on a soft-deleted
+//     book, so a PID left on the loser would later be tombstoned and block
+//     its own re-import. A nil eidStore means no external IDs.
+//  3. Soft-delete. The row, its metadata, locks and book_file rows survive,
+//     so the loser can be restored.
+//
+// The caller skips an already-soft-deleted loser before calling this.
+func retireMergedLoser(store Store, eidStore merge.ExternalIDReassigner, keepID string, loser *database.Book, keepAudioPaths map[string]bool) error {
+	loserPaths, err := bookAudioPaths(store, loser)
+	if err != nil {
+		return fmt.Errorf("read audio paths of loser %s: %w", loser.ID, err)
+	}
+	var shared []string
+	for lp := range loserPaths {
+		for kp := range keepAudioPaths {
+			// IsWithin counts equality, so each direction also catches an
+			// exact match.
+			if pathutil.IsWithin(lp, kp) || pathutil.IsWithin(kp, lp) {
+				shared = append(shared, lp)
+				break
+			}
+		}
+	}
+	if len(shared) > 0 {
+		sort.Strings(shared)
+		return fmt.Errorf("loser %s shares audio path(s) %s with keep book %s; a purge with file deletion would remove the kept audio",
+			loser.ID, strings.Join(shared, ", "), keepID)
+	}
+	if eidStore != nil {
+		if err := eidStore.ReassignExternalIDs(loser.ID, keepID); err != nil {
+			return fmt.Errorf("reassign external IDs of loser %s to %s: %w", loser.ID, keepID, err)
+		}
+	}
+	if err := merge.SoftDeleteBook(store, loser.ID); err != nil {
+		return fmt.Errorf("soft-delete loser %s: %w", loser.ID, err)
+	}
+	return nil
+}
+
 // Concurrency: this is a package-level function (NOT merge.Service.MergeBooks)
 // with its own unguarded read-modify-write, reached from two async ops with
 // DIFFERENT ConcurrencyKeys (dedup.book-merge and the iTunes-heal op), so it can
@@ -419,24 +495,32 @@ func guardKeeperAudioRoute(store Store, keepID string, keepBook *database.Book, 
 // read-modify-write, making every merge atomic w.r.t. every other merge. The
 // per-book loop is bounded by one request's merge set and does only local DB /
 // in-memory progress work under the lock — nothing network/large-scan. Semantics
-// differ from merge.Service.MergeBooks (hard-delete + iTunes-metadata transfer,
-// no version group), so it only shares the lock. Non-reentrant: this never calls
-// the Service merge paths, so the lock is taken exactly once.
+// differ from merge.Service.MergeBooks (iTunes-metadata transfer, no version
+// group), so it only shares the lock. Non-reentrant: this never calls the
+// Service merge paths, so the lock is taken exactly once.
 //
 // F6 (2026-07-18): the POST /audiobooks/merge endpoint (dedup.book-merge op) no
-// longer uses this function — it was rerouted to merge.Service.MergeBooks
-// because this legacy path hard-deletes losers via store.DeleteBook, which does
-// NOT tombstone external-ID (ext_id:*) mappings and does NOT enqueue iTunes ITL
-// removals, orphaning both. See internal/server/duplicates_ops.go. This function
-// is retained solely for internal/reconcile/itunes_heal.go, which intentionally
-// hard-collapses organize-bug duplicate rows.
+// longer uses this function — it was rerouted to merge.Service.MergeBooks.
+// This function is retained solely for internal/reconcile/itunes_heal.go,
+// which collapses acoustically identical organize-bug duplicate rows.
 //
-// TODO.md:2304 (2026-09-10): the audio-route half of that caller's gap is now
-// closed — guardKeeperAudioRoute below refuses a file-less keeper before any
-// write, the same tier merge.Service.MergeBooks enforces with
-// FilelessPrimaryError. The ext-ID / ITL half is STILL open: a hard delete here
-// leaves the loser's ext_id:* mappings un-tombstoned and its iTunes tracks in
-// the ITL. Do not read the closed half as closing both.
+// Loser retirement (A1#11, 2026-09-14): losers used to be HARD-deleted with
+// store.DeleteBook, which destroyed the row and its metadata for good, left
+// its book_file rows pointing at no book, and left its ext_id:* mappings
+// naming a book that no longer existed. A loser is now retired the way
+// merge.Service.MergeBooks retires one (retireMergedLoser): its external IDs
+// move to the kept book first, then it is soft-deleted, so it can be restored
+// with its files. If either step fails, or the loser names one of the kept
+// book's audio paths, it is left live and reported in result.Errors.
+//
+// Refusals, all before any write: a soft-deleted keep
+// (merge.SoftDeletedInputError, AsPrimary); a file-less keep with a
+// file-bearing loser (guardKeeperAudioRoute, TODO.md:2304); any participant
+// under the active iTunes library (merge.GuardITunesProtected).
+//
+// Still open: unlike merge.Service.MergeBooks this path has no iTunes
+// write-back batcher, so no ITL removal is queued for the loser's PIDs here.
+// The PIDs now point at the kept book, which is what the ITL should show.
 func MergeBooks(
 	_ context.Context,
 	store Store,
@@ -452,14 +536,21 @@ func MergeBooks(
 		return BookMergeResult{}, fmt.Errorf("keep book %s not found", keepID)
 	}
 
+	// A soft-deleted keep is already on the purge clock: collapsing live rows
+	// into it would retire the only live copies and leave the survivor to be
+	// purged. Same refusal merge.Service.MergeBooks makes for its primary.
+	if keepBook.IsSoftDeleted() {
+		return BookMergeResult{}, &merge.SoftDeletedInputError{BookID: keepID, AsPrimary: true}
+	}
+
 	// Audio-route guard — runs before ANY write (before the iTunes-metadata
-	// transfer, before FollowMergeWithStore, before DeleteBook), inside the
-	// merge lock so the rows it reads cannot move under it.
+	// transfer, before FollowMergeWithStore, before a loser is retired), inside
+	// the merge lock so the rows it reads cannot move under it.
 	if err := guardKeeperAudioRoute(store, keepID, keepBook, mergeIDs); err != nil {
 		return BookMergeResult{}, err
 	}
-	// iTunes guard — same position and lock: this path hard-deletes losers, so
-	// a book with a file under the active iTunes library must never reach it.
+	// iTunes guard — same position and lock: this path retires losers, so a
+	// book with a file under the active iTunes library must never reach it.
 	if err := merge.GuardITunesProtected(store, append([]string{keepID}, mergeIDs...)); err != nil {
 		return BookMergeResult{}, err
 	}
@@ -481,6 +572,16 @@ func MergeBooks(
 		return BookMergeResult{}, fmt.Errorf("keep book %s not found", keepID)
 	}
 
+	// The kept book's audio paths, for retireMergedLoser's shared-path check.
+	// Fail closed: without them a loser naming the kept audio could be put on
+	// the purge clock.
+	keepAudioPaths, err := bookAudioPaths(store, kBook)
+	if err != nil {
+		return BookMergeResult{}, fmt.Errorf("cannot read audio paths of keep book %s, refusing to merge: %w", keepID, err)
+	}
+	// nil means the backend has no external IDs (the merge.Service rule).
+	eidStore := merge.AsExternalIDReassigner(store)
+
 	var result BookMergeResult
 	for i, mergeID := range mergeIDs {
 		if progress != nil && progress.IsCanceled() {
@@ -499,32 +600,38 @@ func MergeBooks(
 		TransferITunesMetadataFirstWin(kBook, mergeBook)
 
 		// Carry the loser's ABS sync identity (libraryItemId) and each user's
-		// listening position onto the kept book BEFORE the hard delete below.
-		// This path is the worst case for an un-followed merge: store.DeleteBook
-		// removes the row outright, so unlike merge.Service.MergeBooks (which
-		// soft-deletes) there is nothing left to repoint afterwards and the
-		// device's place in the book would be lost permanently. Done here, not
-		// after the delete, so a crash between the two fails in the recoverable
-		// direction (a redirect for a book that still exists) rather than the
-		// unrecoverable one. Best-effort and never fails the merge; it logs at
-		// ERROR with both book IDs on failure. We already hold the process-wide
+		// listening position onto the kept book BEFORE the loser is retired.
+		// Done first so a crash between the two fails in the recoverable
+		// direction (a redirect for a book that still exists). Best-effort and
+		// never fails the merge; it logs at ERROR with both book IDs on failure.
+		// Idempotent, so it also runs for an already-retired loser: a replay is
+		// the only repair for a first merge that crashed after the soft delete
+		// but before this follow. We already hold the process-wide
 		// merge.LockMergeRMW taken at the top of this function, so this is
 		// exactly-once w.r.t. every other merge-family path.
 		merge.FollowMergeWithStore(store, keepID, []string{mergeID})
 
-		if err := store.DeleteBook(mergeID); err != nil {
-			result.Errors = append(result.Errors,
-				fmt.Sprintf("failed to delete book %s: %v", mergeID, err))
+		// Already soft-deleted: collapsed by an earlier heal, or deleted by the
+		// user. Leave the row exactly as it is — re-marking it would restart
+		// its retention clock, and reassigning its external IDs would strip the
+		// ones a restore brings back. Same rule as merge.Service.MergeBooks.
+		if mergeBook.IsSoftDeleted() {
+			slog.Debug("book merge: loser already soft-deleted; left as is", "loser_id", mergeID, "keep_id", keepID)
+		} else if err := retireMergedLoser(store, eidStore, keepID, mergeBook, keepAudioPaths); err != nil {
+			slog.Error("book merge left loser live", "loser_id", mergeID, "keep_id", keepID, "error", err)
+			result.Errors = append(result.Errors, fmt.Sprintf("book %s left live: %v", mergeID, err))
 		} else {
-			_ = store.CreateOperationChange(&database.OperationChange{
+			if err := store.CreateOperationChange(&database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: opID,
 				BookID:      mergeID,
-				ChangeType:  "book_delete",
+				ChangeType:  "book_soft_delete",
 				FieldName:   "book",
 				OldValue:    fmt.Sprintf("%s (%s)", mergeBook.Title, mergeBook.FilePath),
 				NewValue:    fmt.Sprintf("merged_into:%s", keepID),
-			})
+			}); err != nil {
+				slog.Warn("book merge: could not journal the soft delete", "loser_id", mergeID, "keep_id", keepID, "error", err)
+			}
 			result.MergedCount++
 		}
 

@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -111,7 +111,7 @@ func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
 			defer wg.Done()
 			p := pairs[i]
 			if i%2 == 0 {
-				// dedup.MergeBooks: hard-delete drop, transfer metadata into keep.
+				// dedup.MergeBooks: soft-delete drop, transfer metadata into keep.
 				_, _ = MergeBooks(context.Background(), probe, "", p.keep, []string{p.drop}, nil)
 			} else {
 				// merge.Service.MergeBooks: version-group merge (keep is m4b winner).
@@ -127,11 +127,15 @@ func TestDedupMergeBooks_SharesLockWithMergeService(t *testing.T) {
 	}
 
 	// Consistency spot-check: pair[0] went through dedup.MergeBooks -> keep alive,
-	// drop hard-deleted.
+	// drop soft-deleted (A1#11: never hard-deleted).
 	if k0, err := real.GetBookByID(pairs[0].keep); err != nil || k0 == nil {
 		t.Fatalf("dedup keep book missing: %v", err)
 	}
-	if d0, _ := real.GetBookByID(pairs[0].drop); d0 != nil {
-		t.Fatalf("dedup drop book was not deleted")
+	d0, err := real.GetBookByID(pairs[0].drop)
+	if err != nil || d0 == nil {
+		t.Fatalf("dedup drop book must survive as a soft-deleted row: %v", err)
+	}
+	if !d0.IsSoftDeleted() {
+		t.Fatalf("dedup drop book was not soft-deleted")
 	}
 }
