@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -324,6 +324,10 @@ func runBulkApplyPreview(
 		_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
 			slog.Int("unreadable", n))
 	}
+	if err := writePreviewIndexRow(results, opID, claims.Unreadable()); err != nil {
+		_ = reporter.Log(slog.LevelWarn, "preview index row not saved; the summary's unreadable_books will read 0",
+			slog.String("error", err.Error()))
+	}
 
 	var nApply, nBlocked, nSkipped, nWriteErr atomic.Int64
 	previewOne := func(_ context.Context, id string) error {
@@ -386,6 +390,32 @@ type previewSummary struct {
 	Total     int                       `json:"total"`
 	ByVerdict map[string]int            `json:"by_verdict"`
 	ByReason  map[string]map[string]int `json:"by_reason"` // verdict -> reason -> count
+	// UnreadableBooks counts books the sibling-part index could not read;
+	// rows that look like one of them are blocked as partial_book. The same
+	// field batch-apply-candidates returns.
+	UnreadableBooks int `json:"unreadable_books"`
+}
+
+// previewIndexRowID is the reserved op-result key under which the preview op
+// saves facts about its sibling-part index. It is not a book id (book ids
+// never start with "_"), and it carries no verdict, so it is never counted
+// as a report row.
+const previewIndexRowID = "_sibling_index"
+
+// previewIndexRow is the payload of the previewIndexRowID row.
+type previewIndexRow struct {
+	UnreadableBooks int `json:"unreadable_books"`
+}
+
+// writePreviewIndexRow saves the index facts of preview op opID.
+func writePreviewIndexRow(results previewResultStore, opID string, unreadable int) error {
+	raw, err := json.Marshal(previewIndexRow{UnreadableBooks: unreadable})
+	if err != nil {
+		return err
+	}
+	return results.CreateOperationResult(&database.OperationResult{
+		OperationID: opID, BookID: previewIndexRowID, ResultJSON: string(raw), Status: "index",
+	})
 }
 
 // handleStartBulkApplyPreview handles POST /api/v1/metadata/bulk-apply-preview.
@@ -443,6 +473,13 @@ func (s *Server) handleGetBulkApplyPreview(c *gin.Context) {
 	sum := previewSummary{ByVerdict: map[string]int{}, ByReason: map[string]map[string]int{}}
 	wantVerdict, wantReason := c.Query("verdict"), c.Query("reason")
 	for _, r := range all {
+		if r.BookID == previewIndexRowID {
+			var ix previewIndexRow
+			if json.Unmarshal([]byte(r.ResultJSON), &ix) == nil {
+				sum.UnreadableBooks = ix.UnreadableBooks
+			}
+			continue
+		}
 		var row bulkApplyPreviewRow
 		if json.Unmarshal([]byte(r.ResultJSON), &row) != nil || row.Verdict == "" {
 			continue // not a preview row

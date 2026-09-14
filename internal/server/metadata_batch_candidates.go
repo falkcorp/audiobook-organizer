@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.8.0
+// version: 4.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-13
 //
@@ -553,8 +553,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 	// Claim index for the gate's partial_book check, built before any apply
 	// over EVERY row of the operation (not req.BookIDs), the same universe the
 	// preview uses, so a subset request sees the same siblings.
-	// A book the index cannot read fails the request before any write: a
-	// smaller index would silently let a sibling part through.
+	// A book the index cannot read is recorded with what is still known
+	// (folder, ASIN): rows that look like it are blocked for manual review,
+	// the rest proceed, and the count is returned as unreadable_books. Only a
+	// cancelled request fails here.
 	claims, claimErr := buildClaimIndex(c.Request.Context(), keysOf(resultsByBook), opResultClaimLoader(s.store, func(id string) (CandidateResult, bool, error) {
 		r, ok := resultsByBook[id]
 		if !ok {
@@ -742,14 +744,18 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 		Errors       []string `json:"errors"`
 		ErrorCount   int      `json:"error_count"`
 		OperationID  string   `json:"operation_id"`
+		// UnreadableBooks counts books of the operation the sibling-part
+		// index could not read; the same field as the preview summary's.
+		UnreadableBooks int `json:"unreadable_books"`
 	}{
-		Applied:      applied,
-		Skipped:      skipped,
-		Blocked:      blocked,
-		BlockedCount: len(blocked),
-		Errors:       errors,
-		ErrorCount:   len(errors),
-		OperationID:  req.OperationID,
+		Applied:         applied,
+		Skipped:         skipped,
+		Blocked:         blocked,
+		BlockedCount:    len(blocked),
+		Errors:          errors,
+		ErrorCount:      len(errors),
+		OperationID:     req.OperationID,
+		UnreadableBooks: claims.Unreadable(),
 	})
 }
 
