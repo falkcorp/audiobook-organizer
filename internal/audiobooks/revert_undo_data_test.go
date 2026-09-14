@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package audiobooks
 
@@ -318,4 +318,21 @@ func TestRevertTagWrite_AlreadyReadsPreOrganizeValue(t *testing.T) {
 	require.Equal(t, 0, res.ChangedSince)
 	require.Equal(t, "Orig", file.tags["title"])
 	require.Empty(t, file.heldDuringWrite, "the file already holds the pre-organize value; nothing is written")
+}
+
+// A narrator row recorded before per-tag undo values holds one plain value,
+// from an organize that wrote NARRATOR only. Writing it back now would also
+// overwrite PERFORMER, so the row is refused with a message and nothing is
+// written.
+func TestRevertTagWrite_LegacyNarratorRowIsRefused(t *testing.T) {
+	store := newRevertPebble(t)
+	_, p := tagWriteBook(t, store, "op-legacy-narr", "narrator", "Old Narrator", "New Narrator")
+	file := &fakeTagFile{tags: map[string]string{"narrator": "New Narrator"}, locked: map[string]bool{}}
+
+	rs := NewRevertService(store)
+	file.wire(rs, p)
+	res, err := rs.RevertOperation("op-legacy-narr")
+	require.Error(t, err)
+	require.Equal(t, 1, res.Failed)
+	require.Equal(t, "New Narrator", file.tags["narrator"], "nothing is written")
 }
