@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.28.0
+// version: 1.30.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -54,7 +54,7 @@ func renderableCoverURL(previous, applied *string, candidateRemote string) *stri
 // History recording is the caller's job (see guardedApply for the path that
 // records it); every other apply behavior lives in applyMetadataUnguarded.
 func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) ([]string, error) {
-	_, skipped, err := mfs.guardedApply(book, meta, "", false)
+	_, skipped, err := mfs.guardedApply(book, meta, "")
 	return skipped, err
 }
 
@@ -62,11 +62,11 @@ func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookM
 // has ALREADY had locked fields stripped (StripLockedFields) -- never call it
 // from outside guardedApply.
 //
-// replaceAuthors selects how the candidate's author reaches the book_authors
-// join (see applyAuthorCredit): false is fill-only, true replaces. It returns
-// an error only when the author join could not be read or written; the book
-// struct may then be partly mutated and the caller must not persist it.
-func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata, replaceAuthors bool) error {
+// The candidate's author is ADDED to the book_authors join, never replacing it
+// (see applyAuthorCredit). It returns an error only when the author join could
+// not be read or written; the book struct may then be partly mutated and the
+// caller must not persist it.
+func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata) error {
 	originalTitle := book.Title
 	if meta.Title != "" && meta.Title != "Untitled" && IsBetterValue(book.Title, meta.Title) {
 		// Don't replace a real title with something shorter/worse
@@ -111,8 +111,8 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 		book.Narrator = new(meta.Narrator)
 	}
 
-	// Apply author if fetched data is better — resolve to AuthorID and
-	// replace the book_authors join table so stale associations are removed.
+	// Apply author: resolve the name to an AuthorID and ADD it to the
+	// book_authors join (applyAuthorCredit). An apply never removes a credit.
 	extractedAuthor := meta.Author
 	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {
 		// Guard: if extracted artist matches the book's narrator (not the author),
@@ -135,7 +135,7 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			author, err = mfs.db.CreateAuthor(extractedAuthor)
 		}
 		if err == nil && author != nil {
-			if aerr := mfs.applyAuthorCredit(book, author.ID, replaceAuthors); aerr != nil {
+			if aerr := mfs.applyAuthorCredit(book, author.ID); aerr != nil {
 				return aerr
 			}
 		}
@@ -226,64 +226,54 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 
 // applyAuthorCredit puts the candidate's resolved author onto the book.
 //
-// A candidate carries ONE author string, so a replace writes a one-row join.
-// Until 2026-09-14 every apply did that: a book credited to [A, B] that got a
-// candidate naming A came out credited to [A] alone, from auto-fetch and the
-// batch applies as much as from a hand-picked apply, and nothing logged it.
+// A candidate carries ONE author string. Until 2026-09-14 every apply wrote it
+// as a one-row join, replacing the credits: a book credited to [A, B] that got
+// a candidate naming A came out credited to [A] alone, from auto-fetch, the
+// batch applies and the hand-picked single apply alike, and nothing logged it.
 //
-//   - replace=false (fill-only; every automated and batch path): existing
-//     links are never removed. The candidate's author is appended at the next
-//     position if it is not already credited; book.AuthorID is set only when
-//     empty, so the primary author is not repointed.
-//   - replace=true (only an explicit ReplaceAuthors apply): the join becomes
-//     the candidate's author and book.AuthorID points at it.
+// Author apply is ADD-ONLY on every path (owner decision 2026-09-14); removing
+// an author is a manual edit, never a side effect of an apply. Existing links
+// are never removed. The candidate's author is appended at the next position
+// if it is not already credited; book.AuthorID is set only when empty, so the
+// primary author is not repointed.
 //
-// A read or write failure is returned, never discarded: fill-only cannot tell
-// what it would remove without the current join, so it fails closed.
-func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int, replace bool) error {
-	if replace {
-		if err := mfs.db.SetBookAuthors(book.ID, []database.BookAuthor{
-			{BookID: book.ID, AuthorID: authorID, Role: "author", Position: 0},
-		}); err != nil {
-			return fmt.Errorf("replace author credits: %w", err)
+// A read or write failure is returned, never discarded: the merge cannot tell
+// what it would drop without the current join, so it fails closed.
+func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) error {
+	// The read-merge-write runs inside ModifyBookAuthors, under the store's
+	// book_authors stripe: two concurrent applies to one book each adding a
+	// different author both land. A caller-side Get -> merge -> Set lost one
+	// of them (TestApplyMetadataToBook_ConcurrentFillOnlyAppliesKeepBothAuthors).
+	primary := book.AuthorID
+	added, kept := false, 0
+	_, err := mfs.db.ModifyBookAuthors(book.ID, func(existing []database.BookAuthor) ([]database.BookAuthor, error) {
+		// A book whose primary author lives only in the author_id column (no
+		// join rows) keeps it as a credit: the append must not orphan it.
+		if len(existing) == 0 && primary != nil && *primary != authorID {
+			existing = append(existing, database.BookAuthor{
+				BookID: book.ID, AuthorID: *primary, Role: "author", Position: 0,
+			})
 		}
-		book.AuthorID = &authorID
-		return nil
-	}
-
-	existing, err := mfs.db.GetBookAuthors(book.ID)
-	if err != nil {
-		return fmt.Errorf("read author credits for fill-only apply: %w", err)
-	}
-	existing = append([]database.BookAuthor(nil), existing...)
-	// A book whose primary author lives only in the author_id column (no join
-	// rows) keeps it as a credit: the append below must not orphan it.
-	if len(existing) == 0 && book.AuthorID != nil && *book.AuthorID != authorID {
-		existing = append(existing, database.BookAuthor{
-			BookID: book.ID, AuthorID: *book.AuthorID, Role: "author", Position: 0,
-		})
-	}
-	credited := false
-	nextPos := 0
-	for _, ba := range existing {
-		if ba.AuthorID == authorID {
-			credited = true
+		nextPos := 0
+		for _, ba := range existing {
+			if ba.AuthorID == authorID {
+				return nil, database.ErrSkipBookAuthorsWrite
+			}
+			if ba.Position >= nextPos {
+				nextPos = ba.Position + 1
+			}
 		}
-		if ba.Position >= nextPos {
-			nextPos = ba.Position + 1
-		}
-	}
-	if !credited {
-		merged := append(existing, database.BookAuthor{
+		added, kept = true, len(existing)
+		return append(existing, database.BookAuthor{
 			BookID: book.ID, AuthorID: authorID, Role: "author", Position: nextPos,
-		})
-		if err := mfs.db.SetBookAuthors(book.ID, merged); err != nil {
-			return fmt.Errorf("add author credit: %w", err)
-		}
-		if len(existing) > 0 {
-			applyAuthorLog.Info("fill-only apply added author %d to book %s alongside %d existing credit(s)",
-				authorID, logger.SanitizeLogValue(book.ID), len(existing))
-		}
+		}), nil
+	})
+	if err != nil {
+		return fmt.Errorf("add author credit (fill-only): %w", err)
+	}
+	if added && kept > 0 {
+		applyAuthorLog.Info("fill-only apply added author %d to book %s alongside %d existing credit(s)",
+			authorID, logger.SanitizeLogValue(book.ID), kept)
 	}
 	if book.AuthorID == nil {
 		book.AuthorID = &authorID
@@ -705,7 +695,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		prevAuthors = nil
 	}
 	historySource := opts.historySource(candidate.Source)
-	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource, opts.ReplaceAuthors)
+	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource)
 	if err != nil {
 		return nil, err
 	}

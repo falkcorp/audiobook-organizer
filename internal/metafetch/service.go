@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.27.0
+// version: 5.28.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 
@@ -137,6 +137,10 @@ type metafetchContributorStore interface {
 	CreateAuthor(name string) (*database.Author, error)
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	// ModifyBookAuthors is the atomic read-merge-write the fill-only apply
+	// uses (applyAuthorCredit), so concurrent applies cannot drop each other's
+	// added author.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 }

@@ -1,7 +1,7 @@
 // file: internal/database/iface_author.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2e3b78c0-c989-48c0-a324-b88ea52b1ccd
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -80,8 +80,19 @@ type AuthorWriter interface {
 	ResolveTombstoneChains() (int, error)
 }
 
+// BookAuthorModifier is the atomic read-merge-write of a book's author
+// credits. Its own interface because AuthorWriter is at interfacebloat's
+// limit of 8; it is composed into the same parent so database.Store (and so
+// every decorator that embeds it) carries the method.
+type BookAuthorModifier interface {
+	// ModifyBookAuthors atomically reads, changes and writes a book's author
+	// credits (see PebbleStore.ModifyBookAuthors); use it for any merge.
+	ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error)
+}
+
 // AuthorStore combines both halves.
 type AuthorStore interface {
 	AuthorReader
 	AuthorWriter
+	BookAuthorModifier
 }

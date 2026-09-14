@@ -1,13 +1,14 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -660,6 +661,57 @@ func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
 // call says "these are bookID's credits", every copy-shaped call site already
 // stamps the target, and rejecting would turn a caller bug into a lost write.
 func (p *PebbleStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
+	unlock := p.lockBookAuthors(bookID)
+	defer unlock()
+	return p.setBookAuthorsLocked(bookID, authors)
+}
+
+// ErrSkipBookAuthorsWrite, returned by a ModifyBookAuthors callback, means
+// "nothing to change": the join is not written and the current rows are
+// returned with a nil error.
+var ErrSkipBookAuthorsWrite = errors.New("skip book_authors write")
+
+// lockBookAuthors takes the book_authors stripe for bookID. It is its own
+// stripe set, not bookLocks: SetBookAuthors is called from code that may
+// already hold a book stripe, and sync.Mutex does not re-enter. Nothing slow
+// runs under it, and no path holds two of these stripes at once.
+func (p *PebbleStore) lockBookAuthors(bookID string) func() {
+	mu := &p.bookAuthorLocks[stripeFor(bookID)]
+	mu.Lock()
+	return mu.Unlock
+}
+
+// ModifyBookAuthors is the lost-update-safe way to change a book's author
+// credits. Under the book's book_authors stripe it reads the join, hands a
+// copy to fn, and writes what fn returns -- so two callers each adding an
+// author cannot both read [A, B] and have the second write drop the first's
+// addition, which a caller-side GetBookAuthors -> merge -> SetBookAuthors
+// cannot guarantee. fn must not call SetBookAuthors or ModifyBookAuthors.
+// An error from fn aborts without writing; ErrSkipBookAuthorsWrite returns
+// the rows as read with a nil error.
+func (p *PebbleStore) ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error) {
+	unlock := p.lockBookAuthors(bookID)
+	defer unlock()
+	current, err := p.GetBookAuthors(bookID)
+	if err != nil {
+		return nil, err
+	}
+	next, err := fn(append([]BookAuthor(nil), current...))
+	if err != nil {
+		if errors.Is(err, ErrSkipBookAuthorsWrite) {
+			return current, nil
+		}
+		return nil, err
+	}
+	if err := p.setBookAuthorsLocked(bookID, next); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// setBookAuthorsLocked is SetBookAuthors' body; the caller holds the
+// book_authors stripe for bookID.
+func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) error {
 	key := []byte(fmt.Sprintf("book_authors:%s", bookID))
 	// Copy before stamping: the caller may still own and reuse the slice.
 	authors = append([]BookAuthor(nil), authors...)

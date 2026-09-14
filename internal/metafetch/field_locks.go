@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-09-14
 
@@ -145,9 +145,9 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 // what was applied, or the full candidate if they prefer) and the skipped keys.
 // source only labels the log lines.
 //
-// replaceAuthors is ApplyOptions.ReplaceAuthors: false (every automated and
-// batch path) keeps existing author links, true replaces them.
-func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string, replaceAuthors bool) (metadata.BookMetadata, []string, error) {
+// An error from the apply body (the author join could not be read or written)
+// is returned; the caller must not persist the book then.
+func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, error) {
 	if book == nil {
 		return meta, nil, fmt.Errorf("apply metadata: nil book")
 	}
@@ -160,7 +160,7 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 	// checks and before the caller commits, so it recorded changes the apply
 	// then refused. Callers record with RecordApplyHistory after the write.
 	var bodyErr error
-	restored := locks.Apply(book, func(b *database.Book) { bodyErr = mfs.applyMetadataUnguarded(b, meta, replaceAuthors) })
+	restored := locks.Apply(book, func(b *database.Book) { bodyErr = mfs.applyMetadataUnguarded(b, meta) })
 	if bodyErr != nil {
 		return meta, nil, fmt.Errorf("apply metadata to %s: %w", book.ID, bodyErr)
 	}

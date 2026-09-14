@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.19.0
+// version: 1.18.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-09-14
+// last-edited: 2026-09-13
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -153,12 +153,7 @@ type MetadataCandidateCacheStore interface {
 
 // MetadataApplier applies a chosen candidate to a book, on disk and in tags.
 type MetadataApplier interface {
-	// ApplyMetadataCandidateWithOptions applies the candidate. The single-apply
-	// handler passes ApplyOptions.ReplaceAuthors only when the request
-	// explicitly sent replace_authors; otherwise existing co-authors are kept.
-	// (Replaced ApplyMetadataCandidate on 2026-09-14; nothing here called the
-	// options-less form any more.)
-	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
+	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
 	// RenamePreflight reports, before anything is written, that the rename in
 	// the file sequel that follows the apply is known to fail; the error wraps
 	// metafetch.ErrApplyFileWorkWouldFail. Read-only.

@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_authors_fill_only_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c6e-2b7d-4e95-a0c4-9d6e1b2f7a58
 // last-edited: 2026-09-14
 
@@ -89,7 +89,7 @@ func TestApplyMetadataToBook_SingleAuthorCandidateKeepsCoAuthor(t *testing.T) {
 }
 
 // The batch paths (batch-apply-one, batch-apply-candidates, the review lane)
-// call ApplyMetadataCandidateWithOptions without ReplaceAuthors: fill-only.
+// call ApplyMetadataCandidateWithOptions; author apply is add-only there too.
 func TestApplyMetadataCandidate_BatchPathKeepsCoAuthor(t *testing.T) {
 	store, _, writes := coAuthorFixture()
 	svc := NewService(store)
@@ -137,12 +137,23 @@ func TestApplyMetadataToBook_NewAuthorIsAppendedNotReplaced(t *testing.T) {
 	assert.Equal(t, 1, *book.AuthorID, "fill-only must not repoint the primary author")
 }
 
-// Only an explicit ReplaceAuthors apply replaces the join.
-func TestApplyMetadataCandidate_ExplicitReplaceOverwritesAuthors(t *testing.T) {
-	store, _, writes := coAuthorFixture()
-	svc := NewService(store)
-	_, err := svc.ApplyMetadataCandidateWithOptions("b1",
-		MetadataCandidate{Title: "Good Omens", Author: "C", Source: "audible"}, nil, ApplyOptions{ReplaceAuthors: true})
-	require.NoError(t, err)
-	assert.Equal(t, []int{3}, finalJoin(*writes))
+// The hand-picked single apply (POST /audiobooks/:id/apply-metadata calls
+// ApplyMetadataCandidate) is add-only too: a candidate naming only A keeps
+// co-author B, and one naming a new author C adds it beside both. There is no
+// replace path; removing an author is a manual edit.
+func TestApplyMetadataCandidate_SingleApplyKeepsCoAuthors(t *testing.T) {
+	t.Run("candidate names an existing author", func(t *testing.T) {
+		store, _, writes := coAuthorFixture()
+		_, err := NewService(store).ApplyMetadataCandidate("b1",
+			MetadataCandidate{Title: "Good Omens", Author: "A", Source: "audible"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []int{1, 2}, finalJoin(*writes), "single apply dropped co-author B")
+	})
+	t.Run("candidate names a new author", func(t *testing.T) {
+		store, _, writes := coAuthorFixture()
+		_, err := NewService(store).ApplyMetadataCandidate("b1",
+			MetadataCandidate{Title: "Good Omens", Author: "C", Source: "audible"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []int{1, 2, 3}, finalJoin(*writes), "single apply replaced the credits instead of adding")
+	})
 }
