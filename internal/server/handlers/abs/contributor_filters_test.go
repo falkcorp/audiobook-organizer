@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
 // last-edited: 2026-09-13
 
@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
 // seedContributors gives the fixture library enough shape to tell the sources and
@@ -451,6 +453,37 @@ func TestFilterData_ExpiredDocumentServedWithoutWaitingForRebuild(t *testing.T) 
 	}
 	if w.seed.lib.genreCalls() == before {
 		t.Fatal("serving the expired document started no background rebuild")
+	}
+	release()
+	abshandler.WaitCacheRefreshes(w.handler)
+}
+
+// 🔴 TestAuthors_StaleIndexPastTheCapWaitsAndSurfacesTheError.
+//
+// Serving the previous index while it refreshes must not become serving it
+// forever: a store that keeps failing would leave clients on a frozen author
+// list with nothing but a log line. Within absCacheStaleMax the old index is
+// served; past it the request waits for the rebuild and gets its error.
+func TestAuthors_StaleIndexPastTheCapWaitsAndSurfacesTheError(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	base := time.Now()
+	w.handler.SetClock(func() time.Time { return base })
+	_, good, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
+	want := authorNames(t, good, "authors")
+	w.seed.lib.setListErr(errors.New("store unavailable"))
+
+	w.handler.SetClock(func() time.Time { return base.Add(10 * time.Minute) })
+	code, body, raw := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil)
+	if code != http.StatusOK || !equalStrings(authorNames(t, body, "authors"), want) {
+		t.Fatalf("within the stale cap the previous index must be served; got %d %s", code, raw)
+	}
+	abshandler.WaitCacheRefreshes(w.handler)
+
+	w.handler.SetClock(func() time.Time { return base.Add(40 * time.Minute) })
+	if code, _, raw := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/authors", nil); code == http.StatusOK {
+		t.Fatalf("a 40-minute-old index was still served while every rebuild failed: %s", raw)
 	}
 }
 
