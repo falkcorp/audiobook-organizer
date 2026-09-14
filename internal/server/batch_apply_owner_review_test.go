@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-13
 //
@@ -180,9 +180,11 @@ func (fakePreviewSvc) PreviewMetadataCandidate(string, metafetch.MetadataCandida
 // A queued run that absorbs a second request keeps both requests' pins; a
 // dropped pin would silently hard-gate a book the owner reviewed.
 func TestOwnerReview_QueuedMergeKeepsPins(t *testing.T) {
-	a := metafetch.CandidatePin{Source: "Audible", Title: "A"}
-	b1 := metafetch.CandidatePin{Source: "Audible", Title: "B old"}
-	b2 := metafetch.CandidatePin{Source: "Audible", Title: "B new"}
+	// Real row pins (origin + content hash), the only kind the lane sends: two
+	// debounced single-row requests can merge while a run is queued.
+	a := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "A"})
+	b1 := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B old"})
+	b2 := *rowPin(metafetch.MetadataCandidate{Source: "Audible", Title: "B new"})
 	cur, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"a", "b"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"a": a, "b": b1}})
 	next, _ := json.Marshal(batchApplyOpParams{BookIDs: []string{"b", "c"}, WriteBack: true, Pins: map[string]metafetch.CandidatePin{"b": b2}})
 	raw, ok, err := mergeBatchApplyQueuedParams(cur, next)
