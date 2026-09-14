@@ -1,5 +1,5 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
 // last-edited: 2026-09-13
 
@@ -81,7 +81,24 @@ type scanStandDown struct {
 	// graceEpoch invalidates a timer whose callback is already waiting on mu
 	// when the grace is canceled or restarted.
 	graceEpoch uint64
+
+	// markerGen orders the persisted marker's writes. Every change to the
+	// wanted marker bumps it under mu and captures it; the store write itself
+	// runs after mu is released (see writeScanStandDownMarker). The marker
+	// write is a synced SetSetting, and the dispatcher claim path and the
+	// worker pickup take mu (scanStandDownActive), so holding mu across the
+	// write stalled every op dispatch behind a disk sync on each release.
+	markerGen uint64
+	// markerMu serializes the marker's store writes. The dispatcher and the
+	// worker never take it. Lock order: never take mu while holding markerMu.
+	markerMu sync.Mutex
+	// markerWritten is the newest generation written. Guarded by markerMu.
+	markerWritten uint64
 }
+
+// maxScanStandDownGrace caps the re-queue grace whatever the configured
+// value, so a mistyped setting cannot hold the library scan down for hours.
+const maxScanStandDownGrace = 10 * time.Minute
 
 // scanStandDownMarker is the persisted (JSON) form of an active stand-down. Its
 // presence at boot means a holder died mid-apply: the in-memory gate is gone but
@@ -128,8 +145,9 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 	r.scanGate.holders[holderOpID] = expiry
 	r.cancelScanStandDownGraceLocked(holderOpID)
 	inherited := r.scanGate.scanOpID
+	mw := r.markerWriteLocked(false, holderOpID, inherited, expiry)
 	r.scanGate.mu.Unlock()
-	r.persistScanStandDown(holderOpID, inherited, expiry)
+	r.writeScanStandDownMarker(mw)
 
 	r.logger.Info("registry: scan stand-down acquired",
 		"holder_op_id", holderOpID, "reason", reason, "lease", lease)
@@ -146,8 +164,9 @@ func (r *Registry) AcquireScanStandDown(ctx context.Context, holderOpID, reason 
 			r.scanGate.dropped = append(r.scanGate.dropped, prev)
 		}
 		r.scanGate.scanOpID = scanOpID
+		mw := r.markerWriteLocked(false, holderOpID, scanOpID, expiry)
 		r.scanGate.mu.Unlock()
-		r.persistScanStandDown(holderOpID, scanOpID, expiry)
+		r.writeScanStandDownMarker(mw)
 
 		r.logger.Info("registry: scan stand-down quiescing running scan; waiting for it to park",
 			"holder_op_id", holderOpID, "scan_op_id", scanOpID)
@@ -190,6 +209,9 @@ func (r *Registry) scanStandDownGraceFor() time.Duration {
 	if d < 0 {
 		return 0
 	}
+	if d > maxScanStandDownGrace {
+		return maxScanStandDownGrace
+	}
 	return d
 }
 
@@ -199,9 +221,9 @@ func (r *Registry) scanStandDownGraceFor() time.Duration {
 // must then abort its remaining writes.
 func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	r.scanGate.mu.Lock()
-	defer r.scanGate.mu.Unlock()
 	prev, ok := r.scanGate.holders[holderOpID]
 	if !ok {
+		r.scanGate.mu.Unlock()
 		return false
 	}
 	// A lapsed lease is lost even if nothing has reaped it yet: the dispatcher
@@ -209,6 +231,7 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	// late renewal must not resurrect it.
 	if time.Now().After(prev) {
 		delete(r.scanGate.holders, holderOpID)
+		r.scanGate.mu.Unlock()
 		return false
 	}
 	expiry := time.Now().Add(r.leaseTTL())
@@ -216,10 +239,17 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	// Refresh the persisted lease so a reboot after a renewal carries the newer
 	// expiry (best-effort; marker persistence is a hardening, not the hot path).
 	// At most once a second: holders renew per item, and a marker a second
-	// behind a 5m lease loses nothing.
+	// behind a 5m lease loses nothing. Written after mu is released.
+	var mw scanStandDownMarkerWrite
+	persist := false
 	if now := time.Now(); now.Sub(r.scanGate.lastPersist) >= time.Second {
 		r.scanGate.lastPersist = now
-		r.persistScanStandDown(holderOpID, r.scanGate.scanOpID, expiry)
+		mw = r.markerWriteLocked(false, holderOpID, r.scanGate.scanOpID, expiry)
+		persist = true
+	}
+	r.scanGate.mu.Unlock()
+	if persist {
+		r.writeScanStandDownMarker(mw)
 	}
 	return true
 }
@@ -248,12 +278,14 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 	live := r.liveHoldersLocked()
 	var scanOpID string
 	var dropped []string
+	var clearMarker scanStandDownMarkerWrite
 	if live == 0 {
-		// Last holder out: its work is done, so the marker goes now — under
-		// scanGate.mu, so an acquire racing this release can never have its
-		// fresh marker wiped by this clear (the acquire registers under mu
-		// first, which makes live > 0 here, or persists after we unlock).
-		r.clearScanStandDown()
+		// Last holder out: its work is done, so the marker goes. The clear is
+		// decided here under mu but written after unlock, ordered by marker
+		// generation: an acquire racing this release either registered first
+		// (live > 0, no clear) or bumps a newer generation after us, so its
+		// marker wins whichever store write lands first.
+		clearMarker = r.markerWriteLocked(true, "", "", time.Time{})
 		if deferToGrace {
 			r.startScanStandDownGraceLocked(grace)
 		} else {
@@ -263,6 +295,11 @@ func (r *Registry) releaseScanStandDown(holderOpID string) {
 		}
 	}
 	r.scanGate.mu.Unlock()
+	if live == 0 {
+		// Before any re-queue below, so a resumed scan never runs while a
+		// stale marker could still defer it at boot.
+		r.writeScanStandDownMarker(clearMarker)
+	}
 
 	r.logger.Info("registry: scan stand-down released",
 		"holder_op_id", holderOpID, "remaining_holders", live)
@@ -439,12 +476,51 @@ func (r *Registry) findRunningScan() (string, *runHandle) {
 
 // --- persistence (best-effort; nil store => in-memory only) ---
 
+// scanStandDownMarkerWrite is one wanted state of the persisted marker,
+// captured under scanGate.mu (markerWriteLocked) and written after it is
+// released (writeScanStandDownMarker).
+type scanStandDownMarkerWrite struct {
+	gen        uint64
+	clear      bool
+	holderOpID string
+	scanOpID   string
+	expiry     time.Time
+}
+
+// markerWriteLocked records a new wanted marker state and returns it for
+// writeScanStandDownMarker. Caller holds r.scanGate.mu.
+func (r *Registry) markerWriteLocked(clear bool, holderOpID, scanOpID string, expiry time.Time) scanStandDownMarkerWrite {
+	r.scanGate.markerGen++
+	return scanStandDownMarkerWrite{
+		gen: r.scanGate.markerGen, clear: clear,
+		holderOpID: holderOpID, scanOpID: scanOpID, expiry: expiry,
+	}
+}
+
+// writeScanStandDownMarker writes w unless a newer generation has already been
+// written, so the store always ends at the newest state decided under
+// scanGate.mu however the writers interleave. Caller must NOT hold
+// scanGate.mu: the write is a synced store Set.
+func (r *Registry) writeScanStandDownMarker(w scanStandDownMarkerWrite) {
+	r.scanGate.markerMu.Lock()
+	defer r.scanGate.markerMu.Unlock()
+	if w.gen <= r.scanGate.markerWritten {
+		return
+	}
+	r.scanGate.markerWritten = w.gen
+	if w.clear {
+		r.clearScanStandDown()
+		return
+	}
+	r.persistScanStandDown(w.holderOpID, w.scanOpID, w.expiry)
+}
+
 // persistScanStandDown, clearScanStandDown and readScanStandDownMarker read
 // r.scanStandDownStore WITHOUT taking r.mu. This is deliberate and required: the
 // dispatcher claim block calls scanStandDownActive() (which takes scanGate.mu)
-// while holding r.mu, and RenewScanStandDown and releaseScanStandDown call into
-// the store while holding scanGate.mu — taking r.mu here too would be an AB-BA
-// inversion. The lockless read is safe because scanStandDownStore is set once via
+// while holding r.mu, and the marker writers run under scanGate.markerMu
+// (writeScanStandDownMarker) — taking r.mu here too would add a lock the
+// dispatcher already holds. The lockless read is safe because scanStandDownStore is set once via
 // SetScanStandDownStore BEFORE Start() (same set-once-before-Start contract as
 // depBookStore/runContextDecorator); Start()'s goroutine launch is the
 // happens-before edge that publishes it.

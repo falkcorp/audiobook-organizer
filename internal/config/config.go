@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.118.0
+// version: 1.119.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-13
 
@@ -3282,8 +3282,8 @@ func (c *Config) Validate() error {
 	if c.ConcurrentScans < 0 {
 		errs = append(errs, "concurrent_scans must be >= 0")
 	}
-	if c.ScanStandDownGraceSeconds < 0 {
-		errs = append(errs, "scan_standdown_grace_seconds must be >= 0")
+	if c.ScanStandDownGraceSeconds < 0 || c.ScanStandDownGraceSeconds > 600 {
+		errs = append(errs, "scan_standdown_grace_seconds must be between 0 and 600")
 	}
 	if c.MinBookSizeBytes == 0 {
 		c.MinBookSizeBytes = 5 * 1024 * 1024
