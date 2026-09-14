@@ -99,6 +99,30 @@ func TestApplyMetadataCandidate_BatchPathKeepsCoAuthor(t *testing.T) {
 	assert.Equal(t, []int{1, 2}, finalJoin(*writes), "co-author B was dropped by a batch apply")
 }
 
+// A fill-only append leaves author_id alone, so the column diff is empty for
+// the author; history must still record an author row carrying the previous
+// join, or the added credit could never be undone.
+func TestApplyMetadataCandidate_FillOnlyAppendIsRecordedForUndo(t *testing.T) {
+	store, _, _ := coAuthorFixture()
+	var authorRows []*database.MetadataChangeRecord
+	store.RecordMetadataChangeFunc = func(rec *database.MetadataChangeRecord) error {
+		if rec.Field == historyFieldAuthor {
+			authorRows = append(authorRows, rec)
+		}
+		return nil
+	}
+	svc := NewService(store)
+	_, err := svc.ApplyMetadataCandidateWithOptions("b1",
+		MetadataCandidate{Title: "Good Omens", Author: "C", Source: "audible"}, nil, ApplyOptions{})
+	require.NoError(t, err)
+	require.Len(t, authorRows, 1, "fill-only author append left no history row to undo")
+	require.NotNil(t, authorRows[0].PreviousRef)
+	assert.True(t, authorRows[0].PreviousRef.BookAuthorsKnown)
+	assert.Equal(t, []int{1, 2}, authorIDs(authorRows[0].PreviousRef.BookAuthors))
+	require.NotNil(t, authorRows[0].NewRef)
+	assert.Equal(t, []int{1, 2, 3}, authorIDs(authorRows[0].NewRef.BookAuthors))
+}
+
 // Fill-only with a candidate naming a DIFFERENT author appends it; existing
 // links are never removed and the primary AuthorID is not repointed.
 func TestApplyMetadataToBook_NewAuthorIsAppendedNotReplaced(t *testing.T) {
