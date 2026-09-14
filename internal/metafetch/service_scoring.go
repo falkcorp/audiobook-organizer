@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-09-13
 
@@ -595,12 +595,32 @@ func transcriptionBoost(score float64, r metadata.BookMetadata, th transcription
 // transcribedTitleAgrees reports whether a candidate title matches the book's
 // audio-derived (transcribed) title. Used as a hard gate before auto-applying
 // metadata to a book that has a transcribed title, so an author-driven,
-// wrong-title candidate can't overwrite good data. The rule is util.TitleAgrees,
-// the same one the bulk-apply certainty gate uses; until 2026-09-13 this was a
-// raw substring test either way, so a one-word title matched any transcript
-// that contained the word.
+// wrong-title candidate can't overwrite good data.
+//
+// It is util.TitleAgrees (the certainty gate's rule) AND the rule this was
+// until 2026-09-13 (legacyTranscribedTitleAgrees). Auto-fetch applies with no
+// human in the loop, so it must never accept a pair the old rule refused:
+// the AND makes that true by construction, on every input, whatever the
+// shared matcher does. What it adds is refusals: the old raw-substring test
+// let a one-word title match any transcript containing the word, and
+// "Mistborn" match "Mistborn: The Hero of Ages".
 func transcribedTitleAgrees(candidateTitle, transcribedTitle string) bool {
-	return util.TitleAgrees(candidateTitle, transcribedTitle)
+	return legacyTranscribedTitleAgrees(candidateTitle, transcribedTitle) &&
+		util.TitleAgrees(candidateTitle, transcribedTitle)
+}
+
+// legacyTranscribedTitleAgrees is transcribedTitleAgrees as it stood on
+// origin/main before 2026-09-13: normalized equality, or a case-insensitive
+// substring either way. Kept only as the upper bound on what auto-fetch may
+// accept.
+func legacyTranscribedTitleAgrees(candidateTitle, transcribedTitle string) bool {
+	if candidateTitle == "" || transcribedTitle == "" {
+		return false
+	}
+	if util.NormalizeTitle(candidateTitle) == util.NormalizeTitle(transcribedTitle) {
+		return true
+	}
+	return containsCI(candidateTitle, transcribedTitle)
 }
 
 func pickBestMatchFromScored(

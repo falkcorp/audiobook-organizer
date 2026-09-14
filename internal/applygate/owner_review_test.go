@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2f9b41-0e73-4c58-a9b6-3f1e7c8d2a05
 // last-edited: 2026-09-13
 
@@ -25,6 +25,12 @@ func TestOwnerReviewOverridable(t *testing.T) {
 		{"identity stale", Verdict{Reason: ReasonIdentityStale}, false},
 		{"partial book behind another leg", Verdict{Reason: ReasonSequenceMismatch,
 			Evidence: EvidenceVerdict{Checks: []CheckResult{{Name: "partial_book", Outcome: OutcomeBlock, Reason: ReasonPartialBook}}}}, false},
+		{"asin conflict stays hard", Verdict{Reason: ReasonASINConflict,
+			Evidence: EvidenceVerdict{Checks: []CheckResult{{Name: "asin", Outcome: OutcomeBlock, Reason: ReasonASINConflict}}}}, false},
+		{"asin conflict behind a runtime refusal", Verdict{Reason: ReasonRuntimeUnknownOverwrite,
+			Evidence: EvidenceVerdict{Checks: []CheckResult{
+				{Name: "runtime", Outcome: OutcomeBlock, Reason: ReasonRuntimeUnknownOverwrite},
+				{Name: "asin", Outcome: OutcomeBlock, Reason: ReasonASINConflict}}}}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.v.OwnerReviewOverridable(); got != tc.want {

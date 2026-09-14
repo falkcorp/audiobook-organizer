@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_boost_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c1f9a52-8d47-4e60-b9a2-6f0e5d213c74
-// last-edited: 2026-07-02
+// last-edited: 2026-09-13
 
 package metafetch
 
@@ -84,15 +84,52 @@ func TestTranscribedTitleAgrees(t *testing.T) {
 		want              bool
 	}{
 		{"The Way of Kings", "The Way of Kings", true},
-		{"the way of kings", "The Way of Kings", true},                // normalized
-		{"The Way of Kings (Stormlight 1)", "The Way of Kings", true}, // substring
+		{"the way of kings", "The Way of Kings", true}, // normalized
+		// The raw substring the old rule accepted is refused now.
+		{"The Way of Kings (Stormlight 1)", "The Way of Kings", false},
 		{"The Final Empire", "The Way of Kings", false},
 		{"", "The Way of Kings", false},
 		{"The Way of Kings", "", false},
+		// The strict matcher's trailer strip, within what the old rule allowed.
+		{"This Gilded Abyss", "This Gilded Abyss, book one of the Gilded Abyss trilogy", true},
 	}
 	for _, tc := range tests {
 		if got := transcribedTitleAgrees(tc.cand, tc.transcribed); got != tc.want {
 			t.Errorf("transcribedTitleAgrees(%q, %q) = %v, want %v", tc.cand, tc.transcribed, got, tc.want)
+		}
+	}
+}
+
+// Auto-fetch applies with no human in the loop: every reviewer false
+// positive must refuse, in both orders.
+func TestTranscribedTitleAgrees_ReviewerFalsePositivesRefuse(t *testing.T) {
+	for _, p := range [][2]string{
+		{"Mistborn: The Hero of Ages", "Mistborn"},
+		{"Foundation", "Foundation and Empire"},
+		{"The Witches", "The Witcher"},
+	} {
+		if transcribedTitleAgrees(p[0], p[1]) || transcribedTitleAgrees(p[1], p[0]) {
+			t.Errorf("auto-fetch accepted %q ~ %q", p[0], p[1])
+		}
+	}
+}
+
+// Auto-fetch must never be looser than origin/main on any input: whatever
+// the new rule accepts, the old one accepted too.
+func TestTranscribedTitleAgrees_NeverLooserThanMain(t *testing.T) {
+	titles := []string{
+		"Knaves Over Queens", "Naves Over Queens", "Sojourn", "Mistborn",
+		"Mistborn: The Hero of Ages", "The Witcher", "The Witches", "Foundation",
+		"Foundation and Empire", "This Gilded Abyss", "This Gilded Abyss, book one of the Gilded Abyss trilogy",
+		"Witness to a Trial", "Witness to a Trial A short story prequel to The Whistler",
+		"Ready Player One", "Ready Player 1", "The Sandersonian Way Home", "The Sandersinian Way Home",
+		"Blood of Elves", "Blood of Elves (Unabridged)", "It", "",
+	}
+	for _, a := range titles {
+		for _, b := range titles {
+			if transcribedTitleAgrees(a, b) && !legacyTranscribedTitleAgrees(a, b) {
+				t.Errorf("auto-fetch accepts %q ~ %q, which origin/main refused", a, b)
+			}
 		}
 	}
 }

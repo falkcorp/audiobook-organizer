@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
 // last-edited: 2026-09-13
 //
@@ -201,15 +201,25 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 	}
 	seen := make(map[string]struct{}, len(current.BookIDs)+len(next.BookIDs))
 	merged := batchApplyOpParams{WriteBack: current.WriteBack}
-	// Pins union too, the newer request winning for a book in both: its pin is
-	// the candidate the owner looked at most recently.
+	// Pins union too, the newer request deciding for every book it names: its
+	// pin (the candidate the owner looked at most recently) replaces the older
+	// one, and a book it names WITHOUT a pin loses the older pin. That second
+	// case is a bulk button pressed after a row review; the bulk request is
+	// the owner's latest word on that book, and it asked for the hard gate.
 	if len(current.Pins)+len(next.Pins) > 0 {
 		merged.Pins = make(map[string]metafetch.CandidatePin, len(current.Pins)+len(next.Pins))
 		for id, pin := range current.Pins {
 			merged.Pins[id] = pin
 		}
-		for id, pin := range next.Pins {
-			merged.Pins[id] = pin
+		for _, id := range next.BookIDs {
+			if pin, ok := next.Pins[id]; ok {
+				merged.Pins[id] = pin
+			} else {
+				delete(merged.Pins, id)
+			}
+		}
+		if len(merged.Pins) == 0 {
+			merged.Pins = nil
 		}
 	}
 	// Books an earlier attempt already finished, inferred before BookIDs is

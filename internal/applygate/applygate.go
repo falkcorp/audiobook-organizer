@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-09-13
 
@@ -108,7 +108,10 @@ type Verdict struct {
 // shared with auto-fetch and with the apply's audio_confirmed marker. Before
 // 2026-09-13 this demanded exact title equality and the noisy transcribed
 // author as a substring of the candidate's, which refused every real book on
-// the review lane (Whisper appends credits and misspells names).
+// the review lane (Whisper appends credits and misspells names). The shared
+// rule is strict (full-title equality, author from the transcribed author
+// field only) because metadata.upgrade and an unpinned batch apply trust it
+// with no human in the loop.
 func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) bool {
 	if book == nil || c == nil || book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
 		return false
@@ -116,7 +119,7 @@ func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) 
 	if !util.TitleAgrees(c.Title, *book.TranscribedTitle) {
 		return false
 	}
-	return util.AuthorAgrees(c.Author, derefStr(book.TranscribedAuthor), derefStr(book.IntroTranscription))
+	return util.AuthorAgrees(c.Author, derefStr(book.TranscribedAuthor))
 }
 
 func derefStr(p *string) string {

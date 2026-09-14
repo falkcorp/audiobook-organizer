@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -597,7 +598,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		return nil, err
 	}
 	if opts.GateOverride != "" {
-		appendMetadataVersionNote(book, "owner_reviewed")
+		appendOwnerReviewedNote(book, opts.GateOverride, time.Now())
 	}
 
 	// Keep serving the previous cover until the new one is actually on disk.
@@ -610,18 +611,15 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	src := candidate.Source
 	book.MetadataSource = &src
 	th := hintsFromBook(book)
-	// The same title/author rule the certainty gate and auto-fetch use
+	// The same strict title/author rule the certainty gate uses
 	// (internal/util/transcript_match.go); AuthorAgrees passes an empty or
-	// <=3-character transcribed author, as this did before.
+	// <=3-character transcribed author, as this did before. An owner-reviewed
+	// apply earns no audio_confirmed marker it did not match on its own.
 	audioConfirmed := !th.empty() &&
 		th.title != "" &&
 		util.TitleAgrees(candidate.Title, th.title)
 	if audioConfirmed {
-		intro := ""
-		if book.IntroTranscription != nil {
-			intro = *book.IntroTranscription
-		}
-		if util.AuthorAgrees(candidate.Author, th.author, intro) {
+		if util.AuthorAgrees(candidate.Author, th.author) {
 			ac := "audio_confirmed"
 			book.MetadataReviewStatus = &ac
 			slog.Info("metadata apply: audio-confirmed match", "id", logger.SanitizeLogValue(id), "title", logger.SanitizeLogValue(candidate.Title))
@@ -808,6 +806,20 @@ func (mfs *Service) saveCover(bookID, coverURL string, replace bool) {
 	if updated == nil {
 		slog.Warn("background cover art: book vanished before cover_url update", "id", logger.SanitizeLogValue(bookID))
 	}
+}
+
+// appendOwnerReviewedNote records one owner-reviewed override on the book's
+// version notes: "owner_reviewed <UTC time>: <overridden reasons>". Unlike
+// appendMetadataVersionNote it never deduplicates: each override is a
+// separate decision and must stay visible, not collapse into the first.
+func appendOwnerReviewedNote(book *database.Book, overridden string, at time.Time) {
+	line := "owner_reviewed " + at.UTC().Format(time.RFC3339) + ": " + overridden
+	if book.VersionNotes == nil || strings.TrimSpace(*book.VersionNotes) == "" {
+		book.VersionNotes = &line
+		return
+	}
+	notes := strings.TrimSpace(*book.VersionNotes) + "\n" + line
+	book.VersionNotes = &notes
 }
 
 func appendMetadataVersionNote(book *database.Book, marker string) {

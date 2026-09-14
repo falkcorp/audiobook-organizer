@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_review.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
 // last-edited: 2026-09-13
 
@@ -16,8 +16,8 @@ import "strings"
 // Overridden (they are judgements about how sure the match is):
 //   - score: score_below_floor and transcription_mismatch;
 //   - sequence: all four sequence reasons;
-//   - evidence: every hard contradiction except partial_book, and the
-//     MinAgreements count (insufficient_evidence).
+//   - evidence: every hard contradiction except partial_book and
+//     asin_conflict, and the MinAgreements count (insufficient_evidence).
 //
 // Still blocking (they are not about certainty):
 //   - identity_stale: the cache row was fetched for a different title/author,
@@ -25,6 +25,10 @@ import "strings"
 //   - partial_book: another folder holds a part of the same book. The owner
 //     reviewed a candidate, not the folder layout, and applying one identity
 //     onto half a book is corruption the candidate view does not show.
+//   - asin_conflict: the book already carries a different ASIN. An ASIN is a
+//     record identity, not a judgement; overwriting one on a review of the
+//     title/author the row shows would silently re-point the book at another
+//     Audible record.
 //
 // Everything outside the gate (book not found, a stale pin, a rename that
 // cannot land, policy:no-metadata, field locks, the scan stand-down) is
@@ -42,11 +46,18 @@ func (v Verdict) OwnerReviewOverridable() bool {
 		return false
 	}
 	for _, ch := range v.Evidence.Checks {
-		if ch.Outcome == OutcomeBlock && ch.Reason == ReasonPartialBook {
+		if ch.Outcome == OutcomeBlock && ownerReviewHardReasons[ch.Reason] {
 			return false
 		}
 	}
 	return true
+}
+
+// ownerReviewHardReasons are the evidence refusals an owner review does NOT
+// lift (see the file comment for why).
+var ownerReviewHardReasons = map[string]bool{
+	ReasonPartialBook:  true,
+	ReasonASINConflict: true,
 }
 
 // RefusingReasons lists every reason that refused in v, one per failing leg

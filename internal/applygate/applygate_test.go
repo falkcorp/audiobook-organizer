@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-13
 
@@ -130,8 +130,6 @@ func TestEvaluate(t *testing.T) {
 		t.Fatalf("audio-confirmed 0.86 refused: %+v", v)
 	}
 	// ... and a transcribed title the candidate does not match refuses outright.
-	// (A title that CONTAINS the transcribed one, "Big Cats 1 Special Edition",
-	// now agrees: see util.TitleAgrees.)
 	other := metafetch.MetadataCandidate{Title: "Small Dogs 1", SeriesPosition: "1", Score: 0.99}
 	if v := Evaluate(heard, &other, nil); v.Allowed || v.Reason != ReasonTranscriptionMismatch {
 		t.Fatalf("transcription mismatch: allowed=%v reason=%q", v.Allowed, v.Reason)
@@ -151,7 +149,10 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 		want                    bool
 	}{
 		{"Blood of Elves", "Blood of Elves", "Andrzej Sapkowski", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", true},
-		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", true},
+		// The candidate's own title carries the series suffix; the strict
+		// matcher strips trailers from the transcribed side only, so this one
+		// is applied by a row review, not by the matcher.
+		{"A Cry of Honor", "A Cry of Honor (Book #4 in the Sorcerer's Ring)", "Morgan Rice", "A Cry of Honor", "Morgan Rice", false},
 		{"Witness to a Trial", "Witness to a Trial", "John Grisham", "Witness to a Trial A short story prequel to The Whistler", "John Grisham", true},
 		{"Knaves Over Queens", "Knaves Over Queens", "George R. R. Martin", "Naves Over Queens", "George R. R. Martin, assisted", true},
 		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true},
@@ -167,6 +168,41 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
 			if got := TranscriptionConfirms(book, c); got != tc.want {
 				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTranscriptionConfirms_ReviewerFalsePositivesRefuse: the pairs the
+// adversarial review measured as wrongly confirmed by the first matcher.
+// TranscriptionConfirms is what metadata.upgrade and an unpinned batch apply
+// trust with no human in the loop, so every one must refuse.
+func TestTranscriptionConfirms_ReviewerFalsePositivesRefuse(t *testing.T) {
+	cases := []struct {
+		name                           string
+		candTitle, candAuthor          string
+		heardTitle, heardAuthor, intro string
+	}{
+		{"subtitle vs series title", "Mistborn: The Hero of Ages", "Brandon Sanderson", "Mistborn", "Brandon Sanderson", ""},
+		{"series title vs subtitle", "Mistborn", "Brandon Sanderson", "Mistborn: The Hero of Ages", "Brandon Sanderson", ""},
+		{"first book vs second", "Foundation", "Isaac Asimov", "Foundation and Empire", "Isaac Asimov", ""},
+		{"second book vs first", "Foundation and Empire", "Isaac Asimov", "Foundation", "Isaac Asimov", ""},
+		{"one letter apart", "The Witches", "Roald Dahl", "The Witcher", "Roald Dahl", ""},
+		{"same surname, other author", "Sleeping Beauties", "Stephen King", "Sleeping Beauties", "Owen King", ""},
+		{"surname only in the intro", "The Return of the King", "Stephen King", "The Return of the King", "J. R. R. Tolkien",
+			"The Return of the King, by J.R.R. Tolkien. Narrated by Rob Inglis."},
+		{"narrator surname in the intro", "Alex Cross", "James Patterson", "Alex Cross", "Rob Inglis",
+			"Alex Cross, narrated by Patterson Joseph."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{TranscribedTitle: strp(tc.heardTitle), TranscribedAuthor: strp(tc.heardAuthor)}
+			if tc.intro != "" {
+				book.IntroTranscription = strp(tc.intro)
+			}
+			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
+			if TranscriptionConfirms(book, c) {
+				t.Errorf("TranscriptionConfirms confirmed %q/%q against heard %q/%q", tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor)
 			}
 		})
 	}
