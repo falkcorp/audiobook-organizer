@@ -1,23 +1,27 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 2.9.0
+// version: 3.0.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package jobs
 
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
+
+var ddLog = logger.New("dedup-books")
 
 func init() { maintenance.Register(&dedupBooksJob{}) }
 
@@ -38,6 +42,22 @@ func (j *dedupBooksJob) DefaultParams() any {
 func (j *dedupBooksJob) Description() string { return "Detect and merge duplicate books" }
 func (j *dedupBooksJob) CanResume() bool     { return false }
 
+// ddTally counts one phase's outcomes. Refused is a guard saying no (iTunes
+// library, a version group that cannot be handed off); Failed is a store error.
+// Dry-run runs the same guards, so its counts are what apply would do.
+type ddTally struct{ done, refused, failed int }
+
+func (t *ddTally) record(err error) {
+	switch {
+	case err == nil:
+		t.done++
+	case merge.IsRefusal(err):
+		t.refused++
+	default:
+		t.failed++
+	}
+}
+
 func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allBooks, err := ddFetchAllBooksPaginated(store)
 	if err != nil {
@@ -48,7 +68,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	deletedIDs := make(map[string]bool)
 
 	// Phase 1: Delete junk "read by narrator" records
-	phase1 := 0
+	var phase1 ddTally
 	for i := range allBooks {
 		select {
 		case <-ctx.Done():
@@ -62,14 +82,15 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		if !ddIsJunkReadByNarrator(book) {
 			continue
 		}
-		if !dryRun {
-			if delErr := ddSoftDeleteBook(store, book.ID); delErr != nil {
-				slog.Error("phase1 delete", "book", book.ID, "delErr", delErr)
-				continue
-			}
+		// A junk row keeps its own files, so it keeps its FilePath (clearPath
+		// false): it is not handing anything to a keeper.
+		delErr := ddRetireBook(store, book, nil, dryRun, false)
+		phase1.record(delErr)
+		if delErr != nil {
+			ddLog.Error("phase1 retire book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(delErr.Error()))
+			continue
 		}
 		deletedIDs[book.ID] = true
-		phase1++
 	}
 
 	// Phase 2: Merge books with the same file_path
@@ -82,8 +103,8 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		pathGroups[book.FilePath] = append(pathGroups[book.FilePath], *book)
 	}
 
-	phase2 := 0
-	for fp, group := range pathGroups {
+	var phase2 ddTally
+	for _, group := range pathGroups {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -103,12 +124,13 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			if mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer); mergeErr != nil {
-				slog.Error("phase2 merge -> fp", "dup", dup.ID, "keeper", keeper.ID, "fp", fp, "mergeErr", mergeErr)
+			mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer)
+			phase2.record(mergeErr)
+			if mergeErr != nil {
+				ddLog.Error("phase2 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
 				continue
 			}
 			deletedIDs[dup.ID] = true
-			phase2++
 		}
 	}
 
@@ -140,7 +162,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		taGroups[key] = append(taGroups[key], *book)
 	}
 
-	phase3 := 0
+	var phase3 ddTally
 	for key, group := range taGroups {
 		select {
 		case <-ctx.Done():
@@ -170,12 +192,13 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			if mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer); mergeErr != nil {
-				slog.Error("phase3 merge ->", "dup", dup.ID, "keeper", keeper.ID, "mergeErr", mergeErr)
+			mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer)
+			phase3.record(mergeErr)
+			if mergeErr != nil {
+				ddLog.Error("phase3 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
 				continue
 			}
 			deletedIDs[dup.ID] = true
-			phase3++
 		}
 	}
 
@@ -189,7 +212,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		vgGroups[*book.VersionGroupID] = append(vgGroups[*book.VersionGroupID], *book)
 	}
 
-	phase4 := 0
+	var phase4 ddTally
 	for vgID, group := range vgGroups {
 		select {
 		case <-ctx.Done():
@@ -207,22 +230,20 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		if len(dupeIDs) == 0 {
 			continue
 		}
-		if !dryRun {
-			for _, dupID := range dupeIDs {
-				current, gbErr := store.GetBookByID(dupID)
-				if gbErr != nil || current == nil {
-					continue
-				}
-				current.VersionGroupID = nil
-				current.IsPrimaryVersion = nil
-				if _, upErr := store.UpdateBook(dupID, current); upErr != nil {
-					slog.Error("phase4 unlink vg from book", "vgID", vgID, "dupID", dupID, "upErr", upErr)
-					continue
-				}
-				phase4++
+		if dryRun {
+			phase4.done += len(dupeIDs)
+			continue
+		}
+		for _, dupID := range dupeIDs {
+			_, upErr := store.ModifyBook(dupID, func(b *database.Book) error {
+				b.VersionGroupID = nil
+				b.IsPrimaryVersion = nil
+				return nil
+			})
+			phase4.record(upErr)
+			if upErr != nil {
+				ddLog.Error("phase4 unlink vg=%s from book=%s: %s", logger.SanitizeLogValue(vgID), logger.SanitizeLogValue(dupID), logger.SanitizeLogValue(upErr.Error()))
 			}
-		} else {
-			phase4 += len(dupeIDs)
 		}
 	}
 
@@ -230,7 +251,14 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		reporter.Increment()
 	}
 
-	slog.Info("Done phase1_junk phase2_path phase3_title phase4_vg dryRun", "phase1", phase1, "phase2", phase2, "phase3", phase3, "phase4", phase4, "dryRun", dryRun)
+	summary := fmt.Sprintf("dry_run=%v junk=%d/%d refused/%d failed path_merge=%d/%d refused/%d failed title_merge=%d/%d refused/%d failed vg_unlink=%d/%d failed",
+		dryRun, phase1.done, phase1.refused, phase1.failed, phase2.done, phase2.refused, phase2.failed,
+		phase3.done, phase3.refused, phase3.failed, phase4.done, phase4.failed)
+	reporter.Log("info", summary, nil)
+	ddLog.Info("done: %s", summary)
+	if failed := phase1.failed + phase2.failed + phase3.failed + phase4.failed; failed > 0 {
+		return fmt.Errorf("dedup-books: %d write(s) failed; those books were left unmerged (%s)", failed, summary)
+	}
 	return nil
 }
 
@@ -275,14 +303,38 @@ func ddIsJunkReadByNarrator(book *database.Book) bool {
 	return true
 }
 
+// ddPickKeeperIdx picks the survivor. A book explicitly marked as its version
+// group's primary wins over any non-primary, whatever the metadata score:
+// retiring the primary is the one choice that can leave a group without one.
+// Only an explicit true counts here; nil is ambiguous across readers (see
+// ddCountsAsPrimary), and the retire path handles the nil case by re-electing.
 func ddPickKeeperIdx(books []database.Book) int {
 	best := 0
 	for i := 1; i < len(books); i++ {
-		if ddBookScore(&books[i]) > ddBookScore(&books[best]) {
+		iPrim, bestPrim := ddExplicitPrimary(&books[i]), ddExplicitPrimary(&books[best])
+		switch {
+		case iPrim && !bestPrim:
+			best = i
+		case iPrim == bestPrim && ddBookScore(&books[i]) > ddBookScore(&books[best]):
 			best = i
 		}
 	}
 	return best
+}
+
+func ddExplicitPrimary(b *database.Book) bool {
+	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+}
+
+// ddCountsAsPrimary is the reading of IsPrimaryVersion every DESTRUCTIVE guard
+// in this package uses: nil counts as primary. The codebase disagrees about nil
+// (pebble_store and memdb read nil as primary; reconcile and sortVersions read
+// it as not primary -- see the comment in merge.MergeBooks), so a guard that
+// retires a book must take the reading under which retiring it could strand
+// the group. Reading `!= nil && *` here would let the job soft-delete a group's
+// only nil-flagged member, which is the bug this guard exists to stop.
+func ddCountsAsPrimary(b *database.Book) bool {
+	return b.IsPrimaryVersion == nil || *b.IsPrimaryVersion
 }
 
 func ddBookScore(b *database.Book) int {
@@ -326,74 +378,257 @@ func ddBookScore(b *database.Book) int {
 	return score
 }
 
-func ddMergeDuplicateBook(store maintenance.JobStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+// ddGroupStore is what the retire guards read: the iTunes guard's surface plus
+// the version-group membership used to re-elect a primary.
+type ddGroupStore interface {
+	merge.ITunesGuardStore
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// ddPlanPrimaryHandoff decides who becomes primary of book's version group
+// once book is retired. "" means no hand-off is needed: book is not in a
+// group, does not count as its primary, another live member is already an
+// explicit primary, or book is the group's last live member.
+//
+// heir is the book absorbing this one (nil in phase 1). When heir is in the
+// same group -- or joins it through ddMergeBookFields' VersionGroupID fill --
+// heir takes the primary. Otherwise the earliest-created live member does,
+// the same rule reconcile.ElectMissingPrimaries uses.
+func ddPlanPrimaryHandoff(store ddGroupStore, book, heir *database.Book) (string, error) {
+	if book.VersionGroupID == nil || *book.VersionGroupID == "" || !ddCountsAsPrimary(book) {
+		return "", nil
+	}
+	vg := *book.VersionGroupID
+	members, err := store.GetBooksByVersionGroup(vg)
+	if err != nil {
+		return "", fmt.Errorf("read version group %s of %s: %w", vg, book.ID, err)
+	}
+	var others []database.Book
+	for _, m := range members {
+		if m.ID == book.ID || m.IsSoftDeleted() {
+			continue
+		}
+		if ddExplicitPrimary(&m) {
+			return "", nil
+		}
+		others = append(others, m)
+	}
+	if heir != nil {
+		heirVG := ""
+		if heir.VersionGroupID != nil {
+			heirVG = *heir.VersionGroupID
+		}
+		if heirVG == vg || heirVG == "" {
+			return heir.ID, nil
+		}
+	}
+	if len(others) == 0 {
+		return "", nil
+	}
+	sort.SliceStable(others, func(i, j int) bool {
+		a, b := others[i], others[j]
+		switch {
+		case a.CreatedAt != nil && b.CreatedAt != nil && !a.CreatedAt.Equal(*b.CreatedAt):
+			return a.CreatedAt.Before(*b.CreatedAt)
+		case a.CreatedAt != nil && b.CreatedAt == nil:
+			return true
+		case a.CreatedAt == nil && b.CreatedAt != nil:
+			return false
+		}
+		return a.ID < b.ID
+	})
+	return others[0].ID, nil
+}
+
+// ddRetireStore is everything ddRetireBook and ddMergeDuplicateBook need.
+type ddRetireStore interface {
+	ddGroupStore
+	ddBookModifier
+}
+
+// ddBookModifier is the per-book locked read-modify-write.
+type ddBookModifier interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// ddRetireBook soft-deletes book after the guards every retirement shares:
+// the iTunes guard (nothing under books/itunes/** is mutated) and the primary
+// hand-off (a group's primary is never retired without a successor being
+// promoted first). heir is the book absorbing this one, or nil.
+//
+// In dry-run it runs the same guards and writes nothing, so a dry-run count is
+// the count apply would reach.
+func ddRetireBook(store ddRetireStore, book, heir *database.Book, dryRun, clearPath bool) error {
+	ids := []string{book.ID}
+	if heir != nil {
+		ids = append(ids, heir.ID)
+	}
+	if err := merge.GuardITunesProtected(store, ids); err != nil {
+		return err
+	}
+	successor, err := ddPlanPrimaryHandoff(store, book, heir)
+	if err != nil {
+		return err
+	}
+	if dryRun {
+		return nil
+	}
+	// Promote before retiring: if the soft-delete then fails the group briefly
+	// has two primaries, which is visible and repairable; the other order can
+	// leave it with none. The heir is promoted by the caller's keeper write.
+	if successor != "" && (heir == nil || successor != heir.ID) {
+		if err := ddPromotePrimary(store, successor); err != nil {
+			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, book.ID, err)
+		}
+	}
+	return ddSoftDeleteBook(store, book.ID, clearPath)
+}
+
+func ddPromotePrimary(store ddBookModifier, id string) error {
+	b, err := store.ModifyBook(id, func(b *database.Book) error {
+		if ddExplicitPrimary(b) {
+			return database.ErrSkipBookWrite
+		}
+		t := true
+		b.IsPrimaryVersion = &t
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return fmt.Errorf("book %s not found", id)
+	}
+	return nil
+}
+
+// ddMergeStore is ddMergeDuplicateBook's store: the job's whole surface.
+type ddMergeStore = maintenance.JobStore
+
+// ddMergeDuplicateBook folds dup into keeper and soft-deletes dup.
+//
+// Order, and why:
+//  1. Guards (both modes): iTunes, the dup's file list is readable, and the
+//     primary hand-off. Dry-run stops here.
+//  2. Keeper field-fill under the keeper's lock (gap-fill only, respecting the
+//     user's field locks). A failure here writes nothing anywhere.
+//  3. Move the dup's book_file rows with MoveBookFilesToBook. This used to set
+//     f.BookID and call UpsertBookFile, which keeps the STORED BookID -- the
+//     rows never moved, and the dup was then soft-deleted still owning them
+//     while sharing the keeper's FilePath.
+//  4. External IDs, user tags, ITL removals.
+//  5. Re-check the dup owns zero rows (CombineBooks' guard), then soft-delete
+//     it with FilePath cleared: a purge with delete-files on os.Remove()s a
+//     purged book's FilePath, and that path is the keeper's audio.
+//
+// Any failure returns before the soft-delete, so the dup is never retired
+// while it still owns anything.
+func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+	if err := merge.GuardITunesProtected(store, []string{keeper.ID, dup.ID}); err != nil {
+		return err
+	}
+	files, err := store.GetBookFiles(dup.ID)
+	if err != nil {
+		return fmt.Errorf("read files of dup %s: %w", dup.ID, err)
+	}
+	successor, err := ddPlanPrimaryHandoff(store, dup, keeper)
+	if err != nil {
+		return err
+	}
 	if dryRun {
 		return nil
 	}
 
-	dupMappings, _ := store.GetExternalIDsForBook(dup.ID)
+	var restored []string
+	updated, err := store.ModifyBook(keeper.ID, func(current *database.Book) error {
+		// The keeper's user-locked fields win over the dup's values -- a blank
+		// the user locked stays blank. Fail closed: if the locks cannot be read
+		// the merge does not happen and the dup is NOT deleted (its values would
+		// be the only copy of whatever the keeper lacks). Both calls below only
+		// READ (field states, series), which the LOCK RULES allow.
+		r, lockErr := database.ApplyRespectingLocks(store, current, func(b *database.Book) { ddMergeBookFields(b, dup) })
+		if lockErr != nil {
+			return fmt.Errorf("keeper %s: %w", keeper.ID, lockErr)
+		}
+		restored = r
+		database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
+		if successor == keeper.ID {
+			t := true
+			current.IsPrimaryVersion = &t
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("update keeper %s: %w", keeper.ID, err)
+	}
+	if updated == nil {
+		return fmt.Errorf("keeper book %s not found", keeper.ID)
+	}
+	if len(restored) > 0 {
+		ddLog.Info("left the keeper's user-locked fields alone keeper=%s locked=%s", logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(strings.Join(restored, ",")))
+	}
+	*keeper = *updated
+
+	if len(files) > 0 {
+		ids := make([]string, len(files))
+		for i := range files {
+			ids[i] = files[i].ID
+		}
+		if err := store.MoveBookFilesToBook(ids, dup.ID, keeper.ID); err != nil {
+			return fmt.Errorf("move %d file(s) from dup %s to keeper %s: %w", len(ids), dup.ID, keeper.ID, err)
+		}
+	}
+
+	dupMappings, err := store.GetExternalIDsForBook(dup.ID)
+	if err != nil {
+		return fmt.Errorf("read external IDs of dup %s: %w", dup.ID, err)
+	}
 	var dupPIDs []string
 	for _, m := range dupMappings {
 		if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned {
 			dupPIDs = append(dupPIDs, m.ExternalID)
 		}
 	}
+	if err := store.ReassignExternalIDs(dup.ID, keeper.ID); err != nil {
+		return fmt.Errorf("reassign external IDs %s -> %s: %w", dup.ID, keeper.ID, err)
+	}
 
-	files, err := store.GetBookFiles(dup.ID)
-	if err == nil {
-		for i := range files {
-			f := &files[i]
-			f.BookID = keeper.ID
-			if upErr := store.UpsertBookFile(f); upErr != nil {
-				slog.Warn("dedup-books UpsertBookFile -> keeper", "f", f.ID, "keeper", keeper.ID, "upErr", upErr)
-			}
+	tags, err := store.GetBookUserTags(dup.ID)
+	if err != nil {
+		return fmt.Errorf("read user tags of dup %s: %w", dup.ID, err)
+	}
+	for _, tag := range tags {
+		if err := store.AddBookUserTag(keeper.ID, tag); err != nil {
+			return fmt.Errorf("copy user tag to keeper %s: %w", keeper.ID, err)
 		}
 	}
 
-	if reassignErr := store.ReassignExternalIDs(dup.ID, keeper.ID); reassignErr != nil {
-		slog.Warn("dedup-books ReassignExternalIDs ->", "dup", dup.ID, "keeper", keeper.ID, "reassignErr", reassignErr)
+	// The CombineBooks guard (merge/service.go): never retire a book that still
+	// owns files -- that would orphan audio, or let a purge delete it.
+	remaining, err := store.GetBookFiles(dup.ID)
+	if err != nil {
+		return fmt.Errorf("re-read files of dup %s: %w", dup.ID, err)
+	}
+	if len(remaining) != 0 {
+		return fmt.Errorf("dup %s still owns %d file(s) after the move; not soft-deleting it", dup.ID, len(remaining))
+	}
+
+	if successor != "" && successor != keeper.ID {
+		if err := ddPromotePrimary(store, successor); err != nil {
+			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, dup.ID, err)
+		}
+	}
+	if err := ddSoftDeleteBook(store, dup.ID, true); err != nil {
+		return err
 	}
 
 	if enqueuer != nil && len(dupPIDs) > 0 {
 		for _, pid := range dupPIDs {
 			enqueuer.EnqueueRemove(pid)
 		}
-		slog.Info("dedup-books queued ITL removals for dup", "dupPIDs_count", len(dupPIDs), "dup", dup.ID)
+		ddLog.Info("queued ITL removals for dup count=%d dup=%s", len(dupPIDs), logger.SanitizeLogValue(dup.ID))
 	}
-
-	tags, tagsErr := store.GetBookUserTags(dup.ID)
-	if tagsErr == nil && len(tags) > 0 {
-		for _, tag := range tags {
-			_ = store.AddBookUserTag(keeper.ID, tag)
-		}
-	}
-
-	current, gbErr := store.GetBookByID(keeper.ID)
-	if gbErr != nil {
-		return fmt.Errorf("GetBookByID keeper %s: %w", keeper.ID, gbErr)
-	}
-	if current == nil {
-		return fmt.Errorf("keeper book %s not found", keeper.ID)
-	}
-
-	// The keeper's user-locked fields win over the dup's values -- a blank the
-	// user locked stays blank. Fail closed: if the locks cannot be read, the
-	// merge does not happen and the dup is NOT deleted (its values would be the
-	// only copy of whatever the keeper lacks).
-	restored, lockErr := database.ApplyRespectingLocks(store, current, func(b *database.Book) { ddMergeBookFields(b, dup) })
-	if lockErr != nil {
-		return fmt.Errorf("keeper %s: %w", keeper.ID, lockErr)
-	}
-	if len(restored) > 0 {
-		slog.Info("dedup-books left the keeper's user-locked fields alone", "keeper", keeper.ID, "locked", restored)
-	}
-	database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
-
-	if _, upErr := store.UpdateBook(keeper.ID, current); upErr != nil {
-		return fmt.Errorf("UpdateBook keeper %s: %w", keeper.ID, upErr)
-	}
-
-	return ddSoftDeleteBook(store, dup.ID)
+	return nil
 }
 
 func ddMergeBookFields(dst, src *database.Book) {
@@ -468,23 +703,34 @@ func ddMergeBookFields(dst, src *database.Book) {
 	}
 }
 
-func ddSoftDeleteBook(store bookSoftDeleter, bookID string) error {
-	current, err := store.GetBookByID(bookID)
-	if err != nil {
-		return fmt.Errorf("GetBookByID %s: %w", bookID, err)
-	}
-	if current == nil {
+// ddSoftDeleteBook marks bookID for deletion under its per-book lock. With
+// clearPath it also clears FilePath (merge's softDeleteAbsorbed rule): a book
+// whose files went to a keeper must not keep naming the keeper's path, or
+// PurgeSoftDeletedBooks with delete-files removes the keeper's audio. A book
+// that still owns its own files (phase 1's junk rows) keeps its path.
+//
+// A retired book is also demoted from primary, so no reader counts a deleted
+// row as its group's primary; the caller has already promoted a successor.
+func ddSoftDeleteBook(store bookSoftDeleter, bookID string, clearPath bool) error {
+	_, err := store.ModifyBook(bookID, func(current *database.Book) error {
+		t := true
+		now := time.Now()
+		current.MarkedForDeletion = &t
+		current.MarkedForDeletionAt = &now
+		if clearPath {
+			current.FilePath = ""
+		}
+		if current.VersionGroupID != nil && *current.VersionGroupID != "" && ddCountsAsPrimary(current) {
+			f := false
+			current.IsPrimaryVersion = &f
+		}
 		return nil
-	}
-	t := true
-	now := time.Now()
-	current.MarkedForDeletion = &t
-	current.MarkedForDeletionAt = &now
-	if _, upErr := store.UpdateBook(bookID, current); upErr != nil {
+	})
+	if err != nil {
 		// No hard-delete fallback: see merge.SoftDeleteBook. A failed
 		// update means the store is unhealthy; deleting the row on the same
 		// store is the one outcome a soft-delete exists to prevent.
-		return fmt.Errorf("soft-delete %s: %w", bookID, upErr)
+		return fmt.Errorf("soft-delete %s: %w", bookID, err)
 	}
 	return nil
 }

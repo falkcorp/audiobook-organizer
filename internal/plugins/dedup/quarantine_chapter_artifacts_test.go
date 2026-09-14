@@ -1,13 +1,14 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package dedup
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -122,5 +123,102 @@ func TestQuarantineChapterArtifacts_UnscannedIdents(t *testing.T) {
 		if isMarkedDeleted(t, pebble, id) {
 			t.Errorf("5 unscanned copies (< 10) must NOT be quarantined: %s", id)
 		}
+	}
+}
+
+func runQuarantine(t *testing.T, p *Plugin, apply bool) error {
+	t.Helper()
+	body := "{}"
+	if apply {
+		body = `{"apply":true}`
+	}
+	return p.runQuarantineChapterArtifacts(context.Background(), json.RawMessage(body), &fakeReporter{})
+}
+
+// A version group's primary is never quarantined while the group has other
+// live members: on main it was, leaving the group with no primary.
+func TestQuarantineChapterArtifacts_SkipsVersionGroupPrimary(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	p := &Plugin{store: pebble}
+	var ids []string
+	for i := range 6 {
+		ids = append(ids, mkBook(t, pebble, "Opening Credits", i, 30))
+	}
+	sibling := mkBook(t, pebble, "The Real Book", 0, 36000)
+	vg := "vg-primary-artifact"
+	yes, no := true, false
+	for id, prim := range map[string]*bool{ids[0]: &yes, sibling: &no} {
+		if _, err := pebble.ModifyBook(id, func(b *database.Book) error {
+			b.VersionGroupID = &vg
+			b.IsPrimaryVersion = prim
+			return nil
+		}); err != nil {
+			t.Fatalf("seed group: %v", err)
+		}
+	}
+	if err := runQuarantine(t, p, true); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if isMarkedDeleted(t, pebble, ids[0]) {
+		t.Fatal("the version group's primary was quarantined; the group now has no primary")
+	}
+	for _, id := range ids[1:] {
+		if !isMarkedDeleted(t, pebble, id) {
+			t.Errorf("non-primary artifact %s should still be quarantined", id)
+		}
+	}
+}
+
+// Books under the active iTunes library are never mutated.
+func TestQuarantineChapterArtifacts_SkipsITunesLibrary(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	p := &Plugin{store: pebble}
+	var ids []string
+	for i := range 6 {
+		path := fmt.Sprintf("/lib/books/itunes/Credits/Opening Credits-%d.mp3", i)
+		created, err := pebble.CreateBook(&database.Book{Title: "Opening Credits", FilePath: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pebble.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: path, Duration: 30, FileSize: 30*16000 + 1<<20}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, created.ID)
+	}
+	if err := runQuarantine(t, p, true); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, id := range ids {
+		if isMarkedDeleted(t, pebble, id) {
+			t.Fatalf("book %s under books/itunes/ was quarantined", id)
+		}
+	}
+}
+
+// failingWriteStore fails every book write, through either write method.
+type failingWriteStore struct{ *database.PebbleStore }
+
+var errQuarantineTestWrite = errors.New("pebble: disk full")
+
+func (failingWriteStore) UpdateBook(string, *database.Book) (*database.Book, error) {
+	return nil, errQuarantineTestWrite
+}
+func (failingWriteStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, errQuarantineTestWrite
+}
+
+// A failed soft-delete fails the op. On main it was logged and the op
+// reported a clean finish.
+func TestQuarantineChapterArtifacts_WriteErrorsFailTheOp(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	for i := range 5 {
+		mkBook(t, pebble, "Opening Credits", i, 30)
+	}
+	p := &Plugin{store: failingWriteStore{pebble}}
+	if err := runQuarantine(t, p, true); err == nil {
+		t.Fatal("5 failed soft-deletes were reported as success")
+	}
+	if err := runQuarantine(t, p, false); err != nil {
+		t.Fatalf("dry-run writes nothing and must not fail: %v", err)
 	}
 }

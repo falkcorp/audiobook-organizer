@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-09-07
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -239,10 +239,17 @@ type jobBookReader interface {
 	// CountBookSnapshots reads only keys, so a job can size a prune across the
 	// whole library without loading ~7.65 GB of snapshot payloads to count them.
 	CountBookSnapshots(id string) (int, error)
+	// GetBooksByVersionGroup lets a job that retires a book re-elect its
+	// version group's primary instead of leaving the group with none.
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
 
 type jobBookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the lost-update-safe read-modify-write. Prefer it over
+	// GetBookByID -> mutate -> UpdateBook; see LOCK RULES in
+	// database/pebble_store_book_lock.go for what its callback may not do.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	RecomputeBookAggregates(bookID string) error
 	MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
@@ -262,6 +269,7 @@ type jobBookStore interface {
 type jobBookFileReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
 }
@@ -270,9 +278,13 @@ type jobBookFileWriter interface {
 	CreateBookFile(file *database.BookFile) error
 	BatchCreateBookFiles(files []*database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
-	UpsertBookFile(file *database.BookFile) error
+	// MoveBookFilesToBook is the only call that changes which book owns a
+	// book_file row. UpsertBookFile keeps the stored BookID, so it cannot move a
+	// file; it and DeleteBookFilesForBook are deliberately absent here --
+	// dedup-books "moved" files with the first (a no-op) and fix-version-groups
+	// deleted and recreated rows with the second, losing every per-file field.
+	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	SetBookFileHash(id, hash string) error
-	DeleteBookFilesForBook(bookID string) error
 }
 
 type jobBookFileStore interface {

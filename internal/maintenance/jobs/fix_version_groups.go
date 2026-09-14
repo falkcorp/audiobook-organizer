@@ -1,25 +1,29 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 2.5.1
+// version: 3.0.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
-	"log/slog"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/oklog/ulid/v2"
 )
+
+var vgLog = logger.New("fix-version-groups")
 
 func init() { maintenance.Register(&fixVersionGroupsJob{}) }
 
@@ -35,6 +39,10 @@ func (j *fixVersionGroupsJob) DefaultParams() any {
 }
 func (j *fixVersionGroupsJob) Description() string { return "Fix and normalize version groups" }
 func (j *fixVersionGroupsJob) CanResume() bool     { return false }
+
+// errVGRefused marks an author-dir fix the job declines to make (no audio in
+// the target, ambiguous file matching). Counted as refused, not failed.
+var errVGRefused = errors.New("fix-version-groups refused")
 
 func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	allBooks, err := store.GetAllBooksCore(0, 0)
@@ -83,8 +91,8 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStor
 		}
 
 		if !dryRun {
-			if applyErr := vgUnlinkOutliers(store, outliers); applyErr != nil {
-				slog.Error("Failed to unlink outliers in group", "groupID", groupID, "applyErr", applyErr)
+			if applyErr := vgUnlinkOutliers(store, books, outliers); applyErr != nil {
+				vgLog.Error("unlink outliers group=%s: %s", logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(applyErr.Error()))
 				mismatchErrors++
 			} else {
 				mismatchFixed++
@@ -95,7 +103,7 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStor
 	}
 
 	// Phase 2: author-directory file_path detection
-	var authorDirFixed, authorDirErrors int
+	var authorDirFixed, authorDirRefused, authorDirErrors int
 	for i := range allBooks {
 		select {
 		case <-ctx.Done():
@@ -118,19 +126,34 @@ func (j *fixVersionGroupsJob) Run(ctx context.Context, store maintenance.JobStor
 		}
 
 		suggested := vgBestMatchSubdir(b.FilePath, b.Title)
-		if !dryRun && suggested != "" {
-			if fixErr := vgFixAuthorDirPath(store, b, suggested); fixErr != nil {
-				slog.Error("Failed to fix author-dir path for book", "b", b.ID, "fixErr", fixErr)
-				authorDirErrors++
-			} else {
-				authorDirFixed++
-			}
-		} else if suggested != "" {
+		if suggested == "" {
+			continue
+		}
+		// The plan is built in both modes, so dry-run reports the same refusals
+		// apply would hit and never counts a fix apply would not make.
+		plan, planErr := vgPlanAuthorDirFix(store, b.ID, suggested)
+		if planErr == nil && !dryRun {
+			planErr = vgApplyAuthorDirFix(store, plan)
+		}
+		switch {
+		case planErr == nil:
 			authorDirFixed++
+		case merge.IsRefusal(planErr) || errors.Is(planErr, errVGRefused):
+			authorDirRefused++
+			vgLog.Warn("author-dir fix refused book=%s: %s", logger.SanitizeLogValue(b.ID), logger.SanitizeLogValue(planErr.Error()))
+		default:
+			authorDirErrors++
+			vgLog.Error("author-dir fix failed book=%s: %s", logger.SanitizeLogValue(b.ID), logger.SanitizeLogValue(planErr.Error()))
 		}
 	}
 
-	slog.Info("Done mismatch_fixed mismatch_errors author_dir_fixed author_dir_errors dryRun", "mismatchFixed", mismatchFixed, "mismatchErrors", mismatchErrors, "authorDirFixed", authorDirFixed, "authorDirErrors", authorDirErrors, "dryRun", dryRun)
+	summary := fmt.Sprintf("dry_run=%v mismatch_fixed=%d mismatch_errors=%d author_dir_fixed=%d author_dir_refused=%d author_dir_errors=%d",
+		dryRun, mismatchFixed, mismatchErrors, authorDirFixed, authorDirRefused, authorDirErrors)
+	reporter.Log("info", summary, nil)
+	vgLog.Info("done: %s", summary)
+	if mismatchErrors+authorDirErrors > 0 {
+		return fmt.Errorf("fix-version-groups: %d write(s) failed (%s)", mismatchErrors+authorDirErrors, summary)
+	}
 	return nil
 }
 
@@ -201,23 +224,66 @@ func vgLongWords(s string) map[string]bool {
 	return set
 }
 
-func vgUnlinkOutliers(store bookMutator, outliers []database.BookCore) error {
+// vgUnlinkOutliers moves each outlier into a fresh version group of its own,
+// every write under the book's lock (ModifyBook).
+//
+// Primary bookkeeping, both sides:
+//   - The outlier is the sole member of its new group, so it is made that
+//     group's primary. A singleton whose only member is not primary is
+//     invisible under the UI's default is_primary_version filter.
+//   - If an outlier counted as the OLD group's primary (nil counts, the
+//     destructive-guard reading -- see ddCountsAsPrimary) and no remaining
+//     member is an explicit primary, the lowest-ID remaining member is
+//     promoted FIRST, so the group is never left with none. IDs are ULIDs, so
+//     lowest ID is earliest created, reconcile's election rule.
+func vgUnlinkOutliers(store bookModifier, group, outliers []database.BookCore) error {
+	isOutlier := make(map[string]bool, len(outliers))
+	lostPrimary := false
 	for _, ob := range outliers {
-		current, err := store.GetBookByID(ob.ID)
-		if err != nil {
-			return fmt.Errorf("GetBookByID(%s): %w", ob.ID, err)
+		isOutlier[ob.ID] = true
+		if ob.IsPrimaryVersion == nil || *ob.IsPrimaryVersion {
+			lostPrimary = true
 		}
-		if current == nil {
-			return fmt.Errorf("book %s not found", ob.ID)
+	}
+	if lostPrimary {
+		var remaining []database.BookCore
+		hasExplicit := false
+		for _, m := range group {
+			if isOutlier[m.ID] || m.IsSoftDeleted() {
+				continue
+			}
+			if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+				hasExplicit = true
+			}
+			remaining = append(remaining, m)
 		}
+		if !hasExplicit && len(remaining) > 0 {
+			sort.Slice(remaining, func(i, j int) bool { return remaining[i].ID < remaining[j].ID })
+			if err := ddPromotePrimary(store, remaining[0].ID); err != nil {
+				return fmt.Errorf("promote %s before unlinking the group's primary: %w", remaining[0].ID, err)
+			}
+		}
+	}
+	for _, ob := range outliers {
 		newGroupID := ulid.Make().String()
-		current.VersionGroupID = &newGroupID
-		if _, err = store.UpdateBook(ob.ID, current); err != nil {
-			return fmt.Errorf("UpdateBook(%s): %w", ob.ID, err)
+		updated, err := store.ModifyBook(ob.ID, func(b *database.Book) error {
+			t := true
+			b.VersionGroupID = &newGroupID
+			b.IsPrimaryVersion = &t
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("unlink %s: %w", ob.ID, err)
+		}
+		if updated == nil {
+			return fmt.Errorf("book %s not found", ob.ID)
 		}
 	}
 	return nil
 }
+
+// bookModifier is the per-book locked read-modify-write.
+type bookModifier = ddBookModifier
 
 func vgIsAuthorDirectory(dir string) bool {
 	entries, err := os.ReadDir(dir)
@@ -274,29 +340,138 @@ func vgBestMatchSubdir(parent, title string) string {
 	return bestPath
 }
 
-func vgFixAuthorDirPath(store maintenance.JobStore, book *database.BookCore, subdir string) error {
-	current, err := store.GetBookByID(book.ID)
-	if err != nil {
-		return fmt.Errorf("GetBookByID: %w", err)
-	}
-	if current == nil {
-		return fmt.Errorf("book %s not found", book.ID)
-	}
-	current.FilePath = subdir
-	if _, err = store.UpdateBook(book.ID, current); err != nil {
-		return fmt.Errorf("UpdateBook: %w", err)
-	}
-	if err = store.DeleteBookFilesForBook(book.ID); err != nil {
-		return fmt.Errorf("DeleteBookFilesForBook: %w", err)
-	}
-	newFiles := metafetch.AudioFilesInDir(subdir)
-	if len(newFiles) == 0 {
-		return nil
-	}
-	return vgCreateBookFiles(store, current, newFiles)
+// vgAuthorDirPlan is what moving a book from an author directory to its own
+// subdirectory will do. Existing book_file rows are REPOINTED, never deleted
+// and recreated: a row carries its fingerprint, intro transcript, duration,
+// iTunes PID and track/disc numbers, none of which a disk scan can rebuild.
+type vgAuthorDirPlan struct {
+	bookID string
+	subdir string
+	// keep counts rows already at a path inside subdir.
+	keep int
+	// repoint holds existing rows (full, as read) with FilePath set to the
+	// subdir file of the same name. Same ID, same BookID, every other field
+	// untouched.
+	repoint []database.BookFile
+	// create holds subdir files with no row anywhere: only these get new rows.
+	create []string
+	// ownedElsewhere holds subdir files another book already has a row for.
+	// They are left alone; taking them would steal that book's file.
+	ownedElsewhere []string
+	// left counts this book's rows that match nothing in subdir. They are
+	// kept as they are, never deleted.
+	left int
 }
 
-func vgCreateBookFiles(store bookFileCreator, book *database.Book, filePaths []string) error {
+// vgPlanAuthorDirFix reads everything and writes nothing, so dry-run and
+// apply share it. It refuses (errVGRefused) when the subdir holds no audio --
+// the old code wiped the book's rows and then reported success with none --
+// and when two of the book's rows share a file name, so the match is
+// ambiguous. The iTunes guard covers the book, its rows and the target files.
+func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgAuthorDirPlan, error) {
+	if err := merge.GuardITunesProtected(store, []string{bookID}); err != nil {
+		return nil, err
+	}
+	disk := metafetch.AudioFilesInDir(subdir)
+	if len(disk) == 0 {
+		return nil, fmt.Errorf("%w: %s holds no audio files; the book is left as it is", errVGRefused, subdir)
+	}
+	target := make([]database.BookFile, len(disk))
+	for i, fp := range disk {
+		target[i] = database.BookFile{BookID: bookID, FilePath: fp}
+	}
+	if err := merge.GuardITunesProtectedLoaded(
+		[]*database.Book{{ID: bookID, FilePath: subdir}},
+		map[string][]database.BookFile{bookID: target},
+	); err != nil {
+		return nil, err
+	}
+
+	rows, err := store.GetBookFiles(bookID)
+	if err != nil {
+		return nil, fmt.Errorf("read files of %s: %w", bookID, err)
+	}
+	onDisk := make(map[string]bool, len(disk))
+	for _, fp := range disk {
+		onDisk[fp] = true
+	}
+	rowAt := make(map[string]bool, len(rows))
+	unmatched := make(map[string][]database.BookFile)
+	for _, r := range rows {
+		if onDisk[r.FilePath] {
+			rowAt[r.FilePath] = true
+			continue
+		}
+		base := filepath.Base(r.FilePath)
+		unmatched[base] = append(unmatched[base], r)
+	}
+
+	plan := &vgAuthorDirPlan{bookID: bookID, subdir: subdir}
+	for _, fp := range disk {
+		if rowAt[fp] {
+			plan.keep++
+			continue
+		}
+		owner, err := store.GetBookFileByPath(fp)
+		if err != nil {
+			return nil, fmt.Errorf("look up row for %s: %w", fp, err)
+		}
+		if owner != nil && owner.BookID != bookID {
+			plan.ownedElsewhere = append(plan.ownedElsewhere, fp)
+			continue
+		}
+		base := filepath.Base(fp)
+		switch cands := unmatched[base]; len(cands) {
+		case 0:
+			plan.create = append(plan.create, fp)
+		case 1:
+			r := cands[0]
+			r.FilePath = fp
+			plan.repoint = append(plan.repoint, r)
+			delete(unmatched, base)
+		default:
+			return nil, fmt.Errorf("%w: %d rows of book %s are named %q; cannot tell which one is %s",
+				errVGRefused, len(cands), bookID, base, fp)
+		}
+	}
+	for _, rs := range unmatched {
+		plan.left += len(rs)
+	}
+	return plan, nil
+}
+
+// vgApplyAuthorDirFix writes a plan: repoint rows, create rows only for files
+// that have none, then move the book's own path. The book path is written
+// last so a failure part-way leaves the book where it was, with every row it
+// had still present.
+func vgApplyAuthorDirFix(store maintenance.JobStore, plan *vgAuthorDirPlan) error {
+	for i := range plan.repoint {
+		r := plan.repoint[i]
+		if err := store.UpdateBookFile(r.ID, &r); err != nil {
+			return fmt.Errorf("repoint file %s to %s: %w", r.ID, r.FilePath, err)
+		}
+	}
+	if err := vgCreateBookFiles(store, plan.bookID, plan.create); err != nil {
+		return err
+	}
+	updated, err := store.ModifyBook(plan.bookID, func(b *database.Book) error {
+		b.FilePath = plan.subdir
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("set path of %s: %w", plan.bookID, err)
+	}
+	if updated == nil {
+		return fmt.Errorf("book %s not found", plan.bookID)
+	}
+	if plan.left > 0 || len(plan.ownedElsewhere) > 0 {
+		vgLog.Warn("author-dir fix book=%s kept=%d repointed=%d created=%d left_untouched=%d owned_by_other_books=%d",
+			logger.SanitizeLogValue(plan.bookID), plan.keep, len(plan.repoint), len(plan.create), plan.left, len(plan.ownedElsewhere))
+	}
+	return nil
+}
+
+func vgCreateBookFiles(store bookFileCreator, bookID string, filePaths []string) error {
 	for _, fp := range filePaths {
 		ext := strings.ToLower(filepath.Ext(fp))
 		format := strings.TrimPrefix(ext, ".")
@@ -306,7 +481,7 @@ func vgCreateBookFiles(store bookFileCreator, book *database.Book, filePaths []s
 		}
 		bf := &database.BookFile{
 			ID:               ulid.Make().String(),
-			BookID:           book.ID,
+			BookID:           bookID,
 			FilePath:         fp,
 			OriginalFilename: filepath.Base(fp),
 			Format:           format,

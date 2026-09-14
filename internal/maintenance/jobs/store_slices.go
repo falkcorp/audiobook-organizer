@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
 // last-edited: 2026-09-13
 
@@ -130,14 +130,14 @@ type bookAggregateRecomputer interface {
 	RecomputeBookAggregates(bookID string) error
 }
 
-// bookSoftDeleter is what retiring a duplicate needs: read the row, write it
-// back flagged. It deliberately cannot DeleteBook — the hard-delete fallback
+// bookSoftDeleter is what retiring a duplicate needs: read the row and write it
+// back flagged, under the per-book lock (ModifyBook), so a concurrent write to
+// the same row is neither reverted nor lost. It deliberately cannot DeleteBook — the hard-delete fallback
 // that once justified that method was removed (a failed UpdateBook must not
 // become a destroyed row), and taking the method away makes the fallback
 // impossible to reintroduce by accident.
 type bookSoftDeleter interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // seriesUnlinker moves books off a series and then removes the series row.
