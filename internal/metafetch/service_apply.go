@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -719,20 +719,21 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		return nil, err
 	}
 	// Nothing survived the allowlist, the fill-only strip and the locks (or
-	// the candidate had no value for what did). With no book column changed,
-	// no author was applied either: an applied author sets or keeps AuthorID
-	// and adds a book_authors credit, and on a book with no author (the only
-	// case the transcription allowlist leaves "author" in) that changes
-	// AuthorID. So returning here writes nothing: no review status, no
-	// version note, no source stamp. A caller that allows "author" on a book
-	// that already has one would get a credit written before this check;
-	// see ApplyOptions.RefuseEmptyWrite.
+	// the candidate had no value for what did). A change is a changed book
+	// column OR a changed author credit list: applyAuthorCredit (inside
+	// guardedApply, above) writes book_authors under the store's lock before
+	// this point, and on a book that already has a primary author an added
+	// co-author changes no column (AuthorID is only set when empty). Counting
+	// only columns would save that credit and then report nothing to apply,
+	// skipping the commit and its history, so undo could not remove it. With
+	// neither changed, returning here writes nothing: no review status, no
+	// version note, no source stamp.
 	if opts.RefuseEmptyWrite {
 		changed, diffErr := database.ChangedBookFields(before, book)
 		if diffErr != nil {
 			return nil, diffErr
 		}
-		if len(changed) == 0 {
+		if len(changed) == 0 && !credits.Changed() {
 			return nil, fmt.Errorf("book %s: %w", id, ErrNothingToApply)
 		}
 	}
@@ -744,15 +745,25 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// DownloadPendingCover repoints this at the local path when it completes.
 	book.CoverURL = renderableCoverURL(previousCoverURL, book.CoverURL, meta.CoverURL)
 
-	// Record the match (review status, provider, source hash) only when the
-	// book now holds the candidate's title. The status says the book IS the
-	// candidate's record (audio_confirmed compares the CANDIDATE's title to
-	// the transcript), so it must describe what the book holds after the
-	// allowlist, fill-only strip and locks, not what the candidate offered.
-	// An apply that kept a different title (a title-less allowlist, a locked
-	// title, or a candidate title applyMetadataUnguarded declined: garbage,
-	// "Untitled", or under 3 characters over a real title) writes its fields
-	// and leaves all three alone:
+	// Record the match (review status, provider, source hash). A person who
+	// chose this candidate -- the single-book dialog (with any field
+	// selection), or a review-lane approval, gate passed or lifted -- has
+	// asserted the book IS its record, so the match is recorded whatever
+	// title the book keeps: a deselected or locked title must not leave a
+	// hand-picked book in the review lane forever. Those applies are exactly
+	// the ones with FillOnly false (see ApplyOptions.FillOnly).
+	//
+	// An automatic apply (FillOnly: nobody picked this candidate) records it
+	// only when the book now holds the candidate's title. The status says the
+	// book IS the candidate's record (audio_confirmed compares the CANDIDATE's
+	// title to the transcript), so for an automatic apply it must describe
+	// what the book holds after the allowlist, fill-only strip and locks, not
+	// what the candidate offered. An automatic apply that kept a different
+	// title (a title-less allowlist such as auto-match-transcribed filling
+	// only an empty author, a locked title, or a candidate title
+	// applyMetadataUnguarded declined: garbage, "Untitled", or under 3
+	// characters over a real title) writes its fields and leaves all three
+	// alone:
 	//   - MetadataReviewStatus stays as it was, so the book stays in its
 	//     review lane instead of reading as verified;
 	//   - MetadataSource is read by maintenance title repair
@@ -763,7 +774,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	//     a book that does not hold the record is a false duplicate claim.
 	// The fields that were written keep their own provenance: the change
 	// history (historySource) and persistFetchedMetadata below.
-	if util.NormalizeTitle(book.Title) == util.NormalizeTitle(candidate.Title) {
+	humanPicked := !opts.FillOnly
+	if humanPicked || util.NormalizeTitle(book.Title) == util.NormalizeTitle(candidate.Title) {
 		matched := "matched"
 		book.MetadataReviewStatus = &matched
 		src := candidate.Source

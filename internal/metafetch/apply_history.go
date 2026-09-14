@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-14
 
@@ -184,6 +184,13 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, credits *Au
 type AuthorCredits struct {
 	Before []database.BookAuthor
 	After  []database.BookAuthor
+}
+
+// Changed reports whether the apply changed the credit list, by the same
+// comparison RecordApplyHistory uses to record the author row. A nil receiver
+// (no author applied, or the join unknown) reports false.
+func (c *AuthorCredits) Changed() bool {
+	return c != nil && !sameAuthorCredits(c.Before, c.After)
 }
 
 // addedAuthorIDs is the set of author ids an author row's apply added to the
