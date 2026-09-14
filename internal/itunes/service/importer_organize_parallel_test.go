@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package itunesservice
 
@@ -16,7 +16,6 @@ import (
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -130,7 +129,7 @@ func buildOrganizeFixture(t *testing.T, n, distinctTitles int) ([]database.Book,
 		// per book (two calls total) — the mock permits unlimited calls
 		// by default (no .Once()), matching that.
 		m.EXPECT().GetBookFiles(id).Return(nil, nil)
-		m.EXPECT().UpdateBook(id, mock.Anything).Return(&database.Book{}, nil)
+		expectModifyBook(m, id, &b, nil)
 	}
 	return books, m
 }

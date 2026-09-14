@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.97.0
+// version: 2.98.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -224,9 +224,15 @@ type Book struct {
 	ITunesDateAdded    *time.Time `json:"itunes_date_added,omitempty"`
 	ITunesPlayCount    *int       `json:"itunes_play_count,omitempty"`
 	ITunesLastPlayed   *time.Time `json:"itunes_last_played,omitempty"`
-	ITunesRating       *int       `json:"itunes_rating,omitempty"`
-	ITunesBookmark     *int64     `json:"itunes_bookmark,omitempty"`
-	ITunesImportSource *string    `json:"itunes_import_source,omitempty"`
+	// ITunesPlayCountBumpedAt is the listening-activity time of the finish
+	// the position sync last counted into ITunesPlayCount. The sync bumps the
+	// count only for a finish newer than this, so re-running it over the same
+	// finished book does not add a play each time. A dedicated field rather
+	// than ITunesLastPlayed, which the library sync overwrites from iTunes.
+	ITunesPlayCountBumpedAt *time.Time `json:"itunes_play_count_bumped_at,omitempty"`
+	ITunesRating            *int       `json:"itunes_rating,omitempty"`
+	ITunesBookmark          *int64     `json:"itunes_bookmark,omitempty"`
+	ITunesImportSource      *string    `json:"itunes_import_source,omitempty"`
 	// Deprecated: use book_files.itunes_path instead. Will be removed in a future migration.
 	ITunesPath       *string `json:"itunes_path,omitempty"`
 	OriginalFilename *string `json:"original_filename,omitempty"`

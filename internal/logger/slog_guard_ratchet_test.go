@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -133,7 +133,6 @@ var slogRatchet = map[string]int{
 	"internal/itunes/service/location_normalize.go":              1,
 	"internal/itunes/service/path_reconcile.go":                  1,
 	"internal/itunes/service/playlist_sync.go":                   4,
-	"internal/itunes/service/position_sync.go":                   8,
 	"internal/itunes/service/track_provisioner.go":               2,
 	"internal/itunes/service/validate.go":                        7,
 	"internal/itunes/service/writeback_batcher.go":               21,

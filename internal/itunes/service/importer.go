@@ -1,12 +1,13 @@
 // file: internal/itunes/service/importer.go
-// version: 1.25.2
+// version: 1.26.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package itunesservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -150,6 +151,10 @@ type bookLookup interface {
 type bookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the lost-update-safe write: every import step that
+	// changes an EXISTING row (link, hash validation, soft-delete, organize,
+	// sync playback fields) goes through it, never GetBookByID -> UpdateBook.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
 	BatchUpsertBookFiles(files []*database.BookFile) error
@@ -487,19 +492,42 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 					continue
 				}
 				if bookID, err := imp.store.GetBookByExternalID("itunes", firstPID); err == nil && bookID != "" {
-					if existing, err := imp.store.GetBookByID(bookID); err == nil && existing != nil {
-						imp.linkITunesMetadata(existing, book, group.tracks[0], log)
+					linked, linkErr := imp.linkITunesMetadata(bookID, book, log)
+					if linkErr != nil {
+						recordImportFailure(status, linkErr.Error())
+						updateImportProgress(log, status, processed, totalGroups, book.Title)
+						continue
+					}
+					if linked {
 						incImportLinked(status)
 						updateImportProgress(log, status, processed, totalGroups, book.Title)
 						continue
 					}
+					// Mapped to a book that no longer exists: fall through to
+					// the path / file-PID checks and, failing those, create.
 				}
 			}
 		}
 
-		if req.SkipDuplicates {
-			if existing, err := imp.store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
-				imp.linkITunesMetadata(existing, book, group.tracks[0], log)
+		// Always look for a row this group already has -- by path and by the
+		// per-track PID on book_files -- before creating one. Until
+		// 2026-09-13 this ran only under SkipDuplicates, so a plain re-import
+		// created a second book for every album already in the library.
+		existingID, lookupErr := imp.findExistingImportTarget(book, group)
+		if lookupErr != nil {
+			recordImportFailure(status, lookupErr.Error())
+			log.Warn("%s", lookupErr.Error())
+			updateImportProgress(log, status, processed, totalGroups, book.Title)
+			continue
+		}
+		if existingID != "" {
+			linked, linkErr := imp.linkITunesMetadata(existingID, book, log)
+			if linkErr != nil {
+				recordImportFailure(status, linkErr.Error())
+				updateImportProgress(log, status, processed, totalGroups, book.Title)
+				continue
+			}
+			if linked {
 				incImportLinked(status)
 				updateImportProgress(log, status, processed, totalGroups, book.Title)
 				continue
@@ -627,6 +655,11 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				break
 			}
 
+			// Read only to learn which file to hash. The row is NOT written
+			// back from this read: hashing takes minutes on a large file, and
+			// every write below re-reads the row inside ModifyBook and sets
+			// only the fields this phase owns, so a concurrent edit made
+			// while the hash ran survives.
 			book, err := imp.store.GetBookByID(bookID)
 			if err != nil {
 				bookLookupErrs++
@@ -636,27 +669,21 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			if book == nil {
 				continue
 			}
+			hashedPath := book.FilePath
 
-			hash, err := scanner.ComputeFileHash(book.FilePath)
+			hash, err := scanner.ComputeFileHash(hashedPath)
 			if err != nil {
-				log.Warn("Hash validation: failed to hash %s: %v", book.FilePath, err)
+				log.Warn("Hash validation: failed to hash %s: %v", hashedPath, err)
 				continue
 			}
 			if hash == "" {
 				continue
 			}
 
-			book.FileHash = new(hash)
-			book.OriginalFileHash = new(hash)
-			if importMode == itunes.ImportModeOrganized {
-				book.OrganizedFileHash = new(hash)
-			}
-
 			if blocked, err := imp.store.IsHashBlocked(hash); err == nil && blocked {
 				// C-6: only count (and claim) the soft-delete if the write
-				// actually landed — the sibling UpdateBook at the end of this
-				// loop checks its returns; this one must too.
-				if imp.softDeleteBlockedBook(book, log) {
+				// actually landed.
+				if imp.softDeleteBlockedBook(bookID, hashedPath, hash, importMode, log) {
 					hashBlocked++
 				} else {
 					hashBlockFailed++
@@ -664,18 +691,30 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				continue
 			}
 
-			if existing, err := imp.store.GetBookByFileHash(hash); err == nil && existing != nil && existing.ID != book.ID {
+			var linkGroup *string
+			if existing, err := imp.store.GetBookByFileHash(hash); err == nil && existing != nil && existing.ID != bookID {
 				if existing.VersionGroupID != nil && *existing.VersionGroupID != "" {
-					book.VersionGroupID = existing.VersionGroupID
-					isPrimary := false
-					book.IsPrimaryVersion = &isPrimary
+					linkGroup = existing.VersionGroupID
 				}
 				hashLinked++
 				log.Info("Hash validation: linked %s → %s via hash", book.Title, existing.ID)
 			}
 
-			if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
-				log.Warn("Hash validation: failed to update %s: %v", book.ID, err)
+			if _, err := imp.store.ModifyBook(bookID, func(fresh *database.Book) error {
+				if fresh.FilePath != hashedPath {
+					// The file moved while it was being hashed: the hash
+					// describes a path this book no longer has.
+					return errHashedPathMoved
+				}
+				setImportHashes(fresh, hash, importMode)
+				if linkGroup != nil {
+					fresh.VersionGroupID = new(*linkGroup)
+					isPrimary := false
+					fresh.IsPrimaryVersion = &isPrimary
+				}
+				return nil
+			}); err != nil {
+				log.Warn("Hash validation: failed to update %s: %v", bookID, err)
 			}
 
 			if (hi+1)%100 == 0 || hi+1 == len(newBookIDs) {
@@ -714,20 +753,41 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 	return nil
 }
 
-// softDeleteBlockedBook marks a blocked-hash book as MarkedForDeletion and
-// persists it, returning true only if the write actually landed (C-6). book
-// must be a full-fidelity row (Execute's hash-validation loop hydrates via
-// GetBookByID) so the write-back never persists a slim struct.
-func (imp *Importer) softDeleteBlockedBook(book *database.Book, log logger.Logger) bool {
-	marked := true
-	now := time.Now()
-	book.MarkedForDeletion = &marked
-	book.MarkedForDeletionAt = &now
-	if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
-		log.Warn("Hash validation: blocked hash for '%s' (%s) but soft-delete write FAILED — book stays live: %v", book.Title, book.ID, err)
+// errHashedPathMoved aborts a hash-validation write whose book changed path
+// while its file was being hashed.
+var errHashedPathMoved = errors.New("book path changed while it was being hashed; hash not recorded")
+
+// setImportHashes records the hash validation computed for a freshly imported
+// book: FileHash and OriginalFileHash always, OrganizedFileHash when the
+// import copies files straight into the organized layout.
+func setImportHashes(book *database.Book, hash string, importMode itunes.ImportMode) {
+	book.FileHash = new(hash)
+	book.OriginalFileHash = new(hash)
+	if importMode == itunes.ImportModeOrganized {
+		book.OrganizedFileHash = new(hash)
+	}
+}
+
+// softDeleteBlockedBook records the hash on a blocked-hash book and marks it
+// MarkedForDeletion, inside ModifyBook so only those fields change on the
+// freshly read row. It returns true only if the write actually landed (C-6).
+func (imp *Importer) softDeleteBlockedBook(bookID, hashedPath, hash string, importMode itunes.ImportMode, log logger.Logger) bool {
+	row, err := imp.store.ModifyBook(bookID, func(fresh *database.Book) error {
+		if fresh.FilePath != hashedPath {
+			return errHashedPathMoved
+		}
+		setImportHashes(fresh, hash, importMode)
+		marked := true
+		now := time.Now()
+		fresh.MarkedForDeletion = &marked
+		fresh.MarkedForDeletionAt = &now
+		return nil
+	})
+	if err != nil || row == nil {
+		log.Warn("Hash validation: blocked hash for %s but soft-delete write FAILED — book stays live: %v", bookID, err)
 		return false
 	}
-	log.Warn("Hash validation: blocked hash for '%s', soft-deleted", book.Title)
+	log.Warn("Hash validation: blocked hash for '%s', soft-deleted", row.Title)
 	return true
 }
 
@@ -881,15 +941,23 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 	if err != nil {
 		return fmt.Errorf("failed to load books for index: %w", err)
 	}
+	// pathIndex maps a path to EVERY book at it. It was a last-wins map (and
+	// there was a bare-title index beside it) until 2026-09-13: when two
+	// books shared a path or a title, a PID miss attached this album's PID,
+	// play count, rating, bookmark and book_files to whichever book happened
+	// to be indexed last. Now a path held by more than one book is never
+	// picked from (see the ambiguity skip below), and the title fallback is
+	// gone -- a title names a work, not a book row, and BookCore carries no
+	// author or track count to disambiguate it.
 	pidIndex := make(map[string]*database.BookCore, len(allBooks))
-	pathIndex := make(map[string]*database.BookCore, len(allBooks))
-	titleIndex := make(map[string]*database.BookCore, len(allBooks))
+	pathIndex := make(map[string][]*database.BookCore, len(allBooks))
 	for i := range allBooks {
 		if allBooks[i].ITunesPersistentID != nil && *allBooks[i].ITunesPersistentID != "" {
 			pidIndex[*allBooks[i].ITunesPersistentID] = &allBooks[i]
 		}
-		pathIndex[allBooks[i].FilePath] = &allBooks[i]
-		titleIndex[strings.ToLower(allBooks[i].Title)] = &allBooks[i]
+		if allBooks[i].FilePath != "" {
+			pathIndex[allBooks[i].FilePath] = append(pathIndex[allBooks[i].FilePath], &allBooks[i])
+		}
 	}
 	log.Info("Indexed %d books (%d with iTunes persistent IDs)", len(allBooks), len(pidIndex))
 
@@ -906,7 +974,7 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 		pendingFiles = pendingFiles[:0]
 	}
 
-	var updated, newBooks, unchanged int
+	var updated, newBooks, unchanged, skippedAmbiguous int
 	for i, group := range groups {
 		if log.IsCanceled() {
 			log.Info("iTunes sync canceled")
@@ -925,19 +993,23 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 		existing := pidIndex[persistentID]
 
 		if existing == nil {
-			title := strings.TrimSpace(firstTrack.Album)
-			if title == "" {
-				title = strings.TrimSpace(firstTrack.Name)
-			}
-			if title != "" {
-				existing = titleIndex[strings.ToLower(title)]
-			}
-		}
-
-		if existing == nil {
 			if book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts, library.Carries); err == nil {
-				if match := pathIndex[book.FilePath]; match != nil {
-					existing = match
+				switch matches := pathIndex[book.FilePath]; len(matches) {
+				case 0:
+				case 1:
+					existing = matches[0]
+				default:
+					ids := make([]string, len(matches))
+					for mi, m := range matches {
+						ids[mi] = m.ID
+					}
+					// Neither link (which book?) nor create (the path is
+					// already in the library): skip until the duplicates
+					// are resolved.
+					log.Warn("iTunes sync: skipped '%s' (pid=%s): path %s is held by %d books (%s); not attaching it to any of them",
+						book.Title, persistentID, book.FilePath, len(matches), strings.Join(ids, ", "))
+					skippedAmbiguous++
+					continue
 				}
 			}
 		}
@@ -992,32 +1064,30 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 			}
 
 			if changed {
-				// Hydrate full row before writeback — existing is Core (slim);
-				// writing it straight through UpdateBook would wipe Author/Series.
-				full, hydrateErr := imp.store.GetBookByID(existing.ID)
-				if hydrateErr != nil || full == nil {
-					log.Error("Failed to hydrate '%s' for update: %v", existing.Title, hydrateErr)
+				// existing is Core (slim): write only the iTunes fields onto
+				// the freshly read full row, under the book's write lock.
+				full, err := imp.store.ModifyBook(existing.ID, func(fresh *database.Book) error {
+					fresh.ITunesPersistentID = existing.ITunesPersistentID
+					fresh.ITunesPlayCount = existing.ITunesPlayCount
+					fresh.ITunesRating = existing.ITunesRating
+					fresh.ITunesBookmark = existing.ITunesBookmark
+					fresh.ITunesLastPlayed = existing.ITunesLastPlayed
+					return nil
+				})
+				if err != nil || full == nil {
+					log.Error("Failed to update '%s': %v", existing.Title, err)
 				} else {
-					full.ITunesPersistentID = existing.ITunesPersistentID
-					full.ITunesPlayCount = existing.ITunesPlayCount
-					full.ITunesRating = existing.ITunesRating
-					full.ITunesBookmark = existing.ITunesBookmark
-					full.ITunesLastPlayed = existing.ITunesLastPlayed
-					if _, err := imp.store.UpdateBook(full.ID, full); err != nil {
-						log.Error("Failed to update '%s': %v", full.Title, err)
-					} else {
-						updated++
-						if activityFn != nil {
-							activityFn(database.ActivityEntry{
-								Tier:    "change",
-								Type:    "itunes_sync",
-								Level:   "info",
-								Source:  "scheduler",
-								BookID:  full.ID,
-								Summary: fmt.Sprintf("iTunes sync updated: %s", full.Title),
-								Tags:    []string{"itunes"},
-							})
-						}
+					updated++
+					if activityFn != nil {
+						activityFn(database.ActivityEntry{
+							Tier:    "change",
+							Type:    "itunes_sync",
+							Level:   "info",
+							Source:  "scheduler",
+							BookID:  full.ID,
+							Summary: fmt.Sprintf("iTunes sync updated: %s", full.Title),
+							Tags:    []string{"itunes"},
+						})
 					}
 				}
 			} else {
@@ -1123,8 +1193,8 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 		_ = imp.store.SaveLibraryFingerprint(fp.Path, fp.Size, fp.ModTime, fp.CRC32)
 	}
 
-	summary := fmt.Sprintf("Sync completed: %d updated, %d new, %d unchanged (from %d tracks, %d groups)",
-		updated, newBooks, unchanged, trackCount, totalGroups)
+	summary := fmt.Sprintf("Sync completed: %d updated, %d new, %d unchanged, %d skipped (path held by several books) (from %d tracks, %d groups)",
+		updated, newBooks, unchanged, skippedAmbiguous, trackCount, totalGroups)
 	log.UpdateProgress(totalGroups, totalGroups, summary)
 	log.Info("%s", summary)
 	_ = ctx
@@ -1518,10 +1588,15 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 	// RunItems' Concurrency fan-out and progress denominator scoped to
 	// real work only. The filter itself only needs Core-safe fields
 	// (LibraryState, ITunesImportSource), but organizeOneBook/organizeDestKey
-	// generate the destination path from Author/Series (heavy fields), and
-	// the writeback below must never persist a slim struct — so every
-	// surviving candidate is hydrated via GetBookByID before being queued.
-	toOrganize := make([]*database.Book, 0, len(core))
+	// generate the destination path from Author/Series (heavy fields), so each
+	// worker reads the full row with GetBookByID before organizing it.
+	//
+	// Only IDs are queued. Each worker reads its book when it starts (not
+	// all of them up front, which left a row minutes stale by the time a
+	// late worker wrote it back) and records the organize result with a
+	// three-way merge inside ModifyBook, so a field another writer changed
+	// while the file was being copied is kept rather than reverted.
+	toOrganize := make([]string, 0, len(core))
 	for i := range core {
 		c := &core[i]
 		if c.LibraryState == nil || *c.LibraryState != "imported" {
@@ -1530,12 +1605,7 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 		if c.ITunesImportSource == nil {
 			continue
 		}
-		full, hydrateErr := imp.store.GetBookByID(c.ID)
-		if hydrateErr != nil || full == nil {
-			log.Warn("Failed to hydrate book %s for organize: %v", c.ID, hydrateErr)
-			continue
-		}
-		toOrganize = append(toOrganize, full)
+		toOrganize = append(toOrganize, c.ID)
 	}
 
 	var mu sync.Mutex
@@ -1548,7 +1618,19 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 
 	reporter := &loggerReporterAdapter{log: log}
 
-	runErr := registry.RunItems(ctx, reporter, toOrganize, func(_ context.Context, book *database.Book) error {
+	runErr := registry.RunItems(ctx, reporter, toOrganize, func(_ context.Context, bookID string) error {
+		book, err := imp.store.GetBookByID(bookID)
+		if err != nil || book == nil {
+			log.Warn("Failed to read book %s for organize: %v", bookID, err)
+			return nil
+		}
+		// before is the row as read; book is mutated by the organize (path,
+		// hashes, size). The closing ModifyBook merges exactly that diff.
+		before, err := database.SnapshotBook(book)
+		if err != nil {
+			recordImportFailure(status, fmt.Sprintf("Failed to organize '%s': %v", book.Title, err))
+			return nil
+		}
 		var files []database.BookFile
 		if imp.store != nil {
 			files, _ = imp.store.GetBookFiles(book.ID)
@@ -1569,7 +1651,18 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 		}
 
 		book.LibraryState = new("organized")
-		if _, err := imp.store.UpdateBook(book.ID, book); err != nil {
+		// The row repoints and any rollback (UpdateBookFile) all happen
+		// outside this callback: it holds the book's write stripe and must
+		// not call a book write (see the LOCK RULES in
+		// database/pebble_store_book_lock.go).
+		written, err := imp.store.ModifyBook(book.ID, func(fresh *database.Book) error {
+			_, mergeErr := database.MergeBookChanges(fresh, before, book)
+			return mergeErr
+		})
+		if err == nil && written == nil {
+			err = fmt.Errorf("book was deleted while it was being organized")
+		}
+		if err != nil {
 			// The book row is what makes the organized copy reachable; without
 			// it the copies under RootDir are orphans and the rows already
 			// repointed at them (multi-file) name files no book leads to. Put
@@ -1909,47 +2002,101 @@ func (imp *Importer) applyOrganizedFileMetadata(book *database.Book, newPath str
 	}
 }
 
-func (imp *Importer) linkITunesMetadata(existing *database.Book, importBook *database.Book, track *itunes.Track, log logger.Logger) {
-	changed := false
-	if existing.ITunesPersistentID == nil && importBook.ITunesPersistentID != nil {
-		existing.ITunesPersistentID = importBook.ITunesPersistentID
-		changed = true
+// linkITunesMetadata fills the iTunes fields an existing book is still
+// missing from importBook, under the book's write lock. It returns linked ==
+// false (and no error) when the book no longer exists, so the caller can fall
+// through to creating one.
+//
+// It touches ONLY iTunes fields. Until 2026-09-13 it also minted a version
+// group for a groupless book and forced IsPrimaryVersion=true on every linked
+// book -- so linking a non-primary copy made a group with two primaries, and
+// a book that was not primary on purpose became one. Version-group
+// membership and primary status belong to the grouping and election passes
+// (reconcile.ElectMissingPrimaries repairs a group with no primary), not to
+// an import attaching play counts.
+func (imp *Importer) linkITunesMetadata(bookID string, importBook *database.Book, log logger.Logger) (bool, error) {
+	row, err := imp.store.ModifyBook(bookID, func(existing *database.Book) error {
+		changed := false
+		if existing.ITunesPersistentID == nil && importBook.ITunesPersistentID != nil {
+			existing.ITunesPersistentID = importBook.ITunesPersistentID
+			changed = true
+		}
+		if existing.ITunesPlayCount == nil && importBook.ITunesPlayCount != nil {
+			existing.ITunesPlayCount = importBook.ITunesPlayCount
+			changed = true
+		}
+		if existing.ITunesRating == nil && importBook.ITunesRating != nil {
+			existing.ITunesRating = importBook.ITunesRating
+			changed = true
+		}
+		if existing.ITunesBookmark == nil && importBook.ITunesBookmark != nil {
+			existing.ITunesBookmark = importBook.ITunesBookmark
+			changed = true
+		}
+		if existing.ITunesDateAdded == nil && importBook.ITunesDateAdded != nil {
+			existing.ITunesDateAdded = importBook.ITunesDateAdded
+			changed = true
+		}
+		if existing.ITunesImportSource == nil && importBook.ITunesImportSource != nil {
+			existing.ITunesImportSource = importBook.ITunesImportSource
+			changed = true
+		}
+		if !changed {
+			return database.ErrSkipBookWrite
+		}
+		return nil
+	})
+	if err != nil {
+		log.Warn("Failed to link iTunes metadata to %s: %v", bookID, err)
+		return false, fmt.Errorf("failed to link iTunes metadata to %s: %w", bookID, err)
 	}
-	if existing.ITunesPlayCount == nil && importBook.ITunesPlayCount != nil {
-		existing.ITunesPlayCount = importBook.ITunesPlayCount
-		changed = true
-	}
-	if existing.ITunesRating == nil && importBook.ITunesRating != nil {
-		existing.ITunesRating = importBook.ITunesRating
-		changed = true
-	}
-	if existing.ITunesBookmark == nil && importBook.ITunesBookmark != nil {
-		existing.ITunesBookmark = importBook.ITunesBookmark
-		changed = true
-	}
-	if existing.ITunesDateAdded == nil && importBook.ITunesDateAdded != nil {
-		existing.ITunesDateAdded = importBook.ITunesDateAdded
-		changed = true
-	}
-	if existing.ITunesImportSource == nil && importBook.ITunesImportSource != nil {
-		existing.ITunesImportSource = importBook.ITunesImportSource
-		changed = true
-	}
-	if existing.VersionGroupID == nil || *existing.VersionGroupID == "" {
-		vgID := fmt.Sprintf("vg-%s", ulid.Make().String())
-		existing.VersionGroupID = &vgID
-		changed = true
-	}
-	if existing.IsPrimaryVersion == nil || !*existing.IsPrimaryVersion {
-		isPrimary := true
-		existing.IsPrimaryVersion = &isPrimary
-		changed = true
-	}
-	if changed {
-		if _, err := imp.store.UpdateBook(existing.ID, existing); err != nil {
-			log.Warn("Failed to link iTunes metadata to %s: %v", existing.ID, err)
+	return row != nil, nil
+}
+
+// findExistingImportTarget returns the ID of the one book this album group
+// already has, looked up by the book path and by every track's PID on
+// book_files; "" when there is none. A group whose keys point at more than
+// one book is an error: picking one would attach this album's PID, play
+// count and files to the wrong book, so the group is skipped and logged. A
+// lookup error is also returned, rather than read as "no match" -- that
+// reading is what creates a duplicate.
+func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGroup) (string, error) {
+	ids := map[string]string{} // book ID -> the key that found it
+	if book.FilePath != "" {
+		existing, err := imp.store.GetBookByFilePath(book.FilePath)
+		if err != nil {
+			return "", fmt.Errorf("existing-book lookup by path %s failed for '%s': %w", book.FilePath, book.Title, err)
+		}
+		if existing != nil && existing.ID != "" {
+			ids[existing.ID] = "path " + book.FilePath
 		}
 	}
+	for _, track := range group.tracks {
+		if track == nil || track.PersistentID == "" {
+			continue
+		}
+		bf, err := imp.store.GetBookFileByPID(track.PersistentID)
+		if err != nil {
+			return "", fmt.Errorf("existing-book lookup by track pid %s failed for '%s': %w", track.PersistentID, book.Title, err)
+		}
+		if bf != nil && bf.BookID != "" {
+			if _, seen := ids[bf.BookID]; !seen {
+				ids[bf.BookID] = "track pid " + track.PersistentID
+			}
+		}
+	}
+	if len(ids) > 1 {
+		keys := make([]string, 0, len(ids))
+		for id, key := range ids {
+			keys = append(keys, id+" (by "+key+")")
+		}
+		sort.Strings(keys)
+		return "", fmt.Errorf("skipped '%s': its path and track PIDs match %d different books (%s); not linking or creating", book.Title, len(ids), strings.Join(keys, ", "))
+	}
+	for id := range ids {
+		return id, nil
+	}
+	return "", nil
 }
 
 func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath string, opts itunes.ImportOptions, carries itunes.SourceFields) (*database.Book, error) {

@@ -1,7 +1,7 @@
 // file: internal/database/bookcore.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3c1e28-9a4d-4b61-8c2f-bookcore000001
-// last-edited: 2026-09-10
+// last-edited: 2026-09-13
 
 package database
 
@@ -59,13 +59,14 @@ type BookCore struct {
 	HardcoverID   *string `json:"hardcover_id,omitempty"`
 	GoogleBooksID *string `json:"google_books_id,omitempty"`
 	// iTunes import fields
-	ITunesPersistentID *string    `json:"itunes_persistent_id,omitempty"`
-	ITunesDateAdded    *time.Time `json:"itunes_date_added,omitempty"`
-	ITunesPlayCount    *int       `json:"itunes_play_count,omitempty"`
-	ITunesLastPlayed   *time.Time `json:"itunes_last_played,omitempty"`
-	ITunesRating       *int       `json:"itunes_rating,omitempty"`
-	ITunesBookmark     *int64     `json:"itunes_bookmark,omitempty"`
-	ITunesImportSource *string    `json:"itunes_import_source,omitempty"`
+	ITunesPersistentID      *string    `json:"itunes_persistent_id,omitempty"`
+	ITunesDateAdded         *time.Time `json:"itunes_date_added,omitempty"`
+	ITunesPlayCount         *int       `json:"itunes_play_count,omitempty"`
+	ITunesLastPlayed        *time.Time `json:"itunes_last_played,omitempty"`
+	ITunesPlayCountBumpedAt *time.Time `json:"itunes_play_count_bumped_at,omitempty"`
+	ITunesRating            *int       `json:"itunes_rating,omitempty"`
+	ITunesBookmark          *int64     `json:"itunes_bookmark,omitempty"`
+	ITunesImportSource      *string    `json:"itunes_import_source,omitempty"`
 	// Deprecated: use book_files.itunes_path instead. Will be removed in a future migration.
 	ITunesPath       *string `json:"itunes_path,omitempty"`
 	OriginalFilename *string `json:"original_filename,omitempty"`
@@ -215,6 +216,7 @@ func (b *Book) Core() BookCore {
 		ITunesDateAdded:          b.ITunesDateAdded,
 		ITunesPlayCount:          b.ITunesPlayCount,
 		ITunesLastPlayed:         b.ITunesLastPlayed,
+		ITunesPlayCountBumpedAt:  b.ITunesPlayCountBumpedAt,
 		ITunesRating:             b.ITunesRating,
 		ITunesBookmark:           b.ITunesBookmark,
 		ITunesImportSource:       b.ITunesImportSource,
@@ -335,6 +337,7 @@ func (c *BookCore) ToBook() Book {
 		ITunesDateAdded:          c.ITunesDateAdded,
 		ITunesPlayCount:          c.ITunesPlayCount,
 		ITunesLastPlayed:         c.ITunesLastPlayed,
+		ITunesPlayCountBumpedAt:  c.ITunesPlayCountBumpedAt,
 		ITunesRating:             c.ITunesRating,
 		ITunesBookmark:           c.ITunesBookmark,
 		ITunesImportSource:       c.ITunesImportSource,
