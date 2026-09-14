@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 3a9f6d21-7c84-4e0b-bd35-9f12a7c6e840
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package handlers_test
 
@@ -36,6 +36,21 @@ func newVersionsCtx(method, path, body string, params gin.Params) (*gin.Context,
 	c.Request = req
 	c.Params = params
 	return c, w
+}
+
+// modifyOn stands in for the store's ModifyBook: it runs fn on a copy of b,
+// the way the store runs it on the stored row, and honours ErrSkipBookWrite.
+func modifyOn(b database.Book) func(string, func(*database.Book) error) (*database.Book, error) {
+	return func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+		cur := b
+		if err := fn(&cur); err != nil {
+			if errors.Is(err, database.ErrSkipBookWrite) {
+				return &b, nil
+			}
+			return nil, err
+		}
+		return &cur, nil
+	}
 }
 
 // ── ListAudiobookVersions ─────────────────────────────────────────────────
@@ -80,8 +95,8 @@ func TestVersionsHandler_LinkAudiobookVersion_Success(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2"}, nil)
-	store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
-	store.EXPECT().UpdateBook("b2", mock.Anything).Return(&database.Book{ID: "b2"}, nil)
+	store.EXPECT().ModifyBook("b1", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b1"}))
+	store.EXPECT().ModifyBook("b2", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b2"}))
 
 	h := handlers.NewVersionsHandler(store)
 	c, w := newVersionsCtx(http.MethodPost, "/audiobooks/b1/versions", `{"other_id":"b2"}`, gin.Params{{Key: "id", Value: "b1"}})
@@ -106,7 +121,7 @@ func TestVersionsHandler_LinkAudiobookVersion_MissingBody(t *testing.T) {
 func TestVersionsHandler_SetAudiobookPrimary_NoGroup(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
-	store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
+	store.EXPECT().ModifyBook("b1", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b1"}))
 
 	h := handlers.NewVersionsHandler(store)
 	c, w := newVersionsCtx(http.MethodPut, "/audiobooks/b1/set-primary", "", gin.Params{{Key: "id", Value: "b1"}})
@@ -119,8 +134,8 @@ func TestVersionsHandler_SetAudiobookPrimary_WithGroup(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}, {ID: "b2"}}, nil)
-	store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
-	store.EXPECT().UpdateBook("b2", mock.Anything).Return(&database.Book{ID: "b2"}, nil)
+	store.EXPECT().ModifyBook("b1", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b1", VersionGroupID: new("g1")}))
+	store.EXPECT().ModifyBook("b2", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b2", VersionGroupID: new("g1"), IsPrimaryVersion: new(true)}))
 
 	h := handlers.NewVersionsHandler(store)
 	c, w := newVersionsCtx(http.MethodPut, "/audiobooks/b1/set-primary", "", gin.Params{{Key: "id", Value: "b1"}})
@@ -159,13 +174,15 @@ func TestVersionsHandler_SplitVersion_Success(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	// Source already has a version group → skips the early UpdateBook.
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Book One", VersionGroupID: new("g1")}, nil)
+	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{{ID: "f1", FilePath: "/x/f1.m4b"}}, nil).Once()
 	store.EXPECT().GetBooksByVersionGroup("g1").Return([]database.Book{{ID: "b1"}}, nil)
 	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "b2", VersionGroupID: new("g1")}, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1"}, "b1", "b2").Return(nil)
-	// New book gets one remaining file; source has none → only the new-book UpdateBook fires.
+	// New book gets one remaining file; source has none → only the new-book path write fires.
 	store.EXPECT().GetBookFiles("b2").Return([]database.BookFile{{ID: "f1", FilePath: "/x/f1.m4b"}}, nil)
-	store.EXPECT().UpdateBook("b2", mock.Anything).Return(&database.Book{ID: "b2"}, nil)
-	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{}, nil)
+	store.EXPECT().ModifyBook("b2", mock.Anything).RunAndReturn(modifyOn(database.Book{ID: "b2"}))
+	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{}, nil).Once()
+	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", FilePath: "/x/f1.m4b"}, nil)
 
 	h := handlers.NewVersionsHandler(store)
 	c, w := newVersionsCtx(http.MethodPost, "/audiobooks/b1/split-version", `{"segment_ids":["f1"]}`, gin.Params{{Key: "id", Value: "b1"}})
@@ -194,8 +211,8 @@ func TestVersionsHandler_SplitSegmentsToBooks_Success(t *testing.T) {
 	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{
 		{ID: "f1", FilePath: "/x/01 - A Game of Thrones.m4b", Format: "m4b"},
 	}, nil).Once()
-	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "nb1"}, nil)
 	store.EXPECT().GetBookAuthors("b1").Return(nil, nil)
+	store.EXPECT().CreateBook(mock.Anything).Return(&database.Book{ID: "nb1"}, nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1"}, "b1", "nb1").Return(nil)
 	store.EXPECT().GetExternalIDsForBook("b1").Return(nil, nil)
 	// Second GetBookFiles fetches the remaining files (now empty).
@@ -264,6 +281,7 @@ func TestVersionsHandler_MoveSegments_GroupMismatch(t *testing.T) {
 func TestVersionsHandler_SplitVersion_GroupReadError(t *testing.T) {
 	store := handlersmocks.NewMockVersionsStore(t)
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Book One", VersionGroupID: new("g1")}, nil)
+	store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{{ID: "f1"}}, nil)
 	store.EXPECT().GetBooksByVersionGroup("g1").Return(nil, errors.New("injected group read error"))
 	// No CreateBook / MoveBookFilesToBook expectation: the strict mock fails
 	// the test if the split goes on to create the new row.
