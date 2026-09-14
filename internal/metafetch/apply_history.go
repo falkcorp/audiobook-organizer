@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-14
 
@@ -608,7 +608,6 @@ func copyIntPtr(p *int) *int {
 	v := *p
 	return &v
 }
-
 
 // dropUnrevertableAuthorRows removes the author_name row from rows when the
 // author column cannot go back together with the book_authors join: the join
