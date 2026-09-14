@@ -1,5 +1,5 @@
 // file: internal/itunes/service/import_corruption_regression_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e9a1c7b-8d23-4f5e-b6a0-2c7d9e1f3b58
 // last-edited: 2026-09-13
 //
@@ -11,10 +11,13 @@ package itunesservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
@@ -314,4 +317,184 @@ func TestExecute_ReimportByTrackPIDLinksWithoutSkipDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.ITunesPersistentID)
 	assert.Equal(t, pid, *got.ITunesPersistentID)
+}
+
+// --- PR #3397 review round ---
+
+// Review item 1: an organized book (its FilePath moved under RootDir) whose
+// album tracks share disc/track 0/0 must be found by its tracks' book_file
+// PIDs on every sync. Neither the path nor a book-level PID matches it, so
+// until the review fix each sync created a duplicate and moved the file PIDs.
+func TestSyncLibrary_OrganizedZeroNumberedAlbumStaysOneBook(t *testing.T) {
+	imp, store := newSourceFieldsImporter(t)
+	itunesDir := filepath.Join(t.TempDir(), "iTunes Media", "Author Z", "Zero Book")
+	require.NoError(t, os.MkdirAll(itunesDir, 0o755))
+	pids := []string{"ZPID_B", "ZPID_A"}
+	tracks := map[string]*itunes.Track{}
+	for i, pid := range pids {
+		p := filepath.Join(itunesDir, fmt.Sprintf("part%d.m4b", i))
+		require.NoError(t, os.WriteFile(p, []byte("audio"), 0o644))
+		tracks[strconv.Itoa(i+1)] = &itunes.Track{
+			TrackID: i + 1, PersistentID: pid, Name: fmt.Sprintf("Part %d", i),
+			Album: "Zero Book", Artist: "Author Z", Kind: "Audiobook",
+			Location: itunes.EncodeLocation(p),
+		}
+	}
+	lib := &itunes.Library{Tracks: tracks, Carries: itunes.XMLSourceFields()}
+
+	organized := filepath.Join(t.TempDir(), "library", "Author Z", "Zero Book")
+	book, err := store.CreateBook(&database.Book{Title: "Zero Book", FilePath: organized, Format: "m4b", LibraryState: new("organized")})
+	require.NoError(t, err)
+	for i, pid := range pids {
+		require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(organized, fmt.Sprintf("part%d.m4b", i)), ITunesPersistentID: pid}))
+	}
+
+	for run := 1; run <= 2; run++ {
+		require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
+		books := allBooks(t, store)
+		require.Len(t, books, 1, "sync run %d created a duplicate of the organized book", run)
+		assert.Equal(t, book.ID, books[0].ID)
+	}
+	for _, pid := range pids {
+		bf, err := store.GetBookFileByPID(pid)
+		require.NoError(t, err)
+		require.NotNil(t, bf)
+		assert.Equal(t, book.ID, bf.BookID, "track %s's file must stay on the organized book", pid)
+	}
+}
+
+// Review item 1: tracks sharing disc/track numbers sort by PID, so tracks[0]
+// is the same whatever order the library map yields them in.
+func TestSortTracksByDiscTrack_TiesBreakByPID(t *testing.T) {
+	for _, order := range [][]string{{"P_A", "P_B", "P_C"}, {"P_C", "P_B", "P_A"}, {"P_B", "P_C", "P_A"}} {
+		tracks := make([]*itunes.Track, len(order))
+		for i, pid := range order {
+			tracks[i] = &itunes.Track{PersistentID: pid}
+		}
+		sortTracksByDiscTrack(tracks)
+		assert.Equal(t, "P_A", tracks[0].PersistentID, "input order %v", order)
+		assert.Equal(t, "P_C", tracks[2].PersistentID, "input order %v", order)
+	}
+}
+
+// Review item 2: a manual Finished survives new positions, and LastActivityAt
+// is the newest position write -- so dating the finish by LastActivityAt
+// counted every later position write as another finish. The finish is dated
+// once, when the book becomes Finished.
+func TestPushPositions_LaterPositionOnFinishedBookDoesNotBumpAgain(t *testing.T) {
+	store := setupSyncTestStore(t)
+	pid := "POS_PID_LATER"
+	book, err := store.CreateBook(&database.Book{
+		Title: "Finished Then Resumed", FilePath: "/tmp/later.m4b", Format: "m4b",
+		ITunesPersistentID: &pid, ITunesPlayCount: new(3),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "seg-later", BookID: book.ID, FilePath: "/tmp/later.m4b", Duration: 3600}))
+	require.NoError(t, store.SetUserPosition(adminUserID, book.ID, "seg-later", 3599))
+	_, err = readstatus.SetManualStatus(store, adminUserID, book.ID, database.UserBookStatusFinished)
+	require.NoError(t, err)
+
+	ps := newPositionSync(store, &recordingEnqueuer{})
+	assert.Equal(t, 1, ps.pushPositions())
+
+	// The listener seeks back and plays on: a new position, and the manual
+	// Finished stays.
+	time.Sleep(5 * time.Millisecond)
+	require.NoError(t, store.SetUserPosition(adminUserID, book.ID, "seg-later", 120))
+	_, err = readstatus.RecomputeUserBookState(store, adminUserID, book.ID)
+	require.NoError(t, err)
+	state, err := store.GetUserBookState(adminUserID, book.ID)
+	require.NoError(t, err)
+	require.Equal(t, database.UserBookStatusFinished, state.Status)
+
+	for range 2 {
+		assert.Equal(t, 1, ps.pushPositions())
+	}
+
+	got, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.ITunesPlayCount)
+	assert.Equal(t, 4, *got.ITunesPlayCount, "one finish then a later position write must add exactly one play")
+}
+
+// Review item 2: a Finished that pullBookmarks seeds FROM iTunes' play count
+// is already counted there; a later push must not add a play for it.
+func TestPullThenPush_SeededFinishIsNotCountedAgain(t *testing.T) {
+	store := setupSyncTestStore(t)
+	pid := "POS_PID_SEEDED"
+	book, err := store.CreateBook(&database.Book{
+		Title: "Played In iTunes", FilePath: "/tmp/seeded.m4b", Format: "m4b",
+		ITunesPersistentID: &pid, ITunesPlayCount: new(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "seg-seeded", BookID: book.ID, FilePath: "/tmp/seeded.m4b", Duration: 3600}))
+
+	ps := newPositionSync(store, &recordingEnqueuer{})
+	ps.pullBookmarks()
+	state, err := store.GetUserBookState(adminUserID, book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, database.UserBookStatusFinished, state.Status, "play count > 0 seeds Finished")
+
+	time.Sleep(5 * time.Millisecond)
+	require.NoError(t, store.SetUserPosition(adminUserID, book.ID, "seg-seeded", 60))
+	assert.Equal(t, 1, ps.pushPositions())
+
+	got, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.ITunesPlayCount)
+	assert.Equal(t, 2, *got.ITunesPlayCount, "the seeded finish came from iTunes' own count")
+}
+
+// Review item 4: a re-import must neither link to a book marked for deletion
+// (nothing would reappear) nor create a second book beside it.
+func TestExecute_ReimportOfDeletedBookIsSkipped(t *testing.T) {
+	store := newRegressionStore(t)
+	dir := t.TempDir()
+	trackPath := filepath.Join(dir, "gone.m4b")
+	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("g"), 512), 0o644))
+	pid := "REIMPORT_DELETED_PID"
+	xmlPath := writeXMLWithAudiobook(t, dir, "Marked Gone", "Author D", pid, trackPath)
+
+	marked := true
+	deletedBook, err := store.CreateBook(&database.Book{Title: "Marked Gone", FilePath: "/lib/gone", Format: "m4b", MarkedForDeletion: &marked})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: deletedBook.ID, FilePath: "/lib/gone/gone.m4b", ITunesPersistentID: pid}))
+
+	imp := newImporter(Deps{Store: store, Config: Config{}})
+	require.NoError(t, imp.Execute(context.Background(), "op-reimport-deleted", ImportRequest{LibraryPath: xmlPath, ImportMode: "import"}, logger.New("test")))
+
+	got, err := store.GetBookByID(deletedBook.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.ITunesPersistentID, "the re-import linked to a book marked for deletion")
+	for _, b := range allBooks(t, store) {
+		assert.Equal(t, deletedBook.ID, b.ID, "the re-import created book %s beside the deleted one", b.ID)
+	}
+}
+
+// Review item 5: two live books at one path are ambiguous. The single-owner
+// book:path key named only the last-written one, so Execute linked to it.
+func TestExecute_TwoLiveBooksAtPathIsSkipped(t *testing.T) {
+	store := newRegressionStore(t)
+	dir := t.TempDir()
+	trackPath := filepath.Join(dir, "shared.m4b")
+	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("s"), 512), 0o644))
+	xmlPath := writeXMLWithAudiobook(t, dir, "Shared Path", "Author S", "SHARED_PATH_PID", trackPath)
+
+	var ids []string
+	for _, title := range []string{"Shared Path", "Shared Path Copy"} {
+		b, err := store.CreateBook(&database.Book{Title: title, FilePath: trackPath, Format: "m4b"})
+		require.NoError(t, err)
+		ids = append(ids, b.ID)
+	}
+
+	imp := newImporter(Deps{Store: store, Config: Config{}})
+	require.NoError(t, imp.Execute(context.Background(), "op-two-at-path", ImportRequest{LibraryPath: xmlPath, ImportMode: "import"}, logger.New("test")))
+
+	for _, id := range ids {
+		got, err := store.GetBookByID(id)
+		require.NoError(t, err)
+		assert.Nil(t, got.ITunesPersistentID, "book %s shares its path with another live book; it must not be linked", id)
+	}
+	assert.Len(t, allBooks(t, store), 2, "an ambiguous path must not create a third book")
 }

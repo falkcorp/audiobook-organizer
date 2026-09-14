@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_primary_version_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bdb97ea5-c7e2-4797-aec0-a58b225d5fdb
 // last-edited: 2026-09-13
 
@@ -66,6 +66,7 @@ func TestExecute_NewBookIsPrimaryOfItsOwnVersionGroup(t *testing.T) {
 	// The existing-book lookups (path, track PID) run on every import now
 	// and find nothing, so the group is created.
 	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().LiveBookIDsAtPath(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().CreateBook(mock.Anything).
 		Run(func(book *database.Book) { captured = book }).

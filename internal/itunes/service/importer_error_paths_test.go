@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
 // last-edited: 2026-09-13
 
@@ -283,6 +283,8 @@ func TestExecute_SkipDuplicates_ExistingPath_Linked(t *testing.T) {
 	// PID not yet in external_id_map.
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
 	// SkipDuplicates = true → check file path.
+	m.EXPECT().LiveBookIDsAtPath(mock.Anything).Return([]string{"dup-book-id"}, nil).Once()
+	// The single-owner key is read only to spot a book marked for deletion.
 	m.EXPECT().GetBookByFilePath(mock.Anything).Return(existingBook, nil).Once()
 	// The track PID is also looked up on book_files; no row has it.
 	m.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Once()
@@ -333,6 +335,7 @@ func TestExecute_CreateBookFails_ContinuesAndCountsFailed(t *testing.T) {
 	// The existing-book lookups (path, track PID) run on every import now
 	// and find nothing, so the group is created.
 	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().LiveBookIDsAtPath(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	// CreateBook returns an error — simulates a disk/DB failure mid-import.
 	m.EXPECT().CreateBook(mock.Anything).Return(nil, storeErr).Once()
@@ -726,6 +729,7 @@ func TestExecute_NewBook_WritesExternalIDMappingAtImport(t *testing.T) {
 	// The existing-book lookups (path, track PID) run on every import now
 	// and find nothing, so the group is created.
 	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().LiveBookIDsAtPath(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().CreateBook(mock.Anything).Return(created, nil).Once()
 	// The assertion under test: the importer writes the mapping for the
