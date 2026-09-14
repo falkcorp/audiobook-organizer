@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-14
 
@@ -352,9 +352,27 @@ func TestApplyAudiobookMetadata(t *testing.T) {
 	}
 }
 
+// TestMarkAudiobookNoMatch also pins the A3#14 reject rule: marking a book "no
+// match" deletes its provider fetch-cache rows, because the rejected result is
+// wrong for the book's UNCHANGED identity and its stamp would still match.
+// The mockery mock fails the test if the call is missing (AssertExpectations).
 func TestMarkAudiobookNoMatch(t *testing.T) {
 	h, d := newHandler(t)
 	d.mfs.EXPECT().MarkNoMatch("b1").Return(nil)
+	d.mfs.EXPECT().InvalidateFetchCacheForBook("b1").Return(nil).Once()
+	d.store.EXPECT().AddMetadataRejection(mock.Anything).Return(nil)
+	w := doReq(h.MarkAudiobookNoMatch, http.MethodPost, "/audiobooks/b1/mark-no-match", nil, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestMarkAudiobookNoMatch_FetchCacheWipeFailureStillSucceeds: the rejection
+// itself is recorded; a failed cache delete is logged, not surfaced as a 500.
+func TestMarkAudiobookNoMatch_FetchCacheWipeFailureStillSucceeds(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().MarkNoMatch("b1").Return(nil)
+	d.mfs.EXPECT().InvalidateFetchCacheForBook("b1").Return(errors.New("scan failed")).Once()
 	d.store.EXPECT().AddMetadataRejection(mock.Anything).Return(nil)
 	w := doReq(h.MarkAudiobookNoMatch, http.MethodPost, "/audiobooks/b1/mark-no-match", nil, idParam("b1"))
 	if w.Code != http.StatusOK {

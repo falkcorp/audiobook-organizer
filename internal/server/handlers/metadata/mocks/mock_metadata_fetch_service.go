@@ -611,6 +611,57 @@ func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) RunAndReturn
 	return _c
 }
 
+// InvalidateFetchCacheForBook provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) InvalidateFetchCacheForBook(bookID string) error {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for InvalidateFetchCacheForBook")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMetadataFetchService_InvalidateFetchCacheForBook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateFetchCacheForBook'
+type MockMetadataFetchService_InvalidateFetchCacheForBook_Call struct {
+	*mock.Call
+}
+
+// InvalidateFetchCacheForBook is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataFetchService_Expecter) InvalidateFetchCacheForBook(bookID any) *MockMetadataFetchService_InvalidateFetchCacheForBook_Call {
+	return &MockMetadataFetchService_InvalidateFetchCacheForBook_Call{Call: _e.mock.On("InvalidateFetchCacheForBook", bookID)}
+}
+
+func (_c *MockMetadataFetchService_InvalidateFetchCacheForBook_Call) Run(run func(bookID string)) *MockMetadataFetchService_InvalidateFetchCacheForBook_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_InvalidateFetchCacheForBook_Call) Return(err error) *MockMetadataFetchService_InvalidateFetchCacheForBook_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_InvalidateFetchCacheForBook_Call) RunAndReturn(run func(bookID string) error) *MockMetadataFetchService_InvalidateFetchCacheForBook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MarkNoMatch provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) MarkNoMatch(id string) error {
 	ret := _mock.Called(id)
