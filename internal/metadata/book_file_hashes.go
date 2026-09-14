@@ -1,5 +1,5 @@
 // file: internal/metadata/book_file_hashes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a9c3e71-2d48-4b06-9f15-c7e0b8d4a2f6
 // last-edited: 2026-09-13
 
@@ -41,8 +41,10 @@ func bookFileHashStore() fileops.BookFileHashRecorder {
 
 // BookFileHashOptions returns the fileops.WriteTagsSafe options that record a
 // write's hashes on the book_file row at path, or zero options when no store
-// is installed or no row owns the path. Exported for byte writers outside this
-// package that know only a path (the server's movement-atom cleanup).
+// is installed or no row owns the path. It serves the writers that go through
+// fileops directly rather than tagger: the native (cgo) taglib writer, which
+// passes the already-resolved path, and the ffmpeg fallback. Tagger writes use
+// WithBookFileHashes instead, so the row is found after any redirect.
 func BookFileHashOptions(path string) fileops.WriteTagsSafeOptions {
 	store := bookFileHashStore()
 	if store == nil {
