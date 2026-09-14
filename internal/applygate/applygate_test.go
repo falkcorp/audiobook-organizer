@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-13
 
@@ -178,6 +178,22 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 			}
 			if got := ReviewedTranscriptionAgrees(book, c); got != tc.reviewed {
 				t.Errorf("ReviewedTranscriptionAgrees = %v, want %v", got, tc.reviewed)
+			}
+			// The floor follows the UNREVIEWED rule only: a pair the matcher
+			// alone agrees on must keep MinScore, never earn 0.85.
+			c.Score = 0.86
+			v := Evaluate(book, c, nil)
+			if v.TranscriptionAgreesOnReview != tc.reviewed {
+				t.Errorf("verdict annotation = %v, want %v", v.TranscriptionAgreesOnReview, tc.reviewed)
+			}
+			if tc.unreviewed {
+				if !v.AudioConfirmed || v.ScoreFloor != MinScoreAudioConfirmed || v.ScoreReason != "" {
+					t.Errorf("confirmed pair at 0.86: audio=%v floor=%v score_reason=%q, want the relaxed floor to pass it",
+						v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)
+				}
+			} else if v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
+				t.Errorf("unconfirmed pair at 0.86: audio=%v floor=%v score_reason=%q, want floor %v and %q",
+					v.AudioConfirmed, v.ScoreFloor, v.ScoreReason, MinScore, ReasonTranscriptionMismatch)
 			}
 		})
 	}
