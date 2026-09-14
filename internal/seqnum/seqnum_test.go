@@ -1,5 +1,5 @@
 // file: internal/seqnum/seqnum_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e3c1f7b-2a6d-4c80-b5e4-1d8f0a7c3e92
 // last-edited: 2026-09-14
 
@@ -44,6 +44,9 @@ func TestParse(t *testing.T) {
 		{"Big Cats CD 1", ""},
 		{"Big Cats Pt. II", ""},
 		{"Big Cats Track 04", ""},
+		// Part markers from multi-part rips (2026-09-14 preview shapes).
+		{"Rogue Lawyer Part 1", ""},
+		{"Rogue Lawyer (1 of 3)", ""},
 		{"Malcolm X", ""},
 		{"A Civic Duty", ""},
 		{"No Country for Old Men", ""},
