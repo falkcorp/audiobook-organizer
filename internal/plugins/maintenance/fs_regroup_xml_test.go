@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package maintenance
 
@@ -1159,34 +1159,42 @@ func ids0Path(t *testing.T, s *database.PebbleStore, id string) string {
 }
 
 // F2 (round 2): the book-folder re-check sees every live book at the folder,
-// not only the one the single book:path index key names. That key belongs to
-// the last writer and UpdateBook deletes it when any book moves off the path,
-// so in both shapes below GetBookByFilePath no longer finds the live book.
+// not only the one the single book:path index key names.
+//
+// The key belongs to the FIRST live book at a path: a later CreateBook or
+// UpdateBook onto a path whose key names another live book leaves the key
+// alone (pebble_store_book_path_owner.go). When the key's owner leaves, it is
+// not handed on to the next live book there. So the miss this guards against
+// is the owner leaving while a second live book stays: moved off (the key is
+// deleted) or soft-deleted (the key names a dead book). In both shapes below
+// GetBookByFilePath does not find the live book y that is still at the folder.
+// Until the owner-checked key, the last writer took the key and the shapes
+// were the other way round (the second book leaving).
 func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		shape func(t *testing.T, s *database.PebbleStore, base string) string // the live book left at the folder
 	}{
-		{"second book moved off the folder", func(t *testing.T, s *database.PebbleStore, base string) string {
+		{"key owner moved off the folder", func(t *testing.T, s *database.PebbleStore, base string) string {
 			x := fsSeedBook(t, s, "Cage of Souls", base)
 			y := fsSeedBook(t, s, "Cage of Souls", base)
-			yb, err := s.GetBookByID(y)
-			if err != nil || yb == nil {
-				t.Fatalf("book %s: %v", y, err)
+			xb, err := s.GetBookByID(x)
+			if err != nil || xb == nil {
+				t.Fatalf("book %s: %v", x, err)
 			}
-			yb.FilePath = base + " (moved)"
-			if _, err := s.UpdateBook(y, yb); err != nil {
+			xb.FilePath = base + " (moved)"
+			if _, err := s.UpdateBook(x, xb); err != nil {
 				t.Fatal(err)
 			}
-			return x
+			return y
 		}},
-		{"latest book at the folder soft-deleted", func(t *testing.T, s *database.PebbleStore, base string) string {
+		{"key owner soft-deleted", func(t *testing.T, s *database.PebbleStore, base string) string {
 			x := fsSeedBook(t, s, "Cage of Souls", base)
 			y := fsSeedBook(t, s, "Cage of Souls", base)
-			if err := merge.SoftDeleteBook(s, y); err != nil {
+			if err := merge.SoftDeleteBook(s, x); err != nil {
 				t.Fatal(err)
 			}
-			return x
+			return y
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
