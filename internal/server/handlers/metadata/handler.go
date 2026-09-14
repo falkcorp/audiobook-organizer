@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.28.1
+// version: 1.29.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-14
 
@@ -910,7 +910,7 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 			httputil.InternalError(c, "rename preflight failed", err)
 			return
 		}
-		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(id, book); err != nil {
+		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(c.Request.Context(), id, book); err != nil {
 			// The rename may have moved some files before it failed (their rows
 			// are updated; see RunApplyPipelineRenameOnly). Writing tags now
 			// would stamp a half-moved book, so stop and say what happened.
