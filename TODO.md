@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.6 -->
+<!-- version: 10.73.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-13 -->
+<!-- last-edited: 2026-09-14 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,35 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **PEBBLE-KEY-BOUND-SWEEP** Replace the fragile `[]byte("<prefix>:0")` /
+      `[]byte("<prefix>:;")` iterator-bound pairs in `internal/database` with the
+      true prefix range `[]byte("<prefix>:")` / `[]byte("<prefix>;")`. This is gap 2
+      of `PEBBLE-KEY-BOUND-CENSUS` (#2896). Gap 1 (colon-bearing book IDs) was fixed
+      at `CreateBook`. The census counted at least 47 non-test sites across 14 files
+      (`pebble_store.go` 20, `pebble_store_authors.go` / `_series.go` / `_stats.go`
+      4 each, ...). Both regexes are lower bounds, and bounds built with `+` or
+      `fmt.Sprintf` are missed. Re-run both regexes before sizing it. The bug is
+      latent: every ID minted so far starts with a digit. A mechanical
+      `/parallel-sweep` fits.
+
+- [ ] **SERIES-MEMBERSHIP-CORE-AND-MOVEIN-MASK: two leftovers from the residual
+      series-membership hoist (#3377).**
+      1. `executeSeriesNormalizeCore` (`internal/server/duplicates_helpers.go`) still
+         calls `GetBooksBySeriesIDCore` once per action to build the organize
+         worklist. That is a full `book:` Pebble scan per series once memdb is tainted.
+         There is no bulk Core capability, and deriving Core from AllVersions would
+         re-implement the primary-version filter. Fix: add `GetBooksBySeriesIDsCore`
+         (MemStore, PebbleStore, MockStore) plus a parity test against the per-series
+         getter, like #3374's `GetBooksBySeriesIDsAllVersions`.
+      2. The series-denumber apply loop reads `refCounts` once at run start. When an
+         earlier plan moves books INTO a later plan's source series (a reachable case:
+         the IntoName sort is byte-wise but `GetSeriesByName` is case-insensitive, e.g.
+         "Alpha 05 07" before "alpha 05"), those moved-in books raise `len(books)`, so
+         they can mask a trashed reference in `refCounts[FromID] <= len(books)`. The
+         source then gets deleted under the trashed row. The old per-series read had
+         this gap too, so it was not introduced by the hoist. Fix: track moved-in
+         counts per series and compare `refCounts[FromID] + movedIn[FromID]`.
 
 - [ ] **AUTHOR-REFCOUNT-SPLIT (owner decision)** #3309 split author reference counts into live,
       trashed and dangling. Junction rows whose book no longer exists are dangling, and
