@@ -1,5 +1,5 @@
 // file: internal/activity/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-14
 
@@ -31,6 +31,13 @@ type Service struct {
 	// flushDone is non-nil while a flush goroutine is running and is closed
 	// when it exits.
 	flushDone chan struct{}
+	// inflight is the size of the batch the flush goroutine has taken off
+	// deferred and is handing to the store right now.
+	inflight int
+	// closed is set by Close once every deferred entry has been written and
+	// the store is about to be closed. After it, RecordDeferred refuses (and
+	// says so) instead of starting a write against a closed store.
+	closed bool
 }
 
 var serviceLog = logger.New("activity")
@@ -61,13 +68,30 @@ func (s *Service) Record(entry database.ActivityEntry) error {
 // nothing before the listener may wait on one.
 //
 // Entries queue in memory until StartDeferredFlush; after that each call
-// queues and wakes the background flusher. They are never dropped: shutdown
-// calls FlushDeferred, and a store error is reported with the number of rows
-// it cost. The store's error is not returned because the write has not
-// happened yet when this returns.
+// queues and wakes the background flusher. The store's error is not returned
+// because the write has not happened yet when this returns.
+//
+// What is guaranteed: no entry is lost without a log line that counts it.
+//   - Close writes every queued entry before it closes the store, and never
+//     closes the store under an in-flight deferred write. If its time budget
+//     runs out first, it leaves the store open, logs how many entries were not
+//     yet confirmed written, and returns an error. Those entries are still
+//     being written and land if the process lives long enough.
+//   - A store error during the flush is logged with the number of entries it
+//     cost.
+//   - A call after Close has closed the store is refused and logged.
+//
+// What is not guaranteed: that an entry is on disk if the process exits
+// before the flush reaches it (SIGKILL, or a stop that outruns the budget).
+// Those losses are the ones counted in Close's log line.
 func (s *Service) RecordDeferred(entry database.ActivityEntry) {
 	EnrichTags(&entry)
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		serviceLog.Warn("activity entry %q not written: the activity store is already closed (1 entry lost)", entry.Summary)
+		return
+	}
 	s.deferred = append(s.deferred, entry)
 	if s.released {
 		s.startFlushLocked()
@@ -102,7 +126,42 @@ func (s *Service) FlushDeferred(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("activity: deferred entries still being written: %w", ctx.Err())
+		s.mu.Lock()
+		pending := len(s.deferred) + s.inflight
+		s.mu.Unlock()
+		return fmt.Errorf("activity: %d deferred entries not yet confirmed written: %w", pending, ctx.Err())
+	}
+}
+
+// Close writes every deferred entry and then closes the store, waiting at
+// most until ctx ends. It is the only way the store should be closed while
+// RecordDeferred may have queued work.
+//
+// It never closes the store under an in-flight deferred write. If ctx ends
+// first, the store is left open: the flush goroutine keeps writing, the
+// SQLite store's own bounded Close is not reached, and the returned error
+// counts the entries not yet confirmed written, so a loss at process exit is
+// never silent. A later Close retries. Once Close has succeeded, further calls
+// return nil and RecordDeferred refuses new entries.
+func (s *Service) Close(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil
+		}
+		// Everything written and no flush running: shut the door under the same
+		// lock, so a RecordDeferred cannot slip a new write in between this check
+		// and store.Close.
+		if s.flushDone == nil && len(s.deferred) == 0 {
+			s.closed = true
+			s.mu.Unlock()
+			return s.store.Close()
+		}
+		s.mu.Unlock()
+		if err := s.FlushDeferred(ctx); err != nil {
+			return fmt.Errorf("activity store left open: %w", err)
+		}
 	}
 }
 
@@ -125,6 +184,7 @@ func (s *Service) flushDeferred(done chan struct{}) {
 	defer close(done)
 	for {
 		s.mu.Lock()
+		s.inflight = 0
 		batch := s.deferred
 		s.deferred = nil
 		if len(batch) == 0 {
@@ -132,6 +192,7 @@ func (s *Service) flushDeferred(done chan struct{}) {
 			s.mu.Unlock()
 			return
 		}
+		s.inflight = len(batch)
 		s.mu.Unlock()
 		s.writeDeferred(batch)
 	}

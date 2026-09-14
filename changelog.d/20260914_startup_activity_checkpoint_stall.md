@@ -5,7 +5,10 @@
   on a multi-GB SQLite WAL left by an interrupted activity compaction, ran the whole
   checkpoint inline, and kept the HTTP listener closed for about six minutes. The entry is
   now queued (`activity.Service.RecordDeferred`) and written in the background once the
-  listener has been started; shutdown flushes anything still queued, with a 5s bound.
+  listener has been started. Shutdown closes the activity store through
+  `activity.Service.Close`, which writes anything still queued first and never closes the
+  store under an in-flight write. If its 5s budget runs out, the store is left open and the
+  log line counts the entries not yet confirmed written.
 - The SQLite activity store no longer lets a foreground write run a WAL checkpoint.
   `wal_autocheckpoint` is 0 on every connection. A background checkpointer on its own
   connection runs PASSIVE every 30s, then TRUNCATE when the store is idle, and

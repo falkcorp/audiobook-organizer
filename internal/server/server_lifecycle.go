@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.8.0
+// version: 4.9.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-14
 
@@ -107,8 +107,14 @@ func (s *Server) startSearchIndexing() {
 // first, so this stays small.
 const deferredActivityFlushBudget = 5 * time.Second
 
-// flushDeferredActivity writes any entries still queued by
-// Service.RecordDeferred, waiting at most deferredActivityFlushBudget.
+// flushDeferredActivity is for a failed Start. It waits, at most
+// deferredActivityFlushBudget, for the flush goroutine to write every entry
+// still queued by Service.RecordDeferred. It deliberately does not close the
+// store: on the configureAndStartHTTP failure the container, and with it the
+// activity Writer, is still running and may still write through the store,
+// so closing here would open exactly the write-after-close race Shutdown
+// avoids. Start's caller exits right after, and SQLite recovers the WAL on the
+// next open. Entries not confirmed by the deadline are logged with a count.
 func (s *Server) flushDeferredActivity() {
 	if s.activityService == nil {
 		return
@@ -116,8 +122,25 @@ func (s *Server) flushDeferredActivity() {
 	ctx, cancel := context.WithTimeout(context.Background(), deferredActivityFlushBudget)
 	defer cancel()
 	if err := s.activityService.FlushDeferred(ctx); err != nil {
-		lifecycleLog.Warn("deferred activity entries not written before shutdown: %v", err)
+		lifecycleLog.Warn("failed start: %v", err)
 	}
+}
+
+// closeActivityStore writes any RecordDeferred entries and closes the
+// activity store through Service.Close, which never closes it under an
+// in-flight deferred write. On timeout the store is left open and the log
+// line counts the entries not yet confirmed written.
+func (s *Server) closeActivityStore() {
+	if s.activityService == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deferredActivityFlushBudget)
+	defer cancel()
+	if err := s.activityService.Close(ctx); err != nil {
+		lifecycleLog.Warn("activity log store not closed: %v", err)
+		return
+	}
+	lifecycleLog.Info("Activity log store closed")
 }
 
 func (s *Server) Start(cfg ServerConfig) error {
@@ -531,17 +554,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
-	// Close activity log store, after writing anything still queued by
+	// Close the activity log store, after writing anything still queued by
 	// RecordDeferred (a stop that lands right after boot would otherwise lose
-	// the startup entry).
-	if s.activityService != nil {
-		s.flushDeferredActivity()
-		if err := s.activityService.Store().Close(); err != nil {
-			slog.Warn("Failed to close activity log store", "err", err)
-		} else {
-			slog.Info("Activity log store closed")
-		}
-	}
+	// the startup entry). Container.Stop above has already stopped the
+	// activity Writer, so the deferred flush is the only writer left.
+	s.closeActivityStore()
 
 	// Stop every file watcher (one per import path). The supervisor goroutine
 	// has already returned via `shutdown`; this only tears down the live
