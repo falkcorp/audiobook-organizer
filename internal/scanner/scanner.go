@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.95.0
+// version: 1.96.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package scanner
 
@@ -1326,6 +1326,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	readStatErrStart := readStatErrCount.Load()
 	readCacheOffStart := readCacheOffCount.Load()
 	replacedProbeNoAudioStart := replacedProbeNoAudioCount.Load()
+	sameBookReplacedStart := sameBookReplacedCount.Load()
+	sameBookHashCheckStart := sameBookHashCheckCount.Load()
+	sameBookRefreshErrStart := sameBookRefreshErrCount.Load()
+	sameBookHashFailStart := sameBookHashFailCount.Load()
 
 	// Computed ONCE for the run, not per file: a cutoff that drifts while the
 	// scan walks 40k files would make the gate's verdict depend on where in the
@@ -1842,6 +1846,16 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Warn("scan summary: %d replaced files gave no real duration when probed (is ffprobe installed?); "+
 			"their fingerprints and transcripts were dropped and the backfills will rebuild them", d)
 	}
+	if d := sameBookReplacedCount.Load() - sameBookReplacedStart; d > 0 {
+		scanLog.Info("scan summary: %d book files were replaced in place (%d stat-flagged files hashed); "+
+			"their byte-derived fields were refreshed", d, sameBookHashCheckCount.Load()-sameBookHashCheckStart)
+	}
+	if d := sameBookRefreshErrCount.Load() - sameBookRefreshErrStart; d > 0 {
+		scanLog.Warn("scan summary: %d same-book replacement refreshes failed (those rows still describe the old bytes)", d)
+	}
+	if d := sameBookHashFailCount.Load() - sameBookHashFailStart; d > 0 {
+		scanLog.Warn("scan summary: %d stat-flagged book files could not be hashed for the replacement check", d)
+	}
 
 	// Skip-rate summary. Logged UNCONDITIONALLY, unlike the error counters
 	// above: those are silent when nothing went wrong, but the pathology this
@@ -2293,7 +2307,17 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 	// Check if book files already exist
 	existing, _ := getStore().GetBookFiles(dbBook.ID)
 	if len(existing) > 0 {
-		return "" // BookFiles already created (rescan)
+		// Rescan: the rows exist. Re-check them for files replaced in place
+		// (different bytes at a stored path) and refresh those through the
+		// scanner upsert; unchanged files cost one stat. The rows are not
+		// rebuilt: tag positions were judged at import, and with a nil
+		// segment list the directory glob below could attach other files.
+		var known map[string]string
+		if len(knownHashes) > 0 {
+			known = knownHashes[0]
+		}
+		refreshReplacedSameBookFiles(existing, known, scanLog)
+		return ""
 	}
 
 	// If no specific files provided, scan the directory
@@ -2363,38 +2387,16 @@ func createBookFilesForBook(bookFilePath string, segmentFiles []string, scanLog 
 		// per-file "tag wins when present" rule is what let a rip tagged
 		// "track 1" on every chapter import with every file at track 1.
 		// A failed read leaves a zero placement, which refuses the book.
-		var placement metadata.TagPlacement
-		if meta, merr := metadata.ExtractMetadata(filePath, nil); merr == nil {
-			bf.RawTags = meta.AllTags
-			placement = metadata.PlacementFromMetadata(meta)
-			if meta.Title != "" {
-				bf.Title = meta.Title
-			}
-		} else {
-			scanLog.Debug("tag read failed for %s (keeping positional track): %v", logger.SanitizeLogValue(filePath), merr)
-		}
-
 		var preHash string
 		if len(knownHashes) > 0 && knownHashes[0] != nil {
 			preHash = knownHashes[0][filePath]
 		}
-		if preHash != "" {
-			bf.FileHash = preHash
-			bf.OriginalFileHash = preHash
-		} else if h, herr := ComputeFileHash(filePath); herr == nil {
-			bf.FileHash = h
-			bf.OriginalFileHash = h
-		}
-		if bf.OriginalFileHash != "" {
-			// Both sources are filehash.BookFileHash (the segment hashes come
-			// from the same ComputeFileHash). The merge freezes a stored value
-			// of this kind; a legacy stored value of unknown kind is replaced.
-			bf.OriginalFileHashKind = database.FileHashKindSampled
-		}
+		placement := readScannedFileTagsAndHash(bf, filePath, preHash, scanLog)
 
 		// The upsert below merges with whatever row already owns this PATH.
-		// This book has no rows of its own (the early return above), so a
-		// stored row here belongs to another book. When its content hash
+		// This book has no rows of its own (its own rows are handled by
+		// refreshReplacedSameBookFiles above), so a stored row here belongs
+		// to another book. When its content hash
 		// differs, the file was replaced (our own tag writes record the new
 		// digest): probe its real duration and codec so the merge can tell a
 		// re-tag from a different recording; see probeReplacedFileAudio.
