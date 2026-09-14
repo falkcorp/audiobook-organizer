@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -168,6 +168,18 @@ func (s *PebbleActivityStore) EntriesDecoded() int64 { return s.entriesDecoded.L
 func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.Load() }
 
 // Close is a no-op: the caller owns the PebbleDB instance.
+//
+// The DB is BORROWED — NewPebbleActivityStoreFromStore hands this store the
+// main PebbleStore's *pebble.DB — so activity.Service.Close closing this store
+// closes nothing, and the main store's owner can close the DB while a deferred
+// flush or a maintenance op is still running here. Pebble PANICS ErrClosed
+// from Get/Set/NewIter/Commit on a closed DB instead of returning an error, so
+// every method below that touches s.db defers recoverPebbleClosed: an access
+// after close returns an error wrapping pebble.ErrClosed, which every caller
+// already logs (activity.Service.writeDeferred with a lost-entry count),
+// instead of killing the process. Methods whose work runs on another
+// goroutine (repairIndexChunk under errgroup) carry their own guard, because
+// recover only sees panics on its own goroutine.
 func (s *PebbleActivityStore) Close() error { return nil }
 
 // DB returns the underlying *pebble.DB. Used by callers (e.g., backfill, registry wiring)
@@ -646,7 +658,8 @@ func pactStagePrepared(batch *pebble.Batch, p pactPreparedEntry) error {
 // One entry, one fsync. Callers with many entries to write should use
 // RecordBatch instead — see its doc comment for the measured cost of not doing
 // so.
-func (s *PebbleActivityStore) Record(e ActivityEntry) (int64, error) {
+func (s *PebbleActivityStore) Record(e ActivityEntry) (_ int64, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.Record", &err)
 	p, err := s.prepareEntry(e)
 	if err != nil {
 		return 0, err
@@ -726,7 +739,14 @@ var activityRecordBatchCap = 500
 // figure a caller should report: the count returned is always the number of
 // rows actually made durable, so len(entries)-written is authoritative without
 // trusting the error text.
-func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) {
+//
+// A closed DB (the borrowed DB closed by its owner mid-flush) panics inside
+// Commit before that chunk is applied; recoverPebbleClosed turns it into an
+// error wrapping pebble.ErrClosed, and because written is the named result
+// and is only advanced after a successful commit, the count returned is still
+// exactly the rows made durable by the earlier chunks.
+func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (written int, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.RecordBatch", &err)
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -736,7 +756,6 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) 
 	// var, but a suite that hangs is worse than one that fails, so clamp it.
 	chunk := max(activityRecordBatchCap, 1)
 
-	written := 0
 	var prepareErrs []error
 
 	for start := 0; start < len(entries); start += chunk {
@@ -798,7 +817,8 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (int, error) 
 // another page exists) or however many matches were found before the scan
 // budget was reached. An exact count would require decoding every stored
 // entry, which is the behaviour this method exists to remove.
-func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]ActivityEntry, int, error) {
+func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []ActivityEntry, _ int, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.Query", &err)
 	if f.Limit == 0 {
 		f.Limit = 50
 	}
@@ -889,7 +909,8 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) ([]Ac
 // olderThan window. Without the day boundary, a single summary row silently
 // swallowed weeks or months of entries into one "N entries (day1 to dayN)"
 // row, the opposite of the per-day boundary CompactByDay enforces.
-func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (totalDeleted int, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.Summarize", &err)
 	kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
@@ -917,7 +938,6 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 		return 0, nil
 	}
 
-	totalDeleted := 0
 	now := time.Now().UTC()
 
 	i := 0
@@ -993,7 +1013,8 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 // ctx.Err(). Each committed batch is reported through any
 // WithMaintenanceProgress hook on ctx, so the nightly op has liveness during
 // what used to be its longest silent stretch.
-func (s *PebbleActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (int, error) {
+func (s *PebbleActivityStore) Prune(ctx context.Context, olderThan time.Time, tier string) (deleted int, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.Prune", &err)
 	kvs, err := s.scanTierKVs(ctx, tier, nil, &olderThan)
 	if err != nil {
 		return 0, err
@@ -1002,7 +1023,6 @@ func (s *PebbleActivityStore) Prune(ctx context.Context, olderThan time.Time, ti
 		return 0, nil
 	}
 
-	deleted := 0
 	// Delete in batches of 500 to keep batch size reasonable.
 	for i := 0; i < len(kvs); i += 500 {
 		if err := ctx.Err(); err != nil {
@@ -1078,7 +1098,8 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 // on every page load and contributed 3.21 GB to the OOM heap profile, so an
 // abandoned request must be able to stop it. On a cache hit it returns without
 // touching the store at all.
-func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) ([]SourceCount, error) {
+func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) (_ []SourceCount, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.GetDistinctSources", &err)
 	key := pactSourcesCacheKey(f)
 	if cached, ok := s.lookupSourcesCache(key); ok {
 		return cached, nil
@@ -1201,8 +1222,8 @@ func (s *PebbleActivityStore) storeSourcesCache(key string, out []SourceCount) {
 // and index keys are never counted at all. That is deliberate — the
 // ActivityRetention doc promises "rows actually deleted", and counting index
 // keys would silently inflate the number the wipe endpoint shows a user.
-func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
-	var total int64
+func (s *PebbleActivityStore) WipeAllActivity(ctx context.Context) (total int64, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.WipeAllActivity", &err)
 	for _, tier := range actTiers {
 		if err := ctx.Err(); err != nil {
 			return total, err
@@ -1322,7 +1343,8 @@ func (c *pactRepairCounters) result() ActivityIndexRepairResult {
 // A malformed ref (one pactPrimaryKeyFromRef rejects) is DELETED and counted
 // separately, not skipped: queryByIndexPrefix cannot follow it either, so it is
 // dead weight by definition. The first such key is logged with the total.
-func (s *PebbleActivityStore) RepairActivityIndexes(ctx context.Context) (ActivityIndexRepairResult, error) {
+func (s *PebbleActivityStore) RepairActivityIndexes(ctx context.Context) (_ ActivityIndexRepairResult, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.RepairActivityIndexes", &err)
 	c := &pactRepairCounters{}
 	for _, prefix := range pactIndexFamilyPrefixes {
 		if err := ctx.Err(); err != nil {
@@ -1405,7 +1427,10 @@ func (s *PebbleActivityStore) repairIndexFamily(ctx context.Context, prefix stri
 
 // repairIndexChunk checks one disjoint chunk of index rows and deletes the ones
 // whose primary row is gone or whose reference is unusable.
-func (s *PebbleActivityStore) repairIndexChunk(ctx context.Context, rows []pactIndexRow, c *pactRepairCounters) error {
+func (s *PebbleActivityStore) repairIndexChunk(ctx context.Context, rows []pactIndexRow, c *pactRepairCounters) (err error) {
+	// Runs on an errgroup worker goroutine: the guard in RepairActivityIndexes
+	// cannot recover a panic raised here, so this one needs its own.
+	defer recoverPebbleClosed("pebble_activity_store.repairIndexChunk", &err)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1567,8 +1592,8 @@ func (sc *pactDigestScratch) details(dateKey string) DigestDetails {
 // did until 2026-09-09 — double-counts on resume, because the survivors of the
 // interrupted delete are rescanned and merged into a digest that already
 // included them.
-func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (CompactResult, error) {
-	var result CompactResult
+func (s *PebbleActivityStore) CompactByDay(ctx context.Context, olderThan time.Time) (result CompactResult, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.CompactByDay", &err)
 
 	// Bound the calendar-day loop by the data, not the wall clock: one
 	// iterator Seek per tier, no decode.
@@ -1857,8 +1882,8 @@ func (s *PebbleActivityStore) MigrateSystemActivityLogs() (int, error) {
 //  3. Skip entries where no items are legacy (idempotent guard).
 //  4. For each legacy item: call deriveTypeFromMessage + enrichLegacyLogTags.
 //  5. Rebuild Counts and TagCounts, marshal back, and overwrite with the same key.
-func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (RecompactResult, error) {
-	var result RecompactResult
+func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (result RecompactResult, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.RecompactDigests", &err)
 
 	type digestKV struct {
 		key   []byte
@@ -2366,7 +2391,10 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 // number of entries successfully decoded AND accepted by fn — i.e. what actually
 // reached the batches (decode failures excluded), counting THIS call only: a
 // resumed stream does not know about rows an earlier attempt consumed.
-func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, startAfter []byte, fn func(batch []ActivityEntry, lastKey []byte) error) (int, error) {
+func (s *PebbleActivityStore) streamTierEntries(ctx context.Context, tier string, batchSize int, startAfter []byte, fn func(batch []ActivityEntry, lastKey []byte) error) (_ int, err error) {
+	// Driven by the SQLite activity backfill op, which can still be running
+	// when the main store (owner of this borrowed DB) closes.
+	defer recoverPebbleClosed("pebble_activity_store.streamTierEntries", &err)
 	if batchSize <= 0 {
 		batchSize = 1
 	}
@@ -3193,7 +3221,8 @@ func (s *PebbleActivityStore) findExistingDigest(dateKey string) (DigestDetails,
 // read, decoded, or held. The scan is O(keys in range) in time and O(1) in
 // memory, which is what makes counting the whole keyspace safe here when
 // decoding it was not.
-func (s *PebbleActivityStore) CountActivity(ctx context.Context, tier string, olderThan *time.Time) (int, error) {
+func (s *PebbleActivityStore) CountActivity(ctx context.Context, tier string, olderThan *time.Time) (_ int, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.CountActivity", &err)
 	lower, upper := pactTierBounds(tier, nil, olderThan)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
