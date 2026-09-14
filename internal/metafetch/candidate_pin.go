@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-14
 
@@ -107,6 +107,13 @@ type ApplyOptions struct {
 	// does. It is independent of OwnerReviewed, which only labels a lifted
 	// gate refusal.
 	//
+	// It is also what marks an apply as AUTOMATIC (nobody picked this
+	// candidate): a FillOnly apply records the match (review status,
+	// MetadataSource, MetadataSourceHash) only when the book ends up holding
+	// the candidate's title, while a hand-picked apply (FillOnly false)
+	// records it whatever title the book keeps, because the person asserted
+	// the match. A new automatic caller must set FillOnly.
+	//
 	// It covers the DESCRIPTIVE fields only (StripFilledFields leaves the
 	// identity fields alone), so it does not stop a title overwrite: a caller
 	// that must not replace a filled title drops "title" from its fields
@@ -120,12 +127,12 @@ type ApplyOptions struct {
 	// rather than a book stamped as matched. A hand-picked apply leaves it
 	// false.
 	//
-	// The check compares book columns after the apply body ran, so "writes
-	// nothing" holds only when no author credit can land without changing a
-	// column: allow "author" only on a book with no author (as
-	// maintenance.auto-match-transcribed does). On a book that already has
-	// one, an applied co-author adds a book_authors credit, written under
-	// the store's lock, before this check sees no column change.
+	// The check runs after the apply body and counts both a changed book
+	// column and a changed author credit list (AuthorCredits.Changed) as a
+	// change: on a book that already has an author, an applied co-author adds
+	// a book_authors credit, written under the store's lock, without changing
+	// a column. That apply proceeds and commits (with history, so undo can
+	// remove the credit) rather than reporting nothing to apply.
 	RefuseEmptyWrite bool
 }
 
