@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1d4e9b-3a72-4f58-b0e6-8d2a5c7f1e34
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package jobs
 
@@ -24,6 +24,11 @@ func ddLockFixture(t *testing.T, locked []string, lockErr error) (*database.Mock
 			if id == "keep" {
 				cp := *keeper
 				return &cp, nil
+			}
+			// The merge re-reads both rows before planning, so the mock must
+			// return the dup's stored fields, as a real store would.
+			if id == "dup" {
+				return ddDup(), nil
 			}
 			return &database.Book{ID: id}, nil
 		},
