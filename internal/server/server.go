@@ -450,6 +450,12 @@ func (s *Server) publishEvent(ctx context.Context, event plugin.Event) {
 // NewServer constructs a Server with an explicit Store dependency.
 // s.Ops() is still assigned at startup for code that hasn't
 // been migrated to use s.Ops() yet (see DI migration plan 4.4).
+// activityStoreOverrideForTest, when non-nil, replaces the container-built
+// activity store for every server NewServer builds. Test-only: it is how
+// TestNewServer_DoesNotWriteActivitySynchronously hands NewServer a store whose
+// writes block, to prove nothing on the startup path waits on one.
+var activityStoreOverrideForTest database.ActivityStorer
+
 func NewServer(store database.Store) *Server {
 	// Set Gin to release mode (production) unless debug flag is set.
 	// In release mode, Gin suppresses route-registration logging and uses optimized
@@ -582,6 +588,9 @@ func NewServer(store database.Store) *Server {
 	// set — the NutsDB sidecar can't open without a path.
 	if config.AppConfig.DatabasePath != "" {
 		regContainer.IncludeGroup("activity")
+	}
+	if activityStoreOverrideForTest != nil {
+		regContainer.Override(serviceregistry.KeyActivityStore, activityStoreOverrideForTest)
 	}
 	if err := regContainer.Resolve(); err != nil {
 		slog.Error("serviceregistry resolve", "err", err)
@@ -945,8 +954,16 @@ func NewServer(store database.Store) *Server {
 			dedupFn:         server.fireDedupOnImport,
 		})
 
-		// Record server startup in activity log
-		_ = server.activityService.Record(database.ActivityEntry{
+		// Record server startup in activity log -- DEFERRED. This is the
+		// only activity write on the path to the HTTP listener, and it must
+		// not wait on the store: on 2026-09-14 it was the first SQLite
+		// write after a deploy, hit a multi-GB WAL left by an interrupted
+		// compaction, and ran the entire checkpoint synchronously, holding
+		// the listener closed for ~6 minutes. It is queued here and written
+		// by a background goroutine once Start has started the listener
+		// (Service.StartDeferredFlush); shutdown flushes it if the process
+		// stops first.
+		server.activityService.RecordDeferred(database.ActivityEntry{
 			Tier:    "debug",
 			Type:    "system",
 			Level:   "info",

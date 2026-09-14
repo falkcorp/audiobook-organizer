@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.7.0
+// version: 4.8.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -56,6 +56,8 @@ import (
 // Start's later stages spawn background goroutines that require a fully wired
 // Server, so a "no errors" control exercised through Start panics rather than
 // demonstrating anything.
+var lifecycleLog = logger.New("server")
+
 func (s *Server) opRegistrationGate() error {
 	if len(s.opRegistrationErrs) == 0 {
 		return nil
@@ -99,6 +101,25 @@ func (s *Server) startSearchIndexing() {
 	}
 }
 
+// deferredActivityFlushBudget bounds how long shutdown (or a failed Start)
+// waits for RecordDeferred entries to reach the store. The unit's
+// TimeoutStopSec is 30s and the HTTP drain and ops registry spend part of it
+// first, so this stays small.
+const deferredActivityFlushBudget = 5 * time.Second
+
+// flushDeferredActivity writes any entries still queued by
+// Service.RecordDeferred, waiting at most deferredActivityFlushBudget.
+func (s *Server) flushDeferredActivity() {
+	if s.activityService == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deferredActivityFlushBudget)
+	defer cancel()
+	if err := s.activityService.FlushDeferred(ctx); err != nil {
+		lifecycleLog.Warn("deferred activity entries not written before shutdown: %v", err)
+	}
+}
+
 func (s *Server) Start(cfg ServerConfig) error {
 	// Refuse to serve with a hole in the operations registry, before touching
 	// anything else -- nothing below this line should run on a server that is
@@ -114,6 +135,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// abort startup and roll back already-started services.
 	if s.container != nil {
 		if err := s.container.Start(s.bgCtx); err != nil {
+			s.flushDeferredActivity()
 			return fmt.Errorf("container start: %w", err)
 		}
 	}
@@ -149,7 +171,16 @@ func (s *Server) Start(cfg ServerConfig) error {
 	s.startCacheWarmers()
 
 	if err := s.configureAndStartHTTP(cfg); err != nil {
+		s.flushDeferredActivity()
 		return err
+	}
+
+	// The listener is started: activity entries queued on the startup path
+	// (Service.RecordDeferred) may now be written, in the background. Nothing
+	// before this line may wait on the activity store -- see NewServer's
+	// startup record for the 2026-09-14 outage that rule comes from.
+	if s.activityService != nil {
+		s.activityService.StartDeferredFlush()
 	}
 
 	s.seedRolesAndTokens()
@@ -500,8 +531,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
-	// Close activity log store
+	// Close activity log store, after writing anything still queued by
+	// RecordDeferred (a stop that lands right after boot would otherwise lose
+	// the startup entry).
 	if s.activityService != nil {
+		s.flushDeferredActivity()
 		if err := s.activityService.Store().Close(); err != nil {
 			slog.Warn("Failed to close activity log store", "err", err)
 		} else {

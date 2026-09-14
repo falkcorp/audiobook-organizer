@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-09-14
 
 package activity
 
@@ -9,16 +9,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // Service wraps an ActivityStorer and provides business-level methods
 // for recording and querying unified activity log entries.
 type Service struct {
 	store database.ActivityStorer
+
+	// Deferred writes (RecordDeferred). mu guards everything below it.
+	mu sync.Mutex
+	// deferred holds entries not yet handed to the store, oldest first.
+	deferred []database.ActivityEntry
+	// released is set by StartDeferredFlush; before it, deferred entries only
+	// queue.
+	released bool
+	// flushDone is non-nil while a flush goroutine is running and is closed
+	// when it exits.
+	flushDone chan struct{}
 }
+
+var serviceLog = logger.New("activity")
 
 // NewService creates a new Service backed by the given store.
 func NewService(store database.ActivityStorer) *Service {
@@ -33,6 +48,117 @@ func (s *Service) Record(entry database.ActivityEntry) error {
 	EnrichTags(&entry)
 	_, err := s.store.Record(entry)
 	return err
+}
+
+// RecordDeferred queues entry for a later, asynchronous write and returns
+// immediately. It never touches the store on the caller's goroutine.
+//
+// It exists for the server's startup path. On 2026-09-14 the "Server started"
+// Record inside NewServer was the first SQLite write after a deploy, it landed
+// on a multi-GB WAL left by an interrupted compaction, and it ran the whole
+// checkpoint before the HTTP listener opened: about six minutes of downtime.
+// Any store write can be slow for reasons outside the caller's control, so
+// nothing before the listener may wait on one.
+//
+// Entries queue in memory until StartDeferredFlush; after that each call
+// queues and wakes the background flusher. They are never dropped: shutdown
+// calls FlushDeferred, and a store error is reported with the number of rows
+// it cost. The store's error is not returned because the write has not
+// happened yet when this returns.
+func (s *Service) RecordDeferred(entry database.ActivityEntry) {
+	EnrichTags(&entry)
+	s.mu.Lock()
+	s.deferred = append(s.deferred, entry)
+	if s.released {
+		s.startFlushLocked()
+	}
+	s.mu.Unlock()
+}
+
+// StartDeferredFlush releases the RecordDeferred queue: everything queued so
+// far, and anything queued later, is written by a background goroutine. The
+// server calls it once the HTTP listener has been started. It does not wait.
+func (s *Service) StartDeferredFlush() {
+	s.mu.Lock()
+	s.released = true
+	s.startFlushLocked()
+	s.mu.Unlock()
+}
+
+// FlushDeferred releases the queue (if StartDeferredFlush has not already) and
+// waits until every deferred entry has been handed to the store, or until ctx
+// ends. Shutdown calls it before closing the store so a queued entry is not
+// lost to an early exit.
+func (s *Service) FlushDeferred(ctx context.Context) error {
+	s.mu.Lock()
+	s.released = true
+	s.startFlushLocked()
+	done := s.flushDone
+	s.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("activity: deferred entries still being written: %w", ctx.Err())
+	}
+}
+
+// startFlushLocked starts the flush goroutine when there is work and none is
+// running. Caller holds s.mu.
+func (s *Service) startFlushLocked() {
+	if s.flushDone != nil || len(s.deferred) == 0 {
+		return
+	}
+	done := make(chan struct{})
+	s.flushDone = done
+	go s.flushDeferred(done)
+}
+
+// flushDeferred writes the queue in arrival order until it is empty. Entries
+// queued while a batch is being written are picked up by the next iteration,
+// so order is preserved and nothing is stranded between the empty check and
+// the goroutine exiting (both happen under s.mu).
+func (s *Service) flushDeferred(done chan struct{}) {
+	defer close(done)
+	for {
+		s.mu.Lock()
+		batch := s.deferred
+		s.deferred = nil
+		if len(batch) == 0 {
+			s.flushDone = nil
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+		s.writeDeferred(batch)
+	}
+}
+
+// writeDeferred hands one batch to the store: one commit when the store
+// supports RecordBatch, else one Record per entry. Tags were enriched when the
+// entry was queued.
+func (s *Service) writeDeferred(batch []database.ActivityEntry) {
+	if br, ok := s.store.(batchRecorder); ok {
+		written, err := br.RecordBatch(batch)
+		if lost := len(batch) - written; err != nil || lost > 0 {
+			serviceLog.Warn("deferred activity write stored %d of %d entries: %v", written, len(batch), err)
+		}
+		return
+	}
+	lost := 0
+	var lastErr error
+	for _, e := range batch {
+		if _, err := s.store.Record(e); err != nil {
+			lost++
+			lastErr = err
+		}
+	}
+	if lost > 0 {
+		serviceLog.Warn("deferred activity write lost %d of %d entries: %v", lost, len(batch), lastErr)
+	}
 }
 
 // Query returns entries matching the filter plus the total matching count.

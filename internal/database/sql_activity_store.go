@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -75,6 +75,15 @@ type SQLActivityStore struct {
 	// lock for its whole run, and a waiting writer blocks new readers, so the
 	// backfill pauses for the pass rather than starving it.
 	backfillGate sync.RWMutex
+
+	// ckpt is the dedicated one-connection handle every WAL checkpoint runs
+	// on, and ckptr is the background checkpointer that drives it. See
+	// sql_activity_checkpointer.go for why no write path may checkpoint.
+	ckpt  *sql.DB
+	ckptr sqlActCheckpointer
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // sqlActReaderConns bounds the reader pool. WAL lets these run concurrently with
@@ -96,6 +105,13 @@ const sqlActDeleteChunk = 5000
 // store at path. journal is always WAL; synchronous is "normal" (the right
 // point for a log — durable across app crashes, fsync only at checkpoint).
 func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
+	return openSQLiteActivityStore(path, sqlActCheckpointInterval)
+}
+
+// openSQLiteActivityStore is OpenSQLiteActivityStore with the background
+// checkpoint interval as a parameter, so tests can observe the checkpointer
+// without waiting 30 seconds.
+func openSQLiteActivityStore(path string, ckptInterval time.Duration) (*SQLActivityStore, error) {
 	d := sqliteDialect{}
 
 	// The default path now lives in a dot-directory under the library root, which
@@ -111,7 +127,13 @@ func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 
 	// modernc uses the repeatable ?_pragma=name(value) DSN form. busy_timeout
 	// makes a writer wait rather than fail with SQLITE_BUSY under contention.
-	writerDSN := fmt.Sprintf("file:%s?_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=busy_timeout(10000)", path)
+	// wal_autocheckpoint(0) is on EVERY connection: with SQLite's default, the
+	// commit that crosses 1000 WAL pages runs the whole checkpoint inline, and
+	// that is how a startup Record once spent six minutes copying a 19 GB WAL
+	// (sql_activity_checkpointer.go). Checkpoints run on s.ckpt instead.
+	pragmas := fmt.Sprintf("_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=busy_timeout(10000)"+
+		"&_pragma=wal_autocheckpoint(0)&_pragma=journal_size_limit(%d)", sqlActJournalSizeLimit)
+	writerDSN := fmt.Sprintf("file:%s?%s", path, pragmas)
 	writer, err := sql.Open(d.driverName(), writerDSN)
 	if err != nil {
 		return nil, fmt.Errorf("sql_activity: open writer: %w", err)
@@ -123,7 +145,7 @@ func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 		return nil, fmt.Errorf("sql_activity: schema: %w", err)
 	}
 
-	readerDSN := fmt.Sprintf("file:%s?_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=busy_timeout(10000)", path)
+	readerDSN := fmt.Sprintf("file:%s?%s", path, pragmas)
 	reader, err := sql.Open(d.driverName(), readerDSN)
 	if err != nil {
 		_ = writer.Close()
@@ -131,7 +153,17 @@ func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 	}
 	reader.SetMaxOpenConns(sqlActReaderConns)
 
-	s := &SQLActivityStore{writer: writer, reader: reader, dialect: d, path: path}
+	ckpt, err := openCheckpointConn(d.driverName(), path)
+	if err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
+		return nil, fmt.Errorf("sql_activity: open checkpoint handle: %w", err)
+	}
+
+	s := &SQLActivityStore{writer: writer, reader: reader, ckpt: ckpt, dialect: d, path: path}
+	// Started here, not by a separate call: with autocheckpoint off, a caller
+	// that forgot to start it would get an unbounded WAL with no symptom.
+	s.startCheckpointer(ckptInterval)
 
 	// Read the pragmas that actually took effect: a wrong DSN silently leaves
 	// the DB in DELETE journal mode / synchronous=FULL — the exact silent
@@ -298,6 +330,7 @@ func (s *SQLActivityStore) Record(e ActivityEntry) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	s.noteWrite()
 	res, err := s.writer.Exec(s.dialect.rebind(sqlActInsertIgnore), args...)
 	if err != nil {
 		return 0, fmt.Errorf("sql_activity: record: %w", err)
@@ -424,6 +457,7 @@ func (s *SQLActivityStore) copyAndVerifyBatch(ctx context.Context, entries []Act
 // Returns rows actually inserted; a re-presented event conflicts and is skipped,
 // which is exactly what makes a resumed/re-run backfill safe.
 func (s *SQLActivityStore) recordBatch(ctx context.Context, entries []ActivityEntry) (int, error) {
+	s.noteWrite()
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -775,11 +809,14 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 		}
 		n, _ := res.RowsAffected()
 		deleted += n
+		s.checkpointBetweenBatches(ctx)
 		if n < sqlActDeleteChunk {
 			break
 		}
 	}
-	_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	// On the checkpoint handle, never the writer: a checkpoint on the
+	// single writer connection queues every live Record behind it.
+	s.checkpointAndMaybeTruncate(ctx, true)
 	return deleted, nil
 }
 
@@ -892,14 +929,23 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 			sample = nil // the digest exists now; later chunks merge into it
 			dayRows += n
 			result.EntriesDeleted += n
+			// Checkpoint after EVERY chunk, not once per day. A day is
+			// unbounded (4,786,930 rows for 2026-09-07 is ~950 chunks), and
+			// the per-day checkpoint this replaced let one day's deletes pile
+			// up in the WAL; a deploy that killed the op mid-day left a
+			// multi-GB WAL for the next boot's first write to copy
+			// (sql_activity_checkpointer.go). PASSIVE on the checkpoint
+			// handle does not block live Records.
+			s.checkpointBetweenBatches(ctx)
 			// Per chunk, not per day: a single heavy day is many chunks and
 			// each one is progress the op watchdog must hear about
 			// (activity_compact_progress.go).
 			reportCompactProgress(ctx, "sqlite", day, result)
 		}
 		if dayRows > 0 {
-			// Keep the WAL bounded across a long compaction spanning many days.
-			_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+			// End of a day: reset the WAL file too when nothing else is
+			// holding frames back.
+			s.checkpointAndMaybeTruncate(ctx, true)
 			result.DaysCompacted++
 		}
 		reportCompactProgress(ctx, "sqlite", day, result)
@@ -1472,15 +1518,45 @@ func (s *SQLActivityStore) MigrateSystemActivityLogs() (int, error) { return 0, 
 
 // ── ActivityLifecycle ───────────────────────────────────────────────────────
 
-// Close checkpoints and closes both handles.
+// Close stops the background checkpointer, runs one final checkpoint with a
+// deadline, and closes the handles. Idempotent.
+//
+// BOUNDED. This used to run an unconditional wal_checkpoint(TRUNCATE) with no
+// deadline. On a multi-GB WAL (an interrupted compaction) that outlives
+// systemd's TimeoutStopSec=30, the process is SIGKILLed, and the WAL survives
+// at full size for the next boot. So the final checkpoint gets
+// sqlActCloseCheckpointBudget, and if it does not finish the WRITER handle is
+// deliberately left open: closing the last connection to a WAL database makes
+// SQLite checkpoint the whole log again, uninterruptibly. Leaving it open loses
+// nothing — every commit is already in the WAL, the process is exiting, and the
+// next open recovers the WAL and the background checkpointer copies it back
+// without blocking any write.
 func (s *SQLActivityStore) Close() error {
-	_, _ = s.writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	s.closeOnce.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
+
+func (s *SQLActivityStore) close() error {
+	s.stopCheckpointer()
+
+	ctx, cancel := context.WithTimeout(context.Background(), sqlActCloseCheckpointBudget)
+	res, ckErr := s.walCheckpoint(ctx, "TRUNCATE")
+	cancel()
+	clean := ckErr == nil && res.complete()
+
 	rerr := s.reader.Close()
-	werr := s.writer.Close()
-	if werr != nil {
+	cerr := s.ckpt.Close()
+	if !clean {
+		ckptLog.Warn("final checkpoint of %s did not finish within %s (busy=%d wal_frames=%d checkpointed=%d err=%v); "+
+			"leaving the writer handle open so closing it cannot run an unbounded checkpoint — "+
+			"no data is lost, the WAL is recovered on the next open",
+			s.path, sqlActCloseCheckpointBudget, res.Busy, res.Log, res.Checkpointed, ckErr)
+		return errors.Join(rerr, cerr)
+	}
+	if werr := s.writer.Close(); werr != nil {
 		return fmt.Errorf("sql_activity: close writer: %w", werr)
 	}
-	return rerr
+	return errors.Join(rerr, cerr)
 }
 
 var _ ActivityStorer = (*SQLActivityStore)(nil)
