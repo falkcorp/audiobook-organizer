@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 0b6d3e92-4f18-4a7c-8e51-c2a7f9d0b364
 // last-edited: 2026-09-14
 
@@ -295,6 +295,13 @@ func TestMainTranscriptionConfirms_InitialsFold(t *testing.T) {
 		{"R. A. Salvatore", "R․A․ Salvatore", false},
 		// In an all-caps name case says nothing, so "KIM" is a word.
 		{"KIM STANLEY", "K. I. M. Stanley", false},
+		// In a mixed-case name an all-uppercase dotless token IS initials
+		// (the owner's rule: "RA" = "R.A."), so a short first name written
+		// in capitals folds. Recorded here as a decision, not an accident.
+		{"J. O. Nesbo", "JO Nesbo", true},
+		{"E. D. McBain", "ED McBain", true},
+		{"A. L. Franken", "AL Franken", true},
+		{"K.I.M. Stanley", "KIM Stanley", true},
 		// A folded run must not match from its middle: "a." inside "r.a."
 		// is refused by the token-start anchor. (Raw "R.A. Smith" vs "A.
 		// Smith" is origin/main's own substring leg, unchanged here.)
