@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -95,6 +96,15 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		mfs.markApplyIncomplete(after.ID, batchID, source)
 		return batchID, fmt.Errorf("%w: %v", ErrApplyHistoryIncomplete, err)
 	}
+	// A fill-only apply (applyAuthorCredit) can add an author credit without
+	// moving author_id, so the column diff alone would record nothing and the
+	// added credit could never be undone. Record the author row whenever the
+	// committed join differs from the join before the apply.
+	if prevAuthors != nil && !slices.Contains(changed, "author_id") {
+		if cur, aerr := mfs.db.GetBookAuthors(after.ID); aerr == nil && !sameAuthorCredits(prevAuthors, cur) {
+			changed = append(changed, "author_id")
+		}
+	}
 	if len(changed) == 0 {
 		return "", nil
 	}
@@ -120,6 +130,10 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 			oldVal, newVal = mfs.authorName(before.AuthorID), mfs.authorName(after.AuthorID)
 			rec.PreviousRef = &database.MetadataChangeRef{AuthorID: before.AuthorID, BookAuthors: prevAuthors, BookAuthorsKnown: prevAuthors != nil}
 			newAuthors, aerr := mfs.db.GetBookAuthors(after.ID)
+			if oldVal == newVal && aerr == nil {
+				// Credits-only change (fill-only append): show the credit lists.
+				oldVal, newVal = mfs.authorCreditNames(prevAuthors), mfs.authorCreditNames(newAuthors)
+			}
 			rec.NewRef = &database.MetadataChangeRef{AuthorID: after.AuthorID, BookAuthors: newAuthors, BookAuthorsKnown: aerr == nil}
 		case "series_id":
 			oldVal, newVal = mfs.seriesName(before.SeriesID), mfs.seriesName(after.SeriesID)
@@ -152,6 +166,30 @@ func (mfs *Service) RecordApplyHistory(before, after *database.Book, prevAuthors
 		return batchID, fmt.Errorf("%w: %d of %d rows of %s not recorded", ErrApplyHistoryIncomplete, failed, len(changed), after.ID)
 	}
 	return batchID, nil
+}
+
+// sameAuthorCredits reports whether two book_authors joins credit the same
+// authors in the same roles and positions.
+func sameAuthorCredits(a, b []database.BookAuthor) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].AuthorID != b[i].AuthorID || a[i].Role != b[i].Role || a[i].Position != b[i].Position {
+			return false
+		}
+	}
+	return true
+}
+
+// authorCreditNames renders a join as "Name1, Name2" for history display.
+func (mfs *Service) authorCreditNames(credits []database.BookAuthor) string {
+	names := make([]string, 0, len(credits))
+	for _, ba := range credits {
+		id := ba.AuthorID
+		names = append(names, mfs.authorName(&id))
+	}
+	return strings.Join(names, ", ")
 }
 
 // markApplyIncomplete records that batchID's history is not complete, so
