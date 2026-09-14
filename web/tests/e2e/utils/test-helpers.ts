@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.18.1
+// version: 2.18.2
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 import { Page } from '@playwright/test';
 
@@ -1244,9 +1244,19 @@ export async function setupMockApiRoutes(
     if (pathname === '/api/v1/activity' && method === 'GET') {
       const all = mockState.activity as Array<Record<string, unknown>>;
       const level = url.searchParams.get('level');
-      const filtered = level
-        ? all.filter((entry) => entry.level === level)
-        : all;
+      // Honour tier / exclude_tiers like the real endpoint: the Activity page
+      // asks for the feed without digests and for the digests alone
+      // (tier=digest), so a mock that ignored them served every row twice.
+      const tier = url.searchParams.get('tier');
+      const excluded = (url.searchParams.get('exclude_tiers') || '')
+        .split(',')
+        .filter(Boolean);
+      const filtered = all.filter(
+        (entry) =>
+          (!level || entry.level === level) &&
+          (!tier || entry.tier === tier) &&
+          !excluded.includes(String(entry.tier ?? ''))
+      );
       const limit = parseInt(url.searchParams.get('limit') || '25', 10);
       const offset = parseInt(url.searchParams.get('offset') || '0', 10);
       const payload = {
