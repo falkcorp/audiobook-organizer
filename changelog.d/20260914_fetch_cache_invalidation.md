@@ -8,9 +8,13 @@
   user fixed the title. Each cache row now records the search identity it was
   fetched for (normalized title, author, ASIN, ISBN-13, ISBN-10). A row with a
   different identity, or with no identity, is treated as a miss and is
-  overwritten by the fresh fetch at the same key. `InvalidateCachedCandidates`
-  (manual edit, metadata apply, organize rename) now also deletes the book's
-  fetch-cache rows. The bulk "skip already cached" probes check the same
+  overwritten by the fresh fetch at the same key. Marking a book "no match"
+  now also deletes its fetch-cache rows, because a rejected result is wrong
+  for the book's unchanged identity and its stamp would still match. Applies,
+  edits, undos and reverts do not delete them: an identity change already
+  makes the stamped rows miss, and an apply that leaves the identity alone
+  (narrator, series, fill-only) keeps rows that are still valid instead of
+  forcing a provider refetch of every applied book. The bulk "skip already cached" probes check the same
   identity, so a book with a stale row is no longer skipped. New cache-miss
   reasons `no_identity` and `identity_mismatch` make the change visible in
   metrics.
