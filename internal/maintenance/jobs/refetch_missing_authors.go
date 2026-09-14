@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-09-01
+// last-edited: 2026-09-14
 
 package jobs
 
@@ -134,7 +134,12 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			return ""
 		}
 
+		// ALBUMARTIST is the author (owner decision 2026-09-14) unless it
+		// holds the file's own narrator and ARTIST names someone else.
 		authorName := getRaw("ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST")
+		if metadata.AlbumArtistIsNarrator(authorName, getRaw("ARTIST"), getRaw("NARRATOR", "PERFORMER", "READER")) {
+			authorName = ""
+		}
 		if authorName == "" {
 			authorName = getRaw("ARTIST")
 		}

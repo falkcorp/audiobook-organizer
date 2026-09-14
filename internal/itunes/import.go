@@ -1,7 +1,7 @@
 // file: internal/itunes/import.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 4b58a17d-b2b4-4743-9b7e-3462e2ed55ac
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package itunes
 
@@ -413,9 +413,10 @@ func ConvertTrack(track *Track, opts ImportOptions) (*models.Audiobook, error) {
 		book.ITunesLastPlayed = &lastPlayed
 	}
 
-	// Extract narrator from Album Artist if different from Artist
-	if track.AlbumArtist != "" && track.AlbumArtist != track.Artist {
-		book.Narrator = stringPtr(track.AlbumArtist)
+	// Album Artist is the author, not the narrator (owner decision
+	// 2026-09-14); Artist is the narrator only when it names someone else.
+	if _, narrator := AuthorAndNarrator(track); narrator != "" {
+		book.Narrator = stringPtr(narrator)
 	}
 
 	// Comments field typically contains the book description/synopsis

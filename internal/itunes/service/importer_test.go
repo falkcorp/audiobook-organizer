@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 3e7f1a2b-8c4d-4e9a-b6f0-2d5e8c1a7f3b
-// last-edited: 2026-09-11
+// last-edited: 2026-09-14
 
 package itunesservice
 
@@ -53,10 +53,11 @@ func TestBuildBookFromAlbumGroup(t *testing.T) {
 		Bookmark:     5000,
 		DateAdded:    now,
 		PlayDate:     playDate,
-		AlbumArtist:  "Narrator",
-		Artist:       "Author",
-		Comments:     "First edition",
-		Size:         4096,
+		// Album Artist is the author (owner decision 2026-09-14).
+		AlbumArtist: "Author",
+		Artist:      "Narrator",
+		Comments:    "First edition",
+		Size:        4096,
 	}
 
 	imp := newTestImporter()

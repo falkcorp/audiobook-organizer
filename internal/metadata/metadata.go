@@ -1,7 +1,7 @@
 // file: internal/metadata/metadata.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package metadata
 
@@ -236,10 +236,19 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 		fieldCandidate{value: m.Artist(), source: "tag.Artist"},
 		fieldCandidate{value: getRawString(raw, "TPE1", "artist", "\xa9ART", "©ART"), source: "raw.artist"},
 	)
-	// Priority: album_artist > artist > composer.
+	// The dedicated narrator tags are read before the author so the author
+	// choice can see them.
+	narratorValue, narratorSource := pickFirstNonEmpty(
+		fieldCandidate{value: getRawString(raw, "PERFORMER", "Performer", "TXXX:NARRATOR", "TXXX:Narrator", "NARRATOR", "Narrator", "©nrt", "\xa9nrt"), source: "raw.narrator"},
+		fieldCandidate{value: getRawString(raw, "TXXX:Reader", "READER"), source: "raw.reader"},
+	)
+	// Priority: album_artist > artist > composer. ALBUMARTIST is the author
+	// (owner decision 2026-09-14) unless it holds the file's own narrator and
+	// ARTIST names someone else (AlbumArtistIsNarrator).
 	// Composer is used as fallback only — in audiobooks, composer typically
 	// contains the narrator, not the author.
-	if albumArtistValue != "" {
+	albumArtistIsNarrator := AlbumArtistIsNarrator(cleanTagValue(albumArtistValue), cleanTagValue(artistValue), cleanTagValue(narratorValue))
+	if albumArtistValue != "" && !albumArtistIsNarrator {
 		metadata.Artist = cleanTagValue(albumArtistValue)
 		if metadata.Artist != "" {
 			setFieldSource(fieldSources, "author", albumArtistSource+" (album_artist)")
@@ -247,7 +256,11 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 	} else if artistValue != "" {
 		metadata.Artist = cleanTagValue(artistValue)
 		if metadata.Artist != "" {
-			setFieldSource(fieldSources, "author", artistSource)
+			source := artistSource
+			if albumArtistIsNarrator {
+				source += " (album_artist is the narrator)"
+			}
+			setFieldSource(fieldSources, "author", source)
 			authorFromArtist = true
 		}
 	} else if composerValue != "" {
@@ -265,10 +278,6 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 		setFieldSource(fieldSources, "genre", genreSource)
 	}
 
-	narratorValue, narratorSource := pickFirstNonEmpty(
-		fieldCandidate{value: getRawString(raw, "PERFORMER", "Performer", "TXXX:NARRATOR", "TXXX:Narrator", "NARRATOR", "Narrator", "©nrt", "\xa9nrt"), source: "raw.narrator"},
-		fieldCandidate{value: getRawString(raw, "TXXX:Reader", "READER"), source: "raw.reader"},
-	)
 	metadata.Narrator = cleanTagValue(narratorValue)
 	if metadata.Narrator != "" {
 		setFieldSource(fieldSources, "narrator", narratorSource)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -141,8 +141,12 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		if v, ok := payload["publisher"].(string); ok && v != "" {
 			tagMap["publisher"] = v
 		}
+		// The narrator goes to the narrator key (NARRATOR/PERFORMER). It was
+		// sent as album_artist, a key no tag writer maps, so a narrator edit
+		// never reached the file; ALBUMARTIST is the author, written from
+		// "artist" (owner decision 2026-09-14).
 		if v, ok := payload["narrator"].(string); ok && v != "" {
-			tagMap["album_artist"] = v
+			tagMap["narrator"] = v
 		}
 		if v, ok := payload["audiobook_release_year"].(float64); ok && v != 0 {
 			tagMap["year"] = int(v)
@@ -162,7 +166,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 			}
 		}
 		// If we have multiple narrators in join table, combine with " & " for file tags
-		if _, hasNarr := tagMap["album_artist"]; !hasNarr && store != nil {
+		if _, hasNarr := tagMap["narrator"]; !hasNarr && store != nil {
 			if narrators, err := store.GetBookNarrators(id); err == nil && len(narrators) > 1 {
 				names := make([]string, 0, len(narrators))
 				for _, bn := range narrators {
@@ -171,7 +175,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 					}
 				}
 				if len(names) > 0 {
-					tagMap["album_artist"] = strings.Join(names, " & ")
+					tagMap["narrator"] = strings.Join(names, " & ")
 				}
 			}
 		}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package itunesservice
 
@@ -2367,8 +2367,10 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 		lastPlayed := time.Unix(firstTrack.PlayDate, 0)
 		book.ITunesLastPlayed = &lastPlayed
 	}
-	if firstTrack.AlbumArtist != "" && firstTrack.AlbumArtist != firstTrack.Artist {
-		book.Narrator = new(firstTrack.AlbumArtist)
+	// Album Artist is the author (owner decision 2026-09-14); see
+	// itunes.AuthorAndNarrator and assignAuthorAndSeries.
+	if _, narrator := itunes.AuthorAndNarrator(firstTrack); narrator != "" {
+		book.Narrator = new(narrator)
 	}
 	if firstTrack.Comments != "" {
 		book.Description = new(firstTrack.Comments)
@@ -2420,8 +2422,10 @@ func (imp *Importer) assignAuthorAndSeries(book *database.Book, track *itunes.Tr
 	if book == nil || track == nil {
 		return
 	}
-	if track.Artist != "" {
-		ids, err := imp.ensureAuthorIDs(track.Artist)
+	// The author is Album Artist, else Artist: the precedence the file-tag
+	// readers use for ALBUMARTIST > ARTIST (owner decision 2026-09-14).
+	if authorName, _ := itunes.AuthorAndNarrator(track); authorName != "" {
+		ids, err := imp.ensureAuthorIDs(authorName)
 		if err == nil && len(ids) > 0 {
 			book.AuthorID = &ids[0]
 			book.Authors = make([]database.BookAuthor, 0, len(ids))

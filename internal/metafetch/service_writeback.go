@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
@@ -296,16 +296,10 @@ func currentTagValueMap(current metadata.Metadata) map[string]string {
 		"title":  current.Title,
 		"album":  current.Album,
 		"artist": current.Artist,
-		// album_artist and composer both hold the narrator in our
-		// audiobook tag convention (album_artist > artist > composer
-		// is the read priority). RenameService writes them as two
-		// separate keys, so filterUnchangedTags needs to know they
-		// compare against current.Narrator too — otherwise every
-		// organize pass sees album_artist/composer as "unknown
-		// field → always write" and falls through to a real write,
-		// which was the root cause of the "organize rewrites tags
-		// every time even when unchanged" investigation.
-		"album_artist": current.Narrator,
+		// album_artist is the author (owner decision 2026-09-14): the
+		// reader takes ALBUMARTIST first as current.Artist. Known keys
+		// compare against the file so an unchanged tag is not rewritten.
+		"album_artist": current.Artist,
 		"composer":     current.Narrator,
 		"narrator":     current.Narrator,
 		"genre":        current.Genre,

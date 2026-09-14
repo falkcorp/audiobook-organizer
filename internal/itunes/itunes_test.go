@@ -1,6 +1,7 @@
 // file: internal/itunes/itunes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3a7c891-2d4e-5b6f-8a9c-0d1e2f3a4b5c
+// last-edited: 2026-09-14
 
 package itunes
 
@@ -288,8 +289,8 @@ func TestConvertTrack(t *testing.T) {
 		TrackID:      100,
 		PersistentID: "ABCD1234EFGH5678",
 		Name:         "The Hobbit",
-		Artist:       "J.R.R. Tolkien",
-		AlbumArtist:  "Rob Inglis",
+		Artist:       "Rob Inglis",
+		AlbumArtist:  "J.R.R. Tolkien",
 		Album:        "Middle-earth, Book 1",
 		Genre:        "Audiobook",
 		Kind:         "Audiobook",
@@ -329,7 +330,8 @@ func TestConvertTrack(t *testing.T) {
 		t.Errorf("Duration = %v, want 39600", book.Duration)
 	}
 
-	// Narrator should be extracted from AlbumArtist (different from Artist)
+	// Album Artist is the author (owner decision 2026-09-14); Artist, which
+	// names someone else, is the narrator.
 	if book.Narrator == nil || *book.Narrator != "Rob Inglis" {
 		t.Errorf("Narrator = %v, want %q", book.Narrator, "Rob Inglis")
 	}
