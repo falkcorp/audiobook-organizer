@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package handlers
 
@@ -502,6 +502,14 @@ func (h *VersionsHandler) modifyBook(id string, fn func(*database.Book) error) (
 	return b, nil
 }
 
+// errSetPrimaryDeleted and errSetPrimaryJoinedGroup end the ungrouped
+// set-primary write when the row ModifyBook hands its closure is no longer an
+// ungrouped live book.
+var (
+	errSetPrimaryDeleted     = errors.New("book was deleted")
+	errSetPrimaryJoinedGroup = errors.New("book joined a version group")
+)
+
 // SetAudiobookPrimary makes an audiobook the one primary of its version group.
 //
 // The new primary is promoted first and the others are then demoted, in book
@@ -519,6 +527,10 @@ func (h *VersionsHandler) modifyBook(id string, fn func(*database.Book) error) (
 // used to demote each other's promotion and leave no primary. Writers outside
 // this handler do not take that lock. A soft-deleted book is refused: a
 // deleted row must never be its group's only primary.
+//
+// A book with no group is re-checked inside its ModifyBook closure: grouped
+// since the read, it takes the group path; deleted since the read, it is
+// refused. The pre-write read alone let a concurrent link leave two primaries.
 func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 	id := c.Param("id")
 
@@ -541,19 +553,43 @@ func (h *VersionsHandler) SetAudiobookPrimary(c *gin.Context) {
 
 	groupID := versionGroupOf(book)
 	if groupID == "" {
-		if _, err := h.modifyBook(id, func(cur *database.Book) error {
+		// The read above is only a hint. Eligibility is decided again on the
+		// row ModifyBook hands the closure: a book grouped since the read must
+		// go through the group path (which demotes the group's other
+		// primaries, nil flags included), and a book deleted since the read
+		// must not become a primary.
+		var joined string
+		_, err := h.modifyBook(id, func(cur *database.Book) error {
+			if cur.IsSoftDeleted() {
+				return errSetPrimaryDeleted
+			}
+			if g := versionGroupOf(cur); g != "" {
+				joined = g
+				return errSetPrimaryJoinedGroup
+			}
 			if isExplicitPrimary(cur) {
 				return database.ErrSkipBookWrite
 			}
 			t := true
 			cur.IsPrimaryVersion = &t
 			return nil
-		}); err != nil {
+		})
+		switch {
+		case err == nil:
+			httputil.RespondWithOK(c, gin.H{"message": "audiobook set as primary"})
+			return
+		case errors.Is(err, errSetPrimaryDeleted):
+			httputil.RespondWithErrorFields(c, http.StatusConflict,
+				fmt.Sprintf("audiobook %s was deleted; a deleted book cannot be a primary version", id),
+				"primary_deleted_book", map[string]any{"book_id": id})
+			return
+		case errors.Is(err, errSetPrimaryJoinedGroup):
+			versionsLog.Info("set-primary %s: joined version group %s since it was read; using the group path", logger.SanitizeLogValue(id), logger.SanitizeLogValue(joined))
+			groupID = joined
+		default:
 			httputil.InternalError(c, "failed to update audiobook", err)
 			return
 		}
-		httputil.RespondWithOK(c, gin.H{"message": "audiobook set as primary"})
-		return
 	}
 
 	defer h.lockGroups(groupID)()

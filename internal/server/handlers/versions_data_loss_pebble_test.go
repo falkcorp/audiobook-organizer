@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_data_loss_pebble_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c0e2a7d-9b41-4f6e-8a3c-1d7f4b2e6a95
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package handlers_test
 
@@ -507,3 +507,92 @@ func TestSplitSegmentsToBooks_OtherBooksMappingDoesNotFailTheSplit(t *testing.T)
 		t.Fatalf("PID %s owner = %q, %v; want the new book %s", pid, owner, err, moved.BookID)
 	}
 }
+
+// groupOnFirstModify moves book id into group before the first ModifyBook on
+// it runs the caller's closure: a link that lands between set-primary's
+// GetBookByID (which saw no group) and its write.
+type groupOnFirstModify struct {
+	*database.PebbleStore
+	id, group string
+	once      sync.Once
+}
+
+func (s *groupOnFirstModify) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == s.id {
+		var err error
+		s.once.Do(func() {
+			_, err = s.PebbleStore.ModifyBook(id, func(cur *database.Book) error {
+				cur.VersionGroupID = &s.group
+				f := false
+				cur.IsPrimaryVersion = &f
+				return nil
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
+}
+
+// #3399 follow-up: set-primary on a book with no group decided "ungrouped"
+// from a read made before ModifyBook, and the closure did not re-check it. A
+// book grouped in between was flagged primary without the group's existing
+// primary being demoted: two primaries. The eligibility must be decided on the
+// row ModifyBook hands the closure.
+func TestSetAudiobookPrimary_GroupedAfterReadLeavesOnePrimary(t *testing.T) {
+	pebble := openSplitStore(t)
+	mustCreateBook(t, pebble, &database.Book{ID: "ug-old", Title: "Old", FilePath: "/lib/Old", VersionGroupID: new("g1"), IsPrimaryVersion: new(true)})
+	mustCreateBook(t, pebble, &database.Book{ID: "ug-nil", Title: "Nil", FilePath: "/lib/Nil", VersionGroupID: new("g1")})
+	mustCreateBook(t, pebble, &database.Book{ID: "ug-target", Title: "Target", FilePath: "/lib/Target"})
+
+	c, _, res := versionsCall("ug-target", "")
+	handlers.NewVersionsHandler(&groupOnFirstModify{PebbleStore: pebble, id: "ug-target", group: "g1"}).SetAudiobookPrimary(c)
+	if code, body := res(); code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", code, body)
+	}
+	if got := primariesIn(t, pebble, "g1"); len(got) != 1 || got[0] != "ug-target" {
+		t.Fatalf("g1 primaries (nil counts as primary) = %v, want only ug-target", got)
+	}
+}
+
+// A book soft-deleted between the read and the write must not be flagged
+// primary by the ungrouped path.
+type deleteOnFirstModify struct {
+	*database.PebbleStore
+	id   string
+	once sync.Once
+}
+
+func (s *deleteOnFirstModify) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == s.id {
+		var err error
+		s.once.Do(func() {
+			_, err = s.PebbleStore.ModifyBook(id, func(cur *database.Book) error {
+				del := true
+				cur.MarkedForDeletion = &del
+				return nil
+			})
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
+}
+
+func TestSetAudiobookPrimary_UngroupedDeletedAfterReadRefused(t *testing.T) {
+	pebble := openSplitStore(t)
+	mustCreateBook(t, pebble, &database.Book{ID: "ud-target", Title: "Target", FilePath: "/lib/Target", IsPrimaryVersion: new(false)})
+
+	c, _, res := versionsCall("ud-target", "")
+	handlers.NewVersionsHandler(&deleteOnFirstModify{PebbleStore: pebble, id: "ud-target"}).SetAudiobookPrimary(c)
+	if code, body := res(); code == http.StatusOK {
+		t.Fatalf("want a refusal, got %d: %s", code, body)
+	}
+	if b := mustGetBook(t, pebble, "ud-target"); isTrue(b.IsPrimaryVersion) {
+		t.Fatalf("a deleted book was flagged primary")
+	}
+}
+
+func isTrue(p *bool) bool { return p != nil && *p }
