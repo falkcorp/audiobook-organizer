@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
 // last-edited: 2026-09-13
 
@@ -105,14 +105,23 @@ type pluginStore interface {
 	// dedupengine.DetectSplitBookCandidates.
 	dedupengine.Store
 
+	pluginBookReader
+	pluginBookWriter
+}
+
+// pluginBookReader is the plugin's book, file and author reads.
+type pluginBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllAuthors() ([]database.Author, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	// quarantine-chapter-artifacts: soft-delete under the per-book lock, and
-	// read a version group to avoid retiring its primary.
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// pluginBookWriter is the plugin's book writes. quarantine-chapter-artifacts
+// soft-deletes under the per-book lock (ModifyBook).
+type pluginBookWriter interface {
+	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }

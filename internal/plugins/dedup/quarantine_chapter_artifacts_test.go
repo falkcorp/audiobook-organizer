@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
 // last-edited: 2026-09-13
 
@@ -220,5 +220,85 @@ func TestQuarantineChapterArtifacts_WriteErrorsFailTheOp(t *testing.T) {
 	}
 	if err := runQuarantine(t, p, false); err != nil {
 		t.Fatalf("dry-run writes nothing and must not fail: %v", err)
+	}
+}
+
+func setGroup(t *testing.T, pebble *database.PebbleStore, id, vg string, prim *bool) {
+	t.Helper()
+	if _, err := pebble.ModifyBook(id, func(b *database.Book) error {
+		b.VersionGroupID = &vg
+		b.IsPrimaryVersion = prim
+		return nil
+	}); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+}
+
+// Two explicit primaries of one group, both artifacts, with a non-artifact
+// member: the per-book check against pre-run counts let both go (each saw the
+// other as "another explicit primary"), leaving the group with none.
+func TestQuarantineChapterArtifacts_TwoArtifactPrimariesInOneGroup(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	p := &Plugin{store: pebble}
+	var ids []string
+	for i := range 6 {
+		ids = append(ids, mkBook(t, pebble, "Opening Credits", i, 30))
+	}
+	sibling := mkBook(t, pebble, "The Real Book", 0, 36000)
+	const vg = "vg-two-primaries"
+	yes, no := true, false
+	setGroup(t, pebble, ids[0], vg, &yes)
+	setGroup(t, pebble, ids[1], vg, &yes)
+	setGroup(t, pebble, sibling, vg, &no)
+
+	if err := runQuarantine(t, p, true); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	livePrimaries := 0
+	for _, id := range []string{ids[0], ids[1], sibling} {
+		b, err := pebble.GetBookByID(id)
+		if err != nil || b == nil {
+			t.Fatalf("GetBookByID(%s): %v", id, err)
+		}
+		if !b.IsSoftDeleted() && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
+			livePrimaries++
+		}
+	}
+	if livePrimaries == 0 {
+		t.Fatal("both artifact primaries were quarantined; the group has no live primary")
+	}
+	for _, id := range ids[2:] {
+		if !isMarkedDeleted(t, pebble, id) {
+			t.Errorf("non-primary artifact %s should still be quarantined", id)
+		}
+	}
+}
+
+// A group made only of artifacts is quarantined whole, and the retired
+// primary is demoted so no reader counts a deleted row as primary.
+func TestQuarantineChapterArtifacts_AllArtifactGroupIsDemoted(t *testing.T) {
+	pebble := newPebbleForISBNIndexTest(t)
+	p := &Plugin{store: pebble}
+	var ids []string
+	for i := range 6 {
+		ids = append(ids, mkBook(t, pebble, "Opening Credits", i, 30))
+	}
+	const vg = "vg-all-artifacts"
+	yes, no := true, false
+	setGroup(t, pebble, ids[0], vg, &yes)
+	setGroup(t, pebble, ids[1], vg, &no)
+
+	if err := runQuarantine(t, p, true); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	b, err := pebble.GetBookByID(ids[0])
+	if err != nil || b == nil {
+		t.Fatalf("GetBookByID: %v", err)
+	}
+	if !b.IsSoftDeleted() {
+		t.Fatal("primary of an all-artifact group should be quarantined")
+	}
+	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+		t.Fatalf("quarantined primary still counts as primary: %v", b.IsPrimaryVersion)
 	}
 }

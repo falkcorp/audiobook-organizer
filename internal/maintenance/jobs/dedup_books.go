@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-13
 
@@ -66,6 +66,21 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	reporter.SetTotal(len(allBooks))
 
 	deletedIDs := make(map[string]bool)
+	// sim tracks retirements and promotions this run has made (or, in dry-run,
+	// would have made), so a later primary hand-off in the same run sees the
+	// group state apply would see.
+	sim := newDDSim()
+
+	// Paths named by live books that are not junk: a junk row sharing one of
+	// these must not keep naming it once retired (see ddJunkSharesLivePath).
+	livePaths := make(map[string]bool)
+	for i := range allBooks {
+		b := &allBooks[i]
+		if b.IsSoftDeleted() || b.FilePath == "" || ddIsJunkReadByNarrator(b) {
+			continue
+		}
+		livePaths[b.FilePath] = true
+	}
 
 	// Phase 1: Delete junk "read by narrator" records
 	var phase1 ddTally
@@ -82,9 +97,17 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		if !ddIsJunkReadByNarrator(book) {
 			continue
 		}
-		// A junk row keeps its own files, so it keeps its FilePath (clearPath
-		// false): it is not handing anything to a keeper.
-		delErr := ddRetireBook(store, book, nil, dryRun, false)
+		// PurgeSoftDeletedBooks with delete-files os.Remove()s a purged book's
+		// FilePath. A scanner "read by narrator" row can name the same file as
+		// a live book, so a junk row whose path is shared in any way is retired
+		// with its FilePath cleared; only an unshared path is kept.
+		shared, shareErr := ddJunkSharesLivePath(store, book, livePaths)
+		if shareErr != nil {
+			phase1.record(shareErr)
+			ddLog.Error("phase1 path check book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(shareErr.Error()))
+			continue
+		}
+		delErr := ddRetireBook(store, sim, book, nil, dryRun, shared)
 		phase1.record(delErr)
 		if delErr != nil {
 			ddLog.Error("phase1 retire book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(delErr.Error()))
@@ -124,7 +147,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer)
+			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun, j.enqueuer)
 			phase2.record(mergeErr)
 			if mergeErr != nil {
 				ddLog.Error("phase2 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
@@ -192,7 +215,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			mergeErr := ddMergeDuplicateBook(store, keeper, dup, dryRun, j.enqueuer)
+			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun, j.enqueuer)
 			phase3.record(mergeErr)
 			if mergeErr != nil {
 				ddLog.Error("phase3 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
@@ -394,8 +417,13 @@ type ddGroupStore interface {
 // same group -- or joins it through ddMergeBookFields' VersionGroupID fill --
 // heir takes the primary. Otherwise the earliest-created live member does,
 // the same rule reconcile.ElectMissingPrimaries uses.
-func ddPlanPrimaryHandoff(store ddGroupStore, book, heir *database.Book) (string, error) {
-	if book.VersionGroupID == nil || *book.VersionGroupID == "" || !ddCountsAsPrimary(book) {
+//
+// sim overlays what this run has already done (apply) or would have done
+// (dry-run): retired members are skipped and promoted members count as
+// explicit primaries. In apply the store already agrees; in dry-run it is the
+// only thing that makes a second hand-off in the same group match apply.
+func ddPlanPrimaryHandoff(store ddGroupStore, sim *ddSim, book, heir *database.Book) (string, error) {
+	if book.VersionGroupID == nil || *book.VersionGroupID == "" || !(ddCountsAsPrimary(book) || sim.isPromoted(book.ID)) {
 		return "", nil
 	}
 	vg := *book.VersionGroupID
@@ -405,10 +433,10 @@ func ddPlanPrimaryHandoff(store ddGroupStore, book, heir *database.Book) (string
 	}
 	var others []database.Book
 	for _, m := range members {
-		if m.ID == book.ID || m.IsSoftDeleted() {
+		if m.ID == book.ID || m.IsSoftDeleted() || sim.isRetired(m.ID) {
 			continue
 		}
-		if ddExplicitPrimary(&m) {
+		if ddExplicitPrimary(&m) || sim.isPromoted(m.ID) {
 			return "", nil
 		}
 		others = append(others, m)
@@ -458,7 +486,7 @@ type ddBookModifier interface {
 //
 // In dry-run it runs the same guards and writes nothing, so a dry-run count is
 // the count apply would reach.
-func ddRetireBook(store ddRetireStore, book, heir *database.Book, dryRun, clearPath bool) error {
+func ddRetireBook(store ddRetireStore, sim *ddSim, book, heir *database.Book, dryRun, clearPath bool) error {
 	ids := []string{book.ID}
 	if heir != nil {
 		ids = append(ids, heir.ID)
@@ -466,22 +494,80 @@ func ddRetireBook(store ddRetireStore, book, heir *database.Book, dryRun, clearP
 	if err := merge.GuardITunesProtected(store, ids); err != nil {
 		return err
 	}
-	successor, err := ddPlanPrimaryHandoff(store, book, heir)
+	successor, err := ddPlanPrimaryHandoff(store, sim, book, heir)
 	if err != nil {
 		return err
 	}
-	if dryRun {
-		return nil
-	}
-	// Promote before retiring: if the soft-delete then fails the group briefly
-	// has two primaries, which is visible and repairable; the other order can
-	// leave it with none. The heir is promoted by the caller's keeper write.
-	if successor != "" && (heir == nil || successor != heir.ID) {
-		if err := ddPromotePrimary(store, successor); err != nil {
-			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, book.ID, err)
+	if !dryRun {
+		// Promote before retiring: if the soft-delete then fails the group
+		// briefly has two primaries, which is visible and repairable; the
+		// other order can leave it with none.
+		if successor != "" {
+			if err := ddPromotePrimary(store, successor); err != nil {
+				return fmt.Errorf("promote %s before retiring primary %s: %w", successor, book.ID, err)
+			}
+		}
+		if err := ddSoftDeleteBook(store, book.ID, clearPath); err != nil {
+			return err
 		}
 	}
-	return ddSoftDeleteBook(store, book.ID, clearPath)
+	sim.retire(book.ID, successor)
+	return nil
+}
+
+// ddJunkSharesLivePath reports whether retiring junk while keeping its
+// FilePath could let a purge delete a live book's audio: its FilePath is a
+// live book's FilePath, a book_file row at that path belongs to another book,
+// or one of its own rows names a live book's path. A read error is returned,
+// so the caller fails the book rather than guessing "not shared".
+func ddJunkSharesLivePath(store maintenance.JobStore, junk *database.Book, livePaths map[string]bool) (bool, error) {
+	if junk.FilePath == "" {
+		return false, nil
+	}
+	if livePaths[junk.FilePath] {
+		return true, nil
+	}
+	owner, err := store.GetBookFileByPath(junk.FilePath)
+	if err != nil {
+		return false, fmt.Errorf("look up the owner of %s: %w", junk.FilePath, err)
+	}
+	if owner != nil && owner.BookID != junk.ID {
+		return true, nil
+	}
+	files, err := store.GetBookFiles(junk.ID)
+	if err != nil {
+		return false, fmt.Errorf("read files of %s: %w", junk.ID, err)
+	}
+	for _, f := range files {
+		if livePaths[f.FilePath] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ddSim records the retirements and promotions a run has made, or in dry-run
+// would have made. A nil *ddSim is an empty overlay.
+type ddSim struct {
+	retired  map[string]bool
+	promoted map[string]bool
+}
+
+func newDDSim() *ddSim {
+	return &ddSim{retired: map[string]bool{}, promoted: map[string]bool{}}
+}
+
+func (s *ddSim) isRetired(id string) bool  { return s != nil && s.retired[id] }
+func (s *ddSim) isPromoted(id string) bool { return s != nil && s.promoted[id] && !s.retired[id] }
+
+func (s *ddSim) retire(id, successor string) {
+	if s == nil {
+		return
+	}
+	s.retired[id] = true
+	if successor != "" {
+		s.promoted[successor] = true
+	}
 }
 
 func ddPromotePrimary(store ddBookModifier, id string) error {
@@ -522,8 +608,18 @@ type ddMergeStore = maintenance.JobStore
 //     purged book's FilePath, and that path is the keeper's audio.
 //
 // Any failure returns before the soft-delete, so the dup is never retired
-// while it still owns anything.
+// while it still owns anything, and a rerun picks the pair up again: the
+// move, the external-ID reassign and the tag copy are all idempotent.
+//
+// The primary hand-off is written only after the move and the zero-rows
+// check, immediately before the soft-delete. Promoting the keeper earlier
+// (in the field-fill) left two primaries whenever a later step failed.
 func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+	return ddMergeDuplicateBookSim(store, nil, keeper, dup, dryRun, enqueuer)
+}
+
+// ddMergeDuplicateBookSim is ddMergeDuplicateBook with the run's overlay.
+func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
 	if err := merge.GuardITunesProtected(store, []string{keeper.ID, dup.ID}); err != nil {
 		return err
 	}
@@ -531,11 +627,12 @@ func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *databa
 	if err != nil {
 		return fmt.Errorf("read files of dup %s: %w", dup.ID, err)
 	}
-	successor, err := ddPlanPrimaryHandoff(store, dup, keeper)
+	successor, err := ddPlanPrimaryHandoff(store, sim, dup, keeper)
 	if err != nil {
 		return err
 	}
 	if dryRun {
+		sim.retire(dup.ID, successor)
 		return nil
 	}
 
@@ -552,10 +649,6 @@ func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *databa
 		}
 		restored = r
 		database.DropDanglingSeriesRef(store, current, "dedup-books.keeper-fill")
-		if successor == keeper.ID {
-			t := true
-			current.IsPrimaryVersion = &t
-		}
 		return nil
 	})
 	if err != nil {
@@ -613,14 +706,19 @@ func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *databa
 		return fmt.Errorf("dup %s still owns %d file(s) after the move; not soft-deleting it", dup.ID, len(remaining))
 	}
 
-	if successor != "" && successor != keeper.ID {
+	if successor != "" {
 		if err := ddPromotePrimary(store, successor); err != nil {
 			return fmt.Errorf("promote %s before retiring primary %s: %w", successor, dup.ID, err)
+		}
+		if successor == keeper.ID {
+			t := true
+			keeper.IsPrimaryVersion = &t
 		}
 	}
 	if err := ddSoftDeleteBook(store, dup.ID, true); err != nil {
 		return err
 	}
+	sim.retire(dup.ID, successor)
 
 	if enqueuer != nil && len(dupPIDs) > 0 {
 		for _, pid := range dupPIDs {
@@ -706,8 +804,9 @@ func ddMergeBookFields(dst, src *database.Book) {
 // ddSoftDeleteBook marks bookID for deletion under its per-book lock. With
 // clearPath it also clears FilePath (merge's softDeleteAbsorbed rule): a book
 // whose files went to a keeper must not keep naming the keeper's path, or
-// PurgeSoftDeletedBooks with delete-files removes the keeper's audio. A book
-// that still owns its own files (phase 1's junk rows) keeps its path.
+// PurgeSoftDeletedBooks with delete-files removes the keeper's audio. Phase 1
+// clears it too whenever a junk row's path is shared with a live book
+// (ddJunkSharesLivePath); only an unshared junk path is kept.
 //
 // A retired book is also demoted from primary, so no reader counts a deleted
 // row as its group's primary; the caller has already promoted a successor.

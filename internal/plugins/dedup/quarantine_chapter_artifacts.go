@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
 // last-edited: 2026-09-13
 
@@ -21,8 +21,10 @@
 //     confirm it's a segment). Long single files are never touched.
 //
 // Never quarantined, in either mode (so dry-run counts match apply):
-//   - a version group's primary while the group has other live members and no
-//     other explicit primary -- retiring it would leave the group with none;
+//   - a book counting as its version group's primary (nil or true) while the
+//     group keeps members that are not artifacts and none of those is an
+//     explicit primary -- decided per group over the whole artifact set, so
+//     two artifact primaries of one group cannot both go;
 //   - a book whose own path or file is under the active iTunes library
 //     (merge.GuardITunesProtectedLoaded; books/itunes/** is never mutated).
 //
@@ -131,8 +133,11 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	// with a bounded worker pool (mandatory concurrency rule — see CLAUDE.md).
 	_ = reporter.UpdateProgress(2, 3, "Identifying chapter artifacts…")
 	type artifact struct {
-		ID    string
-		Title string
+		ID            string
+		Title         string
+		Group         string
+		CountsPrimary bool
+		Explicit      bool
 	}
 	type candidate struct {
 		ID       string
@@ -184,7 +189,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	// by mu. titleCount is read-only in this phase (safe for concurrent reads,
 	// no writers), so it needs no lock.
 	var (
-		mu            sync.Mutex
+		mu             sync.Mutex
 		artifacts      []artifact
 		examined       int
 		readErrors     int
@@ -227,18 +232,6 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 				return nil
 			}
 		}
-		if c.Group != "" && c.CountsPrimary && groupLive[c.Group] > 1 {
-			otherExplicit := groupExplicit[c.Group]
-			if c.Explicit {
-				otherExplicit--
-			}
-			if otherExplicit == 0 {
-				mu.Lock()
-				skippedPrimary++
-				mu.Unlock()
-				return nil
-			}
-		}
 		if gerr := merge.GuardITunesProtectedLoaded(
 			[]*database.Book{{ID: c.ID, FilePath: c.FilePath}},
 			map[string][]database.BookFile{c.ID: files},
@@ -249,8 +242,7 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 			return nil
 		}
 		mu.Lock()
-		artifacts = append(artifacts, artifact{ID: c.ID, Title: c.Title})
-		sampleByTitle[c.Title]++
+		artifacts = append(artifacts, artifact{ID: c.ID, Title: c.Title, Group: c.Group, CountsPrimary: c.CountsPrimary, Explicit: c.Explicit})
 		mu.Unlock()
 		return nil
 	}, registry.RunItemsOptions{
@@ -261,6 +253,38 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	}); err != nil {
 		return err
 	}
+
+	// Primary protection is decided per version group over the WHOLE artifact
+	// set, not per book against pre-run counts: two explicit primaries of one
+	// group that are both artifacts each saw "another explicit primary exists"
+	// and both went, leaving the group with none. A group whose members are
+	// not all artifacts keeps every artifact that counts as primary unless a
+	// surviving (non-artifact) member is already an explicit primary.
+	artifactsInGroup := make(map[string]int)
+	explicitArtifactsInGroup := make(map[string]int)
+	for _, a := range artifacts {
+		if a.Group == "" {
+			continue
+		}
+		artifactsInGroup[a.Group]++
+		if a.Explicit {
+			explicitArtifactsInGroup[a.Group]++
+		}
+	}
+	kept := artifacts[:0]
+	for _, a := range artifacts {
+		if a.Group != "" && a.CountsPrimary {
+			survivors := groupLive[a.Group] - artifactsInGroup[a.Group]
+			survivingExplicit := groupExplicit[a.Group] - explicitArtifactsInGroup[a.Group]
+			if survivors > 0 && survivingExplicit == 0 {
+				skippedPrimary++
+				continue
+			}
+		}
+		kept = append(kept, a)
+		sampleByTitle[a.Title]++
+	}
+	artifacts = kept
 
 	// Build a short, human-readable sample of the offending titles.
 	type tc struct {
@@ -294,6 +318,13 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 				marked := true
 				b.MarkedForDeletion = &marked
 				b.MarkedForDeletionAt = &now
+				// A retired row is never left counting as its group's primary
+				// (the same rule as dedup-books' soft-delete).
+				if b.VersionGroupID != nil && *b.VersionGroupID != "" &&
+					(b.IsPrimaryVersion == nil || *b.IsPrimaryVersion) {
+					f := false
+					b.IsPrimaryVersion = &f
+				}
 				wrote = true
 				return nil
 			})
