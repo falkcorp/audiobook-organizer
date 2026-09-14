@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
 // last-edited: 2026-09-13
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -49,7 +50,7 @@ func ddLiveExplicitPrimaries(t *testing.T, s *database.PebbleStore, vg string) [
 
 // A "read by narrator" row naming a live book's file is retired with its
 // FilePath cleared, so PurgeSoftDeletedBooks(deleteFiles) cannot os.Remove
-// the live book's audio through it. A junk row with a path of its own keeps it.
+// the live book's audio through it. Every retired junk row loses its path.
 func TestDedupBooks_JunkSharingLivePathIsRetiredWithPathCleared(t *testing.T) {
 	s := ddRealStore(t)
 	dir := t.TempDir()
@@ -71,8 +72,8 @@ func TestDedupBooks_JunkSharingLivePathIsRetiredWithPathCleared(t *testing.T) {
 	if got.FilePath != "" {
 		t.Fatalf("junk FilePath = %q: a delete-files purge would remove the live book's audio", got.FilePath)
 	}
-	if g := ddMustGet(t, s, junkOwn.ID); !g.IsSoftDeleted() || g.FilePath != own {
-		t.Fatalf("unshared junk: deleted=%v path=%q, want retired with its own path kept", g.IsSoftDeleted(), g.FilePath)
+	if g := ddMustGet(t, s, junkOwn.ID); !g.IsSoftDeleted() || g.FilePath != "" {
+		t.Fatalf("junk with its own path %s: deleted=%v path=%q, want retired with the path cleared", own, g.IsSoftDeleted(), g.FilePath)
 	}
 	if g := ddMustGet(t, s, live.ID); g.IsSoftDeleted() || g.FilePath != shared {
 		t.Fatalf("live book changed: %+v", g)
@@ -246,58 +247,181 @@ func TestDDMergeDuplicateBook_PostMoveFailureRerunConverges(t *testing.T) {
 	}
 }
 
-// Two retirements in one group within one run: the dry-run must name the same
-// surviving primary apply produces. Without the overlay the second hand-off
-// in dry-run elected the member the first merge had already retired.
+// Round 3: the live book's FilePath is a directory and the junk row owns a
+// row inside it -- at the same path as a live row (written last, so the
+// book_file_path index names the junk) or at a path with no live row. An
+// exact-string check said "not shared" for both. Both are refused.
+func TestDedupBooks_JunkOwningFileUnderLiveDirIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		liveHasRow bool
+	}{
+		{"same path as a live row", true},
+		{"no live row at that path", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ddRealStore(t)
+			dir := filepath.Join(t.TempDir(), "Author", "Real Book")
+			f := filepath.Join(dir, "01.mp3")
+			ddWriteAudio(t, f)
+			live := ddMustBook(t, s, &database.Book{Title: "Real Book", FilePath: dir})
+			if tc.liveHasRow {
+				ddMustFile(t, s, &database.BookFile{BookID: live.ID, FilePath: f})
+			}
+			junk := ddMustBook(t, s, &database.Book{Title: "Read by Narrator", FilePath: filepath.Join(t.TempDir(), "elsewhere.m4b")})
+			ddMustFile(t, s, &database.BookFile{BookID: junk.ID, FilePath: f})
+
+			if err := (&dedupBooksJob{}).Run(context.Background(), s, ddJobReporter{}, false); err != nil {
+				t.Fatalf("Run: %v (a refusal must not fail the run)", err)
+			}
+			if g := ddMustGet(t, s, junk.ID); g.IsSoftDeleted() {
+				t.Fatal("junk row owning a file under a live book's directory was retired")
+			}
+			if files, _ := s.GetBookFiles(junk.ID); len(files) != 1 {
+				t.Fatalf("junk rows = %d, want its row untouched", len(files))
+			}
+		})
+	}
+}
+
+// Round 3: the junk row's FilePath is a file inside a live book's directory
+// and it owns no rows. It is retired with the FilePath cleared, so a
+// delete-files purge has nothing to remove through it.
+func TestDedupBooks_JunkPathUnderLiveDirIsRetiredWithPathCleared(t *testing.T) {
+	s := ddRealStore(t)
+	dir := filepath.Join(t.TempDir(), "Author", "Real Book")
+	f := filepath.Join(dir, "01.mp3")
+	ddWriteAudio(t, f)
+	live := ddMustBook(t, s, &database.Book{Title: "Real Book", FilePath: dir})
+	ddMustFile(t, s, &database.BookFile{BookID: live.ID, FilePath: f})
+	junk := ddMustBook(t, s, &database.Book{Title: "read by narrator", FilePath: f})
+
+	if err := (&dedupBooksJob{}).Run(context.Background(), s, ddJobReporter{}, false); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if g := ddMustGet(t, s, junk.ID); !g.IsSoftDeleted() || g.FilePath != "" {
+		t.Fatalf("junk: deleted=%v path=%q, want retired with the path cleared", g.IsSoftDeleted(), g.FilePath)
+	}
+	if lf, _ := s.GetBookFiles(live.ID); len(lf) != 1 || lf[0].FilePath != f {
+		t.Fatalf("live rows changed: %+v", lf)
+	}
+}
+
+// Round 3: a subdir holding only files that match none of the book's rows
+// used to pass the gate on "create" alone, moving the book's path and
+// stranding every old row. Refused now.
+func TestVGPlanAuthorDirFix_OnlyUnmatchedFilesRefuses(t *testing.T) {
+	s := ddRealStore(t)
+	authorDir := filepath.Join(t.TempDir(), "Some Author")
+	sub := filepath.Join(authorDir, "Alpha Chronicle")
+	ddWriteAudio(t, filepath.Join(sub, "99.mp3"))
+	book := ddMustBook(t, s, &database.Book{Title: "Alpha Chronicle", FilePath: authorDir})
+	old := ddMustFile(t, s, &database.BookFile{BookID: book.ID, FilePath: filepath.Join(authorDir, "01.mp3"), FileSize: int64(len(ddAudioBytes))})
+
+	if _, err := vgPlanAuthorDirFix(s, book.ID, sub); !errors.Is(err, errVGRefused) {
+		t.Fatalf("err = %v, want errVGRefused: no existing row lands in the subdir", err)
+	}
+	files, _ := s.GetBookFiles(book.ID)
+	if len(files) != 1 || files[0].ID != old.ID || files[0].FilePath != old.FilePath {
+		t.Fatalf("rows changed on a refused fix: %+v", files)
+	}
+	if got := ddMustGet(t, s, book.ID); got.FilePath != authorDir {
+		t.Fatalf("book path moved to %q on a refused fix", got.FilePath)
+	}
+}
+
+// Hand-offs within one run must match between dry-run and apply. Both modes
+// are compared the same way: the successor each retirement promotes, in
+// order, from the run's overlay, mapped to titles. Apply's final rows are
+// checked against the expected primary too.
 func TestDedupBooks_DryRunHandoffMatchesApply(t *testing.T) {
 	type pair struct{ keeper, dup string }
-	seed := func(s *database.PebbleStore) (map[string]*database.Book, []pair) {
-		yes := true
-		byTitle := map[string]*database.Book{}
-		for _, title := range []string{"M1", "M2", "M3"} {
-			b := ddMustBook(t, s, &database.Book{Title: title, FilePath: "/lib/G/" + title + ".m4b"})
-			ddSetGroup(t, s, b.ID, "G", nil)
-			byTitle[title] = b
-		}
-		for _, title := range []string{"Z1", "Z2"} {
-			b := ddMustBook(t, s, &database.Book{Title: title, FilePath: "/lib/Z/" + title + ".m4b"})
-			ddSetGroup(t, s, b.ID, "other-"+title, &yes)
-			byTitle[title] = b
-		}
-		// Loaded once up front, as Run does.
-		for k, b := range byTitle {
-			byTitle[k] = ddMustGet(t, s, b.ID)
-		}
-		return byTitle, []pair{{"Z1", "M1"}, {"Z2", "M2"}}
+	cases := []struct {
+		name string
+		// keepers maps each keeper's title to its version group ("" = none).
+		keepers map[string]string
+		pairs   []pair
+		want    []string // successor title per retirement, "" for none
+		primary string   // G's live explicit primary after apply
+	}{
+		{
+			// Keepers sit in their own groups: two hand-offs inside G, and
+			// the second must skip the member the first retired.
+			name:    "keepers in other groups",
+			keepers: map[string]string{"Z1": "other-Z1", "Z2": "other-Z2"},
+			pairs:   []pair{{"Z1", "M1"}, {"Z2", "M2"}},
+			want:    []string{"M2", "M3"},
+			primary: "M3",
+		},
+		{
+			// K has no group, so the keeper fill moves it into G and it takes
+			// the primary. The second retirement then needs no hand-off --
+			// which dry-run only sees if it models the join.
+			name:    "groupless keeper joins through the fill",
+			keepers: map[string]string{"K": "", "Z": "other-Z"},
+			pairs:   []pair{{"K", "M1"}, {"Z", "M2"}},
+			want:    []string{"K", ""},
+			primary: "K",
+		},
 	}
-	run := func(dry bool) (*database.PebbleStore, *ddSim, map[string]*database.Book) {
-		s := ddRealStore(t)
-		books, pairs := seed(s)
-		sim := newDDSim()
-		for _, p := range pairs {
-			if err := ddMergeDuplicateBookSim(s, sim, books[p.keeper], books[p.dup], dry, nil); err != nil {
-				t.Fatalf("dry=%v merge %s<-%s: %v", dry, p.keeper, p.dup, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(dry bool) (*database.PebbleStore, []string) {
+				s := ddRealStore(t)
+				yes := true
+				byTitle := map[string]*database.Book{}
+				for _, title := range []string{"M1", "M2", "M3"} {
+					b := ddMustBook(t, s, &database.Book{Title: title, FilePath: "/lib/G/" + title + ".m4b"})
+					ddSetGroup(t, s, b.ID, "G", nil)
+					byTitle[title] = b
+				}
+				for _, title := range []string{"K", "Z", "Z1", "Z2"} {
+					vg, ok := tc.keepers[title]
+					if !ok {
+						continue
+					}
+					b := ddMustBook(t, s, &database.Book{Title: title, FilePath: "/lib/K/" + title + ".m4b"})
+					if vg != "" {
+						ddSetGroup(t, s, b.ID, vg, &yes)
+					} else if _, err := s.ModifyBook(b.ID, func(bk *database.Book) error {
+						bk.VersionGroupID = nil
+						bk.IsPrimaryVersion = nil
+						return nil
+					}); err != nil {
+						t.Fatalf("clear group: %v", err)
+					}
+					byTitle[title] = b
+				}
+				titleOf := map[string]string{}
+				// Loaded once up front, as Run does.
+				for k, b := range byTitle {
+					byTitle[k] = ddMustGet(t, s, b.ID)
+					titleOf[b.ID] = k
+				}
+				sim := newDDSim()
+				for _, p := range tc.pairs {
+					if err := ddMergeDuplicateBookSim(s, sim, byTitle[p.keeper], byTitle[p.dup], dry, nil); err != nil {
+						t.Fatalf("dry=%v merge %s<-%s: %v", dry, p.keeper, p.dup, err)
+					}
+				}
+				got := make([]string, len(sim.handoffs))
+				for i, id := range sim.handoffs {
+					got[i] = titleOf[id]
+				}
+				return s, got
 			}
-		}
-		return s, sim, books
-	}
 
-	_, drySim, dryBooks := run(true)
-	var dryPrimaries []string
-	for title, b := range dryBooks {
-		if drySim.isPromoted(b.ID) {
-			dryPrimaries = append(dryPrimaries, title)
-		}
-	}
-	sort.Strings(dryPrimaries)
-
-	applyStore, _, _ := run(false)
-	applyPrimaries := ddLiveExplicitPrimaries(t, applyStore, "G")
-
-	if len(applyPrimaries) != 1 || applyPrimaries[0] != "M3" {
-		t.Fatalf("apply primaries = %v, want [M3]", applyPrimaries)
-	}
-	if len(dryPrimaries) != 1 || dryPrimaries[0] != applyPrimaries[0] {
-		t.Fatalf("dry-run would leave primaries %v, apply leaves %v", dryPrimaries, applyPrimaries)
+			_, dry := run(true)
+			applyStore, apply := run(false)
+			if !reflect.DeepEqual(dry, apply) {
+				t.Fatalf("hand-offs differ: dry-run %q, apply %q", dry, apply)
+			}
+			if !reflect.DeepEqual(apply, tc.want) {
+				t.Fatalf("hand-offs = %q, want %q", apply, tc.want)
+			}
+			if got := ddLiveExplicitPrimaries(t, applyStore, "G"); len(got) != 1 || got[0] != tc.primary {
+				t.Fatalf("apply left G's primaries %v, want [%s]", got, tc.primary)
+			}
+		})
 	}
 }

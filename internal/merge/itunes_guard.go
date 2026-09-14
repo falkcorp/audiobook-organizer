@@ -1,5 +1,5 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
 // last-edited: 2026-09-13
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"syscall"
 
@@ -140,15 +141,16 @@ func GuardITunesProtectedLoaded(books []*database.Book, filesByID map[string][]d
 	if err != nil {
 		return err
 	}
+	pr := resolveProtectedRoots(roots)
 	for _, b := range books {
 		if b == nil {
 			continue
 		}
-		if err := checkITunesPath(b.ID, b.FilePath, roots); err != nil {
+		if err := checkITunesPathResolved(b.ID, b.FilePath, pr); err != nil {
 			return err
 		}
 		for _, f := range filesByID[b.ID] {
-			if err := checkITunesPath(b.ID, f.FilePath, roots); err != nil {
+			if err := checkITunesPathResolved(b.ID, f.FilePath, pr); err != nil {
 				return err
 			}
 		}
@@ -157,6 +159,7 @@ func GuardITunesProtectedLoaded(books []*database.Book, filesByID map[string][]d
 }
 
 func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []string) error {
+	pr := resolveProtectedRoots(roots)
 	seen := make(map[string]bool, len(bookIDs))
 	for _, id := range bookIDs {
 		if seen[id] {
@@ -170,7 +173,7 @@ func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []stri
 		if book == nil {
 			continue
 		}
-		if err := checkITunesPath(id, book.FilePath, roots); err != nil {
+		if err := checkITunesPathResolved(id, book.FilePath, pr); err != nil {
 			return err
 		}
 		files, err := store.GetBookFiles(id)
@@ -178,7 +181,7 @@ func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []stri
 			return &ITunesProtectedError{BookID: id, Reason: "cannot read the book's files to verify they are outside the iTunes library", Cause: err}
 		}
 		for _, f := range files {
-			if err := checkITunesPath(id, f.FilePath, roots); err != nil {
+			if err := checkITunesPathResolved(id, f.FilePath, pr); err != nil {
 				return err
 			}
 		}
@@ -197,6 +200,26 @@ func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []stri
 // is resolved through its nearest existing parent. A resolve error other than
 // not-exist is a fail-closed refusal.
 func checkITunesPath(bookID, p string, roots []string) error {
+	return checkITunesPathResolved(bookID, p, resolveProtectedRoots(roots))
+}
+
+// protectedRoot is a configured root and its symlink-resolved form. Roots are
+// resolved once per guard call, not once per checked path.
+type protectedRoot struct {
+	raw, resolved string
+	err           error
+}
+
+func resolveProtectedRoots(roots []string) []protectedRoot {
+	out := make([]protectedRoot, len(roots))
+	for i, r := range roots {
+		res, err := resolveExistingPrefix(r)
+		out[i] = protectedRoot{raw: r, resolved: res, err: err}
+	}
+	return out
+}
+
+func checkITunesPathResolved(bookID, p string, roots []protectedRoot) error {
 	if p == "" {
 		return nil
 	}
@@ -207,6 +230,11 @@ func checkITunesPath(bookID, p string, roots []string) error {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "relative path cannot be verified against the iTunes library roots"}
 	}
 	clean := filepath.Clean(p)
+	for _, root := range roots {
+		if pathutil.IsWithin(clean, root.raw) {
+			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root.raw}
+		}
+	}
 	resolved, err := resolveExistingPrefix(clean)
 	if err != nil {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "cannot resolve symlinks to verify the path is outside the iTunes library", Cause: err}
@@ -215,25 +243,30 @@ func checkITunesPath(bookID, p string, roots []string) error {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Root: frozenITunesSegmentRoot, Reason: "resolves to " + resolved}
 	}
 	for _, root := range roots {
-		if pathutil.IsWithin(clean, root) {
-			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root}
+		if root.err != nil {
+			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root.raw, Reason: "cannot resolve the iTunes root", Cause: root.err}
 		}
-		resolvedRoot, rerr := resolveExistingPrefix(root)
-		if rerr != nil {
-			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root, Reason: "cannot resolve the iTunes root", Cause: rerr}
-		}
-		if pathutil.IsWithin(resolved, resolvedRoot) || pathutil.IsWithin(resolved, root) {
-			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root, Reason: "resolves to " + resolved}
+		if pathutil.IsWithin(resolved, root.resolved) || pathutil.IsWithin(resolved, root.raw) {
+			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root.raw, Reason: "resolves to " + resolved}
 		}
 	}
 	return nil
 }
 
-// resolveExistingPrefix is filepath.EvalSymlinks for a path that may not exist
-// yet: it resolves the longest existing prefix and re-appends the rest.
+// maxSymlinkHops bounds link following, so a link cycle is an error.
+const maxSymlinkHops = 255
+
+// resolveExistingPrefix is filepath.EvalSymlinks for a path that may not
+// exist: it resolves the longest existing prefix and re-appends the rest.
+// A DANGLING symlink is followed with os.Readlink (a relative target resolves
+// against the link's directory), because EvalSymlinks reports only "not
+// exist" for it -- a dangling link into the iTunes tree would otherwise
+// resolve to itself and pass. A resolve error other than not-exist is
+// returned, and the guard refuses on it.
 func resolveExistingPrefix(p string) (string, error) {
 	var tail []string
 	cur := p
+	hops := 0
 	for {
 		r, err := filepath.EvalSymlinks(cur)
 		if err == nil {
@@ -245,9 +278,27 @@ func resolveExistingPrefix(p string) (string, error) {
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return "", err
 		}
+		if fi, lerr := os.Lstat(cur); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			hops++
+			if hops > maxSymlinkHops {
+				return "", fmt.Errorf("more than %d symlinks resolving %s", maxSymlinkHops, p)
+			}
+			target, rerr := os.Readlink(cur)
+			if rerr != nil {
+				return "", rerr
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(cur), target)
+			}
+			cur = filepath.Clean(target)
+			continue
+		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return p, nil
+			for i := len(tail) - 1; i >= 0; i-- {
+				cur = filepath.Join(cur, tail[i])
+			}
+			return cur, nil
 		}
 		tail = append(tail, filepath.Base(cur))
 		cur = parent
