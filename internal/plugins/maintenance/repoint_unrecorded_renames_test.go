@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f41c2d7-6e08-4a53-b19c-2d7e5a0f8c36
 // last-edited: 2026-09-14
 
@@ -24,6 +24,7 @@ type repointFixture struct {
 	prefs     map[string]string
 	files     map[string]database.BookFile // by ID, all book b1
 	book      database.Book
+	bookAt    map[string][]string // other live books by path
 	fileWrite int
 	bookWrite int
 }
@@ -60,6 +61,25 @@ func (fx *repointFixture) plugin() *Plugin {
 			fx.fileWrite++
 			fx.files[id] = *f
 			return nil
+		},
+		GetBookFileByPathFunc: func(path string) (*database.BookFile, error) {
+			fx.mu.Lock()
+			defer fx.mu.Unlock()
+			for _, f := range fx.files {
+				if f.FilePath == path {
+					return &f, nil
+				}
+			}
+			return nil, nil
+		},
+		LiveBookIDsAtPathFunc: func(path string) ([]string, error) {
+			fx.mu.Lock()
+			defer fx.mu.Unlock()
+			ids := append([]string(nil), fx.bookAt[path]...)
+			if fx.book.FilePath == path {
+				ids = append(ids, fx.book.ID)
+			}
+			return ids, nil
 		},
 		GetBookByIDFunc: func(string) (*database.Book, error) {
 			fx.mu.Lock()
