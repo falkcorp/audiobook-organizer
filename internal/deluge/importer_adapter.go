@@ -1,7 +1,7 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-09-13
 //
 // LibraryImporterAdapter implements tagger.LibraryImporter on top of
 // ImportToLibrary. It is wired into the Server at startup so
@@ -62,6 +62,11 @@ func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath string)
 
 	newPath, err := ImportToLibrary(a.cfg, a.delugeClient, a.store, bf)
 	if err != nil {
+		if newPath != "" {
+			// The copy could not be recorded AND could not be removed: name
+			// it so it can be cleaned up, rather than dropping the path.
+			return srcPath, fmt.Errorf("LibraryImporterAdapter: ImportToLibrary for %s left an unrecorded copy at %s: %w", srcPath, newPath, err)
+		}
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: ImportToLibrary for %s: %w", srcPath, err)
 	}
 	return newPath, nil

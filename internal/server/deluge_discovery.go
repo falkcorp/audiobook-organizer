@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.1.0
+// version: 3.1.1
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-07-13
+// last-edited: 2026-09-13
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -176,7 +176,9 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 		}
 		newPath, importErr := delugeclient.ImportToLibrary(&config.AppConfig, client, store, full)
 		if importErr != nil {
-			results = append(results, result{FileID: f.ID, Path: f.FilePath, Error: importErr.Error()})
+			// newPath is non-empty only when a copy was left in the library
+			// unrecorded (see ImportToLibrary); report where it is.
+			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath, Error: importErr.Error()})
 			failed++
 		} else {
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath})

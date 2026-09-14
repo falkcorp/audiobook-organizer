@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-01
+// last-edited: 2026-09-13
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -10,7 +10,9 @@
 package deluge
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,8 +21,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
+
+var importLog = logger.New("deluge-import")
+
+// sameContent reports whether a and b hold the same bytes (size, then
+// SHA-256).
+func sameContent(a, b string) (bool, error) {
+	ha, sa, err := fileops.ComputeFileHashAndSize(a)
+	if err != nil {
+		return false, err
+	}
+	hb, sb, err := fileops.ComputeFileHashAndSize(b)
+	if err != nil {
+		return false, err
+	}
+	return sa == sb && ha == hb, nil
+}
 
 // ImportToLibrary copies a file from a Deluge-managed path into the library root,
 // updates the BookFile record in the database, and optionally tells Deluge to move
@@ -36,6 +55,13 @@ import (
 // Returns the new absolute file path and nil on success.
 // Returns an error if the source file cannot be read or the destination cannot be written.
 // A MoveStorage failure is NOT returned as an error — it is logged only.
+//
+// On a failed BookFile update the call leaves things as it found them:
+// bookFile's fields are restored and a copy this call created is removed, so
+// a retry starts clean. newPath is then "" -- unless removing the copy also
+// failed, in which case newPath names the file left in the library and the
+// error says so. An existing destination with the same bytes as the source
+// is adopted (recorded without copying) and never removed.
 //
 // Idempotent: if bookFile.ImportedFromDelugeAt is already set, returns the current
 // FilePath immediately without repeating the copy or DB update.
@@ -96,21 +122,54 @@ func ImportToLibrary(
 
 	// Clone into the library, falling back to a byte copy when the filesystem
 	// cannot clone. fileops.ReflinkOrCopy refuses an existing destination
-	// rather than truncating it.
-	if err := fileops.ReflinkOrCopy(src, dest); err != nil {
-		return "", fmt.Errorf("ImportToLibrary: copy %s -> %s: %w", src, dest, err)
+	// rather than truncating it -- so a destination that is already there is
+	// adopted when it holds the same bytes as the source (a copy an earlier
+	// attempt made and could not record, before failed attempts cleaned up
+	// after themselves) and refused otherwise.
+	created := false
+	if _, statErr := os.Lstat(dest); statErr == nil {
+		same, cmpErr := sameContent(src, dest)
+		if cmpErr != nil {
+			return "", fmt.Errorf("ImportToLibrary: compare existing destination %s with %s: %w", dest, src, cmpErr)
+		}
+		if !same {
+			return "", fmt.Errorf("ImportToLibrary: destination %s already exists with different content than %s", dest, src)
+		}
+		importLog.Info("ImportToLibrary: %s already holds the bytes of %s; recording it instead of copying again", dest, src)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("ImportToLibrary: stat destination %s: %w", dest, statErr)
+	} else {
+		if err := fileops.ReflinkOrCopy(src, dest); err != nil {
+			return "", fmt.Errorf("ImportToLibrary: copy %s -> %s: %w", src, dest, err)
+		}
+		created = true
 	}
 
 	// Update the BookFile record.
+	prevOriginal, prevPath, prevImportedAt := bookFile.DelugeOriginalPath, bookFile.FilePath, bookFile.ImportedFromDelugeAt
 	now := time.Now()
 	bookFile.DelugeOriginalPath = src
 	bookFile.FilePath = dest
 	bookFile.ImportedFromDelugeAt = &now
 
 	if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
-		// The file has been copied but the DB update failed. Log it — the
-		// caller is responsible for retry or rollback.
-		return dest, fmt.Errorf("ImportToLibrary: UpdateBookFile %s: %w", bookFile.ID, err)
+		// The row still names the source, so nothing leads to the copy.
+		// Undo both halves: the caller's struct goes back to the source
+		// (a retry must copy from src again, not from dest), and the copy
+		// this call made is removed so the retry does not find an orphan
+		// in its way. Until 2026-09-13 both were left behind and every
+		// retry failed on the existing destination.
+		bookFile.DelugeOriginalPath, bookFile.FilePath, bookFile.ImportedFromDelugeAt = prevOriginal, prevPath, prevImportedAt
+		updErr := fmt.Errorf("ImportToLibrary: UpdateBookFile %s: %w", bookFile.ID, err)
+		if !created {
+			return "", updErr
+		}
+		if rmErr := os.Remove(dest); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			// The copy is still there: return its path with the error so
+			// the caller can report exactly what was left behind.
+			return dest, fmt.Errorf("%w; the copy at %s could not be removed: %v", updErr, dest, rmErr)
+		}
+		return "", updErr
 	}
 
 	slog.Info("ImportToLibrary copied ->", "src", src, "dest", dest)

@@ -133,7 +133,6 @@ var slogRatchet = map[string]int{
 	"internal/itunes/service/location_normalize.go":              1,
 	"internal/itunes/service/path_reconcile.go":                  1,
 	"internal/itunes/service/playlist_sync.go":                   4,
-	"internal/itunes/service/position_sync.go":                   8,
 	"internal/itunes/service/track_provisioner.go":               2,
 	"internal/itunes/service/validate.go":                        7,
 	"internal/itunes/service/writeback_batcher.go":               21,

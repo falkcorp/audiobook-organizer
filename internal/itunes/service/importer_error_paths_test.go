@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -236,10 +236,8 @@ func TestExecute_ExistingPID_LinkedNotCreated(t *testing.T) {
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	// PID already mapped → returns existing book ID.
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return(existingBookID, nil).Once()
-	// Fetch the existing book for linkITunesMetadata.
-	m.EXPECT().GetBookByID(existingBookID).Return(existingBook, nil).Once()
-	// linkITunesMetadata calls UpdateBook on the existing book (sets VG + isPrimary).
-	m.EXPECT().UpdateBook(existingBookID, mock.Anything).Return(existingBook, nil).Once()
+	// linkITunesMetadata fills the missing iTunes fields via ModifyBook.
+	expectModifyBook(m, existingBookID, existingBook, nil)
 	// End of Execute: ClearState + fingerprint.
 	m.EXPECT().DeleteOperationState("op-existing-pid").Return(nil).Once()
 	m.EXPECT().SaveLibraryFingerprint(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -286,8 +284,10 @@ func TestExecute_SkipDuplicates_ExistingPath_Linked(t *testing.T) {
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
 	// SkipDuplicates = true → check file path.
 	m.EXPECT().GetBookByFilePath(mock.Anything).Return(existingBook, nil).Once()
-	// linkITunesMetadata: update the existing book (sets VG + isPrimary etc.).
-	m.EXPECT().UpdateBook("dup-book-id", mock.Anything).Return(existingBook, nil).Once()
+	// The track PID is also looked up on book_files; no row has it.
+	m.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Once()
+	// linkITunesMetadata fills the missing iTunes fields via ModifyBook.
+	expectModifyBook(m, "dup-book-id", existingBook, nil)
 	m.EXPECT().DeleteOperationState("op-skip-dup").Return(nil).Once()
 	m.EXPECT().SaveLibraryFingerprint(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
@@ -330,6 +330,10 @@ func TestExecute_CreateBookFails_ContinuesAndCountsFailed(t *testing.T) {
 	m.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 4, Name: "Audiobook D"}, nil).Maybe()
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
+	// The existing-book lookups (path, track PID) run on every import now
+	// and find nothing, so the group is created.
+	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	// CreateBook returns an error — simulates a disk/DB failure mid-import.
 	m.EXPECT().CreateBook(mock.Anything).Return(nil, storeErr).Once()
 	m.EXPECT().DeleteOperationState("op-fail-create").Return(nil).Once()
@@ -439,63 +443,82 @@ func TestBuildBookFromAlbumGroup_FileNotOnDisk_Error(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// linkITunesMetadata — already-linked book (PID already set) → UpdateBook still
-// called if other fields differ; verifies no double-assignment panic.
+// linkITunesMetadata — fills only missing iTunes fields, on the stored row.
 // ---------------------------------------------------------------------------
 
-func TestLinkITunesMetadata_AlreadyLinked_UpdatesCalled(t *testing.T) {
-	pid := "ALREADY_LINKED"
-	existing := &database.Book{
-		ID:                 "book-linked",
-		Title:              "Linked Book",
-		ITunesPersistentID: &pid, // already set
-	}
-	importBook := &database.Book{
-		Title:              "Linked Book",
-		ITunesPersistentID: &pid,
-		ITunesPlayCount:    new(5),
-	}
-
-	m := dbmocks.NewMockStore(t)
-	// PlayCount differs, so changed=true → UpdateBook is expected.
-	m.EXPECT().UpdateBook("book-linked", mock.Anything).Return(existing, nil).Once()
-
-	imp := newMockImporter(m)
-	log := logger.New("test")
-	imp.linkITunesMetadata(existing, importBook, &itunes.Track{}, log)
-	// Assertions via mock expectation above.
+func newLinkTestStore(t *testing.T) *database.PebbleStore {
+	t.Helper()
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
-// ---------------------------------------------------------------------------
-// linkITunesMetadata — nothing changes → UpdateBook NOT called.
-// ---------------------------------------------------------------------------
+func TestLinkITunesMetadata_AlreadyLinked_FillsMissingField(t *testing.T) {
+	store := newLinkTestStore(t)
+	pid := "ALREADY_LINKED"
+	existing, err := store.CreateBook(&database.Book{
+		Title:              "Linked Book",
+		FilePath:           "/lib/linked.m4b",
+		ITunesPersistentID: &pid,
+	})
+	require.NoError(t, err)
 
-func TestLinkITunesMetadata_NothingChanged_NoUpdate(t *testing.T) {
+	imp := &Importer{store: store}
+	linked, err := imp.linkITunesMetadata(existing.ID, &database.Book{
+		ITunesPersistentID: new("OTHER_PID"),
+		ITunesPlayCount:    new(5),
+	}, logger.New("test"))
+	require.NoError(t, err)
+	require.True(t, linked)
+
+	got, err := store.GetBookByID(existing.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.ITunesPlayCount)
+	assert.Equal(t, 5, *got.ITunesPlayCount, "a missing play count is filled")
+	assert.Equal(t, pid, *got.ITunesPersistentID, "a present PID is never overwritten")
+}
+
+// TestLinkITunesMetadata_LeavesVersionGroupAndPrimaryAlone covers the branch
+// the old NothingChanged test pinned shut by pre-setting a group and
+// IsPrimaryVersion=true: a groupless, non-primary book. Linking used to mint
+// a group for it and force it primary; it must now write nothing at all.
+func TestLinkITunesMetadata_LeavesVersionGroupAndPrimaryAlone(t *testing.T) {
+	store := newLinkTestStore(t)
 	pid := "NO_CHANGE_PID"
-	pc := 3
-	existing := &database.Book{
-		ID:                 "book-nochange",
-		Title:              "Static Book",
+	notPrimary := false
+	existing, err := store.CreateBook(&database.Book{
+		Title:              "Not Primary",
+		FilePath:           "/lib/np.m4b",
 		ITunesPersistentID: &pid,
-		ITunesPlayCount:    &pc,
-	}
-	// All fields already match — import brings nothing new.
-	importBook := &database.Book{
+		ITunesPlayCount:    new(3),
+		IsPrimaryVersion:   &notPrimary,
+	})
+	require.NoError(t, err)
+	before, err := store.GetBookByID(existing.ID)
+	require.NoError(t, err)
+
+	imp := &Importer{store: store}
+	linked, err := imp.linkITunesMetadata(existing.ID, &database.Book{
 		ITunesPersistentID: &pid,
-		ITunesPlayCount:    &pc,
-	}
-	// VersionGroupID and IsPrimaryVersion: set them so the changed guard stays false.
-	vgID := "vg-existing"
-	isPrimary := true
-	existing.VersionGroupID = &vgID
-	existing.IsPrimaryVersion = &isPrimary
+		ITunesPlayCount:    new(3),
+	}, logger.New("test"))
+	require.NoError(t, err)
+	require.True(t, linked)
 
-	m := dbmocks.NewMockStore(t)
-	// No EXPECT for UpdateBook — if called, testify will fail the test.
+	got, err := store.GetBookByID(existing.ID)
+	require.NoError(t, err)
+	assert.True(t, got.VersionGroupID == nil || *got.VersionGroupID == "", "no version group may be minted by a link")
+	require.NotNil(t, got.IsPrimaryVersion)
+	assert.False(t, *got.IsPrimaryVersion, "a link must not make a book primary")
+	assert.Equal(t, before.UpdatedAt, got.UpdatedAt, "nothing to add means nothing is written")
+}
 
-	imp := newMockImporter(m)
-	log := logger.New("test")
-	imp.linkITunesMetadata(existing, importBook, &itunes.Track{}, log)
+func TestLinkITunesMetadata_MissingBook_NotLinked(t *testing.T) {
+	imp := &Importer{store: newLinkTestStore(t)}
+	linked, err := imp.linkITunesMetadata("no-such-book", &database.Book{ITunesPlayCount: new(1)}, logger.New("test"))
+	require.NoError(t, err)
+	assert.False(t, linked, "a vanished book is reported so the caller can create one")
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +723,10 @@ func TestExecute_NewBook_WritesExternalIDMappingAtImport(t *testing.T) {
 	m.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 5, Name: "Audiobook E"}, nil).Maybe()
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
+	// The existing-book lookups (path, track PID) run on every import now
+	// and find nothing, so the group is created.
+	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().CreateBook(mock.Anything).Return(created, nil).Once()
 	// The assertion under test: the importer writes the mapping for the
 	// freshly created book, keyed by the track PID, at import time.

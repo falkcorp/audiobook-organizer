@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_primary_version_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bdb97ea5-c7e2-4797-aec0-a58b225d5fdb
-// last-edited: 2026-08-13
+// last-edited: 2026-09-13
 
 // Regression test for the version-group primary defect fixed 2026-08-13.
 //
@@ -63,6 +63,10 @@ func TestExecute_NewBookIsPrimaryOfItsOwnVersionGroup(t *testing.T) {
 	m.EXPECT().CreateSeries(mock.Anything, mock.Anything).Return(&database.Series{ID: 7, Name: "Primary Book"}, nil).Maybe()
 	m.EXPECT().IsExternalIDTombstoned("itunes", pid).Return(false, nil).Once()
 	m.EXPECT().GetBookByExternalID("itunes", pid).Return("", fmt.Errorf("not found")).Once()
+	// The existing-book lookups (path, track PID) run on every import now
+	// and find nothing, so the group is created.
+	m.EXPECT().GetBookByFilePath(mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().GetBookFileByPID(mock.Anything).Return(nil, nil).Maybe()
 	m.EXPECT().CreateBook(mock.Anything).
 		Run(func(book *database.Book) { captured = book }).
 		Return(nil, fmt.Errorf("stop after capture")).Once()

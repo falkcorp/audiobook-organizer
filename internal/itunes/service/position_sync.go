@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-18
+// last-edited: 2026-09-13
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -23,18 +23,19 @@
 package itunesservice
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/readstatus"
-	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/readstatus"
 )
 
 const adminUserID = "_local"
 
 // positionSyncStore is what the iTunes position sync reads and writes.
 //
-// Measured with an empty-interface compiler probe: 8 direct calls, plus
+// Measured with an empty-interface compiler probe: 8 direct calls (7 since
+// 2026-09-13, when GetBookByID + UpdateBook became one ModifyBook), plus
 // readstatus.Store because this package forwards its store to
 // readstatus.RecomputeUserBookState and SetManualStatus. Embedding that
 // interface states the forwarding relationship instead of duplicating its
@@ -48,8 +49,7 @@ type positionSyncStore interface {
 	readstatus.Store
 
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
 	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
 	ListUserPositionsSince(userID string, t time.Time) ([]database.UserPosition, error)
@@ -61,13 +61,14 @@ type positionSyncStore interface {
 type PositionSync struct {
 	store    positionSyncStore
 	enqueuer Enqueuer
+	log      logger.Logger
 }
 
 // newPositionSync constructs a PositionSync wired with the given store
 // and enqueuer. A nil enqueuer disables the push direction (pull still
 // runs) — useful for tests that only verify seeding behavior.
 func newPositionSync(store positionSyncStore, enqueuer Enqueuer) *PositionSync {
-	return &PositionSync{store: store, enqueuer: enqueuer}
+	return &PositionSync{store: store, enqueuer: enqueuer, log: logger.New("itunes-position-sync")}
 }
 
 // Sync runs a full bidirectional position sync for the
@@ -85,7 +86,7 @@ func (p *PositionSync) Sync() (pulled, pushed int) {
 func (p *PositionSync) pullBookmarks() int {
 	books, err := p.store.GetAllBooksCore(0, 0)
 	if err != nil {
-		slog.Warn("itunes position sync list books", "err", err)
+		p.log.Warn("itunes position sync: list books: %v", err)
 		return 0
 	}
 
@@ -112,13 +113,13 @@ func (p *PositionSync) pullBookmarks() int {
 
 		bookmarkSeconds := float64(*book.ITunesBookmark) / 1000.0
 		if err := p.store.SetUserPosition(adminUserID, book.ID, segmentID, bookmarkSeconds); err != nil {
-			slog.Warn("seed position for", "book", book.ID, "err", err)
+			p.log.Warn("itunes position sync: seed position for %s: %v", book.ID, err)
 			continue
 		}
 
 		// Recompute the derived book state from the seeded position.
 		if _, err := readstatus.RecomputeUserBookState(p.store, adminUserID, book.ID); err != nil {
-			slog.Warn("recompute state for after bookmark seed", "book", book.ID, "err", err)
+			p.log.Warn("itunes position sync: recompute state for %s after bookmark seed: %v", book.ID, err)
 		}
 		seeded++
 	}
@@ -133,7 +134,7 @@ func (p *PositionSync) pullBookmarks() int {
 			continue
 		}
 		if _, err := readstatus.SetManualStatus(p.store, adminUserID, book.ID, database.UserBookStatusFinished); err != nil {
-			slog.Warn("seed finished for", "book", book.ID, "err", err)
+			p.log.Warn("itunes position sync: seed finished for %s: %v", book.ID, err)
 			continue
 		}
 		seeded++
@@ -155,7 +156,7 @@ func (p *PositionSync) pushPositions() int {
 	cutoff := time.Now().Add(-24 * time.Hour)
 	positions, err := p.store.ListUserPositionsSince(adminUserID, cutoff)
 	if err != nil {
-		slog.Warn("itunes position push list positions", "err", err)
+		p.log.Warn("itunes position push: list positions: %v", err)
 		return 0
 	}
 
@@ -176,46 +177,68 @@ func (p *PositionSync) pushPositions() int {
 		}
 		seen[pos.BookID] = true
 
-		book, err := p.store.GetBookByID(pos.BookID)
+		// Read the finish state first: ModifyBook's callback holds the
+		// book's write stripe and must stay a pure in-memory mutation.
+		state, _ := p.store.GetUserBookState(adminUserID, pos.BookID)
+		bookmarkMs := int64(pos.PositionSeconds * 1000)
+
+		// One write for the bookmark and the play-count bump, on the row
+		// as it is now. Until 2026-09-13 this was two full-row UpdateBooks
+		// of a copy read before either, and the bump ran on EVERY sync for
+		// any finished book whose position moved in the last 24h -- so a
+		// single finish added a play each time the task ran.
+		noPID := false
+		row, err := p.store.ModifyBook(pos.BookID, func(book *database.Book) error {
+			if book.ITunesPersistentID == nil {
+				noPID = true
+				return database.ErrSkipBookWrite
+			}
+			book.ITunesBookmark = &bookmarkMs
+			if finish, ok := unbumpedFinish(state, book); ok {
+				pc := 0
+				if book.ITunesPlayCount != nil {
+					pc = *book.ITunesPlayCount
+				}
+				pc++
+				now := time.Now()
+				book.ITunesPlayCount = &pc
+				book.ITunesLastPlayed = &now
+				book.ITunesPlayCountBumpedAt = &finish
+			}
+			return nil
+		})
 		if err != nil {
 			lookupErrs++
+			p.log.Warn("itunes position push: update bookmark for %s: %v", pos.BookID, err)
 			continue
 		}
-		if book == nil || book.ITunesPersistentID == nil {
+		if row == nil || noPID {
 			continue
 		}
-
-		// Update bookmark via the batcher (it updates the ITL on flush).
-		bookmarkMs := int64(pos.PositionSeconds * 1000)
-		book.ITunesBookmark = &bookmarkMs
-		if _, err := p.store.UpdateBook(book.ID, book); err != nil {
-			slog.Warn("update bookmark for", "book", book.ID, "err", err)
-			continue
-		}
-		p.enqueuer.Enqueue(book.ID)
+		p.enqueuer.Enqueue(row.ID)
 		pushed++
-
-		// If the book is marked finished and iTunes play count hasn't
-		// been bumped, increment it.
-		state, _ := p.store.GetUserBookState(adminUserID, pos.BookID)
-		if state != nil && state.Status == database.UserBookStatusFinished {
-			pc := 0
-			if book.ITunesPlayCount != nil {
-				pc = *book.ITunesPlayCount
-			}
-			newPC := pc + 1
-			now := time.Now()
-			book.ITunesPlayCount = &newPC
-			book.ITunesLastPlayed = &now
-			if _, err := p.store.UpdateBook(book.ID, book); err != nil {
-				slog.Warn("bump play count for", "book", book.ID, "err", err)
-			}
-		}
 	}
 
 	if lookupErrs > 0 {
-		slog.Warn("itunes position push: book lookup errors", "errors", lookupErrs, "total_positions", len(positions))
+		p.log.Warn("itunes position push: %d book lookup/write errors across %d positions", lookupErrs, len(positions))
 	}
 
 	return pushed
+}
+
+// unbumpedFinish reports whether state is a finish not yet counted into the
+// book's iTunes play count, and returns the finish's time to record. The
+// finish time is the state's LastActivityAt: it does not move when the sync
+// merely re-runs, so the same finish is counted once, and a later re-listen
+// that finishes again (moving LastActivityAt past the recorded time) is
+// counted again.
+func unbumpedFinish(state *database.UserBookState, book *database.Book) (time.Time, bool) {
+	if state == nil || state.Status != database.UserBookStatusFinished {
+		return time.Time{}, false
+	}
+	finish := state.LastActivityAt
+	if book.ITunesPlayCountBumpedAt != nil && !finish.After(*book.ITunesPlayCountBumpedAt) {
+		return time.Time{}, false
+	}
+	return finish, true
 }

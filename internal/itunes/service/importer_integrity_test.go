@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integrity_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c1d7e2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 //
 // Integrity-finding regression tests from the 2026-07-17 multi-discipline
 // review:
@@ -155,25 +155,33 @@ func TestApplyDeferredITunesUpdates_MarkErrorIsLoggedNotFatal(t *testing.T) {
 
 func TestSoftDeleteBlockedBook_WriteLands_ReturnsTrue(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().UpdateBook("blk-1", mock.Anything).Run(func(_ string, book *database.Book) {
-		require.NotNil(t, book.MarkedForDeletion)
-		assert.True(t, *book.MarkedForDeletion)
-		assert.NotNil(t, book.MarkedForDeletionAt)
-	}).Return(&database.Book{}, nil).Once()
+	var written *database.Book
+	m.EXPECT().ModifyBook("blk-1", mock.Anything).RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+		row := &database.Book{ID: "blk-1", Title: "Blocked Book", FilePath: "/lib/blk.m4b"}
+		if err := fn(row); err != nil {
+			return nil, err
+		}
+		written = row
+		return row, nil
+	}).Once()
 
 	imp := &Importer{store: m}
-	book := &database.Book{ID: "blk-1", Title: "Blocked Book"}
-	assert.True(t, imp.softDeleteBlockedBook(book, logger.New("test-c6-ok")))
+	assert.True(t, imp.softDeleteBlockedBook("blk-1", "/lib/blk.m4b", "h1", itunes.ImportModeImport, logger.New("test-c6-ok")))
+	require.NotNil(t, written)
+	require.NotNil(t, written.MarkedForDeletion)
+	assert.True(t, *written.MarkedForDeletion)
+	assert.NotNil(t, written.MarkedForDeletionAt)
+	require.NotNil(t, written.FileHash)
+	assert.Equal(t, "h1", *written.FileHash)
 }
 
 func TestSoftDeleteBlockedBook_WriteFails_ReturnsFalse(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().UpdateBook("blk-2", mock.Anything).Return(nil, errors.New("write failed")).Once()
+	m.EXPECT().ModifyBook("blk-2", mock.Anything).Return(nil, errors.New("write failed")).Once()
 
 	imp := &Importer{store: m}
-	book := &database.Book{ID: "blk-2", Title: "Blocked Book Two"}
 	// C-6: the caller must NOT count this as a successful soft-delete.
-	assert.False(t, imp.softDeleteBlockedBook(book, logger.New("test-c6-fail")))
+	assert.False(t, imp.softDeleteBlockedBook("blk-2", "/lib/blk2.m4b", "h2", itunes.ImportModeImport, logger.New("test-c6-fail")))
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +301,7 @@ func TestOrganizeImportedBooks_MultiFileUpdateBookFailure_RollsBackRowsAndCopies
 		return bf.FilePath == filepath.Join(organizedDir, "b.m4b")
 	})).Return(nil).Once()
 	// The Book write fails -> rollback.
-	m.EXPECT().UpdateBook("mfb-1", mock.Anything).Return(nil, errors.New("pebble write stall")).Once()
+	m.EXPECT().ModifyBook("mfb-1", mock.Anything).Return(nil, errors.New("pebble write stall")).Once()
 	// Rollback: both rows restored to their SOURCE paths.
 	m.EXPECT().UpdateBookFile("bf-1", mock.MatchedBy(func(bf *database.BookFile) bool {
 		return bf.FilePath == "/old/common/a.m4b"
