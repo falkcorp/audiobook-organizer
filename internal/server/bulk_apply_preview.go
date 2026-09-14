@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-13
 //
@@ -125,6 +125,11 @@ type bulkApplyPreviewRow struct {
 	Changes       []metafetch.FieldChange  `json:"changes,omitempty"`
 	SkippedLocked []string                 `json:"skipped_locked,omitempty"`
 	Rename        *metafetch.RenamePreview `json:"rename,omitempty"`
+	// OwnerReviewedWouldApply: the row is blocked by the certainty gate only,
+	// every refusing leg is one an owner review overrides, and nothing after
+	// the gate (policy, the rename) blocks it. Clicking Apply on this book in
+	// the review lane would apply it.
+	OwnerReviewedWouldApply bool `json:"owner_reviewed_would_apply,omitempty"`
 }
 
 // previewBulkApplyRow builds one book's row. plan is the same plan the real
@@ -189,6 +194,10 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 			row.Verdict, row.Reason, row.Detail = previewVerdictBlocked, applySkipFileWorkWouldFail, pv.Rename.Blocking
 		}
 	}
+	// Still the gate's own reason: no later step replaced it with a refusal
+	// an owner review does not lift.
+	row.OwnerReviewedWouldApply = plan.Reason == applySkipGateBlocked &&
+		plan.Gate.OwnerReviewOverridable() && row.Reason == plan.Gate.Reason
 	return row
 }
 
@@ -343,7 +352,9 @@ func runBulkApplyPreview(
 				plan = planOpResultApply(books, id, cr, claims)
 			}
 		} else {
-			plan = planCachedApply(svc, books, id, claims)
+			// No pin: the dry run always reports the hard gate, and says in
+			// owner_reviewed_would_apply what a reviewed Apply would do.
+			plan = planCachedApply(svc, books, id, claims, nil)
 		}
 		row := previewBulkApplyRow(svc, id, plan, writeBack)
 		switch row.Verdict {

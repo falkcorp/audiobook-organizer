@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-09-13
 
@@ -737,6 +737,13 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// certainty-gate verdict, field changes, rename) and nothing is
 		// applied. The web UI's Apply button sends dry_run:false.
 		DryRun *bool `json:"dry_run"`
+		// Pins maps book id -> the candidate the reviewer was looking at when
+		// they clicked Apply (the review lane sends one per book). A book with
+		// a pin that still matches the top cached candidate is applied as
+		// owner-reviewed; one whose pin no longer matches is refused as
+		// stale_candidate; a book with no pin gets the ordinary hard gate. The
+		// dry run ignores pins.
+		Pins map[string]metafetch.CandidatePin `json:"pins"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
@@ -778,10 +785,14 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		return
 	}
 
-	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", map[string]any{
+	params := map[string]any{
 		"book_ids":   body.BookIDs,
 		"write_back": shouldWriteBack,
-	})
+	}
+	if len(body.Pins) > 0 {
+		params["pins"] = body.Pins
+	}
+	opID, err := h.ops.EnqueueOp(c.Request.Context(), "metadata.batch-apply-cached", params)
 	if err != nil {
 		httputil.InternalError(c, "failed to enqueue metadata apply", err)
 		return

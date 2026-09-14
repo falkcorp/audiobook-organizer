@@ -511,6 +511,13 @@ func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMeta
 // ApplyMetadataCandidate applies a user-selected metadata candidate to a book.
 // If fields is non-empty, only the listed fields are applied.
 func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidate, fields []string) (*FetchMetadataResponse, error) {
+	return mfs.ApplyMetadataCandidateWithOptions(id, candidate, fields, ApplyOptions{})
+}
+
+// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate with opts
+// deciding how the apply is recorded (see ApplyOptions). Field policy is the
+// same for every opts.
+func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate MetadataCandidate, fields []string, opts ApplyOptions) (*FetchMetadataResponse, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
@@ -584,9 +591,13 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	if prevAuthorsErr != nil {
 		prevAuthors = nil
 	}
-	meta, skippedLocked, err := mfs.guardedApply(book, meta, candidate.Source)
+	historySource := opts.historySource(candidate.Source)
+	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource)
 	if err != nil {
 		return nil, err
+	}
+	if opts.GateOverride != "" {
+		appendMetadataVersionNote(book, "owner_reviewed")
 	}
 
 	// Keep serving the previous cover until the new one is actually on disk.
@@ -637,7 +648,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// that committed during the apply was silently reverted. A book with an
 	// error means the write stands and its history did not land; CommitApply
 	// logged it at Error and undo refuses that apply.
-	updatedBook, updateErr := mfs.CommitApply(id, before, book, prevAuthors, candidate.Source)
+	updatedBook, updateErr := mfs.CommitApply(id, before, book, prevAuthors, historySource)
 	if updatedBook == nil {
 		return nil, updateErr
 	}

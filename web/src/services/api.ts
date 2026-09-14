@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.107.0
+// version: 2.108.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-13
 
@@ -4320,14 +4320,34 @@ export interface BatchApplyDispatch {
 //
 // Callers poll the op, then RE-READ the review list. Server state after the op
 // is the only description of what happened that cannot go stale.
+/**
+ * Identifies the cached candidate a reviewer was LOOKING AT when they clicked
+ * Apply (server: metafetch.CandidatePin). The server applies the top cached
+ * candidate; a pin that still matches it makes the apply owner-reviewed (the
+ * certainty gate reports but does not refuse on its certainty legs), and a pin
+ * that no longer matches -- the cache was refetched after the page loaded -- is
+ * refused as stale_candidate. A book sent without a pin gets the hard gate.
+ */
+export interface CandidatePin {
+  source: string;
+  title: string;
+  author?: string;
+  asin?: string;
+  isbn?: string;
+  isbn10?: string;
+  isbn13?: string;
+}
+
 export async function batchApplyFromCache(
   bookIds: string[],
-  writeBack?: boolean
+  writeBack?: boolean,
+  pins?: Record<string, CandidatePin>
 ): Promise<BatchApplyDispatch> {
   // dry_run:false is explicit: absent, the server enqueues a preview
   // (metadata.bulk-apply-preview) and applies nothing.
   const body: Record<string, unknown> = { book_ids: bookIds, dry_run: false };
   if (writeBack !== undefined) body.write_back = writeBack;
+  if (pins && Object.keys(pins).length > 0) body.pins = pins;
   const response = await apiFetch(`${API_BASE}/audiobooks/metadata/batch-apply-cached`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

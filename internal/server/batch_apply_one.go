@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -32,7 +32,9 @@ type cachedApplyService interface {
 	// ValidateCachedIdentityForBook is the identity leg of the bulk-apply gate:
 	// the cache row must have been fetched for the book's current title/author.
 	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book) error
-	ApplyMetadataCandidate(id string, candidate metafetch.MetadataCandidate, fields []string) (*metafetch.FetchMetadataResponse, error)
+	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate; opts records
+	// an owner-reviewed override of the certainty gate in the change history.
+	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
 	InvalidateCachedCandidates(bookID string) error
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
@@ -71,6 +73,10 @@ type applyOutcome struct {
 	// Gate is the certainty gate's verdict, set whenever the gate ran. When
 	// Reason is applySkipGateBlocked, Gate.Reason says which leg refused.
 	Gate *applygate.Verdict
+	// OwnerReviewed is true when the gate refused but the owner's pinned
+	// review overrode it (see applygate.OwnerReviewOverridable). Set on the
+	// plan, so it is true whether or not a later step then refused the book.
+	OwnerReviewed bool
 	// WriteBackFailed is true when the metadata WAS applied to the database but
 	// writing it into the audio files failed. Deliberately separate from
 	// !Applied: the database change is real and durable, and reporting the book
@@ -99,6 +105,11 @@ const (
 	// is refused so the database and the files never disagree; nothing was
 	// written.
 	applySkipFileWorkWouldFail = metafetch.ApplyRefusedReasonFileWorkWouldFail
+	// applySkipStaleCandidate: the request pinned the candidate the owner was
+	// looking at, and the top cached candidate is no longer that one (the cache
+	// was refetched after the page loaded). Applying would put a record on the
+	// book that nobody reviewed, so nothing is written.
+	applySkipStaleCandidate = "stale_candidate"
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
@@ -111,13 +122,25 @@ type cachedApplyPlan struct {
 	Reason string
 	Err    error
 	Gate   *applygate.Verdict
+	// OwnerReviewed: the gate refused, the request's pin matched, and every
+	// refusing leg is one an owner review overrides. Reason is then "".
+	OwnerReviewed bool
 }
 
 // planCachedApply picks the top cached candidate and runs the certainty gate
 // on it. It reads only. A refused top candidate does NOT fall through to the
 // second one: choosing among candidates is what manual review is for.
 // claims is the batch's buildClaimIndex result (nil = no batch context).
-func planCachedApply(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex) cachedApplyPlan {
+//
+// pin is the candidate the owner was looking at when they clicked Apply in the
+// review lane, nil for every other caller (scripts, API clients, the dry run).
+// The lane shows the same top cached candidate this applies, so a pin that no
+// longer matches means the cache was refetched since: stale_candidate, nothing
+// written. A matching pin makes the apply owner-reviewed: the gate still runs
+// and its verdict is reported, but a refusal from a certainty leg does not
+// block (applygate.OwnerReviewOverridable lists which legs still do). No pin
+// means the ordinary hard gate.
+func planCachedApply(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex, pin *metafetch.CandidatePin) cachedApplyPlan {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
 		return cachedApplyPlan{Reason: applySkipNoCachedCandidates, Err: err}
@@ -133,9 +156,17 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
+	if pin != nil && !pin.Matches(cand) {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipStaleCandidate,
+			Err: fmt.Errorf("reviewed candidate %q (%s) is no longer the top cached candidate %q (%s)", pin.Title, pin.Source, cand.Title, cand.Source)}
+	}
 	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
+		if pin != nil && v.OwnerReviewOverridable() {
+			plan.OwnerReviewed = true
+			return plan
+		}
 		plan.Reason = applySkipGateBlocked
 		plan.Err = fmt.Errorf("%s: %s", v.Reason, v.Detail)
 	}
@@ -219,7 +250,7 @@ func applyCachedCandidateForBook(
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
-	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil)
+	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil)
 }
 
 // applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
@@ -235,11 +266,12 @@ func applyCachedCandidateForBookTimed(
 	checkpoint func() error,
 	pt *metafetch.ApplyPhaseTimings,
 	claims *applygate.ClaimIndex,
+	pin *metafetch.CandidatePin,
 ) applyOutcome {
 	applyStart := time.Now()
-	plan := planCachedApply(svc, books, id, claims)
+	plan := planCachedApply(svc, books, id, claims, pin)
 	if plan.Reason != "" {
-		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate}
+		return applyOutcome{Reason: plan.Reason, Err: plan.Err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 	}
 
 	// The apply below writes the database first and the files after. On
@@ -247,15 +279,23 @@ func applyCachedCandidateForBookTimed(
 	// ("link <tmp> <dest>: file already exists"), leaving the database and the
 	// disk disagreeing. When the file side is known to fail, refuse here,
 	// before any write. Only with writeBack: without it there is no rename.
+	// An owner review does not lift this: it is not a certainty judgement.
 	if writeBack {
 		if err := svc.RenamePreflight(id, *plan.Candidate, nil); err != nil {
-			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate}
+			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 		}
 	}
 
-	resp, aerr := svc.ApplyMetadataCandidate(id, *plan.Candidate, nil)
+	// Field policy is identical for a reviewed and an unreviewed apply (fields
+	// nil: every field the candidate provides, minus the user's locks). The
+	// options only record the override in the change history.
+	var opts metafetch.ApplyOptions
+	if plan.OwnerReviewed {
+		opts.GateOverride = plan.Gate.OverrideSummary()
+	}
+	resp, aerr := svc.ApplyMetadataCandidateWithOptions(id, *plan.Candidate, nil, opts)
 	if aerr != nil {
-		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate}
+		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 	}
 	_ = svc.InvalidateCachedCandidates(id)
 	pt.Since(metafetch.PhaseApplyDB, applyStart)
@@ -264,7 +304,7 @@ func applyCachedCandidateForBookTimed(
 	// of them. resp is non-nil on a nil error (ApplyMetadataCandidate's
 	// contract), but the mocks in this package's tests return (nil, nil), and a
 	// nil deref here would turn "no response" into a crashed op.
-	out := applyOutcome{Applied: true, Gate: plan.Gate}
+	out := applyOutcome{Applied: true, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 	pendingCover := ""
 	if resp != nil {
 		out.SkippedLocked = resp.SkippedLockedFields

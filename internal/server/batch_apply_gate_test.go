@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
 // last-edited: 2026-09-13
 //
@@ -190,7 +190,7 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 	svc := metafetch.NewService(store)
 	rows := map[string]bulkApplyPreviewRow{}
 	for id := range books {
-		rows[id] = previewBulkApplyRow(svc, id, planCachedApply(svc, store, id, nil), true)
+		rows[id] = previewBulkApplyRow(svc, id, planCachedApply(svc, store, id, nil, nil), true)
 	}
 
 	good := rows["good"]

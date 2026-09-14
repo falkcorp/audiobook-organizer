@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-13
 //
@@ -50,6 +50,8 @@ type fakeApplySvc struct {
 	// preflightErr is what RenamePreflight reports; preflightIDs records calls.
 	preflightErr error
 	preflightIDs []string
+	// applyOpts records the options each apply got, parallel to appliedIDs.
+	applyOpts []metafetch.ApplyOptions
 }
 
 func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate, _ []string) error {
@@ -148,11 +150,12 @@ func (f *fakeApplySvc) GetCachedCandidates(bookID string) (*metafetch.MetadataCa
 	return &metafetch.MetadataCandidateCache{Candidates: f.candidates}, true, nil
 }
 
-func (f *fakeApplySvc) ApplyMetadataCandidate(id string, _ metafetch.MetadataCandidate, _ []string) (*metafetch.FetchMetadataResponse, error) {
+func (f *fakeApplySvc) ApplyMetadataCandidateWithOptions(id string, _ metafetch.MetadataCandidate, _ []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error) {
 	if f.applyErr != nil {
 		return nil, f.applyErr
 	}
 	f.appliedIDs = append(f.appliedIDs, id)
+	f.applyOpts = append(f.applyOpts, opts)
 	return &metafetch.FetchMetadataResponse{SkippedLockedFields: f.skippedLocked, PendingCoverURL: f.pendingCover}, nil
 }
 
