@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-09-14
 //
@@ -250,7 +250,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		if params.SkipCached {
 			hasFreshCache := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
+				if database.CachedMetadataCoversSkip(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge) {
 					hasFreshCache = true
 					break
 				}
@@ -739,7 +739,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		if params.SkipCached {
 			hasFresh := false
 			for _, src := range s.metadataFetchService.BuildSourceChain() {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, id, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
+				if database.CachedMetadataCoversSkip(store, id, metadata.ProviderIDOf(src), src.Name(), identity, maxAge) {
 					hasFresh = true
 					break
 				}

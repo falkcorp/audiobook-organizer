@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-14
 
@@ -129,7 +129,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 			maxAge := time.Duration(ttlDays) * 24 * time.Hour
 			hasFreshCache := false
 			for _, src := range sourceChain {
-				if cached, _, cerr := database.CachedMetadataForProvider(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge); cerr == nil && cached != nil {
+				if database.CachedMetadataCoversSkip(store, b.ID, metadata.ProviderIDOf(src), src.Name(), identity, maxAge) {
 					hasFreshCache = true
 					break
 				}

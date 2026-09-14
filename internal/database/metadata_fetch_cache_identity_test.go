@@ -87,6 +87,71 @@ func TestMetadataFetchCache_LegacyRowWithoutIdentityIsMiss(t *testing.T) {
 	require.NotNil(t, raw)
 }
 
+// writeLegacyFetchRow writes a pre-stamp row (no search_identity) cached `age` ago.
+func writeLegacyFetchRow(t *testing.T, store RawKVStore, bookID, source string, age time.Duration) {
+	t.Helper()
+	legacy, err := json.Marshal(map[string]any{
+		"book_id": bookID, "source": source, "results": json.RawMessage(`[{"title":"Wrong"}]`),
+		"best_score": 1.0, "cached_at": time.Now().UTC().Add(-age),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.SetRaw(metadataFetchCacheKey(bookID, source), legacy))
+}
+
+// TestCachedMetadataCoversSkip_LegacyRowCountsAsCached: the A3#14 rollout rule.
+// The bulk skip probe treats an unstamped row as cached (no mass refetch on
+// deploy), under both the id key and the legacy display-name key, while the
+// TTL still ages it out.
+func TestCachedMetadataCoversSkip_LegacyRowCountsAsCached(t *testing.T) {
+	store := newCacheTestStore(t)
+	ident := MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", nil, nil, nil)
+
+	writeLegacyFetchRow(t, store, "b1", "audible", time.Hour)
+	require.True(t, CachedMetadataCoversSkip(store, "b1", "audible", "Audible", ident, 7*24*time.Hour),
+		"a fresh unstamped row must count as cached for the bulk skip")
+
+	writeLegacyFetchRow(t, store, "b2", "Audible Legacy", time.Hour)
+	require.True(t, CachedMetadataCoversSkip(store, "b2", "audible", "Audible Legacy", ident, 7*24*time.Hour),
+		"an unstamped row under the legacy display-name key must count too")
+
+	writeLegacyFetchRow(t, store, "b3", "audible", 8*24*time.Hour)
+	require.False(t, CachedMetadataCoversSkip(store, "b3", "audible", "Audible", ident, 7*24*time.Hour),
+		"the TTL still applies to unstamped rows")
+
+	require.False(t, CachedMetadataCoversSkip(store, "b4", "audible", "Audible", ident, 7*24*time.Hour),
+		"no row at all is not cached")
+}
+
+// TestCachedMetadataCoversSkip_MismatchedStampIsNotCached: a row stamped for a
+// different identity is a real identity change, so the bulk skip must NOT skip
+// the book; a matching stamp is skipped.
+func TestCachedMetadataCoversSkip_MismatchedStampIsNotCached(t *testing.T) {
+	store := newCacheTestStore(t)
+	garbage := MetadataSearchIdentity("01 - track", "", nil, nil, nil)
+	fixed := MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", nil, nil, nil)
+	require.NoError(t, PutCachedMetadataFetch(store, "b1", "audible", garbage, json.RawMessage(`[{"title":"Wrong"}]`), 0))
+
+	require.False(t, CachedMetadataCoversSkip(store, "b1", "audible", "Audible", fixed, 7*24*time.Hour),
+		"a row stamped for another identity must not let the bulk run skip the book")
+	require.True(t, CachedMetadataCoversSkip(store, "b1", "audible", "Audible", garbage, 7*24*time.Hour),
+		"a row stamped for the current identity is cached")
+}
+
+// TestCachedMetadataForProvider_LegacyRowStillNotReplayed: the skip allowance
+// must not leak into the replay read. The same unstamped row the bulk skip
+// accepts is still a miss for CachedMetadataForProvider, so a fetch re-queries.
+func TestCachedMetadataForProvider_LegacyRowStillNotReplayed(t *testing.T) {
+	store := newCacheTestStore(t)
+	ident := MetadataSearchIdentity("The Way of Kings", "Brandon Sanderson", nil, nil, nil)
+	writeLegacyFetchRow(t, store, "b1", "audible", time.Hour)
+
+	require.True(t, CachedMetadataCoversSkip(store, "b1", "audible", "Audible", ident, 7*24*time.Hour))
+	got, hit, err := CachedMetadataForProvider(store, "b1", "audible", "Audible", ident, 7*24*time.Hour)
+	require.NoError(t, err)
+	require.False(t, hit, "an unstamped row must never be replayed")
+	require.Nil(t, got)
+}
+
 // TestPutCachedMetadataFetch_RequiresIdentity: an unstampable row is refused
 // rather than written as a row nothing can ever read back.
 func TestPutCachedMetadataFetch_RequiresIdentity(t *testing.T) {
