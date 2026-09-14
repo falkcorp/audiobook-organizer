@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -294,7 +294,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if prevAuthorsErr != nil {
 				prevAuthors = nil
 			}
-			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name(), false)
 			if applyErr != nil {
 				return nil, applyErr
 			}
@@ -435,7 +435,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if prevAuthorsErr != nil {
 			prevAuthors = nil
 		}
-		meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
+		meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name(), false)
 		if applyErr != nil {
 			return nil, applyErr
 		}

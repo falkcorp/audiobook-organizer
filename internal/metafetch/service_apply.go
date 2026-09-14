@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -54,14 +54,19 @@ func renderableCoverURL(previous, applied *string, candidateRemote string) *stri
 // History recording is the caller's job (see guardedApply for the path that
 // records it); every other apply behavior lives in applyMetadataUnguarded.
 func (mfs *Service) ApplyMetadataToBook(book *database.Book, meta metadata.BookMetadata) ([]string, error) {
-	_, skipped, err := mfs.guardedApply(book, meta, "")
+	_, skipped, err := mfs.guardedApply(book, meta, "", false)
 	return skipped, err
 }
 
 // applyMetadataUnguarded is the field-by-field apply body. It trusts that meta
 // has ALREADY had locked fields stripped (StripLockedFields) -- never call it
 // from outside guardedApply.
-func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata) {
+//
+// replaceAuthors selects how the candidate's author reaches the book_authors
+// join (see applyAuthorCredit): false is fill-only, true replaces. It returns
+// an error only when the author join could not be read or written; the book
+// struct may then be partly mutated and the caller must not persist it.
+func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.BookMetadata, replaceAuthors bool) error {
 	originalTitle := book.Title
 	if meta.Title != "" && meta.Title != "Untitled" && IsBetterValue(book.Title, meta.Title) {
 		// Don't replace a real title with something shorter/worse
@@ -130,10 +135,9 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			author, err = mfs.db.CreateAuthor(extractedAuthor)
 		}
 		if err == nil && author != nil {
-			book.AuthorID = &author.ID
-			_ = mfs.db.SetBookAuthors(book.ID, []database.BookAuthor{
-				{BookID: book.ID, AuthorID: author.ID, Role: "author", Position: 0},
-			})
+			if aerr := mfs.applyAuthorCredit(book, author.ID, replaceAuthors); aerr != nil {
+				return aerr
+			}
 		}
 	}
 
@@ -217,7 +221,78 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			book.SeriesSequence = &pos
 		}
 	}
+	return nil
 }
+
+// applyAuthorCredit puts the candidate's resolved author onto the book.
+//
+// A candidate carries ONE author string, so a replace writes a one-row join.
+// Until 2026-09-14 every apply did that: a book credited to [A, B] that got a
+// candidate naming A came out credited to [A] alone, from auto-fetch and the
+// batch applies as much as from a hand-picked apply, and nothing logged it.
+//
+//   - replace=false (fill-only; every automated and batch path): existing
+//     links are never removed. The candidate's author is appended at the next
+//     position if it is not already credited; book.AuthorID is set only when
+//     empty, so the primary author is not repointed.
+//   - replace=true (only an explicit ReplaceAuthors apply): the join becomes
+//     the candidate's author and book.AuthorID points at it.
+//
+// A read or write failure is returned, never discarded: fill-only cannot tell
+// what it would remove without the current join, so it fails closed.
+func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int, replace bool) error {
+	if replace {
+		if err := mfs.db.SetBookAuthors(book.ID, []database.BookAuthor{
+			{BookID: book.ID, AuthorID: authorID, Role: "author", Position: 0},
+		}); err != nil {
+			return fmt.Errorf("replace author credits: %w", err)
+		}
+		book.AuthorID = &authorID
+		return nil
+	}
+
+	existing, err := mfs.db.GetBookAuthors(book.ID)
+	if err != nil {
+		return fmt.Errorf("read author credits for fill-only apply: %w", err)
+	}
+	existing = append([]database.BookAuthor(nil), existing...)
+	// A book whose primary author lives only in the author_id column (no join
+	// rows) keeps it as a credit: the append below must not orphan it.
+	if len(existing) == 0 && book.AuthorID != nil && *book.AuthorID != authorID {
+		existing = append(existing, database.BookAuthor{
+			BookID: book.ID, AuthorID: *book.AuthorID, Role: "author", Position: 0,
+		})
+	}
+	credited := false
+	nextPos := 0
+	for _, ba := range existing {
+		if ba.AuthorID == authorID {
+			credited = true
+		}
+		if ba.Position >= nextPos {
+			nextPos = ba.Position + 1
+		}
+	}
+	if !credited {
+		merged := append(existing, database.BookAuthor{
+			BookID: book.ID, AuthorID: authorID, Role: "author", Position: nextPos,
+		})
+		if err := mfs.db.SetBookAuthors(book.ID, merged); err != nil {
+			return fmt.Errorf("add author credit: %w", err)
+		}
+		if len(existing) > 0 {
+			applyAuthorLog.Info("fill-only apply added author %d to book %s alongside %d existing credit(s)",
+				authorID, logger.SanitizeLogValue(book.ID), len(existing))
+		}
+	}
+	if book.AuthorID == nil {
+		book.AuthorID = &authorID
+	}
+	return nil
+}
+
+// applyAuthorLog is applyAuthorCredit's logger.New printf-style logger.
+var applyAuthorLog = logger.New("metafetch.apply-authors")
 
 // isbnOfLen returns s only when it is exactly n characters long, else "". Used to
 // length-classify a single ISBN into its ISBN-10 / ISBN-13 column.
@@ -630,7 +705,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		prevAuthors = nil
 	}
 	historySource := opts.historySource(candidate.Source)
-	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource)
+	meta, skippedLocked, err := mfs.guardedApply(book, meta, historySource, opts.ReplaceAuthors)
 	if err != nil {
 		return nil, err
 	}
