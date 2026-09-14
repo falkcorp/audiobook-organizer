@@ -1,5 +1,5 @@
 // file: internal/itunes/service/import_corruption_regression_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e9a1c7b-8d23-4f5e-b6a0-2c7d9e1f3b58
 // last-edited: 2026-09-13
 //
@@ -497,4 +497,142 @@ func TestExecute_TwoLiveBooksAtPathIsSkipped(t *testing.T) {
 		assert.Nil(t, got.ITunesPersistentID, "book %s shares its path with another live book; it must not be linked", id)
 	}
 	assert.Len(t, allBooks(t, store), 2, "an ambiguous path must not create a third book")
+}
+
+// countedFinishedBook creates an iTunes book whose admin state finished once
+// and whose finish was already pushed (play count 3 -> 4). It returns the
+// book ID and that finish's state as stored.
+func countedFinishedBook(t *testing.T, store *database.PebbleStore, pid string) (string, *database.UserBookState) {
+	t.Helper()
+	book, err := store.CreateBook(&database.Book{
+		Title: "Counted " + pid, FilePath: "/tmp/" + pid + ".m4b", Format: "m4b",
+		ITunesPersistentID: &pid, ITunesPlayCount: new(3),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "seg-" + pid, BookID: book.ID, FilePath: "/tmp/" + pid + ".m4b", Duration: 3600}))
+	require.NoError(t, store.SetUserPosition(adminUserID, book.ID, "seg-"+pid, 3599))
+	_, err = readstatus.SetManualStatus(store, adminUserID, book.ID, database.UserBookStatusFinished)
+	require.NoError(t, err)
+	assert.Equal(t, 1, newPositionSync(store, &recordingEnqueuer{}).pushPositions())
+	require.Equal(t, 4, playCount(t, store, book.ID))
+	state, err := store.GetUserBookState(adminUserID, book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, state.FinishedAt)
+	return book.ID, state
+}
+
+func playCount(t *testing.T, store *database.PebbleStore, id string) int {
+	t.Helper()
+	got, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, got.ITunesPlayCount)
+	return *got.ITunesPlayCount
+}
+
+// Round 3, item 1: the undo restore (merge/combine_journal.go writeProgress)
+// drains the row to a status-less state and later writes the snapshot back.
+// The restored finish is the one already counted, so the push that follows
+// must not count it again, however many times the merge is undone.
+func TestPushPositions_UndoRestoredFinishIsNotCountedAgain(t *testing.T) {
+	store := setupSyncTestStore(t)
+	id, snapshot := countedFinishedBook(t, store, "UNDO_RESTORE_PID")
+	ps := newPositionSync(store, &recordingEnqueuer{})
+
+	for range 2 {
+		// Drain, exactly as writeProgress's `current != nil` branch does.
+		current, err := store.GetUserBookState(adminUserID, id)
+		require.NoError(t, err)
+		drained := *current
+		drained.Status = ""
+		drained.StatusManual = false
+		drained.ProgressPct = 0
+		drained.TotalListenedSeconds = 0
+		drained.LastSegmentID = ""
+		require.NoError(t, store.SetUserBookState(&drained))
+
+		// Restore the snapshot, exactly as its `st != nil` branch does.
+		time.Sleep(5 * time.Millisecond)
+		restored := *snapshot
+		require.NoError(t, store.SetUserBookState(&restored))
+		assert.Equal(t, 1, ps.pushPositions())
+	}
+
+	assert.Equal(t, 4, playCount(t, store, id), "an undo restore re-dated the counted finish and the push counted it again")
+}
+
+// Round 3, item 1: the merge carry (merge/sync_follow.go mergeUserProgressFor)
+// writes the loser's Finished state onto a winner whose row is unfinished.
+// Here the winner had already counted that same finish, so the push must not
+// add a play for it.
+func TestPushPositions_MergeCarriedFinishIsNotCountedAgain(t *testing.T) {
+	store := setupSyncTestStore(t)
+	loserID, loserState := countedFinishedBook(t, store, "MERGE_LOSER_PID")
+
+	winnerPID := "MERGE_WINNER_PID"
+	winner, err := store.CreateBook(&database.Book{
+		Title: "Winner", FilePath: "/tmp/winner.m4b", Format: "m4b",
+		ITunesPersistentID: &winnerPID, ITunesPlayCount: new(4),
+		ITunesPlayCountBumpedAt: loserState.FinishedAt,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "seg-winner", BookID: winner.ID, FilePath: "/tmp/winner.m4b", Duration: 3600}))
+	require.NoError(t, store.SetUserPosition(adminUserID, winner.ID, "seg-winner", 60))
+	_, err = readstatus.RecomputeUserBookState(store, adminUserID, winner.ID)
+	require.NoError(t, err)
+	ws, err := store.GetUserBookState(adminUserID, winner.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ws)
+	require.NotEqual(t, database.UserBookStatusFinished, ws.Status, "the winner's row must be unfinished before the carry")
+
+	// The carry, exactly as mergeUserProgressFor writes it.
+	time.Sleep(5 * time.Millisecond)
+	loaded, err := store.GetUserBookState(adminUserID, loserID)
+	require.NoError(t, err)
+	carried := *loaded
+	carried.BookID = winner.ID
+	require.NoError(t, store.SetUserBookState(&carried))
+	require.NoError(t, store.SetUserPosition(adminUserID, winner.ID, "seg-winner", 3599))
+
+	// Both books have positions inside the push window, so both bookmarks go out.
+	assert.Equal(t, 2, newPositionSync(store, &recordingEnqueuer{}).pushPositions())
+	assert.Equal(t, 4, playCount(t, store, winner.ID), "the carried finish was re-dated and counted again on the winner")
+	assert.Equal(t, 4, playCount(t, store, loserID), "the loser's finish was already counted")
+}
+
+// failingModifyStore makes every ModifyBook fail, standing in for a store
+// error while pullBookmarks marks a seeded finish as counted.
+type failingModifyStore struct{ *database.PebbleStore }
+
+func (s failingModifyStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, fmt.Errorf("injected ModifyBook failure")
+}
+
+// Round 3, item 2: if marking the seeded finish as counted fails, no
+// unmarked finish may be left behind for the next push to count.
+func TestPullBookmarks_MarkFailureLeavesNoUncountedFinish(t *testing.T) {
+	store := setupSyncTestStore(t)
+	pid := "POS_PID_MARK_FAIL"
+	book, err := store.CreateBook(&database.Book{
+		Title: "Mark Fails", FilePath: "/tmp/markfail.m4b", Format: "m4b",
+		ITunesPersistentID: &pid, ITunesPlayCount: new(2),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "seg-markfail", BookID: book.ID, FilePath: "/tmp/markfail.m4b", Duration: 3600}))
+
+	newPositionSync(failingModifyStore{store}, &recordingEnqueuer{}).pullBookmarks()
+
+	time.Sleep(5 * time.Millisecond)
+	require.NoError(t, store.SetUserPosition(adminUserID, book.ID, "seg-markfail", 60))
+	ps := newPositionSync(store, &recordingEnqueuer{})
+	ps.pushPositions()
+	assert.Equal(t, 2, playCount(t, store, book.ID), "a finish seeded from iTunes' own count was counted after its mark failed")
+
+	// The next pull, with a working store, seeds it marked.
+	ps.pullBookmarks()
+	state, err := store.GetUserBookState(adminUserID, book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, database.UserBookStatusFinished, state.Status)
+	ps.pushPositions()
+	assert.Equal(t, 2, playCount(t, store, book.ID))
 }

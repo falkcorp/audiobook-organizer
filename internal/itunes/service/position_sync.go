@@ -1,5 +1,5 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-09-13
 //
@@ -126,6 +126,7 @@ func (p *PositionSync) pullBookmarks() int {
 
 	// Also seed "finished" from iTunes play_count > 0 with no existing state.
 	stateErrs := 0
+	markErrs := 0 // books whose "already counted" mark failed; not seeded
 	for _, book := range books {
 		if book.ITunesPlayCount == nil || *book.ITunesPlayCount <= 0 {
 			continue
@@ -141,30 +142,47 @@ func (p *PositionSync) pullBookmarks() int {
 		if state != nil {
 			continue
 		}
-		seededState, err := readstatus.SetManualStatus(p.store, adminUserID, book.ID, database.UserBookStatusFinished)
-		if err != nil {
+		// This finish came FROM iTunes' play count, so it has already been
+		// counted there. The book is marked as counted first, and the
+		// Finished state is written only once that mark is stored, carrying
+		// the same stamp. A finish can then never exist unmarked: if the
+		// mark fails, nothing is seeded and the next run tries again. If
+		// the state write fails, the mark is left without a finish, which
+		// is harmless because a later real finish is dated after it.
+		finish := time.Now()
+		if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
+			if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
+				return database.ErrSkipBookWrite
+			}
+			b.ITunesPlayCountBumpedAt = &finish
+			return nil
+		}); err != nil {
+			markErrs++
+			p.log.Warn("itunes position sync: mark the iTunes finish of %s as counted: %v; not seeding finished", book.ID, err)
+			continue
+		}
+		// With no stored row, SetUserBookState keeps a stamp the caller
+		// supplies, so the seeded finish is dated exactly at the mark. The
+		// fields are the ones readstatus.SetManualStatus writes for a book
+		// with no state.
+		if err := p.store.SetUserBookState(&database.UserBookState{
+			UserID:         adminUserID,
+			BookID:         book.ID,
+			Status:         database.UserBookStatusFinished,
+			StatusManual:   true,
+			LastActivityAt: finish,
+			FinishedAt:     &finish,
+		}); err != nil {
 			p.log.Warn("itunes position sync: seed finished for %s: %v", book.ID, err)
 			continue
 		}
 		seeded++
-		// This finish came FROM iTunes' play count, so it is already
-		// counted there: record it as bumped, or the next push would add a
-		// play for it.
-		if seededState != nil && seededState.FinishedAt != nil {
-			finish := *seededState.FinishedAt
-			if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
-				if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
-					return database.ErrSkipBookWrite
-				}
-				b.ITunesPlayCountBumpedAt = &finish
-				return nil
-			}); err != nil {
-				p.log.Warn("itunes position sync: mark seeded finish of %s as counted: %v", book.ID, err)
-			}
-		}
 	}
 	if stateErrs > 0 {
 		p.log.Warn("itunes position sync: %d read-state errors while seeding finished status", stateErrs)
+	}
+	if markErrs > 0 {
+		p.log.Warn("itunes position sync: %d books not seeded as finished because marking their iTunes finish as counted failed", markErrs)
 	}
 
 	return seeded
@@ -266,9 +284,10 @@ func (p *PositionSync) pushPositions() int {
 
 // unbumpedFinish reports whether state is a finish not yet counted into the
 // book's iTunes play count, and returns the finish's time to record. The
-// finish time is the state's LastActivityAt: it does not move when the sync
-// merely re-runs, so the same finish is counted once, and a later re-listen
-// that finishes again (moving LastActivityAt past the recorded time) is
+// finish time is the state's FinishedAt, which the store stamps only when the
+// status changes into Finished. A later position write or a re-run of the sync
+// does not move it, so the same finish is counted once. A re-listen that
+// leaves Finished and finishes again gets a new, later FinishedAt and is
 // counted again.
 func unbumpedFinish(state *database.UserBookState, book *database.Book) (time.Time, bool) {
 	if state == nil || state.Status != database.UserBookStatusFinished || state.FinishedAt == nil {

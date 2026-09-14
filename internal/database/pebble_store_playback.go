@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
 // last-edited: 2026-09-13
 
@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var playbackLog = logger.New("database.playback")
 
 func (p *PebbleStore) SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error {
 	if userID == "" || bookID == "" || segmentID == "" {
@@ -98,22 +102,34 @@ func (p *PebbleStore) ClearUserPositions(userID, bookID string) error {
 // stored prev, and mutates state in place so the caller sees the stamp. Every
 // writer of a UserBookState -- readstatus, the ABS handlers, merge, the iTunes
 // position backfill -- goes through SetUserBookState, so this is the one
-// place a finish is dated.
+// place a finish is dated. prevErr is the error from reading prev.
 //   - not Finished: no finish, the stamp is cleared.
+//   - prev unreadable: the caller's value is kept, and nil stays nil. The row
+//     that could not be read may already be Finished, so stamping now would
+//     date an old finish as a new one, and the iTunes push would count it.
 //   - still Finished: the original finish is kept, whatever the caller sent.
-//   - newly Finished: stamped now -- except a row with no stored state that
-//     arrives already stamped (a state carried over from another book by a
-//     merge), which keeps its finish rather than counting as a new one.
-func stampFinishedAt(state, prev *UserBookState, now time.Time) {
+//   - newly Finished, and the caller sent a stamp: the caller's is kept.
+//     This is safe because anyone who read a non-Finished row, or no row,
+//     got nil: every non-Finished write clears the stamp. A non-nil value
+//     arriving here was therefore carried from somewhere else, either by
+//     the merge carry (a loser's finish written onto a winner whose row is
+//     unfinished, merge/sync_follow.go) or by the undo restore (a snapshot
+//     written back over the drained row, merge/combine_journal.go). In both
+//     cases it is the same finish and must not be dated as new.
+//   - newly Finished with no stamp: stamped now.
+func stampFinishedAt(state, prev *UserBookState, prevErr error, now time.Time) {
 	if state.Status != UserBookStatusFinished {
 		state.FinishedAt = nil
+		return
+	}
+	if prevErr != nil {
 		return
 	}
 	if prev != nil && prev.Status == UserBookStatusFinished {
 		state.FinishedAt = prev.FinishedAt
 		return
 	}
-	if prev == nil && state.FinishedAt != nil {
+	if state.FinishedAt != nil {
 		return
 	}
 	finished := now
@@ -126,11 +142,15 @@ func (p *PebbleStore) SetUserBookState(state *UserBookState) error {
 	}
 	now := time.Now()
 	state.UpdatedAt = now
-	// A prev that cannot be read is treated as absent: the state is still
-	// written (a row that fails to decode must stay rewritable), and the
-	// finish stamp falls back to the caller's value or now.
-	prev, _ := p.GetUserBookState(state.UserID, state.BookID)
-	stampFinishedAt(state, prev, now)
+	// A prev that cannot be read is still overwritten, because a row that
+	// fails to decode must stay rewritable. stampFinishedAt then keeps the
+	// caller's stamp instead of dating the finish now.
+	prev, prevErr := p.GetUserBookState(state.UserID, state.BookID)
+	if prevErr != nil {
+		playbackLog.Warn("SetUserBookState %s/%s: stored state unreadable (%v); overwriting it and keeping the caller's finish stamp", state.UserID, state.BookID, prevErr)
+		prev = nil
+	}
+	stampFinishedAt(state, prev, prevErr, now)
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
