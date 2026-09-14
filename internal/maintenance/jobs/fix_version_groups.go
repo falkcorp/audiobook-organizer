@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: a1000004-0000-0000-0000-000000000004
 // last-edited: 2026-09-13
 
@@ -476,11 +476,18 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 	for _, rs := range unmatched {
 		plan.left += len(rs)
 	}
+	if len(rows) > 0 && plan.keep+len(plan.repoint) == 0 {
+		// None of the book's rows is, or verifiably becomes, a file in
+		// subdir. Moving the book's path -- even with new rows for the
+		// subdir's files -- would leave every old row behind under a book
+		// that no longer points at them. A book with no rows at all has
+		// nothing to leave behind, so only its new files are created.
+		return nil, fmt.Errorf("%w: none of book %s's %d row(s) could be verified in %s (%d unverified name match(es), %d unmatched file(s), %d owned by other books)",
+			errVGRefused, bookID, len(rows), subdir, len(plan.unverified), len(plan.create), len(plan.ownedElsewhere))
+	}
 	if plan.keep+len(plan.repoint)+len(plan.create) == 0 {
-		// Nothing in subdir could be tied to this book: moving only the
-		// book's path would point it away from every row it has.
-		return nil, fmt.Errorf("%w: no file in %s could be verified as book %s's (%d unverified name match(es), %d owned by other books)",
-			errVGRefused, subdir, bookID, len(plan.unverified), len(plan.ownedElsewhere))
+		return nil, fmt.Errorf("%w: no file in %s could be tied to book %s (%d owned by other books)",
+			errVGRefused, subdir, bookID, len(plan.ownedElsewhere))
 	}
 	return plan, nil
 }

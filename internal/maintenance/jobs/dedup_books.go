@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: a1000010-0000-0000-0000-000000000010
 // last-edited: 2026-09-13
 
@@ -7,6 +7,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -47,11 +48,15 @@ func (j *dedupBooksJob) CanResume() bool     { return false }
 // Dry-run runs the same guards, so its counts are what apply would do.
 type ddTally struct{ done, refused, failed int }
 
+// errDDRefused marks a retirement the job declines (a junk row whose own
+// files collide with a live book's). Counted as refused, not failed.
+var errDDRefused = errors.New("dedup-books refused")
+
 func (t *ddTally) record(err error) {
 	switch {
 	case err == nil:
 		t.done++
-	case merge.IsRefusal(err):
+	case merge.IsRefusal(err) || errors.Is(err, errDDRefused):
 		t.refused++
 	default:
 		t.failed++
@@ -71,15 +76,13 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 	// group state apply would see.
 	sim := newDDSim()
 
-	// Paths named by live books that are not junk: a junk row sharing one of
-	// these must not keep naming it once retired (see ddJunkSharesLivePath).
-	livePaths := make(map[string]bool)
-	for i := range allBooks {
-		b := &allBooks[i]
-		if b.IsSoftDeleted() || b.FilePath == "" || ddIsJunkReadByNarrator(b) {
-			continue
-		}
-		livePaths[b.FilePath] = true
+	// Every path a live, non-junk book names -- its FilePath and each of its
+	// book_file rows -- so phase 1 can refuse a junk row whose own files
+	// collide with a live book's (see ddJunkSharesLivePath). A read error
+	// fails the run before any write: the check cannot be skipped.
+	livePaths, err := ddLivePathIndex(store, allBooks)
+	if err != nil {
+		return fmt.Errorf("index live book paths: %w", err)
 	}
 
 	// Phase 1: Delete junk "read by narrator" records
@@ -98,16 +101,17 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 			continue
 		}
 		// PurgeSoftDeletedBooks with delete-files os.Remove()s a purged book's
-		// FilePath. A scanner "read by narrator" row can name the same file as
-		// a live book, so a junk row whose path is shared in any way is retired
-		// with its FilePath cleared; only an unshared path is kept.
-		shared, shareErr := ddJunkSharesLivePath(store, book, livePaths)
-		if shareErr != nil {
-			phase1.record(shareErr)
-			ddLog.Error("phase1 path check book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(shareErr.Error()))
-			continue
+		// FilePath (for a directory, the book's own rows' files). Exact-string
+		// comparison cannot prove a junk path unshared -- a live book's
+		// FilePath can be the directory holding it -- so EVERY junk row is
+		// retired with its FilePath cleared and the purge deletes nothing
+		// through it. A junk row whose own book_file rows name a live book's
+		// file or lie under a live book's path is refused: retiring it would
+		// leave that file owned by a deleted row.
+		delErr := ddJunkSharesLivePath(store, book, livePaths)
+		if delErr == nil {
+			delErr = ddRetireBook(store, sim, book, nil, dryRun, true)
 		}
-		delErr := ddRetireBook(store, sim, book, nil, dryRun, shared)
 		phase1.record(delErr)
 		if delErr != nil {
 			ddLog.Error("phase1 retire book=%s: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(delErr.Error()))
@@ -431,6 +435,19 @@ func ddPlanPrimaryHandoff(store ddGroupStore, sim *ddSim, book, heir *database.B
 	if err != nil {
 		return "", fmt.Errorf("read version group %s of %s: %w", vg, book.ID, err)
 	}
+	if sim != nil {
+		// Books that joined this group through the keeper fill. In apply the
+		// store already lists them; in dry-run only the overlay does.
+		seen := make(map[string]bool, len(members))
+		for _, m := range members {
+			seen[m.ID] = true
+		}
+		for _, j := range sim.joined[vg] {
+			if !seen[j.ID] {
+				members = append(members, j)
+			}
+		}
+	}
 	var others []database.Book
 	for _, m := range members {
 		if m.ID == book.ID || m.IsSoftDeleted() || sim.isRetired(m.ID) {
@@ -515,46 +532,107 @@ func ddRetireBook(store ddRetireStore, sim *ddSim, book, heir *database.Book, dr
 	return nil
 }
 
-// ddJunkSharesLivePath reports whether retiring junk while keeping its
-// FilePath could let a purge delete a live book's audio: its FilePath is a
-// live book's FilePath, a book_file row at that path belongs to another book,
-// or one of its own rows names a live book's path. A read error is returned,
-// so the caller fails the book rather than guessing "not shared".
-func ddJunkSharesLivePath(store maintenance.JobStore, junk *database.Book, livePaths map[string]bool) (bool, error) {
-	if junk.FilePath == "" {
-		return false, nil
-	}
-	if livePaths[junk.FilePath] {
-		return true, nil
-	}
-	owner, err := store.GetBookFileByPath(junk.FilePath)
-	if err != nil {
-		return false, fmt.Errorf("look up the owner of %s: %w", junk.FilePath, err)
-	}
-	if owner != nil && owner.BookID != junk.ID {
-		return true, nil
-	}
-	files, err := store.GetBookFiles(junk.ID)
-	if err != nil {
-		return false, fmt.Errorf("read files of %s: %w", junk.ID, err)
-	}
-	for _, f := range files {
-		if livePaths[f.FilePath] {
-			return true, nil
+// ddLivePathIndex returns every path a live, non-junk book names: its
+// FilePath and each of its book_file rows, cleaned. The rows come from the
+// full file listing, not the book_file_path index, which keeps one owner per
+// path (last write wins) and so can name the junk row itself.
+func ddLivePathIndex(store maintenance.JobStore, allBooks []database.Book) (map[string]bool, error) {
+	live := make(map[string]bool)
+	paths := make(map[string]bool)
+	junk := 0
+	for i := range allBooks {
+		b := &allBooks[i]
+		if b.IsSoftDeleted() {
+			continue
+		}
+		if ddIsJunkReadByNarrator(b) {
+			junk++
+			continue
+		}
+		live[b.ID] = true
+		if b.FilePath != "" {
+			paths[filepath.Clean(b.FilePath)] = true
 		}
 	}
-	return false, nil
+	if junk == 0 {
+		return paths, nil
+	}
+	files, err := store.GetAllBookFilesCore()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if live[f.BookID] && f.FilePath != "" {
+			paths[filepath.Clean(f.FilePath)] = true
+		}
+	}
+	return paths, nil
 }
 
-// ddSim records the retirements and promotions a run has made, or in dry-run
-// would have made. A nil *ddSim is an empty overlay.
+// ddJunkSharesLivePath returns errDDRefused when one of junk's own book_file
+// rows names a path in livePaths or lies under one (a live book's FilePath
+// directory). A read error is returned as is, so the book fails rather than
+// being retired on a guess.
+func ddJunkSharesLivePath(store maintenance.JobStore, junk *database.Book, livePaths map[string]bool) error {
+	files, err := store.GetBookFiles(junk.ID)
+	if err != nil {
+		return fmt.Errorf("read files of %s: %w", junk.ID, err)
+	}
+	for _, f := range files {
+		if f.FilePath == "" {
+			continue
+		}
+		if hit := ddCoveredBy(filepath.Clean(f.FilePath), livePaths); hit != "" {
+			return fmt.Errorf("%w: junk book %s owns %s, which is live path %s or lies under it",
+				errDDRefused, junk.ID, f.FilePath, hit)
+		}
+	}
+	return nil
+}
+
+// ddCoveredBy returns the entry of paths that is p or an ancestor of p, or "".
+func ddCoveredBy(p string, paths map[string]bool) string {
+	for cur := p; ; {
+		if paths[cur] {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return ""
+		}
+		cur = parent
+	}
+}
+
+// ddSim records the retirements, promotions and group joins a run has made,
+// or in dry-run would have made. A nil *ddSim is an empty overlay.
 type ddSim struct {
 	retired  map[string]bool
 	promoted map[string]bool
+	// joined holds books that joined a version group through the keeper
+	// field-fill, by group. In dry-run the store never sees the join.
+	joined map[string][]database.Book
+	// handoffs is the successor each retirement promoted ("" for none), in
+	// order: what a dry-run and an apply of the same plan must agree on.
+	handoffs []string
 }
 
 func newDDSim() *ddSim {
-	return &ddSim{retired: map[string]bool{}, promoted: map[string]bool{}}
+	return &ddSim{retired: map[string]bool{}, promoted: map[string]bool{}, joined: map[string][]database.Book{}}
+}
+
+func (s *ddSim) join(b *database.Book, vg string) {
+	if s == nil || vg == "" {
+		return
+	}
+	for _, m := range s.joined[vg] {
+		if m.ID == b.ID {
+			return
+		}
+	}
+	cp := *b
+	cp.VersionGroupID = &vg
+	s.joined[vg] = append(s.joined[vg], cp)
 }
 
 func (s *ddSim) isRetired(id string) bool  { return s != nil && s.retired[id] }
@@ -565,6 +643,7 @@ func (s *ddSim) retire(id, successor string) {
 		return
 	}
 	s.retired[id] = true
+	s.handoffs = append(s.handoffs, successor)
 	if successor != "" {
 		s.promoted[successor] = true
 	}
@@ -631,7 +710,23 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 	if err != nil {
 		return err
 	}
+	// The keeper fill gives a groupless keeper the dup's version group.
+	joinVG := ""
+	if (keeper.VersionGroupID == nil || *keeper.VersionGroupID == "") && dup.VersionGroupID != nil {
+		joinVG = *dup.VersionGroupID
+	}
 	if dryRun {
+		// Mirror what apply leaves behind, so a later hand-off in the dup's
+		// group counts the keeper as a member (and as primary if promoted).
+		if joinVG != "" {
+			vg := joinVG
+			keeper.VersionGroupID = &vg
+			sim.join(keeper, joinVG)
+		}
+		if successor != "" && successor == keeper.ID {
+			t := true
+			keeper.IsPrimaryVersion = &t
+		}
 		sim.retire(dup.ID, successor)
 		return nil
 	}
@@ -661,6 +756,9 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		ddLog.Info("left the keeper's user-locked fields alone keeper=%s locked=%s", logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(strings.Join(restored, ",")))
 	}
 	*keeper = *updated
+	if joinVG != "" && keeper.VersionGroupID != nil && *keeper.VersionGroupID == joinVG {
+		sim.join(keeper, joinVG)
+	}
 
 	if len(files) > 0 {
 		ids := make([]string, len(files))
@@ -805,8 +903,7 @@ func ddMergeBookFields(dst, src *database.Book) {
 // clearPath it also clears FilePath (merge's softDeleteAbsorbed rule): a book
 // whose files went to a keeper must not keep naming the keeper's path, or
 // PurgeSoftDeletedBooks with delete-files removes the keeper's audio. Phase 1
-// clears it too whenever a junk row's path is shared with a live book
-// (ddJunkSharesLivePath); only an unshared junk path is kept.
+// clears it on every junk row it retires.
 //
 // A retired book is also demoted from primary, so no reader counts a deleted
 // row as its group's primary; the caller has already promoted a successor.
