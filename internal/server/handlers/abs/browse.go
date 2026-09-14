@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-13
 
@@ -1855,15 +1855,17 @@ func (h *Handler) filterDataCached(ctx context.Context) *filterDataResponse {
 		return resp
 	}
 	// Expired: serve the last published document and rebuild behind it, for the
-	// reason contributorsCached gives. A handler with no document, or one older
-	// than absCacheStaleMax, waits for the rebuild.
-	h.filterDataMu.Lock()
-	prev, at := h.filterDataCache, h.filterDataCachedAt
-	h.filterDataMu.Unlock()
-	if prev != nil && h.servableStale(at) {
+	// reason contributorsCached gives. Only a handler with no document waits.
+	//
+	// 🔴 NO absCacheStaleMax CAP HERE, unlike contributors and series. The cap
+	// exists to turn a store that keeps failing into an error the client sees,
+	// and this endpoint has no error to give: a degraded build deliberately
+	// falls back to the last good document (see rebuildFilterData). Capping it
+	// would only make every request past the cap wait on a failing full rebuild
+	// and then receive the same old document. Each failed refresh is logged.
+	if prev := h.filterDataPublished(); prev != nil {
 		h.filterDataRefresh.refresh("filterdata", func() error {
-			h.rebuildFilterData(context.Background())
-			if h.filterDataFresh() == nil {
+			if _, published := h.rebuildFilterData(context.Background()); !published {
 				// buildFilterData has logged which source failed; this line
 				// records that the refresh as a whole published nothing.
 				return errors.New("rebuild was degraded and not published")
@@ -1872,7 +1874,8 @@ func (h *Handler) filterDataCached(ctx context.Context) *filterDataResponse {
 		})
 		return prev
 	}
-	return h.rebuildFilterData(ctx)
+	resp, _ := h.rebuildFilterData(ctx)
+	return resp
 }
 
 // filterDataPublished returns the last published document regardless of age,
@@ -1883,12 +1886,25 @@ func (h *Handler) filterDataPublished() *filterDataResponse {
 	return h.filterDataCache
 }
 
+// filterDataResult is one filterDataSF outcome: the document to serve, and
+// whether it is a published (complete) build rather than a degraded fallback.
+type filterDataResult struct {
+	resp      *filterDataResponse
+	published bool
+}
+
 // rebuildFilterData builds the /filterdata document, publishing it only when
-// complete. Concurrent callers share one build through filterDataSF.
-func (h *Handler) rebuildFilterData(ctx context.Context) *filterDataResponse {
+// complete, and reports whether this call's result was published. Concurrent
+// callers share one build through filterDataSF.
+//
+// published is reported from the build itself, not inferred afterwards from
+// filterDataFresh: the document is stamped with its contributor index's build
+// time, so a complete build from an index near the end of its TTL can be
+// published already expired.
+func (h *Handler) rebuildFilterData(ctx context.Context) (*filterDataResponse, bool) {
 	v, _, _ := h.filterDataSF.Do("filterdata", func() (any, error) {
 		if resp := h.filterDataFresh(); resp != nil {
-			return resp, nil
+			return filterDataResult{resp: resp, published: true}, nil
 		}
 		resp, builtAt, complete := h.buildFilterData(context.WithoutCancel(ctx))
 
@@ -1914,9 +1930,9 @@ func (h *Handler) rebuildFilterData(ctx context.Context) *filterDataResponse {
 		// carries the LoadedAt to say which.
 		if !complete {
 			if prev := h.filterDataCache; prev != nil {
-				return prev, nil
+				return filterDataResult{resp: prev}, nil
 			}
-			return resp, nil
+			return filterDataResult{resp: resp}, nil
 		}
 
 		// 🔴 STAMPED WITH THE CONTRIBUTOR INDEX'S BUILD TIME, NOT h.now(). Equal
@@ -1925,15 +1941,15 @@ func (h *Handler) rebuildFilterData(ctx context.Context) *filterDataResponse {
 		// /filterdata would serve the author list /authors had already replaced.
 		// Expiring with the index is what actually makes the two agree.
 		h.filterDataCache, h.filterDataCachedAt = resp, builtAt
-		return resp, nil
+		return filterDataResult{resp: resp, published: true}, nil
 	})
-	if resp, ok := v.(*filterDataResponse); ok && resp != nil {
-		return resp
+	if r, ok := v.(filterDataResult); ok && r.resp != nil {
+		return r.resp, r.published
 	}
 	// Unreachable today: the closure above returns a non-nil document on every
 	// path. Guarded anyway because the bare assertion would panic through gin's
 	// recovery the moment anyone adds a `return nil, err` to it.
-	return emptyFilterData(msEpoch(h.now()))
+	return emptyFilterData(msEpoch(h.now())), false
 }
 
 // emptyFilterData is the all-keys-present, all-lists-empty document.
@@ -2645,8 +2661,7 @@ func (h *Handler) WarmContributors(ctx context.Context) {
 	// of the contributor result: a request waits only when no build exists, and
 	// after a restart that is every cache this does not fill.
 	started = time.Now()
-	h.rebuildFilterData(ctx)
-	if h.filterDataFresh() == nil {
+	if _, published := h.rebuildFilterData(ctx); !published {
 		cacheLog.Warn("abs: filterdata cache warm was degraded; the first request will rebuild it")
 	}
 	if _, err := h.rebuildSeriesBooks(); err != nil {

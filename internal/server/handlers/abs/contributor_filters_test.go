@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
 // last-edited: 2026-09-13
 
@@ -453,6 +453,41 @@ func TestFilterData_ExpiredDocumentServedWithoutWaitingForRebuild(t *testing.T) 
 	}
 	if w.seed.lib.genreCalls() == before {
 		t.Fatal("serving the expired document started no background rebuild")
+	}
+	release()
+	abshandler.WaitCacheRefreshes(w.handler)
+}
+
+// 🔴 TestFilterData_PastTheStaleCapStillServesWithoutWaiting — /filterdata is
+// exempt from absCacheStaleMax. It has no error to surface (a degraded build
+// falls back to the last good document), so a cap would only make a request
+// wait on a failing rebuild and then serve the same document.
+func TestFilterData_PastTheStaleCapStillServesWithoutWaiting(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	base := time.Now()
+	w.handler.SetClock(func() time.Time { return base })
+	_, good, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	want := authorNames(t, good, "authors")
+
+	w.handler.SetClock(func() time.Time { return base.Add(40 * time.Minute) })
+	release := w.seed.lib.holdFilterDataBuilds()
+	defer release()
+
+	done := make(chan []string, 1)
+	go func() {
+		_, body, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+		done <- authorNames(t, body, "authors")
+	}()
+	select {
+	case got := <-done:
+		if !equalStrings(got, want) {
+			t.Fatalf("40-minute-old document served as %v, want the previous %v", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("a /filterdata request past the stale cap blocked on the rebuild")
 	}
 	release()
 	abshandler.WaitCacheRefreshes(w.handler)
