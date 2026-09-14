@@ -127,6 +127,14 @@ func TestApplyCachedCandidate_PassingPreflightApplies(t *testing.T) {
 	if !out.Applied || len(svc.preflightIDs) != 1 || len(svc.appliedIDs) != 1 || len(svc.finishCalls) != 1 {
 		t.Fatalf("outcome %+v preflight %v applied %v finish %d", out, svc.preflightIDs, svc.appliedIDs, len(svc.finishCalls))
 	}
+	// A batch apply is fill-only (owner decision A3#3), and the preflight must
+	// plan the same fill-only write or it checks a different rename target.
+	if !svc.applyOpts[0].FillOnly {
+		t.Errorf("batch apply sent opts without FillOnly: %+v", svc.applyOpts[0])
+	}
+	if !svc.preflightOpts[0].FillOnly {
+		t.Errorf("batch rename preflight planned without FillOnly: %+v", svc.preflightOpts[0])
+	}
 }
 
 func (f *fakeApplySvc) ValidateCachedIdentityForBook(*metafetch.MetadataCandidateCache, *database.Book) error {
