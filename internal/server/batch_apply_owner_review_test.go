@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-13
 //
@@ -50,8 +50,15 @@ func TestOwnerReview_MatchingPinAppliesAndRecordsOverride(t *testing.T) {
 	if out.Gate == nil || out.Gate.Allowed {
 		t.Fatalf("the gate must still run and report its refusal: %+v", out.Gate)
 	}
-	if len(svc.applyOpts) != 1 || !strings.Contains(svc.applyOpts[0].GateOverride, applygate.ReasonSequenceMissingOnCandidate) {
-		t.Fatalf("override not recorded for the history: %+v", svc.applyOpts)
+	// The real verdict refuses on two legs at once (no volume number, no
+	// runtime); the history must name both, not just the first.
+	if len(svc.applyOpts) != 1 {
+		t.Fatalf("applies: %+v", svc.applyOpts)
+	}
+	for _, want := range []string{applygate.ReasonSequenceMissingOnCandidate, applygate.ReasonRuntimeUnknownOverwrite} {
+		if !strings.Contains(svc.applyOpts[0].GateOverride, want) {
+			t.Errorf("override %q does not name %s", svc.applyOpts[0].GateOverride, want)
+		}
 	}
 }
 
@@ -112,6 +119,17 @@ func TestOwnerReview_PreviewReportsWouldApply(t *testing.T) {
 	row = previewBulkApplyRow(stale, "b1", planCachedApply(stale, books, "b1", nil, nil), false)
 	if row.OwnerReviewedWouldApply {
 		t.Fatalf("identity_stale must not read as reviewable: %+v", row)
+	}
+
+	// The op-results path takes no pin, so its dry run never claims it.
+	cr := CandidateResult{Status: "matched", Candidate: &cand}
+	cr.Book.Title = "Big Cats 1"
+	opPlan := planOpResultApply(books, "b1", cr, nil)
+	if opPlan.Reason != applySkipGateBlocked {
+		t.Fatalf("op-results plan: reason %q, want gate_blocked", opPlan.Reason)
+	}
+	if row = previewBulkApplyRow(svc, "b1", opPlan, false); row.OwnerReviewedWouldApply {
+		t.Fatalf("op-results preview claimed an owner review would apply: %+v", row)
 	}
 }
 

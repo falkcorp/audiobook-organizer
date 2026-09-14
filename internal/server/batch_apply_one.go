@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-13
 
@@ -125,6 +125,10 @@ type cachedApplyPlan struct {
 	// OwnerReviewed: the gate refused, the request's pin matched, and every
 	// refusing leg is one an owner review overrides. Reason is then "".
 	OwnerReviewed bool
+	// Pinnable: the plan came from a path that accepts an owner-review pin
+	// (planCachedApply). The op-results path (planOpResultApply) takes none,
+	// so its dry run must never claim an owner review would apply a book.
+	Pinnable bool
 }
 
 // planCachedApply picks the top cached candidate and runs the certainty gate
@@ -161,7 +165,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 			Err: fmt.Errorf("reviewed candidate %q (%s) is no longer the top cached candidate %q (%s)", pin.Title, pin.Source, cand.Title, cand.Source)}
 	}
 	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
-	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
+	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true}
 	if !v.Allowed {
 		if pin != nil && v.OwnerReviewOverridable() {
 			plan.OwnerReviewed = true
