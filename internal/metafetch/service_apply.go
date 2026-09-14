@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -622,14 +622,16 @@ func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMeta
 }
 
 // ApplyMetadataCandidate applies a user-selected metadata candidate to a book.
-// If fields is non-empty, only the listed fields are applied.
+// If fields is non-empty, only the listed fields are applied. It is the
+// hand-picked apply and may overwrite filled fields; batch and automatic
+// callers use ApplyMetadataCandidateWithOptions with FillOnly.
 func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidate, fields []string) (*FetchMetadataResponse, error) {
 	return mfs.ApplyMetadataCandidateWithOptions(id, candidate, fields, ApplyOptions{})
 }
 
 // ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate with opts
-// deciding how the apply is recorded (see ApplyOptions). Field policy is the
-// same for every opts.
+// deciding how the apply is recorded and, with FillOnly, that it only fills
+// empty descriptive fields (see ApplyOptions).
 func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate MetadataCandidate, fields []string, opts ApplyOptions) (*FetchMetadataResponse, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
@@ -700,6 +702,14 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// is exactly what the UI's "fetched vs override" panel exists to show.
 	fetched := meta
 	historySource := opts.historySource(candidate.Source)
+	if opts.FillOnly {
+		var kept []string
+		meta, kept = StripFilledFields(book, meta)
+		if len(kept) > 0 {
+			applyMarkerLog.Info("fill-only apply kept filled fields book_id=%s source=%s kept=%v",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(candidate.Source), kept)
+		}
+	}
 	// credits is the author join as read and written under the store's
 	// book_authors lock, so undo removes exactly what this apply added. It
 	// replaces a join read taken here, outside that lock, which could miss

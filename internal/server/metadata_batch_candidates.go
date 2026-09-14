@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.9.0
+// version: 4.10.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -642,7 +642,7 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			// Reported as blocked, not as an error: nothing failed and nothing
 			// was written, so the book is left for review rather than a retry.
 			if s.fileIOPool != nil {
-				if perr := mfs.RenamePreflight(bookID, candidate, nil); perr != nil {
+				if perr := mfs.RenamePreflightWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true}); perr != nil {
 					batchApplyCandidatesLog.Warn("batch-apply-candidates: refused %s before any write: %s",
 						logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(perr.Error()))
 					outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %s: %v",
@@ -651,7 +651,8 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 				}
 			}
 
-			resp, err := mfs.ApplyMetadataCandidate(bookID, candidate, nil)
+			// Batch apply: fill-only (owner decision A3#3).
+			resp, err := mfs.ApplyMetadataCandidateWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true})
 			if err != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
 				return nil

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-14
 
@@ -290,6 +290,9 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if snapErr != nil {
 				return nil, snapErr
 			}
+			// Auto-fetch is fill-only (StripFilledFields): it never overwrites a
+			// filled descriptive field.
+			meta, _ = StripFilledFields(book, meta)
 			// credits: the author join read and written under the store's lock.
 			meta, skippedLocked, credits, applyErr := mfs.guardedApply(book, meta, src.Name())
 			if applyErr != nil {
@@ -428,6 +431,9 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if snapErr != nil {
 			return nil, snapErr
 		}
+		// Auto-fetch is fill-only (StripFilledFields): it never overwrites a
+		// filled descriptive field.
+		meta, _ = StripFilledFields(book, meta)
 		// credits: the author join read and written under the store's lock.
 		meta, skippedLocked, credits, applyErr := mfs.guardedApply(book, meta, src.Name())
 		if applyErr != nil {

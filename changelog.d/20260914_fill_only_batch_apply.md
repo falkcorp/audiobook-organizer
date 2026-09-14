@@ -1,0 +1,3 @@
+### Fixed
+
+- Batch and automatic metadata applies no longer overwrite a book's descriptive fields that are already filled. Before this change they replaced description, narrator, cover, genre, subtitle, publisher, language, page count, secondary series, runtime and audiobook release year whenever the provider had a value. The affected paths are batch-apply-cached, batch-apply-candidates, auto-fetch, fetch-by-title and the metadata upgrade job. They now fill empty fields only (`StripFilledFields`, `ApplyOptions.FillOnly`). Identity fields (title, author add-only, series, position, ASIN, ISBN) are unchanged. A hand-picked single-book apply may still overwrite. The bulk-apply preview and the batch rename preflight plan the same fill-only result (owner decision A3#3).

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-09-14
 //
@@ -50,6 +50,8 @@ type fakeApplySvc struct {
 	// preflightErr is what RenamePreflight reports; preflightIDs records calls.
 	preflightErr error
 	preflightIDs []string
+	// preflightOpts records the options each preflight got.
+	preflightOpts []metafetch.ApplyOptions
 	// applyOpts records the options each apply got, parallel to appliedIDs.
 	applyOpts []metafetch.ApplyOptions
 	// historyErr is returned WITH the response: the write stood, its history
@@ -57,8 +59,9 @@ type fakeApplySvc struct {
 	historyErr error
 }
 
-func (f *fakeApplySvc) RenamePreflight(id string, _ metafetch.MetadataCandidate, _ []string) error {
+func (f *fakeApplySvc) RenamePreflightWithOptions(id string, _ metafetch.MetadataCandidate, _ []string, opts metafetch.ApplyOptions) error {
 	f.preflightIDs = append(f.preflightIDs, id)
+	f.preflightOpts = append(f.preflightOpts, opts)
 	return f.preflightErr
 }
 

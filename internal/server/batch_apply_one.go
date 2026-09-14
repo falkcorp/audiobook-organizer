@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-14
 
@@ -49,7 +49,7 @@ type cachedApplyService interface {
 	// RenamePreflight reports, before anything is written, that the write-back
 	// rename following an apply of candidate is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail). See applySkipFileWorkWouldFail.
-	RenamePreflight(id string, candidate metafetch.MetadataCandidate, fields []string) error
+	RenamePreflightWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) error
 }
 
 // bookReader reads the book the gate judges the candidate against.
@@ -302,15 +302,17 @@ func applyCachedCandidateForBookTimed(
 	// before any write. Only with writeBack: without it there is no rename.
 	// An owner review does not lift this: it is not a certainty judgement.
 	if writeBack {
-		if err := svc.RenamePreflight(id, *plan.Candidate, nil); err != nil {
+		if err := svc.RenamePreflightWithOptions(id, *plan.Candidate, nil, metafetch.ApplyOptions{FillOnly: true}); err != nil {
 			return applyOutcome{Reason: applySkipFileWorkWouldFail, Err: err, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}
 		}
 	}
 
 	// Field policy is identical for a reviewed and an unreviewed apply (fields
-	// nil: every field the candidate provides, minus the user's locks). The
-	// options only record the override in the change history.
-	var opts metafetch.ApplyOptions
+	// nil: every field the candidate provides, minus the user's locks) and is
+	// fill-only: a batch apply never overwrites a filled descriptive field
+	// (owner decision A3#3). OwnerReviewed only records the override in the
+	// change history.
+	opts := metafetch.ApplyOptions{FillOnly: true}
 	if plan.OwnerReviewed {
 		// OwnerReviewed, not a non-empty summary, is what makes the apply
 		// record the override and require its history: an empty
