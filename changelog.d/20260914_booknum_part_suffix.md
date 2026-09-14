@@ -1,0 +1,4 @@
+### Fixed
+
+- The bulk-apply certainty gate no longer refuses standalone books titled like "Rogue Lawyer - 001" as "book is #1". A trailing three-digit zero-padded " - 00N" (a multi-part rip's part number) on a title with no other number is set aside as a part number in the title, file name and folder name, and a series position that only repeats it (with no series name other than the title's own words and no independent source) is not counted either. Books with a real series name, a differing position, or another source naming the number still refuse, and "Mistborn 01", "Book 04", "Wheel of Time 03" and "The Sorcerer's Ring - 04 - A Cry of Honor" keep their numbers. The series-number-lost check applies the same rule.
+- Import (`matcher.IdentifySeries`) no longer turns "Title - 001" into series "Title" #1: the "Series - Title" pattern read the part number as its title group and converted it into a position. Existing rows are not rewritten.

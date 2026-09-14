@@ -1,7 +1,7 @@
 // file: internal/seqnum/seqnum_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e3c1f7b-2a6d-4c80-b5e4-1d8f0a7c3e92
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package seqnum
 
@@ -112,5 +112,42 @@ func TestEqual(t *testing.T) {
 	}
 	if !Equal(mustParse("Big Cats Volume III"), mustParse("Big Cats #3")) {
 		t.Error("III must equal 3")
+	}
+}
+
+// TestPartSuffix pins the part-number shape: a spaced dash and exactly three
+// zero-padded digits, with no other number in the title.
+func TestPartSuffix(t *testing.T) {
+	cases := []struct {
+		in, num, stem string // num "" = not a part suffix
+	}{
+		{"Rogue Lawyer - 001", "1", "Rogue Lawyer"},
+		{"All Tomorrow's Parties - 001", "1", "All Tomorrow's Parties"},
+		{"The Rooster Bar - 001", "1", "The Rooster Bar"},
+		{"Witness to a Trial - 001", "1", "Witness to a Trial"},
+		{"Witness_to_a_Trial_-_012", "12", "Witness to a Trial"},
+		{"Rogue Lawyer – 002", "2", "Rogue Lawyer"},
+		// Not part suffixes.
+		{"Big Cats - 03", "", ""},
+		{"Big Cats - 3", "", ""},
+		{"Mistborn 01", "", ""},
+		{"Wheel of Time 03", "", ""},
+		{"Book 04", "", ""},
+		{"The Sorcerer's Ring - 04 - A Cry of Honor", "", ""},
+		{"Mistborn 01 - The Final Empire", "", ""},
+		{"Big Cats 3 - 001", "", ""},
+		{"Big Cats - 101", "", ""},
+		{"Rogue Lawyer-001", "", ""},
+		{"", "", ""},
+	}
+	for _, tc := range cases {
+		n, stem, ok := PartSuffix(tc.in)
+		got := ""
+		if ok {
+			got = n.Text
+		}
+		if got != tc.num || (ok && stem != tc.stem) {
+			t.Errorf("PartSuffix(%q) = (%q, %q, %v), want (%q, %q)", tc.in, got, stem, ok, tc.num, tc.stem)
+		}
 	}
 }
