@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.26.0
+// version: 5.27.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 
@@ -465,8 +465,8 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 			archived = true
 		}
 
-		// EmbedCoverArtSafe imports the file from a Deluge-protected path before
-		// writing if the pre-flight guard is wired (mfs.safeWriteDeps).
+		// EmbedCoverArtSafe refuses a protected path (the deps carry no importer;
+		// see SetSafeWriteDeps), so a seeding file is skipped, never copied.
 		// The embed rewrites the whole file, so it records the new hashes on the
 		// file's book_file row; otherwise the next rescan saw a changed hash and
 		// treated the file as replaced.
