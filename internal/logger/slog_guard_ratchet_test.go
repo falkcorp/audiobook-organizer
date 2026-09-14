@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 329
-	slogRatchetCallCeiling = 1980
+	slogRatchetCallCeiling = 1975
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -273,7 +273,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/ai.go":                             3,
 	"internal/server/handlers/apikeys.go":                        5,
 	"internal/server/handlers/audiobooks/handler_crud.go":        4,
-	"internal/server/handlers/audiobooks/handler_files.go":       4,
+	"internal/server/handlers/audiobooks/handler_files.go":       2,
 	"internal/server/handlers/audiobooks/handler_metadata.go":    4,
 	"internal/server/handlers/cache.go":                          2,
 	"internal/server/handlers/dedup/handler.go":                  19,
@@ -283,7 +283,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/entities/handler.go":               3,
 	"internal/server/handlers/filesystem.go":                     7,
 	"internal/server/handlers/itunes.go":                         7,
-	"internal/server/handlers/metadata/handler.go":               6,
+	"internal/server/handlers/metadata/handler.go":               5,
 	"internal/server/handlers/metadata_cache.go":                 5,
 	"internal/server/handlers/openai_validate.go":                3,
 	"internal/server/handlers/operations/handler.go":             3,
@@ -293,7 +293,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/review/handler.go":                 1,
 	"internal/server/handlers/scheduler_admin.go":                1,
 	"internal/server/handlers/system/handler.go":                 11,
-	"internal/server/handlers/versions.go":                       3,
+	"internal/server/handlers/versions.go":                       1,
 	"internal/server/indexed_store.go":                           3,
 	"internal/server/itl_pid.go":                                 1,
 	"internal/server/itl_rebuild.go":                             2,

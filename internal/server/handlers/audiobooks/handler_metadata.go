@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
 // last-edited: 2026-09-13
 
@@ -233,7 +233,8 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	for _, rec := range batchRecords {
 		if handled, revErr := revertBookFilePosition(store, id, rec); handled {
 			if revErr != nil {
-				slog.Warn("undo-last-apply failed to revert file position", "rec", logger.SanitizeLogValue(rec.Field), "id", logger.SanitizeLogValue(id), "err", revErr)
+				filesLog.Warn("undo-last-apply failed to revert file position %s on book %s: %v",
+					logger.SanitizeLogValue(rec.Field), logger.SanitizeLogValue(id), revErr)
 				continue
 			}
 		} else if rec.PreviousValue != nil {
