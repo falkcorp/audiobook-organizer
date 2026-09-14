@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.7.0
-// last-edited: 2026-09-13
+// version: 1.7.1
+// last-edited: 2026-09-14
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -33,8 +33,8 @@ var taglibAvailable = true
 
 // writeMetadataWithTaglib performs metadata writing using native TagLib (CGO).
 //
-// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
-// imported into the library before the write proceeds.
+// If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
+// refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
@@ -95,8 +95,8 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interfa
 // writeSingleTagWithTaglib writes one tag property without touching others.
 // Pass value="" to clear the property.
 //
-// If packageSafeWriteDeps is configured, protected (Deluge-managed) paths are
-// imported into the library before the write proceeds.
+// If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
+// refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
