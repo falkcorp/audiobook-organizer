@@ -7,8 +7,6 @@ package scanner
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -44,7 +42,8 @@ var (
 // taken over by another book; there is one rule, not two.
 //
 // COST. This runs for every book that reaches createBookFilesForBook on a
-// rescan, so it must stay a stat per file for files that did not change.
+// rescan (~742k rows library-wide), so it must stay a stat per file for files
+// that did not change.
 // looksChangedSinceStored decides from stat data alone; only a file it flags
 // is hashed, and not even then when the caller already hashed it (knownHashes,
 // the SegmentHashes the dedup pass computed). Files are handled sequentially:
@@ -87,13 +86,15 @@ func refreshReplacedSameBookFiles(existing []database.BookFile, knownHashes map[
 			continue
 		}
 
+		// OriginalFilename and Format are left zero on purpose: both are
+		// plain preserve fields, so the merge restores the stored values. An
+		// organized file's OriginalFilename is its pre-organize name, which a
+		// recomputed basename would overwrite.
 		bf := &database.BookFile{
-			ID:               stored.ID,
-			BookID:           stored.BookID,
-			FilePath:         stored.FilePath,
-			OriginalFilename: filepath.Base(stored.FilePath),
-			Format:           strings.TrimPrefix(strings.ToLower(filepath.Ext(stored.FilePath)), "."),
-			FileSize:         fi.Size(),
+			ID:       stored.ID,
+			BookID:   stored.BookID,
+			FilePath: stored.FilePath,
+			FileSize: fi.Size(),
 			// bfUpsertOwned: the merge writes these exactly as given, zero
 			// included. The book's placement was judged when it was imported
 			// and a content replacement is no reason to re-judge it, so carry
@@ -130,13 +131,17 @@ func refreshReplacedSameBookFiles(existing []database.BookFile, knownHashes map[
 //   - Size differs from the stored FileSize (the scanner writes FileSize on
 //     every row it builds) or from the scan-cache LastScanSize: changed.
 //   - A scan-cache LastScanMtime is recorded and differs: changed.
-//   - No LastScanMtime (the scan-cache stamp is mirrored onto a file row only
-//     for single-file books, so multi-file rows usually have none): changed
-//     when the file was modified after the row was last written. A file whose
-//     mtime predates the row cannot hold bytes the row has not seen. The price
-//     of this fallback is a repeat hash on rescans of a file touched without a
-//     content change (the row is not rewritten when the hash matches); such
-//     files are re-read by the scan anyway.
+//   - Otherwise: unchanged.
+//
+// No LastScanMtime means size is the only signal. The scan-cache stamp is
+// mirrored onto a file row only for single-file books, so multi-file rows
+// usually have none, and those books are re-read on every scan (a per-file
+// cache miss) without caller-supplied hashes (SegmentHashes are computed only
+// for new books). An mtime-based fallback there, such as "modified after the
+// row's UpdatedAt", would hash every touched-but-identical segment on every
+// scan, because a matching hash writes nothing that could clear it. The cost
+// of size-only: a same-size replacement on an unstamped row is not detected.
+// A different recording or edition essentially never has the same size.
 //
 // A zero stored FileSize is "unknown", not "empty", and is not compared.
 func looksChangedSinceStored(stored *database.BookFile, fi os.FileInfo) bool {
@@ -147,10 +152,7 @@ func looksChangedSinceStored(stored *database.BookFile, fi os.FileInfo) bool {
 	if stored.LastScanSize != nil && *stored.LastScanSize != size {
 		return true
 	}
-	if stored.LastScanMtime != nil {
-		return *stored.LastScanMtime != fi.ModTime().Unix()
-	}
-	return !stored.UpdatedAt.IsZero() && fi.ModTime().After(stored.UpdatedAt)
+	return stored.LastScanMtime != nil && *stored.LastScanMtime != fi.ModTime().Unix()
 }
 
 // readScannedFileTagsAndHash fills the tag- and hash-derived fields of a

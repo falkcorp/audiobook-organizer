@@ -78,6 +78,23 @@ func seedSameBookRow(t *testing.T, store *database.PebbleStore, path string, con
 	return *seeded
 }
 
+// stampScanCache records the file's current mtime and size as the row's
+// scan-cache stamp, as the single-file mirror of UpdateScanCache would.
+func stampScanCache(t *testing.T, store *database.PebbleStore, row database.BookFile, path string) database.BookFile {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mt, sz := fi.ModTime().Unix(), fi.Size()
+	row.LastScanMtime, row.LastScanSize = &mt, &sz
+	if err := store.UpdateBookFile(row.ID, &row); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+	stamped, _ := store.GetBookFileByPath(path)
+	return *stamped
+}
+
 func rescanSameBook(t *testing.T, store *database.PebbleStore, path string) database.BookFile {
 	t.Helper()
 	createBookFilesForBook(path, []string{path}, logger.New("test"), keepFilePath)
@@ -100,10 +117,11 @@ func TestCreateBookFilesForBook_SameBookReplacementRefreshesRow(t *testing.T) {
 	cases := []struct {
 		name        string
 		replacement []byte
+		stamp       bool
 	}{
-		{"different size", bytes.Repeat([]byte("new edition "), 5000)},
-		// Same size, so only the mtime-after-row-write fallback flags it.
-		{"same size", bytes.Repeat([]byte("B"), 40000)},
+		{"different size", bytes.Repeat([]byte("new edition "), 5000), false},
+		// Same size, so only the scan-cache mtime stamp flags it.
+		{"same size, stamped row", bytes.Repeat([]byte("B"), 40000), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,6 +134,9 @@ func TestCreateBookFilesForBook_SameBookReplacementRefreshesRow(t *testing.T) {
 			first := seedSameBookRow(t, store, path, bytes.Repeat([]byte("A"), 40000))
 			if !hasAudioDerived(first) {
 				t.Fatal("fixture error: seeded row has no audio-derived data")
+			}
+			if tc.stamp {
+				first = stampScanCache(t, store, first, path)
 			}
 
 			if err := os.WriteFile(path, tc.replacement, 0o644); err != nil {
@@ -159,14 +180,22 @@ func TestCreateBookFilesForBook_SameBookReplacementRefreshesRow(t *testing.T) {
 }
 
 // An unchanged file must stay a stat: zero hashing, whether or not the row
-// carries a scan-cache stamp, and nothing about the row changes.
+// carries a scan-cache stamp, and nothing about the row changes. An unstamped
+// row whose file was only touched (same size, newer mtime) is also not hashed:
+// size is the only signal there, so touched segments of multi-file books are
+// not re-hashed on every scan.
 func TestCreateBookFilesForBook_SameBookUnchangedDoesNotHash(t *testing.T) {
-	for _, stamped := range []bool{false, true} {
-		name := "no scan-cache stamp"
-		if stamped {
-			name = "scan-cache stamp matches"
-		}
-		t.Run(name, func(t *testing.T) {
+	cases := []struct {
+		name    string
+		stamped bool
+		touch   bool
+	}{
+		{"no scan-cache stamp", false, false},
+		{"scan-cache stamp matches", true, false},
+		{"no scan-cache stamp, touched", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			store, cleanup := setupPebbleStore(t)
 			defer cleanup()
 			SetStore(store)
@@ -174,15 +203,13 @@ func TestCreateBookFilesForBook_SameBookUnchangedDoesNotHash(t *testing.T) {
 
 			path := filepath.Join(t.TempDir(), "book.mp3")
 			first := seedSameBookRow(t, store, path, bytes.Repeat([]byte("A"), 40000))
-			if stamped {
-				fi, err := os.Stat(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				mt, sz := fi.ModTime().Unix(), fi.Size()
-				first.LastScanMtime, first.LastScanSize = &mt, &sz
-				if err := store.UpdateBookFile(first.ID, &first); err != nil {
-					t.Fatalf("stamp: %v", err)
+			if tc.stamped {
+				first = stampScanCache(t, store, first, path)
+			}
+			if tc.touch {
+				future := time.Now().Add(time.Minute)
+				if err := os.Chtimes(path, future, future); err != nil {
+					t.Fatalf("chtimes: %v", err)
 				}
 			}
 			counter := installHashCounter(t)
@@ -209,6 +236,7 @@ func TestCreateBookFilesForBook_SameBookMtimeOnlyKeepsDerivedData(t *testing.T) 
 
 	path := filepath.Join(t.TempDir(), "book.mp3")
 	first := seedSameBookRow(t, store, path, bytes.Repeat([]byte("A"), 40000))
+	first = stampScanCache(t, store, first, path)
 	future := time.Now().Add(time.Minute)
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatalf("chtimes: %v", err)
@@ -255,5 +283,46 @@ func TestCreateBookFilesForBook_SameBookReplacementUsesKnownHash(t *testing.T) {
 	}
 	if after == nil || after.FileHash != newHash || hasAudioDerived(*after) {
 		t.Errorf("replacement not refreshed from the supplied hash: row=%+v", after)
+	}
+}
+
+// gateStat is an os.FileInfo with a chosen size and mtime.
+type gateStat struct {
+	os.FileInfo
+	size  int64
+	mtime time.Time
+}
+
+func (f gateStat) Size() int64        { return f.size }
+func (f gateStat) ModTime() time.Time { return f.mtime }
+
+// looksChangedSinceStored is the gate that keeps unchanged files from being
+// hashed. Pinned directly, because an integration test that counts zero hashes
+// cannot tell a gate from a function that never looks.
+func TestLooksChangedSinceStored(t *testing.T) {
+	now := time.Now()
+	stampM, stampS := now.Unix(), int64(1000)
+	otherM := now.Add(time.Hour).Unix()
+	otherS := int64(999)
+	cases := []struct {
+		name   string
+		stored database.BookFile
+		fi     gateStat
+		want   bool
+	}{
+		{"unstamped, same size, older mtime", database.BookFile{FileSize: 1000, UpdatedAt: now}, gateStat{size: 1000, mtime: now.Add(-time.Hour)}, false},
+		{"unstamped, same size, newer mtime", database.BookFile{FileSize: 1000, UpdatedAt: now}, gateStat{size: 1000, mtime: now.Add(time.Hour)}, false},
+		{"unstamped, size differs", database.BookFile{FileSize: 1000}, gateStat{size: 1001, mtime: now}, true},
+		{"unknown stored size, unstamped", database.BookFile{}, gateStat{size: 1001, mtime: now}, false},
+		{"stamp matches", database.BookFile{FileSize: 1000, LastScanMtime: &stampM, LastScanSize: &stampS}, gateStat{size: 1000, mtime: time.Unix(stampM, 0)}, false},
+		{"stamp mtime differs", database.BookFile{FileSize: 1000, LastScanMtime: &otherM, LastScanSize: &stampS}, gateStat{size: 1000, mtime: time.Unix(stampM, 0)}, true},
+		{"stamp size differs", database.BookFile{LastScanMtime: &stampM, LastScanSize: &otherS}, gateStat{size: 1000, mtime: time.Unix(stampM, 0)}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksChangedSinceStored(&tc.stored, tc.fi); got != tc.want {
+				t.Errorf("looksChangedSinceStored = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
