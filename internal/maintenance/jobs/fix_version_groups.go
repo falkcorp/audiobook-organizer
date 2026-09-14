@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: a1000004-0000-0000-0000-000000000004
 // last-edited: 2026-09-13
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -358,9 +359,35 @@ type vgAuthorDirPlan struct {
 	// ownedElsewhere holds subdir files another book already has a row for.
 	// They are left alone; taking them would steal that book's file.
 	ownedElsewhere []string
-	// left counts this book's rows that match nothing in subdir. They are
-	// kept as they are, never deleted.
+	// left counts this book's rows that match nothing in subdir, or whose
+	// name match could not be verified. They are kept as they are, never
+	// deleted.
 	left int
+	// unverified holds subdir files whose name matched a row that could not
+	// be proven to be the same file (old path still present, or size
+	// differs). Neither the row nor the file is touched, and no row is
+	// created for the file, since it may be the same audio.
+	unverified []string
+}
+
+// vgSameFileMoved reports whether row r's file was moved to fp: nothing is at
+// r's old path any more (Lstat reports not-exist) and fp has the row's size.
+// A row with no recorded size cannot be verified and is not repointed. A stat
+// error other than not-exist is returned: the fix does not guess.
+func vgSameFileMoved(r database.BookFile, fp string) (bool, error) {
+	if _, err := os.Lstat(r.FilePath); err == nil {
+		return false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("stat old path %s: %w", r.FilePath, err)
+	}
+	if r.FileSize <= 0 {
+		return false, nil
+	}
+	info, err := os.Stat(fp)
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", fp, err)
+	}
+	return info.Size() == r.FileSize, nil
 }
 
 // vgPlanAuthorDirFix reads everything and writes nothing, so dry-run and
@@ -426,9 +453,21 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 			plan.create = append(plan.create, fp)
 		case 1:
 			r := cands[0]
+			// A shared file name alone is not identity ("01.mp3" is in every
+			// book). Repoint only when the row's old path is gone and the
+			// file at fp is the same size; otherwise leave both alone.
+			same, err := vgSameFileMoved(r, fp)
+			if err != nil {
+				return nil, err
+			}
+			delete(unmatched, base)
+			if !same {
+				plan.unverified = append(plan.unverified, fp)
+				plan.left++
+				continue
+			}
 			r.FilePath = fp
 			plan.repoint = append(plan.repoint, r)
-			delete(unmatched, base)
 		default:
 			return nil, fmt.Errorf("%w: %d rows of book %s are named %q; cannot tell which one is %s",
 				errVGRefused, len(cands), bookID, base, fp)
@@ -436,6 +475,12 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 	}
 	for _, rs := range unmatched {
 		plan.left += len(rs)
+	}
+	if plan.keep+len(plan.repoint)+len(plan.create) == 0 {
+		// Nothing in subdir could be tied to this book: moving only the
+		// book's path would point it away from every row it has.
+		return nil, fmt.Errorf("%w: no file in %s could be verified as book %s's (%d unverified name match(es), %d owned by other books)",
+			errVGRefused, subdir, bookID, len(plan.unverified), len(plan.ownedElsewhere))
 	}
 	return plan, nil
 }

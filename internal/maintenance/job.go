@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-09-13
 
@@ -225,10 +225,21 @@ func RestartPolicy() ExecutionPolicy {
 // the narrower JobStore just as it satisfied the wider one, so the job tests
 // that build one still compile unchanged.
 type jobBookReader interface {
+	jobBookLookup
+	jobBookRelatedReader
+}
+
+// jobBookLookup resolves and lists books.
+type jobBookLookup interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	ListBookIDs() ([]string, error)
+}
+
+// jobBookRelatedReader reads books through a relation (series, version
+// group) and a book's history.
+type jobBookRelatedReader interface {
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	// The complete set minus trashed rows. A job that UNLINKS or REPOINTS series
 	// membership must read this, not the Core listing getter: the rows Core hides

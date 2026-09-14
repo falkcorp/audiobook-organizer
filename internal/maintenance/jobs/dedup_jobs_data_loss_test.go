@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/dedup_jobs_data_loss_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2b8c47-91d3-4f60-a7c8-2d4e6f1a9b30
 // last-edited: 2026-09-13
 
@@ -218,10 +218,12 @@ func ddWriteAudio(t *testing.T, path string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("not really audio"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(ddAudioBytes), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
+
+const ddAudioBytes = "not really audio"
 
 // On main, fixing an author-directory path deleted every book_file row of the
 // book and recreated them from a disk scan: new IDs, and the iTunes PID,
@@ -234,10 +236,11 @@ func TestFixVersionGroups_AuthorDirRepointsRowsInPlace(t *testing.T) {
 	ddWriteAudio(t, filepath.Join(authorDir, "Beta Saga", "02.mp3"))
 
 	book := ddMustBook(t, s, &database.Book{Title: "Alpha Chronicle", FilePath: authorDir})
-	// The row predates the folder split: it names the file by its old flat path.
+	// The row predates the folder split: it names the file by its old flat
+	// path, which no longer exists, and records the size of the moved file.
 	old := ddMustFile(t, s, &database.BookFile{
 		BookID: book.ID, FilePath: filepath.Join(authorDir, "01.mp3"),
-		ITunesPersistentID: "PID-KEEP", Duration: 3600,
+		ITunesPersistentID: "PID-KEEP", Duration: 3600, FileSize: int64(len(ddAudioBytes)),
 	})
 
 	j := &fixVersionGroupsJob{}

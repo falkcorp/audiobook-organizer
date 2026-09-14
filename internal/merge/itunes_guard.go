@@ -1,5 +1,5 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
 // last-edited: 2026-09-13
 
@@ -8,7 +8,9 @@ package merge
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
+	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -188,6 +190,12 @@ func guardITunesProtected(store ITunesGuardStore, bookIDs []string, roots []stri
 // boundary (pathutil.IsWithin), after filepath.Clean so "/root/../x" cannot
 // sneak in or out. A relative path is refused: it has no base to resolve
 // against, so it can never be proven outside an absolute root.
+//
+// Symlinks are resolved too, for the path and for each root: a link outside
+// the tree that points into it (or a root reached through a link) is the same
+// files. A path that does not exist yet -- a target a plan is about to write --
+// is resolved through its nearest existing parent. A resolve error other than
+// not-exist is a fail-closed refusal.
 func checkITunesPath(bookID, p string, roots []string) error {
 	if p == "" {
 		return nil
@@ -199,10 +207,49 @@ func checkITunesPath(bookID, p string, roots []string) error {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "relative path cannot be verified against the iTunes library roots"}
 	}
 	clean := filepath.Clean(p)
+	resolved, err := resolveExistingPrefix(clean)
+	if err != nil {
+		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "cannot resolve symlinks to verify the path is outside the iTunes library", Cause: err}
+	}
+	if resolved != clean && config.UnderFrozenITunesTree(resolved) {
+		return &ITunesProtectedError{BookID: bookID, Path: p, Root: frozenITunesSegmentRoot, Reason: "resolves to " + resolved}
+	}
 	for _, root := range roots {
 		if pathutil.IsWithin(clean, root) {
 			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root}
 		}
+		resolvedRoot, rerr := resolveExistingPrefix(root)
+		if rerr != nil {
+			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root, Reason: "cannot resolve the iTunes root", Cause: rerr}
+		}
+		if pathutil.IsWithin(resolved, resolvedRoot) || pathutil.IsWithin(resolved, root) {
+			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root, Reason: "resolves to " + resolved}
+		}
 	}
 	return nil
+}
+
+// resolveExistingPrefix is filepath.EvalSymlinks for a path that may not exist
+// yet: it resolves the longest existing prefix and re-appends the rest.
+func resolveExistingPrefix(p string) (string, error) {
+	var tail []string
+	cur := p
+	for {
+		r, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+			return r, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p, nil
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
 }
