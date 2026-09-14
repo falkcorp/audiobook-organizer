@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-14
 
@@ -174,12 +174,21 @@ func (s *PebbleActivityStore) DecodeFailures() int64 { return s.decodeFailures.L
 // closes nothing, and the main store's owner can close the DB while a deferred
 // flush or a maintenance op is still running here. Pebble PANICS ErrClosed
 // from Get/Set/NewIter/Commit on a closed DB instead of returning an error, so
-// every method below that touches s.db defers recoverPebbleClosed: an access
+// every method in this file that touches s.db (and SetLastActivityDBPath in
+// sql_activity_relocate.go) defers recoverPebbleClosed: an access
 // after close returns an error wrapping pebble.ErrClosed, which every caller
 // already logs (activity.Service.writeDeferred with a lost-entry count),
 // instead of killing the process. Methods whose work runs on another
 // goroutine (repairIndexChunk under errgroup) carry their own guard, because
 // recover only sees panics on its own goroutine.
+//
+// Two readers are deliberately left unguarded: LastActivityDBPath and
+// SQLBackfillDone. Both return a bare bool with no error, so a recovered
+// panic could only come back as "no record" — a false answer that would
+// send relocation looking for the database somewhere else, or start the
+// wiring on the wrong tier. They run only during startup wiring
+// (activity/register.go, activity/relocate.go), before anything can close
+// the DB, so a panic there is a real bug and should crash.
 func (s *PebbleActivityStore) Close() error { return nil }
 
 // DB returns the underlying *pebble.DB. Used by callers (e.g., backfill, registry wiring)
@@ -761,38 +770,45 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (written int,
 	for start := 0; start < len(entries); start += chunk {
 		end := min(start+chunk, len(entries))
 
-		batch := s.db.NewBatch()
-		staged := 0
-		for _, e := range entries[start:end] {
-			p, err := s.prepareEntry(e)
-			if err != nil {
-				prepareErrs = append(prepareErrs, err)
-				continue
+		// One closure per chunk so the batch is closed by a defer: a Commit
+		// that panics on a closed DB unwinds through here to the recover
+		// above, and the batch's buffer still goes back to pebble's pool.
+		staged, stageErr, commitErr := func() (staged int, stageErr, commitErr error) {
+			batch := s.db.NewBatch()
+			defer batch.Close()
+			for _, e := range entries[start:end] {
+				p, err := s.prepareEntry(e)
+				if err != nil {
+					prepareErrs = append(prepareErrs, err)
+					continue
+				}
+				if err := pactStagePrepared(batch, p); err != nil {
+					return staged, err, nil
+				}
+				staged++
 			}
-			if err := pactStagePrepared(batch, p); err != nil {
-				batch.Close()
-				// Join whatever was already dropped by prepare: abandoning the
-				// batch must not also abandon the report of the earlier losses.
-				return written, errors.Join(
-					fmt.Errorf("pebble_activity_store: record batch staging lost %d of %d entries: %w",
-						len(entries)-written, len(entries), err),
-					errors.Join(prepareErrs...))
+			if staged == 0 {
+				return 0, nil, nil
 			}
-			staged++
-		}
-
-		if staged == 0 {
-			batch.Close()
-			continue
-		}
-		if err := batch.Commit(pebble.Sync); err != nil {
-			batch.Close()
+			return staged, nil, batch.Commit(pebble.Sync)
+		}()
+		if stageErr != nil {
+			// Join whatever was already dropped by prepare: abandoning the
+			// batch must not also abandon the report of the earlier losses.
 			return written, errors.Join(
-				fmt.Errorf("pebble_activity_store: record batch commit lost %d of %d entries: %w",
-					len(entries)-written, len(entries), err),
+				fmt.Errorf("pebble_activity_store: record batch staging lost %d of %d entries: %w",
+					len(entries)-written, len(entries), stageErr),
 				errors.Join(prepareErrs...))
 		}
-		batch.Close()
+		if commitErr != nil {
+			return written, errors.Join(
+				fmt.Errorf("pebble_activity_store: record batch commit lost %d of %d entries: %w",
+					len(entries)-written, len(entries), commitErr),
+				errors.Join(prepareErrs...))
+		}
+		if staged == 0 {
+			continue
+		}
 		s.recordBatchCommits.Add(1)
 		written += staged
 	}

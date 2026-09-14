@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_relocate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d9a1e83-7b25-4c06-9f18-3e6c0a72b5d1
-// last-edited: 2026-09-07
+// last-edited: 2026-09-14
 
 // Package database — relocation of the SQLite activity database between paths.
 //
@@ -92,7 +92,11 @@ func (s *PebbleActivityStore) LastActivityDBPath() (string, bool) {
 // Written with pebble.Sync: if this write were lost to a crash while the file
 // itself had already moved, the next boot would look for the database at the old
 // path, find nothing, and silently start an empty one.
-func (s *PebbleActivityStore) SetLastActivityDBPath(path string) error {
+//
+// Guarded like the store's writers: this returns an error, so a closed DB
+// can be reported instead of panicking.
+func (s *PebbleActivityStore) SetLastActivityDBPath(path string) (err error) {
+	defer recoverPebbleClosed("pebble_activity_store.SetLastActivityDBPath", &err)
 	return s.db.Set([]byte(ActivitySQLPathKey), []byte(path), pebble.Sync)
 }
 
