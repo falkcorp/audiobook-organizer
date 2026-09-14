@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
 // last-edited: 2026-09-13
 
@@ -379,6 +379,12 @@ type Handler struct {
 	// seriesBooksSF coalesces concurrent rebuilds (a request that found no
 	// grouping, or the background refresh behind an expired one) onto one pass.
 	seriesBooksSF singleflight.Group
+
+	// One background refresher per cache: an expired build is served while its
+	// refresher rebuilds it (cache_refresh.go).
+	contributorsRefresh cacheRefresher
+	filterDataRefresh   cacheRefresher
+	seriesBooksRefresh  cacheRefresher
 
 	// filterDataCache holds the whole /filterdata document.
 	//

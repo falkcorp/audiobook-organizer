@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package abs_test
 
@@ -329,6 +329,8 @@ func newHarness(t *testing.T, modes string, allowed []string, opts ...harnessOpt
 		t.Fatalf("abs.New: %v", err)
 	}
 	h.SetSleep(func(time.Duration) {})
+	// A background cache refresh must not outlive the fixture it reads.
+	t.Cleanup(func() { abshandler.WaitCacheRefreshes(h) })
 
 	r := gin.New()
 	h.Register(r)
