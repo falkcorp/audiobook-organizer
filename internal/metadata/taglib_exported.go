@@ -1,6 +1,7 @@
 // file: internal/metadata/taglib_exported.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
+// last-edited: 2026-09-14
 //
 // Exported wrappers around the internal taglib read/write functions.
 // Both the WASM (taglib_support.go) and CGO (taglib_cgo.go) build
@@ -18,9 +19,17 @@ var packageSafeWriteDeps tagger.SafeWriteDeps
 
 // SetSafeWriteDeps installs the pre-flight guard dependencies for all taglib
 // writes in this package. Must be called once at server startup, before any
-// tag writes occur. Both fields of deps should be non-nil for the guard to be
-// fully effective.
+// tag writes occur.
+//
+// The Importer is dropped: every write through this package (the book PATCH
+// write-back, single-tag fixes, tag reverts) REFUSES a protected path with
+// tagger.ErrProtectedPathWrite instead of importing it. An import here copied
+// a Deluge-seeding file to RootDir/<basename> -- outside any book folder, with
+// no organize -- and repointed its row there, scattering files into the
+// library root. A protected book's tags are written only on its library copy,
+// which metafetch resolves before it writes.
 func SetSafeWriteDeps(deps tagger.SafeWriteDeps) {
+	deps.Importer = nil
 	packageSafeWriteDeps = deps
 }
 
