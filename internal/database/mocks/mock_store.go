@@ -10262,6 +10262,63 @@ func (_c *MockStore_FlagMetadataHashDuplicate_Call) RunAndReturn(run func(primar
 	return _c
 }
 
+// ForEachWork provides a mock function for the type MockStore
+func (_mock *MockStore) ForEachWork(ctx context.Context, visit func(database.Work) error) error {
+	ret := _mock.Called(ctx, visit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ForEachWork")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, func(database.Work) error) error); ok {
+		r0 = returnFunc(ctx, visit)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ForEachWork_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ForEachWork'
+type MockStore_ForEachWork_Call struct {
+	*mock.Call
+}
+
+// ForEachWork is a helper method to define mock.On call
+//   - ctx context.Context
+//   - visit func(database.Work) error
+func (_e *MockStore_Expecter) ForEachWork(ctx any, visit any) *MockStore_ForEachWork_Call {
+	return &MockStore_ForEachWork_Call{Call: _e.mock.On("ForEachWork", ctx, visit)}
+}
+
+func (_c *MockStore_ForEachWork_Call) Run(run func(ctx context.Context, visit func(database.Work) error)) *MockStore_ForEachWork_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 func(database.Work) error
+		if args[1] != nil {
+			arg1 = args[1].(func(database.Work) error)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ForEachWork_Call) Return(err error) *MockStore_ForEachWork_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ForEachWork_Call) RunAndReturn(run func(ctx context.Context, visit func(database.Work) error) error) *MockStore_ForEachWork_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAIJob provides a mock function for the type MockStore
 func (_mock *MockStore) GetAIJob(id string) (database.AIJob, error) {
 	ret := _mock.Called(id)
@@ -15908,6 +15965,68 @@ func (_c *MockStore_GetDirtyBookFolders_Call) RunAndReturn(run func() ([]string,
 	return _c
 }
 
+// GetDirtyBookFoldersContext provides a mock function for the type MockStore
+func (_mock *MockStore) GetDirtyBookFoldersContext(ctx context.Context) ([]string, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDirtyBookFoldersContext")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]string, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []string); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetDirtyBookFoldersContext_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDirtyBookFoldersContext'
+type MockStore_GetDirtyBookFoldersContext_Call struct {
+	*mock.Call
+}
+
+// GetDirtyBookFoldersContext is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockStore_Expecter) GetDirtyBookFoldersContext(ctx any) *MockStore_GetDirtyBookFoldersContext_Call {
+	return &MockStore_GetDirtyBookFoldersContext_Call{Call: _e.mock.On("GetDirtyBookFoldersContext", ctx)}
+}
+
+func (_c *MockStore_GetDirtyBookFoldersContext_Call) Run(run func(ctx context.Context)) *MockStore_GetDirtyBookFoldersContext_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetDirtyBookFoldersContext_Call) Return(strings []string, err error) *MockStore_GetDirtyBookFoldersContext_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockStore_GetDirtyBookFoldersContext_Call) RunAndReturn(run func(ctx context.Context) ([]string, error)) *MockStore_GetDirtyBookFoldersContext_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetDistinctGenres provides a mock function for the type MockStore
 func (_mock *MockStore) GetDistinctGenres() ([]string, error) {
 	ret := _mock.Called()
@@ -19158,6 +19277,68 @@ func (_c *MockStore_GetScanCacheMap_Call) Return(stringToScanCacheEntry map[stri
 }
 
 func (_c *MockStore_GetScanCacheMap_Call) RunAndReturn(run func() (map[string]database.ScanCacheEntry, error)) *MockStore_GetScanCacheMap_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetScanCacheMapContext provides a mock function for the type MockStore
+func (_mock *MockStore) GetScanCacheMapContext(ctx context.Context) (map[string]database.ScanCacheEntry, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetScanCacheMapContext")
+	}
+
+	var r0 map[string]database.ScanCacheEntry
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) (map[string]database.ScanCacheEntry, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) map[string]database.ScanCacheEntry); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]database.ScanCacheEntry)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetScanCacheMapContext_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetScanCacheMapContext'
+type MockStore_GetScanCacheMapContext_Call struct {
+	*mock.Call
+}
+
+// GetScanCacheMapContext is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockStore_Expecter) GetScanCacheMapContext(ctx any) *MockStore_GetScanCacheMapContext_Call {
+	return &MockStore_GetScanCacheMapContext_Call{Call: _e.mock.On("GetScanCacheMapContext", ctx)}
+}
+
+func (_c *MockStore_GetScanCacheMapContext_Call) Run(run func(ctx context.Context)) *MockStore_GetScanCacheMapContext_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetScanCacheMapContext_Call) Return(stringToScanCacheEntry map[string]database.ScanCacheEntry, err error) *MockStore_GetScanCacheMapContext_Call {
+	_c.Call.Return(stringToScanCacheEntry, err)
+	return _c
+}
+
+func (_c *MockStore_GetScanCacheMapContext_Call) RunAndReturn(run func(ctx context.Context) (map[string]database.ScanCacheEntry, error)) *MockStore_GetScanCacheMapContext_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -30018,6 +30199,50 @@ func (_c *MockStore_UpsertReviewItem_Call) Return(reviewItem database.ReviewItem
 }
 
 func (_c *MockStore_UpsertReviewItem_Call) RunAndReturn(run func(item database.ReviewItem) (database.ReviewItem, error)) *MockStore_UpsertReviewItem_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WorksGeneration provides a mock function for the type MockStore
+func (_mock *MockStore) WorksGeneration() uint64 {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for WorksGeneration")
+	}
+
+	var r0 uint64
+	if returnFunc, ok := ret.Get(0).(func() uint64); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(uint64)
+	}
+	return r0
+}
+
+// MockStore_WorksGeneration_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WorksGeneration'
+type MockStore_WorksGeneration_Call struct {
+	*mock.Call
+}
+
+// WorksGeneration is a helper method to define mock.On call
+func (_e *MockStore_Expecter) WorksGeneration() *MockStore_WorksGeneration_Call {
+	return &MockStore_WorksGeneration_Call{Call: _e.mock.On("WorksGeneration")}
+}
+
+func (_c *MockStore_WorksGeneration_Call) Run(run func()) *MockStore_WorksGeneration_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_WorksGeneration_Call) Return(v uint64) *MockStore_WorksGeneration_Call {
+	_c.Call.Return(v)
+	return _c
+}
+
+func (_c *MockStore_WorksGeneration_Call) RunAndReturn(run func() uint64) *MockStore_WorksGeneration_Call {
 	_c.Call.Return(run)
 	return _c
 }

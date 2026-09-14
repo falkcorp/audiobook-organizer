@@ -1,23 +1,56 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
+// worksIterCtxEvery is how many work rows ForEachWork visits between context
+// checks. A check is a single atomic load, so this only has to keep the gap
+// between checks well under a millisecond.
+const worksIterCtxEvery = 1024
+
+// WorksGeneration returns a counter that changes whenever any work: row
+// changes. Every writer of a work: key (CreateWork, UpdateWork, DeleteWork,
+// Reset, WipeByPrefixes) bumps it AFTER its commit, so a reader that records
+// the value BEFORE loading the works table and later sees the same value knows
+// no write landed in between. The scanner's works lookup cache uses it to
+// survive a scan restart without reloading every work (2026-09-13: each
+// stand-down re-queue reloaded 156,952 works in ~57s).
+//
+// The value is seeded per store instance at open, so a cache built against one
+// store can never match the generation of another (a reopened or swapped
+// store).
+func (p *PebbleStore) WorksGeneration() uint64 {
+	return p.worksGen.Load()
+}
+
+// seedWorksGeneration gives this store instance a starting generation that no
+// other instance in the process will have.
+func (p *PebbleStore) seedWorksGeneration() {
+	p.worksGen.Store(uint64(time.Now().UnixNano()) << 8)
+}
+
+// bumpWorksGeneration records that a work: row changed. Call after the commit.
+func (p *PebbleStore) bumpWorksGeneration() {
+	p.worksGen.Add(1)
+}
+
 // GetAllWorks returns all works by iterating the Pebble "work:" prefix.
 // Works are intentionally NOT mirrored into memdb — 211K rows × ~590B is
 // ~120MB of heap for a query path used in <0.1% of requests. The single
-// meaningful hot caller (scanner-side work lookup) batches one call at
-// scan start, which Pebble handles in tens of milliseconds.
+// meaningful hot caller (scanner-side work lookup) now uses ForEachWork so it
+// can be canceled.
 func (p *PebbleStore) GetAllWorks() ([]Work, error) {
 	return p.GetAllWorks_Pebble()
 }
@@ -25,17 +58,37 @@ func (p *PebbleStore) GetAllWorks() ([]Work, error) {
 // GetAllWorks_Pebble returns all works by iterating the Pebble "work:" prefix.
 func (p *PebbleStore) GetAllWorks_Pebble() ([]Work, error) {
 	var works []Work
-	if err := forEachBareRow(p.db, "work:", func(rowID string, rowValue []byte) error {
-		var w Work
-		if err := json.Unmarshal(rowValue, &w); err != nil {
-			return err
-		}
+	if err := p.ForEachWork(context.Background(), func(w Work) error {
 		works = append(works, w)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	return works, nil
+}
+
+// ForEachWork calls visit with every work row, checking ctx every
+// worksIterCtxEvery rows and returning ctx's error once it is done. It exists
+// because the scanner loads the whole works table at scan start (156,952 rows,
+// ~57s on production on 2026-09-13) and GetAllWorks could not be interrupted:
+// a scan canceled by a stand-down did not see the cancel until the load
+// finished, and the apply op waiting for the scan to park waited that long.
+// It also avoids materializing a []Work the caller immediately discards.
+func (p *PebbleStore) ForEachWork(ctx context.Context, visit func(Work) error) error {
+	n := 0
+	return forEachBareRow(p.db, "work:", func(_ string, rowValue []byte) error {
+		n++
+		if n%worksIterCtxEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		var w Work
+		if err := json.Unmarshal(rowValue, &w); err != nil {
+			return err
+		}
+		return visit(w)
+	})
 }
 
 func (p *PebbleStore) GetWorkByID(id string) (*Work, error) {
@@ -85,6 +138,7 @@ func (p *PebbleStore) CreateWork(work *Work) (*Work, error) {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
+	p.bumpWorksGeneration()
 	p.UpsertWorkToMemDB(work)
 	return work, nil
 }
@@ -127,6 +181,7 @@ func (p *PebbleStore) UpdateWork(id string, work *Work) (*Work, error) {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
+	p.bumpWorksGeneration()
 	p.UpsertWorkToMemDB(work)
 	return work, nil
 }
@@ -155,6 +210,7 @@ func (p *PebbleStore) DeleteWork(id string) error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return err
 	}
+	p.bumpWorksGeneration()
 	p.DeleteWorkFromMemDB(id)
 	return nil
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.25.3
+// version: 3.26.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-09-13
 
@@ -136,6 +136,11 @@ type Registry struct {
 	// scanStandDownLease overrides the scan stand-down lease TTL. Zero means use
 	// defaultScanStandDownLease. Set via Options; tunable for tests.
 	scanStandDownLease time.Duration
+	// scanStandDownGrace is the static re-queue grace from Options (see
+	// scanStandDownGraceFor). scanStandDownGraceFn, when set, overrides it
+	// with a live value (the server wires the config setting through it).
+	scanStandDownGrace   time.Duration
+	scanStandDownGraceFn atomic.Pointer[func() time.Duration]
 
 	// sweepStopped is closed by the DepsScheduler sweep-ticker goroutine when
 	// it exits. Shutdown joins on it UNCONDITIONALLY (after canceling the
@@ -182,6 +187,22 @@ type Options struct {
 	// ScanStandDownLease overrides the scan stand-down lease TTL (default 5m).
 	// Zero = default. Primarily used in tests to observe lease expiry quickly.
 	ScanStandDownLease time.Duration
+	// ScanStandDownGrace delays re-queuing the quiesced library.scan after the
+	// last stand-down holder releases, so a burst of applies does not restart
+	// the scan between each one. Zero (the default here) re-queues at once;
+	// production sets it through SetScanStandDownGraceFunc from config.
+	ScanStandDownGrace time.Duration
+}
+
+// SetScanStandDownGraceFunc installs a live source for the scan stand-down
+// re-queue grace (see releaseScanStandDown), read at each last release. It
+// overrides Options.ScanStandDownGrace. Safe to call at any time.
+func (r *Registry) SetScanStandDownGraceFunc(fn func() time.Duration) {
+	if fn == nil {
+		r.scanStandDownGraceFn.Store(nil)
+		return
+	}
+	r.scanStandDownGraceFn.Store(&fn)
 }
 
 // New creates a new Registry. workers controls the in-process worker pool size.
@@ -218,6 +239,7 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		batch:              newBatchManager(),
 		scanGate:           scanStandDown{holders: make(map[string]time.Time)},
 		scanStandDownLease: opts.ScanStandDownLease,
+		scanStandDownGrace: opts.ScanStandDownGrace,
 	}
 }
 
@@ -1272,6 +1294,11 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 	// Start() will reload them. We do NOT dispatch during shutdown because
 	// InsertOperationV2 after db.Close() panics (the "pebble: closed" issue).
 	r.batchStopAllTimers()
+
+	// Stop a pending scan stand-down grace timer so it cannot re-queue a scan
+	// into a closing store. The quiesced scan row stays interrupted_quiesced
+	// with no marker, which the next startup's resume sweep re-queues.
+	r.stopScanStandDownGrace()
 
 	// Gather running ops.
 	r.mu.Lock()

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-13
 
@@ -238,6 +238,10 @@ func SetStore(s scannerStore) {
 	pkgStoreMu.Lock()
 	pkgStore = s
 	pkgStoreMu.Unlock()
+	// A works map loaded from the previous store must never serve this one.
+	// Called after pkgStoreMu is released: AcquireWorksLookupCache takes
+	// worksLookupMu and then getStore's pkgStoreMu, so that is the order.
+	invalidateWorksLookupCache()
 }
 
 // getStore returns the package-local store with read-lock protection.
@@ -343,23 +347,71 @@ func AcquireScanCache(cache map[string]database.ScanCacheEntry) func() {
 	}
 }
 
-// worksLookupCache caches a (normalizedTitle|authorID) → workID map for the
-// duration of a single scan. Without this cache, saveBookToDatabase calls
-// GetAllWorks() once per book, producing 50K × 50K = 2.5B lookups on a full
-// scan of the production library (MAYDEPLOY-H6). With it, GetAllWorks is
-// called at most once per scan and reused for every book.
+// worksLookupCache caches a (normalizedTitle|authorID) → workID map for
+// scan runs. Without this cache, saveBookToDatabase calls GetAllWorks() once
+// per book, producing 50K × 50K = 2.5B lookups on a full scan of the
+// production library (MAYDEPLOY-H6). With it, the works table is loaded at
+// most once per scan and reused for every book.
 //
-// The cache is populated lazily on first access (so test paths that don't
-// initialise it still work) and invalidated when the scanner creates a new
-// Work mid-scan, so subsequent books in the same scan can find it.
+// The map is consulted only while a scan run holds it (worksLookupReady); it
+// is populated lazily otherwise (so test paths that don't initialise it still
+// work) and kept coherent with the scanner's own CreateWork calls through
+// rememberCreatedWork.
 //
-// Set via InitWorksLookupCache / cleared via ClearWorksLookupCache from
+// Retention across runs (2026-09-13). The last run's release used to drop the
+// map, so every scan restart reloaded the whole works table. A stand-down
+// parks and re-queues the scan once per metadata apply, and on production each
+// reload was 156,952 works in ~57s: the scan restarted, spent a minute
+// reloading, was canceled by the next apply, and never reached its folders.
+// The map is now retained after the last release (for worksLookupRetainTTL)
+// and reused by the next run when it is still current. "Current" is decided
+// by the store's works generation (database.WorkStore.WorksGeneration), which
+// every writer of a work row bumps after its commit — CreateWork, UpdateWork,
+// DeleteWork, Reset and WipeByPrefixes are the complete set of writers of
+// work: keys in internal/database. The map records the generation read BEFORE
+// its load plus the number of works this package created and added to the
+// map since (worksLookupOwnWrites). Reuse requires
+//
+//	store.WorksGeneration() == worksLookupBuiltGen + worksLookupOwnWrites
+//
+// i.e. every bump since the load is one the map already reflects. Any other
+// write (a merge, an edit through the works API, a delete, a write that raced
+// the load) makes the equation false and the next run reloads. A scanner
+// CreateWork that is counted a moment after another writer's bump can only
+// make the check fail, never pass wrongly, because the count never exceeds the
+// bumps it corresponds to.
+//
+// Within one run nothing changed: a write by another path mid-run is not seen
+// until the next load, exactly as before, and its worst case is a lookup miss
+// that falls through to CreateWork and the isUniqueConstraintError re-query.
+//
+// Set via AcquireWorksLookupCache / ReleaseWorksLookupCache from
 // ScanService.performScanInternal. Protected by worksLookupMu.
 var (
 	worksLookupCache map[string]string // key = normalizedTitle + "|" + authorID(or "nil")
-	worksLookupReady bool              // true when cache has been populated (or attempted) for this scan
+	worksLookupReady bool              // true while the map is live for lookups (a run holds it, or InitWorksLookupCache)
 	worksLookupMu    sync.RWMutex
+
+	// worksLookupReusable is true when the map was fully loaded from the
+	// current store and may be reused by a later run if the generation check
+	// passes. False after a failed load, a load with no store, or SetStore.
+	worksLookupReusable bool
+	// worksLookupBuiltGen is the store's works generation read before the load.
+	worksLookupBuiltGen uint64
+	// worksLookupOwnWrites counts works this package created (and put in the
+	// map) since the load; see the reuse equation above.
+	worksLookupOwnWrites uint64
+	// worksLookupDropTimer drops a retained map after worksLookupRetainTTL
+	// with no run holding it; worksLookupDropEpoch invalidates a timer that
+	// fires after a newer Acquire/Release.
+	worksLookupDropTimer *time.Timer
+	worksLookupDropEpoch uint64
 )
+
+// worksLookupRetainTTL bounds how long a retained works map (~160K entries on
+// production) stays in memory with no scan holding it. It only has to span a
+// scan restart: a stand-down's grace plus the time to re-queue.
+const worksLookupRetainTTL = 30 * time.Minute
 
 // worksLookupKey builds the cache key used by both lookups and inserts.
 func worksLookupKey(normalizedTitle string, authorID *int) string {
@@ -370,46 +422,87 @@ func worksLookupKey(normalizedTitle string, authorID *int) string {
 }
 
 // InitWorksLookupCache builds the (normalizedTitle|authorID) → workID map by
-// calling GetAllWorks once. Test/legacy direct-init; production scan runs use
+// loading every work once. Test/legacy direct-init; production scan runs use
 // AcquireWorksLookupCache / ReleaseWorksLookupCache so concurrent runs don't
 // clear each other's cache (audit 2026-07-17 R-4).
-// If GetAllWorks fails, the cache is left empty but enabled — saveBookToDatabase
+// If the load fails, the cache is left empty but enabled — saveBookToDatabase
 // will fall through to a direct CreateWork (which is the same fallback path as
 // when nothing matched).
 func InitWorksLookupCache() {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
-	initWorksLookupCacheLocked()
+	stopWorksLookupDropTimerLocked()
+	_ = initWorksLookupCacheLocked(context.Background())
 }
 
-// initWorksLookupCacheLocked is the body of InitWorksLookupCache; callers must
-// hold worksLookupMu.
-func initWorksLookupCacheLocked() {
-	worksLookupCache = make(map[string]string)
-	worksLookupReady = true
+// initWorksLookupCacheLocked loads the works map; callers must hold
+// worksLookupMu. It returns an error only when ctx was canceled during the
+// load; the partial map is then discarded and the cache left not ready. Any
+// other load failure leaves an empty, enabled, non-reusable map.
+func initWorksLookupCacheLocked(ctx context.Context) error {
 	store := getStore()
 	if store == nil {
-		return
+		worksLookupCache = make(map[string]string)
+		worksLookupReady = true
+		worksLookupReusable = false
+		return nil
 	}
-	works, err := store.GetAllWorks()
+	gen := store.WorksGeneration()
+	start := time.Now()
+	m := make(map[string]string)
+	err := store.ForEachWork(ctx, func(w database.Work) error {
+		m[worksLookupKey(util.NormalizeString(w.Title), w.AuthorID)] = w.ID
+		return nil
+	})
+	if err != nil && ctx.Err() != nil {
+		worksLookupCache = nil
+		worksLookupReady = false
+		worksLookupReusable = false
+		defaultLog.Info("InitWorksLookupCache: load canceled after %d works (%s)",
+			len(m), time.Since(start).Round(time.Millisecond))
+		return fmt.Errorf("works lookup load canceled: %w", ctx.Err())
+	}
 	if err != nil {
-		defaultLog.Warn("InitWorksLookupCache: GetAllWorks failed: %v", err)
-		return
+		defaultLog.Warn("InitWorksLookupCache: loading works failed: %v", err)
+		worksLookupCache = make(map[string]string)
+		worksLookupReady = true
+		worksLookupReusable = false
+		return nil
 	}
-	for _, w := range works {
-		worksLookupCache[worksLookupKey(util.NormalizeString(w.Title), w.AuthorID)] = w.ID
-	}
-	defaultLog.Info("InitWorksLookupCache: loaded %d works", len(works))
+	worksLookupCache = m
+	worksLookupReady = true
+	worksLookupReusable = true
+	worksLookupBuiltGen = gen
+	worksLookupOwnWrites = 0
+	defaultLog.Info("InitWorksLookupCache: loaded %d works in %s",
+		len(m), time.Since(start).Round(time.Millisecond))
+	return nil
 }
 
-// ClearWorksLookupCache drops the per-scan works lookup map. Test/legacy
-// direct-clear counterpart of InitWorksLookupCache; production scan runs use
+// ClearWorksLookupCache drops the works lookup map. Test/legacy direct-clear
+// counterpart of InitWorksLookupCache; production scan runs use
 // ReleaseWorksLookupCache.
 func ClearWorksLookupCache() {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
+	stopWorksLookupDropTimerLocked()
 	worksLookupCache = nil
 	worksLookupReady = false
+	worksLookupReusable = false
+}
+
+// invalidateWorksLookupCache marks any retained map unusable for a later run.
+// SetStore calls it: a map loaded from one store must never serve another
+// (test stores can share a generation value).
+func invalidateWorksLookupCache() {
+	worksLookupMu.Lock()
+	defer worksLookupMu.Unlock()
+	worksLookupReusable = false
+	if worksLookupRefs == 0 {
+		stopWorksLookupDropTimerLocked()
+		worksLookupCache = nil
+		worksLookupReady = false
+	}
 }
 
 // worksLookupRefs reference-counts concurrent scan runs sharing the works
@@ -420,38 +513,88 @@ func ClearWorksLookupCache() {
 var worksLookupRefs int
 
 // AcquireWorksLookupCache registers a scan run with the shared works lookup
-// cache, populating it on first use (one GetAllWorks call). Later concurrent
-// acquirers share the same map — safe because all runs resolve works against
-// the same store and rememberCreatedWork keeps the map coherent under
-// worksLookupMu. Pair with a deferred ReleaseWorksLookupCache.
-func AcquireWorksLookupCache() {
+// cache. A concurrent run's live map is shared; otherwise a retained map from
+// an earlier run is reused when the works generation shows no work row changed
+// since it was loaded (see the reuse equation on worksLookupCache); otherwise
+// the works table is loaded, cancelably. It returns an error only when ctx was
+// canceled during that load, in which case the run is NOT registered and must
+// not call ReleaseWorksLookupCache. On success pair it with a deferred
+// ReleaseWorksLookupCache.
+func AcquireWorksLookupCache(ctx context.Context) error {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
-	worksLookupRefs++
 	if worksLookupReady && worksLookupCache != nil {
-		return // already populated by a concurrent run
+		worksLookupRefs++
+		return nil // already live: populated by a concurrent run
 	}
-	initWorksLookupCacheLocked()
+	stopWorksLookupDropTimerLocked()
+	if store := getStore(); store != nil && worksLookupReusable && worksLookupCache != nil {
+		if cur := store.WorksGeneration(); cur == worksLookupBuiltGen+worksLookupOwnWrites {
+			worksLookupReady = true
+			worksLookupRefs++
+			defaultLog.Info("InitWorksLookupCache: reusing %d works from the previous run (no work row changed)",
+				len(worksLookupCache))
+			return nil
+		}
+		defaultLog.Info("InitWorksLookupCache: works changed since the previous run; reloading")
+	}
+	if err := initWorksLookupCacheLocked(ctx); err != nil {
+		return err
+	}
+	worksLookupRefs++
+	return nil
 }
 
-// ReleaseWorksLookupCache decrements the refcount and drops the cache when the
-// last active scan run finishes.
+// ReleaseWorksLookupCache decrements the refcount. When the last active scan
+// run finishes the map stops serving lookups; a reusable map is retained for
+// worksLookupRetainTTL so a restarted run can skip the reload, anything else
+// is dropped.
 func ReleaseWorksLookupCache() {
 	worksLookupMu.Lock()
 	defer worksLookupMu.Unlock()
 	if worksLookupRefs > 0 {
 		worksLookupRefs--
 	}
-	if worksLookupRefs == 0 {
+	if worksLookupRefs != 0 {
+		return
+	}
+	worksLookupReady = false
+	if !worksLookupReusable || worksLookupCache == nil {
+		worksLookupCache = nil
+		worksLookupReusable = false
+		return
+	}
+	stopWorksLookupDropTimerLocked()
+	epoch := worksLookupDropEpoch
+	worksLookupDropTimer = time.AfterFunc(worksLookupRetainTTL, func() {
+		worksLookupMu.Lock()
+		defer worksLookupMu.Unlock()
+		if worksLookupDropEpoch != epoch || worksLookupRefs != 0 {
+			return
+		}
 		worksLookupCache = nil
 		worksLookupReady = false
+		worksLookupReusable = false
+		worksLookupDropTimer = nil
+	})
+}
+
+// stopWorksLookupDropTimerLocked cancels a pending retained-map drop. Callers
+// hold worksLookupMu. Bumping the epoch covers a timer that already fired and
+// is waiting on the mutex.
+func stopWorksLookupDropTimerLocked() {
+	worksLookupDropEpoch++
+	if worksLookupDropTimer != nil {
+		worksLookupDropTimer.Stop()
+		worksLookupDropTimer = nil
 	}
 }
 
 // lookupWorkID returns the cached workID for (normalizedTitle, authorID), or
 // "" if no match. Falls back to a one-shot GetAllWorks() scan when the cache
-// hasn't been initialised (test paths and any code that calls saveBook outside
-// a ScanService-driven scan).
+// isn't live (test paths and any code that calls saveBook outside a
+// ScanService-driven scan). A retained, idle map is never consulted here: it
+// is only trusted after AcquireWorksLookupCache's generation check.
 func lookupWorkID(normalizedTitle string, authorID *int) string {
 	key := worksLookupKey(normalizedTitle, authorID)
 	worksLookupMu.RLock()
@@ -485,9 +628,21 @@ func lookupWorkID(normalizedTitle string, authorID *int) string {
 	return ""
 }
 
-// rememberCreatedWork records a freshly-created Work in the per-scan cache so
-// subsequent books in the same scan can resolve it without re-querying.
+// rememberCreatedWork records a Work this package just CREATED (a successful
+// CreateWork, which bumped the store's works generation once) in the live
+// cache so subsequent books resolve it without re-querying, and counts the
+// write so the map stays reusable across a restart (see worksLookupOwnWrites).
 func rememberCreatedWork(w *database.Work) {
+	rememberWork(w, true)
+}
+
+// rememberResolvedWork records a Work found by re-query (no write by us, so no
+// generation bump to account for).
+func rememberResolvedWork(w *database.Work) {
+	rememberWork(w, false)
+}
+
+func rememberWork(w *database.Work, created bool) {
 	if w == nil {
 		return
 	}
@@ -497,6 +652,9 @@ func rememberCreatedWork(w *database.Work) {
 		return
 	}
 	worksLookupCache[worksLookupKey(util.NormalizeString(w.Title), w.AuthorID)] = w.ID
+	if created {
+		worksLookupOwnWrites++
+	}
 }
 
 // skipReason explains why a file was skipped or re-read. It exists so the scan
@@ -2691,8 +2849,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 									(authorID != nil && w.AuthorID != nil && *authorID == *w.AuthorID)) {
 								wid := w.ID
 								workID = &wid
-								// Refresh the cache entry with the resolved ID.
-								rememberCreatedWork(&w)
+								// Refresh the cache entry with the resolved ID
+								// (found, not written by us: no generation bump).
+								rememberResolvedWork(&w)
 								break
 							}
 						}

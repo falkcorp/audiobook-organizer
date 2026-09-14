@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.117.0
+// version: 1.118.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-13
 
@@ -1236,6 +1236,13 @@ type Config struct {
 	// library on slow or high-latency storage may need a smaller interval than
 	// the default of 20. 0 means use the default.
 	ScanProgressEvery int `json:"scan_progress_every" mapstructure:"scan_progress_every"`
+	// ScanStandDownGraceSeconds delays re-queuing a library scan that a
+	// metadata apply stood down, measured from the last apply's release. An
+	// apply arriving inside the window finds no scan running and starts at
+	// once. Without it, applying metadata one book at a time restarted the scan
+	// between every click, and each click waited ~57s for the restarted scan to
+	// park (2026-09-13). 0 re-queues immediately. Default 45.
+	ScanStandDownGraceSeconds int `json:"scan_standdown_grace_seconds" mapstructure:"scan_standdown_grace_seconds"`
 	// ChapterConsolidationThresholdMin is the per-file duration threshold (minutes)
 	// used during scanning to detect chapter-named files. If a group of ≥ 3 files
 	// sharing the same base title (e.g. "01 - My Book", "02 - My Book") each
@@ -2188,6 +2195,7 @@ func InitConfig() {
 	// Set performance defaults — scale with available CPUs
 	defaultWorkers := max(runtime.NumCPU(), 4)
 	viper.SetDefault("concurrent_scans", defaultWorkers)
+	viper.SetDefault("scan_standdown_grace_seconds", 45)
 	viper.SetDefault("chapter_consolidation_threshold_min", 10)
 	viper.SetDefault("operation_timeout_minutes", 30)
 	viper.SetDefault("log_retention_days", 90)
@@ -2688,6 +2696,7 @@ func InitConfig() {
 			// Performance
 			ConcurrentScans:                     viper.GetInt("concurrent_scans"),
 			ScanProgressEvery:                   viper.GetInt("scan_progress_every"),
+			ScanStandDownGraceSeconds:           viper.GetInt("scan_standdown_grace_seconds"),
 			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
@@ -3273,6 +3282,9 @@ func (c *Config) Validate() error {
 	if c.ConcurrentScans < 0 {
 		errs = append(errs, "concurrent_scans must be >= 0")
 	}
+	if c.ScanStandDownGraceSeconds < 0 {
+		errs = append(errs, "scan_standdown_grace_seconds must be >= 0")
+	}
 	if c.MinBookSizeBytes == 0 {
 		c.MinBookSizeBytes = 5 * 1024 * 1024
 	}
@@ -3418,6 +3430,7 @@ func ResetToDefaults() {
 			// Performance
 			ConcurrentScans:                  max(runtime.NumCPU(), 4),
 			ScanProgressEvery:                20,
+			ScanStandDownGraceSeconds:        45,
 			ChapterConsolidationThresholdMin: 10,
 			OperationTimeoutMinutes:          30,
 			MinBookSizeBytes:                 5 * 1024 * 1024,

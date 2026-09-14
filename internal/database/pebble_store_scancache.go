@@ -1,11 +1,12 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
 // last-edited: 2026-09-13
 
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -49,8 +50,29 @@ import (
 // eventual option B -- stop normalizing Book.FilePath at all -- cheap, by
 // leaving the scan/skip layer untouched by it.
 func (p *PebbleStore) GetScanCacheMap() (map[string]ScanCacheEntry, error) {
+	return p.GetScanCacheMapContext(context.Background())
+}
+
+// scanCacheCtxEvery is how many rows the scan-startup loaders visit between
+// context checks.
+const scanCacheCtxEvery = 1024
+
+// GetScanCacheMapContext is GetScanCacheMap with cancellation: it checks ctx
+// every scanCacheCtxEvery rows and returns ctx's error once ctx is done. It
+// walks every book_file row (hundreds of thousands on production), and it runs
+// in the scan's startup before the per-folder loop's own cancel checks, so
+// without this a stand-down that canceled the scan here waited for the whole
+// walk before the scan parked.
+func (p *PebbleStore) GetScanCacheMapContext(ctx context.Context) (map[string]ScanCacheEntry, error) {
 	result := make(map[string]ScanCacheEntry)
+	n := 0
 	if err := forEachKeyInRange(p.db, []byte("book_file:"), []byte("book_file;"), func(_, value []byte) error {
+		n++
+		if n%scanCacheCtxEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		var bf BookFile
 		if err := json.Unmarshal(value, &bf); err != nil {
 			return nil
@@ -428,10 +450,23 @@ func (p *PebbleStore) MarkNeedsRescan(bookID string) error {
 // GetDirtyBookFolders returns a deduplicated list of parent directories for all
 // books that have NeedsRescan = true.
 func (p *PebbleStore) GetDirtyBookFolders() ([]string, error) {
+	return p.GetDirtyBookFoldersContext(context.Background())
+}
 
+// GetDirtyBookFoldersContext is GetDirtyBookFolders with cancellation (every
+// scanCacheCtxEvery rows). It walks every book row during the scan's startup;
+// see GetScanCacheMapContext for why that has to be cancelable.
+func (p *PebbleStore) GetDirtyBookFoldersContext(ctx context.Context) ([]string, error) {
 	seen := make(map[string]struct{})
 	var dirs []string
+	n := 0
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		n++
+		if n%scanCacheCtxEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		var book Book
 		if err := json.Unmarshal(rowValue, &book); err != nil {
 			return nil

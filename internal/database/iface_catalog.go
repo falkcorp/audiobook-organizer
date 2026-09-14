@@ -1,7 +1,7 @@
 // file: internal/database/iface_catalog.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package database
 
@@ -43,6 +43,14 @@ type CollectionStore interface {
 // WorkStore covers Work CRUD.
 type WorkStore interface {
 	GetAllWorks() ([]Work, error)
+	// ForEachWork visits every work row and stops with ctx's error once ctx
+	// is done. Use it instead of GetAllWorks on any path that must stay
+	// cancelable (the scanner's works lookup load).
+	ForEachWork(ctx context.Context, visit func(Work) error) error
+	// WorksGeneration changes after every write to a work row. A caller that
+	// reads it before loading the works table can later compare it to tell
+	// whether its copy is still current.
+	WorksGeneration() uint64
 	GetWorkByID(id string) (*Work, error)
 	CreateWork(work *Work) (*Work, error)
 	UpdateWork(id string, work *Work) (*Work, error)

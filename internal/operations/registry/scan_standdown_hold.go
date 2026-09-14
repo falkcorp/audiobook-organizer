@@ -1,5 +1,5 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
 // last-edited: 2026-09-13
 
@@ -91,6 +91,9 @@ func (r *Registry) TryAcquireScanStandDown(holderOpID, reason string) (func(), e
 	}
 	r.scanGate.mu.Lock()
 	r.scanGate.holders[holderOpID] = time.Now().Add(r.leaseTTL())
+	// A pending re-queue grace ends here: the quiesced scan stays parked and
+	// this holder's last release re-queues it (see scan_standdown.go).
+	r.cancelScanStandDownGraceLocked(holderOpID)
 	r.scanGate.mu.Unlock()
 
 	if r.anyScanClaimed() {

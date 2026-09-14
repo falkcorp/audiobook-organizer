@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.164.0
+// version: 1.165.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-13
 
@@ -106,6 +106,11 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
+	// worksGen is the works generation counter (see WorksGeneration in
+	// pebble_store_works.go). Every writer of a work: key bumps it after its
+	// commit, so a cache of the works table can tell whether it is still current.
+	// Seeded per instance at open so two stores never share a value.
+	worksGen atomic.Uint64
 	// memPending buffers write-throughs that arrive while memPtr is still nil
 	// because the async warmup hasn't published yet, and replays them into the
 	// MemStore immediately before it is published. Without it those writes were
@@ -375,6 +380,7 @@ func newPebbleStore(path string, fs vfs.FS) (*PebbleStore, error) {
 		db:       db,
 		UseMemDB: true, // in-memory query layer is the default after Phase 3
 	}
+	store.seedWorksGeneration()
 
 	slog.Info("PebbleDB opened", "path", path, "format_version", db.FormatMajorVersion())
 
@@ -4799,6 +4805,8 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	// The wipe removed every work: row; invalidate any works cache.
+	p.bumpWorksGeneration()
 
 	// Force flush to ensure deletes are persisted to disk
 	if err := p.db.Flush(); err != nil {
@@ -4849,6 +4857,14 @@ func (p *PebbleStore) CountByPrefix(prefix string) (int, error) {
 // Returns the total number of keys deleted.
 func (p *PebbleStore) WipeByPrefixes(prefixes []string) (int, error) {
 	total := 0
+	// Any prefix may cover work: rows ("work:", "w", or ""), and an error part
+	// way through leaves earlier prefixes' deletes committed. Bump the works
+	// generation whenever anything was deleted, success or not.
+	defer func() {
+		if total > 0 {
+			p.bumpWorksGeneration()
+		}
+	}()
 	for _, prefix := range prefixes {
 		lb := []byte(prefix)
 		// Upper bound: increment the last byte to cover all keys with this prefix.
