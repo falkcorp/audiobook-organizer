@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-09-11
+// last-edited: 2026-09-14
 
 package server
 
@@ -37,11 +37,22 @@ func (s *Server) safeWriteDeps() tagger.SafeWriteDeps {
 		return tagger.SafeWriteDeps{}
 	}
 	store := s.storeForWiring()
-	importer := deluge.NewLibraryImporterAdapter(store, deluge.GetClient(), &config.AppConfig)
+	importer := deluge.NewLibraryImporterAdapter(store, deluge.GetClient(), &config.AppConfig, s.protectedPathCache)
 	return tagger.SafeWriteDeps{
 		ProtectedCache: s.protectedPathCache,
 		Importer:       importer,
 	}
+}
+
+// protectedChecker returns the server's protected-path predicate, or a nil
+// interface when none is wired. Returning s.protectedPathCache directly would
+// hand callers a non-nil interface holding a nil pointer, which passes their
+// nil check and then panics in IsProtected.
+func (s *Server) protectedChecker() tagger.PathChecker {
+	if s.protectedPathCache == nil {
+		return nil
+	}
+	return s.protectedPathCache
 }
 
 // searchBackfillStore is the store slice the bulk backfill reads. It is

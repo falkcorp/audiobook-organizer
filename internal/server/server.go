@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.56.0
+// version: 2.56.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -979,7 +979,7 @@ func NewServer(store database.Store) *Server {
 		// all taglib writes (metadata apply, single-tag patch) check for Deluge-
 		// protected paths before writing. This uses the same ProtectedPathCache
 		// and a LibraryImporterAdapter backed by the server's store.
-		importer := deluge.NewLibraryImporterAdapter(resolvedStore, dc, &config.AppConfig)
+		importer := deluge.NewLibraryImporterAdapter(resolvedStore, dc, &config.AppConfig, server.protectedPathCache)
 		deps := tagger.SafeWriteDeps{
 			ProtectedCache: server.protectedPathCache,
 			Importer:       importer,

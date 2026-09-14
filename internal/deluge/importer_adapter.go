@@ -1,7 +1,7 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // LibraryImporterAdapter implements tagger.LibraryImporter on top of
 // ImportToLibrary. It is wired into the Server at startup so
@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // LibraryImporterAdapter satisfies tagger.LibraryImporter using the
@@ -23,16 +24,22 @@ type LibraryImporterAdapter struct {
 	store        Store
 	delugeClient *Client
 	cfg          *config.Config
+	protected    tagger.PathChecker
 }
 
 // NewLibraryImporterAdapter creates a new adapter. delugeClient may be nil
 // (Deluge MoveStorage will be skipped but the copy still succeeds).
 // cfg is passed by pointer; callers should use &config.AppConfig.
-func NewLibraryImporterAdapter(store Store, delugeClient *Client, cfg *config.Config) *LibraryImporterAdapter {
+// protected is the predicate the write guard uses (the server's
+// ProtectedPathCache): ImportToLibrary needs it to tell a row imported to a
+// library file from one that still names the protected copy. Nil disables
+// those checks.
+func NewLibraryImporterAdapter(store Store, delugeClient *Client, cfg *config.Config, protected tagger.PathChecker) *LibraryImporterAdapter {
 	return &LibraryImporterAdapter{
 		store:        store,
 		delugeClient: delugeClient,
 		cfg:          cfg,
+		protected:    protected,
 	}
 }
 
@@ -56,10 +63,12 @@ func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath string)
 		// record is committed). There is no row to repoint, so nothing can be
 		// imported -- and the write must not proceed in place on a protected
 		// file, which until 2026-09-13 it did. Refuse it.
-		return srcPath, fmt.Errorf("LibraryImporterAdapter: no BookFile record for protected path %s; refusing to write it in place", srcPath)
+		// Wraps tagger.ErrProtectedPathWrite: the file is left alone because
+		// it is protected, which callers count as a skip, not a failure.
+		return srcPath, fmt.Errorf("LibraryImporterAdapter: no BookFile record for protected path %s, so there is no row to repoint to a library copy: %w", srcPath, tagger.ErrProtectedPathWrite)
 	}
 
-	newPath, err := ImportToLibrary(a.cfg, a.delugeClient, a.store, bf)
+	newPath, err := ImportToLibrary(a.cfg, a.delugeClient, a.store, bf, a.protected)
 	if err != nil {
 		if newPath != "" {
 			// The copy could not be recorded AND could not be removed: name

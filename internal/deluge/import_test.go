@@ -1,7 +1,7 @@
 // file: internal/deluge/import_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Tests for ImportToLibrary in internal/deluge/import.go.
 
@@ -47,7 +47,7 @@ func TestImportToLibrary_BasicCopy(t *testing.T) {
 	store := &fakeDelugStore{}
 	bf := &database.BookFile{ID: "id-001", FilePath: srcFile}
 
-	newPath, err := ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestImportToLibrary_SamePath_NoOp(t *testing.T) {
 	store := &fakeDelugStore{}
 	bf := &database.BookFile{ID: "id-002", FilePath: srcFile}
 
-	newPath, err := ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestImportToLibrary_Idempotent(t *testing.T) {
 	importedAt := time.Now().Add(-time.Hour)
 	bf := &database.BookFile{ID: "id-003", FilePath: srcFile, ImportedFromDelugeAt: &importedAt}
 
-	newPath, err := ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestImportToLibrary_NilBookFile(t *testing.T) {
 	cfg := &config.Config{RootDir: t.TempDir()}
 	store := &fakeDelugStore{}
 
-	_, err := ImportToLibrary(cfg, nil, store, nil)
+	_, err := ImportToLibrary(cfg, nil, store, nil, nil)
 	if err == nil {
 		t.Error("expected error for nil bookFile")
 	}
@@ -138,7 +138,7 @@ func TestImportToLibrary_MoveStorageNilClient_OK(t *testing.T) {
 	bf := &database.BookFile{ID: "id-004", FilePath: srcFile, DelugeHash: "abc123"}
 
 	// nil client → MoveStorage skipped, but copy still succeeds.
-	newPath, err := ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestImportToLibrary_UpdateFails_RemovesCopyAndRetrySucceeds(t *testing.T) {
 	bf := &database.BookFile{ID: "id-fail", FilePath: srcFile}
 	dest := filepath.Join(rootDir, "book.m4b")
 
-	newPath, err := ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := ImportToLibrary(cfg, nil, store, bf, nil)
 	if err == nil {
 		t.Fatal("expected the UpdateBookFile failure to be returned")
 	}
@@ -200,7 +200,7 @@ func TestImportToLibrary_UpdateFails_RemovesCopyAndRetrySucceeds(t *testing.T) {
 	}
 
 	store.fail = false
-	newPath, err = ImportToLibrary(cfg, nil, store, bf)
+	newPath, err = ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("retry after a failed update must succeed: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestImportToLibrary_ExistingIdenticalDestinationIsAdopted(t *testing.T) {
 	cfg := &config.Config{RootDir: rootDir}
 
 	failing := &failingDelugStore{fail: true}
-	if _, err := ImportToLibrary(cfg, nil, failing, &database.BookFile{ID: "id-adopt", FilePath: srcFile}); err == nil {
+	if _, err := ImportToLibrary(cfg, nil, failing, &database.BookFile{ID: "id-adopt", FilePath: srcFile}, nil); err == nil {
 		t.Fatal("expected the UpdateBookFile failure")
 	}
 	if _, statErr := os.Stat(dest); statErr != nil {
@@ -232,7 +232,7 @@ func TestImportToLibrary_ExistingIdenticalDestinationIsAdopted(t *testing.T) {
 	}
 
 	store := &failingDelugStore{}
-	newPath, err := ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-adopt", FilePath: srcFile})
+	newPath, err := ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-adopt", FilePath: srcFile}, nil)
 	if err != nil {
 		t.Fatalf("an identical existing destination must be adopted: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestImportToLibrary_ExistingDifferentDestinationRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &failingDelugStore{}
-	if _, err := ImportToLibrary(&config.Config{RootDir: rootDir}, nil, store, &database.BookFile{ID: "id-diff", FilePath: srcFile}); err == nil {
+	if _, err := ImportToLibrary(&config.Config{RootDir: rootDir}, nil, store, &database.BookFile{ID: "id-diff", FilePath: srcFile}, nil); err == nil {
 		t.Fatal("a different file at the destination must be refused")
 	}
 	if store.updated != nil {
@@ -278,7 +278,7 @@ func TestImportToLibrary_DestinationOwnedByAnotherRowRefused(t *testing.T) {
 	store := &fakeDelugStore{owners: map[string]*database.BookFile{
 		dest: {ID: "other-row", BookID: "other-book", FilePath: dest},
 	}}
-	if _, err := ImportToLibrary(&config.Config{RootDir: rootDir}, nil, store, &database.BookFile{ID: "id-owned", FilePath: srcFile}); err == nil {
+	if _, err := ImportToLibrary(&config.Config{RootDir: rootDir}, nil, store, &database.BookFile{ID: "id-owned", FilePath: srcFile}, nil); err == nil {
 		t.Fatal("a destination recorded for another book file must be refused")
 	}
 	if store.updated != nil {
@@ -344,7 +344,7 @@ func TestImportToLibrary_ConcurrentImportCannotAdoptCopyBeingRemoved(t *testing.
 
 	aErr := make(chan error, 1)
 	go func() {
-		_, err := ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-a", FilePath: srcFile})
+		_, err := ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-a", FilePath: srcFile}, nil)
 		aErr <- err
 	}()
 	<-store.started // A has copied and is inside its failing row update
@@ -353,7 +353,7 @@ func TestImportToLibrary_ConcurrentImportCannotAdoptCopyBeingRemoved(t *testing.
 	var bErr error
 	go func() {
 		defer close(bDone)
-		bPath, bErr = ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-b", FilePath: srcFile})
+		bPath, bErr = ImportToLibrary(cfg, nil, store, &database.BookFile{ID: "id-b", FilePath: srcFile}, nil)
 	}()
 
 	if err := <-aErr; err == nil {

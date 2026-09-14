@@ -1,7 +1,7 @@
 // file: internal/server/malformed_m4b_wrappers.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -21,6 +21,10 @@ func (s *Server) remuxMalformedM4BFiles(ctx context.Context, progress func(proce
 	// Every remuxed file's book_file row learns the new bytes' hashes, or the
 	// next rescan treats the file as replaced.
 	remuxer.SetBookFileStore(s.store)
+	// Protected files (Deluge save paths, the iTunes library) are skipped:
+	// the walk covers all of RootDir, and a protected directory can sit
+	// under it. Same predicate the tag-write guard uses.
+	remuxer.SetProtectedChecker(s.protectedChecker())
 	return remuxer.RemuxMalformedFiles(ctx, progress)
 }
 
@@ -31,5 +35,6 @@ func (s *Server) transcodeMalformedM4BFiles(ctx context.Context, progress func(p
 	transcoder := remux.NewTranscoder(s.store)
 	// Hashes plus codec, bitrate and sample rate, which a transcode changes.
 	transcoder.SetBookFileStore(s.store)
+	transcoder.SetProtectedChecker(s.protectedChecker())
 	return transcoder.TranscodeMalformedFiles(ctx, progress)
 }

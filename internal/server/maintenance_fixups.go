@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.20.0
+// version: 2.20.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
@@ -603,7 +603,9 @@ func (s *Server) handleGetComposerScanResults(c *gin.Context) {
 			continue
 		}
 		counts[r.Category]++
-		if r.Category != "ok" && r.Category != "missing" {
+		// "skipped_protected": the write guard refused a protected file. It
+		// is counted in by_category but is not a problem to fix.
+		if r.Category != "ok" && r.Category != "missing" && r.Category != "skipped_protected" {
 			problems = append(problems, r)
 		}
 	}
