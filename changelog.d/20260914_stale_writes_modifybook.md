@@ -16,3 +16,10 @@
     track, track count and title through `PatchBookFileFields` (which gains
     `Title` and `TrackCount`), pinned to the track number it read, instead of a
     whole-row `UpdateBookFile` that could revert e.g. a file's `Duration`.
+- The rename pipelines (`runApplyPipeline` and `RunApplyPipelineRenameOnly`)
+  no longer write back the whole book row they read before the disk rename.
+  They record only the new `FilePath`, inside `ModifyBook`, so an apply or edit
+  that lands during a rename is kept. A file that moved on disk but whose new
+  path could not be written to the database (book or `book_file` row) now fails
+  the rename with an error; before, it was logged as a warning and the rename
+  reported success.
