@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/plugin.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: d1e2f3a4-b5c6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package dedup is the UOS plugin for deduplication operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -111,4 +111,8 @@ type pluginStore interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllAuthors() ([]database.Author, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// quarantine-chapter-artifacts: soft-delete under the per-book lock, and
+	// read a version group to avoid retiring its primary.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }

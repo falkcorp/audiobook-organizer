@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-13
 
@@ -8,8 +8,8 @@ package logger
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 329
-	slogRatchetCallCeiling = 1975
+	slogRatchetFileCeiling = 327
+	slogRatchetCallCeiling = 1963
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -151,13 +151,11 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/cleanup_empty_folders.go":         7,
 	"internal/maintenance/jobs/cleanup_organize_mess.go":         4,
 	"internal/maintenance/jobs/cleanup_series.go":                4,
-	"internal/maintenance/jobs/dedup_books.go":                   9,
 	"internal/maintenance/jobs/enrich_book_files.go":             4,
 	"internal/maintenance/jobs/fix_author_narrator_swap.go":      3,
 	"internal/maintenance/jobs/fix_book_file_paths.go":           4,
 	"internal/maintenance/jobs/fix_file_modes.go":                2,
 	"internal/maintenance/jobs/fix_read_by_narrator.go":          2,
-	"internal/maintenance/jobs/fix_version_groups.go":            3,
 	"internal/maintenance/jobs/generate_itl_tests.go":            3,
 	"internal/maintenance/jobs/merge_chapter_groups.go":          3,
 	"internal/maintenance/jobs/normalize_primary_flags.go":       5,

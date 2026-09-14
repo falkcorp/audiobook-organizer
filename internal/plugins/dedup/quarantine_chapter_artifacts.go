@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -20,13 +20,22 @@
 //     with >= MinTitleCollisionsUnscanned books (a higher bar, since duration can't
 //     confirm it's a segment). Long single files are never touched.
 //
-// Action is SOFT-delete (MarkedForDeletion) — recoverable, not a hard delete.
+// Never quarantined, in either mode (so dry-run counts match apply):
+//   - a version group's primary while the group has other live members and no
+//     other explicit primary -- retiring it would leave the group with none;
+//   - a book whose own path or file is under the active iTunes library
+//     (merge.GuardITunesProtectedLoaded; books/itunes/** is never mutated).
+//
+// Action is SOFT-delete (MarkedForDeletion) under the per-book lock
+// (ModifyBook) — recoverable, not a hard delete. A failed write or an
+// unreadable file list is counted and fails the op; it is not only logged.
 // Dry-run by default: reports what it WOULD quarantine and writes nothing.
 package dedup
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -35,6 +44,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -124,9 +135,31 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		Title string
 	}
 	type candidate struct {
-		ID    string
-		Title string
-		Norm  string
+		ID       string
+		Title    string
+		Norm     string
+		FilePath string
+		Group    string
+		// CountsPrimary uses the destructive-guard reading: nil counts as
+		// primary. Readers disagree about nil (see merge.MergeBooks), and the
+		// reading that protects the group is the one a soft-delete must take.
+		CountsPrimary bool
+		Explicit      bool
+	}
+	// Live members and explicit primaries per version group, read-only in the
+	// workers below. A primary is protected only while it is the group's sole
+	// possible primary and the group has someone else to strand.
+	groupLive := make(map[string]int)
+	groupExplicit := make(map[string]int)
+	for i := range books {
+		b := &books[i]
+		if b.IsSoftDeleted() || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+			continue
+		}
+		groupLive[*b.VersionGroupID]++
+		if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
+			groupExplicit[*b.VersionGroupID]++
+		}
 	}
 	var candidates []candidate
 	for i := range books {
@@ -138,7 +171,13 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		if norm == "" || titleCount[norm] < params.MinTitleCollisions {
 			continue
 		}
-		candidates = append(candidates, candidate{ID: b.ID, Title: b.Title, Norm: norm})
+		c := candidate{ID: b.ID, Title: b.Title, Norm: norm, FilePath: b.FilePath}
+		if b.VersionGroupID != nil {
+			c.Group = *b.VersionGroupID
+		}
+		c.Explicit = b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
+		c.CountsPrimary = b.IsPrimaryVersion == nil || c.Explicit
+		candidates = append(candidates, c)
 	}
 
 	// Shared mutable state written from worker goroutines below — all guarded
@@ -146,9 +185,12 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 	// no writers), so it needs no lock.
 	var (
 		mu            sync.Mutex
-		artifacts     []artifact
-		examined      int
-		sampleByTitle = make(map[string]int)
+		artifacts      []artifact
+		examined       int
+		readErrors     int
+		skippedPrimary int
+		skippedITunes  int
+		sampleByTitle  = make(map[string]int)
 	)
 	if err := registry.RunItems(ctx, reporter, candidates, func(ctx context.Context, c candidate) error {
 		mu.Lock()
@@ -156,8 +198,17 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		mu.Unlock()
 
 		files, ferr := p.store.GetBookFiles(c.ID)
-		if ferr != nil || len(files) != 1 {
-			return nil // multi-file audiobook (or unreadable) — not a single-segment artifact
+		if ferr != nil {
+			// Unreadable: not examined, so not quarantined -- but counted and
+			// reported, never silently treated as "not an artifact".
+			mu.Lock()
+			readErrors++
+			mu.Unlock()
+			reporter.Logger().Error("quarantine read files error", "book_id", c.ID, "error", ferr)
+			return nil
+		}
+		if len(files) != 1 {
+			return nil // multi-file audiobook — not a single-segment artifact
 		}
 		dur := files[0].AcoustIDFingerprintDurationSec
 		if dur <= 0 {
@@ -175,6 +226,27 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 			if titleCount[c.Norm] < params.MinTitleCollisionsUnscanned {
 				return nil
 			}
+		}
+		if c.Group != "" && c.CountsPrimary && groupLive[c.Group] > 1 {
+			otherExplicit := groupExplicit[c.Group]
+			if c.Explicit {
+				otherExplicit--
+			}
+			if otherExplicit == 0 {
+				mu.Lock()
+				skippedPrimary++
+				mu.Unlock()
+				return nil
+			}
+		}
+		if gerr := merge.GuardITunesProtectedLoaded(
+			[]*database.Book{{ID: c.ID, FilePath: c.FilePath}},
+			map[string][]database.BookFile{c.ID: files},
+		); gerr != nil {
+			mu.Lock()
+			skippedITunes++
+			mu.Unlock()
+			return nil
 		}
 		mu.Lock()
 		artifacts = append(artifacts, artifact{ID: c.ID, Title: c.Title})
@@ -205,27 +277,37 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		sampleStr.WriteString(fmt.Sprintf("%q×%d ", samples[i].Title, samples[i].N))
 	}
 
-	var quarantinedCount int64
+	var quarantinedCount, failedCount, goneCount int64
 	if params.Apply {
 		now := time.Now()
 		// Each artifact is a distinct book ID (built once per book above), so
 		// workers never touch the same row — safe to run concurrently without
-		// any additional partitioning. The soft-delete itself keeps the
-		// correct fetch-full-mutate pattern (GetBookByID then UpdateBook with
-		// the full record), unchanged from the sequential version.
+		// any additional partitioning. The soft-delete is a ModifyBook: the
+		// read and the write happen under the book's lock, so a concurrent
+		// write to the row is not reverted. The callback only mutates.
 		if err := registry.RunItems(ctx, reporter, artifacts, func(ctx context.Context, a artifact) error {
-			full, gerr := p.store.GetBookByID(a.ID)
-			if gerr != nil || full == nil {
+			wrote := false
+			updated, uerr := p.store.ModifyBook(a.ID, func(b *database.Book) error {
+				if b.IsSoftDeleted() {
+					return database.ErrSkipBookWrite
+				}
+				marked := true
+				b.MarkedForDeletion = &marked
+				b.MarkedForDeletionAt = &now
+				wrote = true
 				return nil
-			}
-			marked := true
-			full.MarkedForDeletion = &marked
-			full.MarkedForDeletionAt = &now
-			if _, uerr := p.store.UpdateBook(full.ID, full); uerr != nil {
+			})
+			switch {
+			case uerr != nil:
+				// One book's write error doesn't abort the whole op, but it is
+				// counted and fails the op at the end.
+				atomic.AddInt64(&failedCount, 1)
 				reporter.Logger().Error("quarantine soft-delete error", "book_id", a.ID, "error", uerr)
-				return nil // one book's write error doesn't abort the whole op
+			case updated == nil:
+				atomic.AddInt64(&goneCount, 1)
+			case wrote:
+				atomic.AddInt64(&quarantinedCount, 1)
 			}
-			atomic.AddInt64(&quarantinedCount, 1)
 			return nil
 		}, registry.RunItemsOptions{
 			Concurrency: runtime.NumCPU(),
@@ -237,16 +319,25 @@ func (p *Plugin) runQuarantineChapterArtifacts(ctx context.Context, rawParams js
 		}
 	}
 	quarantined := int(quarantinedCount)
+	failed := int(failedCount)
 
-	summary := fmt.Sprintf("examined=%d artifacts=%d quarantined=%d (apply=%v) top: %s",
-		examined, len(artifacts), quarantined, params.Apply, sampleStr.String())
+	summary := fmt.Sprintf("examined=%d artifacts=%d quarantined=%d failed=%d gone=%d read_errors=%d skipped_primary=%d skipped_itunes=%d (apply=%v) top: %s",
+		examined, len(artifacts), quarantined, failed, goneCount, readErrors, skippedPrimary, skippedITunes, params.Apply, sampleStr.String())
 	reporter.Logger().Info("quarantine-chapter-artifacts complete", "summary", summary)
 	if !params.Apply {
 		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
-			"Dry-run — %d chapter-artifact book(s) would be soft-deleted. Pass apply=true to quarantine. Top: %s",
-			len(artifacts), sampleStr.String()))
+			"Dry-run — %d chapter-artifact book(s) would be soft-deleted. Pass apply=true to quarantine. %s",
+			len(artifacts), summary))
 	} else {
 		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf("Soft-deleted %d chapter-artifact book(s). %s", quarantined, summary))
 	}
+	if failed > 0 || readErrors > 0 {
+		return errors.Join(errQuarantineIncomplete,
+			fmt.Errorf("%d soft-delete(s) failed and %d book(s) could not be read: %s", failed, readErrors, summary))
+	}
 	return nil
 }
+
+// errQuarantineIncomplete is returned when any book could not be read or
+// written, so the op result reports failure instead of a clean finish.
+var errQuarantineIncomplete = errors.New("quarantine-chapter-artifacts incomplete")
