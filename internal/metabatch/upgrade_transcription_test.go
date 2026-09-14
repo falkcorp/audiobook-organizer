@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade_transcription_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b3e1f64-2d9a-4c07-95e8-a4f6c0d71b39
 // last-edited: 2026-09-14
 
@@ -66,6 +66,15 @@ func TestTranscriptionConfirmsCandidate_RefusesEveryPairMainRefused(t *testing.T
 		{"Harry Potter", "J. K. Rowling", "2", "Harry Potter book 2", "J. K. Rowling"},
 		{"The Expanse", "James S. A. Corey", "3", "The Expanse, volume 3", "James S. A. Corey"},
 		{"Ready Player One", "Ernest Cline", "", "Ready Player 1", "Ernest Cline"},
+		// A real short first name folds nothing: these are different
+		// people from the initialled author (2026-09-14 review).
+		{"Sojourn", "R. A. Salvatore", "2", "Sojourn", "Ra Salvatore"},
+		{"Sojourn", "Ra Salvatore", "2", "Sojourn", "R.A. Salvatore"},
+		{"Sojourn", "E. D. McBain", "2", "Sojourn", "Ed McBain"},
+		{"Sojourn", "J. O. Nesbo", "2", "Sojourn", "Jo Nesbo"},
+		{"Sojourn", "Kim Stanley", "2", "Sojourn", "K. I. M. Stanley"},
+		{"Sojourn", "A. L. Franken", "2", "Sojourn", "Al Franken"},
+		{"Sojourn", "R. A. Salvatore", "2", "Sojourn", "R.A. Salvadori"},
 	}
 	for _, p := range pairs {
 		if util.MainTranscriptionConfirms(p.candTitle, p.candAuthor, p.heardTitle, p.heardAuthor) {
@@ -92,6 +101,10 @@ func TestTranscriptionConfirmsCandidate_InitialsFold(t *testing.T) {
 		{"RA Salvatore", true},
 		{"J.R. Salvator", false},
 		{"R.A. Smith", false},
+		// A misspelled surname that is not a prefix of the real one.
+		{"R.A. Salvadori", false},
+		// A real short first name is not initials.
+		{"Ra Salvatore", false},
 	}
 	for _, tc := range cases {
 		book := &database.Book{TranscribedTitle: s("Sojourn"), TranscribedAuthor: s(tc.heardAuthor)}

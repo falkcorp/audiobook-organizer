@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-09-14
 
@@ -167,6 +167,14 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 		{"Sojourn", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Salvator", true, true},
 		{"different initials", "Sojourn", "R. A. Salvatore", "Sojourn", "J.R. Salvator", false, false},
 		{"initials folded, different surname", "Sojourn", "R. A. Salvatore", "Sojourn", "R.A. Smith", false, false},
+		// A real short first name is not initials (2026-09-14 review): the
+		// full unreviewed gate must refuse each of these.
+		{"Ra is a name, not R.A.", "Sojourn", "R. A. Salvatore", "Sojourn", "Ra Salvatore", false, true},
+		{"R.A. is not the name Ra", "Sojourn", "Ra Salvatore", "Sojourn", "R.A. Salvatore", false, true},
+		{"Ed is a name, not E. D.", "Sojourn", "E. D. McBain", "Sojourn", "Ed McBain", false, true},
+		{"Jo is a name, not J. O.", "Sojourn", "J. O. Nesbo", "Sojourn", "Jo Nesbo", false, true},
+		{"K. I. M. is not the name Kim", "Sojourn", "Kim Stanley", "Sojourn", "K. I. M. Stanley", false, true},
+		{"Al is a name, not A. L.", "Sojourn", "A. L. Franken", "Sojourn", "Al Franken", false, false},
 		// Heard "book one"; the review row carried no series position.
 		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false, false},
 		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, true},

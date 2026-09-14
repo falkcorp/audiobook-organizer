@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 0b6d3e92-4f18-4a7c-8e51-c2a7f9d0b364
 // last-edited: 2026-09-14
 
@@ -220,18 +220,28 @@ func TestMainTranscriptionConfirms_IsOldRulePlusInitialsFold(t *testing.T) {
 
 func TestFoldInitials(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"R.A. Salvator", "ra salvator"},
-		{"R. A. Salvatore", "ra salvatore"},
-		{"R A Salvatore", "ra salvatore"},
-		{"RA Salvatore", "ra salvatore"},
-		{"r.a salvatore", "ra salvatore"},
-		{"George R. R. Martin, assisted", "george rr martin, assisted"},
-		{"J.R.R. Tolkien", "jrr tolkien"},
-		{"James S. A. Corey", "james sa corey"},
+		{"R.A. Salvator", "r.a. salvator"},
+		{"R. A. Salvatore", "r.a. salvatore"},
+		{"R A Salvatore", "r.a. salvatore"},
+		{"RA Salvatore", "r.a. salvatore"},
+		{"r.a salvatore", "r.a. salvatore"},
+		{"George R. R. Martin, assisted", "george r.r. martin, assisted"},
+		{"J.R.R. Tolkien", "j.r.r. tolkien"},
+		{"JRR Tolkien", "j.r.r. tolkien"},
+		{"James S. A. Corey", "james s.a. corey"},
+		// A dotless token that is not all uppercase is a word, not initials.
+		{"Ra Salvatore", "ra salvatore"},
+		{"Ed McBain", "ed mcbain"},
+		{"Kim Stanley", "kim stanley"},
+		// In an all-caps name a capital run is a word; dots still fold.
+		{"KIM STANLEY", "kim stanley"},
+		{"R.A. SALVATORE", "r.a. salvatore"},
 		// Only initials change; words and other punctuation are kept.
 		{"Brandon Sanderson", "brandon sanderson"},
 		{"Andrzej  Sapkowski Translated", "andrzej sapkowski translated"},
-		{"Salvatore, R.", "salvatore, r"},
+		{"Salvatore, R.", "salvatore, r."},
+		{"Martin Jr.", "martin jr."},
+		{"R-A Salvatore", "r-a salvatore"},
 		{"", ""},
 	}
 	for _, tc := range cases {
@@ -268,6 +278,27 @@ func TestMainTranscriptionConfirms_InitialsFold(t *testing.T) {
 		// substring leg, unchanged here and out of scope for the fold.)
 		{"Debra Salvatore", "R. A. Salvatore", false},
 		{"Debra Salvatore", "R.A. Salvatore", false},
+		// A real short first name is not initials: only dotted tokens,
+		// single letters and all-uppercase dotless tokens fold, classified
+		// on the RAW text before lowercasing.
+		{"R. A. Salvatore", "Ra Salvatore", false},
+		{"Ra Salvatore", "R.A. Salvatore", false},
+		{"E. D. McBain", "Ed McBain", false},
+		{"J. O. Nesbo", "Jo Nesbo", false},
+		{"Kim Stanley", "K. I. M. Stanley", false},
+		{"A. L. Franken", "Al Franken", false},
+		{"R. A. Salvatore", "JRR Salvatore", false},
+		{"J. R. R. Salvatore", "JRR Salvatore", true},
+		// Hyphen, apostrophe and unicode-dot tokens are never initials.
+		{"R. A. Salvatore", "R-A Salvatore", false},
+		{"R. A. Salvatore", "R'A Salvatore", false},
+		{"R. A. Salvatore", "R․A․ Salvatore", false},
+		// In an all-caps name case says nothing, so "KIM" is a word.
+		{"KIM STANLEY", "K. I. M. Stanley", false},
+		// A folded run must not match from its middle: "a." inside "r.a."
+		// is refused by the token-start anchor. (Raw "R.A. Smith" vs "A.
+		// Smith" is origin/main's own substring leg, unchanged here.)
+		{"R. A. Smith", "A Smith", false},
 	}
 	for _, tc := range cases {
 		if got := MainTranscriptionConfirms("Sojourn", tc.cand, "Sojourn", tc.heard); got != tc.want {

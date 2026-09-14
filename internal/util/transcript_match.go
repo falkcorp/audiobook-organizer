@@ -1,5 +1,5 @@
 // file: internal/util/transcript_match.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
 // last-edited: 2026-09-14
 
@@ -372,8 +372,8 @@ func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle
 		return true
 	}
 	// Leg 2: the folded forms, anchored at a token boundary. Without the
-	// anchor the dotless run "ra salvatore" would sit inside "debra
-	// salvatore", a different author main refused.
+	// anchor a heard "A. Smith" ("a. smith") would sit inside "R.A. Smith"
+	// ("r.a. smith"), a different author main refused.
 	return containsAtTokenStart(foldInitials(candidateAuthor), foldInitials(transcribedAuthor))
 }
 
@@ -398,27 +398,60 @@ func containsAtTokenStart(s, sub string) bool {
 }
 
 // foldInitials is NormalizeAuthor with every run of initials written as one
-// undotted token: "R.A." = "R. A." = "R A" = "RA" all become "ra", so
-// "R.A. Salvator" folds to "ra salvator" and "R. A. Salvatore" to
-// "ra salvatore". An initial is a whitespace-separated token made of single
-// letters each followed by a dot ("r.", "r.a.") or a lone letter ("r");
-// adjacent initial tokens are joined with no space. Every other token is left
-// exactly as NormalizeAuthor wrote it, punctuation included, so nothing but
-// initials spacing and punctuation is forgiven.
+// canonical token, each letter followed by one dot: "R.A." = "R. A." = "R A"
+// = "RA" all become "r.a.", so "R.A. Salvator" folds to "r.a. salvator" and
+// "R. A. Salvatore" to "r.a. salvatore". The dots keep a folded run distinct
+// from a word: "Ra Salvatore" folds to "ra salvatore", which is not
+// "r.a. salvatore". Adjacent initial tokens are joined with no space. Every
+// other token is left exactly as NormalizeAuthor writes it (lower-cased,
+// punctuation included), so nothing but initials spacing and punctuation is
+// forgiven.
+//
+// Classification rule. A whitespace-separated token is initials only when
+// its RAW text, BEFORE lowercasing, is one of:
+//   - a token containing dots whose letters are each single and followed by
+//     a dot or the end of the token ("R.", "R.A.", "R.A", "r.a.");
+//   - a single letter ("R", "r");
+//   - a dotless run of two or more letters that are ALL uppercase ("RA",
+//     "JRR"), and only when the whole name has a lowercase letter somewhere
+//     (in an all-caps "KIM STANLEY" case says nothing, so "KIM" is a word).
+//
+// A dotless mixed- or lower-case token ("Ra", "Ed", "Jo", "Al", "Kim") is a
+// first name, never initials: "Ra Salvatore" is not "R. A. Salvatore", and
+// "K. I. M. Stanley" is not "Kim Stanley". The classification must come from
+// the raw text because lowercasing erases the only signal that separates
+// "RA" from "Ra". Hyphen, apostrophe and any non-ASCII dot ("R-A", "R'A",
+// "R․A") make a token a word, so it stays unfolded. The transcribed side
+// keeps Whisper's casing all the way here (transcribe.ClassifyIntro ->
+// truncateName -> clean never change case), so the rule works on both sides.
 //
 // Comparison only. NormalizeAuthor keys the Pebble name indexes and must never
 // change; do not use this for a key.
 func foldInitials(s string) string {
-	toks := strings.Split(NormalizeAuthor(s), " ")
+	raw := CollapseSpaces(s)
+	if raw == "" {
+		return ""
+	}
+	hasLower := strings.ToUpper(raw) != raw
+	toks := strings.Split(raw, " ")
 	out := make([]string, 0, len(toks))
 	inRun := false
 	for _, t := range toks {
-		letters, ok := initialLetters(t)
+		letters, ok := initialLetters(t, hasLower)
 		if !ok {
-			out = append(out, t)
+			out = append(out, strings.ToLower(t))
 			inRun = false
 			continue
 		}
+		// Canonical initials: every letter followed by one dot ("r.a."). A
+		// word never folds to this shape (any raw token of that shape IS
+		// initials), so "Ra" ("ra") can never equal "R. A." ("r.a.").
+		var b strings.Builder
+		for _, r := range strings.ToLower(letters) {
+			b.WriteRune(r)
+			b.WriteByte('.')
+		}
+		letters = b.String()
 		if inRun {
 			out[len(out)-1] += letters
 		} else {
@@ -429,13 +462,39 @@ func foldInitials(s string) string {
 	return strings.Join(out, " ")
 }
 
-// initialLetters reports whether t is a token of initials ("r", "r.",
-// "r.a.", "r.a") and returns its letters without the dots ("ra").
-func initialLetters(t string) (string, bool) {
+// initialLetters reports whether the RAW (not lower-cased) token t is a token
+// of initials under foldInitials' classification rule, and returns its
+// letters without the dots ("R.A." -> "RA"). allowUpperRun is false when the
+// whole name is written without a lowercase letter; then a dotless run of
+// capitals is a word, not initials.
+func initialLetters(t string, allowUpperRun bool) (string, bool) {
 	rs := []rune(t)
 	if len(rs) == 0 {
 		return "", false
 	}
+	for _, r := range rs {
+		if r != '.' && !unicode.IsLetter(r) {
+			return "", false
+		}
+	}
+	if len(rs) == 1 {
+		return t, unicode.IsLetter(rs[0])
+	}
+	if !strings.Contains(t, ".") {
+		// Dotless, two or more letters: initials only if every letter is
+		// uppercase ("RA", "JRR"). "Ra", "Ed", "Kim" are first names.
+		if !allowUpperRun {
+			return "", false
+		}
+		for _, r := range rs {
+			if !unicode.IsUpper(r) {
+				return "", false
+			}
+		}
+		return t, true
+	}
+	// Dotted: each letter single, followed by a dot or the end ("R.A.",
+	// "R.A"). "Jr." has two letters in a row, so it is a word.
 	var b strings.Builder
 	for i := 0; i < len(rs); i++ {
 		if !unicode.IsLetter(rs[i]) {
@@ -444,11 +503,10 @@ func initialLetters(t string) (string, bool) {
 		b.WriteRune(rs[i])
 		switch {
 		case i+1 == len(rs):
-			// A lone letter, or the last letter of "r.a".
+			// The last letter of "R.A".
 		case rs[i+1] == '.':
 			i++
 		default:
-			// Two letters in a row: a word, not initials.
 			return "", false
 		}
 	}
