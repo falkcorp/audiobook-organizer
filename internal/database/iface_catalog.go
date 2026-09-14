@@ -1,5 +1,5 @@
 // file: internal/database/iface_catalog.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
 // last-edited: 2026-09-13
 
@@ -40,9 +40,11 @@ type CollectionStore interface {
 	DeleteCollection(id string) error
 }
 
-// WorkStore covers Work CRUD.
-type WorkStore interface {
-	GetAllWorks() ([]Work, error)
+// WorkScanStore is the whole-table side of the works store: a cancelable walk
+// of every work row, and a generation counter that says whether a copy of the
+// table taken earlier is still current. The scanner's works lookup cache uses
+// both (a cancelable load, and reuse of that load across scan restarts).
+type WorkScanStore interface {
 	// ForEachWork visits every work row and stops with ctx's error once ctx
 	// is done. Use it instead of GetAllWorks on any path that must stay
 	// cancelable (the scanner's works lookup load).
@@ -51,6 +53,12 @@ type WorkStore interface {
 	// reads it before loading the works table can later compare it to tell
 	// whether its copy is still current.
 	WorksGeneration() uint64
+}
+
+// WorkStore covers Work CRUD.
+type WorkStore interface {
+	WorkScanStore
+	GetAllWorks() ([]Work, error)
 	GetWorkByID(id string) (*Work, error)
 	CreateWork(work *Work) (*Work, error)
 	UpdateWork(id string, work *Work) (*Work, error)

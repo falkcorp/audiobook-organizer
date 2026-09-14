@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.120.0
+// version: 1.121.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-13
 
@@ -121,6 +121,7 @@ type MockStore struct {
 	// Work methods
 	GetAllWorksFunc     func() ([]Work, error)
 	WorksGenerationFunc func() uint64
+	ForEachWorkFunc     func(ctx context.Context, visit func(Work) error) error
 	GetWorkByIDFunc     func(id string) (*Work, error)
 	CreateWorkFunc      func(work *Work) (*Work, error)
 	UpdateWorkFunc      func(id string, work *Work) (*Work, error)
@@ -526,6 +527,8 @@ type MockStore struct {
 	UpdateScanCacheFunc                  func(bookID string, mtime int64, size int64) error
 	MarkNeedsRescanFunc                  func(bookID string) error
 	GetDirtyBookFoldersFunc              func() ([]string, error)
+	GetDirtyBookFoldersContextFunc       func(ctx context.Context) ([]string, error)
+	GetScanCacheMapContextFunc           func(ctx context.Context) (map[string]ScanCacheEntry, error)
 	CreateDeferredITunesUpdateFunc       func(bookID, persistentID, oldPath, newPath, updateType string) error
 	GetPendingDeferredITunesUpdatesFunc  func() ([]DeferredITunesUpdate, error)
 	MarkDeferredITunesUpdateAppliedFunc  func(id int) error
@@ -936,8 +939,12 @@ func (m *MockStore) GetAllWorks() ([]Work, error) {
 	return nil, nil
 }
 
-// ForEachWork visits GetAllWorks' result, honouring ctx between rows.
+// ForEachWork visits GetAllWorks' result, honouring ctx between rows, unless
+// ForEachWorkFunc overrides it.
 func (m *MockStore) ForEachWork(ctx context.Context, visit func(Work) error) error {
+	if m.ForEachWorkFunc != nil {
+		return m.ForEachWorkFunc(ctx, visit)
+	}
 	works, err := m.GetAllWorks()
 	if err != nil {
 		return err
@@ -2711,16 +2718,24 @@ func (m *MockStore) GetDirtyBookFolders() ([]string, error) {
 	return nil, nil
 }
 
-// GetDirtyBookFoldersContext delegates to GetDirtyBookFolders after a ctx check.
+// GetDirtyBookFoldersContext delegates to GetDirtyBookFolders after a ctx check,
+// unless GetDirtyBookFoldersContextFunc overrides it.
 func (m *MockStore) GetDirtyBookFoldersContext(ctx context.Context) ([]string, error) {
+	if m.GetDirtyBookFoldersContextFunc != nil {
+		return m.GetDirtyBookFoldersContextFunc(ctx)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return m.GetDirtyBookFolders()
 }
 
-// GetScanCacheMapContext delegates to GetScanCacheMap after a ctx check.
+// GetScanCacheMapContext delegates to GetScanCacheMap after a ctx check, unless
+// GetScanCacheMapContextFunc overrides it.
 func (m *MockStore) GetScanCacheMapContext(ctx context.Context) (map[string]ScanCacheEntry, error) {
+	if m.GetScanCacheMapContextFunc != nil {
+		return m.GetScanCacheMapContextFunc(ctx)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
