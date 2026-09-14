@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
 // last-edited: 2026-09-13
 
@@ -117,6 +117,16 @@ func (p *PebbleStore) ClearUserPositions(userID, bookID string) error {
 //     written back over the drained row, merge/combine_journal.go). In both
 //     cases it is the same finish and must not be dated as new.
 //   - newly Finished with no stamp: stamped now.
+//
+// Two consequences, both accepted:
+//   - A stale copy of a Finished state, written back after the row left
+//     Finished, restores the old stamp. That finish was already counted
+//     (or is counted once), so it is never counted twice. It only means a
+//     re-finish in between is dated at the older time.
+//   - A Finished write over an unreadable row keeps the caller's value,
+//     which is usually nil. A nil-stamped finish is never counted, so that
+//     finish stays uncounted until the book leaves Finished and finishes
+//     again. The overwrite is logged.
 func stampFinishedAt(state, prev *UserBookState, prevErr error, now time.Time) {
 	if state.Status != UserBookStatusFinished {
 		state.FinishedAt = nil

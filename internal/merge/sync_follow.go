@@ -1,5 +1,5 @@
 // file: internal/merge/sync_follow.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
 // last-edited: 2026-09-13
 
@@ -259,6 +259,29 @@ func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 		"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID)
 }
 
+// carryPlayCountMark moves the loser book's ITunesPlayCountBumpedAt onto the
+// winner when it is later than the winner's, so a carried finish the loser's
+// iTunes track already counted is not counted again (see mergeUserProgressFor).
+// A loser with no mark, or no longer present, carries nothing.
+func carryPlayCountMark(db playCountMarkStore, loserBookID, winnerBookID string) error {
+	loser, err := db.GetBookByID(loserBookID)
+	if err != nil {
+		return fmt.Errorf("read loser %s: %w", loserBookID, err)
+	}
+	if loser == nil || loser.ITunesPlayCountBumpedAt == nil {
+		return nil
+	}
+	mark := *loser.ITunesPlayCountBumpedAt
+	_, err = db.ModifyBook(winnerBookID, func(b *database.Book) error {
+		if b.ITunesPlayCountBumpedAt != nil && !mark.After(*b.ITunesPlayCountBumpedAt) {
+			return database.ErrSkipBookWrite
+		}
+		b.ITunesPlayCountBumpedAt = &mark
+		return nil
+	})
+	return err
+}
+
 // mergeUserProgress merges every user's listening progress on loserBookID onto
 // winnerBookID, then drains the loser side.
 //
@@ -303,6 +326,13 @@ func mergeUserProgress(db UserProgressMerger, loserBookID, winnerBookID string) 
 //
 // The loser side is drained ONLY after a successful copy, so a mid-way store
 // failure can never destroy the position it was supposed to carry forward.
+//
+// A carried Finished state also carries the loser book's
+// ITunesPlayCountBumpedAt onto the winner when it is later than the winner's
+// own. The rule: one listen is one iTunes play-count bump across a merge,
+// not one per iTunes track that ever held it. Without the mark, the winner's
+// track would see the carried finish as newer than anything it had counted
+// and add a play for a listen the loser's track already counted.
 func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookID string) error {
 	loserState, err := db.GetUserBookState(userID, loserBookID)
 	if err != nil {
@@ -327,6 +357,16 @@ func mergeUserProgressFor(db userPositionStore, userID, loserBookID, winnerBookI
 			carried.BookID = winnerBookID
 			if err := db.SetUserBookState(&carried); err != nil {
 				return fmt.Errorf("carry state onto winner: %w", err)
+			}
+			if carried.Status == database.UserBookStatusFinished {
+				// The carried state keeps its FinishedAt (the store keeps a
+				// caller's stamp). Carry the loser's count of that finish too,
+				// or the winner's iTunes track counts one listen a second time.
+				// Best-effort like the rest of the follow: logged, and the
+				// positions are still carried.
+				if err := carryPlayCountMark(db, loserBookID, winnerBookID); err != nil {
+					mlog.Warn("merge-follow: play-count mark NOT carried from %s to %s: %v", loserBookID, winnerBookID, err)
+				}
 			}
 		}
 		// Segment IDs are opaque per-user bookkeeping, not meaningfully
