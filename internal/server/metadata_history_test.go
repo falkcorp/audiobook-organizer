@@ -1,5 +1,5 @@
 // file: internal/server/metadata_history_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-13
 
@@ -190,6 +190,39 @@ func TestUndoMetadataChange_ChangedSinceIsRefused(t *testing.T) {
 	got, err := database.GetGlobalStore().GetBookByID(createdBook.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "User Title", got.Title)
+}
+
+// A second click on the same field's undo is refused. The newest row for the
+// field is then the undo itself, and treating it as a change to undo put the
+// provider value back.
+func TestUndoMetadataChange_SecondClickIsRefused(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	createdBook, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "New Title", FilePath: "/tmp/test-twice.m4b"})
+	require.NoError(t, err)
+	prev, next := `"Old Title"`, `"New Title"`
+	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
+		BookID: createdBook.ID, Field: "title", PreviousValue: &prev, NewValue: &next,
+		ChangeType: "fetched", Source: "Open Library", ChangedAt: time.Now().Add(-time.Minute),
+	}))
+
+	undoTitle := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/v1/audiobooks/"+createdBook.ID+"/metadata-history/title/undo", nil)
+		server.router.ServeHTTP(w, req)
+		return w
+	}
+	w := undoTitle()
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "Old Title", "reverted_to is the value written")
+
+	w = undoTitle()
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	got, err := database.GetGlobalStore().GetBookByID(createdBook.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Old Title", got.Title, "the second click must not put the provider value back")
 }
 
 func TestUndoMetadataChange_NoHistory(t *testing.T) {

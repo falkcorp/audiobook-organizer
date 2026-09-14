@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-13
 
@@ -471,8 +471,7 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 		}}, nil)
 	// onlyMissing defaults true; title has a value so it's only fetched (not applied),
 	// publisher is missing so it gets applied → didUpdate true.
-	d.mfs.EXPECT().RecordApplyHistory(mock.Anything, mock.Anything, mock.Anything, "audible").Return("")
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "audible").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "audible", "").Return()
 	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
 		map[string]any{"book_ids": []string{"b1"}}, nil)
@@ -497,10 +496,9 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 			ISBN10: "0261103342", ISBN13: "9780261103344",
 			Narrator: "Rob Inglis", Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
 		}}}, nil)
-	d.mfs.EXPECT().RecordApplyHistory(mock.Anything, mock.Anything, mock.Anything, "Google Books").Return("")
 	var saved *database.Book
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).
-		Run(func(_ string, b *database.Book) { saved = b }).
+	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Google Books").
+		Run(func(_ string, _ *database.Book, b *database.Book, _ []database.BookAuthor, _ string) { saved = b }).
 		Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Google Books", "").Return()
 
@@ -670,8 +668,7 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 			{Title: "Old5", Source: "audible", Publisher: "Pub5"},
 		}}, nil)
-	mfs.EXPECT().RecordApplyHistory(mock.Anything, mock.Anything, mock.Anything, "audible").Return("")
-	store.EXPECT().UpdateBook("b5", mock.Anything).Return(&database.Book{ID: "b5"}, nil)
+	mfs.EXPECT().CommitApply("b5", mock.Anything, mock.Anything, mock.Anything, "audible").Return(&database.Book{ID: "b5"}, nil)
 	mfs.EXPECT().ApplyMetadataSystemTags("b5", "audible", "").Return()
 
 	var utMu sync.Mutex

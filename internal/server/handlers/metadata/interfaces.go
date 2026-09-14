@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-13
 
@@ -183,9 +183,11 @@ type MetadataMatchMarker interface {
 
 // MetadataHistoryRecorder records applied metadata in the change history.
 type MetadataHistoryRecorder interface {
-	// RecordApplyHistory records, after the write commits, one row per field
-	// that differs between before and after, all under one batch id.
-	RecordApplyHistory(before, after *database.Book, prevAuthors []database.BookAuthor, source string) string
+	// CommitApply writes the fields an apply changed onto the row as it stands
+	// (ModifyBook) and records history from the committed row, under one batch
+	// id. A nil book means nothing was written; a book with an error means the
+	// write committed and its history did not, so undo refuses that apply.
+	CommitApply(id string, before, book *database.Book, prevAuthors []database.BookAuthor, source string) (*database.Book, error)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata

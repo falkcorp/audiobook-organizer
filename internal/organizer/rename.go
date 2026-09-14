@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -38,10 +38,12 @@ type RenameService struct {
 	// Breaks the metafetch import cycle.
 	ComputeITunesPath func(filePath string) string
 
-	// ReadCurrentTags returns a file's current tag values under the same keys
-	// FilterUnchangedTags compares (metafetch.CurrentTagValues). ApplyRename
-	// records them as each tag_write row's OldValue before it writes, and does
-	// not write to a file it cannot read. Nil means no file is written.
+	// ReadCurrentTags returns a file's current value for each tag key, read
+	// from the one property the revert writes back (metadata.ReadTagProperties;
+	// "" for a property the file does not carry, a key left out when unknown).
+	// ApplyRename records them as each tag_write row's OldValue before it
+	// writes, and does not write to a file it cannot read. Nil means no file
+	// is written.
 	ReadCurrentTags func(filePath string) (map[string]string, error)
 
 	// WriteTags writes tags to one file. Nil uses metadata.WriteMetadataToFile.
@@ -94,7 +96,10 @@ type RenameApplyResult struct {
 	OldPath     string `json:"old_path"`
 	NewPath     string `json:"new_path"`
 	TagsWritten int    `json:"tags_written"`
-	Message     string `json:"message"`
+	// TagUndoRecordsLost counts tag writes whose undo record could not be
+	// saved; those writes cannot be undone. Each one is logged at Error.
+	TagUndoRecordsLost int    `json:"tag_undo_records_lost,omitempty"`
+	Message            string `json:"message"`
 }
 
 // PreviewRename computes what a rename + tag write would do without executing it.
@@ -142,7 +147,7 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 	}
 
 	oldPath := book.FilePath
-	tagsWritten := 0
+	tagsWritten, tagUndoLost := 0, 0
 
 	// Build tag metadata for later use
 	authorName, _ := rs.ResolveAuthorAndSeriesNames(book)
@@ -177,7 +182,7 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 	if len(tagMeta) > 0 && !rs.IsProtectedPath(tagWriteTarget) {
 		// Per book_file, with each tag's pre-write value recorded for undo
 		// (rename_tags.go).
-		tagsWritten = rs.writeTagsRecordingOld(bookID, operationID, oldPath, tagWriteTarget, tagMeta)
+		tagsWritten, tagUndoLost = rs.writeTagsRecordingOld(bookID, operationID, oldPath, tagWriteTarget, tagMeta)
 	} else if rs.IsProtectedPath(tagWriteTarget) {
 		slog.Info("rename skipping tag write for protected path", "tagWriteTarget", tagWriteTarget)
 	}
@@ -253,11 +258,12 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 	}
 
 	return &RenameApplyResult{
-		BookID:      bookID,
-		OldPath:     oldPath,
-		NewPath:     proposedPath,
-		TagsWritten: tagsWritten,
-		Message:     fmt.Sprintf("Renamed and updated %s", filepath.Base(proposedPath)),
+		BookID:             bookID,
+		OldPath:            oldPath,
+		NewPath:            proposedPath,
+		TagsWritten:        tagsWritten,
+		TagUndoRecordsLost: tagUndoLost,
+		Message:            fmt.Sprintf("Renamed and updated %s", filepath.Base(proposedPath)),
 	}, nil
 }
 

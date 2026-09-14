@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-13
 
@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -120,7 +119,7 @@ type RevertService struct {
 func NewRevertService(db revertServiceStore) *RevertService {
 	rs := &RevertService{
 		db:                db,
-		ReadTags:          metafetch.CurrentTagValues,
+		ReadTags:          metadata.ReadTagProperties,
 		WriteTags:         defaultRevertWriteTags,
 		ComputeITunesPath: metafetch.ComputeITunesPath,
 	}
@@ -130,8 +129,17 @@ func NewRevertService(db revertServiceStore) *RevertService {
 	return rs
 }
 
+// It writes each key to its one file property and reads the file back
+// (metadata.WriteTagProperties): a key with no property, a value the writer
+// did not store, or a removal it did not make is an error, so the row fails
+// instead of being marked reverted. metadata.WriteMetadataToFile could not be
+// used: its write map drops "" and turns one key into several properties.
 func defaultRevertWriteTags(path string, tags map[string]any) error {
-	return metadata.WriteMetadataToFile(path, tags, fileops.OperationConfig{VerifyChecksums: true})
+	values := make(map[string]string, len(tags))
+	for k, v := range tags {
+		values[k] = fmt.Sprint(v)
+	}
+	return metadata.WriteTagProperties(path, values)
 }
 
 // lockPaths takes the per-path lock on each distinct non-empty path, in
@@ -754,14 +762,18 @@ func renameRefusal(err error) error {
 // refuses them again rather than write "", which deletes the tag. A missing
 // file or a protected path fails the row.
 //
-// It is a compare-and-set, under the per-path write lock: the file must still
+// It is a compare-and-set on the one file property the tag key names
+// (metadata.TagProperty), under the per-path write lock: the file must still
 // hold what the organize wrote (NewValue). A later write-back or apply that
 // changed the tag is kept and the row refused as changed since. A file that
-// already reads as the pre-organize value is written again, which is a no-op
-// for the file as read: album_artist, composer and narrator all read back
-// through one narrator value, so once one of them is restored the others
-// read as restored too. A tag that was absent before (undo.TagAbsentValue)
-// is removed.
+// already holds the pre-organize value is left alone and the row counts as
+// restored. A tag that was absent before (undo.TagAbsentValue) is removed. A
+// key with no single property fails the row: nothing is written for it.
+//
+// Only that property is written, and the writer reads it back. The write used
+// to go through the organizer's write map, which dropped "" (so an absent tag
+// was never removed, yet the row was marked reverted) and turned one key into
+// several properties (reverting artist wrote COMPOSER="", erasing the narrator).
 func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	tag, fileID, ok := undo.TagWriteFromField(c.FieldName)
 	if !ok || c.OldValue == "" {
@@ -777,6 +789,11 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	bf, err := rs.db.GetBookFileByID(c.BookID, fileID)
 	if err != nil || bf == nil {
 		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	// Checked after the book and file, so a row whose book is gone reports
+	// that reason; either way nothing is written and the row fails.
+	if _, writable := metadata.TagProperty(tag); !writable {
+		return fmt.Errorf("tag %s not restored: it maps to no single file property the revert can write", tag)
 	}
 	target := bf.FilePath
 	release := rs.lockPaths(book.FilePath, target)
@@ -800,7 +817,11 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	switch {
 	case !known:
 		return driftRefusal("tag %s of %s cannot be read back, so whether it still holds what the organize wrote is unknown", tag, target)
-	case cur != c.NewValue && cur != restore:
+	case cur == restore:
+		// Already the pre-organize value (an absent tag reads ""): nothing to
+		// write.
+		return nil
+	case cur != c.NewValue:
 		return driftRefusal("tag %s of %s is %q, not %q as the organize wrote it; the later value is kept", tag, target, cur, c.NewValue)
 	}
 	if err := rs.WriteTags(target, map[string]any{tag: restore}); err != nil {

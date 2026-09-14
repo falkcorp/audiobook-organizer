@@ -1,5 +1,5 @@
 // file: internal/audiobooks/rename.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 //
@@ -12,6 +12,7 @@ package audiobooks
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
@@ -53,7 +54,10 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 		return resolveAuthorAndSeriesNames(db, book)
 	}
 	svc.FilterUnchangedTags = metafetch.FilterUnchangedTags
-	svc.ReadCurrentTags = metafetch.CurrentTagValues
+	// The pre-write value each tag_write row records is read from the one
+	// file property the revert will write back (metadata.TagProperty), so the
+	// revert's compare-and-set and its write address the same property.
+	svc.ReadCurrentTags = metadata.ReadTagProperties
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
 	return svc
 }

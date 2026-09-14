@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -628,11 +628,13 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// that committed during the apply was silently reverted.
 	// Write only what this apply changed, onto the row as it stands under the
 	// book's write lock, then record history from the committed row
-	// (commitApply). A whole-struct UpdateBook(id, book) here replaced every
+	// (CommitApply). A whole-struct UpdateBook(id, book) here replaced every
 	// column with this apply's read, so a book-page save (or any other write)
-	// that committed during the apply was silently reverted.
-	updatedBook, updateErr := mfs.commitApply(id, before, book, prevAuthors, candidate.Source)
-	if updateErr != nil {
+	// that committed during the apply was silently reverted. A book with an
+	// error means the write stands and its history did not land; CommitApply
+	// logged it at Error and undo refuses that apply.
+	updatedBook, updateErr := mfs.CommitApply(id, before, book, prevAuthors, candidate.Source)
+	if updatedBook == nil {
 		return nil, updateErr
 	}
 

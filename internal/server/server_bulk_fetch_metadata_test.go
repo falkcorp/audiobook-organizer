@@ -1,5 +1,5 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
 // last-edited: 2026-09-13
 
@@ -223,4 +223,59 @@ func TestBulkFetchMetadata_UndoRestoresAuthorAndCredits(t *testing.T) {
 	credits, err := store.GetBookAuthors(book.ID)
 	require.NoError(t, err)
 	assert.Empty(t, credits)
+}
+
+// An edit that commits while the bulk fetch is searching the provider survives
+// the apply. The handler used to UpdateBook the whole row it read before the
+// search, which reverted the edit, and recorded history from that in-memory
+// row.
+func TestBulkFetchMetadata_KeepsAnEditMadeDuringTheSearch(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	store := database.GetGlobalStore()
+	var bookID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
+		// The user saves the book page while the provider is answering.
+		if cur, err := store.GetBookByID(bookID); err == nil && cur != nil && cur.Publisher == nil {
+			pub := "User Pub"
+			cur.Publisher = &pub
+			_, _ = store.UpdateBook(bookID, cur)
+		}
+		_ = json.MarshalWrite(w, map[string]any{
+			"numFound": 1, "start": 0,
+			"docs": []map[string]any{{"title": "Edit Race Book", "author_name": []string{"Race Author"}}},
+		})
+	})
+	ol := httptest.NewServer(mux)
+	defer ol.Close()
+	useOnlyOpenLibrary(t, ol.URL)
+
+	tempFile := filepath.Join(t.TempDir(), "edit-race.m4b")
+	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "Edit Race Book", FilePath: tempFile, Format: "m4b"})
+	require.NoError(t, err)
+	bookID = book.ID
+
+	body, err := json.Marshal(map[string]any{"book_ids": []string{book.ID}})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/bulk-fetch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	got, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.AuthorID, "precondition: the bulk apply set the author")
+	require.NotNil(t, got.Publisher, "the edit made during the search must survive")
+	assert.Equal(t, "User Pub", *got.Publisher)
+
+	history, err := store.GetBookChangeHistory(book.ID, 100)
+	require.NoError(t, err)
+	for _, h := range history {
+		assert.NotEqual(t, "publisher", h.Field, "the apply did not change publisher: %+v", h)
+	}
 }
