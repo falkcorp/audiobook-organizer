@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-13
 
@@ -284,6 +284,16 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				meta.SeriesPosition = ""
 			}
 			previousCoverURL := book.CoverURL
+			// Snapshot and author join before the apply: history is recorded from the
+			// committed diff after UpdateBook, never from the candidate.
+			historyBefore, snapErr := database.SnapshotBook(book)
+			if snapErr != nil {
+				return nil, snapErr
+			}
+			prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+			if prevAuthorsErr != nil {
+				prevAuthors = nil
+			}
 			meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
 			if applyErr != nil {
 				return nil, applyErr
@@ -298,6 +308,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if updateErr != nil {
 				return nil, fmt.Errorf("failed to update book: %w", updateErr)
 			}
+			mfs.RecordApplyHistory(historyBefore, book, prevAuthors, src.Name())
 
 			mfs.persistFetchedMetadata(id, fetched)
 
@@ -409,6 +420,16 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		NormalizeMetaSeries(&meta)
 
 		fetched := meta
+		// Snapshot and author join before the apply: history is recorded from the
+		// committed diff after UpdateBook, never from the candidate.
+		historyBefore, snapErr := database.SnapshotBook(book)
+		if snapErr != nil {
+			return nil, snapErr
+		}
+		prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+		if prevAuthorsErr != nil {
+			prevAuthors = nil
+		}
 		meta, skippedLocked, applyErr := mfs.guardedApply(book, meta, src.Name())
 		if applyErr != nil {
 			return nil, applyErr
@@ -418,6 +439,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if updateErr != nil {
 			return nil, fmt.Errorf("failed to update book: %w", updateErr)
 		}
+		mfs.RecordApplyHistory(historyBefore, book, prevAuthors, src.Name())
 
 		mfs.persistFetchedMetadata(id, fetched)
 

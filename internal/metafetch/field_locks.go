@@ -1,5 +1,5 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
 // last-edited: 2026-09-13
 
@@ -130,8 +130,8 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 }
 
 // guardedApply is this package's entry to the shared chokepoint. It loads the
-// locks (fail closed), strips locked fields from the candidate, records change
-// history for what will actually change, and runs the apply body inside
+// locks (fail closed), strips locked fields from the candidate, and runs the
+// apply body inside
 // database.FieldLocks.Apply.
 //
 // Why strip AND restore: applyMetadataUnguarded has side effects on two locked
@@ -154,9 +154,9 @@ func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata
 		return meta, nil, fmt.Errorf("refusing to apply metadata to %s: %w", book.ID, err)
 	}
 	meta, skipped := StripLockedFields(meta, locks.Set())
-	if source != "" {
-		mfs.RecordChangeHistory(book, meta, source)
-	}
+	// History is NOT recorded here: this runs before the apply body's IsBetter
+	// checks and before the caller commits, so it recorded changes the apply
+	// then refused. Callers record with RecordApplyHistory after the write.
 	restored := locks.Apply(book, func(b *database.Book) { mfs.applyMetadataUnguarded(b, meta) })
 	if len(restored) > 0 {
 		// Strip should have made this unreachable; if it fires, a new write in

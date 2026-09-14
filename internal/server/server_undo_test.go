@@ -1,6 +1,7 @@
 // file: internal/server/server_undo_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-09-13
 
 package server
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,277 +93,192 @@ func TestUndoLastApply_OnlyUndoRecords(t *testing.T) {
 	assert.Contains(t, errMsg, "not found")
 }
 
+// createApplyBook makes a book whose publisher/description are empty and
+// whose title is file-derived junk, so the apply's IsBetter checks take the
+// candidate's values.
+func createApplyBook(t *testing.T, name string) *database.Book {
+	t.Helper()
+	tempFile := filepath.Join(t.TempDir(), name+".m4b")
+	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
+	book, err := database.GetGlobalStore().CreateBook(&database.Book{
+		Title:    "track01",
+		FilePath: tempFile,
+		Format:   "m4b",
+	})
+	require.NoError(t, err)
+	return book
+}
+
+func applyCandidate(t *testing.T, s *Server, bookID string, cand metafetch.MetadataCandidate) {
+	t.Helper()
+	_, err := s.metadataFetchService.ApplyMetadataCandidate(bookID, cand, nil)
+	require.NoError(t, err)
+}
+
+func postUndoLastApply(t *testing.T, s *Server, bookID string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", bookID), nil)
+	w := httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	var wrapper struct {
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &wrapper)
+	return w.Code, wrapper.Data
+}
+
+func mustGetBook(t *testing.T, id string) *database.Book {
+	t.Helper()
+	b, err := database.GetGlobalStore().GetBookByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	return b
+}
+
+// Undo-last-apply puts the BOOK ROW back and leaves no override behind. It
+// used to only write the pre-apply values into the override state: the book
+// kept the applied values, and HasUserOverride then froze them.
 func TestUndoLastApply_RevertsBatch(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "undo-batch.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Batch Undo Book",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Record a batch of changes (all within 2 seconds of each other)
-	batchTime := time.Now()
-	oldTitle := `"Original Title"`
-	newTitle := `"Updated Title"`
-	oldAuthor := `"Original Author"`
-	newAuthor := `"Updated Author"`
-
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "title",
-		PreviousValue: &oldTitle,
-		NewValue:      &newTitle,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     batchTime,
-	}))
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "author",
-		PreviousValue: &oldAuthor,
-		NewValue:      &newAuthor,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     batchTime.Add(500 * time.Millisecond),
-	}))
-
-	// Ensure server.writeBackBatcher is nil so we don't trigger actual write-back
-	origBatcher := server.writeBackBatcher
 	server.writeBackBatcher = nil
-	defer func() { server.writeBackBatcher = origBatcher }()
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", book.ID), nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
+	book := createApplyBook(t, "undo-batch")
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{
+		Title: "The Applied Title", Publisher: "Applied Pub", Description: "Applied description", Source: "Open Library",
+	})
+	applied := mustGetBook(t, book.ID)
+	require.Equal(t, "The Applied Title", applied.Title, "precondition: the apply landed")
+	require.NotNil(t, applied.Publisher)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	code, resp := postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusOK, code, "resp %v", resp)
+	assert.ElementsMatch(t, []any{"title", "publisher", "description"}, filterStrings(resp["undone_fields"], "title", "publisher", "description"))
 
-	var wrapper struct {
-		Data map[string]any `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-	resp := wrapper.Data
-	assert.Contains(t, resp["message"], "2 field(s)")
+	got := mustGetBook(t, book.ID)
+	assert.Equal(t, "track01", got.Title)
+	assert.Empty(t, derefStr(got.Publisher))
+	assert.Empty(t, derefStr(got.Description), "description must be back to empty")
 
-	undoneFields, ok := resp["undone_fields"].([]any)
-	require.True(t, ok)
-	assert.Len(t, undoneFields, 2)
-
-	// Verify undo records were written to history
-	history, err := database.GetGlobalStore().GetBookChangeHistory(book.ID, 50)
+	states, err := database.GetGlobalStore().GetMetadataFieldStates(book.ID)
 	require.NoError(t, err)
+	for _, st := range states {
+		assert.Nil(t, st.OverrideValue, "undo must not create an override on %s", st.Field)
+		assert.False(t, st.OverrideLocked, "undo must not lock %s", st.Field)
+	}
+}
 
-	undoCount := 0
-	for _, rec := range history {
-		if rec.ChangeType == "undo" {
-			undoCount++
-			assert.Equal(t, "bulk-search-undo", rec.Source)
+func filterStrings(v any, keep ...string) []any {
+	list, _ := v.([]any)
+	var out []any
+	for _, x := range list {
+		for _, k := range keep {
+			if x == k {
+				out = append(out, x)
+			}
 		}
 	}
-	assert.Equal(t, 2, undoCount, "expected 2 undo records in history")
+	return out
 }
 
-func TestUndoLastApply_SkipsOldChanges(t *testing.T) {
+// A field edited after the apply is left as the user set it; the others are
+// still reverted.
+func TestUndoLastApply_LeavesFieldChangedSince(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	book := createApplyBook(t, "undo-changed-since")
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{
+		Title: "The Applied Title", Publisher: "Applied Pub", Source: "Open Library",
+	})
+	edited := mustGetBook(t, book.ID)
+	userPub := "User Pub"
+	edited.Publisher = &userPub
+	_, err := database.GetGlobalStore().UpdateBook(book.ID, edited)
+	require.NoError(t, err)
+
+	code, resp := postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusOK, code, "resp %v", resp)
+	assert.Contains(t, resp["changed_since_fields"], "publisher")
+
+	got := mustGetBook(t, book.ID)
+	assert.Equal(t, "track01", got.Title)
+	require.NotNil(t, got.Publisher)
+	assert.Equal(t, "User Pub", *got.Publisher)
+}
+
+// Two applies in a row: undo reverts only the last one, by batch id, however
+// close together they ran.
+func TestUndoLastApply_UndoesOnlyTheLatestApply(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	book := createApplyBook(t, "undo-latest")
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Pub One", Source: "Open Library"})
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Description: "Desc two", Source: "Audible"})
+
+	code, resp := postUndoLastApply(t, server, book.ID)
+	require.Equal(t, http.StatusOK, code, "resp %v", resp)
+
+	got := mustGetBook(t, book.ID)
+	assert.Empty(t, derefStr(got.Description), "the second apply is undone")
+	require.NotNil(t, got.Publisher, "the first apply is kept")
+	assert.Equal(t, "Pub One", *got.Publisher)
+}
+
+// History rows written before batch ids existed cannot be grouped into one
+// apply; guessing (the old ±2s window) is refused.
+func TestUndoLastApply_LegacyRowsAreRefused(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "undo-skip-old.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Skip Old Changes Book",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Record an old change (more than 2 seconds before the batch)
-	oldTime := time.Now().Add(-10 * time.Second)
-	oldPublisher := `"Old Publisher"`
-	newPublisher := `"New Publisher"`
+	book := createApplyBook(t, "undo-legacy")
+	oldVal, newVal := `"Before"`, `"After"`
 	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "publisher",
-		PreviousValue: &oldPublisher,
-		NewValue:      &newPublisher,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     oldTime,
+		BookID: book.ID, Field: "title", PreviousValue: &oldVal, NewValue: &newVal,
+		ChangeType: "fetched", Source: "Open Library", ChangedAt: time.Now(),
 	}))
 
-	// Record a recent change
-	recentTime := time.Now()
-	oldTitle := `"Title A"`
-	newTitle := `"Title B"`
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "title",
-		PreviousValue: &oldTitle,
-		NewValue:      &newTitle,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     recentTime,
-	}))
-
-	origBatcher := server.writeBackBatcher
-	server.writeBackBatcher = nil
-	defer func() { server.writeBackBatcher = origBatcher }()
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", book.ID), nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var wrapper struct {
-		Data map[string]any `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-	resp := wrapper.Data
-	// Only the recent change should be undone, not the old publisher change
-	assert.Contains(t, resp["message"], "1 field(s)")
-
-	undoneFields, ok := resp["undone_fields"].([]any)
-	require.True(t, ok)
-	assert.Len(t, undoneFields, 1)
-	assert.Equal(t, "title", undoneFields[0])
+	code, _ := postUndoLastApply(t, server, book.ID)
+	assert.Equal(t, http.StatusConflict, code)
+	assert.Equal(t, "track01", mustGetBook(t, book.ID).Title)
 }
 
-func TestUndoLastApply_SkipsUndoRecordsInBatchDetection(t *testing.T) {
+// History is recorded from what the apply actually wrote, after it
+// committed: a title the IsBetter checks refused is not recorded, and a field
+// outside the old nine-field list (description) is.
+func TestApplyHistory_RecordsOnlyWhatTheApplyWrote(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "undo-skip-undo-type.m4b")
+	tempFile := filepath.Join(t.TempDir(), "history.m4b")
 	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Skip Undo Type Book",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
+	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "The Real Long Title", FilePath: tempFile, Format: "m4b"})
 	require.NoError(t, err)
 
-	now := time.Now()
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Title: "Ab", Description: "New description", Source: "Open Library"})
+	require.Equal(t, "The Real Long Title", mustGetBook(t, book.ID).Title, "precondition: the short title is refused")
 
-	// Record a real change first
-	oldTitle := `"Before"`
-	newTitle := `"After"`
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "title",
-		PreviousValue: &oldTitle,
-		NewValue:      &newTitle,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     now.Add(-5 * time.Second),
-	}))
-
-	// Record a more recent undo record (should be skipped when finding batch time)
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "author",
-		PreviousValue: &newTitle,
-		NewValue:      &oldTitle,
-		ChangeType:    "undo",
-		Source:        "bulk-search-undo",
-		ChangedAt:     now,
-	}))
-
-	origBatcher := server.writeBackBatcher
-	server.writeBackBatcher = nil
-	defer func() { server.writeBackBatcher = origBatcher }()
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", book.ID), nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var wrapper struct {
-		Data map[string]any `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-	resp := wrapper.Data
-	// Should undo the fetched title change, skipping the undo record
-	assert.Contains(t, resp["message"], "1 field(s)")
-}
-
-func TestUndoLastApply_NilPreviousValueClearsOverride(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "undo-nil-prev.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Nil Previous Value Book",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
+	history, err := database.GetGlobalStore().GetBookChangeHistory(book.ID, 1000)
 	require.NoError(t, err)
-
-	// Record a change where previous value is nil (field was empty before)
-	newISBN := `"1234567890"`
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "isbn",
-		PreviousValue: nil,
-		NewValue:      &newISBN,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     time.Now(),
-	}))
-
-	origBatcher := server.writeBackBatcher
-	server.writeBackBatcher = nil
-	defer func() { server.writeBackBatcher = origBatcher }()
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", book.ID), nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var wrapper struct {
-		Data map[string]any `json:"data"`
+	var sawDescription bool
+	for _, r := range history {
+		assert.NotEqual(t, "title", r.Field, "a refused title must not be recorded as applied")
+		if r.Field == "description" {
+			sawDescription = true
+			assert.NotEmpty(t, r.BatchID)
+		}
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wrapper))
-	resp := wrapper.Data
-	assert.Contains(t, resp["message"], "1 field(s)")
+	assert.True(t, sawDescription, "the applied description must be recorded")
 }
 
 func TestUndoLastApply_WriteBackBatcherEnqueued(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "undo-writeback.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "WriteBack Undo Book",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Record a change to undo
-	oldVal := `"Old"`
-	newVal := `"New"`
-	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
-		BookID:        book.ID,
-		Field:         "title",
-		PreviousValue: &oldVal,
-		NewValue:      &newVal,
-		ChangeType:    "fetched",
-		Source:        "Open Library",
-		ChangedAt:     time.Now(),
-	}))
+	book := createApplyBook(t, "undo-writeback")
 
 	// Set up a real batcher (with auto write-back enabled)
 	origBatcher := server.writeBackBatcher
@@ -369,6 +286,8 @@ func TestUndoLastApply_WriteBackBatcherEnqueued(t *testing.T) {
 	config.AppConfig.ITunes.AutoWriteBack = true
 	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
 	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/tmp/test.itl"}, nil) // long delay so it won't flush
+	server.writeBackBatcher = nil
+	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Applied Pub", Source: "Open Library"})
 	server.writeBackBatcher = batcher
 	defer func() {
 		// Stop the server's fileIOPool before restoring globals to avoid races
@@ -386,15 +305,9 @@ func TestUndoLastApply_WriteBackBatcherEnqueued(t *testing.T) {
 		config.AppConfig = origConfig
 	}()
 
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/undo-last-apply", book.ID), nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Verify the book ID was enqueued in the batcher
-	enqueued := batcher.HasPendingBook(book.ID)
-	assert.True(t, enqueued, "expected book ID to be enqueued in WriteBackBatcher")
+	code, _ := postUndoLastApply(t, server, book.ID)
+	assert.Equal(t, http.StatusOK, code)
+	assert.True(t, batcher.HasPendingBook(book.ID), "expected book ID to be enqueued in WriteBackBatcher")
 }
 
 // ---------- applyAudiobookMetadata write_back flag tests ----------
@@ -591,4 +504,13 @@ func TestApplyAudiobookMetadata_WriteBackFalse(t *testing.T) {
 	// Verify NOT enqueued
 	enqueued := batcher.HasPendingBook(book.ID)
 	assert.False(t, enqueued, "expected book ID NOT to be enqueued when write_back=false")
+}
+
+// derefStr reads an optional string; the store may hand back an empty
+// string where the row held none.
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

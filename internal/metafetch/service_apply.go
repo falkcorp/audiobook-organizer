@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -246,100 +245,6 @@ func displayOrNone(s string) string {
 		return "(none)"
 	}
 	return s
-}
-
-// RecordChangeHistory records metadata changes before they are applied.
-func (mfs *Service) RecordChangeHistory(book *database.Book, meta metadata.BookMetadata, sourceName string) {
-	now := time.Now()
-
-	// Resolve current author name for history
-	var currentAuthor string
-	if book.AuthorID != nil {
-		if author, err := mfs.db.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
-			currentAuthor = author.Name
-		}
-	}
-
-	// Resolve current series name for history
-	var currentSeries string
-	if book.SeriesID != nil {
-		if series, err := mfs.db.GetSeriesByID(*book.SeriesID); err == nil && series != nil {
-			currentSeries = series.Name
-		}
-	}
-
-	changes := []struct {
-		field  string
-		oldVal string
-		newVal string
-	}{
-		{"title", book.Title, meta.Title},
-		{"author_name", currentAuthor, meta.Author},
-		{"narrator", derefString(book.Narrator), meta.Narrator},
-		{"publisher", derefString(book.Publisher), meta.Publisher},
-		{"language", derefString(book.Language), meta.Language},
-		{"series", currentSeries, meta.Series},
-		{"series_position", derefIntAsString(book.SeriesSequence), meta.SeriesPosition},
-		{"cover_url", derefString(book.CoverURL), meta.CoverURL},
-	}
-
-	if meta.PublishYear != 0 {
-		// Record against the field the year actually routes to (see
-		// ApplyMetadataToBook): release-kind → audiobook_release_year,
-		// print-kind → print_year.
-		yearField := "print_year"
-		yearOld := derefIntAsString(book.PrintYear)
-		if meta.PublishYearIsAudiobookRelease {
-			yearField = "audiobook_release_year"
-			yearOld = derefIntAsString(book.AudiobookReleaseYear)
-		}
-		changes = append(changes, struct {
-			field  string
-			oldVal string
-			newVal string
-		}{yearField, yearOld, strconv.Itoa(meta.PublishYear)})
-	}
-
-	// Activity rows are read out of context in the unified activity feed, so the
-	// summary has to name the book itself; the BookID field only gives the UI a
-	// link target. Fall back to the ID when the title is empty so the line never
-	// starts with a bare ": Applied ...".
-	activityTitle := book.Title
-	if activityTitle == "" {
-		activityTitle = book.ID
-	}
-
-	for _, c := range changes {
-		if c.newVal == "" || c.newVal == c.oldVal {
-			continue
-		}
-		oldJSON := jsonEncodeString(c.oldVal)
-		newJSON := jsonEncodeString(c.newVal)
-		record := &database.MetadataChangeRecord{
-			BookID:        book.ID,
-			Field:         c.field,
-			PreviousValue: &oldJSON,
-			NewValue:      &newJSON,
-			ChangeType:    "fetched",
-			Source:        sourceName,
-			ChangedAt:     now,
-		}
-		if err := mfs.db.RecordMetadataChange(record); err != nil {
-			slog.Warn("failed to record metadata change for .", "id", book.ID, "field", c.field, "error", err)
-		}
-		// Dual-write to unified activity log
-		if mfs.activityService != nil {
-			_ = mfs.activityService.Record(database.ActivityEntry{
-				Tier:    "change",
-				Type:    "metadata_apply",
-				Level:   "info",
-				Source:  "background",
-				BookID:  book.ID,
-				Summary: fmt.Sprintf("%s: Applied %s: %s → %s", activityTitle, c.field, displayOrNone(truncateActivity(c.oldVal, 50)), truncateActivity(c.newVal, 50)),
-				Details: map[string]any{"field": c.field, "old_value": c.oldVal, "new_value": c.newVal, "source": sourceName},
-			})
-		}
-	}
 }
 
 // syncMetadataToLibraryCopy copies metadata fields from the original book to
@@ -674,6 +579,11 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// candidate so provenance below still records what the provider said, which
 	// is exactly what the UI's "fetched vs override" panel exists to show.
 	fetched := meta
+	// The author join as it stood before the apply, so undo can put it back.
+	prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+	if prevAuthorsErr != nil {
+		prevAuthors = nil
+	}
 	meta, skippedLocked, err := mfs.guardedApply(book, meta, candidate.Source)
 	if err != nil {
 		return nil, err
@@ -716,8 +626,10 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// book's write lock. A whole-struct UpdateBook(id, book) here replaced every
 	// column with this apply's read, so a book-page save (or any other write)
 	// that committed during the apply was silently reverted.
+	var mergedFields []string
 	updatedBook, updateErr := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
-		_, mErr := database.MergeBookChanges(fresh, before, book)
+		var mErr error
+		mergedFields, mErr = database.MergeBookChanges(fresh, before, book)
 		return mErr
 	})
 	if updateErr != nil {
@@ -731,6 +643,17 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// back nothing is a bug wherever it happens, not a case to route around.
 	if updatedBook == nil {
 		return nil, fmt.Errorf("update book %s: store reported success but returned no book", id)
+	}
+	// History is recorded from what this apply wrote -- the fields it changed
+	// relative to before, which are exactly the fields MergeBookChanges copied --
+	// and only now that the write has committed.
+	// The new values are read from the committed row, so a value the store
+	// normalised on write is recorded as stored and undo's compare-and-set
+	// matches it.
+	if written, snapErr := database.SnapshotBook(before); snapErr == nil {
+		if cErr := database.CopyBookFields(written, updatedBook, mergedFields); cErr == nil {
+			mfs.RecordApplyHistory(before, written, prevAuthors, candidate.Source)
+		}
 	}
 
 	// Check whether any other book already carries the same hash — if so,

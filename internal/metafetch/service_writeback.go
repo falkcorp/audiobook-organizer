@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-13
 
@@ -267,32 +267,11 @@ func FilterUnchangedTags(filePath string, tagMap map[string]any) map[string]any 
 	return filterTagsAgainst(filePath, current, tagMap)
 }
 
-// filterTagsAgainst is the pure comparison half of FilterUnchangedTags, split
-// out so the mapping can be unit-tested against a constructed Metadata without
-// synthesizing a real audio file on disk.
-//
-// This split exists because every pre-existing FilterUnchangedTags test pointed
-// at a nonexistent path: ExtractMetadata failed, the function returned tagMap
-// untouched, and the comparison below never ran. Those tests passed no matter
-// what the mapping did — one of them even asserted that "track" survives,
-// pinning the bug in place as if it were intended behavior.
-func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]any) map[string]any {
-	// Build a map of known tag names to their current values. Every custom tag
-	// key emitted by the writer (via metadata/taglib_tagmap.go buildWriteTagMap)
-	// must have an entry here, mapping the input key to the corresponding
-	// Metadata field value.
-	// "track" is emitted unconditionally by the multi-file write path
-	// (BuildTagMap adds it whenever track != "", and the multi-file branch always
-	// passes "n/total"). Until this entry existed it fell through to the
-	// unknown-key branch below and was ALWAYS written, which made
-	// len(tagMap) == 0 unreachable for every multi-file book — so each one
-	// rewrote every one of its files on every single write-back run, forever.
-	//
-	// Render the on-disk value in the same "n/total" shape the writer produces.
-	// A file tagged with a bare "3" (TrackTotal == 0) renders as "3", won't match
-	// "3/12", and is written once — after which it carries the pair and matches.
-	// TrackNumber == 0 means we could not read a track at all: leave the key out
-	// so the unknown-key branch writes it, which is the correct conservative call.
+// currentTagValueMap renders a file's current tags under the keys the tag
+// writer takes, the comparison half of filterTagsAgainst. CurrentTagValues
+// hands the same map to the organizer, which records it as the pre-write
+// value of each tag_write undo row.
+func currentTagValueMap(current metadata.Metadata) map[string]string {
 	trackCur := ""
 	if current.TrackNumber > 0 {
 		if current.TrackTotal > 0 {
@@ -348,6 +327,52 @@ func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[st
 	if current.ISBN13 != "" {
 		currentVals["isbn13"] = current.ISBN13
 	}
+
+	return currentVals
+}
+
+// CurrentTagValues reads a file's tags and returns them as
+// currentTagValueMap renders them, except that an absent year is "" rather
+// than "0" (a restored "0" would be written as a year).
+func CurrentTagValues(filePath string) (map[string]string, error) {
+	current, err := metadata.ExtractMetadata(filePath, nil)
+	if err != nil {
+		return nil, err
+	}
+	vals := currentTagValueMap(current)
+	if current.Year == 0 {
+		vals["year"] = ""
+	}
+	return vals, nil
+}
+
+// filterTagsAgainst is the pure comparison half of FilterUnchangedTags, split
+// out so the mapping can be unit-tested against a constructed Metadata without
+// synthesizing a real audio file on disk.
+//
+// This split exists because every pre-existing FilterUnchangedTags test pointed
+// at a nonexistent path: ExtractMetadata failed, the function returned tagMap
+// untouched, and the comparison below never ran. Those tests passed no matter
+// what the mapping did — one of them even asserted that "track" survives,
+// pinning the bug in place as if it were intended behavior.
+func filterTagsAgainst(filePath string, current metadata.Metadata, tagMap map[string]any) map[string]any {
+	// Build a map of known tag names to their current values. Every custom tag
+	// key emitted by the writer (via metadata/taglib_tagmap.go buildWriteTagMap)
+	// must have an entry here, mapping the input key to the corresponding
+	// Metadata field value.
+	// "track" is emitted unconditionally by the multi-file write path
+	// (BuildTagMap adds it whenever track != "", and the multi-file branch always
+	// passes "n/total"). Until this entry existed it fell through to the
+	// unknown-key branch below and was ALWAYS written, which made
+	// len(tagMap) == 0 unreachable for every multi-file book — so each one
+	// rewrote every one of its files on every single write-back run, forever.
+	//
+	// Render the on-disk value in the same "n/total" shape the writer produces.
+	// A file tagged with a bare "3" (TrackTotal == 0) renders as "3", won't match
+	// "3/12", and is written once — after which it carries the pair and matches.
+	// TrackNumber == 0 means we could not read a track at all: leave the key out
+	// so the unknown-key branch writes it, which is the correct conservative call.
+	currentVals := currentTagValueMap(current)
 
 	filtered := make(map[string]any, len(tagMap))
 	for k, v := range tagMap {

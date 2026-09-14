@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_preflight_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e41b8d2a-6c07-4f95-a3e8-1d9c5b7f2a60
-// last-edited: 2026-09-12
+// last-edited: 2026-09-13
 
 package undo
 
@@ -147,7 +147,7 @@ func TestPreflightUndoConflicts_BookRows(t *testing.T) {
 	}
 	for _, r := range []*database.OperationChange{
 		{ID: "c1", OperationID: "op1", BookID: "gone", ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "New"},
-		{ID: "c2", OperationID: "op1", BookID: "gone", ChangeType: "tag_write", FieldName: "TITLE", OldValue: "Old", NewValue: "New"},
+		{ID: "c2", OperationID: "op1", BookID: "gone", ChangeType: "tag_write", FieldName: TagWriteField("TITLE", "f1"), OldValue: "Old", NewValue: "New"},
 		{ID: "c3", OperationID: "op1", BookID: "gone", ChangeType: "file_move", OldValue: "/library/old.m4b", NewValue: moved},
 		{ID: "c4", OperationID: "op1", BookID: live.ID, ChangeType: "metadata_update", FieldName: "title", OldValue: "Old", NewValue: "T"},
 	} {

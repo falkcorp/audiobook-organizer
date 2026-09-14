@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.23.0
+// version: 5.24.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-13
 
@@ -75,6 +75,9 @@ type metadataFieldStateStore interface {
 	UpsertMetadataFieldState(state *database.MetadataFieldState) error
 	DeleteMetadataFieldState(bookID, field string) error
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	// GetBookChangeHistory is read by UndoLastApply to find the last apply's
+	// batch of rows.
+	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
 }
 
 // metafetchBookStore is the book entity: lookup, create, update, plus the two

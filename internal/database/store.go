@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.99.0
+// version: 2.100.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-09-13
 
@@ -1128,6 +1128,24 @@ type MetadataChangeRecord struct {
 	ChangeType    string    `json:"change_type"`              // "fetched", "override", "clear", "undo", "bulk_update"
 	Source        string    `json:"source,omitempty"`         // e.g. "Open Library", "manual", "AI parsing"
 	ChangedAt     time.Time `json:"changed_at"`
+	// BatchID is shared by every row one metadata apply wrote (and by the
+	// "undo" rows that reverted them), so undo-last-apply reverts exactly one
+	// apply. Rows recorded before 2026-09-13 have none.
+	BatchID string `json:"batch_id,omitempty"`
+	// PreviousRef / NewRef carry the row ids behind a foreign-key field
+	// (author_name, series), whose PreviousValue / NewValue hold display names.
+	PreviousRef *MetadataChangeRef `json:"previous_ref,omitempty"`
+	NewRef      *MetadataChangeRef `json:"new_ref,omitempty"`
+}
+
+// MetadataChangeRef is the id side of an author_name or series history row.
+type MetadataChangeRef struct {
+	AuthorID *int `json:"author_id,omitempty"`
+	SeriesID *int `json:"series_id,omitempty"`
+	// BookAuthors is the book_authors join; BookAuthorsKnown says it was read
+	// (an empty join and an unread one are different things to an undo).
+	BookAuthors      []BookAuthor `json:"book_authors,omitempty"`
+	BookAuthorsKnown bool         `json:"book_authors_known,omitempty"`
 }
 
 // BookSnapshot represents an immutable snapshot of a book at a point in time.

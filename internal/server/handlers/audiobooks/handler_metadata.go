@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
 // last-edited: 2026-09-13
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/gin-gonic/gin"
 )
 
@@ -173,118 +174,58 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "undo applied", "field": field, "reverted_to": latest.PreviousValue})
 }
 
-// UndoLastApply reverts all fields changed in the most recent metadata apply
-// for a book. POST /audiobooks/:id/undo-last-apply.
+// UndoLastApply reverts the most recent metadata apply for a book.
+// POST /audiobooks/:id/undo-last-apply.
+//
+// The apply's rows are found by their batch id, not by a time window, and each
+// field is put back on the book row inside ModifyBook only while it still holds
+// what the apply wrote (metafetch.Service.UndoLastApply). It used to write the
+// pre-apply value into the per-field override state and never touch the book
+// row: the applied value stayed, HasUserOverride then froze the field against
+// every later fetch, and the write-back it queued pushed the applied values to
+// the files and iTunes. Write-back is now queued only when a field of the book
+// row actually changed.
 func (h *Handler) UndoLastApply(c *gin.Context) {
 	id := c.Param("id")
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
+	if h.metadataFetchService == nil {
+		httputil.RespondWithInternalError(c, "metadata service not initialized")
 		return
 	}
-
-	// Get recent history for this book (enough to find the last apply batch)
-	history, err := store.GetBookChangeHistory(id, 50)
-	if err != nil {
-		httputil.InternalError(c, "failed to get change history", err)
-		return
-	}
-	if len(history) == 0 {
-		httputil.RespondWithNotFound(c, "change history", id)
-		return
-	}
-
-	// Find the most recent non-undo change timestamp to identify the batch
-	var batchTime time.Time
-	for _, rec := range history {
-		if rec.ChangeType != "undo" {
-			batchTime = rec.ChangedAt
-			break
-		}
-	}
-	if batchTime.IsZero() {
+	res, err := h.metadataFetchService.UndoLastApply(id)
+	switch {
+	case errors.Is(err, metafetch.ErrNoApplyToUndo):
 		httputil.RespondWithNotFound(c, "changes", "none")
 		return
-	}
-
-	// Collect all changes from this batch (within 2 seconds of each other)
-	var batchRecords []*database.MetadataChangeRecord
-	for i := range history {
-		rec := &history[i]
-		if rec.ChangeType == "undo" {
-			continue
-		}
-		diff := batchTime.Sub(rec.ChangedAt)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff <= 2*time.Second {
-			batchRecords = append(batchRecords, rec)
-		}
-	}
-
-	if len(batchRecords) == 0 {
-		httputil.RespondWithNotFound(c, "changes", "none")
+	case errors.Is(err, metafetch.ErrApplyPredatesBatches):
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	case err != nil:
+		httputil.InternalError(c, "failed to undo last apply", err)
 		return
 	}
 
-	// Undo each field in the batch
-	undoneFields := []string{}
-	for _, rec := range batchRecords {
-		if handled, revErr := revertBookFilePosition(store, id, rec); handled {
-			if revErr != nil {
-				filesLog.Warn("undo-last-apply failed to revert file position %s on book %s: %v",
-					logger.SanitizeLogValue(rec.Field), logger.SanitizeLogValue(id), revErr)
-				continue
-			}
-		} else if rec.PreviousValue != nil {
-			var prevValue any
-			if jsonErr := json.Unmarshal([]byte(*rec.PreviousValue), &prevValue); jsonErr != nil {
-				prevValue = *rec.PreviousValue
-			}
-			if setErr := h.metadataStateService.SetOverride(id, rec.Field, prevValue, false); setErr != nil {
-				slog.Warn("undo-last-apply failed to revert for", "rec", rec.Field, "id", logger.SanitizeLogValue(id), "setErr", setErr)
-				continue
-			}
-		} else {
-			if clrErr := h.metadataStateService.ClearOverride(id, rec.Field); clrErr != nil {
-				if !strings.Contains(clrErr.Error(), "not found") {
-					slog.Warn("undo-last-apply failed to clear for", "rec", rec.Field, "id", logger.SanitizeLogValue(id), "clrErr", clrErr)
-					continue
-				}
-			}
-		}
-		undoneFields = append(undoneFields, rec.Field)
-
-		// Record the undo
-		undoRec := &database.MetadataChangeRecord{
-			BookID:        id,
-			Field:         rec.Field,
-			PreviousValue: rec.NewValue,
-			NewValue:      rec.PreviousValue,
-			ChangeType:    "undo",
-			Source:        "bulk-search-undo",
-			ChangedAt:     time.Now(),
-		}
-		if recErr := store.RecordMetadataChange(undoRec); recErr != nil {
-			slog.Warn("undo-last-apply failed to record undo for /", "id", logger.SanitizeLogValue(id), "rec", rec.Field, "recErr", recErr)
-		}
-	}
-
-	// Re-write tags to files if write-back is enabled, restoring original values
-	if wb := h.resolveWriteBack(); len(undoneFields) > 0 && wb != nil {
+	if wb := h.resolveWriteBack(); len(res.Reverted) > 0 && wb != nil {
 		wb.Enqueue(id)
 	}
-
 	// METADATA-CACHED-MATCHER: undo restores the prior identity. Drop the
 	// cache so the next read fetches against the reverted title/author.
-	if len(undoneFields) > 0 && h.metadataFetchService != nil {
+	if len(res.Reverted) > 0 {
 		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
 	}
 
+	undone := res.Reverted
+	if undone == nil {
+		undone = []string{}
+	}
 	httputil.RespondWithOK(c, gin.H{
-		"message":       fmt.Sprintf("Undid %d field(s)", len(undoneFields)),
-		"undone_fields": undoneFields,
+		"message":                 fmt.Sprintf("Undid %d field(s)", len(undone)),
+		"undone_fields":           undone,
+		"changed_since_fields":    res.ChangedSince,
+		"already_restored_fields": res.AlreadyRestored,
+		"locked_fields":           res.Locked,
+		"failed_fields":           res.Failed,
+		"author_credits_left":     res.AuthorCreditsLeft,
+		"batch_id":                res.BatchID,
 	})
 }
 

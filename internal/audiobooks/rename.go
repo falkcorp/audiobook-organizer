@@ -1,7 +1,7 @@
 // file: internal/audiobooks/rename.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-08-18
+// last-edited: 2026-09-13
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/rename.go. This file provides type aliases and
@@ -53,6 +53,7 @@ func NewRenameService(db organizerWrapperStore) *RenameService {
 		return resolveAuthorAndSeriesNames(db, book)
 	}
 	svc.FilterUnchangedTags = metafetch.FilterUnchangedTags
+	svc.ReadCurrentTags = metafetch.CurrentTagValues
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
 	return svc
 }

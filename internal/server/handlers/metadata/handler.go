@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -1029,6 +1029,14 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			setResult(i, result)
 			return nil
 		}
+		// The row as read, for the history diff recorded after the write.
+		historyBefore, snapErr := database.SnapshotBook(book)
+		if snapErr != nil {
+			result.Status = "error"
+			result.Message = snapErr.Error()
+			setResult(i, result)
+			return nil
+		}
 
 		if strings.TrimSpace(book.Title) == "" {
 			result.Message = "missing title"
@@ -1328,15 +1336,16 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		}
 
 		if didUpdate {
-			// Record change history before applying
-			h.metadataFetchService.RecordChangeHistory(book, meta, sourceName)
-
 			if _, err := store.UpdateBook(bookID, book); err != nil {
 				result.Status = "error"
 				result.Message = fmt.Sprintf("failed to update book: %v", err)
 				setResult(i, result)
 				return nil
 			}
+			// Record what the write changed, now that it has committed. This
+			// used to run before the write, on a book already mutated above,
+			// so it compared the new values with themselves.
+			h.metadataFetchService.RecordApplyHistory(historyBefore, book, nil, sourceName)
 			result.Status = "updated"
 
 			// System tag the source and language so the review UI
