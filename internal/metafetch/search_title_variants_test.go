@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.2.0
+// version: 3.2.1
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
 // last-edited: 2026-09-14
 
@@ -570,9 +570,10 @@ func TestKeepVariant_PartSuffixStemIsExact(t *testing.T) {
 		t.Fatalf("variants = %+v, want one Exact variant", v)
 	}
 	res := []metadata.BookMetadata{
-		{Title: "The Wheel of Time Companion"},
-		{Title: "The Great Hunt: Book Two of The Wheel of Time"},
-		{Title: "The Wheel of Time: A Novel"},
+		{Title: "The Wheel of Time Companion", Author: "Robert Jordan"},
+		{Title: "The Great Hunt: Book Two of The Wheel of Time", Author: "Robert Jordan"},
+		{Title: "The Wheel of Time: A Novel", Author: "Robert Jordan"},
+		{Title: "The Wheel of Time"}, // names no author: cannot vouch
 	}
 	got := keepVariant(res, v[0], "")
 	if len(got) != 1 || got[0].Title != "The Wheel of Time: A Novel" {
@@ -582,5 +583,14 @@ func TestKeepVariant_PartSuffixStemIsExact(t *testing.T) {
 	got = keepVariant([]metadata.BookMetadata{{Title: "Rogue Lawyer", Author: "John Grisham"}}, r[0], "")
 	if len(got) != 1 {
 		t.Fatalf("Rogue Lawyer dropped: %+v", got)
+	}
+	// Two authors' books of one title, and no author of our own: ambiguous.
+	two := []metadata.BookMetadata{{Title: "Rogue Lawyer", Author: "John Grisham"}, {Title: "Rogue Lawyer", Author: "Someone Else"}}
+	if got = keepVariant(two, r[0], ""); len(got) != 0 {
+		t.Fatalf("ambiguous title kept: %+v", got)
+	}
+	// Our own author disambiguates.
+	if got = keepVariant(two, r[0], "John Grisham"); len(got) != 1 || got[0].Author != "John Grisham" {
+		t.Fatalf("author did not pick the book: %+v", got)
 	}
 }
