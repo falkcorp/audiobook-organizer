@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_grace_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f2d9a41-83c5-4b7e-a0d6-19e4c7b35f82
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package registry_test
 
@@ -143,6 +143,12 @@ func TestScanStandDown_GraceHoldsQueuedScanThenDispatchesOnce(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	awaitStatus(t, store, scanID, "running", 5*time.Second)
+	// The worker marks the row running before it calls Run, where starts is
+	// counted, so wait for the start itself rather than reading the counter
+	// the instant the status flips. Then hold briefly: a second dispatch
+	// would show up as a second start.
+	waitFor(t, "the scan's Run to start", 5*time.Second, func() bool { return starts.Load() >= 1 })
+	time.Sleep(200 * time.Millisecond)
 	if got := starts.Load(); got != 1 {
 		t.Fatalf("scan started %d times; want 1", got)
 	}
