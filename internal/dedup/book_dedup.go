@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -337,38 +337,11 @@ type BookMergeResult struct {
 // opID is the legacy operation ID written into OperationChange records.
 // keepID is the ID of the book to keep; every ID in mergeIDs is deleted.
 //
-// TransferITunesMetadataFirstWin copies the six iTunes-provenance Book fields
-// (persistent ID, play count, rating, date added, last played, bookmark) from a
-// merged-away loser onto the surviving keep book, first-win: a field is only
-// filled if the keep book does not already have it. These are Book-level fields,
-// NOT external-ID mappings, so merge.Service.ReassignExternalIDs does not carry
-// them — any merge path that soft-deletes/hard-deletes a loser must call this
-// first or the loser's iTunes stats are stranded on the removed row. Shared by
-// the legacy dedup.MergeBooks hard-delete path AND the rerouted book-merge op
-// (internal/server/duplicates_ops.go), so the copy semantics live in one place.
+// TransferITunesMetadataFirstWin forwards to merge.TransferITunesMetadataFirstWin,
+// where the copy now lives so merge.Service can apply it inside its merge lock
+// (merge cannot import dedup). See that function for the semantics.
 func TransferITunesMetadataFirstWin(keep, from *database.Book) {
-	if keep == nil || from == nil {
-		return
-	}
-	if (keep.ITunesPersistentID == nil || *keep.ITunesPersistentID == "") &&
-		from.ITunesPersistentID != nil && *from.ITunesPersistentID != "" {
-		keep.ITunesPersistentID = from.ITunesPersistentID
-	}
-	if keep.ITunesPlayCount == nil && from.ITunesPlayCount != nil {
-		keep.ITunesPlayCount = from.ITunesPlayCount
-	}
-	if keep.ITunesRating == nil && from.ITunesRating != nil {
-		keep.ITunesRating = from.ITunesRating
-	}
-	if keep.ITunesDateAdded == nil && from.ITunesDateAdded != nil {
-		keep.ITunesDateAdded = from.ITunesDateAdded
-	}
-	if keep.ITunesLastPlayed == nil && from.ITunesLastPlayed != nil {
-		keep.ITunesLastPlayed = from.ITunesLastPlayed
-	}
-	if keep.ITunesBookmark == nil && from.ITunesBookmark != nil {
-		keep.ITunesBookmark = from.ITunesBookmark
-	}
+	merge.TransferITunesMetadataFirstWin(keep, from)
 }
 
 // guardKeeperAudioRoute refuses a merge whose keeper cannot reach any audio

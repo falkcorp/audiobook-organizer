@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.27.2
+// version: 1.28.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package merge
 
@@ -311,6 +311,21 @@ func preferOnTie(a, b *database.Book) bool {
 // the idempotent sync-identity follow re-runs). A book the store has no row
 // for is BookNotFoundError; a store failure is returned as itself.
 func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, error) {
+	return ms.MergeBooksWithOptions(bookIDs, primaryID, MergeOptions{})
+}
+
+// MergeOptions adjusts what MergeBooksWithOptions carries onto the survivor.
+type MergeOptions struct {
+	// CarryITunesFields copies each loser's iTunes-provenance Book fields onto
+	// the survivor first-win (TransferITunesMetadataFirstWin), inside the
+	// merge lock and in the same write that marks the survivor primary. An
+	// error writing it fails the merge before any loser is soft-deleted.
+	CarryITunesFields bool
+}
+
+// MergeBooksWithOptions is MergeBooks with MergeOptions; MergeBooks is this
+// with the zero value.
+func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (*Result, error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
 	// /audiobooks/merge handler passes req.BookIDs straight through) — if
@@ -551,9 +566,41 @@ func (ms *Service) MergeBooks(bookIDs []string, primaryID string) (*Result, erro
 		}
 		book.VersionGroupID = &versionGroupID
 		book.IsPrimaryVersion = &isPrimary
-		if _, err := ms.db.UpdateBook(book.ID, book); err != nil {
+		// The iTunes carry (opts.CarryITunesFields) is applied to the survivor
+		// HERE, inside mergeSerializeMu and before any loser is soft-deleted,
+		// so a merge whose carry cannot be written fails with every loser still
+		// live and still holding its stats. It used to run in the dedup op's
+		// caller before this lock was taken, and its write failure was only
+		// logged -- the merge went on and the stats stayed behind on a row
+		// headed for the purge clock (A1#10). The loser values it copies from
+		// were read above, under this same lock.
+		//
+		// Written through ModifyBook, not UpdateBook(book): `book` was read at
+		// the top of this call, and a full-row write of it reverts any
+		// non-merge writer (metadata apply, a user edit) that committed to this
+		// row since. Only the fields this merge owns are set on the fresh row,
+		// and books[i] is replaced with what was stored: the loser-cleanup
+		// loop below reads IsSoftDeleted() (MarkedForDeletion) off it, and
+		// that must be the row as written, not as read at the top.
+		stored, err := ms.db.ModifyBook(book.ID, func(fresh *database.Book) error {
+			fresh.VersionGroupID = &versionGroupID
+			fresh.IsPrimaryVersion = &isPrimary
+			if isPrimary && opts.CarryITunesFields {
+				for j, from := range books {
+					if j != bestIdx {
+						TransferITunesMetadataFirstWin(fresh, from)
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
 			return nil, fmt.Errorf("failed to update book %s: %w", book.ID, err)
 		}
+		if stored == nil {
+			return nil, &BookNotFoundError{BookID: book.ID}
+		}
+		books[i] = stored
 	}
 
 	// Demote every pre-existing member of a REUSED group that the loop above
