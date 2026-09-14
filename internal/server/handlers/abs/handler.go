@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-13
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -376,6 +376,9 @@ type Handler struct {
 	seriesBooksCacheMu sync.Mutex
 	seriesBooksCache   map[int]seriesBooksBuilt
 	seriesBooksCacheAt time.Time
+	// seriesBooksSF coalesces concurrent rebuilds (a request that found no
+	// grouping, or the background refresh behind an expired one) onto one pass.
+	seriesBooksSF singleflight.Group
 
 	// filterDataCache holds the whole /filterdata document.
 	//

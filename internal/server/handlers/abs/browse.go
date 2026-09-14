@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-13
 
@@ -997,13 +997,34 @@ func (h *Handler) seriesBooksCached() (map[int]seriesBooksBuilt, error) {
 	now := h.now()
 
 	h.seriesBooksCacheMu.Lock()
-	if h.seriesBooksCache != nil && now.Sub(h.seriesBooksCacheAt) < absSeriesBooksCacheTTL {
-		m := h.seriesBooksCache
-		h.seriesBooksCacheMu.Unlock()
+	m, at := h.seriesBooksCache, h.seriesBooksCacheAt
+	h.seriesBooksCacheMu.Unlock()
+	if m != nil && now.Sub(at) < absSeriesBooksCacheTTL {
 		return m, nil
 	}
-	h.seriesBooksCacheMu.Unlock()
+	// Expired: serve the previous grouping and rebuild behind it (see
+	// contributorsCached). Only a handler with no grouping yet waits.
+	if m != nil {
+		go func() { _, _ = h.rebuildSeriesBooks() }()
+		return m, nil
+	}
+	return h.rebuildSeriesBooks()
+}
 
+// rebuildSeriesBooks builds and publishes the series→books grouping. Concurrent
+// callers share one pass through seriesBooksSF.
+func (h *Handler) rebuildSeriesBooks() (map[int]seriesBooksBuilt, error) {
+	v, err, _ := h.seriesBooksSF.Do("series-books", func() (any, error) {
+		return h.buildSeriesBooks()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(map[int]seriesBooksBuilt), nil
+}
+
+func (h *Handler) buildSeriesBooks() (map[int]seriesBooksBuilt, error) {
+	now := h.now()
 	// Built OUTSIDE the lock, for the reason contributorsCached documents: holding
 	// it across a full-library pass serializes every concurrent request behind one
 	// rebuild.
@@ -1105,6 +1126,40 @@ func (h *Handler) contributorsCached(ctx context.Context) (*contributorIndex, er
 	if idx := h.contributorsFresh(); idx != nil {
 		return idx, nil
 	}
+	// 🔴 AN EXPIRED INDEX IS SERVED WHILE A NEW ONE BUILDS. Blocking here made
+	// the first request after every TTL wait for a full-library rebuild: on prod
+	// 2026-09-13 the first /search keystrokes after an idle spell took 20-32s
+	// (12:52 and 20:39), the client gave up and showed its cached empty result.
+	// The previous index is true of a moment at most one TTL old; a request only
+	// waits when there is no index at all (the cold start WarmContributors covers).
+	if stale := h.contributorsStale(); stale != nil {
+		go func() { _, _ = h.rebuildContributors(context.Background()) }()
+		return stale, nil
+	}
+	return h.rebuildContributors(ctx)
+}
+
+// contributorsFreshOrRebuild returns an index within its TTL, building one when
+// the cached index is missing or expired. For background builds that must not
+// derive from a stale index.
+func (h *Handler) contributorsFreshOrRebuild(ctx context.Context) (*contributorIndex, error) {
+	if idx := h.contributorsFresh(); idx != nil {
+		return idx, nil
+	}
+	return h.rebuildContributors(ctx)
+}
+
+// contributorsStale returns the cached contributor index regardless of age, or
+// nil when none has been built yet.
+func (h *Handler) contributorsStale() *contributorIndex {
+	h.authorsCacheMu.Lock()
+	defer h.authorsCacheMu.Unlock()
+	return h.authorsCache
+}
+
+// rebuildContributors builds and publishes a new contributor index. Concurrent
+// callers (request or background refresh) share one scan through the group.
+func (h *Handler) rebuildContributors(ctx context.Context) (*contributorIndex, error) {
 
 	// Built OUTSIDE authorsCacheMu. Holding it across a full-library scan would
 	// serialize every concurrent page request behind one rebuild — which is
@@ -1781,6 +1836,21 @@ func (h *Handler) filterDataCached(ctx context.Context) *filterDataResponse {
 	if resp := h.filterDataFresh(); resp != nil {
 		return resp
 	}
+	// Expired: serve the last published document and rebuild behind it, for the
+	// reason contributorsCached gives. Only a handler with no document yet waits.
+	h.filterDataMu.Lock()
+	prev := h.filterDataCache
+	h.filterDataMu.Unlock()
+	if prev != nil {
+		go func() { _ = h.rebuildFilterData(context.Background()) }()
+		return prev
+	}
+	return h.rebuildFilterData(ctx)
+}
+
+// rebuildFilterData builds the /filterdata document, publishing it only when
+// complete. Concurrent callers share one build through filterDataSF.
+func (h *Handler) rebuildFilterData(ctx context.Context) *filterDataResponse {
 	v, _, _ := h.filterDataSF.Do("filterdata", func() (any, error) {
 		if resp := h.filterDataFresh(); resp != nil {
 			return resp, nil
@@ -1900,7 +1970,11 @@ func (h *Handler) buildFilterData(ctx context.Context) (resp *filterDataResponse
 	// PR #2512 built contributorIndex precisely so "the tile and the drill-down
 	// cannot drift"; /filterdata was simply never moved onto it. Sourcing it here
 	// makes the filter list exactly the list /authors and /narrators serve.
-	if idx, err := h.contributorsCached(ctx); err != nil {
+	// The CURRENT index, never the stale one contributorsCached would hand back
+	// while it refreshes: this document is stamped with its index's build time,
+	// so built from an expired index it would be expired on arrival and every
+	// request would start another rebuild until the index caught up.
+	if idx, err := h.contributorsFreshOrRebuild(ctx); err != nil {
 		degraded("contributor-index", err)
 	} else {
 		// The document expires with the index it was built from, not five
@@ -2526,6 +2600,17 @@ func (h *Handler) WarmContributors(ctx context.Context) {
 		return
 	}
 	slog.Info("abs: contributor cache warmed", "duration_ms", time.Since(started).Milliseconds())
+
+	// The filter document and series grouping are warmed too: with
+	// stale-while-revalidate a request only ever waits when no build exists, and
+	// after a restart that is every cache this does not fill.
+	started = time.Now()
+	h.rebuildFilterData(ctx)
+	if _, err := h.rebuildSeriesBooks(); err != nil {
+		slog.Warn("abs: series cache warm failed; the first request will rebuild it", "err", err)
+		return
+	}
+	slog.Info("abs: filterdata and series caches warmed", "duration_ms", time.Since(started).Milliseconds())
 }
 
 // absFilterGroup splits an ABS filter token into its group and decoded value.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package abs_test
 
@@ -393,14 +393,64 @@ func TestFilterData_ExpiresWithTheIndexItWasBuiltFrom(t *testing.T) {
 	before := w.seed.lib.genreCalls()
 
 	// T=6m: the index has expired and /authors would rebuild it. The document
-	// must expire too, or the two disagree for the next three minutes.
+	// must expire too, or the two disagree for the next three minutes. The
+	// request serves the expired document and refreshes behind it, so the
+	// rebuild is awaited rather than expected inline.
 	w.handler.SetClock(func() time.Time { return base.Add(6 * time.Minute) })
 	w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
 
+	deadline := time.Now().Add(5 * time.Second)
+	for w.seed.lib.genreCalls() == before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if after := w.seed.lib.genreCalls(); after == before {
 		t.Fatalf("the filter document outlived the contributor index it was built from: "+
 			"the index expired at T=5m and this T=6m request still served the cached "+
 			"document (genre scans %d -> %d)", before, after)
+	}
+}
+
+// 🔴 TestFilterData_ExpiredDocumentServedWithoutWaitingForRebuild.
+//
+// Prod 2026-09-13: the first ABS request after each TTL waited on a
+// full-library rebuild (20-32s), and the phone client timed out and showed an
+// empty result. An expired document must be served at once while the rebuild
+// runs behind it; only a handler with no document at all may wait.
+func TestFilterData_ExpiredDocumentServedWithoutWaitingForRebuild(t *testing.T) {
+	w := newWriteHarness(t)
+	seedContributors(t, w)
+
+	base := time.Now()
+	w.handler.SetClock(func() time.Time { return base })
+	_, good, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+	want := authorNames(t, good, "authors")
+	before := w.seed.lib.genreCalls()
+
+	w.handler.SetClock(func() time.Time { return base.Add(10 * time.Minute) })
+	release := w.seed.lib.holdFilterDataBuilds()
+	defer release()
+
+	done := make(chan []string, 1)
+	go func() {
+		_, body, _ := w.req(t, http.MethodGet, "/api/libraries/"+w.libraryID()+"/filterdata", nil)
+		done <- authorNames(t, body, "authors")
+	}()
+	select {
+	case got := <-done:
+		if !equalStrings(got, want) {
+			t.Fatalf("expired document served as %v, want the previous %v", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("an expired /filterdata request blocked on the rebuild instead of serving the previous document")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for w.seed.lib.genreCalls() == before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if w.seed.lib.genreCalls() == before {
+		t.Fatal("serving the expired document started no background rebuild")
 	}
 }
 
