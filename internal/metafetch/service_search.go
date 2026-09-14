@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
@@ -566,7 +566,7 @@ func (mfs *Service) searchMetadataForBook(
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitleAndAuthor(c, v.Query, searchAuthor)
 							}); serr == nil {
-								hits = keepAnchored(results, v.Anchor, searchAuthor+" "+bookNarrator)
+								hits = keepVariant(results, v, searchAuthor+" "+bookNarrator)
 							} else {
 								note(serr)
 							}
@@ -575,7 +575,7 @@ func (mfs *Service) searchMetadataForBook(
 							if results, serr := gatedSearch(func(c context.Context) ([]metadata.BookMetadata, error) {
 								return src.SearchByTitle(c, v.Query)
 							}); serr == nil {
-								hits = keepAnchored(results, v.Anchor, searchAuthor+" "+bookNarrator)
+								hits = keepVariant(results, v, searchAuthor+" "+bookNarrator)
 							} else {
 								note(serr)
 							}

@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-09-14
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -261,6 +262,11 @@ type titleVariant struct {
 	// /api/v1/metadata/bulk-fetch, which applies the first candidate with no
 	// score floor. Neither may be handed the series' other books as this one.
 	Anchor map[string]bool
+	// Exact additionally refuses a result whose title carries a significant
+	// word the anchor lacks. Set for a part-suffix stem ("Rogue Lawyer" from
+	// "Rogue Lawyer - 001"): the stem may be a series name ("Wheel of Time -
+	// 003"), and "The Wheel of Time Companion" carries every anchor word.
+	Exact bool
 }
 
 // titleOnlyAllowed reports whether the variant may be searched WITHOUT an
@@ -280,7 +286,10 @@ func (v titleVariant) titleOnlyAllowed() bool { return len(v.Anchor) >= 2 }
 // generic words ("A Novel").
 func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 	base, series, bookName, found := splitSeriesDecoration(rawTitle)
-	if !found || bookName == "" {
+	if !found {
+		return partSuffixVariant(rawTitle, searchTitle)
+	}
+	if bookName == "" {
 		return nil
 	}
 	anchor := anchorWords(bookName, series)
@@ -299,6 +308,45 @@ func extraTitleVariants(rawTitle, searchTitle string) []titleVariant {
 		out = append(out, titleVariant{Query: q, Anchor: anchor})
 	}
 	return out
+}
+
+// partSuffixVariant returns the title without its part number ("Rogue Lawyer -
+// 001" → "Rogue Lawyer") as an Exact variant. Multi-part rips carry the suffix
+// in the book title, and no provider finds the title with it.
+func partSuffixVariant(rawTitle, searchTitle string) []titleVariant {
+	_, stem, ok := seqnum.PartSuffix(rawTitle)
+	if !ok {
+		return nil
+	}
+	stem = strings.Trim(strings.TrimSpace(stem), " -–—:,")
+	anchor := anchorWords(stem, "")
+	if len(stem) < 3 || len(anchor) == 0 || strings.EqualFold(stem, strings.TrimSpace(searchTitle)) {
+		return nil
+	}
+	return []titleVariant{{Query: stem, Anchor: anchor, Exact: true}}
+}
+
+// keepVariant returns the results v accepts: an Exact variant first drops any
+// result whose title has a significant, non-generic word outside the anchor,
+// then keepAnchored applies.
+func keepVariant(results []metadata.BookMetadata, v titleVariant, people string) []metadata.BookMetadata {
+	if v.Exact {
+		var exact []metadata.BookMetadata
+		for _, r := range results {
+			ok := true
+			for w := range SignificantWords(r.Title) {
+				if !genericTitleWords[w] && !v.Anchor[w] {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				exact = append(exact, r)
+			}
+		}
+		results = exact
+	}
+	return keepAnchored(results, v.Anchor, people)
 }
 
 // keepAnchored returns the results that name this book: every anchor word in
