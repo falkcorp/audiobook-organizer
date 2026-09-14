@@ -1,11 +1,12 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -21,7 +22,17 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
+
+// writeBackLog carries the write-back's protected-skip and summary lines.
+var writeBackLog = logger.New("metafetch-writeback")
+
+// logProtectedWriteSkip records a per-file write the protected-path guard
+// refused. It is a skip, counted apart from failures.
+func logProtectedWriteSkip(path string, err error) {
+	writeBackLog.Info("write-back: skipping protected file %s: %v", logger.SanitizeLogValue(path), err)
+}
 
 // sortedKeys returns a tag map's keys in a stable order so a failure log names
 // which tags were being written. Without it a write-back failure told you only
@@ -892,7 +903,10 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				return
 			}
 			if err := mfs.writeFileTagsSafe(bf.FilePath, tagMap,
-				fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}, opConfig); err != nil {
+				fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}, opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+				logProtectedWriteSkip(bf.FilePath, err)
+				skippedN.Add(1)
+			} else if err != nil {
 				slog.Warn("write-back failed for file",
 					"path", bf.FilePath, "error", err,
 					"book_id", book.ID, "book_title", book.Title,
@@ -943,7 +957,10 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 						slog.Debug("write-back all tags match, skipping", "value", f)
 						return
 					}
-					if err := mfs.writeFileTagsSafe(f, fm, mfs.bookFileWriteOpts(f), opConfig); err != nil {
+					if err := mfs.writeFileTagsSafe(f, fm, mfs.bookFileWriteOpts(f), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+						logProtectedWriteSkip(f, err)
+						skippedN.Add(1)
+					} else if err != nil {
 						slog.Warn("write-back failed for file",
 							"path", f, "error", err,
 							"book_id", book.ID, "book_title", book.Title,
@@ -958,7 +975,10 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				fm := FilterUnchangedTags(book.FilePath, fullTagMap)
 				if len(fm) == 0 {
 					slog.Debug("write-back all tags match, skipping", "path", book.FilePath)
-				} else if err := mfs.writeFileTagsSafe(book.FilePath, fm, mfs.bookFileWriteOpts(book.FilePath), opConfig); err != nil {
+				} else if err := mfs.writeFileTagsSafe(book.FilePath, fm, mfs.bookFileWriteOpts(book.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+					logProtectedWriteSkip(book.FilePath, err)
+					skippedN.Add(1)
+				} else if err != nil {
 					slog.Warn("write-back failed for file",
 						"path", book.FilePath, "error", err,
 						"book_id", book.ID, "book_title", book.Title,
@@ -993,10 +1013,12 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				if len(tagMap) == 0 {
 					continue // tags already match, nothing to write
 				}
-				backupFileBeforeWrite(sib.FilePath)
-				if _, _, err := fileops.WriteTagsSafe(sib.FilePath, func(tmpPath string) error {
-					return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
-				}, mfs.bookFileWriteOpts(sib.FilePath)); err != nil {
+				// Same guarded write as the book's own files: a sibling under a
+				// protected directory inside RootDir is refused, not rewritten.
+				if err := mfs.writeFileTagsSafe(sib.FilePath, tagMap, mfs.bookFileWriteOpts(sib.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+					logProtectedWriteSkip(sib.FilePath, err)
+					skippedProtected++
+				} else if err != nil {
 					slog.Warn("write-back failed for version-linked", "path", sib.FilePath, "error", err)
 				} else {
 					writtenCount++
@@ -1043,7 +1065,10 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 	}
 
 	if skippedProtected > 0 {
-		slog.Info("write-back for book wrote file(s), skipped protected path(s)", "id", book.ID, "count", writtenCount-skippedProtected, "value", skippedProtected)
+		// writtenCount already excludes skips; it used to be logged as
+		// writtenCount-skippedProtected, under-reporting the files written.
+		writeBackLog.Info("write-back for book %s wrote %d file(s), skipped %d protected file(s)",
+			logger.SanitizeLogValue(book.ID), writtenCount, skippedProtected)
 	}
 
 	pt.Since(PhaseDBPost, dbPostStart)

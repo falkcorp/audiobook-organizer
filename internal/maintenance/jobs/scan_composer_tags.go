@@ -1,13 +1,14 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package jobs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,9 +19,16 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
+
+// sctCategorySkippedProtected is the result category for a file whose COMPOSER
+// write the guard refused because the file is protected. It is neither a
+// problem nor a failure: the file is left alone on purpose.
+const sctCategorySkippedProtected = "skipped_protected"
 
 func init() { maintenance.Register(&scanComposerTagsJob{}) }
 
@@ -199,7 +207,12 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 						Author: w.author, Narrator: w.narrator, WillWrite: willWrite,
 					}
 					if !dryRun && category != "ok" && willWrite != composer {
-						if writeErr := metadata.WriteSingleTag(w.filePath, "COMPOSER", willWrite); writeErr != nil {
+						if writeErr := metadata.WriteSingleTag(w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
+							r.Category = sctCategorySkippedProtected
+							r.Error = writeErr.Error()
+							logger.New("scan-composer-tags").Info("op %s: skipping protected file %s: %v",
+								logger.SanitizeLogValue(opID), logger.SanitizeLogValue(w.filePath), writeErr)
+						} else if writeErr != nil {
 							r.Error = writeErr.Error()
 							slog.Warn("scan-composer-tags write failed", "opID", opID, "w", w.filePath, "writeErr", writeErr)
 						} else {

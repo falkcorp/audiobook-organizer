@@ -1,11 +1,12 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package metafetch
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -186,12 +188,30 @@ func (mfs *Service) runFileWrites(n int, fn func(i int)) {
 // writeFileTagsSafe is the one per-file tag write of writeBackForBook: an
 // optional backup, then an atomic temp-copy write. bookFileID/store, when set,
 // let WriteTagsSafe persist the file's before/after hashes.
+//
+// The write goes through the same protected-path guard as every other tag
+// write (tagger.ResolvePathForWrite with the service's safe-write deps): a
+// Deluge-protected file is imported to the library and the copy is written,
+// or, when there is no copy to write, the call returns an error wrapping
+// tagger.ErrProtectedPathWrite and the file is not touched. Until 2026-09-14
+// this path wrote the file it was given, so write-back rewrote files a torrent
+// client was seeding whenever mfs.isProtectedPath (import roots and the iTunes
+// library only) did not cover them.
 func (mfs *Service) writeFileTagsSafe(path string, tagMap map[string]any, opts fileops.WriteTagsSafeOptions, opConfig fileops.OperationConfig) error {
-	if mfs.fileTagWrite != nil {
-		return mfs.fileTagWrite(path, tagMap)
+	target, err := tagger.ResolvePathForWrite(context.Background(), path, mfs.safeWriteDeps)
+	if err != nil {
+		return err
 	}
-	backupFileBeforeWrite(path)
-	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
+	if target != path && opts.Store != nil && mfs.db != nil {
+		// The write went to a library copy: record on the row of the file
+		// actually written (tagger.SafeWriteDeps.hashOptions, same rule).
+		opts = fileops.HashOptionsForPath(mfs.db, target)
+	}
+	if mfs.fileTagWrite != nil {
+		return mfs.fileTagWrite(target, tagMap)
+	}
+	backupFileBeforeWrite(target)
+	_, _, err = fileops.WriteTagsSafe(target, func(tmpPath string) error {
 		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 	}, opts)
 	return err

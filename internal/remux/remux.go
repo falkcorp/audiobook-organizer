@@ -1,7 +1,7 @@
 // file: internal/remux/remux.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package remux
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	taglib "go.senan.xyz/taglib"
 )
@@ -41,15 +42,35 @@ type BookFileStore interface {
 	PatchBookFileFields(bookID, fileID string, patch database.BookFileFieldPatch) (before, after *database.BookFile, err error)
 }
 
+// ProtectedChecker reports whether a path is protected: under a Deluge
+// save_path or a configured protected prefix such as the iTunes library.
+// Satisfied by *deluge.ProtectedPathCache, the predicate the tag-write guard
+// (tagger.SafeWriteDeps.ProtectedCache) uses.
+type ProtectedChecker interface {
+	IsProtected(filePath string) bool
+}
+
+// isProtected reports whether path is protected; a nil checker protects nothing.
+func isProtected(c ProtectedChecker, path string) bool {
+	return c != nil && c.IsProtected(path)
+}
+
 // Remuxer provides malformed M4B remux operations.
 type Remuxer struct {
-	store Store
-	files BookFileStore
+	store     Store
+	files     BookFileStore
+	protected ProtectedChecker
 }
 
 // SetBookFileStore installs the store remuxed files' hashes are recorded
 // through. Nil disables recording.
 func (r *Remuxer) SetBookFileStore(files BookFileStore) { r.files = files }
+
+// SetProtectedChecker installs the protected-path predicate. A protected file
+// is never remuxed: ffmpeg would rewrite a file a torrent client is seeding,
+// or one the iTunes library owns. The file is counted as skipped_protected.
+// Nil disables the check.
+func (r *Remuxer) SetProtectedChecker(c ProtectedChecker) { r.protected = c }
 
 // remuxAndRecord rewrites path with remux and records the new bytes' hashes on
 // the file's book_file row. A remux rewrites the container, so every byte-level
@@ -157,7 +178,8 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 	})
 
 	slog.Info("Starting malformed M4B remux scan under", "root", root, "candidates", total)
-	remuxed, clean, failed, processed := 0, 0, 0, 0
+	remuxed, clean, failed, skippedProtected, processed := 0, 0, 0, 0, 0
+	log := logger.New("remux")
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
@@ -188,7 +210,16 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 
 		processed++
 		if progress != nil && processed%25 == 0 {
-			progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d)", processed, total, remuxed, failed))
+			progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d skipped_protected=%d)", processed, total, remuxed, failed, skippedProtected))
+		}
+
+		// A protected file is counted by both walks (it is a candidate) and
+		// skipped here, after processed++, so the two still agree. It is never
+		// probed or rewritten: remux replaces the file with ffmpeg's output.
+		if isProtected(r.protected, path) {
+			log.Info("malformed M4B remux: skipping protected file %s", logger.SanitizeLogValue(path))
+			skippedProtected++
+			return nil
 		}
 
 		if _, err := taglib.ReadTags(path); err == nil {
@@ -216,10 +247,10 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 	})
 
 	if progress != nil {
-		progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d)", processed, total, remuxed, failed))
+		progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d skipped_protected=%d)", processed, total, remuxed, failed, skippedProtected))
 	}
 
-	slog.Info("Malformed M4B remux complete", "remuxed", remuxed, "clean", clean, "failed", failed)
+	log.Info("Malformed M4B remux complete: remuxed=%d clean=%d failed=%d skipped_protected=%d", remuxed, clean, failed, skippedProtected)
 	_ = r.store.SetSetting(RemuxKey, "true", "bool", false)
 	return nil
 }

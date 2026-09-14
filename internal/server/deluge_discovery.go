@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.1.1
+// version: 3.2.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -11,12 +11,14 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -148,6 +150,8 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 		Path    string `json:"path"`
 		NewPath string `json:"new_path,omitempty"`
 		Error   string `json:"error,omitempty"`
+		// SkippedReason is set when nothing was imported and nothing failed.
+		SkippedReason string `json:"skipped_reason,omitempty"`
 	}
 
 	var results []result
@@ -174,13 +178,25 @@ func (s *Server) handleDiscoveryImport(c *gin.Context) {
 			failed++
 			continue
 		}
-		newPath, importErr := delugeclient.ImportToLibrary(&config.AppConfig, client, store, full)
-		if importErr != nil {
+		srcPath := full.FilePath // ImportToLibrary rewrites full.FilePath on success
+		newPath, importErr := delugeclient.ImportToLibrary(&config.AppConfig, client, store, full, s.protectedChecker())
+		switch {
+		case errors.Is(importErr, tagger.ErrProtectedPathWrite):
+			// A protected file that is its own library destination: there is
+			// nowhere to copy it. Nothing was imported and nothing broke.
+			results = append(results, result{FileID: f.ID, Path: f.FilePath, SkippedReason: importErr.Error()})
+			skipped++
+		case importErr != nil:
 			// newPath is non-empty only when a copy was left in the library
 			// unrecorded (see ImportToLibrary); report where it is.
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath, Error: importErr.Error()})
 			failed++
-		} else {
+		case newPath == srcPath:
+			// Source and destination are the same file: no copy, no row
+			// update. Until 2026-09-14 this was counted as imported.
+			results = append(results, result{FileID: f.ID, Path: f.FilePath, SkippedReason: "file is already at its library destination; nothing was copied"})
+			skipped++
+		default:
 			results = append(results, result{FileID: f.ID, Path: f.FilePath, NewPath: newPath})
 			imported++
 		}

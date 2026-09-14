@@ -1,7 +1,7 @@
 // file: internal/organizer/rename_tags.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e8f5a13-7b4c-4d91-a6e0-3c9d1b7f5e28
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -128,9 +128,6 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			continue
 		}
 		written += len(filtered)
-		// Post-write bookkeeping for this file (t.path, row t.fileID) goes
-		// here, after the write succeeded and before the ledger rows: the
-		// book_file FileHash refresh from #3394 slots in at this point.
 		if operationID == "" {
 			continue
 		}

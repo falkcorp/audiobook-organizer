@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package remux
 
@@ -30,13 +30,19 @@ const TranscodeKey = "malformed_m4b_transcode_v1_done"
 
 // Transcoder provides malformed M4B transcode operations.
 type Transcoder struct {
-	store Store
-	files BookFileStore
+	store     Store
+	files     BookFileStore
+	protected ProtectedChecker
 }
 
 // SetBookFileStore installs the store transcoded files' hashes and audio
 // properties are recorded through. Nil disables recording.
 func (t *Transcoder) SetBookFileStore(files BookFileStore) { t.files = files }
+
+// SetProtectedChecker installs the protected-path predicate. A protected file
+// is never transcoded (a re-encode replaces the file) and is counted as
+// skipped_protected. Nil disables the check.
+func (t *Transcoder) SetProtectedChecker(c ProtectedChecker) { t.protected = c }
 
 // transcodeAndRecord re-encodes path with transcode, records the new bytes'
 // hashes on the file's book_file row, and refreshes the row's codec, bitrate
@@ -205,7 +211,11 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 	})
 
 	slog.Info("Starting malformed M4B transcode scan under", "root", root, "candidates", total)
-	transcoded, clean, failed, skipped, processed := 0, 0, 0, 0, 0
+	// skipped counts files marked permanently unfixable; skippedProtected
+	// counts protected files, which are never rewritten. Two meanings, two
+	// counters.
+	transcoded, clean, failed, skipped, skippedProtected, processed := 0, 0, 0, 0, 0, 0
+	log := logger.New("remux")
 
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
@@ -236,7 +246,15 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 
 		processed++
 		if progress != nil && processed%25 == 0 {
-			progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d)", processed, total, transcoded, failed, skipped))
+			progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d skipped_protected=%d)", processed, total, transcoded, failed, skipped, skippedProtected))
+		}
+
+		// Counted by both walks, skipped here after processed++ so they agree.
+		// A protected file is never probed or re-encoded.
+		if isProtected(t.protected, path) {
+			log.Info("malformed M4B transcode: skipping protected file %s", logger.SanitizeLogValue(path))
+			skippedProtected++
+			return nil
 		}
 
 		if _, err := taglib.ReadTags(path); err == nil {
@@ -274,10 +292,10 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 	})
 
 	if progress != nil {
-		progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d)", processed, total, transcoded, failed, skipped))
+		progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d skipped_protected=%d)", processed, total, transcoded, failed, skipped, skippedProtected))
 	}
 
-	slog.Info("Malformed M4B transcode transcoded, already readable, failed, permanently skipped", "transcoded", transcoded, "clean", clean, "failed", failed, "skipped", skipped)
+	log.Info("Malformed M4B transcode complete: transcoded=%d clean=%d failed=%d skipped=%d skipped_protected=%d", transcoded, clean, failed, skipped, skippedProtected)
 	_ = t.store.SetSetting(TranscodeKey, "true", "bool", false)
 	return nil
 }

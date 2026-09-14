@@ -1,12 +1,13 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package server
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
@@ -41,12 +43,16 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 // deleted one. Returning the counters gives the guard a real instrument. Both
 // production call sites use the call as a statement and are unaffected.
 type movementAtomCleanupResult struct {
-	Stripped  int
-	Clean     int
-	Failed    int
-	WalkErrs  int
-	Visited   int // Stripped + Clean + Failed: every file the walk accepted
-	Completed bool
+	Stripped int
+	Clean    int
+	Failed   int
+	// SkippedProtected counts files the write guard refused because they are
+	// protected (tagger.ErrProtectedPathWrite). Not failures: the file is
+	// left alone on purpose.
+	SkippedProtected int
+	WalkErrs         int
+	Visited          int // Stripped + Clean + Failed + SkippedProtected: every file the walk accepted
+	Completed        bool
 }
 
 func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResult {
@@ -71,7 +77,8 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 	app := appdirs.Current()
 
 	slog.Info("Starting movement atom cleanup under …", "root", root)
-	stripped, clean, failed, walkErrs := 0, 0, 0, 0
+	stripped, clean, failed, skippedProtected, walkErrs := 0, 0, 0, 0, 0
+	log := logger.New("movement-atom-cleanup")
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
@@ -105,6 +112,9 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 
 		changed, err := removeMovementAtomsFromFile(path, deps)
 		switch {
+		case errors.Is(err, tagger.ErrProtectedPathWrite):
+			log.Info("movement atom cleanup: skipping protected file %s: %v", logger.SanitizeLogValue(path), err)
+			skippedProtected++
 		case err != nil:
 			slog.Warn("movement atom cleanup:", "path", path, "err", err)
 			failed++
@@ -113,9 +123,9 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 		default:
 			clean++
 		}
-		if processed := stripped + clean + failed; processed%500 == 0 {
-			slog.Info("movement atom cleanup: progress",
-				"processed", processed, "stripped", stripped, "clean", clean, "failed", failed)
+		if processed := stripped + clean + failed + skippedProtected; processed%500 == 0 {
+			log.Info("movement atom cleanup: progress: processed=%d stripped=%d clean=%d failed=%d skipped_protected=%d",
+				processed, stripped, clean, failed, skippedProtected)
 		}
 		return nil
 	})
@@ -123,12 +133,12 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 		slog.Warn("movement atom cleanup: walk aborted", "root", root, "err", err)
 	}
 
-	slog.Info("Movement atom cleanup stripped, already clean, errors",
-		"stripped", stripped, "clean", clean, "failed", failed, "walk_errors", walkErrs)
+	log.Info("Movement atom cleanup: stripped=%d clean=%d failed=%d skipped_protected=%d walk_errors=%d",
+		stripped, clean, failed, skippedProtected, walkErrs)
 
 	res := movementAtomCleanupResult{
-		Stripped: stripped, Clean: clean, Failed: failed, WalkErrs: walkErrs,
-		Visited: stripped + clean + failed,
+		Stripped: stripped, Clean: clean, Failed: failed, SkippedProtected: skippedProtected, WalkErrs: walkErrs,
+		Visited: stripped + clean + failed + skippedProtected,
 	}
 
 	if ctx.Err() != nil {

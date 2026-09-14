@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 var importLog = logger.New("deluge-import")
@@ -112,6 +113,8 @@ func (k *keyedMutex) lock(key string) (unlock func()) {
 //   - store: database store (used to call UpdateBookFile)
 //   - bookFile: the BookFile to import; its FilePath must point to the source file.
 //     After a successful return, bookFile.FilePath is updated to the new path.
+//   - protected: the protected-path predicate (the server's ProtectedPathCache).
+//     Nil disables the two protected-path checks described below.
 //
 // Returns the new absolute file path and nil on success.
 // Returns an error if the source file cannot be read or the destination cannot be written.
@@ -124,13 +127,24 @@ func (k *keyedMutex) lock(key string) (unlock func()) {
 // error says so. An existing destination with the same bytes as the source
 // is adopted (recorded without copying) and never removed.
 //
-// Idempotent: if bookFile.ImportedFromDelugeAt is already set, returns the current
-// FilePath immediately without repeating the copy or DB update.
+// Idempotent: if bookFile.ImportedFromDelugeAt is already set and FilePath is
+// not protected, returns the current FilePath without repeating the copy or DB
+// update. A row marked imported whose FilePath is still protected (it was
+// pointed back at the seeding copy) is imported again: returning that path
+// sent every tag write to the protected file, where the write guard refused
+// it, so the book could never be tagged.
+//
+// A protected source whose library destination is the source itself (a
+// protected directory under RootDir) cannot be copied anywhere, so it is
+// refused with an error wrapping tagger.ErrProtectedPathWrite. Until 2026-09-14
+// the protected source was returned as the "library" path. An unprotected
+// source already at its destination is returned unchanged, with no row update.
 func ImportToLibrary(
 	cfg *config.Config,
 	delugeClient *Client,
 	store Store,
 	bookFile *database.BookFile,
+	protected tagger.PathChecker,
 ) (newPath string, err error) {
 	if bookFile == nil {
 		return "", fmt.Errorf("ImportToLibrary: bookFile is nil")
@@ -141,10 +155,15 @@ func ImportToLibrary(
 		return "", fmt.Errorf("ImportToLibrary: store is nil")
 	}
 
-	// Idempotency guard: already imported.
+	// Idempotency guard: already imported, and the row names a library file.
 	if bookFile.ImportedFromDelugeAt != nil {
-		slog.Info("ImportToLibrary already imported at , skipping", "bookFile", bookFile.FilePath, "value1", bookFile.ImportedFromDelugeAt.Format(time.RFC3339))
-		return bookFile.FilePath, nil
+		if !isProtected(protected, bookFile.FilePath) {
+			importLog.Info("ImportToLibrary: %s already imported at %s, skipping",
+				logger.SanitizeLogValue(bookFile.FilePath), bookFile.ImportedFromDelugeAt.Format(time.RFC3339))
+			return bookFile.FilePath, nil
+		}
+		importLog.Info("ImportToLibrary: book file %s is marked imported at %s but names protected path %s; importing it again",
+			logger.SanitizeLogValue(bookFile.ID), bookFile.ImportedFromDelugeAt.Format(time.RFC3339), logger.SanitizeLogValue(bookFile.FilePath))
 	}
 
 	src := bookFile.FilePath
@@ -174,9 +193,14 @@ func ImportToLibrary(
 
 	dest := destSP.String()
 
-	// Do not copy if source and destination are the same path.
+	// Source and destination are the same path: nothing to copy. For a
+	// protected source that means there is no library copy to write to, so
+	// refuse rather than hand the protected path back as the write target.
 	if src == dest {
-		slog.Info("ImportToLibrary source and dest are the same (), skipping copy", "src", src)
+		if isProtected(protected, src) {
+			return "", fmt.Errorf("ImportToLibrary: %s is protected and is its own library destination (a protected directory under RootDir), so there is nowhere to copy it: %w", src, tagger.ErrProtectedPathWrite)
+		}
+		importLog.Info("ImportToLibrary: source and destination are both %s, skipping copy", logger.SanitizeLogValue(src))
 		return src, nil
 	}
 
@@ -270,6 +294,11 @@ func ImportToLibrary(
 	}
 
 	return dest, nil
+}
+
+// isProtected reports whether path is protected; a nil checker protects nothing.
+func isProtected(protected tagger.PathChecker, path string) bool {
+	return protected != nil && protected.IsProtected(path)
 }
 
 // isParentTraversal returns true if the rel path starts with ".." (escapes root).

@@ -1,7 +1,7 @@
 // file: internal/server/deluge_import_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: e1b5d8f2-3c7a-4091-a2e9-6f4d0c8b3a15
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Tests for ImportToLibrary — delegates to internal/deluge/import.go.
 
@@ -61,7 +61,7 @@ func TestImportToLibrary_FallbackToCopy(t *testing.T) {
 		// DelugeHash intentionally empty so MoveStorage is skipped.
 	}
 
-	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary returned error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestImportToLibrary_SameSourceAndDest(t *testing.T) {
 		FilePath: srcFile,
 	}
 
-	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestImportToLibrary_Idempotent(t *testing.T) {
 		ImportedFromDelugeAt: &importedAt,
 	}
 
-	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary returned error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestImportToLibrary_MoveStorageFailureIsNonFatal(t *testing.T) {
 
 	// delugeClient is nil, so MoveStorage is skipped (not called).
 	// The function should still succeed.
-	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf)
+	newPath, err := deluge.ImportToLibrary(cfg, nil, store, bf, nil)
 	if err != nil {
 		t.Fatalf("ImportToLibrary returned error even with nil delugeClient: %v", err)
 	}
