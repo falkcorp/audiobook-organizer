@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -165,4 +165,62 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	require.NotNil(t, updated)
 	require.NotNil(t, updated.Publisher)
 	assert.Equal(t, "Overwrite Pub", *updated.Publisher)
+}
+
+// The bulk path records the author join as it stood before the apply, so undo
+// puts the author back together with its credits. It passed nil, so the
+// author could only be reverted with the join left as the apply made it.
+func TestBulkFetchMetadata_UndoRestoresAuthorAndCredits(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.writeBackBatcher = nil
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.MarshalWrite(w, map[string]any{
+			"numFound": 1, "start": 0,
+			"docs": []map[string]any{{"title": "Bulk Book", "author_name": []string{"Bulk Author"}}},
+		})
+	})
+	ol := httptest.NewServer(mux)
+	defer ol.Close()
+	useOnlyOpenLibrary(t, ol.URL)
+
+	store := database.GetGlobalStore()
+	tempFile := filepath.Join(t.TempDir(), "bulk-author.m4b")
+	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "Bulk Book", FilePath: tempFile, Format: "m4b"})
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]any{"book_ids": []string{book.ID}})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/bulk-fetch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	applied, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, applied.AuthorID, "precondition: the bulk apply set the author")
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/undo-last-apply", nil)
+	w = httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Data struct {
+			Undone      []string `json:"undone_fields"`
+			CreditsLeft bool     `json:"author_credits_left"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.Data.Undone, "author_name")
+	assert.False(t, resp.Data.CreditsLeft, "the join must be restored with the author")
+
+	got, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.AuthorID)
+	credits, err := store.GetBookAuthors(book.ID)
+	require.NoError(t, err)
+	assert.Empty(t, credits)
 }

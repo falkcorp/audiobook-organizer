@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
 // last-edited: 2026-09-13
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,4 +134,134 @@ func TestRevertFileCopy_IsReportedNotUndone(t *testing.T) {
 	got, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.Equal(t, dst, got.FilePath)
+}
+
+// fakeTagFile is one file's tags. A tag written "" is removed, as TagLib does.
+type fakeTagFile struct {
+	tags   map[string]string
+	locked map[string]bool
+	// heldDuringWrite records whether the path lock was held at each write.
+	heldDuringWrite []bool
+}
+
+func (f *fakeTagFile) wire(rs *RevertService, path string) {
+	rs.ReadTags = func(string) (map[string]string, error) {
+		out := map[string]string{"title": "", "artist": ""}
+		for k, v := range f.tags {
+			out[k] = v
+		}
+		return out, nil
+	}
+	rs.WriteTags = func(_ string, tags map[string]any) error {
+		f.heldDuringWrite = append(f.heldDuringWrite, f.locked[path])
+		for k, v := range tags {
+			if s, _ := v.(string); s == "" {
+				delete(f.tags, k)
+			} else {
+				f.tags[k] = s
+			}
+		}
+		return nil
+	}
+	rs.LockPath = func(p string) func() {
+		f.locked[p] = true
+		return func() { f.locked[p] = false }
+	}
+}
+
+// tagWriteBook makes a single-file book with one book_file and records the
+// tag_write row the organizer writes for tag: pre-write oldValue, written
+// newValue.
+func tagWriteBook(t *testing.T, store *database.PebbleStore, op, tag, oldValue, newValue string) (string, string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "a.m4b")
+	require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "A", FilePath: p, Format: "m4b"})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: p, Format: "m4b"}))
+	files, err := store.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.NoError(t, store.CreateOperationChange(&database.OperationChange{
+		OperationID: op, BookID: book.ID, ChangeType: undo.ChangeTypeTagWrite,
+		FieldName: undo.TagWriteField(tag, files[0].ID), OldValue: oldValue, NewValue: newValue,
+	}))
+	return book.ID, p
+}
+
+// Organize wrote the title, a later write-back changed it again, then the
+// organize is reverted: the write-back's value stays. The revert used to write
+// the pre-organize value regardless and erase the later edit.
+func TestRevertTagWrite_KeepsALaterWrite(t *testing.T) {
+	store := newRevertPebble(t)
+	_, p := tagWriteBook(t, store, "op-later", "title", "Orig", "Organized")
+	file := &fakeTagFile{tags: map[string]string{"title": "Organized"}, locked: map[string]bool{}}
+	file.tags["title"] = "Written Back Later" // the later write-back
+
+	rs := NewRevertService(store)
+	file.wire(rs, p)
+	res, err := rs.RevertOperation("op-later")
+	require.Error(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, 1, res.Failed)
+	require.Equal(t, 1, res.ChangedSince)
+	require.Equal(t, "Written Back Later", file.tags["title"], "the later value must survive the revert")
+	require.Empty(t, file.heldDuringWrite, "nothing may be written")
+}
+
+// With no later write, the revert puts the pre-organize value back, under the
+// file's path lock.
+func TestRevertTagWrite_RestoresUnderPathLock(t *testing.T) {
+	store := newRevertPebble(t)
+	_, p := tagWriteBook(t, store, "op-restore", "title", "Orig", "Organized")
+	file := &fakeTagFile{tags: map[string]string{"title": "Organized"}, locked: map[string]bool{}}
+
+	rs := NewRevertService(store)
+	file.wire(rs, p)
+	res, err := rs.RevertOperation("op-restore")
+	require.NoError(t, err, "result %+v", res)
+	require.Equal(t, "Orig", file.tags["title"])
+	require.Equal(t, []bool{true}, file.heldDuringWrite, "the tag write must run under the path lock")
+	require.False(t, file.locked[p], "the lock is released")
+}
+
+// A tag the file did not carry before the organize is removed again. It used
+// to be recorded as "", which cannot be told apart from "unknown".
+func TestRevertTagWrite_AbsentBeforeIsRemoved(t *testing.T) {
+	store := newRevertPebble(t)
+	_, p := tagWriteBook(t, store, "op-absent", "artist", undo.TagAbsentValue, "Someone")
+	file := &fakeTagFile{tags: map[string]string{"artist": "Someone"}, locked: map[string]bool{}}
+
+	rs := NewRevertService(store)
+	file.wire(rs, p)
+	res, err := rs.RevertOperation("op-absent")
+	require.NoError(t, err, "result %+v", res)
+	_, still := file.tags["artist"]
+	require.False(t, still, "the tag the organize added must be removed")
+}
+
+// A file move holds the path lock on both paths across the rename and the
+// book write.
+func TestRevertFileMove_TakesPathLocks(t *testing.T) {
+	store := newRevertPebble(t)
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "import", "a.m4b")
+	newPath := filepath.Join(root, "library", "a.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(newPath), 0o755))
+	require.NoError(t, os.WriteFile(newPath, []byte("x"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "A", FilePath: newPath, Format: "m4b"})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateOperationChange(&database.OperationChange{
+		OperationID: "op-lock", BookID: book.ID, ChangeType: "file_move", FieldName: "file_path", OldValue: oldPath, NewValue: newPath,
+	}))
+
+	var locked []string
+	rs := NewRevertService(store)
+	rs.LockPath = func(p string) func() { locked = append(locked, p); return func() {} }
+	res, err := rs.RevertOperation("op-lock")
+	require.NoError(t, err, "result %+v", res)
+	require.ElementsMatch(t, []string{oldPath, newPath}, locked)
+	got, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, oldPath, got.FilePath)
 }

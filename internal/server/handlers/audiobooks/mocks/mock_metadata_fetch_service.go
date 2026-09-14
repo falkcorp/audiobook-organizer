@@ -87,6 +87,74 @@ func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) RunAndReturn
 	return _c
 }
 
+// UndoFieldChange provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) UndoFieldChange(bookID string, field string) (*metafetch.UndoApplyResult, error) {
+	ret := _mock.Called(bookID, field)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UndoFieldChange")
+	}
+
+	var r0 *metafetch.UndoApplyResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*metafetch.UndoApplyResult, error)); ok {
+		return returnFunc(bookID, field)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string) *metafetch.UndoApplyResult); ok {
+		r0 = returnFunc(bookID, field)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*metafetch.UndoApplyResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(bookID, field)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_UndoFieldChange_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UndoFieldChange'
+type MockMetadataFetchService_UndoFieldChange_Call struct {
+	*mock.Call
+}
+
+// UndoFieldChange is a helper method to define mock.On call
+//   - bookID string
+//   - field string
+func (_e *MockMetadataFetchService_Expecter) UndoFieldChange(bookID any, field any) *MockMetadataFetchService_UndoFieldChange_Call {
+	return &MockMetadataFetchService_UndoFieldChange_Call{Call: _e.mock.On("UndoFieldChange", bookID, field)}
+}
+
+func (_c *MockMetadataFetchService_UndoFieldChange_Call) Run(run func(bookID string, field string)) *MockMetadataFetchService_UndoFieldChange_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_UndoFieldChange_Call) Return(undoApplyResult *metafetch.UndoApplyResult, err error) *MockMetadataFetchService_UndoFieldChange_Call {
+	_c.Call.Return(undoApplyResult, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_UndoFieldChange_Call) RunAndReturn(run func(bookID string, field string) (*metafetch.UndoApplyResult, error)) *MockMetadataFetchService_UndoFieldChange_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UndoLastApply provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) UndoLastApply(bookID string) (*metafetch.UndoApplyResult, error) {
 	ret := _mock.Called(bookID)

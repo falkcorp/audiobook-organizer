@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-09-13
 
@@ -114,6 +114,9 @@ type MetadataBookStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	CreateBook(book *database.Book) (*database.Book, error)
+	// GetBookAuthors reads the author join before a bulk apply, so undo can
+	// restore it together with the author column.
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 }
 
 // MetadataStore is the database subset the metadata handlers require, kept as a

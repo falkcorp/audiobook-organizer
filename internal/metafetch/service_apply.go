@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-13
 
@@ -580,7 +580,7 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// is exactly what the UI's "fetched vs override" panel exists to show.
 	fetched := meta
 	// The author join as it stood before the apply, so undo can put it back.
-	prevAuthors, prevAuthorsErr := mfs.db.GetBookAuthors(id)
+	prevAuthors, prevAuthorsErr := KnownBookAuthors(mfs.db.GetBookAuthors(id))
 	if prevAuthorsErr != nil {
 		prevAuthors = nil
 	}
@@ -626,34 +626,14 @@ func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidat
 	// book's write lock. A whole-struct UpdateBook(id, book) here replaced every
 	// column with this apply's read, so a book-page save (or any other write)
 	// that committed during the apply was silently reverted.
-	var mergedFields []string
-	updatedBook, updateErr := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
-		var mErr error
-		mergedFields, mErr = database.MergeBookChanges(fresh, before, book)
-		return mErr
-	})
+	// Write only what this apply changed, onto the row as it stands under the
+	// book's write lock, then record history from the committed row
+	// (commitApply). A whole-struct UpdateBook(id, book) here replaced every
+	// column with this apply's read, so a book-page save (or any other write)
+	// that committed during the apply was silently reverted.
+	updatedBook, updateErr := mfs.commitApply(id, before, book, prevAuthors, candidate.Source)
 	if updateErr != nil {
-		return nil, fmt.Errorf("failed to update book: %w", updateErr)
-	}
-	// A nil book with a nil error means the row is gone (ModifyBook's contract
-	// for a missing book), or a mock that returns (nil, nil) when unstubbed:
-	// database.MockStore does that whenever UpdateBookFunc is unset. That
-	// made this an outright panic at updatedBook.Title below rather than anything
-	// diagnosable. Fail loudly instead: a store that reports success while handing
-	// back nothing is a bug wherever it happens, not a case to route around.
-	if updatedBook == nil {
-		return nil, fmt.Errorf("update book %s: store reported success but returned no book", id)
-	}
-	// History is recorded from what this apply wrote -- the fields it changed
-	// relative to before, which are exactly the fields MergeBookChanges copied --
-	// and only now that the write has committed.
-	// The new values are read from the committed row, so a value the store
-	// normalised on write is recorded as stored and undo's compare-and-set
-	// matches it.
-	if written, snapErr := database.SnapshotBook(before); snapErr == nil {
-		if cErr := database.CopyBookFields(written, updatedBook, mergedFields); cErr == nil {
-			mfs.RecordApplyHistory(before, written, prevAuthors, candidate.Source)
-		}
+		return nil, updateErr
 	}
 
 	// Check whether any other book already carries the same hash — if so,

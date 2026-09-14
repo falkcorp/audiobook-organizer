@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-09-13
 
@@ -464,6 +464,7 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 	h, d := newHandler(t)
 	expectNoLocks(d.store)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 			{Title: "New Title", Source: "audible", Publisher: "Pub"},
@@ -489,6 +490,7 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 	expectNoLocks(d.store)
 	release := 2019
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old", AudiobookReleaseYear: &release}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{{
 			Title: "New", Source: "Google Books", Year: 1937,
@@ -544,6 +546,7 @@ func TestBulkFetchMetadata_LockedFieldIsFetchedNotApplied(t *testing.T) {
 		{BookID: "b1", Field: database.FieldKeyPublisher, OverrideLocked: true},
 	}, nil)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 			{Title: "New Title", Source: "audible", Publisher: "Pub"},
@@ -585,6 +588,7 @@ func TestBulkFetchMetadata_LockReadErrorRefusesToApply(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetMetadataFieldStates("b1").Return(nil, errors.New("pebble: closed"))
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
 	// No search, no UpdateBook: refused before any provider call.
 	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
 		map[string]any{"book_ids": []string{"b1"}}, nil)
@@ -661,6 +665,7 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 	// applied → didUpdate → status "updated" (the only one counted in
 	// updated_count).
 	store.EXPECT().GetBookByID("b5").Return(&database.Book{ID: "b5", Title: "Old5"}, nil)
+	store.EXPECT().GetBookAuthors(mock.Anything).Return(nil, nil).Maybe()
 	mfs.EXPECT().SearchMetadataForBookWithOptions("b5", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 			{Title: "Old5", Source: "audible", Publisher: "Pub5"},

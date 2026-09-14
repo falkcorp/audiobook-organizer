@@ -411,6 +411,68 @@ func (_c *MockMetadataStore_GetAuthorByName_Call) RunAndReturn(run func(name str
 	return _c
 }
 
+// GetBookAuthors provides a mock function for the type MockMetadataStore
+func (_mock *MockMetadataStore) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	ret := _mock.Called(bookID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBookAuthors")
+	}
+
+	var r0 []database.BookAuthor
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookAuthor, error)); ok {
+		return returnFunc(bookID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.BookAuthor); ok {
+		r0 = returnFunc(bookID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookAuthor)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(bookID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataStore_GetBookAuthors_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBookAuthors'
+type MockMetadataStore_GetBookAuthors_Call struct {
+	*mock.Call
+}
+
+// GetBookAuthors is a helper method to define mock.On call
+//   - bookID string
+func (_e *MockMetadataStore_Expecter) GetBookAuthors(bookID any) *MockMetadataStore_GetBookAuthors_Call {
+	return &MockMetadataStore_GetBookAuthors_Call{Call: _e.mock.On("GetBookAuthors", bookID)}
+}
+
+func (_c *MockMetadataStore_GetBookAuthors_Call) Run(run func(bookID string)) *MockMetadataStore_GetBookAuthors_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataStore_GetBookAuthors_Call) Return(bookAuthors []database.BookAuthor, err error) *MockMetadataStore_GetBookAuthors_Call {
+	_c.Call.Return(bookAuthors, err)
+	return _c
+}
+
+func (_c *MockMetadataStore_GetBookAuthors_Call) RunAndReturn(run func(bookID string) ([]database.BookAuthor, error)) *MockMetadataStore_GetBookAuthors_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBookByID provides a mock function for the type MockMetadataStore
 func (_mock *MockMetadataStore) GetBookByID(id string) (*database.Book, error) {
 	ret := _mock.Called(id)

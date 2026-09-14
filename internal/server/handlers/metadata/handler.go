@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-09-13
 
@@ -1037,6 +1037,13 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			setResult(i, result)
 			return nil
 		}
+		// The author join as it stood before this apply. Undo restores the
+		// author column and the join together; with the join unknown (nil)
+		// it refuses the author rather than put author_id back alone.
+		prevAuthors, prevAuthorsErr := metafetch.KnownBookAuthors(store.GetBookAuthors(bookID))
+		if prevAuthorsErr != nil {
+			prevAuthors = nil
+		}
 
 		if strings.TrimSpace(book.Title) == "" {
 			result.Message = "missing title"
@@ -1345,7 +1352,7 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			// Record what the write changed, now that it has committed. This
 			// used to run before the write, on a book already mutated above,
 			// so it compared the new values with themselves.
-			h.metadataFetchService.RecordApplyHistory(historyBefore, book, nil, sourceName)
+			h.metadataFetchService.RecordApplyHistory(historyBefore, book, prevAuthors, sourceName)
 			result.Status = "updated"
 
 			// System tag the source and language so the review UI

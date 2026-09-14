@@ -1,7 +1,7 @@
 // file: internal/server/metadata_history_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-13
 
 package server
 
@@ -119,9 +119,9 @@ func TestUndoMetadataChange_Handler(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create a book first
+	// The book holds the value the recorded change wrote.
 	book := &database.Book{
-		Title:    "Test Book",
+		Title:    "New Title",
 		FilePath: "/tmp/test.m4b",
 	}
 	createdBook, err := database.GetGlobalStore().CreateBook(book)
@@ -156,6 +156,40 @@ func TestUndoMetadataChange_Handler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "undo applied", wrapper.Data["message"])
 	assert.Equal(t, "title", wrapper.Data["field"])
+
+	// The book row goes back, and no override is left behind. The undo used
+	// to store "Old Title" as an override and leave the row at "New Title".
+	got, err := database.GetGlobalStore().GetBookByID(createdBook.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Old Title", got.Title)
+	states, err := database.GetGlobalStore().GetMetadataFieldStates(createdBook.ID)
+	require.NoError(t, err)
+	for _, st := range states {
+		assert.Nil(t, st.OverrideValue, "undo must not create an override on %s", st.Field)
+	}
+}
+
+// A field edited since its last change is refused, not overwritten.
+func TestUndoMetadataChange_ChangedSinceIsRefused(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	createdBook, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "User Title", FilePath: "/tmp/test-cs.m4b"})
+	require.NoError(t, err)
+	prev, next := `"Old Title"`, `"New Title"`
+	require.NoError(t, database.GetGlobalStore().RecordMetadataChange(&database.MetadataChangeRecord{
+		BookID: createdBook.ID, Field: "title", PreviousValue: &prev, NewValue: &next,
+		ChangeType: "fetched", Source: "Open Library", ChangedAt: time.Now(),
+	}))
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/audiobooks/"+createdBook.ID+"/metadata-history/title/undo", nil)
+	server.router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	got, err := database.GetGlobalStore().GetBookByID(createdBook.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "User Title", got.Title)
 }
 
 func TestUndoMetadataChange_NoHistory(t *testing.T) {
