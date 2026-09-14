@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-14
 //
@@ -181,10 +181,13 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 		return row
 	}
 
-	// The options the apply would use: fill-only for an ordinary row; for a
-	// row only an owner review can land, the overwriting options that
-	// reviewed apply (and its rename preflight) runs with. Changes and the
-	// rename check below therefore describe the apply that would happen.
+	// The options the apply of this row would use (cachedApplyPlan.applyOptions
+	// states the rule): fill-only for a row the gate passes, which a pinless
+	// bulk apply of the preview's rows writes; for a row only a review-lane
+	// approval can land, the overwriting options that apply (and its rename
+	// preflight) runs with. Changes and the rename check below therefore
+	// describe the apply that would happen. A gate-passed row the owner later
+	// approves in the review lane overwrites where this shows a fill.
 	pv, err := svc.PreviewMetadataCandidateWithOptions(id, *plan.Candidate, writeBack, plan.applyOptions())
 	switch {
 	case errors.Is(err, metafetch.ErrApplyPolicyBlocked):
@@ -205,8 +208,7 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	// an owner review does not lift.
 	// Only on the cache path: /metadata/batch-apply-candidates takes no pin,
 	// so nothing could apply the book that way.
-	row.OwnerReviewedWouldApply = plan.ownerApproved() && plan.Reason == applySkipGateBlocked &&
-		row.Reason == plan.Gate.Reason
+	row.OwnerReviewedWouldApply = plan.reviewOnly() && row.Reason == plan.Gate.Reason
 	return row
 }
 

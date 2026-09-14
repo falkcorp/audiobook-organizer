@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-14
 
@@ -140,36 +140,59 @@ type cachedApplyPlan struct {
 	// OwnerReviewed: the gate refused, the request's pin matched, and every
 	// refusing leg is one an owner review overrides. Reason is then "".
 	OwnerReviewed bool
+	// ReviewApproved: the owner clicked Apply on this row in the review lane
+	// (a pin with origin "row" that matched the top cached candidate), whether
+	// the gate then passed or refused it. It is what makes the apply overwrite
+	// (owner ruling 2026-09-14, "any row I approve overwrites"). It is kept
+	// apart from OwnerReviewed on purpose: OwnerReviewed records a GATE
+	// OVERRIDE in the change history, and a row the gate passed overrode
+	// nothing.
+	ReviewApproved bool
 	// Pinnable: the plan came from a path that accepts an owner-review pin
 	// (planCachedApply). The op-results path (planOpResultApply) takes none,
 	// so its dry run must never claim an owner review would apply a book.
 	Pinnable bool
 }
 
-// ownerApproved reports whether the book goes through only as an owner
-// review: the plan already carries one (a matching row pin lifted the gate),
-// or, for the pinless dry run, the gate refused on legs a row review lifts on
-// a path that accepts a pin. The preview and the apply both derive their
-// ApplyOptions from it, so they cannot disagree about a row. Reason is checked
-// before Gate: Gate is nil on the early skip plans.
-func (p cachedApplyPlan) ownerApproved() bool {
-	return p.OwnerReviewed ||
-		(p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate.OwnerReviewOverridable())
+// reviewOnly reports whether a pinless plan refused the book on legs a
+// review-lane approval lifts, on a path that accepts a pin: the book can land
+// only as a review-lane apply. Gate is nil on the early skip plans, so it is
+// checked explicitly rather than trusted to Reason.
+func (p cachedApplyPlan) reviewOnly() bool {
+	return p.Pinnable && p.Reason == applySkipGateBlocked && p.Gate != nil && p.Gate.OwnerReviewOverridable()
 }
 
 // applyOptions is the ApplyOptions for plan, used by the apply, its rename
-// preflight and the dry-run preview alike. A row the owner approved is
-// hand-picked, so it may overwrite filled descriptive fields like the
-// single-book apply (owner decision 2026-09-14); every other batch row is
-// fill-only (owner decision A3#3).
+// preflight and the dry-run preview alike, so no two of them can disagree
+// about a row.
+//
+// Apply (a request's plan): a row approved in the review lane
+// (ReviewApproved) is hand-picked, so it may overwrite filled descriptive
+// fields like the single-book apply (owner ruling 2026-09-14), whether the
+// gate passed it or an owner review lifted a refusal. Every other batch row
+// (no pin, or a pin not from a review row) is fill-only (owner decision
+// A3#3). Only a lifted refusal (OwnerReviewed) is labelled as a gate override.
+//
+// Preview (the pinless dry run): the preview's rows are applied by a pinless
+// bulk request, so a row the gate passes previews fill-only, exactly what
+// that request writes. A row only a review can land (reviewOnly) previews
+// with the options its review-lane apply would carry: overwrite, and the
+// override labels. What the preview cannot know is whether the owner will
+// later approve a gate-passed row in the review lane; that apply overwrites
+// where this preview showed a fill.
 func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
-	opts := metafetch.ApplyOptions{FillOnly: !p.ownerApproved()}
-	if p.OwnerReviewed {
+	overridden := p.OwnerReviewed || p.reviewOnly()
+	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || overridden)}
+	if overridden {
 		// OwnerReviewed, not a non-empty summary, is what makes the apply
 		// record the override and require its history: an empty
 		// RefusingReasons must not turn a reviewed apply into an ordinary one.
 		opts.OwnerReviewed = true
-		opts.GateOverride = cmp.Or(p.Gate.OverrideSummary(), applygate.ReasonOwnerReviewed)
+		summary := ""
+		if p.Gate != nil {
+			summary = p.Gate.OverrideSummary()
+		}
+		opts.GateOverride = cmp.Or(summary, applygate.ReasonOwnerReviewed)
 	}
 	return opts
 }
@@ -208,11 +231,15 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 			Err: fmt.Errorf("reviewed candidate %q (%s) is no longer the top cached candidate %q (%s)", pin.Title, pin.Source, cand.Title, cand.Source)}
 	}
 	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
-	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true}
+	// A matching pin from a review row is the owner's approval of this row:
+	// its apply overwrites whether or not the gate needed lifting. A stale
+	// pin never gets here (stale_candidate above, nothing written).
+	approved := pin != nil && pin.IsRowReview()
+	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: approved}
 	if !v.Allowed {
 		// Only a single-row review earns the override. A pin of any other
 		// origin was still checked for staleness above, and gets the hard gate.
-		if pin != nil && pin.IsRowReview() && v.OwnerReviewOverridable() {
+		if approved && v.OwnerReviewOverridable() {
 			plan.OwnerReviewed = true
 			return plan
 		}

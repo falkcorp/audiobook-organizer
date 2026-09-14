@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-07-11
+// last-edited: 2026-09-14
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 )
 
 // newTOCTOUCacheStore builds a MockStore whose GetMetadataCacheFunc returns
@@ -203,5 +204,47 @@ func TestApplyTranscriptionCandidateUnchangedStillApplies(t *testing.T) {
 	}
 	if len(*updateCalls) != 1 {
 		t.Fatalf("UpdateBook was called %d times, want 1 — the legit apply must not be over-suppressed", len(*updateCalls))
+	}
+}
+
+// Owner ruling 2026-09-14: auto-match-transcribed is fill-only. It may fill an
+// empty title or author, never replace a filled one: a book with a title and
+// no author gets the author and keeps its title.
+func TestApplyTranscriptionCandidate_FillsOnlyEmptyTitleAndAuthor(t *testing.T) {
+	bookID := "book-fill"
+	book := &database.Book{ID: bookID, Title: "Old Title"}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	if err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author); err != nil {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v", err)
+	}
+	if len(*updateCalls) != 1 {
+		t.Fatalf("UpdateBook calls = %d, want 1 (the empty author is filled)", len(*updateCalls))
+	}
+	if got := (*updateCalls)[0].Title; got != "Old Title" {
+		t.Fatalf("title = %q, want the filled title kept (\"Old Title\")", got)
+	}
+}
+
+// With title and author both filled there is nothing this op may write: it
+// returns ErrTranscriptionNothingToFill and never reaches the write path.
+func TestApplyTranscriptionCandidate_NothingToFillWritesNothing(t *testing.T) {
+	bookID := "book-full"
+	authorID := 7
+	book := &database.Book{ID: bookID, Title: "Old Title", AuthorID: &authorID, Author: &database.Author{ID: authorID, Name: "Old Author"}}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author)
+	if !errors.Is(err, maintenanceplugin.ErrTranscriptionNothingToFill) {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v, want ErrTranscriptionNothingToFill", err)
+	}
+	if len(*updateCalls) != 0 {
+		t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
 	}
 }

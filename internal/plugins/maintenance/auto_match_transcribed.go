@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -134,6 +135,15 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		if b.MetadataReviewStatus != nil {
 			return nil
 		}
+		// Fill-only (owner ruling 2026-09-14): this op may write only an empty
+		// title or author. With both filled there is nothing it may write, so
+		// skip before searching; the dry run must not count as eligible a book
+		// the real run would refuse. ApplyTranscriptionCandidate re-checks per
+		// field on the book as it reads it at apply time.
+		if strings.TrimSpace(b.Title) != "" &&
+			(b.AuthorID != nil || (b.Author != nil && strings.TrimSpace(b.Author.Name) != "")) {
+			return nil
+		}
 		// Must have an audio-derived title to search with.
 		if b.TranscribedTitle == nil || *b.TranscribedTitle == "" {
 			return nil
@@ -196,7 +206,14 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 				"applied", applied, "cap", capCounter.Cap(), "next_book_id", id)
 			return capErr
 		}
-		if applyErr := p.deps.ApplyTranscriptionCandidate(ctx, id, candTitle, candAuthor); applyErr != nil {
+		applyErr := p.deps.ApplyTranscriptionCandidate(ctx, id, candTitle, candAuthor)
+		if errors.Is(applyErr, ErrTranscriptionNothingToFill) {
+			// Filled between the pre-check and the apply: a skip, not a failure.
+			log.Info("auto-match-transcribed: skipped, title and author already filled",
+				"book_id", id, "candidate", candTitle)
+			return nil
+		}
+		if applyErr != nil {
 			log.Warn("auto-match-transcribed: apply failed",
 				"book_id", id, "candidate", candTitle, "err", applyErr)
 			return nil // non-fatal: continue with remaining books

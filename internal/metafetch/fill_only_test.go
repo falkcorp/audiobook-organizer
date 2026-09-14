@@ -1,5 +1,5 @@
 // file: internal/metafetch/fill_only_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c8e1f27-9a6b-4d35-8e02-b7f1c3a9d640
 // last-edited: 2026-09-14
 
@@ -105,21 +105,27 @@ func TestPreviewMetadataCandidate_BatchPreviewIsFillOnly(t *testing.T) {
 		return out
 	}
 
-	batch, err := svc.PreviewMetadataCandidate("b1", cand, false)
+	batch, err := svc.PreviewMetadataCandidateWithOptions("b1", cand, false, ApplyOptions{FillOnly: true})
 	require.NoError(t, err)
 	assert.Contains(t, fieldsOf(batch), "publisher", "an empty field is filled")
 	assert.NotContains(t, fieldsOf(batch), "description", "a batch apply must not overwrite a filled description")
 	assert.NotContains(t, fieldsOf(batch), "narrator", "a batch apply must not overwrite a filled narrator")
 
-	// An owner-approved batch row previews with the apply's own options,
-	// FillOnly false: the filled description and narrator are replaced.
-	approved, err := svc.PreviewMetadataCandidateWithOptions("b1", cand, false, ApplyOptions{OwnerReviewed: true})
+	// A row approved in the review lane previews with the options its apply
+	// really uses, FillOnly false: the filled description and narrator are
+	// replaced.
+	approved, err := svc.PreviewMetadataCandidateWithOptions("b1", cand, false, ApplyOptions{FillOnly: false})
 	require.NoError(t, err)
 	assert.Contains(t, fieldsOf(approved), "description", "an owner-approved row may overwrite a filled description")
 	assert.Contains(t, fieldsOf(approved), "narrator")
 	unreviewed, err := svc.PreviewMetadataCandidateWithOptions("b1", cand, false, ApplyOptions{FillOnly: true})
 	require.NoError(t, err)
 	assert.NotContains(t, fieldsOf(unreviewed), "description", "an unreviewed row stays fill-only")
+	// The history label must not change what is written: a fill-only apply
+	// that also carries OwnerReviewed still fills only.
+	labelled, err := svc.PreviewMetadataCandidateWithOptions("b1", cand, false, ApplyOptions{FillOnly: true, OwnerReviewed: true})
+	require.NoError(t, err)
+	assert.NotContains(t, fieldsOf(labelled), "description", "OwnerReviewed must not lift FillOnly")
 
 	picked, err := svc.previewMetadataCandidate("b1", cand, nil, false, false)
 	require.NoError(t, err)

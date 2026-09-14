@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-09-14
 //
@@ -345,5 +345,97 @@ func TestCandidatePin_Matches(t *testing.T) {
 	noHash.ContentHash = ""
 	if noHash.Matches(x) {
 		t.Fatal("a pin without a content hash must never match")
+	}
+}
+
+// gatePassingRow is a row the certainty gate passes on its own, with the
+// candidate it carries.
+func gatePassingRow(t *testing.T) ([]json.RawMessage, metafetch.MetadataCandidate) {
+	t.Helper()
+	raw := oneCandidate(t)
+	var cand metafetch.MetadataCandidate
+	if err := json.Unmarshal(raw[0], &cand); err != nil {
+		t.Fatal(err)
+	}
+	return raw, cand
+}
+
+// Owner ruling 2026-09-14, "any row I approve overwrites": a row approved in
+// the review lane overwrites filled fields even when the gate passes it on
+// its own, and that approval is not recorded as a gate override. The same
+// row unpinned, or pinned from anywhere but a review row, stays fill-only.
+func TestReviewApproved_GatePassedRowOverwrites(t *testing.T) {
+	raw, cand := gatePassingRow(t)
+	svc := &fakeApplySvc{candidates: raw}
+	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if !out.Applied || out.OwnerReviewed || len(svc.applyOpts) != 1 || len(svc.preflightOpts) != 1 {
+		t.Fatalf("approved gate-passed row: outcome %+v apply %+v preflight %+v", out, svc.applyOpts, svc.preflightOpts)
+	}
+	if svc.applyOpts[0].FillOnly || svc.preflightOpts[0].FillOnly {
+		t.Fatalf("an approved row must overwrite: apply %+v preflight %+v", svc.applyOpts[0], svc.preflightOpts[0])
+	}
+	if svc.applyOpts[0].OwnerReviewed || svc.applyOpts[0].GateOverride != "" {
+		t.Fatalf("the gate passed: no override may be recorded, got %+v", svc.applyOpts[0])
+	}
+
+	plain := &fakeApplySvc{candidates: oneCandidate(t)}
+	out = applyCachedCandidateForBookTimed(plain, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil)
+	if !out.Applied || len(plain.applyOpts) != 1 || !plain.applyOpts[0].FillOnly || !plain.preflightOpts[0].FillOnly {
+		t.Fatalf("an unpinned row must stay fill-only: outcome %+v apply %+v", out, plain.applyOpts)
+	}
+
+	other := &fakeApplySvc{candidates: oneCandidate(t)}
+	pin := metafetch.PinOf(cand) // no origin: not a review-lane approval
+	out = applyCachedCandidateForBookTimed(other, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin)
+	if !out.Applied || len(other.applyOpts) != 1 || !other.applyOpts[0].FillOnly {
+		t.Fatalf("a non-row pin must stay fill-only: outcome %+v apply %+v", out, other.applyOpts)
+	}
+}
+
+// A stale review-lane pin on a row the gate would pass still refuses with
+// stale_candidate and writes nothing: the approval covered another record.
+func TestReviewApproved_StalePinOnGatePassedRowWritesNothing(t *testing.T) {
+	raw, cand := gatePassingRow(t)
+	svc := &fakeApplySvc{candidates: raw}
+	shown := *rowPin(cand)
+	shown.Title = "A Title (a different record)"
+	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown)
+	if out.Applied || out.Reason != applySkipStaleCandidate {
+		t.Fatalf("stale pin: outcome %+v, want %s", out, applySkipStaleCandidate)
+	}
+	if len(svc.appliedIDs)+len(svc.invalidatedID)+len(svc.finishCalls)+len(svc.preflightIDs) != 0 {
+		t.Fatalf("stale pin touched the book: applied=%v preflight=%v", svc.appliedIDs, svc.preflightIDs)
+	}
+}
+
+// The pinless dry run previews each of its rows with the options the apply
+// of that row would use: a gate-passed row with the pinless bulk apply's
+// (fill-only), a row only a review can land with the review-lane apply's.
+func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
+	prev := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
+	previewBulkApplyRow(prev, "b1", planCachedApply(prev, fakeBooks{}, "b1", nil, nil), true)
+	bulk := &fakeApplySvc{candidates: oneCandidate(t)}
+	applyCachedCandidateForBookTimed(bulk, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil)
+	if len(prev.previewOpts) != 1 || len(bulk.applyOpts) != 1 || prev.previewOpts[0] != bulk.applyOpts[0] {
+		t.Fatalf("gate-passed row: preview %+v, pinless apply %+v", prev.previewOpts, bulk.applyOpts)
+	}
+
+	books, cand := ownerReviewFixture()
+	rprev := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}
+	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true)
+	reviewed := &fakeApplySvc{candidates: candidateJSON(t, cand)}
+	applyCachedCandidateForBookTimed(reviewed, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand))
+	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || rprev.previewOpts[0] != reviewed.applyOpts[0] {
+		t.Fatalf("review-only row: preview %+v, review-lane apply %+v", rprev.previewOpts, reviewed.applyOpts)
+	}
+}
+
+// applyOptions must not dereference a nil Gate, whatever the other fields say.
+func TestReviewApproved_ApplyOptionsNilGate(t *testing.T) {
+	for _, p := range []cachedApplyPlan{
+		{Pinnable: true, Reason: applySkipGateBlocked},
+		{OwnerReviewed: true},
+	} {
+		_ = p.applyOptions()
 	}
 }
