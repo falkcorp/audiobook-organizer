@@ -1,6 +1,7 @@
 // file: internal/metadata/taglib_reader.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e8d7c6b-5a4f-3e2d-1c0b-9a8b7c6d5e4f
+// last-edited: 2026-09-14
 
 package metadata
 
@@ -59,17 +60,25 @@ func BuildMetadataFromTaglibMap(tags map[string][]string, filePath string, metaL
 
 	// Author priority: ALBUMARTIST > ARTIST > COMPOSER (composer is
 	// narrator in audiobooks, so it's a last-ditch fallback).
+	// ALBUMARTIST is the author (owner decision 2026-09-14) unless it
+	// holds the file's own narrator and ARTIST names someone else
+	// (AlbumArtistIsNarrator).
 	albumArtist := get("ALBUMARTIST", "ALBUM_ARTIST", "ALBUM ARTIST")
 	artist := get("ARTIST")
 	composer := get("COMPOSER")
+	narratorTag := get("NARRATOR", "PERFORMER", "READER", "TXXX:NARRATOR", "TXXX:PERFORMER")
+	albumArtistIsNarrator := AlbumArtistIsNarrator(albumArtist, artist, narratorTag)
 	authorFromArtist := false
 	switch {
-	case albumArtist != "":
+	case albumArtist != "" && !albumArtistIsNarrator:
 		metadata.Artist = albumArtist
 		metadata.AuthorSource = "taglib.albumartist"
 	case artist != "":
 		metadata.Artist = artist
 		metadata.AuthorSource = "taglib.artist"
+		if albumArtistIsNarrator {
+			metadata.AuthorSource = "taglib.artist (albumartist is the narrator)"
+		}
 		authorFromArtist = true
 	case composer != "":
 		metadata.Artist = composer
@@ -80,7 +89,7 @@ func BuildMetadataFromTaglibMap(tags map[string][]string, filePath string, metaL
 
 	// Narrator: dedicated fields first, then fall back to artist if
 	// artist wasn't already used for the author slot.
-	metadata.Narrator = get("NARRATOR", "PERFORMER", "READER", "TXXX:NARRATOR", "TXXX:PERFORMER")
+	metadata.Narrator = narratorTag
 	if metadata.Narrator == "" && !authorFromArtist && artist != "" && artist != metadata.Artist {
 		metadata.Narrator = artist
 	}
