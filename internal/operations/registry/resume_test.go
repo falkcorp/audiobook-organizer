@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-09-11
+// last-edited: 2026-09-15
 
 package registry_test
 
@@ -445,5 +445,49 @@ func TestResume_PreservesParamsAcrossRestartAndRequeue(t *testing.T) {
 					"without its params falls back to dry_run=false and applies for real", have, want, got)
 			}
 		})
+	}
+}
+
+// ResumeRequeue retires the interrupted row and inserts a replacement. When the
+// retire write fails, the old row stays in a status the next boot's sweep
+// requeues AGAIN — so inserting the replacement anyway would run the op twice.
+// The requeue must stop before the insert, leave the row for the next sweep,
+// and record the failure in op_errors_v2.
+func TestResumeRequeue_DropWriteFailureInsertsNoReplacement(t *testing.T) {
+	store := newFakeStore()
+	store.failUpdateStatus(errors.New("pebble: write stall"))
+	bus := &recordingBus{}
+	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
+		WatchdogInterval: 30 * time.Second,
+		Bus:              bus,
+	})
+
+	var runCount atomic.Int32
+	def := makeValidDef("test.requeue-drop-fails")
+	def.ResumePolicy = registry.ResumeRequeue
+	def.Run = func(_ context.Context, _ json.RawMessage, _ registry.Reporter) error {
+		runCount.Add(1)
+		return nil
+	}
+	_ = r.RegisterOp(def)
+
+	oldID := insertOpV2(store, def.ID, def.Plugin, 1, "running", "{}")
+
+	r.Start(t.Context())
+	time.Sleep(100 * time.Millisecond)
+
+	if got := store.statusOf(oldID); got != "running" {
+		t.Errorf("old row status: got %q, want it left as \"running\" for the next boot's sweep", got)
+	}
+	for _, row := range activeRowsForDef(t, store, def.ID) {
+		if row.ID != oldID {
+			t.Errorf("a replacement row %s was inserted although the old row could not be retired (duplicate on next boot)", row.ID)
+		}
+	}
+	if got := runCount.Load(); got != 0 {
+		t.Errorf("Run was called %d times; nothing should dispatch", got)
+	}
+	if errs := store.errorsFor(oldID); len(errs) != 1 {
+		t.Errorf("op_errors_v2 rows for %s: got %d, want 1 recording the failed retire write", oldID, len(errs))
 	}
 }
