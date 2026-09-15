@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-09-15
 
@@ -242,10 +242,12 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 				// composite meanwhile is left alone. Sibling of
 				// internal/scheduler/extra_ops.go — keep in sync.
 				newPrimary := newAuthors[0]
+				applied := false
 				written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
 					if full.AuthorID == nil || *full.AuthorID != author.ID {
 						return database.ErrSkipBookWrite
 					}
+					applied = true
 					full.AuthorID = &firstID
 					full.Author = &newPrimary
 					return nil
@@ -257,9 +259,12 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 				case written == nil:
 					errCount++
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
+				case !applied:
+					_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, author.Name))
+				default:
+					booksUpdated++
 				}
 			}
-			booksUpdated++
 		}
 
 		// Every per-book failure above is logged and skipped, so the composite

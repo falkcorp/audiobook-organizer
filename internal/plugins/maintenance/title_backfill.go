@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-15
 
@@ -129,7 +129,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	_ = reporter.UpdateProgress(0, toChange,
 		fmt.Sprintf("Phase 2/2: updating %d titles…", toChange))
 
-	var changed, errCount int
+	var changed, changedUnder, errCount int
 	for i, u := range toUpdate {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -142,11 +142,15 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			// u.book is Core (slim); retitleBook re-reads the full row and
 			// writes only Title, so nothing else on the row is disturbed.
 			if err := retitleBook(store, u.book.ID, u.book.Title, u.newTitle); err != nil {
+				if errors.Is(err, errRetitleChangedUnderneath) {
+					changedUnder++
+					_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+						"book %s: title changed underneath, not retitled: %v", u.book.ID, err))
+					continue
+				}
+				errCount++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: retitle failed: %v", u.book.ID, err))
-				if !errors.Is(err, errRetitleChangedUnderneath) {
-					errCount++
-				}
 				continue
 			}
 		}
@@ -160,13 +164,13 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	if params.DryRun {
 		suffix = " (dry run — no writes)"
 	}
-	result := fmt.Sprintf("Scanned %d books: %d titles updated, %d skipped, %d errors%s",
-		scanned, changed, skipped, errCount, suffix)
+	result := fmt.Sprintf("Scanned %d books: %d titles updated, %d skipped, %d changed underneath, %d errors%s",
+		scanned, changed, skipped, changedUnder, errCount, suffix)
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(toChange, toChange, result)
 
 	if errCount > 0 {
-		return fmt.Errorf("%d UpdateBook errors (see op log for details)", errCount)
+		return fmt.Errorf("%d retitle errors (see op log for details)", errCount)
 	}
 	return nil
 }

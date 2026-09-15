@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.28.0
+// version: 3.29.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-09-15
 
@@ -1072,7 +1072,10 @@ func (p *Plugin) processTranscribePage(
 				id := s.book.ID
 				wrote := false
 				written, uerr := store.ModifyBook(id, func(cur *database.Book) error {
-					if cur.IntroTranscription != nil && *cur.IntroTranscription != "" && *cur.IntroTranscription != sentinel {
+					if cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
+						// A real transcript that landed meanwhile outranks the
+						// sentinel; a row already carrying the sentinel needs
+						// no second write (and no UpdatedAt bump).
 						return database.ErrSkipBookWrite
 					}
 					cur.IntroTranscription = &sentinel

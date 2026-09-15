@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-15
 
@@ -484,7 +484,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			nd := res.newDur
 			oldDur := res.book.Duration
 			applied := false
-			written, uErr := store.ModifyBook(res.book.ID, func(cur *database.Book) error {
+			row, uErr := store.ModifyBook(res.book.ID, func(cur *database.Book) error {
 				if !sameIntPtr(cur.Duration, oldDur) {
 					return database.ErrSkipBookWrite
 				}
@@ -498,7 +498,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 				readErr++
 				continue
 			}
-			if written == nil {
+			if row == nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: gone before the duration write", res.book.ID))
 				readErr++
