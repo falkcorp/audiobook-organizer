@@ -1,5 +1,5 @@
 // file: internal/merge/provisional_guard_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 51f8f6c7-7a87-45e9-b9fa-cecc30246566
 // last-edited: 2026-09-14
 
@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -126,11 +125,11 @@ func TestMergeBooks_AllowsFullyScannedBooks(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return([]database.BookFile{scannedFile("book-1")}, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return([]database.BookFile{scannedFile("book-2")}, nil)
 	expectModifyBook(mockStore, book1)
-	expectModifyBook(mockStore, book2)
+	// The loser (book-2) is written twice: the version-group loop, then
+	// SoftDeleteBook.
+	expectModifyBookTimes(mockStore, book2, 2)
 	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
-	mockStore.EXPECT().GetBookByID("book-2").Return(book2, nil)
-	mockStore.EXPECT().UpdateBook("book-2", mock.Anything).Return(book2, nil)
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "book-1")
 	require.NoError(t, err, "a fully scanned pair must still merge")

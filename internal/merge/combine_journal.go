@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-14
 
@@ -648,6 +648,8 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 				}
 			}
 		}
+		// UpdateBook on purpose: this is the journal's whole-row restore of the
+		// absorbed shell, not a column write, so it is not routed through ModifyBook.
 		if _, err := ms.db.UpdateBook(a.BookID, b); err != nil {
 			return res, fmt.Errorf("restore absorbed book %s: %w", a.BookID, err)
 		}
@@ -791,21 +793,33 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 
 	// 4. Survivor metadata override.
 	if o := j.Override; o != nil {
-		fresh, err := ms.db.GetBookByID(j.SurvivorID)
-		if err != nil || fresh == nil {
-			return res, fmt.Errorf("reload survivor %s: %v", j.SurvivorID, err)
-		}
-		if o.Applied.Title != "" {
-			fresh.Title = o.TitleBefore
-		}
-		if o.Applied.Narrator != "" {
-			fresh.Narrator = o.NarratorBefore
-		}
-		if o.AuthorIDAfter != nil {
-			fresh.AuthorID = o.AuthorIDBefore
-		}
-		if _, err := ms.db.UpdateBook(fresh.ID, fresh); err != nil {
+		// ModifyBook: only the overridden columns are put back, on the row as
+		// it is under the write lock; the survivor's other columns keep what
+		// any later writer committed.
+		fresh, err := ms.db.ModifyBook(j.SurvivorID, func(b *database.Book) error {
+			changed := false
+			if o.Applied.Title != "" {
+				b.Title = o.TitleBefore
+				changed = true
+			}
+			if o.Applied.Narrator != "" {
+				b.Narrator = o.NarratorBefore
+				changed = true
+			}
+			if o.AuthorIDAfter != nil {
+				b.AuthorID = o.AuthorIDBefore
+				changed = true
+			}
+			if !changed {
+				return database.ErrSkipBookWrite
+			}
+			return nil
+		})
+		if err != nil {
 			return res, fmt.Errorf("restore survivor metadata: %w", err)
+		}
+		if fresh == nil {
+			return res, fmt.Errorf("reload survivor %s: not found", j.SurvivorID)
 		}
 		if o.AuthorIDAfter != nil {
 			if err := ms.db.SetBookAuthors(j.SurvivorID, o.AuthorsBefore); err != nil {

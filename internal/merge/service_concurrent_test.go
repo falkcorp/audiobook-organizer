@@ -1,7 +1,7 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package merge
 
@@ -55,6 +55,14 @@ func (p *serializeProbe) UpdateBook(id string, b *database.Book) (*database.Book
 	p.enter()
 	defer p.leave()
 	return p.Store.UpdateBook(id, b)
+}
+
+// ModifyBook is counted like UpdateBook: the merge's column writes go through
+// it now, and a probe that let them bypass the counter would measure nothing.
+func (p *serializeProbe) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	p.enter()
+	defer p.leave()
+	return p.Store.ModifyBook(id, fn)
 }
 
 // TestMergeBooks_ConcurrentSamePair_Serializes is the load-bearing regression

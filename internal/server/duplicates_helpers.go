@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -61,7 +61,10 @@ type seriesPruneStore interface {
 	// (SERIES-MERGE-PERSERIES-SCAN-COST).
 	DeleteSeries(id int) error
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook, not UpdateBook: the prune repoints one column (SeriesID)
+	// and must not revert whatever another writer committed to the row
+	// between the hydrate and the write (database.BookMutator.ModifyBook).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateOperationChange(change *database.OperationChange) error
 }
 
@@ -388,8 +391,20 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 					repointFailed++
 					continue
 				}
-				full.SeriesID = &keepID
-				if _, err := store.UpdateBook(full.ID, full); err != nil {
+				// ModifyBook writes SeriesID alone, on the row as it is under
+				// the write lock, so a column another writer committed between
+				// the hydrate above and this write is not reverted.
+				written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
+					if b.SeriesID != nil && *b.SeriesID == keepID {
+						return database.ErrSkipBookWrite
+					}
+					b.SeriesID = &keepID
+					return nil
+				})
+				if err == nil && written == nil {
+					err = fmt.Errorf("book vanished before its series could be reassigned")
+				}
+				if err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 					repointFailed++
 				} else {
@@ -794,23 +809,28 @@ func mergeSeriesGroupHelper(store maintenanceStore, keepID int, mergeIDs []int, 
 		// that is what was ATTEMPTED, not what succeeded.
 		moved := 0
 		for _, book := range books {
-			current, herr := store.GetBookByID(book.ID)
-			if herr != nil {
-				return merged, refused, fmt.Errorf("GetBookByID(%s): %w", book.ID, herr)
+			// ModifyBook writes SeriesID alone, on the row as it is under the
+			// write lock, so a column another writer committed in the meantime
+			// is not reverted. It is also the existence check: (nil, nil) is a
+			// row the listing named that the store cannot hydrate.
+			written, uerr := store.ModifyBook(book.ID, func(b *database.Book) error {
+				if b.SeriesID != nil && *b.SeriesID == keepID {
+					return database.ErrSkipBookWrite
+				}
+				b.SeriesID = &keepID
+				return nil
+			})
+			if uerr != nil {
+				return merged, refused, fmt.Errorf("ModifyBook(%s): %w", book.ID, uerr)
 			}
-			if current == nil {
+			if written == nil {
 				// Not a skippable row. DeleteSeries(fromID) below must not fire
-				// while this book still points at fromID. The two error branches
-				// around this one already return; this was the one way through,
-				// and it was silent (pinned by
+				// while this book still points at fromID. The error branch above
+				// already returns; this was the one way through, and it was
+				// silent (pinned by
 				// TestMergeSeriesGroupHelper_DoesNotDeleteWhenABookDoesNotResolve).
 				return merged, refused, fmt.Errorf("book %s is listed under series %d but does not resolve; "+
 					"refusing to delete series %d, which would strand it", book.ID, fromID, fromID)
-			}
-
-			current.SeriesID = &keepID
-			if _, uerr := store.UpdateBook(book.ID, current); uerr != nil {
-				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, uerr)
 			}
 			members.Move(book.ID, fromID, &keepID)
 			moved++
@@ -1154,27 +1174,40 @@ func writeStrippedSeriesPositions(
 			if gctx.Err() != nil {
 				return gctx.Err()
 			}
-			// Full row, not the Core projection: UpdateBook does a full column
-			// replacement, so handing it a reduced struct blanks every field the
-			// projection dropped.
-			book, err := store.GetBookByID(bookID)
+			// ModifyBook: the already-set check, the lock check and the write
+			// all see the row as it is under the write lock, and only
+			// SeriesSequence is written, so a column another writer committed
+			// in the meantime is not reverted. The row is the full Pebble row,
+			// not the Core projection, so nothing the projection drops is lost.
+			p := pos
+			var refused []string
+			alreadySet := false
+			book, err := store.ModifyBook(bookID, func(b *database.Book) error {
+				if b.SeriesSequence != nil && *b.SeriesSequence > 0 {
+					alreadySet = true
+					return database.ErrSkipBookWrite // Already has one; never overwrite it.
+				}
+				var lockErr error
+				refused, lockErr = database.ApplyRespectingLocks(store, b, func(b *database.Book) {
+					b.SeriesSequence = &p
+				})
+				if lockErr != nil {
+					return fmt.Errorf("LoadFieldLocks: %w", lockErr)
+				}
+				if len(refused) > 0 {
+					return database.ErrSkipBookWrite
+				}
+				return nil
+			})
 			if err != nil {
-				note("GetBookByID(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
+				note("ModifyBook(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
 				return nil
 			}
 			if book == nil {
 				note("GetBookByID(%s): no such book -- the position %d stripped from its series name was NOT recorded", bookID, pos)
 				return nil
 			}
-			if book.SeriesSequence != nil && *book.SeriesSequence > 0 {
-				return nil // Already has one; never overwrite it.
-			}
-			p := pos
-			refused, lockErr := database.ApplyRespectingLocks(store, book, func(b *database.Book) {
-				b.SeriesSequence = &p
-			})
-			if lockErr != nil {
-				note("LoadFieldLocks(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, lockErr, pos)
+			if alreadySet {
 				return nil
 			}
 			if len(refused) > 0 {
@@ -1182,10 +1215,6 @@ func writeStrippedSeriesPositions(
 				// number is not simply gone without explanation.
 				logging.Info(gctx, "series normalize: declined to record a stripped position on a locked field",
 					"book_id", bookID, "series_sequence", pos, "locked_fields", strings.Join(refused, ","))
-				return nil
-			}
-			if _, err := store.UpdateBook(bookID, book); err != nil {
-				note("UpdateBook(%s): %v -- the position %d stripped from its series name was NOT recorded", bookID, err, pos)
 				return nil
 			}
 			// A silent rewrite of user-visible data is the pattern this repo keeps

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -149,6 +149,10 @@ type fsRepairStore interface {
 	// the planner's bookAt index has: GetBookByFilePath reads one index key
 	// that the last writer owns and that a move off the path deletes.
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// merge.SoftDeleteBook writes the retired shell's deletion columns
+	// through ModifyBook (merge.BookWriter), so the apply's store must
+	// carry it.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // OpsStore() is server.indexedStore in production, which embeds

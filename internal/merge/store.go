@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package merge
 
@@ -30,6 +30,11 @@ type BookWriter interface {
 	BookReader
 
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the read-modify-write every merge column write goes
+	// through (database.BookMutator.ModifyBook): the callback sets only the
+	// columns the site owns, so a concurrent writer's columns are not
+	// reverted by a whole-row UpdateBook of a stale read.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	RecomputeBookAggregates(bookID string) error
 }

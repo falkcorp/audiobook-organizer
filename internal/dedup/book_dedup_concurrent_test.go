@@ -1,5 +1,5 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
 // last-edited: 2026-09-14
 
@@ -54,6 +54,15 @@ func (p *dedupSerializeProbe) UpdateBook(id string, b *database.Book) (*database
 	p.enter()
 	defer p.leave()
 	return p.Store.UpdateBook(id, b)
+}
+
+// ModifyBook is counted like UpdateBook: merge.SoftDeleteBook and the merge
+// service's column writes go through it now, and a probe that let them bypass
+// the counter would measure nothing.
+func (p *dedupSerializeProbe) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	p.enter()
+	defer p.leave()
+	return p.Store.ModifyBook(id, fn)
 }
 
 func newConcurrentTestStore(t *testing.T) database.Store {
