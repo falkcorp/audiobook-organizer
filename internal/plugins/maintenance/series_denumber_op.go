@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-09-15
 
@@ -406,10 +406,12 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			// commits meanwhile is not reverted (audit A1#15). The fresh row
 			// decides: a book moved off the source series meanwhile no longer
 			// holds it and is left alone.
+			moved := false
 			written, uerr := store.ModifyBook(books[i].ID, func(full *database.Book) error {
 				if full.SeriesID == nil || *full.SeriesID != pl.FromID {
 					return database.ErrSkipBookWrite
 				}
+				moved = true
 				full.SeriesID = &sid
 				// Only fill the position when the book has none — an existing sequence
 				// was set deliberately and outranks one parsed from a name.
@@ -427,6 +429,14 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			if written == nil {
 				failed++
 				movedAll = false
+				continue
+			}
+			if !moved {
+				// The fresh row no longer holds the source series: another
+				// writer moved it meanwhile. It references nothing this plan
+				// deletes, so the source stays safe to delete, and it must
+				// NOT be hoisted into the target below.
+				log.Info("series-denumber: book left the source series meanwhile, not moved", "book", books[i].ID)
 				continue
 			}
 			// 🔑 LOAD-BEARING, not a safeguard. A target can be a LATER plan's

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -445,4 +445,56 @@ func (r *phantomCaptureRegistry) RegisterOp(def sdk.OperationDef) error {
 
 func (r *phantomCaptureRegistry) EnqueueOp(context.Context, string, any, ...sdk.EnqueueOption) (string, error) {
 	return "", nil
+}
+
+// phantomStaleReadStore answers GetBookByID with a stale copy for one book, so
+// the op's outer read still sees the phantom while the stored row has already
+// moved to a real series (a concurrent writer landed between read and write).
+type phantomStaleReadStore struct {
+	*database.PebbleStore
+	staleID string
+	stale   *database.Book
+}
+
+func (s phantomStaleReadStore) GetBookByID(id string) (*database.Book, error) {
+	if id == s.staleID {
+		cp := *s.stale
+		return &cp, nil
+	}
+	return s.PebbleStore.GetBookByID(id)
+}
+
+// A holder that left the phantom series between the repoint's read and its
+// write is left alone AND gets no undo-ledger row: a row for a write that never
+// happened would replay the phantom id over the concurrent writer's series on
+// undo. The census enumerates holders from the stored rows, so the race is
+// reproduced at the per-holder repoint with a stale outer read.
+func TestSeriesPhantomRepair_ChangedUnderneathWritesNoLedgerRow(t *testing.T) {
+	s := newSeriesPhantomStore(t)
+	fx := seedSeriesPhantomFixture(t, s)
+
+	stale, err := s.GetBookByID(fx.live777[0])
+	require.NoError(t, err)
+	requireSeriesID(t, s, fx.live777[0], phantomA)
+	// The concurrent writer: the stored row now points at the real series.
+	moved, err := s.ModifyBook(fx.live777[0], func(b *database.Book) error {
+		b.SeriesID = &fx.realSeriesID
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotNil(t, moved)
+
+	store := phantomStaleReadStore{PebbleStore: s, staleID: fx.live777[0], stale: stale}
+	h := seriesPhantomHolder{SeriesID: phantomA, BookID: fx.live777[0], Title: stale.Title, AuthorID: stale.AuthorID}
+	skip, err := seriesPhantomRepointOne(store, "op-345", h, nil)
+	require.NoError(t, err)
+	require.Equal(t, "changed_underneath", skip)
+
+	// The concurrent writer's series survives.
+	requireSeriesID(t, s, fx.live777[0], fx.realSeriesID)
+
+	// No ledger row for the write that did not happen.
+	changes, cerr := s.GetOperationChanges("op-345")
+	require.NoError(t, cerr)
+	require.Empty(t, changes, "ledger row for a skipped write")
 }

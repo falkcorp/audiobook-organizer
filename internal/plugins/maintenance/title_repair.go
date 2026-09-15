@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
 // last-edited: 2026-09-15
 
@@ -241,7 +241,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 	// Counters are atomics — the RunItems pool below is concurrent. Each
 	// worker touches a disjoint book, so writes never collide on a row, but
 	// counters are shared.
-	var examined, retitled, skipSingle, skipNoAgree, skipProv, skipTitleOK, skipDeleted, mixedDir, errs atomic.Int64
+	var examined, retitled, skipSingle, skipNoAgree, skipProv, skipTitleOK, skipDeleted, mixedDir, changedUnder, errs atomic.Int64
 
 	verb := "would retitle"
 	if params.Apply {
@@ -329,9 +329,12 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 				// and only while the stored title is still the one the
 				// decision above was made against.
 				if uerr := retitleBook(store, b.ID, b.Title, d.NewTitle); uerr != nil {
-					if !errors.Is(uerr, errRetitleChangedUnderneath) {
-						errs.Add(1)
+					if errors.Is(uerr, errRetitleChangedUnderneath) {
+						changedUnder.Add(1)
+						_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("book %s: title changed underneath, not retitled: %v", b.ID, uerr))
+						return nil
 					}
+					errs.Add(1)
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: retitle failed: %v", b.ID, uerr))
 					return nil
 				}
@@ -357,9 +360,9 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		suffix = " (dry run — no writes)"
 	}
 	result := fmt.Sprintf(
-		"title-repair complete: examined=%d %s=%d skipped_single_file=%d skipped_no_agreement=%d skipped_provenance=%d skipped_title_ok=%d skipped_deleted=%d mixed_dir=%d errors=%d%s",
+		"title-repair complete: examined=%d %s=%d skipped_single_file=%d skipped_no_agreement=%d skipped_provenance=%d skipped_title_ok=%d skipped_deleted=%d mixed_dir=%d changed_underneath=%d errors=%d%s",
 		examined.Load(), strings.ReplaceAll(verb, " ", "_"), retitled.Load(), skipSingle.Load(), skipNoAgree.Load(),
-		skipProv.Load(), skipTitleOK.Load(), skipDeleted.Load(), mixedDir.Load(), errs.Load(), suffix)
+		skipProv.Load(), skipTitleOK.Load(), skipDeleted.Load(), mixedDir.Load(), changedUnder.Load(), errs.Load(), suffix)
 	_ = reporter.Log(slog.LevelInfo, result)
 	_ = reporter.UpdateProgress(total, total, result)
 

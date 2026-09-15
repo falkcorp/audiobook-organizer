@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
 // last-edited: 2026-09-15
 
@@ -523,29 +523,36 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 	if target != nil {
 		newValue = strconv.Itoa(*target)
 	}
-	if jerr := store.CreateOperationChange(&database.OperationChange{
-		ID:          ulid.Make().String(),
-		OperationID: opID,
-		BookID:      h.BookID,
-		ChangeType:  seriesPhantomChangeType,
-		FieldName:   seriesPhantomFieldName,
-		OldValue:    strconv.Itoa(h.SeriesID),
-		NewValue:    newValue,
-	}); jerr != nil {
-		return "", fmt.Errorf("undo-ledger write failed, book NOT written: %w", jerr)
-	}
 	// Write only SeriesID, under the book's write lock (ModifyBook), so a
 	// column another writer commits meanwhile is not reverted (audit A1#15).
 	// The phantom check and the lock check are re-made on the fresh row.
-	applied := false
+	//
+	// The undo-ledger row is written INSIDE the callback, after both checks
+	// and before the book: a skip leaves no ledger row (a row for a write
+	// that never happened would replay the phantom id over whatever the
+	// concurrent writer committed), and a ledger failure aborts ModifyBook
+	// so the book is NOT written. CreateOperationChange is one synced Pebble
+	// put on an opchange key — no book stripe, no store book write.
 	written, uerr := store.ModifyBook(full.ID, func(cur *database.Book) error {
 		if cur.SeriesID == nil || *cur.SeriesID != h.SeriesID {
+			skip = "changed_underneath"
 			return database.ErrSkipBookWrite
 		}
 		if slices.Contains(locks.Apply(cur, mutate), database.FieldKeySeriesName) {
+			skip = "locked"
 			return database.ErrSkipBookWrite
 		}
-		applied = true
+		if jerr := store.CreateOperationChange(&database.OperationChange{
+			ID:          ulid.Make().String(),
+			OperationID: opID,
+			BookID:      h.BookID,
+			ChangeType:  seriesPhantomChangeType,
+			FieldName:   seriesPhantomFieldName,
+			OldValue:    strconv.Itoa(h.SeriesID),
+			NewValue:    newValue,
+		}); jerr != nil {
+			return fmt.Errorf("undo-ledger write failed, book NOT written: %w", jerr)
+		}
 		return nil
 	})
 	if uerr != nil {
@@ -554,10 +561,7 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 	if written == nil {
 		return "vanished", nil
 	}
-	if !applied {
-		return "changed_underneath", nil
-	}
-	return "", nil
+	return skip, nil
 }
 
 // majorityAuthorID picks the author most of the holders share, or nil when the
