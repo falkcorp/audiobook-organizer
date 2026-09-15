@@ -16,3 +16,4 @@
   stamp of a book `CreateBook` just returned stays a whole-row write, since
   nothing else can have written it yet. One lost-update test per package
   proves a concurrent `Duration` write survives each path.
+- Batch update: a request that does not name `series_id` no longer clears the book's series. Until now an absent key read like an explicit null, so every batch edit that omitted the field unlinked the book from its series.

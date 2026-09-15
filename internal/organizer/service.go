@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.40.0
+// version: 1.40.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-14
 
@@ -2160,10 +2160,15 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 		b.LibraryState = &organizedSourceState
 		return nil
 	})
-	if modifyErr != nil || modified == nil {
-		if modifyErr != nil {
-			log.Warn("organize: locked write failed for original book %s, falling back to state-only write (Author/Series may be wiped): %v", book.ID, modifyErr)
-		}
+	switch {
+	case modifyErr != nil:
+		// The locked write itself failed. The pre-fix code only warned on a
+		// failed UpdateBook of the hydrated row; keep that shape rather than
+		// widening the whole-row fallback to one more error path.
+		log.Warn("Failed to update original book %s version group: %v", book.ID, modifyErr)
+	case modified == nil:
+		// Row not readable under the lock: fall back to the direct
+		// state-only write (the pre-fix behavior) so the transition lands.
 		if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
 			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
 		}
