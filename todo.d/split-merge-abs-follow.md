@@ -1,0 +1,1 @@
+- [ ] **SPLIT-MERGE-ABS-FOLLOW**: `MergeSplitBookCluster` (internal/dedup/split_book_merge.go) does not call `FollowMerge`/`FollowFileMove`, so ABS sync identity and listening progress do not follow a split-book merge (the journal records `SyncRedirected=false`). CombineBooks does both. Wire the same calls, with undo support.
