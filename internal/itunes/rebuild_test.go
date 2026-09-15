@@ -1,6 +1,6 @@
 // file: internal/itunes/rebuild_test.go
-// version: 1.2.0
-// last-edited: 2026-09-12
+// version: 1.3.0
+// last-edited: 2026-09-15
 // guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 
 package itunes
@@ -180,6 +180,7 @@ func (m *mockRebuildStore) SearchBooks(query string, limit, offset int) ([]datab
 func (m *mockRebuildStore) GetDistinctGenres() ([]string, error) {
 	return nil, nil
 }
+func (m *mockRebuildStore) GetGenreCounts() (map[string]int, error) { return nil, nil }
 
 func (m *mockRebuildStore) GetDistinctLanguages() ([]string, error) {
 	return nil, nil
