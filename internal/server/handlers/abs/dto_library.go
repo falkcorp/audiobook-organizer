@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto_library.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: c471e9a0-5b83-4d16-92fe-08a7c35d1b6e
-// last-edited: 2026-08-22
+// last-edited: 2026-09-15
 
 package abs
 
@@ -442,11 +442,12 @@ type narratorDTO struct {
 	// restart and the client's cached ids would rot.
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// NumBooks is a POINTER and omitted when unknown. There is no reverse
-	// narrator->book index in this store, so a real count would need a library scan
-	// on a request path. The field is optional in the client (`numBooks: Int?`), and
-	// omitting it is honest where emitting 0 would render "0 books" beside every
-	// narrator.
+	// NumBooks is a POINTER and omitted when unknown on the /narrators tab, where
+	// the client's Narrator model has `numBooks: Int?`. On /search it MUST be set:
+	// AudioBooth's SearchResponse.Narrator is {name: String, numBooks: Int}, both
+	// required, and one narrator hit without it throws the whole search decode
+	// (every search on prod with a narrator match rendered empty until
+	// 2026-09-15). The contributor index carries the real count.
 	NumBooks *int `json:"numBooks,omitempty"`
 }
 
@@ -464,10 +465,13 @@ type episodesResponse struct {
 // Note the asymmetry in §1.7.3 item 8, which is easy to get backwards: Authors is
 // OBJECTS while Narrators is PLAIN NAME STRINGS.
 type filterDataResponse struct {
-	AuthorCount      int         `json:"authorCount"`
-	Authors          []idNameDTO `json:"authors"`
-	BookCount        int         `json:"bookCount"`
-	Genres           []string    `json:"genres"`
+	AuthorCount int         `json:"authorCount"`
+	Authors     []idNameDTO `json:"authors"`
+	BookCount   int         `json:"bookCount"`
+	Genres      []string    `json:"genres"`
+	// genreCounts is the per-genre book count behind Genres, kept for /search
+	// (its genre hits carry numItems). Not part of the wire document.
+	genreCounts      map[string]int
 	Languages        []string    `json:"languages"`
 	LoadedAt         int64       `json:"loadedAt"`
 	Narrators        []string    `json:"narrators"`
@@ -485,12 +489,23 @@ type filterDataResponse struct {
 type searchResponse struct {
 	Authors []any              `json:"authors"`
 	Book    []searchBookHitDTO `json:"book"`
-	Genres  []any              `json:"genres"`
 	// Narrators is typed, not []any, because an untyped slice is how this element
 	// drifted from narratorDTO and shipped without the non-optional id (§6.3).
 	Narrators []narratorDTO `json:"narrators"`
 	Series    []any         `json:"series"`
 	Tags      []any         `json:"tags"`
+	// Genres is typed for the same reason Narrators is: AudioBooth's
+	// SearchResponse.Genre is {name: String, numItems: Int}, both required, and
+	// this shipped as bare strings, which throws the whole search decode.
+	Genres []searchGenreDTO `json:"genres"`
+}
+
+// searchGenreDTO is one /search genre hit: AudioBooth's SearchResponse.Genre
+// (API/Sources/API/Models/SearchResponse.swift) — name and numItems, both
+// non-optional. Real ABS counts the library items carrying the genre.
+type searchGenreDTO struct {
+	Name     string `json:"name"`
+	NumItems int    `json:"numItems"`
 }
 
 type searchBookHitDTO struct {

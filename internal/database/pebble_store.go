@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.168.0
+// version: 1.169.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 package database
 
@@ -3709,28 +3709,35 @@ func (p *PebbleStore) CountAllBooks() (int, error) {
 
 // GetDistinctGenres returns sorted distinct non-empty genre values across all primary books.
 func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
-	// Scan book:* index directly without loading all books
-	seen := map[string]bool{}
-	var out []string
+	counts, err := p.GetGenreCounts()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(counts))
+	for g := range counts {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out, nil
+}
 
+// GetGenreCounts returns every distinct non-empty genre with the number of
+// books carrying it. One walk of the book:* keyspace without loading all books.
+func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
+	counts := map[string]int{}
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
-
 		var b Book
 		if err := json.Unmarshal(rowValue, &b); err != nil {
 			return nil
 		}
 		if b.Genre != nil && *b.Genre != "" {
-			if !seen[*b.Genre] {
-				seen[*b.Genre] = true
-				out = append(out, *b.Genre)
-			}
+			counts[*b.Genre]++
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	sort.Strings(out)
-	return out, nil
+	return counts, nil
 }
 
 // GetDistinctLanguages returns sorted distinct non-empty language values across all primary books.

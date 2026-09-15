@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.20.0
+// version: 2.21.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package database
 
@@ -172,6 +172,10 @@ type BookRelationReader interface {
 type BookSearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]Book, error)
 	GetDistinctGenres() ([]string, error)
+	// GetGenreCounts returns, for every distinct non-empty genre across all
+	// primary books, the number of books carrying it. Same walk as
+	// GetDistinctGenres; callers that need both take this one.
+	GetGenreCounts() (map[string]int, error)
 	GetDistinctLanguages() ([]string, error)
 	// GetDistinctPublishedYears returns the sorted distinct non-zero published
 	// years across all live (non-soft-deleted) books. A book's published year

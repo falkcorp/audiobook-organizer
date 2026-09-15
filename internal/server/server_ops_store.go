@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 package server
 
@@ -144,6 +144,7 @@ type serverStatsReader interface {
 	GetBookFileHashStats() (*database.BookFileHashStats, error)
 	GetBookMetadataHashStats() (*database.BookMetadataHashStats, error)
 	GetDistinctGenres() ([]string, error)
+	GetGenreCounts() (map[string]int, error)
 	GetDistinctLanguages() ([]string, error)
 }
 

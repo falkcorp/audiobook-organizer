@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package abs
 
@@ -2050,14 +2050,17 @@ func (h *Handler) buildFilterData(ctx context.Context) (resp *filterDataResponse
 			resp.Series = append(resp.Series, idNameDTO{ID: strconv.Itoa(s.ID), Name: s.Name})
 		}
 	}
-	if genres, err := h.library.GetDistinctGenres(); err != nil {
+	if counts, err := h.library.GetGenreCounts(); err != nil {
 		degraded("genres", err)
 	} else {
-		for _, g := range genres {
+		resp.genreCounts = make(map[string]int, len(counts))
+		for g, n := range counts {
 			if g = strings.TrimSpace(g); g != "" {
 				resp.Genres = append(resp.Genres, g)
+				resp.genreCounts[g] += n
 			}
 		}
+		sort.Strings(resp.Genres)
 	}
 	if decades, err := h.publishedDecades(); err != nil {
 		degraded("published-decades", err)
@@ -2427,7 +2430,7 @@ func (h *Handler) LibrarySearch(c *gin.Context) {
 
 func emptySearchResponse() *searchResponse {
 	return &searchResponse{
-		Authors: []any{}, Book: []searchBookHitDTO{}, Genres: []any{},
+		Authors: []any{}, Book: []searchBookHitDTO{}, Genres: []searchGenreDTO{},
 		Narrators: []narratorDTO{}, Series: []any{}, Tags: []any{},
 	}
 }
@@ -2495,10 +2498,20 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 			// empty list. Authors three branches up already read this index; the
 			// narrator branch was the last one on the raw store.
 			//
-			// NumBooks is dropped deliberately: the index carries a real count,
-			// and §6.3 wants the field omitted here rather than sent.
+			// numBooks is REQUIRED here. AudioBooth's SearchResponse.Narrator is
+			// {name: String, numBooks: Int} — unlike the /narrators tab model,
+			// whose numBooks is optional — and Swift's all-or-nothing decode
+			// throws the entire search document on the first narrator without
+			// it. This branch dropped the count on purpose (reading the tab
+			// model's rule as the search rule) and every prod search with a
+			// narrator hit came back "Search failed" / empty. The index count is
+			// real; send it, and never omit it.
+			n := 0
+			if nr.NumBooks != nil {
+				n = *nr.NumBooks
+			}
 			resp.Narrators = append(resp.Narrators, narratorDTO{
-				ID: nr.ID, Name: nr.Name,
+				ID: nr.ID, Name: nr.Name, NumBooks: &n,
 			})
 		}
 	}
@@ -2521,8 +2534,10 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 	}
 	if fd != nil {
 		// Ranked before bounding, same reason as authors above.
+		// {name, numItems}, both required by the client (searchGenreDTO); the
+		// count comes from the same scan that produced the list.
 		for _, g := range rankNameMatches(fd.Genres, lower, limit, func(g string) string { return g }) {
-			resp.Genres = append(resp.Genres, g)
+			resp.Genres = append(resp.Genres, searchGenreDTO{Name: g, NumItems: fd.genreCounts[g]})
 		}
 	}
 	return resp, complete, nil
