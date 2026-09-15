@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d2e5b1a-4c8f-4e93-a6b0-2f9d3c7e8a15
 // last-edited: 2026-09-14
 
@@ -111,8 +111,10 @@ func TestDiagnosticsHandler_ApplySuggestions_LockReadErrorFailsTheSuggestion(t *
 	store.EXPECT().GetOperationV2("op-1").Return(diagSuggestionOp(
 		`{"id":"s1","action":"fix_metadata","book_ids":["b1"],"fix":"{\"title\":\"AI Title\"}"}`), nil)
 	store.EXPECT().GetMetadataFieldStates("b1").Return(nil, errors.New("pebble: closed"))
-	// No ModifyBook expectation: the lock read fails closed before the row is
-	// touched, and any write fails the test.
+	// The lock read happens inside the ModifyBook callback, under the row
+	// lock; it fails closed there, so the callback errors and nothing is
+	// written (the helper records a write only when the callback returns nil).
+	written := diagExpectModifyBook(store, func() *database.Book { return &database.Book{ID: "b1", Title: "Old"} }, 1)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
@@ -123,4 +125,5 @@ func TestDiagnosticsHandler_ApplySuggestions_LockReadErrorFailsTheSuggestion(t *
 	assert.Contains(t, w.Body.String(), `"applied":0`)
 	assert.Contains(t, w.Body.String(), `"failed":1`)
 	assert.Contains(t, w.Body.String(), database.ErrFieldLocksUnavailable.Error())
+	assert.Empty(t, *written, "an unreadable lock set must not let the write through")
 }
