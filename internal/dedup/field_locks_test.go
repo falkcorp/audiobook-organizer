@@ -1,7 +1,7 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.1.0
+// version: 1.1.2
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
-// last-edited: 2026-09-10
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -92,6 +92,16 @@ func TestMergeSplitBookCluster_LockReadErrorKeepsTitle(t *testing.T) {
 	m.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
 		return nil, errors.New("pebble: closed")
 	}
+	// The keep is written only when a column the merge owns changes, so give
+	// it a duration-bearing file: the duration write still happens and must
+	// carry the unchanged title.
+	prevFiles := m.GetBookFilesFunc
+	m.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) {
+		if bookID == keepID {
+			return []database.BookFile{{ID: "fk", BookID: keepID, Duration: 300}}, nil
+		}
+		return prevFiles(bookID)
+	}
 	var keepWrite *database.Book
 	prev := m.UpdateBookFunc
 	m.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
@@ -106,8 +116,10 @@ func TestMergeSplitBookCluster_LockReadErrorKeepsTitle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0], database.ErrFieldLocksUnavailable.Error())
-	require.NotNil(t, keepWrite)
+	require.NotNil(t, keepWrite, "the keep is still written for its duration")
 	assert.Equal(t, "book K", keepWrite.Title, "fail closed: an unreadable lock set keeps the title")
+	require.NotNil(t, keepWrite.Duration)
+	assert.Equal(t, 300, *keepWrite.Duration)
 }
 
 // ── DedupSeries: SeriesID ───────────────────────────────────────────────────

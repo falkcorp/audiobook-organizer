@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package dedup
 
@@ -80,6 +80,10 @@ type dedupBookReader interface {
 
 type dedupBookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the locked read-modify-write: MergeSplitBookCluster
+	// writes the keep row through it so a column another writer (or the
+	// file move's own aggregate recompute) changed is not reverted.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	RevertBookToVersion(id string, ts time.Time) (*database.Book, error)
@@ -120,6 +124,15 @@ type dedupDuplicateStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
+// dedupSplitMergeStore is what MergeSplitBookCluster needs beyond the book
+// surface: the src's external-ID mappings (reassigned to the keep before the
+// src is soft-deleted, via merge.AsExternalIDReassigner) and the raw-key write
+// for the combine undo journal. Both are on database.Store itself.
+type dedupSplitMergeStore interface {
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	merge.CombineJournalWriter
+}
+
 // Store is the whole surface, for Engine and the exported entry points.
 //
 // Exported because MergeBooks and MergeSplitBookCluster are exported: a caller
@@ -133,4 +146,5 @@ type Store interface {
 	dedupAuthorStore
 	dedupSeriesStore
 	dedupDuplicateStore
+	dedupSplitMergeStore
 }

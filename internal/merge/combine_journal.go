@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package merge
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	ulid "github.com/oklog/ulid/v2"
 )
 
 // mlog is the merge package's logger. It is printf-style (format verbs, not
@@ -62,7 +63,10 @@ const (
 	// CombineJournalUndone marks a combine that UndoCombine reversed.
 	CombineJournalUndone = "undone"
 	// CombineJournalUndoFailed marks an undo that passed every precondition
-	// but hit a store error part way through. LastError says where.
+	// but hit a store error part way through. LastError says where. It is NOT
+	// terminal: UndoCombine accepts it and re-runs the undo, treating every item
+	// the failed attempt already restored as done (see undoPreconditions and
+	// applyUndo, whose steps are each safe to re-run).
 	CombineJournalUndoFailed = "undo_failed"
 )
 
@@ -72,6 +76,9 @@ type CombineJournal struct {
 	Status     string    `json:"status"`
 	CreatedAt  time.Time `json:"created_at"`
 	SurvivorID string    `json:"survivor_id"`
+	// Origin names the operation that wrote the journal when it is not
+	// CombineBooks (empty): "split_book_merge" for dedup.MergeSplitBookCluster.
+	Origin string `json:"origin,omitempty"`
 
 	// Absorbed holds one entry per book folded into the survivor.
 	Absorbed []CombineAbsorbed `json:"absorbed"`
@@ -204,15 +211,40 @@ func (e *CombineUndoRefusedError) Error() string {
 
 func combineJournalKey(id string) string { return combineJournalPrefix + id }
 
-func (ms *Service) putCombineJournal(j *CombineJournal) error {
+// CombineJournalWriter is the raw-key write a journal needs. database.Store
+// carries it (RawKVStore), so the production indexedStore forwards it.
+type CombineJournalWriter interface {
+	SetRaw(key string, value []byte) error
+}
+
+// NewCombineJournal returns an empty Pending journal for survivorID with a
+// fresh chronologically-sortable id. Callers outside this package that fold
+// books into a survivor (dedup.MergeSplitBookCluster) record their work in
+// this same format so UndoCombine can reverse it.
+func NewCombineJournal(survivorID string) *CombineJournal {
+	return &CombineJournal{
+		ID:             ulid.Make().String(),
+		Status:         CombineJournalPending,
+		CreatedAt:      time.Now().UTC(),
+		SurvivorID:     survivorID,
+		ITunesRemovals: []string{},
+	}
+}
+
+// WriteCombineJournal persists j under its key.
+func WriteCombineJournal(db CombineJournalWriter, j *CombineJournal) error {
 	data, err := json.Marshal(j)
 	if err != nil {
 		return fmt.Errorf("marshal combine journal %s: %w", j.ID, err)
 	}
-	if err := ms.db.SetRaw(combineJournalKey(j.ID), data); err != nil {
+	if err := db.SetRaw(combineJournalKey(j.ID), data); err != nil {
 		return fmt.Errorf("write combine journal %s: %w", j.ID, err)
 	}
 	return nil
+}
+
+func (ms *Service) putCombineJournal(j *CombineJournal) error {
+	return WriteCombineJournal(ms.db, j)
 }
 
 // GetCombineJournal returns the journal with the given id, or
@@ -393,6 +425,7 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 	}
 	j.Status = CombineJournalUndone
 	j.UndoneAt = &now
+	j.LastError = ""
 	j.Warnings = append(j.Warnings, res.Warnings...)
 	if err := ms.putCombineJournal(j); err != nil {
 		// The undo itself is done; a stale "applied" status is caught by the
@@ -405,10 +438,20 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 }
 
 // undoPreconditions returns every reason the undo must not run. Read-only.
+//
+// A journal in CombineJournalUndoFailed is a RETRY: an earlier attempt passed
+// these same checks and then stopped part way through applyUndo. Every item it
+// already reversed is in its post-undo state now, so on a retry each check
+// accepts either the post-combine state (not yet reversed) or the exact
+// pre-combine state the journal records (already reversed). Anything else is
+// still a refusal. What a retry cannot tell apart is "reversed by the failed
+// attempt" from "put back by hand to exactly the recorded state"; both leave
+// the row where the undo wants it, so treating them alike is safe.
 func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	var reasons []string
-	if j.Status != CombineJournalApplied {
-		return []string{fmt.Sprintf("journal status is %q, only %q combines can be undone", j.Status, CombineJournalApplied)}
+	retry := j.Status == CombineJournalUndoFailed
+	if j.Status != CombineJournalApplied && !retry {
+		return []string{fmt.Sprintf("journal status is %q, only %q (or %q, to retry) combines can be undone", j.Status, CombineJournalApplied, CombineJournalUndoFailed)}
 	}
 	survivor, err := ms.db.GetBookByID(j.SurvivorID)
 	switch {
@@ -422,6 +465,9 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 
 	checkFile := func(fm CombineFileMove) {
 		f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+		if err == nil && f == nil && retry && ms.fileAlreadyUndone(j, fm) {
+			return
+		}
 		switch {
 		case err != nil:
 			reasons = append(reasons, fmt.Sprintf("load file %s: %v", fm.FileID, err))
@@ -470,6 +516,8 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		case b == nil:
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s no longer exists (purged)", a.BookID))
 			continue
+		case !b.IsSoftDeleted() && retry:
+			// Restored by the failed attempt (step 1 runs first).
 		case !b.IsSoftDeleted():
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s is no longer soft-deleted (restored since)", a.BookID))
 		case a.MarkedForDeletionAt == nil || b.MarkedForDeletionAt == nil || !b.MarkedForDeletionAt.Equal(*a.MarkedForDeletionAt):
@@ -477,8 +525,27 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		}
 		if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
 			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
-		} else if len(files) > 0 {
-			reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)", a.BookID, len(files)))
+		} else {
+			// On a retry the failed attempt may already have moved some of
+			// this book's own rows back; those are expected. Any other row is
+			// a file the book gained since, and still refuses.
+			ownRows := map[string]bool{}
+			if retry {
+				for _, fm := range a.Files {
+					if !fm.Created {
+						ownRows[fm.FileID] = true
+					}
+				}
+			}
+			foreign := 0
+			for _, f := range files {
+				if !ownRows[f.ID] {
+					foreign++
+				}
+			}
+			if foreign > 0 {
+				reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)", a.BookID, foreign))
+			}
 		}
 		for _, fm := range a.Files {
 			checkFile(fm)
@@ -488,6 +555,8 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			switch {
 			case err != nil:
 				reasons = append(reasons, fmt.Sprintf("load %s id %s: %v", x.Source, x.ExternalID, err))
+			case retry && owner == a.BookID:
+				// Moved back by the failed attempt.
 			case owner != j.SurvivorID:
 				reasons = append(reasons, fmt.Sprintf("%s id %s now maps to %q, not the survivor", x.Source, x.ExternalID, owner))
 			}
@@ -495,17 +564,52 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	}
 
 	if o := j.Override; o != nil && survivor != nil {
-		if o.Applied.Title != "" && survivor.Title != o.Applied.Title {
+		// On a retry the failed attempt may already have rolled a field back
+		// (step 4 writes the row before the authors and locks).
+		if o.Applied.Title != "" && survivor.Title != o.Applied.Title && !(retry && survivor.Title == o.TitleBefore) {
 			reasons = append(reasons, fmt.Sprintf("survivor title was edited since the combine (%q, combine set %q)", survivor.Title, o.Applied.Title))
 		}
-		if o.Applied.Narrator != "" && (survivor.Narrator == nil || *survivor.Narrator != o.Applied.Narrator) {
+		if o.Applied.Narrator != "" && !strPtrIs(survivor.Narrator, o.Applied.Narrator) &&
+			!(retry && strPtrEqual(survivor.Narrator, o.NarratorBefore)) {
 			reasons = append(reasons, "survivor narrator was edited since the combine")
 		}
-		if o.AuthorIDAfter != nil && (survivor.AuthorID == nil || *survivor.AuthorID != *o.AuthorIDAfter) {
+		if o.AuthorIDAfter != nil && !intPtrEqual(survivor.AuthorID, o.AuthorIDAfter) &&
+			!(retry && intPtrEqual(survivor.AuthorID, o.AuthorIDBefore)) {
 			reasons = append(reasons, "survivor author was edited since the combine")
 		}
 	}
 	return reasons
+}
+
+// fileAlreadyUndone reports whether a file row that is no longer on the
+// survivor is exactly where a completed undo of fm puts it: gone, for a row
+// the combine created, or back on its recorded owner at its recorded path.
+// Only consulted on a retry.
+func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool {
+	if fm.Created {
+		return true
+	}
+	if fm.FromBookID == j.SurvivorID {
+		return false
+	}
+	f, err := ms.db.GetBookFileByID(fm.FromBookID, fm.FileID)
+	return err == nil && f != nil && f.FilePath == fm.FilePath
+}
+
+func strPtrIs(p *string, v string) bool { return p != nil && *p == v }
+
+func strPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return (a == nil || *a == "") && (b == nil || *b == "")
+	}
+	return *a == *b
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // applyUndo performs the reversal. Preconditions have passed.
@@ -553,10 +657,20 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	// 2. Files: move rows back to the book they came from (or delete the rows
 	//    the combine created), carry sync_file inos, restore disc/track.
 	moveBack := func(moves []CombineFileMove) error {
+		// Every step here is safe to re-run after a failed attempt: a created
+		// row already removed is skipped, and a row already back on its owner
+		// is not moved again (only its disc/track are re-checked).
 		byOwner := map[string][]CombineFileMove{}
 		var owners []string
 		for _, fm := range moves {
 			if fm.Created {
+				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+				if err != nil {
+					return fmt.Errorf("load file row %s created by the combine: %w", fm.FileID, err)
+				}
+				if cur == nil {
+					continue // removed by an earlier attempt
+				}
 				if err := ms.db.DeleteBookFile(fm.FileID); err != nil {
 					return fmt.Errorf("remove file row %s created by the combine: %w", fm.FileID, err)
 				}
@@ -569,15 +683,23 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		}
 		for _, owner := range owners {
 			group := byOwner[owner]
-			ids := make([]string, len(group))
-			for i, fm := range group {
-				ids[i] = fm.FileID
+			ids := make([]string, 0, len(group))
+			for _, fm := range group {
+				cur, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
+				if err != nil {
+					return fmt.Errorf("load file %s: %w", fm.FileID, err)
+				}
+				if cur != nil {
+					ids = append(ids, fm.FileID)
+				}
 			}
-			if err := ms.db.MoveBookFilesToBook(ids, j.SurvivorID, owner); err != nil {
-				return fmt.Errorf("move %d file(s) back to %s: %w", len(ids), owner, err)
+			if len(ids) > 0 {
+				if err := ms.db.MoveBookFilesToBook(ids, j.SurvivorID, owner); err != nil {
+					return fmt.Errorf("move %d file(s) back to %s: %w", len(ids), owner, err)
+				}
+				FollowFileMove(ms.db, j.SurvivorID, owner, ids)
+				res.FilesMoved += len(ids)
 			}
-			FollowFileMove(ms.db, j.SurvivorID, owner, ids)
-			res.FilesMoved += len(ids)
 			for _, fm := range group {
 				f, err := ms.db.GetBookFileByID(owner, fm.FileID)
 				if err != nil || f == nil {
@@ -649,6 +771,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			curSurvPos, err := ms.db.ListUserPositionsForBook(p.UserID, j.SurvivorID)
 			if err != nil {
 				return res, fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, j.SurvivorID, err)
+			}
+			if sameProgress(curSurv, p.SurvivorStateBefore, curSurvPos, p.SurvivorPosBefore) {
+				// Already restored (an earlier attempt of this undo got here).
+				continue
 			}
 			if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
 				// The user has listened to the survivor since. Their newer
