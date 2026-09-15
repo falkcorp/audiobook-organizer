@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -547,15 +547,23 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 
 		case "delete_orphan":
 			for _, bookID := range suggestion.BookIDs {
-				book, getErr := store.GetBookByID(bookID)
-				if getErr != nil || book == nil {
-					applyErr = fmt.Errorf("book %s not found", bookID)
+				// ModifyBook sets only the deletion flag on the stored row; the
+				// old GetBookByID -> UpdateBook(book) wrote the whole stale row
+				// back and reverted any column written meanwhile.
+				marked, modErr := store.ModifyBook(bookID, func(b *database.Book) error {
+					if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+						return database.ErrSkipBookWrite
+					}
+					yes := true
+					b.MarkedForDeletion = &yes
+					return nil
+				})
+				if modErr != nil {
+					applyErr = modErr
 					break
 				}
-				marked := true
-				book.MarkedForDeletion = &marked
-				if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
-					applyErr = updateErr
+				if marked == nil {
+					applyErr = fmt.Errorf("book %s not found", bookID)
 					break
 				}
 			}
@@ -616,28 +624,41 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 }
 
 // applySuggestionRespectingLocks runs mutate on each named book and saves it,
-// through database.ApplyRespectingLocks so a field the user locked is never
-// overwritten by an AI suggestion. A book whose locked field was the only thing
-// the suggestion changed is not written at all and is reported in the returned
-// list as "<bookID> (<locked keys>)". Lock reads fail closed: an unreadable
-// lock set is an error for the whole suggestion, and nothing is written.
+// under the book's field locks (database.FieldLocks.Apply) so a field the user
+// locked is never overwritten by an AI suggestion. A book whose locked field
+// was the only thing the suggestion changed is not written at all and is
+// reported in the returned list as "<bookID> (<locked keys>)". Lock reads fail
+// closed: an unreadable lock set is an error for the whole suggestion, and
+// nothing is written.
+//
+// The locks are read before the row lock is taken; mutate itself runs inside
+// ModifyBook on the stored row, so only the suggestion's own column is written
+// and a column another writer committed meanwhile is kept. Until 2026-09-14
+// this was GetBookByID -> mutate -> UpdateBook, which wrote the whole stale
+// row back.
 func applySuggestionRespectingLocks(store diagnosticsStore, bookIDs []string, mutate func(*database.Book)) ([]string, error) {
 	var locked []string
 	for _, bookID := range bookIDs {
-		book, getErr := store.GetBookByID(bookID)
-		if getErr != nil || book == nil {
-			return nil, fmt.Errorf("book %s not found", bookID)
-		}
-		restored, lerr := database.ApplyRespectingLocks(store, book, mutate)
+		locks, lerr := database.LoadFieldLocks(store, bookID)
 		if lerr != nil {
 			return nil, lerr
 		}
+		var restored []string
+		written, err := store.ModifyBook(bookID, func(b *database.Book) error {
+			restored = locks.Apply(b, mutate)
+			if len(restored) > 0 {
+				return database.ErrSkipBookWrite
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if written == nil {
+			return nil, fmt.Errorf("book %s not found", bookID)
+		}
 		if len(restored) > 0 {
 			locked = append(locked, fmt.Sprintf("%s (%s)", bookID, strings.Join(restored, ", ")))
-			continue
-		}
-		if _, updateErr := store.UpdateBook(book.ID, book); updateErr != nil {
-			return nil, updateErr
 		}
 	}
 	return locked, nil

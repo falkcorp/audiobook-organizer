@@ -1,12 +1,13 @@
 // file: internal/server/handlers/organize_inplace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4c7e21-5d3b-4f80-b6e2-1c8d0a7f3e94
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package handlers_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -59,6 +60,28 @@ func (f *organizeStoreFake) GetBookByID(id string) (*database.Book, error) {
 }
 func (f *organizeStoreFake) UpdateBook(id string, b *database.Book) (*database.Book, error) {
 	cp := *b
+	f.updated = append(f.updated, &cp)
+	return &cp, nil
+}
+
+// ModifyBook applies fn to a copy of the stored book and records the result
+// in updated, like UpdateBook, so the stamp assertions read one list.
+func (f *organizeStoreFake) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if f.getBookErr != nil {
+		return nil, f.getBookErr
+	}
+	if f.book == nil || f.book.ID != id {
+		return nil, nil
+	}
+	cp := *f.book
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	stored := cp
+	f.book = &stored
 	f.updated = append(f.updated, &cp)
 	return &cp, nil
 }

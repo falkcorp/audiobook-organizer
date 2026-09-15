@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2e5b1a-4c8f-4e93-a6b0-2f9d3c7e8a15
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package handlers_test
 
@@ -38,16 +38,12 @@ func TestDiagnosticsHandler_ApplySuggestions_LockedTitleIsSkippedNotOverwritten(
 	store.EXPECT().GetOperationV2("op-1").Return(diagSuggestionOp(
 		`{"id":"s1","action":"fix_metadata","book_ids":["b1"],"fix":"{\"title\":\"AI Title\"}"},`+
 			`{"id":"s2","action":"reassign_series","book_ids":["b1"],"fix":"{\"series_id\":9}"}`), nil)
-	// The same book twice: once per suggestion.
-	store.EXPECT().GetBookByID("b1").RunAndReturn(func(string) (*database.Book, error) {
-		return &database.Book{ID: "b1", Title: "User Title", SeriesID: &seriesID}, nil
-	}).Times(2)
+	// The same book twice: once per suggestion, each a ModifyBook over a
+	// fresh copy of the stored row.
+	written := diagExpectModifyBook(store, func() *database.Book {
+		return &database.Book{ID: "b1", Title: "User Title", SeriesID: &seriesID}
+	}, 2)
 	store.EXPECT().GetMetadataFieldStates("b1").Return(diagLockedRow("b1", database.FieldKeyTitle), nil).Times(2)
-	// Only the series reassignment (unlocked) reaches the store, with the
-	// user's title intact.
-	store.EXPECT().UpdateBook("b1", mock.MatchedBy(func(b *database.Book) bool {
-		return b.Title == "User Title" && b.SeriesID != nil && *b.SeriesID == 9
-	})).Return(nil, nil).Once()
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
@@ -59,6 +55,33 @@ func TestDiagnosticsHandler_ApplySuggestions_LockedTitleIsSkippedNotOverwritten(
 	assert.Contains(t, w.Body.String(), `"skipped":1`)
 	assert.Contains(t, w.Body.String(), `"failed":0`)
 	assert.Contains(t, w.Body.String(), `suggestion s1: b1 (title)`)
+	// Only the series reassignment (unlocked) is written, with the user's
+	// title intact.
+	require.Len(t, *written, 1)
+	assert.Equal(t, "User Title", (*written)[0].Title)
+	require.NotNil(t, (*written)[0].SeriesID)
+	assert.Equal(t, 9, *(*written)[0].SeriesID)
+}
+
+// diagExpectModifyBook scripts n ModifyBook("b1") calls, each over a fresh
+// row from seed, the way the store runs them: the callback mutates the stored
+// row under its lock. Rows the callback did not skip
+// (database.ErrSkipBookWrite) are appended to the returned slice.
+func diagExpectModifyBook(store *databasemocks.MockStore, seed func() *database.Book, n int) *[]*database.Book {
+	var written []*database.Book
+	store.EXPECT().ModifyBook("b1", mock.Anything).
+		RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			b := seed()
+			if err := fn(b); err != nil {
+				if errors.Is(err, database.ErrSkipBookWrite) {
+					return b, nil
+				}
+				return nil, err
+			}
+			written = append(written, b)
+			return b, nil
+		}).Times(n)
+	return &written
 }
 
 func TestDiagnosticsHandler_ApplySuggestions_LockedSeriesBlocksReassign(t *testing.T) {
@@ -66,9 +89,10 @@ func TestDiagnosticsHandler_ApplySuggestions_LockedSeriesBlocksReassign(t *testi
 	seriesID := 4
 	store.EXPECT().GetOperationV2("op-1").Return(diagSuggestionOp(
 		`{"id":"s2","action":"reassign_series","book_ids":["b1"],"fix":"{\"series_id\":9}"}`), nil)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "User Title", SeriesID: &seriesID}, nil)
+	written := diagExpectModifyBook(store, func() *database.Book {
+		return &database.Book{ID: "b1", Title: "User Title", SeriesID: &seriesID}
+	}, 1)
 	store.EXPECT().GetMetadataFieldStates("b1").Return(diagLockedRow("b1", database.FieldKeySeriesName), nil)
-	// No UpdateBook expectation: any write fails the test.
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
@@ -79,15 +103,16 @@ func TestDiagnosticsHandler_ApplySuggestions_LockedSeriesBlocksReassign(t *testi
 	assert.Contains(t, w.Body.String(), `"applied":0`)
 	assert.Contains(t, w.Body.String(), `"skipped":1`)
 	assert.Contains(t, w.Body.String(), `suggestion s2: b1 (series_name)`)
+	assert.Empty(t, *written, "a locked series must not be written")
 }
 
 func TestDiagnosticsHandler_ApplySuggestions_LockReadErrorFailsTheSuggestion(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").Return(diagSuggestionOp(
 		`{"id":"s1","action":"fix_metadata","book_ids":["b1"],"fix":"{\"title\":\"AI Title\"}"}`), nil)
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "User Title"}, nil)
 	store.EXPECT().GetMetadataFieldStates("b1").Return(nil, errors.New("pebble: closed"))
-	// No UpdateBook expectation: fail closed.
+	// No ModifyBook expectation: the lock read fails closed before the row is
+	// touched, and any write fails the test.
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",

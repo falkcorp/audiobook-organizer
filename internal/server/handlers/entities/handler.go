@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"strings"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,6 +37,10 @@ type authorMergeOpParams struct {
 	MergeIDs []int  `json:"merge_ids"`
 	KeepName string `json:"keep_name"`
 }
+
+// entitiesLog is the package logger (the handlers here logged through slog
+// directly until 2026-09-14).
+var entitiesLog = logger.New("handlers.entities")
 
 // seriesRenameOpID is the op PUT /series/:id/name and PATCH /series/:id
 // enqueue. It must match the id package server registers.
@@ -512,33 +516,39 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 		return
 	}
 	if newPrimary == nil {
-		slog.Warn("author repoint: no successor given, refusing to clear AuthorID",
-			"book_id", book.ID, "author_id", deletedAuthorID)
+		entitiesLog.Warn("author repoint: no successor given, refusing to clear AuthorID book=%s author=%d",
+			book.ID, deletedAuthorID)
 		return
 	}
 	id := newPrimary.ID
 	newID := &id
 
-	full, err := h.store.GetBookByID(book.ID)
-	if err != nil || full == nil {
-		// Hydration failed. Fall back to the BookCore projection so the
-		// AuthorID change still lands -- a stale Author (preserved by the
-		// guard) is strictly better than a pointer into a deleted row, which
-		// is what skipping the write would leave behind. Never skip it.
-		projection := book.ToBook()
-		projection.AuthorID = newID
-		if _, uErr := h.store.UpdateBook(book.ID, &projection); uErr != nil {
-			slog.Warn("author repoint: failed via projection",
-				"book_id", book.ID, "hydrate_err", err, "update_err", uErr)
+	// ModifyBook sets AuthorID and the denormalized Author on the stored row
+	// under its lock. Until 2026-09-14 this hydrated the row with GetBookByID,
+	// set the two fields and wrote the whole row back with UpdateBook -- and
+	// when the hydrate failed, wrote book.ToBook(), a BookCore PROJECTION, as
+	// the whole row. Both were column writes in disguise: AuthorID and Author
+	// are the only columns this function owns, the whole-row write reverted
+	// anything another writer committed meanwhile, and the projection write
+	// would have blanked every column BookCore does not carry. The store
+	// reads the row itself now, so there is no hydrate step to fail and no
+	// fallback. A row whose primary author is no longer the deleted one
+	// (another writer repointed it meanwhile) is left as it is.
+	updated, err := h.store.ModifyBook(book.ID, func(b *database.Book) error {
+		if b.AuthorID == nil || *b.AuthorID != deletedAuthorID {
+			return database.ErrSkipBookWrite
 		}
-		return
-	}
-
-	full.AuthorID = newID
-	full.Author = newPrimary
-	if _, err := h.store.UpdateBook(book.ID, full); err != nil {
-		slog.Warn("author repoint: failed to update book",
-			"book_id", book.ID, "new_author_id", newID, "err", err)
+		b.AuthorID = newID
+		b.Author = newPrimary
+		return nil
+	})
+	switch {
+	case err != nil:
+		entitiesLog.Warn("author repoint: failed to update book %s to author %d: %s",
+			book.ID, id, err.Error())
+	case updated == nil:
+		entitiesLog.Warn("author repoint: book %s no longer exists, nothing to repoint from author %d",
+			book.ID, deletedAuthorID)
 	}
 }
 
@@ -1207,15 +1217,19 @@ func (h *Handler) SplitSeries(c *gin.Context) {
 	}
 	moved := 0
 	for _, bookID := range req.BookIDs {
-		book, err := h.store.GetBookByID(bookID)
-		if err != nil || book == nil {
-			continue
-		}
-		if book.SeriesID == nil || *book.SeriesID != seriesID {
-			continue
-		}
-		book.SeriesID = &newSeries.ID
-		if _, err := h.store.UpdateBook(book.ID, book); err != nil {
+		// ModifyBook sets SeriesID alone on the stored row; the old
+		// GetBookByID -> UpdateBook(book) wrote the whole stale row back. A
+		// book that is not (or no longer) in the old series is left alone.
+		inSeries := false
+		updated, err := h.store.ModifyBook(bookID, func(b *database.Book) error {
+			if b.SeriesID == nil || *b.SeriesID != seriesID {
+				return database.ErrSkipBookWrite
+			}
+			inSeries = true
+			b.SeriesID = &newSeries.ID
+			return nil
+		})
+		if err != nil || updated == nil || !inSeries {
 			continue
 		}
 		moved++
