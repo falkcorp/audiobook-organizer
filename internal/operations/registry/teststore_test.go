@@ -1,7 +1,7 @@
 // file: internal/operations/registry/teststore_test.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package registry_test
 
@@ -59,6 +59,8 @@ type fakeStore struct {
 	// same-def check and before the re-queue, so a blocking hook holds a retry
 	// inside exactly the window the admission lock protects.
 	manualRetryHook func()
+	// updateStatusErr, when set, is returned by every UpdateOperationV2Status.
+	updateStatusErr error
 }
 
 // failResetForResume makes every subsequent ResetOperationV2ForResume call
@@ -67,6 +69,14 @@ func (f *fakeStore) failResetForResume(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resetForResumeErr = err
+}
+
+// failUpdateStatus makes every subsequent UpdateOperationV2Status call return
+// err without touching the row (nil restores normal behaviour).
+func (f *fakeStore) failUpdateStatus(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateStatusErr = err
 }
 
 func newFakeStore() *fakeStore {
@@ -172,6 +182,9 @@ func (f *fakeStore) GetOperationV2(id string) (*database.OperationV2Row, error) 
 func (f *fakeStore) UpdateOperationV2Status(id, status string, startedAt, completedAt *time.Time, errMsg *string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.updateStatusErr != nil {
+		return f.updateStatusErr
+	}
 	op, ok := f.ops[id]
 	if !ok {
 		return nil // best-effort
