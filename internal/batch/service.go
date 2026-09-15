@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-14
 
@@ -335,7 +335,11 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 		sid := int(v)
 		book.SeriesID = &sid
 	}
-	if updates["series_id"] == nil {
+	// Only an EXPLICIT null clears the series. A request that does not name
+	// series_id must leave it alone: the map lookup reads an absent key as
+	// nil too, and until 2026-09-14 every batch update that omitted the
+	// field silently unlinked the book from its series.
+	if v, present := updates["series_id"]; present && v == nil {
 		book.SeriesID = nil
 	}
 	if v, ok := updates["series_sequence"].(float64); ok {

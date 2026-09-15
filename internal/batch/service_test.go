@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.3.0
+// version: 1.3.1
 // last-edited: 2026-09-14
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
@@ -651,5 +651,21 @@ func TestApplyUpdates_ClearSeriesID(t *testing.T) {
 
 	if book.SeriesID != nil {
 		t.Errorf("expected series_id to be nil, got %v", book.SeriesID)
+	}
+}
+
+// An update that does not mention series_id must not clear it (an absent
+// map key reads as nil just like an explicit null did).
+func TestApplyUpdates_AbsentSeriesIDIsKept(t *testing.T) {
+	sid := 42
+	book := &database.Book{ID: "book1", Title: "Test", SeriesID: &sid}
+
+	applyUpdates(book, map[string]any{"title": "Renamed"})
+
+	if book.SeriesID == nil || *book.SeriesID != 42 {
+		t.Fatalf("series_id was cleared by an update that did not name it: got %v, want 42", book.SeriesID)
+	}
+	if book.Title != "Renamed" {
+		t.Fatalf("title not applied: %q", book.Title)
 	}
 }
