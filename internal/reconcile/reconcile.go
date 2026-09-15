@@ -1,13 +1,14 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 package reconcile
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,6 +32,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 )
 
+// pkgLog serves the whole-library passes that take no logger.Logger parameter
+// (CleanupVersionGroups, FindBrokenSegmentBooks, MergeNoVGDuplicates,
+// AssignOrphanVGs).
+var pkgLog = logger.New("reconcile")
+
+// errVGAssignedConcurrently is returned from AssignOrphanVGs' ModifyBook
+// callback when the locked re-read shows another writer already assigned a
+// version group; ModifyBook writes nothing and hands it back as-is.
+var errVGAssignedConcurrently = errors.New("version group assigned concurrently")
+
 // The reconcile package's database surface, grouped by what each part is for.
 // Store was a pass-through of four database.* embeds — 115 methods — until
 // 2026-08-18; it is now these nine, kept as a composition so the declaration
@@ -43,9 +54,8 @@ type bookReader interface {
 }
 
 type bookWriter interface {
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-	// ModifyBook is the locked read-modify-write (database.BookMutator);
-	// ElectMissingPrimaries writes through it.
+	// ModifyBook is the locked read-modify-write (database.BookMutator); every
+	// book write in this package goes through it, so UpdateBook is not needed.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 }
@@ -129,6 +139,9 @@ type VersionGroupCleanupResult struct {
 	GroupsCleaned     int `json:"groups_cleaned"`
 	DuplicatesRemoved int `json:"duplicates_removed"`
 	FilesDeleted      int `json:"files_deleted"`
+	// WriteErrors counts is_primary_version writes that failed or found the
+	// row gone. Until 2026-09-15 those writes discarded their error.
+	WriteErrors int `json:"write_errors"`
 }
 
 // BrokenSegmentResult describes books with missing segment files.
@@ -697,10 +710,24 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, save
 			continue
 		}
 
-		// Update the book's file path
-		book.FilePath = m.NewPath
-		if _, err := store.UpdateBook(book.ID, book); err != nil {
+		// Update the book's file path through ModifyBook: FilePath alone is set
+		// on the row as it is under the book's write lock, so a column another
+		// writer committed after the GetBookByID above (the os.Stat and the
+		// change record sit between them) is not reverted (audit A1#15).
+		written, err := store.ModifyBook(book.ID, func(b *database.Book) error {
+			if b.FilePath == m.NewPath {
+				return database.ErrSkipBookWrite
+			}
+			b.FilePath = m.NewPath
+			return nil
+		})
+		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("book %s: failed to update: %v", m.BookID, err))
+			result.Skipped++
+			continue
+		}
+		if written == nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("book %s: vanished before its path could be updated", m.BookID))
 			result.Skipped++
 			continue
 		}
@@ -826,33 +853,48 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 			result.DuplicatesRemoved++
 		}
 
-		// Ensure the kept library copy is primary and the original(s) are non-primary.
-		// Hydrate each target via GetBookByID before writing back — kept/orig are
-		// Core (slim) values here, and writing a slim struct through UpdateBook
-		// would wipe the denormalized Author/Series on Pebble.
+		// Ensure the kept library copy is primary and the original(s) are
+		// non-primary. Each row goes through setPrimaryFlag (ModifyBook), which
+		// re-reads the full row under its own write lock — kept/orig are Core
+		// projections here — and sets only IsPrimaryVersion. The kept/original
+		// pair is NOT one atomic swap: the store holds one book stripe at a
+		// time, so it is one write per row, each touching only that row's
+		// column, and a failure on one row does not undo the other.
 		if !dryRun {
-			isPrimary := true
-			isNotPrimary := false
-			keptCore := libraryCopies[keepIdx]
-			if kept, err := store.GetBookByID(keptCore.ID); err != nil || kept == nil {
-				slog.Warn("version-group cleanup failed to hydrate kept book", "kept", keptCore.ID, "err", err)
-			} else {
-				kept.IsPrimaryVersion = &isPrimary
-				store.UpdateBook(kept.ID, kept)
-			}
+			setPrimaryFlag(store, result, libraryCopies[keepIdx].ID, true, "kept")
 			for _, origCore := range originals {
-				orig, err := store.GetBookByID(origCore.ID)
-				if err != nil || orig == nil {
-					slog.Warn("version-group cleanup failed to hydrate original book", "orig", origCore.ID, "err", err)
-					continue
-				}
-				orig.IsPrimaryVersion = &isNotPrimary
-				store.UpdateBook(orig.ID, orig)
+				setPrimaryFlag(store, result, origCore.ID, false, "original")
 			}
 		}
 	}
 
 	return result, nil
+}
+
+// setPrimaryFlag writes IsPrimaryVersion=primary on one row through ModifyBook,
+// so a column another writer commits meanwhile is not reverted (audit A1#15).
+// A row that already holds the value is left alone. A failed write or a row
+// that vanished is logged and counted in result.WriteErrors; CleanupVersionGroups
+// carried on past these errors before (it discarded them), so it keeps carrying
+// on, just visibly.
+func setPrimaryFlag(store bookWriter, result *VersionGroupCleanupResult, id string, primary bool, role string) {
+	written, err := store.ModifyBook(id, func(b *database.Book) error {
+		if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion == primary {
+			return database.ErrSkipBookWrite
+		}
+		v := primary
+		b.IsPrimaryVersion = &v
+		return nil
+	})
+	if err != nil {
+		pkgLog.Warn("version-group cleanup failed to write is_primary_version=%v on %s book %s: %v", primary, role, id, err)
+		result.WriteErrors++
+		return
+	}
+	if written == nil {
+		pkgLog.Warn("version-group cleanup: %s book %s vanished before is_primary_version=%v could be written", role, id, primary)
+		result.WriteErrors++
+	}
 }
 
 // FindBrokenSegmentBooks finds books whose segment files don't exist on disk
@@ -868,11 +910,11 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 	needsReview := "needs_review"
 
 	// Each book does a directory stat + GetBookFiles + a per-segment stat storm +
-	// (non-dry-run) a hydrate/UpdateBook — a whole-library-scale I/O-bound loop and
+	// (non-dry-run) a ModifyBook write — a whole-library-scale I/O-bound loop and
 	// a CLAUDE.md concurrency-mandate hotspot. Shard the OUTER loop across a bounded
 	// worker pool. Correctness under concurrency:
 	//   - Work partitions by book index, so each book (and its DB row) is touched
-	//     by exactly one worker; the per-book UpdateBook writes are to disjoint keys
+	//     by exactly one worker; the per-book ModifyBook writes are to disjoint keys
 	//     and never race (they also only flip LibraryState/MarkedForDeletion, not
 	//     any secondary-indexed field, so no cross-book index contention).
 	//   - Per-book output lands in its own index slot (entries[i]); result.Details
@@ -928,20 +970,29 @@ func FindBrokenSegmentBooks(store Store, dryRun bool) (*BrokenSegmentResult, err
 			atomic.AddInt64(&brokenBooks, 1)
 
 			if !dryRun {
-				// Hydrate before writeback — book is a Core (slim) value here, and
-				// writing it straight through UpdateBook would wipe Author/Series.
-				full, ferr := store.GetBookByID(book.ID)
-				if ferr != nil || full == nil {
-					slog.Warn("failed to hydrate broken book for update", "book", book.ID, "ferr", ferr)
-				} else {
-					full.LibraryState = &needsReview
-					full.MarkedForDeletion = new(true)
-					full.MarkedForDeletionAt = &now
-					if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-						slog.Warn("failed to mark broken book", "book", full.ID, "uerr", uerr)
-					} else {
-						atomic.AddInt64(&markedForReview, 1)
+				// ModifyBook re-reads the full row (book is a Core projection
+				// here) under the book's write lock and sets only the three
+				// review columns, so a column another writer commits meanwhile
+				// is not reverted (audit A1#15). The segment stats above stay
+				// outside the lock. A row already marked is left alone but
+				// still counted: it is in the state the counter reports.
+				written, uerr := store.ModifyBook(book.ID, func(b *database.Book) error {
+					if b.LibraryState != nil && *b.LibraryState == needsReview &&
+						b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+						return database.ErrSkipBookWrite
 					}
+					b.LibraryState = &needsReview
+					b.MarkedForDeletion = new(true)
+					b.MarkedForDeletionAt = &now
+					return nil
+				})
+				switch {
+				case uerr != nil:
+					pkgLog.Warn("failed to mark broken book %s: %v", book.ID, uerr)
+				case written == nil:
+					pkgLog.Warn("broken book %s vanished before it could be marked for review", book.ID)
+				default:
+					atomic.AddInt64(&markedForReview, 1)
 				}
 			}
 			return nil
@@ -995,13 +1046,29 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	now := time.Now()
 	deletedState := "deleted"
 
-	// Helper to soft-delete a book
-	softDelete := func(book *database.Book) error {
-		book.MarkedForDeletion = new(true)
-		book.MarkedForDeletionAt = &now
-		book.LibraryState = &deletedState
-		_, err := store.UpdateBook(book.ID, book)
-		return err
+	// softDelete marks one book deleted through ModifyBook: the three columns
+	// are set on the row as it is under the book's write lock, so a column
+	// another writer committed since the hydrate is not reverted (audit
+	// A1#15). A row already soft-deleted is left alone; a row that vanished is
+	// an error, as the old whole-row write of a missing row was.
+	softDelete := func(id string) error {
+		written, err := store.ModifyBook(id, func(b *database.Book) error {
+			if b.MarkedForDeletion != nil && *b.MarkedForDeletion &&
+				b.LibraryState != nil && *b.LibraryState == deletedState {
+				return database.ErrSkipBookWrite
+			}
+			b.MarkedForDeletion = new(true)
+			b.MarkedForDeletionAt = &now
+			b.LibraryState = &deletedState
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if written == nil {
+			return fmt.Errorf("book %s vanished before it could be soft-deleted", id)
+		}
+		return nil
 	}
 
 	// hydrated caches full (heavy-field) Book rows fetched via GetBookByID, keyed
@@ -1060,6 +1127,16 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			continue
 		}
 
+		// before is the primary as hydrated (or as last written); the write
+		// below copies onto the stored row only what the merge changed from it.
+		before, serr := database.SnapshotBook(primary)
+		if serr != nil {
+			pkgLog.Warn("merge-dupes failed to snapshot primary %s: %v", primary.ID, serr)
+			entry.Action = "error"
+			result.Errors++
+			result.Details = append(result.Details, entry)
+			continue
+		}
 		merged, merr := mergeBookMetadataRespectingLocks(store, primary, dupe)
 		if merr != nil {
 			slog.Warn("merge-dupes refused: field locks unreadable", "primary", primary.ID, "err", merr)
@@ -1073,16 +1150,23 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 
 		if !dryRun {
 			if len(merged) > 0 {
-				if _, err := store.UpdateBook(primary.ID, primary); err != nil {
-					slog.Warn("merge-dupes failed to update primary", "primary", primary.ID, "err", err)
+				written, err := writeMergedFields(store, primary, before)
+				if err != nil {
+					pkgLog.Warn("merge-dupes failed to update primary %s: %v", primary.ID, err)
+					// Drop the unwritten merge from the cache so a later dupe's
+					// diff is measured against what the store actually holds.
+					hydrated[primary.ID] = before
 					entry.Action = "error"
 					result.Errors++
 					result.Details = append(result.Details, entry)
 					continue
 				}
+				// Later dupes merging into this primary work from the row as
+				// written, so they see this merge and any concurrent columns.
+				hydrated[primary.ID] = written
 				result.MetadataMerged++
 			}
-			if err := softDelete(dupe); err != nil {
+			if err := softDelete(dupe.ID); err != nil {
 				slog.Warn("merge-dupes failed to soft-delete", "dupe", dupe.ID, "err", err)
 				entry.Action = "error"
 				result.Errors++
@@ -1163,6 +1247,14 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 				continue
 			}
 
+			before, serr := database.SnapshotBook(keeper)
+			if serr != nil {
+				pkgLog.Warn("merge-self-dupes failed to snapshot keeper %s: %v", keeper.ID, serr)
+				entry.Action = "error"
+				result.Errors++
+				result.Details = append(result.Details, entry)
+				continue
+			}
 			merged, merr := mergeBookMetadataRespectingLocks(store, keeper, dupe)
 			if merr != nil {
 				slog.Warn("merge-self-dupes refused: field locks unreadable", "keeper", keeper.ID, "err", merr)
@@ -1176,13 +1268,20 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 
 			if !dryRun {
 				if len(merged) > 0 {
-					if _, err := store.UpdateBook(keeper.ID, keeper); err != nil {
-						slog.Warn("merge-self-dupes failed to update keeper", "keeper", keeper.ID, "err", err)
+					if written, err := writeMergedFields(store, keeper, before); err != nil {
+						pkgLog.Warn("merge-self-dupes failed to update keeper %s: %v", keeper.ID, err)
+						// Drop the unwritten merge so the next dupe's diff is
+						// measured against what the store actually holds.
+						keeper = before
+						hydrated[keeper.ID] = keeper
 					} else {
+						// Later dupes merge into the row as written.
+						keeper = written
+						hydrated[keeper.ID] = written
 						result.MetadataMerged++
 					}
 				}
-				if err := softDelete(dupe); err != nil {
+				if err := softDelete(dupe.ID); err != nil {
 					slog.Warn("merge-self-dupes failed to soft-delete", "dupe", dupe.ID, "err", err)
 					entry.Action = "error"
 					result.Errors++
@@ -1211,6 +1310,34 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	result.RemainingOrphans = remaining
 
 	return result, nil
+}
+
+// writeMergedFields writes what a metadata merge changed on working (compared
+// with before, the snapshot taken right before the merge) onto the stored row
+// through ModifyBook, and returns the row as written. Only the changed fields
+// are copied, so a column another writer committed between the hydrate and this
+// write is not reverted (audit A1#15); a field both sides changed ends with the
+// merge's value, per database.MergeBookChanges. The merge and its lock read
+// stay outside the book lock. A row that vanished is an error, as the old
+// whole-row UpdateBook of a missing row was.
+func writeMergedFields(store bookWriter, working, before *database.Book) (*database.Book, error) {
+	written, err := store.ModifyBook(working.ID, func(b *database.Book) error {
+		changed, merr := database.MergeBookChanges(b, before, working)
+		if merr != nil {
+			return merr
+		}
+		if len(changed) == 0 {
+			return database.ErrSkipBookWrite
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if written == nil {
+		return nil, fmt.Errorf("book %s vanished before the merged metadata could be written", working.ID)
+	}
+	return written, nil
 }
 
 // mergeBookMetadataRespectingLocks is MergeBookMetadata behind the user's
@@ -1385,8 +1512,8 @@ func loadAllBooksCore(store Store) ([]database.BookCore, error) {
 // creates a VG for each, and marks them as primary.
 // AssignOrphanVGs assigns a fresh VersionGroupID to every library book that
 // doesn't have one yet. The candidate scan is serial (cheap, no I/O beyond
-// the initial paginated load), but the per-candidate work — a GetBookByID
-// hydrate plus an UpdateBook write-back — is two DB calls per book, which on
+// the initial paginated load), but the per-candidate work — a ModifyBook, a
+// locked read plus a write-back — is two DB calls per book, which on
 // a whole-library scale collection is a CLAUDE.md concurrency-mandate
 // hotspot if left serial. It is parallelized across a bounded worker pool
 // (runtime.NumCPU()) below, sharded over the candidates slice so each worker
@@ -1396,9 +1523,9 @@ func loadAllBooksCore(store Store) ([]database.BookCore, error) {
 // Clobber guard: because the initial scan and the per-book hydrate/write are
 // not atomic, another process (a sibling worker in this same pool, a
 // concurrent regroup apply, or a merge) can assign a VersionGroupID to a book
-// in between. After re-fetching the full record, if VersionGroupID is now
-// non-empty and doesn't match the ID this worker planned to assign, the
-// worker skips the write rather than clobbering the concurrent assignment.
+// in between. ModifyBook re-reads the full record under the book's write
+// lock; if VersionGroupID is non-empty there, the worker skips the write
+// rather than clobbering the concurrent assignment.
 func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	result := &AssignVGResult{}
 
@@ -1447,34 +1574,36 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 		g.Go(func() error {
 			defer logProgress()
 
-			// Hydrate before writeback — c is a Core (slim) value here, and
-			// writing it straight through UpdateBook would wipe Author/Series.
-			b, herr := store.GetBookByID(c.ID)
-			if herr != nil || b == nil {
-				slog.Warn("assign-orphan-vgs failed to hydrate book", "book", c.ID, "herr", herr)
-				atomic.AddInt64(&errCount, 1)
-				return nil
-			}
-
-			// Clobber guard — see doc comment above.
+			// ModifyBook re-reads the full row (c is a Core projection) under
+			// the book's write lock and sets only the three columns below, so a
+			// column another writer commits meanwhile is not reverted (audit
+			// A1#15). The clobber guard (doc comment above) runs on that locked
+			// re-read, so a VersionGroupID that landed since the scan is seen
+			// and left alone rather than overwritten.
 			plannedVGID := fmt.Sprintf("vg-%s", ulid.Make().String())
-			if b.VersionGroupID != nil && *b.VersionGroupID != "" && *b.VersionGroupID != plannedVGID {
-				atomic.AddInt64(&skippedConcurrent, 1)
-				return nil
-			}
-
-			// Create a version group and mark as primary
-			b.VersionGroupID = &plannedVGID
 			isPrimary := true
-			b.IsPrimaryVersion = &isPrimary
 			organizedState := "organized"
-			b.LibraryState = &organizedState
-
-			if _, err := store.UpdateBook(b.ID, b); err != nil {
-				atomic.AddInt64(&errCount, 1)
+			written, err := store.ModifyBook(c.ID, func(b *database.Book) error {
+				if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+					return errVGAssignedConcurrently
+				}
+				b.VersionGroupID = &plannedVGID
+				b.IsPrimaryVersion = &isPrimary
+				b.LibraryState = &organizedState
 				return nil
+			})
+			switch {
+			case errors.Is(err, errVGAssignedConcurrently):
+				atomic.AddInt64(&skippedConcurrent, 1)
+			case err != nil:
+				pkgLog.Warn("assign-orphan-vgs failed to write book %s: %v", c.ID, err)
+				atomic.AddInt64(&errCount, 1)
+			case written == nil:
+				pkgLog.Warn("assign-orphan-vgs: book %s vanished before its version group could be assigned", c.ID)
+				atomic.AddInt64(&errCount, 1)
+			default:
+				atomic.AddInt64(&assigned, 1)
 			}
-			atomic.AddInt64(&assigned, 1)
 			return nil
 		})
 	}

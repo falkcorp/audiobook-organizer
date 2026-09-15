@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_saveresult_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e1c73-2b85-4f60-8d19-3e7c0a5b6f24
-// last-edited: 2026-08-23
+// last-edited: 2026-09-15
 
 package reconcile
 
@@ -98,6 +98,23 @@ func (f *applyFakeStore) CreateOperationChange(c *database.OperationChange) erro
 
 func (f *applyFakeStore) UpdateBook(_ string, b *database.Book) (*database.Book, error) {
 	return b, nil
+}
+
+// ModifyBook is the write the apply path now uses: fn runs on a copy of the
+// one book and the result replaces it. (nil, nil) when there is no book.
+func (f *applyFakeStore) ModifyBook(_ string, fn func(*database.Book) error) (*database.Book, error) {
+	if f.book == nil {
+		return nil, nil
+	}
+	cp := *f.book
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	f.book = &cp
+	return &cp, nil
 }
 
 // Control: a match that applies CLEANLY must succeed and round-trip its payload.
