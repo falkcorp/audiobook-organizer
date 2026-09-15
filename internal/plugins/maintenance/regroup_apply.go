@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -355,20 +355,27 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				primaryID = b.ID
 			}
 		}
-		// Re-fetch-and-patch: mutate ONLY VersionGroupID + IsPrimaryVersion on the
-		// full fetched row (UpdateBook is a full-column replace — never write back a
-		// fresh/partial Book). Skip a write only when both already match (idempotent).
+		// Set ONLY VersionGroupID + IsPrimaryVersion, under the book's write
+		// lock (ModifyBook), so a column another writer commits between the
+		// hold read and this write is not reverted (audit A1#15). Skip the
+		// write when both already match on the fresh row (idempotent).
 		for _, b := range books {
 			vg := target
 			isPrimary := b.ID == primaryID
-			if b.VersionGroupID != nil && *b.VersionGroupID == target &&
-				b.IsPrimaryVersion != nil && *b.IsPrimaryVersion == isPrimary {
-				continue
-			}
-			b.VersionGroupID = &vg
-			b.IsPrimaryVersion = &isPrimary
-			if _, err := store.UpdateBook(b.ID, b); err != nil {
+			written, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
+				if cur.VersionGroupID != nil && *cur.VersionGroupID == target &&
+					cur.IsPrimaryVersion != nil && *cur.IsPrimaryVersion == isPrimary {
+					return database.ErrSkipBookWrite
+				}
+				cur.VersionGroupID = &vg
+				cur.IsPrimaryVersion = &isPrimary
+				return nil
+			})
+			if err != nil {
 				return fmt.Errorf("regroup version-group apply: set version group on %s: %w", b.ID, err)
+			}
+			if written == nil {
+				return fmt.Errorf("regroup version-group apply: set version group on %s: book not found", b.ID)
 			}
 		}
 		// Single-primary invariant across the WHOLE group: when target is a reused
@@ -396,22 +403,26 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				if m.ID == primaryID || !database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
 					continue
 				}
-				// Re-fetch-and-patch (UpdateBook is a full-column replace): mutate
-				// ONLY IsPrimaryVersion on the authoritative row.
-				full, err := store.GetBookByID(m.ID)
+				// Demote ONLY IsPrimaryVersion, under the book's write lock
+				// (ModifyBook), so a column another writer commits meanwhile
+				// is not reverted (audit A1#15); a member demoted meanwhile
+				// is left alone.
+				notPrimary := false
+				written, err := store.ModifyBook(m.ID, func(cur *database.Book) error {
+					if !database.EffectiveIsPrimaryVersion(cur.IsPrimaryVersion) {
+						return database.ErrSkipBookWrite
+					}
+					cur.IsPrimaryVersion = &notPrimary
+					return nil
+				})
 				if err != nil {
-					return fmt.Errorf("regroup version-group apply: refetch stale primary %s: %w", m.ID, err)
+					return fmt.Errorf("regroup version-group apply: demote stale primary %s: %w", m.ID, err)
 				}
-				if full == nil {
+				if written == nil {
 					continue
 				}
-				notPrimary := false
-				full.IsPrimaryVersion = &notPrimary
-				if _, err := store.UpdateBook(full.ID, full); err != nil {
-					return fmt.Errorf("regroup version-group apply: demote stale primary %s: %w", full.ID, err)
-				}
 				slog.Info("regroup version-group apply: demoted stale primary",
-					"item", item.ID, "book", full.ID, "version_group", target, "new_primary", primaryID)
+					"item", item.ID, "book", m.ID, "version_group", target, "new_primary", primaryID)
 			}
 		}
 		slog.Info("regroup version-group apply: linked members",

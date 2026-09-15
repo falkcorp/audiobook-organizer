@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/intro_reparse_guard_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8f2b6d41-7e05-4c39-b8a7-1d94e30c5f26
-// last-edited: 2026-09-02
+// last-edited: 2026-09-15
 
 package maintenance
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -50,6 +51,23 @@ func (s *reparseStore) UpdateBook(id string, b *database.Book) (*database.Book, 
 	s.updates[id] = &cp
 	s.books[id] = &cp
 	return &cp, nil
+}
+
+// ModifyBook mirrors the real store: fn runs on a copy of the stored row and
+// the copy is written back unless fn skips.
+func (s *reparseStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	b, ok := s.books[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *b
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return b, nil
+		}
+		return nil, err
+	}
+	return s.UpdateBook(id, &cp)
 }
 
 // TestReparseNeverClearsAnUnreproducibleParse is the data-loss regression test

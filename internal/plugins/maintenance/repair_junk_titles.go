@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/repair_junk_titles.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c4e7a12-3b58-4d06-8f21-7ae5c0d94b63
-// last-edited: 2026-08-23
+// last-edited: 2026-09-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -175,16 +176,16 @@ func (p *Plugin) runRepairJunkTitles(ctx context.Context, raw json.RawMessage, r
 			return nil
 		}
 
-		full, gerr := store.GetBookByID(b.ID)
-		if gerr != nil || full == nil {
+		// retitleBook writes only Title under the book's write lock, and only
+		// while the stored title is still the junk one the replacement was
+		// derived from (audit A1#15).
+		if uerr := retitleBook(store, b.ID, b.Title, newTitle); uerr != nil {
+			if errors.Is(uerr, errRetitleChangedUnderneath) {
+				log.Warn("repair-junk-titles: title changed underneath, left as it is", "book_id", b.ID)
+				return nil
+			}
 			failed.Add(1)
-			log.Warn("repair-junk-titles: GetBookByID failed", "book_id", b.ID, "err", gerr)
-			return nil
-		}
-		full.Title = newTitle
-		if _, uerr := store.UpdateBook(b.ID, full); uerr != nil {
-			failed.Add(1)
-			log.Warn("repair-junk-titles: UpdateBook failed", "book_id", b.ID, "err", uerr)
+			log.Warn("repair-junk-titles: retitle failed", "book_id", b.ID, "err", uerr)
 			return nil
 		}
 		repaired.Add(1)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -511,13 +511,12 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 	if full.SeriesID == nil || *full.SeriesID != h.SeriesID {
 		return "changed_underneath", nil
 	}
-	kept, lerr := database.ApplyRespectingLocks(store, full, func(b *database.Book) {
-		b.SeriesID = target
-	})
+	locks, lerr := database.LoadFieldLocks(store, full.ID)
 	if lerr != nil {
 		return "", fmt.Errorf("field locks unavailable, book NOT written: %w", lerr)
 	}
-	if slices.Contains(kept, database.FieldKeySeriesName) {
+	mutate := func(b *database.Book) { b.SeriesID = target }
+	if slices.Contains(locks.Apply(full, mutate), database.FieldKeySeriesName) {
 		return "locked", nil
 	}
 	newValue := ""
@@ -535,8 +534,28 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 	}); jerr != nil {
 		return "", fmt.Errorf("undo-ledger write failed, book NOT written: %w", jerr)
 	}
-	if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-		return "", fmt.Errorf("UpdateBook: %w", uerr)
+	// Write only SeriesID, under the book's write lock (ModifyBook), so a
+	// column another writer commits meanwhile is not reverted (audit A1#15).
+	// The phantom check and the lock check are re-made on the fresh row.
+	applied := false
+	written, uerr := store.ModifyBook(full.ID, func(cur *database.Book) error {
+		if cur.SeriesID == nil || *cur.SeriesID != h.SeriesID {
+			return database.ErrSkipBookWrite
+		}
+		if slices.Contains(locks.Apply(cur, mutate), database.FieldKeySeriesName) {
+			return database.ErrSkipBookWrite
+		}
+		applied = true
+		return nil
+	})
+	if uerr != nil {
+		return "", fmt.Errorf("ModifyBook: %w", uerr)
+	}
+	if written == nil {
+		return "vanished", nil
+	}
+	if !applied {
+		return "changed_underneath", nil
 	}
 	return "", nil
 }

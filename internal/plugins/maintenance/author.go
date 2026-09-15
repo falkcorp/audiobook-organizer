@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -232,25 +232,31 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, _ json.RawMessage, repo
 				// `book` is a BookCore (heavy fields nil). Do NOT write its
 				// ToBook() projection: that carries nil Author/Series AND,
 				// because this op changes AuthorID, the guard-preserved Author
-				// would be STALE (it still names the composite author). Hydrate
-				// the full stored row and set BOTH the new AuthorID and a fresh
-				// denormalized Author so the row stays consistent
-				// (Author.ID == AuthorID), not preserved-stale (STOREFID
-				// W5d-1 / #1887).
-				if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
-					newPrimary := newAuthors[0]
+				// would be STALE (it still names the composite author).
+				// ModifyBook re-reads the full stored row under its write lock
+				// and sets BOTH the new AuthorID and a fresh denormalized
+				// Author, so the row stays consistent (Author.ID == AuthorID),
+				// not preserved-stale (STOREFID W5d-1 / #1887), and a column
+				// another writer commits meanwhile is not reverted (audit
+				// A1#15). The fresh row decides: a primary moved off the
+				// composite meanwhile is left alone. Sibling of
+				// internal/scheduler/extra_ops.go — keep in sync.
+				newPrimary := newAuthors[0]
+				written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
+					if full.AuthorID == nil || *full.AuthorID != author.ID {
+						return database.ErrSkipBookWrite
+					}
 					full.AuthorID = &firstID
 					full.Author = &newPrimary
-					_, _ = store.UpdateBook(book.ID, full)
-				} else {
-					// Hydration failed — fall back to the projection write so
-					// the AuthorID change still lands (UpdateBook's guard
-					// preserves the old Author/Series; the denormalized Author
-					// is re-derived from AuthorID on read). Never skip the split.
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: hydrate book %s failed, writing projection: %v", book.ID, err))
-					book.AuthorID = &firstID
-					full := book.ToBook()
-					_, _ = store.UpdateBook(book.ID, &full)
+					return nil
+				})
+				switch {
+				case err != nil:
+					errCount++
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
+				case written == nil:
+					errCount++
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
 				}
 			}
 			booksUpdated++

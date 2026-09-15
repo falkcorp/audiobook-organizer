@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -58,6 +58,8 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 				FileHash: fileHash,
 			}}, nil
 		},
+		// ModifyBook's MockStore fallback reads the row before writing it.
+		GetBookByIDFunc: func(id string) (*database.Book, error) { return &database.Book{ID: id}, nil },
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
 			*written = append(*written, *b)
 			return b, nil

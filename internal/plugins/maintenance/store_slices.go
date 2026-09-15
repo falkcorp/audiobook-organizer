@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-09-10
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -42,11 +42,6 @@ import (
 // repair individual fields on an existing row (restoreRecoverableFields,
 // stampVerifiedAt) — neither creates or deletes anything, and declaring only
 // these two methods is what says so.
-type bookFieldWriter interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
-}
-
 // bookFileLister lists one book's files and nothing else.
 type bookFileLister interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
@@ -66,9 +61,12 @@ type bookFileCoreScanner interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 }
 
-// bookUpdater writes a book row without being able to read one back.
-type bookUpdater interface {
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+// bookModifier writes a book row's own columns under its write lock
+// (ModifyBook) without being able to read one back on its own: the write
+// re-reads the row itself and sets only the caller's columns, so a column
+// another writer commits meanwhile is not reverted (audit A1#15).
+type bookModifier interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // bookFileRelinker repoints an existing book_file row at a different path or
@@ -101,7 +99,11 @@ type regroupBookReader interface {
 // regroupBookMutator updates, deletes and re-aggregates a book. Shared by both
 // regroup paths. Worth reading twice: this is the half that can delete a book.
 type regroupBookMutator interface {
+	// UpdateBook is carried for merge.BookWriter (merge.SoftDeleteBook on
+	// the fs path); the regroup paths' own book writes go through
+	// ModifyBook, which sets only the columns each site owns.
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	RecomputeBookAggregates(bookID string) error
 }
@@ -194,7 +196,7 @@ type bookFileTrackWriter interface {
 type versionGroupWriter interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // bookByIDReader reads single books by ID. Read-only by construction.
@@ -229,10 +231,9 @@ type bookFileBatchCreator interface {
 // break here — at the declaration — instead of at whichever call site happens to
 // be compiled first.
 var (
-	_ bookFieldWriter       = (*database.PebbleStore)(nil)
+	_ bookModifier          = (*database.PebbleStore)(nil)
 	_ bookFileLister        = (*database.PebbleStore)(nil)
 	_ bookFileCoreScanner   = (*database.PebbleStore)(nil)
-	_ bookUpdater           = (*database.PebbleStore)(nil)
 	_ bookFileRelinker      = (*database.PebbleStore)(nil)
 	_ regroupSnapshotReader = (*database.PebbleStore)(nil)
 	_ fsRegroupStore        = (*database.PebbleStore)(nil)
@@ -245,7 +246,7 @@ var (
 	_ bookFileCreator       = (*database.PebbleStore)(nil)
 	_ bookFileBatchCreator  = (*database.PebbleStore)(nil)
 
-	_ bookFieldWriter    = (*database.MockStore)(nil)
+	_ bookModifier       = (*database.MockStore)(nil)
 	_ fsRegroupStore     = (*database.MockStore)(nil)
 	_ itunesRegroupStore = (*database.MockStore)(nil)
 	_ orphanFileScanner  = (*database.MockStore)(nil)
@@ -285,5 +286,5 @@ type multidiscApplier interface {
 type transcribePageStore interface {
 	bookFileLister
 
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }

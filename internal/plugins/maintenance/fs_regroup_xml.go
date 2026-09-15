@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -150,9 +150,7 @@ type fsRepairStore interface {
 	// that the last writer owns and that a move off the path deletes.
 	LiveBookIDsAtPath(path string) ([]string, error)
 	// merge.SoftDeleteBook writes the retired shell's deletion columns
-	// through ModifyBook (merge.BookWriter), so the apply's store must
-	// carry it.
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// through ModifyBook (merge.BookWriter); regroupBookMutator carries it.
 }
 
 // OpsStore() is server.indexedStore in production, which embeds
@@ -1264,6 +1262,7 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		return
 	}
 	oldTitle, oldPath := b.Title, b.FilePath
+	newTitle, newPath := oldTitle, oldPath
 	if g.Title != "" && g.Title != b.Title {
 		locks, lerr := database.LoadFieldLocks(a.store, b.ID)
 		switch {
@@ -1273,25 +1272,48 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		case locks.Locked(database.FieldKeyTitle):
 			a.titleKept.Add(1)
 		default:
-			b.Title = g.Title
+			newTitle = g.Title
 		}
 	}
 	if g.BookFolder != "" {
-		b.FilePath = g.BookFolder
+		newPath = g.BookFolder
 	}
-	if b.Title == oldTitle && b.FilePath == oldPath {
+	if newTitle == oldTitle && newPath == oldPath {
 		return
 	}
-	if _, err := a.store.UpdateBook(b.ID, b); err != nil {
+	// Write only Title and FilePath, under the book's write lock (ModifyBook),
+	// so a column another writer commits meanwhile is not reverted (audit
+	// A1#15). The plan and the lock check above were made against the title
+	// and path read above; a survivor retitled or moved meanwhile is left as
+	// it is.
+	changed := false
+	written, err := a.store.ModifyBook(b.ID, func(cur *database.Book) error {
+		if cur.Title != oldTitle || cur.FilePath != oldPath {
+			return database.ErrSkipBookWrite
+		}
+		cur.Title, cur.FilePath = newTitle, newPath
+		changed = true
+		return nil
+	})
+	if err != nil {
 		a.errs.Add(1)
 		a.log(slog.LevelWarn, "fragments %q: update survivor %s: %v", folder, b.ID, err)
 		return
 	}
-	if b.Title != oldTitle {
-		a.journal(b.ID, "metadata_update", "title", oldTitle, b.Title)
+	if written == nil {
+		a.errs.Add(1)
+		a.log(slog.LevelWarn, "fragments %q: update survivor %s: book gone", folder, b.ID)
+		return
 	}
-	if b.FilePath != oldPath {
-		a.journal(b.ID, fsChangePathUpdate, "file_path", oldPath, b.FilePath)
+	if !changed {
+		a.log(slog.LevelWarn, "fragments %q: survivor %s retitled or moved underneath; title and path left as they are", folder, b.ID)
+		return
+	}
+	if newTitle != oldTitle {
+		a.journal(b.ID, "metadata_update", "title", oldTitle, newTitle)
+	}
+	if newPath != oldPath {
+		a.journal(b.ID, fsChangePathUpdate, "file_path", oldPath, newPath)
 	}
 }
 
@@ -1316,18 +1338,37 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	// merge.MergeBooks demotes its losers; a retired shell left primary would
 	// still compete for its version group.
 	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+		// Demote only IsPrimaryVersion, under the book's write lock
+		// (ModifyBook), so a column another writer commits meanwhile is not
+		// reverted (audit A1#15); a shell demoted meanwhile is not journaled
+		// twice.
 		prev := ""
-		if b.IsPrimaryVersion != nil {
-			prev = "true"
-		}
 		notPrimary := false
-		b.IsPrimaryVersion = &notPrimary
-		if _, err := a.store.UpdateBook(b.ID, b); err != nil {
+		demoted := false
+		written, err := a.store.ModifyBook(shellID, func(cur *database.Book) error {
+			if cur.IsPrimaryVersion != nil && !*cur.IsPrimaryVersion {
+				return database.ErrSkipBookWrite
+			}
+			if cur.IsPrimaryVersion != nil {
+				prev = "true"
+			}
+			cur.IsPrimaryVersion = &notPrimary
+			demoted = true
+			return nil
+		})
+		if err != nil {
 			a.errs.Add(1)
 			a.log(slog.LevelWarn, "%s %q: demote shell %s: %v — shell kept", kind, folder, shellID, err)
 			return
 		}
-		a.journal(shellID, fsChangePrimaryDemote, "is_primary_version", prev, "false")
+		if written == nil {
+			a.kept.Add(1)
+			a.log(slog.LevelWarn, "%s %q: shell %s kept, gone before demotion", kind, folder, shellID)
+			return
+		}
+		if demoted {
+			a.journal(shellID, fsChangePrimaryDemote, "is_primary_version", prev, "false")
+		}
 	}
 	if err := merge.SoftDeleteBook(a.store, shellID); err != nil {
 		a.errs.Add(1)

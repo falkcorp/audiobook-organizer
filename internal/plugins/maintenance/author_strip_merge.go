@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -489,28 +489,36 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			// the rewrite. Logging and deleting anyway would leave AuthorID
 			// pointing at a row that no longer exists — the exact 2026-08-24
 			// mechanism — while the summary reported failed=0.
-			full, err := store.GetBookByID(book.ID)
-			if err != nil {
-				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: %w", book.ID, err)
-			}
-			if full == nil {
-				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
-			}
-			full.AuthorID = nil
-			full.Author = nil
+			var promoted *database.Author
 			if len(remaining) > 0 {
-				promoted, err := store.GetAuthorByID(remaining[0].AuthorID)
+				survivor, err := store.GetAuthorByID(remaining[0].AuthorID)
 				if err != nil {
 					return unlinked, authorless, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
 				}
+				promoted = survivor
+			}
+			// Rewrite only AuthorID/Author, under the book's write lock
+			// (ModifyBook), so a column another writer commits meanwhile is
+			// not reverted (audit A1#15). The fresh row decides: a book whose
+			// primary already moved off the deleted author is left alone.
+			written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
+				if full.AuthorID == nil || *full.AuthorID != from.ID {
+					return database.ErrSkipBookWrite
+				}
+				full.AuthorID = nil
+				full.Author = nil
 				if promoted != nil {
 					id := promoted.ID
 					full.AuthorID = &id
 					full.Author = promoted
 				}
-			}
-			if _, err := store.UpdateBook(book.ID, full); err != nil {
+				return nil
+			})
+			if err != nil {
 				return unlinked, authorless, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
+			}
+			if written == nil {
+				return unlinked, authorless, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
 			}
 		}
 		unlinked++

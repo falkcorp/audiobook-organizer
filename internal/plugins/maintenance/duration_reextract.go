@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.13.1
+// version: 3.14.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -475,19 +475,38 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 				continue
 			}
 		} else {
-			full, gErr := store.GetBookByID(res.book.ID)
-			if gErr != nil || full == nil {
+			// The new duration was measured against res.book's stored value
+			// before the slow fingerprint/ffprobe work. Write only Duration,
+			// under the book's write lock (ModifyBook), so a column another
+			// writer commits meanwhile is not reverted (audit A1#15), and only
+			// while the stored duration is still the one the diff was
+			// measured against.
+			nd := res.newDur
+			oldDur := res.book.Duration
+			applied := false
+			written, uErr := store.ModifyBook(res.book.ID, func(cur *database.Book) error {
+				if !sameIntPtr(cur.Duration, oldDur) {
+					return database.ErrSkipBookWrite
+				}
+				cur.Duration = &nd
+				applied = true
+				return nil
+			})
+			if uErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: GetBookByID failed: %v", res.book.ID, gErr))
+					"book %s: ModifyBook failed: %v", res.book.ID, uErr))
 				readErr++
 				continue
 			}
-			nd := res.newDur
-			full.Duration = &nd
-			if _, uErr := store.UpdateBook(res.book.ID, full); uErr != nil {
+			if written == nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: UpdateBook failed: %v", res.book.ID, uErr))
+					"book %s: gone before the duration write", res.book.ID))
 				readErr++
+				continue
+			}
+			if !applied {
+				_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+					"book %s: duration changed underneath, left for the next run", res.book.ID))
 				continue
 			}
 		}
@@ -520,14 +539,23 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 
 // stampVerifiedAt writes DurationVerifiedAt=now to the book record. Called
 // after confirming or correcting a book's duration so future runs can skip it.
-func stampVerifiedAt(store bookFieldWriter, reporter sdk.Reporter, bookID string) {
-	full, err := store.GetBookByID(bookID)
-	if err != nil || full == nil {
-		return
-	}
+func stampVerifiedAt(store bookModifier, reporter sdk.Reporter, bookID string) {
 	now := time.Now()
-	full.DurationVerifiedAt = &now
-	if _, err := store.UpdateBook(bookID, full); err != nil {
+	// Only DurationVerifiedAt changes, under the book's write lock
+	// (ModifyBook), so a column another writer commits meanwhile is not
+	// reverted (audit A1#15). A book gone meanwhile is not stamped, as before.
+	if _, err := store.ModifyBook(bookID, func(cur *database.Book) error {
+		cur.DurationVerifiedAt = &now
+		return nil
+	}); err != nil {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: failed to stamp DurationVerifiedAt: %v", bookID, err))
 	}
+}
+
+// sameIntPtr reports whether two optional ints hold the same value.
+func sameIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
