@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package acoustid
 
@@ -669,20 +669,23 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 	}
 
 	now := time.Now()
-	book, err := store.GetBookByID(bookID)
-	if err != nil {
-		return fmt.Errorf("get book: %w", err)
-	}
-
-	book.BookSigV1 = &sig
-	book.BookSigSegments = &preLen
-	book.BookSigBuiltAt = &now
-	book.BookSigV1Mask = &mask
-	book.BookSigCoveragePct = &coverage
-
-	_, err = store.UpdateBook(book.ID, book)
+	// The synthesis above is the slow part and is done; ModifyBook re-reads
+	// the row under its write lock and sets only the five signature columns,
+	// so a column another worker or op committed meanwhile is not reverted
+	// (audit A1#15).
+	written, err := store.ModifyBook(bookID, func(book *database.Book) error {
+		book.BookSigV1 = &sig
+		book.BookSigSegments = &preLen
+		book.BookSigBuiltAt = &now
+		book.BookSigV1Mask = &mask
+		book.BookSigCoveragePct = &coverage
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("update book: %w", err)
+	}
+	if written == nil {
+		return fmt.Errorf("update book: %s not found", bookID)
 	}
 
 	return nil

@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -156,16 +156,20 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 					// table. Without this sync, the field still points at the losing author ID.
 					//
 					// Backlog 7.11 — found while investigating the merge ITL cleanup bug (#251).
-					current, gbErr := store.GetBookByID(book.ID)
-					if gbErr != nil || current == nil {
-						continue
-					}
-					if current.AuthorID != nil && *current.AuthorID == mergeID {
+					//
+					// ModifyBook re-reads the row under the book's write lock and
+					// sets only AuthorID, so a column another writer commits in the
+					// meantime is not reverted (audit A1#15). A vanished book is
+					// (nil, nil): nothing to sync, as before.
+					if _, upErr := store.ModifyBook(book.ID, func(current *database.Book) error {
+						if current.AuthorID == nil || *current.AuthorID != mergeID {
+							return database.ErrSkipBookWrite
+						}
 						newID := keepID
 						current.AuthorID = &newID
-						if _, upErr := store.UpdateBook(book.ID, current); upErr != nil {
-							slog.Warn("author merge failed to sync denormalized AuthorID on book", "book", book.ID, "upErr", upErr)
-						}
+						return nil
+					}); upErr != nil {
+						slog.Warn("author merge failed to sync denormalized AuthorID on book", "book", book.ID, "upErr", upErr)
 					}
 				}
 
@@ -341,25 +345,26 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 // passed to it (only seven heavy Description/BookSig* fields are restored from
 // the old row). Passing a near-empty literal such as &database.Book{Publisher:…}
 // therefore wipes Title, FilePath (which also corrupts the book:path: index),
-// AuthorID, ratings, media-info, and everything else. This helper instead
-// hydrates the current full row via GetBookByID and mutates only Publisher, so
-// every other field survives the write.
+// AuthorID, ratings, media-info, and everything else. This helper instead goes
+// through ModifyBook, which re-reads the current full row under the book's
+// write lock and sets only Publisher, so every other field survives the write
+// and a column another writer commits meanwhile is not reverted (audit A1#15).
 //
-// Fail-closed: if hydration fails it returns the error and writes NOTHING. A
-// skipped publisher tag is far better than a wiped record; the caller counts the
-// skip and moves on to the next book.
+// Fail-closed: if the row cannot be read it returns the error and writes
+// NOTHING, and a book that no longer exists is reported as not found. A skipped
+// publisher tag is far better than a wiped record; the caller counts the skip
+// and moves on to the next book.
 func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher string) error {
-	full, err := store.GetBookByID(bookID)
+	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
+		pub := publisher
+		full.Publisher = &pub
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("hydrate book %s before publisher write: %w", bookID, err)
-	}
-	if full == nil {
-		return fmt.Errorf("hydrate book %s before publisher write: not found", bookID)
-	}
-	pub := publisher
-	full.Publisher = &pub
-	if _, err := store.UpdateBook(bookID, full); err != nil {
 		return fmt.Errorf("update book %s publisher: %w", bookID, err)
+	}
+	if written == nil {
+		return fmt.Errorf("hydrate book %s before publisher write: not found", bookID)
 	}
 	return nil
 }
@@ -370,23 +375,25 @@ func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher 
 // wiping the rest of the stored record (see assignPublisherPreservingRecord for
 // why a bare UpdateBook literal is catastrophic).
 //
-// Fail-closed: if hydration fails it returns the error before touching anything,
-// so neither the Book row nor the join is written and the book stays consistently
-// attributed to the production company (unresolved) rather than half-applied or
-// wiped. The join rewrite itself is best-effort: an error there is logged by the
-// caller path but does not roll back the AuthorID write (matching prior behavior).
+// Fail-closed: if the row cannot be read or no longer exists it returns the
+// error before touching anything, so neither the Book row nor the join is
+// written and the book stays consistently attributed to the production company
+// (unresolved) rather than half-applied or wiped. The AuthorID write goes
+// through ModifyBook, which sets only that column under the book's write lock
+// (audit A1#15). The join rewrite itself is best-effort: an error there is
+// logged by the caller path but does not roll back the AuthorID write (matching
+// prior behavior).
 func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string, resolvedAuthorID, prodAuthorID int) error {
-	full, err := store.GetBookByID(bookID)
+	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
+		aid := resolvedAuthorID
+		full.AuthorID = &aid
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("hydrate book %s before author write: %w", bookID, err)
-	}
-	if full == nil {
-		return fmt.Errorf("hydrate book %s before author write: not found", bookID)
-	}
-	aid := resolvedAuthorID
-	full.AuthorID = &aid
-	if _, err := store.UpdateBook(bookID, full); err != nil {
 		return fmt.Errorf("update book %s author: %w", bookID, err)
+	}
+	if written == nil {
+		return fmt.Errorf("hydrate book %s before author write: not found", bookID)
 	}
 
 	// Rewrite the book_authors join: drop the production-company author, add the

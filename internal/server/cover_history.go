@@ -1,7 +1,7 @@
 // file: internal/server/cover_history.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6d4e5f3a-7b8c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-05-15
+// last-edited: 2026-09-14
 //
 // HTTP handlers for cover art history browsing and restore.
 // Each time a book's cover is updated, the previous cover is saved
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/covers"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/gin-gonic/gin"
@@ -88,9 +89,20 @@ func (s *Server) handleRestoreCover(c *gin.Context) {
 	// Update book's cover_url
 	ext := filepath.Ext(req.Filename)
 	coverURL := "/api/v1/covers/local/" + bookID + ext
-	book.CoverURL = &coverURL
-	if _, err := s.Ops().UpdateBook(book.ID, book); err != nil {
+	// ModifyBook sets only CoverURL on the row re-read under the book's
+	// write lock: the file restore above is slow, and writing back the whole
+	// row read before it would revert any column another writer committed
+	// meanwhile (audit A1#15).
+	updated, err := s.Ops().ModifyBook(bookID, func(b *database.Book) error {
+		b.CoverURL = &coverURL
+		return nil
+	})
+	if err != nil {
 		httputil.InternalError(c, "update book cover", err)
+		return
+	}
+	if updated == nil {
+		httputil.RespondWithNotFound(c, "book", "")
 		return
 	}
 

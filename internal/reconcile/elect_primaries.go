@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
-// last-edited: 2026-08-19
+// last-edited: 2026-09-14
 
 package reconcile
 
@@ -231,21 +231,23 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 				return nil
 			}
 
-			// Hydrate the full row before write-back. GetBooksByVersionGroup
-			// may serve a slim projection; GetBookByID is a direct book:<id>
-			// point-get and is full fidelity.
-			full, herr := store.GetBookByID(winner.ID)
-			if herr != nil || full == nil {
-				slog.Warn("elect-missing-primaries failed to hydrate winner", "book", winner.ID, "err", herr)
+			// Write through ModifyBook: it re-reads the full row (the group
+			// listing may be a slim projection) under the book's write lock
+			// and sets only IsPrimaryVersion, so a column another writer
+			// commits meanwhile is not reverted (audit A1#15).
+			// LibraryState is intentionally left alone — see doc comment.
+			isPrimary := true
+			written, err := store.ModifyBook(winner.ID, func(full *database.Book) error {
+				full.IsPrimaryVersion = &isPrimary
+				return nil
+			})
+			if err != nil {
+				slog.Warn("elect-missing-primaries write failed", "book", winner.ID, "err", err)
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}
-			isPrimary := true
-			full.IsPrimaryVersion = &isPrimary
-			// LibraryState is intentionally left alone — see doc comment.
-
-			if _, err := store.UpdateBook(full.ID, full); err != nil {
-				slog.Warn("elect-missing-primaries write failed", "book", full.ID, "err", err)
+			if written == nil {
+				slog.Warn("elect-missing-primaries winner vanished before write", "book", winner.ID)
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}

@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package server
 
@@ -110,6 +110,9 @@ type serverBookReader interface {
 type serverBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the locked read-modify-write; see database.BookMutator.
+	// indexedStore overrides it so the search index is refreshed.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	SetLastWrittenAt(id string, t time.Time) error
 }
