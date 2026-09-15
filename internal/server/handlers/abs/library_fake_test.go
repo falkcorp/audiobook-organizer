@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-11
+// last-edited: 2026-09-15
 
 package abs_test
 
@@ -586,6 +586,21 @@ func (f *fakeLibrary) ListNarrators() ([]database.Narrator, error) {
 }
 
 func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
+	counts, err := f.GetGenreCounts()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(counts))
+	for g := range counts {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// GetGenreCounts is the scan GetDistinctGenres derives from; genreScans counts
+// it, so a /filterdata build still registers as exactly one scan.
+func (f *fakeLibrary) GetGenreCounts() (map[string]int, error) {
 	f.mu.Lock()
 	f.genreScans++
 	gate := f.genreGate
@@ -596,22 +611,21 @@ func (f *fakeLibrary) GetDistinctGenres() ([]string, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	seen := map[string]bool{}
-	out := []string{}
+	counts := map[string]int{}
 	for _, b := range f.books {
 		if b.Genre == nil {
 			continue
 		}
+		seen := map[string]bool{}
 		for g := range strings.SplitSeq(*b.Genre, ",") {
 			g = strings.TrimSpace(g)
 			if g != "" && !seen[g] {
 				seen[g] = true
-				out = append(out, g)
+				counts[g]++
 			}
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	return counts, nil
 }
 
 func (f *fakeLibrary) GetDistinctLanguages() ([]string, error) { return []string{}, nil }

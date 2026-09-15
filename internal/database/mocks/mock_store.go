@@ -16693,6 +16693,61 @@ func (_c *MockStore_GetFolderDuplicatesCore_Call) RunAndReturn(run func() ([][]d
 	return _c
 }
 
+// GetGenreCounts provides a mock function for the type MockStore
+func (_mock *MockStore) GetGenreCounts() (map[string]int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetGenreCounts")
+	}
+
+	var r0 map[string]int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (map[string]int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() map[string]int); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]int)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetGenreCounts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetGenreCounts'
+type MockStore_GetGenreCounts_Call struct {
+	*mock.Call
+}
+
+// GetGenreCounts is a helper method to define mock.On call
+func (_e *MockStore_Expecter) GetGenreCounts() *MockStore_GetGenreCounts_Call {
+	return &MockStore_GetGenreCounts_Call{Call: _e.mock.On("GetGenreCounts")}
+}
+
+func (_c *MockStore_GetGenreCounts_Call) Run(run func()) *MockStore_GetGenreCounts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_GetGenreCounts_Call) Return(stringToInt map[string]int, err error) *MockStore_GetGenreCounts_Call {
+	_c.Call.Return(stringToInt, err)
+	return _c
+}
+
+func (_c *MockStore_GetGenreCounts_Call) RunAndReturn(run func() (map[string]int, error)) *MockStore_GetGenreCounts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetITunesDirtyBooks provides a mock function for the type MockStore
 func (_mock *MockStore) GetITunesDirtyBooks() ([]database.Book, error) {
 	ret := _mock.Called()

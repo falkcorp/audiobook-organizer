@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -144,6 +144,10 @@ type LibrarySummaryReader interface {
 type LibrarySearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
 	GetDistinctGenres() ([]string, error)
+	// GetGenreCounts feeds /filterdata's genre list AND the per-genre numItems
+	// that a /search genre hit must carry (AudioBooth decodes search genres as
+	// {name, numItems} with both required).
+	GetGenreCounts() (map[string]int, error)
 	GetDistinctLanguages() ([]string, error)
 	// GetDistinctPublishedYears feeds the /filterdata decade facet from the
 	// WHOLE library. It replaced a GetAllBooksCore(5000, 0) scan whose first

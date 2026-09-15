@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.2.5
+// version: 1.3.0
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-08-27
+// last-edited: 2026-09-15
 
 package abs_test
 
@@ -521,8 +521,14 @@ func TestSearch_NarratorElementShape(t *testing.T) {
 
 	for i, n := range narrators {
 		narrator := n.(map[string]any)
-		if _, ok := narrator["numBooks"]; ok {
-			t.Errorf("narrator[%d] must not contain 'numBooks' field, but it does: %v", i, narrator)
+		// AudioBooth's SearchResponse.Narrator is {name: String, numBooks: Int},
+		// both non-optional: a hit WITHOUT numBooks throws the whole search
+		// decode. (The /narrators tab model is the one with an optional count;
+		// an earlier version of this test enforced that rule here and pinned
+		// the bug.)
+		nb, ok := narrator["numBooks"].(float64)
+		if !ok || nb < 1 {
+			t.Errorf("narrator[%d] must carry numBooks >= 1, got %v", i, narrator["numBooks"])
 		}
 		// §6.3: one element without an id throws the entire list client-side.
 		id, ok := narrator["id"].(string)
@@ -911,4 +917,33 @@ func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *recordingHandler) WithGroup(name string) slog.Handler {
 	return h
+}
+
+// AudioBooth decodes each /search genre hit as {name: String, numItems: Int},
+// both required; a bare string there throws the whole search document.
+func TestSearch_GenreElementShape(t *testing.T) {
+	h, _, tok := newBrowseHarness(t)
+	code, body := h.doAny(t, request{
+		method: http.MethodGet, path: "/api/libraries/" + h.libraryID() + "/search?q=speech",
+		headers: bearer(tok),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("got %d want 200", code)
+	}
+	genres := body.(map[string]any)["genres"].([]any)
+	if len(genres) == 0 {
+		t.Fatalf("expected a genre hit for 'speech' (a seeded book carries Genre \"Speech\")")
+	}
+	for i, g := range genres {
+		obj, ok := g.(map[string]any)
+		if !ok {
+			t.Fatalf("genres[%d] must be an object {name, numItems}, got %T %v", i, g, g)
+		}
+		if name, _ := obj["name"].(string); name == "" {
+			t.Errorf("genres[%d] name missing: %v", i, obj)
+		}
+		if n, ok := obj["numItems"].(float64); !ok || n < 1 {
+			t.Errorf("genres[%d] numItems must be >= 1, got %v", i, obj["numItems"])
+		}
+	}
 }
