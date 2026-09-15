@@ -1,5 +1,5 @@
 // file: internal/metafetch/no_match_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e7c3a-91d4-4f62-8a1e-3c7d2f90b6a4
 // last-edited: 2026-09-14
 
@@ -46,6 +46,27 @@ func TestApplyCandidate_HandPickedApplyOverridesNoMatch(t *testing.T) {
 	require.NotNil(t, got.MetadataReviewStatus)
 	require.Equal(t, "matched", *got.MetadataReviewStatus, "the owner's pick clears the no-match mark")
 	require.Equal(t, "Candidate Title", got.Title)
+}
+
+// The owner marks the book "no match" after the automatic apply's first check
+// read the row but before its write: the in-lock re-check refuses the write,
+// so the fresh no_match is not overwritten with "matched".
+func TestApplyCandidate_NoMatchSetDuringApplyIsNotOverwritten(t *testing.T) {
+	store, book, updated := stampFixture(false)
+	reads := 0
+	store.GetBookByIDFunc = func(string) (*database.Book, error) {
+		reads++
+		clone := *book
+		if reads > 1 { // every read after the apply's first is the "fresh" row
+			nm := "no_match"
+			clone.MetadataReviewStatus = &nm
+		}
+		return &clone, nil
+	}
+	_, err := NewService(store).ApplyMetadataCandidateWithOptions("stamp-1", stampCandidate, nil, ApplyOptions{FillOnly: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrMarkedNoMatch), "the in-lock refusal is typed: %v", err)
+	require.Nil(t, *updated, "nothing was committed over the fresh no_match")
 }
 
 // FetchMetadataForBookByTitle searches AND applies; the production-company

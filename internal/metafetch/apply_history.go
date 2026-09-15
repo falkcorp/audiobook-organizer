@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-09-14
 
@@ -768,8 +768,22 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 // credits is the author join the apply read and wrote under the store's
 // book_authors lock (guardedApply returns it); nil means unknown.
 func (mfs *Service) CommitApply(id string, before, book *database.Book, credits *AuthorCredits, source string) (*database.Book, error) {
+	return mfs.commitApply(id, before, book, credits, source, nil)
+}
+
+// commitApply is CommitApply with an optional guard run on the fresh row
+// under the book's write lock, before anything is merged. A guard error
+// aborts the write (nil book, the guard's error). The automatic apply uses
+// it to re-check "no match": its earlier check read a row that can be
+// minutes old in a bulk run, and the owner may have marked the book since.
+func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source string, guard func(fresh *database.Book) error) (*database.Book, error) {
 	var mergedFields []string
 	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
+		if guard != nil {
+			if gErr := guard(fresh); gErr != nil {
+				return gErr
+			}
+		}
 		var mErr error
 		mergedFields, mErr = database.MergeBookChanges(fresh, before, book)
 		return mErr
