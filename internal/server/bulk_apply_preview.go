@@ -1,5 +1,5 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
 // last-edited: 2026-09-14
 //
@@ -349,7 +349,7 @@ func runBulkApplyPreview(
 			slog.String("error", err.Error()))
 	}
 
-	var nApply, nBlocked, nSkipped, nWriteErr atomic.Int64
+	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch atomic.Int64
 	previewOne := func(_ context.Context, id string) error {
 		var plan cachedApplyPlan
 		if source == previewSourceOpResults {
@@ -366,6 +366,12 @@ func runBulkApplyPreview(
 			// No pin: the dry run always reports the hard gate, and says in
 			// owner_reviewed_would_apply what a reviewed Apply would do.
 			plan = planCachedApply(svc, books, id, claims, nil)
+		}
+		// The owner rejected every match for this book: it is not a
+		// candidate for a bulk apply, so it gets no row and no verdict count.
+		if excludedFromPreview(plan) {
+			nNoMatch.Add(1)
+			return nil
 		}
 		row := previewBulkApplyRow(svc, id, plan, writeBack)
 		switch row.Verdict {
@@ -401,8 +407,8 @@ func runBulkApplyPreview(
 	if runErr != nil {
 		return runErr
 	}
-	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
-		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids), nWriteErr.Load(), claims.Unreadable(), opID)
+	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
+		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable(), opID)
 	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
 	return nil
 }

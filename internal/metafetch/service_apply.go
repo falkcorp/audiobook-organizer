@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-09-14
 
@@ -651,6 +651,16 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		if policy.EvaluatePolicy(tags).NoMetadataFetch {
 			return nil, fmt.Errorf("metadata application disabled by policy:no-metadata tag")
 		}
+	}
+
+	// The owner marked this book "no match". An automatic apply (FillOnly:
+	// nobody picked this candidate) must not write onto it; this is the one
+	// choke point every bulk apply shares (batch-apply-candidates, the cached
+	// batch apply, metadata upgrade, auto-match-transcribed). A person-picked
+	// apply is the owner overriding their own mark and goes through; it records
+	// the match below, which replaces the no_match status.
+	if opts.FillOnly && IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 	}
 
 	// Warn when the candidate runtime diverges significantly from the local

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-09-14
 
@@ -57,8 +57,8 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 		return nil, fmt.Errorf("audiobook not found")
 	}
 
-	if book.MetadataReviewStatus != nil && *book.MetadataReviewStatus == "no_match" {
-		return nil, fmt.Errorf("book %q is marked as no-match; use search-metadata to re-evaluate", book.Title)
+	if IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return nil, fmt.Errorf("book %q is marked as no-match; use search-metadata to re-evaluate: %w", book.Title, ErrMarkedNoMatch)
 	}
 
 	var sources []metadata.MetadataSource
@@ -373,6 +373,12 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+	// Searches AND applies with nobody picking the candidate (the
+	// production-company resolvers loop over it), so it refuses a book the
+	// owner marked "no match", as FetchMetadataForBook does.
+	if IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return nil, fmt.Errorf("book %q is marked as no-match: %w", book.Title, ErrMarkedNoMatch)
 	}
 
 	var sources []metadata.MetadataSource

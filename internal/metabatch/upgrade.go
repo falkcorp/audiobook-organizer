@@ -1,5 +1,5 @@
 // file: internal/metabatch/upgrade.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-14
 //
@@ -160,6 +160,12 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	book, err := s.DB.GetBookByID(bookID)
 	if err != nil || book == nil {
 		return false, fmt.Errorf("book not found: %s", bookID)
+	}
+	// The owner marked this book "no match": skip before the search so no
+	// provider quota is spent on a match that the apply would refuse anyway
+	// (ApplyMetadataCandidateWithOptions returns ErrMarkedNoMatch for FillOnly).
+	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return false, nil
 	}
 
 	// Run the full search pipeline — this goes through the

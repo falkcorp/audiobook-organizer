@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.10.0
+// version: 4.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-09-14
 //
@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -189,6 +190,17 @@ func (s *Server) fetchCandidateForBook(
 	}
 
 	bookInfo := metabatch.BuildCandidateBookInfo(store, book)
+
+	// The owner marked this book "no match": do not spend provider quota
+	// searching for, or offer, a match they rejected. "skipped", not
+	// "no_match": that status here means "the search found nothing".
+	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return CandidateResult{
+			Book:   bookInfo,
+			Status: "skipped",
+			Error:  "skipped: marked no match",
+		}
+	}
 
 	// Skip obvious chapter fragments of shattered audiobooks (e.g. a book
 	// titled "06 Chapter 6"). Searching a catalog for these matches a random
@@ -617,6 +629,11 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 			// sequence-number guard. The "matched" status above is only "the
 			// top non-rejected candidate", with no floor behind it.
 			plan := planOpResultApply(s.store, bookID, cr, claims)
+			if plan.Reason == applySkipMarkedNoMatch {
+				// Marked "no match" since the fetch: nothing to apply.
+				outcomes[i] = applyOutcome{skipped: true}
+				return nil
+			}
 			if plan.Reason == applySkipGateBlocked {
 				outcomes[i] = applyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, plan.Err)}
 				return nil
@@ -653,6 +670,11 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 
 			// Batch apply: fill-only (owner decision A3#3).
 			resp, err := mfs.ApplyMetadataCandidateWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true})
+			if err != nil && errors.Is(err, metafetch.ErrMarkedNoMatch) {
+				// Marked "no match" between the plan and the apply.
+				outcomes[i] = applyOutcome{skipped: true}
+				return nil
+			}
 			if err != nil {
 				outcomes[i] = applyOutcome{errMsg: fmt.Sprintf("%s: apply failed: %v", bookID, err)}
 				return nil

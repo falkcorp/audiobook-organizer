@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-14
 
@@ -115,6 +115,11 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	for i := range allBooks {
 		b := &allBooks[i]
 		if done[b.ID] || strings.TrimSpace(b.Title) == "" {
+			continue
+		}
+		// The owner marked this book "no match": fetching would only spend
+		// provider quota on candidates nothing may apply.
+		if metafetch.IsMarkedNoMatch(b.MetadataReviewStatus) {
 			continue
 		}
 		author := ""
