@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_path_failure.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b1f52-9c47-4a06-b2d1-7f5c0e9a4d18
 // last-edited: 2026-09-14
 
@@ -36,8 +36,10 @@ type RenamePathWriteFailure struct {
 	// location, so the repair writes the same row the rename meant to.
 	NewITunesPath string `json:"new_itunes_path,omitempty"`
 	Error         string `json:"error"`
-	// RecordedAt is RFC3339Nano UTC. The repair op compares it against the
-	// row's UpdatedAt, so it needs sub-second precision.
+	// RecordedAt is RFC3339Nano UTC, for the operator reading the record. The
+	// repair op does not compare it against the row: it repoints on content
+	// preconditions (the row still holds OldPath, NewPath is on disk, OldPath
+	// is gone, no other row holds NewPath).
 	RecordedAt string `json:"recorded_at"`
 }
 
