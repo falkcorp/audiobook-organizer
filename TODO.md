@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.8 -->
+<!-- version: 10.73.9 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-09-15 -->
 
@@ -13,6 +13,45 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Normalize path keys to NFC before use as Pebble keys.** `book_file_path:`
+      and book path keys are built from the raw string
+      (internal/database/pebble_store.go, path-key builder near the
+      `book_file_path` prefix), so the same folder spelled in NFD by macOS and
+      NFC by Linux gets two keys: missed duplicates and double rows. Never
+      observed in prod as of 2026-09-14; parked by the owner (audit A2#14). Fix
+      needs a key migration: normalize on write and read, and a one-time
+      rewrite of existing keys behind a maintenance op with a dry run.
+
+- [ ] **Repoint the path index to the surviving row when the owner moves away.**
+      When book_file rows X and Y share path P and `book_file_path:P` names X,
+      X moving away (rename, repoint) deletes the index entry while Y is still
+      live at P. `GetBookFileByPath` callers (internal/organizer/collision.go,
+      internal/deluge/import.go) read nil as "path free", so a later import
+      can land on an occupied folder. Fix: on owner-checked delete, look for
+      another live row at P and repoint the index to it. Found in the #3426
+      review, 2026-09-14.
+
+- [ ] **`maintenance.repoint-unrecorded-renames` misjudges an old directory.**
+      The op treats the old directory as gone when its audio uses an extension
+      not in the configured list, or when the directory is a symlink. Both
+      cases should read as "still present" (do not repoint). Found in the
+      #3426 review, 2026-09-14.
+
+- [ ] **Record review-lane approvals server-side.** The batch apply trusts two
+      client claims: a pin with `origin: "row"` (which now makes the row
+      overwrite filled fields, owner ruling 2026-09-14) and the owner-review
+      gate override it unlocks. Any API-key caller can build that pin from the
+      review list's own `candidate_hash`, so both are claims, not proof that
+      the owner looked at the row. Accepted for now (owner, 2026-09-14).
+      Record the approval on the server when the owner clicks Apply in the
+      review lane (who, when, which candidate hash), and have
+      `planCachedApply` in `internal/server/batch_apply_one.go` check that
+      record instead of the request's pin origin.
+
+- [ ] **FS-WATCHER-ENABLE**: Owner 2026-09-15 01:38 — new downloads only appear when the daily scheduled scan runs (and tonight's deploy restarts interrupted it 12 times). A filesystem watcher already exists (`internal/watcher`, fsnotify, wired in `internal/server/server_lifecycle.go` behind `auto_scan_enabled`) but prod runs with `auto_scan_enabled=false`. Task: make low-latency discovery of new books work unattended. (1) Confirm the download landing path is a local mount on the server, not written by a remote NFS/SMB client (fsnotify cannot see those writes — the config comment says so); if it is remote, add a polling fallback for that path instead. (2) Check `fs.inotify.max_user_watches`/`max_user_instances` against the number of directories under `root_dir` and each import path, and raise them in the deploy if short. (3) Verify the watcher's folder-scoped `library.scan` (`FolderPath` set) respects the scan stand-down held by metadata applies and the `library.scan` ConcurrencyKey, so an apply and a watcher-triggered scan never overlap. (4) Enable `auto_scan_enabled` in prod with a debounce sized for multi-file audiobook drops (30 s is the current stored value), and log every trigger to the activity log. (5) Keep the scheduled scan as the fallback (prod interval is 1440 min vs the shipped 360 default — decide which). Report with a real test: drop a book into the import path and time its appearance in AudioBooth.
+
+- [ ] **SPLIT-MERGE-ABS-FOLLOW**: `MergeSplitBookCluster` (internal/dedup/split_book_merge.go) does not call `FollowMerge`/`FollowFileMove`, so ABS sync identity and listening progress do not follow a split-book merge (the journal records `SyncRedirected=false`). CombineBooks does both. Wire the same calls, with undo support.
 
 - [ ] **PEBBLE-KEY-BOUND-SWEEP** Replace the fragile `[]byte("<prefix>:0")` /
       `[]byte("<prefix>:;")` iterator-bound pairs in `internal/database` with the
