@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -170,17 +170,26 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			slog.Info("refetch-missing-authors created author", "opID", opID, "authorName", authorName, "authorID", author.ID)
 		}
 
-		// Hydrate before writeback — b is Core (slim); writing it straight
-		// through UpdateBook would wipe the denormalized Author/Series.
-		full, herr := store.GetBookByID(b.ID)
-		if herr != nil || full == nil {
-			slog.Error("failed to hydrate book for update", "b", b.ID, "err", herr)
+		// Write through ModifyBook: it re-reads the full row (b is a slim
+		// Core projection) under the book's write lock and sets only
+		// AuthorID, so a column another writer commits while the tags were
+		// being read from disk is not reverted (audit A1#15). "Still has no
+		// author" is decided on the fresh row: one filled meanwhile is kept.
+		authorID := author.ID
+		full, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
+			if cur.AuthorID != nil {
+				return database.ErrSkipBookWrite
+			}
+			cur.AuthorID = &authorID
+			return nil
+		})
+		if err != nil {
+			slog.Error("failed to update book", "b", b.ID, "err", err)
 			errors++
 			continue
 		}
-		full.AuthorID = &author.ID
-		if _, err := store.UpdateBook(full.ID, full); err != nil {
-			slog.Error("failed to update book", "b", full.ID, "err", err)
+		if full == nil {
+			slog.Error("book vanished before author update", "b", b.ID)
 			errors++
 			continue
 		}

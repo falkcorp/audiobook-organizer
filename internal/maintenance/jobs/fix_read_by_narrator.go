@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-08-17
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -190,20 +190,25 @@ func rbnrTitleFromFilePath(fp string) string {
 	return title
 }
 
+// rbnrApplyFix writes the fix's Title (and Narrator, when it found one) and
+// nothing else, under the book's write lock (ModifyBook), so a column another
+// writer commits between the listing read and this write is not reverted
+// (audit A1#15). A book that vanished meanwhile is still an error.
 func rbnrApplyFix(store bookMutator, book *database.BookCore, fix *rbnrFixResult) error {
-	current, err := store.GetBookByID(book.ID)
+	written, err := store.ModifyBook(book.ID, func(current *database.Book) error {
+		current.Title = fix.NewTitle
+		if fix.NewNarrator != "" {
+			current.Narrator = &fix.NewNarrator
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("GetBookByID: %w", err)
+		return fmt.Errorf("ModifyBook: %w", err)
 	}
-	if current == nil {
+	if written == nil {
 		return fmt.Errorf("book %s not found", book.ID)
 	}
-	current.Title = fix.NewTitle
-	if fix.NewNarrator != "" {
-		current.Narrator = &fix.NewNarrator
-	}
-	_, err = store.UpdateBook(book.ID, current)
-	return err
+	return nil
 }
 
 func rbnrCaseInsensitiveIndex(s, substr string) int {

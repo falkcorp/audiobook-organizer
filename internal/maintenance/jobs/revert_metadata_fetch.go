@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-07
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -176,8 +176,11 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 		}
 		reporter.Increment()
 
-		book, err := store.GetBookByID(bookID)
-		if err != nil || book == nil {
+		// Existence guard only: the row read here is NOT the write target.
+		// The reverts below are applied to a fresh copy inside ModifyBook,
+		// so a column another writer commits while the history and locks
+		// are being read is not reverted (audit A1#15).
+		if book, err := store.GetBookByID(bookID); err != nil || book == nil {
 			errors++
 			continue
 		}
@@ -239,64 +242,72 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 			continue
 		}
 
-		didChange := false
+		// Each revert is a closure over the previous value; the store lookup
+		// for author_name stays out here, outside the row lock.
+		var reverts []func(*database.Book)
 		for _, e := range byField {
 			switch e.field {
 			case "title":
-				book.Title = e.prev
-				didChange = true
+				reverts = append(reverts, func(b *database.Book) { b.Title = e.prev })
 			case "author_name":
 				if e.prev == "" {
-					book.AuthorID = nil
-					didChange = true
+					reverts = append(reverts, func(b *database.Book) { b.AuthorID = nil })
 				} else {
 					if author, aerr := store.GetAuthorByName(e.prev); aerr == nil && author != nil {
-						book.AuthorID = &author.ID
-						didChange = true
+						aid := author.ID
+						reverts = append(reverts, func(b *database.Book) { b.AuthorID = &aid })
 					}
 				}
 			case "publisher":
 				if e.prev == "" {
-					book.Publisher = nil
+					reverts = append(reverts, func(b *database.Book) { b.Publisher = nil })
 				} else {
-					book.Publisher = &e.prev
+					reverts = append(reverts, func(b *database.Book) { b.Publisher = &e.prev })
 				}
-				didChange = true
 			case "language":
 				if e.prev == "" {
-					book.Language = nil
+					reverts = append(reverts, func(b *database.Book) { b.Language = nil })
 				} else {
-					book.Language = &e.prev
+					reverts = append(reverts, func(b *database.Book) { b.Language = &e.prev })
 				}
-				didChange = true
 			case "audiobook_release_year":
 				if e.prev == "" {
-					book.AudiobookReleaseYear = nil
+					reverts = append(reverts, func(b *database.Book) { b.AudiobookReleaseYear = nil })
 				} else if yr, yerr := strconv.Atoi(e.prev); yerr == nil {
-					book.AudiobookReleaseYear = &yr
+					reverts = append(reverts, func(b *database.Book) { b.AudiobookReleaseYear = &yr })
+				} else {
+					// Unparseable year: the old code counted the field as
+					// changed while writing nothing for it. Keep that.
+					reverts = append(reverts, func(*database.Book) {})
 				}
-				didChange = true
 			case "isbn10":
 				if e.prev == "" {
-					book.ISBN10 = nil
+					reverts = append(reverts, func(b *database.Book) { b.ISBN10 = nil })
 				} else {
-					book.ISBN10 = &e.prev
+					reverts = append(reverts, func(b *database.Book) { b.ISBN10 = &e.prev })
 				}
-				didChange = true
 			case "isbn13":
 				if e.prev == "" {
-					book.ISBN13 = nil
+					reverts = append(reverts, func(b *database.Book) { b.ISBN13 = nil })
 				} else {
-					book.ISBN13 = &e.prev
+					reverts = append(reverts, func(b *database.Book) { b.ISBN13 = &e.prev })
 				}
-				didChange = true
 			}
 		}
 
-		if didChange {
+		if len(reverts) > 0 {
 			if !dryRun {
-				if _, uerr := store.UpdateBook(bookID, book); uerr != nil {
-					slog.Warn("revert-metadata-fetch UpdateBook", "bookID", bookID, "uerr", uerr)
+				written, uerr := store.ModifyBook(bookID, func(b *database.Book) error {
+					for _, apply := range reverts {
+						apply(b)
+					}
+					return nil
+				})
+				if uerr == nil && written == nil {
+					uerr = fmt.Errorf("book %s vanished before write", bookID)
+				}
+				if uerr != nil {
+					slog.Warn("revert-metadata-fetch ModifyBook", "bookID", bookID, "uerr", uerr)
 					errors++
 				} else {
 					reverted++

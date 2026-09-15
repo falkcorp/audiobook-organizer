@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1000015-0000-0000-0000-000000000015
-// last-edited: 2026-08-17
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -56,17 +56,25 @@ func (j *backfillMetadataSourceHashJob) Run(ctx context.Context, store maintenan
 		sum := sha256.Sum256([]byte(raw))
 		hash := fmt.Sprintf("%x", sum)
 		if !dryRun {
-			// Hydrate before writeback — book is Core (slim); writing it
-			// straight through UpdateBook would wipe Author/Series.
-			full, herr := store.GetBookByID(book.ID)
-			if herr != nil || full == nil {
-				slog.Error("backfill-metadata-source-hash hydrate failed", "id", book.ID, "err", herr)
+			// Fill through ModifyBook: it re-reads the full row (book is a
+			// slim Core projection) under the book's write lock and sets only
+			// MetadataSourceHash, so a column another writer commits
+			// meanwhile is not reverted (audit A1#15). The "still empty"
+			// decision is re-made on the fresh row.
+			full, uerr := store.ModifyBook(book.ID, func(cur *database.Book) error {
+				if cur.MetadataSourceHash != nil && *cur.MetadataSourceHash != "" {
+					return database.ErrSkipBookWrite
+				}
+				cur.MetadataSourceHash = &hash
+				return nil
+			})
+			if uerr != nil {
+				msg := uerr.Error()
+				slog.Error("backfill-metadata-source-hash ModifyBook failed", "details", msg)
 				continue
 			}
-			full.MetadataSourceHash = &hash
-			if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-				msg := uerr.Error()
-				slog.Error("backfill-metadata-source-hash UpdateBook failed", "details", msg)
+			if full == nil {
+				slog.Error("backfill-metadata-source-hash book vanished before write", "id", book.ID)
 				continue
 			}
 		}
