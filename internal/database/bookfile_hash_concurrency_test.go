@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_hash_concurrency_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f7a9d14-6b3e-4c85-a0d9-8e1c5b7f3a26
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -107,7 +107,7 @@ func TestUpdateBookFileHashes_ConcurrentFieldPatchIsNotReverted(t *testing.T) {
 	}
 }
 
-// Review round 4, item 3: deleteHashIndexIfOwned decided ownership from the
+// Review round 4, item 3: deleteSingleOwnerIndexIfOwned decided ownership from the
 // committed index entry. In one batch upsert, B's row is staged first and
 // points "dup" at B; A's row, whose committed entry still owned "dup", then
 // staged a delete of it, so B's fresh entry was gone at commit.

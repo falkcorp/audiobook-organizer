@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package database
 
@@ -57,9 +57,13 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 		}
 	}
 
+	// book_file_path is single-owner too: two rows at one path (or two paths
+	// whose CRCs collide) share one entry naming whichever wrote last. Deleting
+	// it unconditionally on the other row's update left GetBookFileByPath
+	// returning nothing while the owner still sat at the path, so delete only
+	// an entry that points at this row, as for the hash indexes below.
 	if f.FilePath != "" {
-		pathKey := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(f.FilePath)))
-		if err := batch.Delete(pathKey, nil); err != nil {
+		if err := s.deleteSingleOwnerIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(f.FilePath))), f); err != nil {
 			return err
 		}
 	}
@@ -69,13 +73,13 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 	// unconditionally on one row's update dropped the other row's lookup, so
 	// delete only an entry that points at this row.
 	if f.FileHash != "" {
-		if err := s.deleteHashIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash)), f); err != nil {
+		if err := s.deleteSingleOwnerIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_hash:%s", f.FileHash)), f); err != nil {
 			return err
 		}
 	}
 
 	if f.OriginalFileHash != "" && f.OriginalFileHash != f.FileHash {
-		if err := s.deleteHashIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash)), f); err != nil {
+		if err := s.deleteSingleOwnerIndexIfOwned(batch, []byte(fmt.Sprintf("book_file_orig_hash:%s", f.OriginalFileHash)), f); err != nil {
 			return err
 		}
 	}
@@ -98,10 +102,10 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 	return nil
 }
 
-// deleteHashIndexIfOwned stages the deletion of a content-hash index entry only
-// when it holds f's "<bookID>:<fileID>" reference (the value
-// writeBookFileSecondaryIndexes stores). An entry owned by another row with the
-// same hash is left alone.
+// deleteSingleOwnerIndexIfOwned stages the deletion of a single-owner index
+// entry (a content hash, or book_file_path) only when it holds f's
+// "<bookID>:<fileID>" reference (the value writeBookFileSecondaryIndexes
+// stores). An entry owned by another row with the same key is left alone.
 //
 // The entry is read through the batch first. A multi-row batch (a batch
 // upsert, a bulk move or delete) can already have pointed the entry at another
@@ -110,7 +114,7 @@ func (s *PebbleStore) deleteBookFileSecondaryIndexes(batch *pebble.Batch, f *Boo
 // Every book_file batch that reaches here is an indexed batch for that reason.
 // Pebble's Batch.Get answers from the batch alone, so a key the batch has not
 // touched falls back to the committed state.
-func (s *PebbleStore) deleteHashIndexIfOwned(batch *pebble.Batch, key []byte, f *BookFile) error {
+func (s *PebbleStore) deleteSingleOwnerIndexIfOwned(batch *pebble.Batch, key []byte, f *BookFile) error {
 	val, found, err := s.hashIndexValue(batch, key)
 	if err != nil || !found {
 		return err

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f41c2d7-6e08-4a53-b19c-2d7e5a0f8c36
 // last-edited: 2026-09-14
 
@@ -62,15 +62,16 @@ func (fx *repointFixture) plugin() *Plugin {
 			fx.files[id] = *f
 			return nil
 		},
-		GetBookFileByPathFunc: func(path string) (*database.BookFile, error) {
+		// No GetBookFileByPathFunc: the op must not rely on the single-owner
+		// path index for its claim check; claims come from the core list.
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
 			fx.mu.Lock()
 			defer fx.mu.Unlock()
+			var out []database.BookFileCore
 			for _, f := range fx.files {
-				if f.FilePath == path {
-					return &f, nil
-				}
+				out = append(out, f.Core())
 			}
-			return nil, nil
+			return out, nil
 		},
 		LiveBookIDsAtPathFunc: func(path string) ([]string, error) {
 			fx.mu.Lock()
