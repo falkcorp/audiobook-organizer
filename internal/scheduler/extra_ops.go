@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -74,7 +74,9 @@ type ExtraOpsStore interface {
 	extraOpsAuthorLinkStore
 	extraOpsMaintenanceStore
 
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the author split's primary-author write: a locked
+	// read-modify-write of AuthorID/Author, never GetBookByID -> UpdateBook.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // extraOpsAuthorStore is the author-consolidation op's author-row half. Split
@@ -413,25 +415,29 @@ func (r *ExtraOpsRegistrar) RegisterAuthorSplitScanOp(reg *opsregistry.Registry)
 						// its ToBook() projection: it carries nil Author/Series
 						// AND, because this op changes AuthorID, the
 						// guard-preserved Author would be STALE (still the
-						// composite). Hydrate the full stored row and set BOTH
-						// the new AuthorID and a fresh denormalized Author so
-						// the row stays consistent (Author.ID == AuthorID), not
-						// preserved-stale (STOREFID W5d-1 / #1887). Duplicate of
+						// composite). ModifyBook re-reads the full stored row
+						// under its write lock and sets BOTH the new AuthorID
+						// and a fresh denormalized Author, so the row stays
+						// consistent (Author.ID == AuthorID), not
+						// preserved-stale (STOREFID W5d-1 / #1887), and a column
+						// another writer commits meanwhile is not reverted
+						// (audit A1#15). Sibling of
 						// internal/plugins/maintenance/author.go — keep in sync.
-						if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
-							newPrimary := newAuthors[0]
+						newPrimary := newAuthors[0]
+						written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
 							full.AuthorID = &firstID
 							full.Author = &newPrimary
-							_, _ = store.UpdateBook(book.ID, full)
-						} else {
-							// Hydration failed — fall back to the projection
-							// write so the AuthorID change still lands
-							// (UpdateBook's guard preserves the old
-							// Author/Series). Never skip the split.
-							_ = progress.Log("warning", fmt.Sprintf("author split: hydrate book %s failed, writing projection: %v", book.ID, err), nil)
-							book.AuthorID = &firstID
-							full := book.ToBook()
-							_, _ = store.UpdateBook(book.ID, &full)
+							return nil
+						})
+						switch {
+						case err != nil:
+							errCount++
+							schedLog.Warn("author split: primary author write failed: book=%s author=%q err=%v", book.ID, author.Name, err)
+							_ = progress.Log("warning", fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err), nil)
+						case written == nil:
+							errCount++
+							schedLog.Warn("author split: book vanished before primary author write: book=%s author=%q", book.ID, author.Name)
+							_ = progress.Log("warning", fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID), nil)
 						}
 					}
 					booksUpdated++

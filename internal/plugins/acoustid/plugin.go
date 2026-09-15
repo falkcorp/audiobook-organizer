@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Package acoustid is the UOS plugin for AcoustID fingerprinting operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -78,6 +78,8 @@ type pluginStore interface {
 	// through books instead of loading them all up front.
 	CountAllBooks() (int, error)
 	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]database.BookFile, int64, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the book-signature write: a locked read-modify-write of
+	// the five BookSig* columns, never GetBookByID -> UpdateBook.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 }

@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package reconcile
 
@@ -44,6 +44,9 @@ type bookReader interface {
 
 type bookWriter interface {
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the locked read-modify-write (database.BookMutator);
+	// ElectMissingPrimaries writes through it.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 }
 

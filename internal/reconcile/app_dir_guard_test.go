@@ -1,7 +1,7 @@
 // file: internal/reconcile/app_dir_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d5c3e78-1b46-4a02-8f95-7c2e60b3d417
-// last-edited: 2026-09-09
+// last-edited: 2026-09-14
 
 package reconcile
 
@@ -94,9 +94,12 @@ func (s appDirStore) GetBooksByVersionGroup(string) ([]database.Book, error) {
 	return nil, nil
 }
 func (s appDirStore) UpdateBook(string, *database.Book) (*database.Book, error) { return nil, nil }
-func (s appDirStore) DeleteBook(string) error                                   { return nil }
-func (s appDirStore) GetAllImportPaths() ([]database.ImportPath, error)         { return s.imports, nil }
-func (s appDirStore) CreateOperationChange(*database.OperationChange) error     { return nil }
+func (s appDirStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, nil
+}
+func (s appDirStore) DeleteBook(string) error                               { return nil }
+func (s appDirStore) GetAllImportPaths() ([]database.ImportPath, error)     { return s.imports, nil }
+func (s appDirStore) CreateOperationChange(*database.OperationChange) error { return nil }
 func (s appDirStore) GetMetadataFieldStates(string) ([]database.MetadataFieldState, error) {
 	return nil, nil
 }

@@ -1,11 +1,12 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package reconcile
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -94,6 +95,28 @@ func (f *electFakeStore) UpdateBook(id string, book *database.Book) (*database.B
 	defer f.unlock()
 	f.updated[id] = book
 	return book, nil
+}
+
+// ModifyBook is the locked read-modify-write the pass now uses: fn runs on a
+// copy of the stored row and the result lands in both byID and updated.
+func (f *electFakeStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	f.lock()
+	defer f.unlock()
+	b := f.byID[id]
+	if b == nil {
+		return nil, nil
+	}
+	cp := *b
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	stored := cp
+	f.byID[id] = &stored
+	f.updated[id] = &stored
+	return &cp, nil
 }
 
 // countGroupsWithoutPrimary is the data invariant under test: no version group

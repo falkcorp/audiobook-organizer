@@ -1,7 +1,7 @@
 // file: internal/server/leaf_stores.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-09-11
+// last-edited: 2026-09-14
 
 package server
 
@@ -44,10 +44,10 @@ type userPreferenceWriter interface {
 	SetUserPreference(key, value string) error
 }
 
-// entityAssignStore: assignPublisherPreservingRecord.
+// entityAssignStore: assignPublisherPreservingRecord. A locked
+// read-modify-write of one column, never GetBookByID -> UpdateBook.
 type entityAssignStore interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // authorAssignStore: assignResolvedAuthorPreservingRecord.
