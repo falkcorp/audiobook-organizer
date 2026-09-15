@@ -1,7 +1,7 @@
 // file: internal/organizer/rename.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-09-14
+// last-edited: 2026-09-15
 
 package organizer
 
@@ -216,7 +216,11 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 			})
 		}
 
-		// Step 3: Update DB with new file path
+		// Step 3: Update DB with new file path.
+		// The pre-rename state is captured BEFORE it is overwritten: the undo
+		// row below replays OldValue, and reading it after this assignment
+		// recorded "organized -> organized", an undo that restored nothing.
+		prevLibraryState := stringOrDefault(book.LibraryState, "")
 		book.FilePath = proposedPath
 		book.LibraryState = new("organized")
 		if _, err := rs.db.UpdateBook(bookID, book); err != nil {
@@ -262,7 +266,7 @@ func (rs *RenameService) ApplyRename(bookID, operationID string) (*RenameApplyRe
 				BookID:      bookID,
 				ChangeType:  "metadata_update",
 				FieldName:   "library_state",
-				OldValue:    stringOrDefault(book.LibraryState, ""),
+				OldValue:    prevLibraryState,
 				NewValue:    "organized",
 			})
 		}
