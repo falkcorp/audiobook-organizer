@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.7 -->
+<!-- version: 10.73.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-14 -->
+<!-- last-edited: 2026-09-15 -->
 
 # Project TODO — live items only
 
@@ -182,7 +182,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [x] **CI-03** Node version drift: security.yml pins Node 20.x for npm dependency submission while every other workflow uses 22 — `.github/workflows/security.yml:77`. The Dependency Submission job resolves the npm graph under Node 20 while builds run under 22; engine-dependent resolution (optional/platform deps) can produce a dependency graph that does not match what ships, under- or over-reporting the supply-chain surface. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-312-node-version-drift-security-yml-pins-node-20-x-f.md`. ✅ **DONE 2026-09-12 (#3276):** security.yml on the shared Node pin; `scripts/check_toolchain_versions.py` fails CI on drift (CI itself moves to Node 26 in #3291).
 
-- [ ] **SF-01b** `ReOrganizeInPlace` stamps the same-path no-op case as organized without a stat — `internal/organizer/service.go` (~L799, grep `ReOrganizeInPlace`). Same shape as SF-01 (fixed for `OrganizeBook` in TASK-303 / PR #3180): when the row's `FilePath` already equals the computed target, the batch-organize worker records success without checking the file still exists, so a stale or edited row pointing at a deleted file is reported organized. Surfaced by the TASK-303 worker and left out of scope; needs the same `os.Stat` guard plus a regression test in `internal/organizer`.
+- [x] **SF-01b** (verified 2026-09-15: `reOrganizeInPlace` already stats the source before the same-path branch and errors when it is gone; no change needed) `ReOrganizeInPlace` stamps the same-path no-op case as organized without a stat — `internal/organizer/service.go` (~L799, grep `ReOrganizeInPlace`). Same shape as SF-01 (fixed for `OrganizeBook` in TASK-303 / PR #3180): when the row's `FilePath` already equals the computed target, the batch-organize worker records success without checking the file still exists, so a stale or edited row pointing at a deleted file is reported organized. Surfaced by the TASK-303 worker and left out of scope; needs the same `os.Stat` guard plus a regression test in `internal/organizer`.
 
 - [ ] **WEB-02** Series page fetches the entire series table on every mount, no server pagination — `web/src/services/api.ts:1827`. Same whole-table-per-visit cost as WEB-01, scaled by series count instead of author count. Frequency is the same (primary nav page, refetched after every rename/split/delete/merge). Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md`.
 
@@ -1503,7 +1503,7 @@ is filesystem presence.
 
 ### Two incidental defects found en route
 
-- [ ] **Broken undo record.** `internal/organizer/rename.go:230` assigns
+- [x] (fixed 2026-09-15, PR fix/rename-undo-oldvalue) **Broken undo record.** `internal/organizer/rename.go:230` assigns
   `"organized"` to the book *before* `:264-266` records
   `OldValue: stringOrDefault(book.LibraryState, "")`, so the undo entry is
   `organized → organized`. `internal/undo/engine.go:274-275` and
