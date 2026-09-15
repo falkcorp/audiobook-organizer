@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-09-14
 
@@ -125,6 +125,11 @@ const (
 	// was refetched after the page loaded). Applying would put a record on the
 	// book that nobody reviewed, so nothing is written.
 	applySkipStaleCandidate = "stale_candidate"
+	// applySkipMarkedNoMatch: the owner marked the book "no match" and nobody
+	// picked this candidate, so an automatic apply leaves it alone. A
+	// review-lane approval (row pin) overrides the mark, as the single-book
+	// dialog does. The preview drops these books (excludedFromPreview).
+	applySkipMarkedNoMatch = "marked_no_match"
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
@@ -230,6 +235,13 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipStaleCandidate,
 			Err: fmt.Errorf("reviewed candidate %q (%s) is no longer the top cached candidate %q (%s)", pin.Title, pin.Source, cand.Title, cand.Source)}
 	}
+	// A no-match book is left alone unless the owner approved this row in the
+	// review lane, which overrides their own mark (the apply then records the
+	// match, replacing no_match, like the single-book dialog).
+	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) && (pin == nil || !pin.IsRowReview()) {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
+			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
+	}
 	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
 	// A matching pin from a review row is the owner's approval of this row:
 	// its apply overwrites whether or not the gate needed lifting. A stale
@@ -268,6 +280,11 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
+	// Nobody picks candidates on this path, so a no-match book is always left.
+	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
+			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
+	}
 	v := applygate.EvaluateInBatch(book, &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
@@ -275,6 +292,12 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 		plan.Err = fmt.Errorf("%s: %s", v.Reason, v.Detail)
 	}
 	return plan
+}
+
+// excludedFromPreview reports whether the bulk-apply preview leaves this book
+// out entirely (no row, not counted): the owner rejected every match for it.
+func excludedFromPreview(plan cachedApplyPlan) bool {
+	return plan.Reason == applySkipMarkedNoMatch
 }
 
 // fetchTimeIdentity fails closed when the book's current title or author is
@@ -379,6 +402,11 @@ func applyCachedCandidateForBookTimed(
 	historyErr := error(nil)
 	if aerr != nil && resp != nil && errors.Is(aerr, metafetch.ErrApplyHistoryIncomplete) {
 		historyErr, aerr = aerr, nil
+	}
+	if aerr != nil && errors.Is(aerr, metafetch.ErrMarkedNoMatch) {
+		// Marked "no match" between the plan and the apply: nothing written,
+		// reported as the skip it is rather than a failure.
+		return applyOutcome{Reason: applySkipMarkedNoMatch, Err: aerr, Gate: plan.Gate}
 	}
 	if aerr != nil {
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}

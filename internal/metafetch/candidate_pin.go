@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-09-14
 
@@ -139,6 +139,19 @@ type ApplyOptions struct {
 // ErrNothingToApply is returned by an apply with RefuseEmptyWrite when no
 // field would change. Nothing was written.
 var ErrNothingToApply = errors.New("metadata apply: no field left to write")
+
+// ErrMarkedNoMatch is returned by an automatic apply or fetch (nobody picked a
+// candidate) for a book its owner marked "no match": the owner rejected every
+// match, so nothing is written or searched. Bulk callers report the book as
+// skipped, not failed. A person-picked apply is the owner overriding their own
+// mark and is not refused.
+var ErrMarkedNoMatch = errors.New("metadata: book is marked no match")
+
+// IsMarkedNoMatch reports whether the owner marked this book "no match"
+// (MetadataReviewStatus == "no_match", written by Service.MarkNoMatch).
+func IsMarkedNoMatch(status *string) bool {
+	return status != nil && *status == "no_match"
+}
 
 // overrideLabel is the refusing-reasons label recorded for an owner-reviewed
 // apply, never empty.

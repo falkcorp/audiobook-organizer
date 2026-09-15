@@ -120,6 +120,11 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		if done[b.ID] || strings.TrimSpace(b.Title) == "" {
 			continue
 		}
+		// The owner marked this book "no match": fetching would only spend
+		// provider quota on candidates nothing may apply.
+		if metafetch.IsMarkedNoMatch(b.MetadataReviewStatus) {
+			continue
+		}
 		author := ""
 		if b.AuthorID != nil {
 			author = authorByID[*b.AuthorID]
