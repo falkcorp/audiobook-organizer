@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -564,9 +564,22 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 
 	// Update book's file_path to match first file
 	if result.Updated > 0 && len(files) > 0 {
-		book.FilePath = files[0].FilePath
-		if _, err := store.UpdateBook(book.ID, book); err != nil {
-			slog.Warn("failed to update book file_path", "err", err)
+		newBookPath := files[0].FilePath
+		// ModifyBook sets FilePath alone. `book` was read before the disk
+		// checks above, so a whole-row UpdateBook would revert any column
+		// another writer committed meanwhile.
+		updated, err := store.ModifyBook(book.ID, func(b *database.Book) error {
+			if b.FilePath == newBookPath {
+				return database.ErrSkipBookWrite
+			}
+			b.FilePath = newBookPath
+			return nil
+		})
+		switch {
+		case err != nil:
+			filesLog.Warn("failed to update book file_path for %s: %s", book.ID, err.Error())
+		case updated == nil:
+			filesLog.Warn("failed to update book file_path for %s: book no longer exists", book.ID)
 		}
 	}
 

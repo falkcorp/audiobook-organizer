@@ -1,12 +1,13 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package entities_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -160,6 +161,27 @@ func newCtx(method, path, body string, params gin.Params) (*gin.Context, *httpte
 }
 
 func idParam(v string) gin.Params { return gin.Params{{Key: "id", Value: v}} }
+
+// expectModifyBook scripts ModifyBook(seed.ID) over a copy of seed, the way the
+// store runs it: the callback mutates the stored row under its lock. It returns
+// where the written row lands; *result stays nil when the callback skipped the
+// write (database.ErrSkipBookWrite) or was never called.
+func expectModifyBook(d *deps, seed *database.Book) **database.Book {
+	var wrote *database.Book
+	d.store.EXPECT().ModifyBook(seed.ID, mock.Anything).
+		RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			b := *seed
+			if err := fn(&b); err != nil {
+				if errors.Is(err, database.ErrSkipBookWrite) {
+					return &b, nil
+				}
+				return nil, err
+			}
+			wrote = &b
+			return &b, nil
+		})
+	return &wrote
+}
 
 // ── Works ──────────────────────────────────────────────────────────────────
 
@@ -676,11 +698,12 @@ func TestSplitSeries(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetSeriesByID(5).Return(&database.Series{ID: 5, Name: "S"}, nil)
 	d.store.EXPECT().CreateSeries("S (Split)", (*int)(nil)).Return(&database.Series{ID: 6, Name: "S (Split)"}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", SeriesID: new(5)}, nil)
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).Return(&database.Book{ID: "b1"}, nil)
+	wrote := expectModifyBook(d, &database.Book{ID: "b1", SeriesID: new(5)})
 	c, w := newCtx(http.MethodPost, "/series/5/split", `{"book_ids":["b1"]}`, idParam("5"))
 	h.SplitSeries(c)
 	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, *wrote, "the book must be written into the new series")
+	assert.Equal(t, 6, *(*wrote).SeriesID)
 }
 
 func TestSplitSeries_EmptyBookIDs(t *testing.T) {
@@ -946,42 +969,35 @@ func TestSplitCompositeAuthor_RepointsPrimaryAuthorID(t *testing.T) {
 	d.store.EXPECT().GetBookAuthors("b1").
 		Return([]database.BookAuthor{{BookID: "b1", AuthorID: 5, Role: "author"}}, nil)
 	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+	wrote := expectModifyBook(d, &database.Book{
 		ID:       "b1",
 		AuthorID: &composite,
 		Author:   &database.Author{ID: 5, Name: "A / B"},
-	}, nil)
-
-	var wrote *database.Book
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).
-		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
-			wrote = b
-			return b, nil
-		})
+	})
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 
 	c, w := newCtx(http.MethodPost, "/authors/5/split", `{"names":["A","B"]}`, idParam("5"))
 	h.SplitCompositeAuthor(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	require.NotNil(t, wrote,
+	require.NotNil(t, *wrote,
 		"the book row must be written: leaving AuthorID on the about-to-be-deleted "+
 			"composite is the leak itself")
-	require.NotNil(t, wrote.AuthorID, "AuthorID must not be cleared")
-	assert.Equal(t, 10, *wrote.AuthorID,
+	require.NotNil(t, (*wrote).AuthorID, "AuthorID must not be cleared")
+	assert.Equal(t, 10, *(*wrote).AuthorID,
 		"AuthorID must move to the first individual author, not stay on the deleted composite")
-	require.NotNil(t, wrote.Author,
-		"Author must be written alongside AuthorID -- UpdateBook's preserve-on-nil guard "+
+	require.NotNil(t, (*wrote).Author,
+		"Author must be written alongside AuthorID -- the store's preserve-on-nil guard "+
 			"(pebble_store.go:2407) would otherwise keep the stale composite snapshot")
-	assert.Equal(t, 10, wrote.Author.ID,
+	assert.Equal(t, 10, (*wrote).Author.ID,
 		"the denormalized Author must agree with AuthorID, not lag it")
 }
 
 // TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone is the negative half: a book
 // that merely LISTS the composite author (not as its primary) needs only the
 // junction rewrite. Writing the book row for it would be a needless write and
-// would silently promote a secondary contributor to primary. No GetBookByID or
-// UpdateBook is EXPECTed here, so the mock fails the test if either is called.
+// would silently promote a secondary contributor to primary. No ModifyBook is
+// EXPECTed here, so the mock fails the test if it is called.
 func TestSplitCompositeAuthor_LeavesNonPrimaryBooksAlone(t *testing.T) {
 	h, d := newHandler(t)
 	otherPrimary := 99
@@ -1035,18 +1051,11 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	// The surviving junction entry is looked up so a real Author object can be
 	// written next to the new AuthorID.
 	d.store.EXPECT().GetAuthorByID(7).Return(&database.Author{ID: 7, Name: "Real Author"}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+	wrote := expectModifyBook(d, &database.Book{
 		ID:       "b1",
 		AuthorID: &reclassified,
 		Author:   &database.Author{ID: 5, Name: "Reader"},
-	}, nil)
-
-	var wrote *database.Book
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).
-		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
-			wrote = b
-			return b, nil
-		})
+	})
 	d.store.EXPECT().GetBookNarrators("b1").Return(nil, nil)
 	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
@@ -1055,11 +1064,11 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	h.ReclassifyAuthorAsNarrator(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	require.NotNil(t, wrote, "the book row must be written; otherwise AuthorID still points at the deleted author")
-	require.NotNil(t, wrote.AuthorID, "a surviving author exists, so AuthorID must be repointed, not cleared")
-	assert.Equal(t, 7, *wrote.AuthorID, "the surviving junction author must become primary")
-	require.NotNil(t, wrote.Author)
-	assert.Equal(t, 7, wrote.Author.ID, "the denormalized Author must agree with the new AuthorID")
+	require.NotNil(t, *wrote, "the book row must be written; otherwise AuthorID still points at the deleted author")
+	require.NotNil(t, (*wrote).AuthorID, "a surviving author exists, so AuthorID must be repointed, not cleared")
+	assert.Equal(t, 7, *(*wrote).AuthorID, "the surviving junction author must become primary")
+	require.NotNil(t, (*wrote).Author)
+	assert.Equal(t, 7, (*wrote).Author.ID, "the denormalized Author must agree with the new AuthorID")
 }
 
 // TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
@@ -1085,18 +1094,11 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	d.store.EXPECT().SetBookAuthors("b1", mock.Anything).Return(nil)
 	d.store.EXPECT().GetAuthorByName(database.UnknownAuthorName).
 		Return(&database.Author{ID: 9, Name: database.UnknownAuthorName}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{
+	wrote := expectModifyBook(d, &database.Book{
 		ID:       "b1",
 		AuthorID: &reclassified,
 		Author:   &database.Author{ID: 5, Name: "Reader"},
-	}, nil)
-
-	var wrote *database.Book
-	d.store.EXPECT().UpdateBook("b1", mock.Anything).
-		RunAndReturn(func(_ string, b *database.Book) (*database.Book, error) {
-			wrote = b
-			return b, nil
-		})
+	})
 	d.store.EXPECT().GetBookNarrators("b1").Return(nil, nil)
 	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
@@ -1105,11 +1107,11 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	h.ReclassifyAuthorAsNarrator(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	require.NotNil(t, wrote, "the book row must be written to drop the dangling pointer")
-	require.NotNil(t, wrote.AuthorID, "AuthorID must never be cleared")
-	assert.Equal(t, 9, *wrote.AuthorID, "with no surviving author, AuthorID must fall back to Unknown Author")
-	require.NotNil(t, wrote.Author)
-	assert.Equal(t, 9, wrote.Author.ID, "the denormalized Author must agree with the new AuthorID")
+	require.NotNil(t, *wrote, "the book row must be written to drop the dangling pointer")
+	require.NotNil(t, (*wrote).AuthorID, "AuthorID must never be cleared")
+	assert.Equal(t, 9, *(*wrote).AuthorID, "with no surviving author, AuthorID must fall back to Unknown Author")
+	require.NotNil(t, (*wrote).Author)
+	assert.Equal(t, 9, (*wrote).Author.ID, "the denormalized Author must agree with the new AuthorID")
 }
 
 // TestSetAudiobookNarrators_OmittedBookIDKeepsMemDBLive drives PUT

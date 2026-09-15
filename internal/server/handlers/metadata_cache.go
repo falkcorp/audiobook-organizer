@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -57,6 +57,9 @@ type MetadataCacheBookStore interface {
 	// sends all=true) and previously did two GetBookByID point reads per entry.
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the column-scoped read-modify-write ClearMetadataNoMatch
+	// uses (database.BookMutator.ModifyBook).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
@@ -826,14 +829,23 @@ func (h *MetadataCacheHandler) ClearMetadataNoMatch(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
-	book, err := h.store.GetBookByID(id)
-	if err != nil || book == nil {
-		httputil.RespondWithNotFound(c, "audiobook", id)
+	// ModifyBook, not GetBookByID -> UpdateBook(book): the whole-row write
+	// reverted any column another writer committed between the read and the
+	// write. MetadataReviewStatus is the only column this endpoint owns; a
+	// book that already has no status is not written at all.
+	book, err := h.store.ModifyBook(id, func(b *database.Book) error {
+		if b.MetadataReviewStatus == nil {
+			return database.ErrSkipBookWrite
+		}
+		b.MetadataReviewStatus = nil
+		return nil
+	})
+	if err != nil {
+		httputil.InternalError(c, "failed to clear review status", err)
 		return
 	}
-	book.MetadataReviewStatus = nil
-	if _, err := h.store.UpdateBook(id, book); err != nil {
-		httputil.InternalError(c, "failed to clear review status", err)
+	if book == nil {
+		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
 	httputil.RespondWithOK(c, gin.H{"message": "Review status cleared"})

@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-14
 
@@ -264,14 +264,13 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/ai.go":                             3,
 	"internal/server/handlers/apikeys.go":                        5,
 	"internal/server/handlers/audiobooks/handler_crud.go":        4,
-	"internal/server/handlers/audiobooks/handler_files.go":       2,
+	"internal/server/handlers/audiobooks/handler_files.go":       1,
 	"internal/server/handlers/audiobooks/handler_metadata.go":    1,
 	"internal/server/handlers/cache.go":                          2,
 	"internal/server/handlers/dedup/handler.go":                  19,
 	"internal/server/handlers/dedup/label_capture.go":            8,
 	"internal/server/handlers/diagnostics.go":                    6,
 	"internal/server/handlers/duplicates/handler.go":             1,
-	"internal/server/handlers/entities/handler.go":               3,
 	"internal/server/handlers/filesystem.go":                     7,
 	"internal/server/handlers/itunes.go":                         7,
 	"internal/server/handlers/metadata/handler.go":               5,
@@ -279,7 +278,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/openai_validate.go":                3,
 	"internal/server/handlers/operations/handler.go":             3,
 	"internal/server/handlers/operations_v2.go":                  6,
-	"internal/server/handlers/organize.go":                       2,
+	"internal/server/handlers/organize.go":                       1,
 	"internal/server/handlers/reading.go":                        1,
 	"internal/server/handlers/review/handler.go":                 1,
 	"internal/server/handlers/scheduler_admin.go":                1,

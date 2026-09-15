@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/interfaces.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 43710377-fdb3-490c-872e-fd03309163be
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Narrow dependency interfaces for the entities domain handlers (authors,
 // series, narrators, works). Each interface lists only the methods the
@@ -69,6 +69,9 @@ type BookLinkStore interface {
 type BookEntityStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the column-scoped read-modify-write the author repoint
+	// and series split use for the book row (database.BookMutator.ModifyBook).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // NarratorEntityStore covers narrator CRUD.

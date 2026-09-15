@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.
@@ -73,7 +73,10 @@ type OrganizeStore interface {
 	logger.ActivityLogWriter
 
 	GetBookByID(id string) (*database.Book, error)
+	// UpdateBook is the first write of a row CreateOrganizedVersion just
+	// created; every other book write here goes through ModifyBook.
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 	// CreateOperation is deliberately absent. ApplyRename and OrganizeBook are
@@ -271,10 +274,20 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 
 	if landing.InPlace {
 		now := time.Now()
-		book.LastOrganizeOperationID = &opID
-		book.LastOrganizedAt = &now
-		if _, updateErr := h.store.UpdateBook(book.ID, book); updateErr != nil {
-			slog.Warn("organize failed to stamp book", "book", book.ID, "updateErr", updateErr)
+		// ModifyBook, not UpdateBook(book): `book` was read before
+		// OrganizeOneBook moved the file, so writing it back whole would
+		// revert any column another writer committed meanwhile. The two stamp
+		// columns are the only ones this handler owns.
+		stamped, updateErr := h.store.ModifyBook(book.ID, func(b *database.Book) error {
+			b.LastOrganizeOperationID = &opID
+			b.LastOrganizedAt = &now
+			return nil
+		})
+		switch {
+		case updateErr != nil:
+			log2.Warn("organize failed to stamp book %s: %s", book.ID, updateErr.Error())
+		case stamped == nil:
+			log2.Warn("organize failed to stamp book %s: row no longer exists", book.ID)
 		}
 		_ = h.store.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
@@ -311,6 +324,8 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	now := time.Now()
 	createdBook.LastOrganizeOperationID = &opID
 	createdBook.LastOrganizedAt = &now
+	// First write of the row CreateOrganizedVersion just returned: no other
+	// writer can have touched it yet, so the whole-row UpdateBook is safe here.
 	if _, updateErr := h.store.UpdateBook(createdBook.ID, createdBook); updateErr != nil {
 		slog.Warn("organize failed to stamp organized book", "createdBook", createdBook.ID, "updateErr", updateErr)
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -803,9 +803,23 @@ func (h *Handler) ReconcileAudiobookFiles(c *gin.Context) {
 		oldBookSize = *book.FileSize
 	}
 	if newTotal != oldBookSize {
-		book.FileSize = &newTotal
-		if _, upErr := store.UpdateBook(id, book); upErr != nil {
+		// ModifyBook sets FileSize alone on the stored row. `book` was read
+		// before the file stats above, so writing it back whole would revert
+		// any column another writer committed meanwhile; the callback
+		// re-checks the fresh row so an equal size is not rewritten.
+		updated, upErr := store.ModifyBook(id, func(b *database.Book) error {
+			if b.FileSize != nil && *b.FileSize == newTotal {
+				return database.ErrSkipBookWrite
+			}
+			b.FileSize = &newTotal
+			return nil
+		})
+		if upErr != nil {
 			httputil.InternalError(c, "failed to update book", upErr)
+			return
+		}
+		if updated == nil {
+			httputil.RespondWithNotFound(c, "audiobook", id)
 			return
 		}
 		// Invalidate the dashboard cache so the next /system/status sees

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -45,6 +45,9 @@ import (
 type AudiobookBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the column-scoped read-modify-write the reconcile and
+	// relocate handlers use for the book row (database.BookMutator.ModifyBook).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// MarkNeedsRescan flags the book for a full re-read by the next scan.
 	//
 	// This is the ONLY per-book forced rescan that is precise. The alternative --

@@ -222,6 +222,74 @@ func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(i
 	return _c
 }
 
+// ModifyBook provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	ret := _mock.Called(id, fn)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ModifyBook")
+	}
+
+	var r0 *database.Book
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) (*database.Book, error)); ok {
+		return returnFunc(id, fn)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) *database.Book); ok {
+		r0 = returnFunc(id, fn)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Book)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, func(*database.Book) error) error); ok {
+		r1 = returnFunc(id, fn)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_ModifyBook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ModifyBook'
+type MockMetadataCacheBookStore_ModifyBook_Call struct {
+	*mock.Call
+}
+
+// ModifyBook is a helper method to define mock.On call
+//   - id string
+//   - fn func(*database.Book) error
+func (_e *MockMetadataCacheBookStore_Expecter) ModifyBook(id any, fn any) *MockMetadataCacheBookStore_ModifyBook_Call {
+	return &MockMetadataCacheBookStore_ModifyBook_Call{Call: _e.mock.On("ModifyBook", id, fn)}
+}
+
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Run(run func(id string, fn func(*database.Book) error)) *MockMetadataCacheBookStore_ModifyBook_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 func(*database.Book) error
+		if args[1] != nil {
+			arg1 = args[1].(func(*database.Book) error)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Return(book *database.Book, err error) *MockMetadataCacheBookStore_ModifyBook_Call {
+	_c.Call.Return(book, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) RunAndReturn(run func(id string, fn func(*database.Book) error) (*database.Book, error)) *MockMetadataCacheBookStore_ModifyBook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateBook provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
 	ret := _mock.Called(id, book)
