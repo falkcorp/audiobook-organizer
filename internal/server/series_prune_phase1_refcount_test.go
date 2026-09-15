@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
-// last-edited: 2026-08-30
+// last-edited: 2026-09-14
 
 package server
 
@@ -204,8 +204,8 @@ func (s noRefCountPruneStore) DeleteSeries(id int) error { return s.m.DeleteSeri
 func (s noRefCountPruneStore) GetBookByID(id string) (*database.Book, error) {
 	return s.m.GetBookByID(id)
 }
-func (s noRefCountPruneStore) UpdateBook(id string, b *database.Book) (*database.Book, error) {
-	return s.m.UpdateBook(id, b)
+func (s noRefCountPruneStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.m.ModifyBook(id, fn)
 }
 func (s noRefCountPruneStore) CreateOperationChange(c *database.OperationChange) error {
 	return s.m.CreateOperationChange(c)

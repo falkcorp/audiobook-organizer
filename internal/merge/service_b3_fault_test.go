@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package merge
 
@@ -56,6 +56,12 @@ type b3FaultStore struct {
 	// SoftDeleteBook's own re-fetch inside the loser-cleanup loop, which is
 	// the call this is meant to fail.
 	failGetBookByIDAfterFirstFor map[string]bool
+	// failModifyBookAfterFirstFor makes ModifyBook(id) return an error for id
+	// starting on its SECOND call -- the first is MergeBooks' version-group
+	// write (must succeed so the merge proceeds); the second is
+	// SoftDeleteBook's, which is the one under test.
+	failModifyBookAfterFirstFor map[string]bool
+	modifyCount                 map[string]int
 }
 
 func (f *b3FaultStore) GetBookByID(id string) (*database.Book, error) {
@@ -147,6 +153,25 @@ func (f *b3FaultStore) UpdateBook(id string, b *database.Book) (*database.Book, 
 	return f.Store.UpdateBook(id, b)
 }
 
+// ModifyBook fails under the same switches as UpdateBook: the merge's column
+// writes go through it now, and the injected-write-failure cases must still
+// reach them.
+func (f *b3FaultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if f.failUpdateBook || f.failUpdateBookFor[id] {
+		return nil, fmt.Errorf("b3 injected UpdateBook failure")
+	}
+	if f.failModifyBookAfterFirstFor[id] {
+		if f.modifyCount == nil {
+			f.modifyCount = map[string]int{}
+		}
+		f.modifyCount[id]++
+		if f.modifyCount[id] > 1 {
+			return nil, fmt.Errorf("b3 injected ModifyBook failure")
+		}
+	}
+	return f.Store.ModifyBook(id, fn)
+}
+
 func (f *b3FaultStore) GetAuthorByName(name string) (*database.Author, error) {
 	if f.failGetAuthorByName {
 		return nil, fmt.Errorf("b3 injected GetAuthorByName failure")
@@ -223,13 +248,13 @@ func TestB3_MergeBooks_SoftDeleteError_IsReported(t *testing.T) {
 	_, err = real.CreateBook(winner)
 	require.NoError(t, err)
 
-	// SoftDeleteBook's own GetBookByID re-fetch fails. Until 2026-09-02 this
-	// was warned and swallowed: the merge reported success while the loser
-	// stayed live as a non-primary member of the group, which is the shape
-	// the dedup bug hunt (F1/F4) found on prod. The chokepoint now returns an
-	// error that names the loser so the caller (review lane, FullScan, op)
-	// records a failure instead of a clean merge.
-	fault.failGetBookByIDAfterFirstFor = map[string]bool{loser.ID: true}
+	// SoftDeleteBook's own ModifyBook (its locked re-read and write) fails.
+	// Until 2026-09-02 this was warned and swallowed: the merge reported
+	// success while the loser stayed live as a non-primary member of the
+	// group, which is the shape the dedup bug hunt (F1/F4) found on prod. The
+	// chokepoint now returns an error that names the loser so the caller
+	// (review lane, FullScan, op) records a failure instead of a clean merge.
+	fault.failModifyBookAfterFirstFor = map[string]bool{loser.ID: true}
 
 	ms := NewService(fault)
 	result, err := ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)

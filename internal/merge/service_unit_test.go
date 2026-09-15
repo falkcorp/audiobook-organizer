@@ -1,5 +1,5 @@
 // file: internal/merge/service_unit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8a2c1d-7e4b-4d9a-b6c5-0e1f2a3b4c5d
 // last-edited: 2026-09-14
 
@@ -33,13 +33,20 @@ func newBook(id, title, format, path string) *database.Book {
 // ModifyBook (not a full-row UpdateBook of the row read at the top of the
 // merge): it runs the merge's mutation against b and returns b.
 func expectModifyBook(m *mocks.MockStore, b *database.Book) {
+	expectModifyBookTimes(m, b, 1)
+}
+
+// expectModifyBookTimes is expectModifyBook for a book that is written
+// through ModifyBook n times in one call -- a merge's loser, for example, is
+// written once in the version-group loop and once by SoftDeleteBook.
+func expectModifyBookTimes(m *mocks.MockStore, b *database.Book, n int) {
 	m.EXPECT().ModifyBook(b.ID, mock.Anything).RunAndReturn(
 		func(_ string, fn func(*database.Book) error) (*database.Book, error) {
 			if err := fn(b); err != nil {
 				return nil, err
 			}
 			return b, nil
-		})
+		}).Times(n)
 }
 
 // ---------- MergeBooks error paths ----------
@@ -125,16 +132,14 @@ func TestUnit_MergeBooks_AutoSelectM4B(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
-	// ModifyBook called for both books in the version-group loop
-	expectModifyBook(mockStore, book1)
+	// ModifyBook called for both books in the version-group loop; the loser
+	// (book-1) is written a second time by SoftDeleteBook.
+	expectModifyBookTimes(mockStore, book1, 2)
 	expectModifyBook(mockStore, book2)
 
 	// Loser cleanup: GetExternalIDsForBook, ReassignExternalIDs, then SoftDeleteBook
 	mockStore.EXPECT().GetExternalIDsForBook("book-1").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-1", "book-2").Return(nil)
-	// SoftDeleteBook calls GetBookByID then UpdateBook again
-	mockStore.EXPECT().GetBookByID("book-1").Return(book1, nil)
-	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(book1, nil)
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "")
 	require.NoError(t, err)
@@ -156,15 +161,14 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetBookFiles("book-2").Return(nil, nil)
 
-	// Both books written in the version-group loop
+	// Both books written in the version-group loop; the loser (book-2) is
+	// written a second time by SoftDeleteBook.
 	expectModifyBook(mockStore, book1)
-	expectModifyBook(mockStore, book2)
+	expectModifyBookTimes(mockStore, book2, 2)
 
 	// Loser is book-2 (explicit override)
 	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
-	mockStore.EXPECT().GetBookByID("book-2").Return(book2, nil)
-	mockStore.EXPECT().UpdateBook("book-2", mock.Anything).Return(book2, nil)
 
 	result, err := svc.MergeBooks([]string{"book-1", "book-2"}, "book-1")
 	require.NoError(t, err)
@@ -173,15 +177,13 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 
 // ---------- SoftDeleteBook ----------
 
-// A failed UpdateBook must surface as an error and must NOT fall back to
+// A failed ModifyBook must surface as an error and must NOT fall back to
 // DeleteBook. The mock has no DeleteBook expectation, so any hard-delete
 // attempt fails this test (mockery panics on an unexpected call).
 func TestUnit_SoftDeleteBook_UpdateFails_ReturnsErrorNoHardDelete(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
-	book := newBook("book-1", "A", "mp3", "/tmp/a.mp3")
-	mockStore.EXPECT().GetBookByID("book-1").Return(book, nil)
-	mockStore.EXPECT().UpdateBook("book-1", mock.Anything).Return(nil, fmt.Errorf("update failed"))
+	mockStore.EXPECT().ModifyBook("book-1", mock.Anything).Return(nil, fmt.Errorf("update failed"))
 
 	err := SoftDeleteBook(mockStore, "book-1")
 	require.Error(t, err)
@@ -192,20 +194,24 @@ func TestUnit_SoftDeleteBook_UpdateFails_ReturnsErrorNoHardDelete(t *testing.T) 
 func TestUnit_SoftDeleteBook_BookAlreadyGone(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
-	mockStore.EXPECT().GetBookByID("book-1").Return(nil, nil)
+	// (nil, nil) from ModifyBook is the store's "no such book".
+	mockStore.EXPECT().ModifyBook("book-1", mock.Anything).Return(nil, nil)
 
 	err := SoftDeleteBook(mockStore, "book-1")
 	assert.NoError(t, err, "should be a no-op when book is already gone")
 }
 
+// The store's read inside ModifyBook fails: the error surfaces, named for
+// the book, and nothing else is attempted.
 func TestUnit_SoftDeleteBook_GetBookByID_Error(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
-	mockStore.EXPECT().GetBookByID("book-1").Return(nil, fmt.Errorf("connection refused"))
+	mockStore.EXPECT().ModifyBook("book-1", mock.Anything).Return(nil, fmt.Errorf("connection refused"))
 
 	err := SoftDeleteBook(mockStore, "book-1")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GetBookByID")
+	assert.Contains(t, err.Error(), "connection refused")
+	assert.Contains(t, err.Error(), "book-1")
 }
 
 // ---------- BookIsBetter / BookCurationScore ----------

@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-14
 
@@ -645,26 +645,27 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if member.IsPrimaryVersion != nil && !*member.IsPrimaryVersion {
 			continue
 		}
-		// Re-fetch before writing. UpdateBook is a full-column REPLACE, and
+		// Written through ModifyBook, never UpdateBook(member): the store
+		// re-reads the row under the book's write lock and only
+		// IsPrimaryVersion is set on it. That covers both hazards at once --
 		// GetBooksByVersionGroup is documented as possibly serving a slim
 		// projection (elect_primaries.go:232 says so about this exact
 		// accessor; regroup_apply.go:290 and reconcile.go:810 state the same
-		// rule for their own writes). Writing the listed row straight back
-		// would silently drop whatever the projection omitted.
-		//
-		// Today every PebbleStore path happens to return a full row, so this
-		// is a latent hazard rather than live data loss -- but the three
-		// precedents above all hydrate, and being the one writer that does not
-		// is how the hazard eventually becomes real. Merge groups are small;
-		// the point-get is free.
-		full, err := ms.db.GetBookByID(member.ID)
+		// rule for their own writes), and a column another writer commits
+		// between a read and a whole-row write would be reverted by it.
+		demoted, err := ms.db.ModifyBook(member.ID, func(b *database.Book) error {
+			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+				return database.ErrSkipBookWrite
+			}
+			notPrimary := false
+			b.IsPrimaryVersion = &notPrimary
+			return nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to load pre-existing version-group member %s for demotion: %w", member.ID, err)
-		}
-		notPrimary := false
-		full.IsPrimaryVersion = &notPrimary
-		if _, err := ms.db.UpdateBook(member.ID, full); err != nil {
 			return nil, fmt.Errorf("failed to demote pre-existing version-group member %s: %w", member.ID, err)
+		}
+		if demoted == nil {
+			return nil, fmt.Errorf("failed to load pre-existing version-group member %s for demotion: book not found", member.ID)
 		}
 		slog.Info("merge demoted pre-existing version-group member",
 			"id", member.ID, "group", versionGroupID, "primary", resolvedPrimaryID)
@@ -1119,20 +1120,22 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 // original for undo. A separate function from SoftDeleteBook because
 // MergeBooks' losers keep their own files and must keep their FilePath.
 func (ms *Service) softDeleteAbsorbed(bookID string) (*time.Time, error) {
-	current, err := ms.db.GetBookByID(bookID)
+	// ModifyBook: the three columns are set on the row as it is under the
+	// write lock, so a column another writer committed in the meantime is
+	// not reverted by a whole-row write of a stale read.
+	written, err := ms.db.ModifyBook(bookID, func(b *database.Book) error {
+		t := true
+		now := time.Now()
+		b.MarkedForDeletion = &t
+		b.MarkedForDeletionAt = &now
+		b.FilePath = ""
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("GetBookByID %s: %w", bookID, err)
+		return nil, fmt.Errorf("soft-delete absorbed %s: %w", bookID, err)
 	}
-	if current == nil {
+	if written == nil {
 		return nil, &BookNotFoundError{BookID: bookID}
-	}
-	t := true
-	now := time.Now()
-	current.MarkedForDeletion = &t
-	current.MarkedForDeletionAt = &now
-	current.FilePath = ""
-	if _, err := ms.db.UpdateBook(bookID, current); err != nil {
-		return nil, err
 	}
 	stored, err := ms.db.GetBookByID(bookID)
 	if err != nil || stored == nil || stored.MarkedForDeletionAt == nil {
@@ -1228,36 +1231,40 @@ func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverr
 	}
 
 	if override.Title != "" || override.Narrator != "" {
-		fresh, err := ms.db.GetBookByID(primaryID)
-		if err == nil && fresh != nil {
-			undo.TitleBefore = fresh.Title
-			undo.NarratorBefore = fresh.Narrator
+		// ModifyBook: only Title and Narrator are written, on the row as it
+		// is under the write lock, so a column another writer committed in
+		// the meantime survives. The undo before-values come from that same
+		// row, the one the write actually replaces.
+		fresh, err := ms.db.ModifyBook(primaryID, func(b *database.Book) error {
+			undo.TitleBefore = b.Title
+			undo.NarratorBefore = b.Narrator
 			if override.Title != "" {
-				fresh.Title = override.Title
+				b.Title = override.Title
 			}
 			if override.Narrator != "" {
-				fresh.Narrator = &override.Narrator
+				b.Narrator = &override.Narrator
 			}
-			if _, err := ms.db.UpdateBook(fresh.ID, fresh); err != nil {
-				slog.Warn("combine override UpdateBook", "id", fresh.ID, "err", err)
-				// Not applied, so nothing for undo to roll back or check.
-				undo.Applied.Title, undo.Applied.Narrator = "", ""
-			} else {
-				slog.Info("combine applied metadata override", "id", fresh.ID,
-					"title", override.Title, "narrator", override.Narrator)
-				// The override is the user's explicit choice for the
-				// survivor. Record it as a lock, or the next metadata fetch
-				// is free to replace the value they just picked.
-				userSet := map[string]any{}
-				if override.Title != "" {
-					userSet[database.FieldKeyTitle] = override.Title
-				}
-				if override.Narrator != "" {
-					userSet[database.FieldKeyNarrator] = override.Narrator
-				}
-				if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
-					slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
-				}
+			return nil
+		})
+		if err != nil || fresh == nil {
+			slog.Warn("combine override ModifyBook", "id", primaryID, "err", err)
+			// Not applied, so nothing for undo to roll back or check.
+			undo.Applied.Title, undo.Applied.Narrator = "", ""
+		} else {
+			slog.Info("combine applied metadata override", "id", fresh.ID,
+				"title", override.Title, "narrator", override.Narrator)
+			// The override is the user's explicit choice for the
+			// survivor. Record it as a lock, or the next metadata fetch
+			// is free to replace the value they just picked.
+			userSet := map[string]any{}
+			if override.Title != "" {
+				userSet[database.FieldKeyTitle] = override.Title
+			}
+			if override.Narrator != "" {
+				userSet[database.FieldKeyNarrator] = override.Narrator
+			}
+			if err := database.RecordUserOverrides(ms.db, fresh.ID, userSet); err != nil {
+				slog.Warn("combine override lock rows", "id", fresh.ID, "err", err)
 			}
 		}
 	}
@@ -1313,24 +1320,28 @@ func (ms *Service) applyCombineOverride(primaryID string, override *CombineOverr
 		slog.Warn("combine override SetBookAuthors", "id", logger.SanitizeLogValue(primaryID), "author", logger.SanitizeLogValue(override.Author), "err", logger.SanitizeLogValue(fmt.Sprint(saErr)))
 	}
 	// Also set AuthorID on the book row for backward compat.
-	if b, err2 := ms.db.GetBookByID(primaryID); err2 == nil && b != nil {
+	// ModifyBook: only AuthorID is written, on the row as it is under the
+	// write lock, so a column another writer committed in the meantime
+	// survives. The undo before-value comes from that same row.
+	b, ubErr := ms.db.ModifyBook(primaryID, func(b *database.Book) error {
 		undo.AuthorIDBefore = b.AuthorID
 		b.AuthorID = &author.ID
-		if _, ubErr := ms.db.UpdateBook(b.ID, b); ubErr != nil {
-			slog.Warn("combine override author UpdateBook", "id", b.ID, "err", ubErr)
-		} else {
-			id := author.ID
-			undo.AuthorIDAfter = &id
-			if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
-				// The CLEANED name, not the raw override: this row is
-				// the lock that protects the field from later scans, so
-				// it has to name the author actually linked above.
-				// Recording the raw "001-147 Kevin J Anderson" would
-				// lock the field to a value nothing else agrees with.
-				database.FieldKeyAuthorName: cleanedAuthor,
-			}); lErr != nil {
-				slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
-			}
+		return nil
+	})
+	if ubErr != nil || b == nil {
+		slog.Warn("combine override author ModifyBook", "id", primaryID, "err", ubErr)
+	} else {
+		id := author.ID
+		undo.AuthorIDAfter = &id
+		if lErr := database.RecordUserOverrides(ms.db, b.ID, map[string]any{
+			// The CLEANED name, not the raw override: this row is
+			// the lock that protects the field from later scans, so
+			// it has to name the author actually linked above.
+			// Recording the raw "001-147 Kevin J Anderson" would
+			// lock the field to a value nothing else agrees with.
+			database.FieldKeyAuthorName: cleanedAuthor,
+		}); lErr != nil {
+			slog.Warn("combine override author lock row", "id", b.ID, "err", lErr)
 		}
 	}
 	return undo
@@ -1400,21 +1411,18 @@ func (ms *Service) attachVirtualFile(b *database.Book, targetBookID string) (Com
 // whose job is to keep the loser recoverable. The caller gets the error and
 // decides.
 func SoftDeleteBook(store BookWriter, bookID string) error {
-	current, err := store.GetBookByID(bookID)
-	if err != nil {
-		return fmt.Errorf("GetBookByID %s: %w", bookID, err)
-	}
-	if current == nil {
-		return nil // Already gone
-	}
-
-	t := true
-	now := time.Now()
-	current.MarkedForDeletion = &t
-	current.MarkedForDeletionAt = &now
-
-	if _, upErr := store.UpdateBook(bookID, current); upErr != nil {
-		return fmt.Errorf("soft-delete %s: %w", bookID, upErr)
+	// ModifyBook: the two deletion columns are set on the row as it is under
+	// the write lock, so a column another writer committed in the meantime is
+	// not reverted by a whole-row write of a stale read. (nil, nil) is a book
+	// that is already gone, which is not an error.
+	if _, err := store.ModifyBook(bookID, func(b *database.Book) error {
+		t := true
+		now := time.Now()
+		b.MarkedForDeletion = &t
+		b.MarkedForDeletionAt = &now
+		return nil
+	}); err != nil {
+		return fmt.Errorf("soft-delete %s: %w", bookID, err)
 	}
 	return nil
 }

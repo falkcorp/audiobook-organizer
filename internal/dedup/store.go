@@ -1,5 +1,5 @@
 // file: internal/dedup/store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
 // last-edited: 2026-09-14
 
@@ -83,6 +83,8 @@ type dedupBookWriter interface {
 	// ModifyBook is the locked read-modify-write: MergeSplitBookCluster
 	// writes the keep row through it so a column another writer (or the
 	// file move's own aggregate recompute) changed is not reverted.
+	// The series repoints also write one column (SeriesID) on rows
+	// other writers touch concurrently; see database.BookMutator.ModifyBook.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error

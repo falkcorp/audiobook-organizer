@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -577,24 +577,53 @@ func DedupSeries(
 				// merged-into id and report success while nothing moved back.
 				//
 				// full.SeriesID rather than bookCore.SeriesID (which is what
-				// MergeSeries reads) because full is the row UpdateBook writes;
-				// the index copy is a second source that can only disagree.
+				// MergeSeries reads) for the dry run; the real write re-reads
+				// it from the row ModifyBook hands back, which is the row the
+				// write actually replaces. The index copy is a second source
+				// that can only disagree.
 				oldSeriesID := ""
 				if full.SeriesID != nil {
 					oldSeriesID = fmt.Sprintf("%d", *full.SeriesID)
 				}
-				full.SeriesID = &keepID
 				if dryRun {
 					result.TotalBooksReassigned++
 					moved++
 					continue
 				}
-				if _, err := store.UpdateBook(full.ID, full); err != nil {
+				// ModifyBook writes SeriesID alone, on the row as it is under
+				// the write lock, so a column another writer committed between
+				// the hydrate above and this write is not reverted. A row that
+				// already points at keepID is left alone and gets no ledger
+				// row: nothing was overwritten, so there is nothing to undo.
+				changed := false
+				written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
+					if b.SeriesID != nil && *b.SeriesID == keepID {
+						return database.ErrSkipBookWrite
+					}
+					oldSeriesID = ""
+					if b.SeriesID != nil {
+						oldSeriesID = fmt.Sprintf("%d", *b.SeriesID)
+					}
+					b.SeriesID = &keepID
+					changed = true
+					return nil
+				})
+				if err != nil {
 					result.Errors = append(result.Errors,
 						fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
 					continue
 				}
+				if written == nil {
+					result.Errors = append(result.Errors,
+						fmt.Sprintf("book %s vanished before its series could be reassigned; "+
+							"series %d kept, it may still reference it", bookCore.ID, s.ID))
+					continue
+				}
 				members.Move(full.ID, s.ID, &keepID)
+				if !changed {
+					moved++
+					continue
+				}
 				// Undo ledger. internal/undo reverses a "metadata_update" row by
 				// writing OldValue back into FieldName, so this row is what makes
 				// a dry_run=false run undoable at all — without it git revert
@@ -945,22 +974,42 @@ func MergeSeries(
 						"series %d kept, it may still reference it", bookCore.ID, mergeID))
 				continue
 			}
-			// The before-image comes from full, the row UpdateBook overwrites,
-			// not from bookCore (the index copy, which can disagree), and it is
-			// read before the assignment below. It is load-bearing: the revert
+			// The before-image comes from the row ModifyBook hands back -- the
+			// row the write actually replaces -- not from bookCore (the index
+			// copy, which can disagree). It is load-bearing: the revert
 			// endpoint writes this OldValue back into Book.SeriesID. Mirrors
-			// DedupSeries.
+			// DedupSeries. ModifyBook writes SeriesID alone, on the row as it
+			// is under the write lock, so a column another writer committed
+			// between the hydrate above and this write is not reverted. A row
+			// that already points at keepID is left alone and gets no ledger
+			// row: nothing was overwritten, so there is nothing to undo.
 			oldSeriesID := ""
-			if full.SeriesID != nil {
-				oldSeriesID = fmt.Sprintf("%d", *full.SeriesID)
-			}
-			full.SeriesID = &keepID
-			if _, err := store.UpdateBook(full.ID, full); err != nil {
+			changed := false
+			written, err := store.ModifyBook(full.ID, func(b *database.Book) error {
+				if b.SeriesID != nil && *b.SeriesID == keepID {
+					return database.ErrSkipBookWrite
+				}
+				if b.SeriesID != nil {
+					oldSeriesID = fmt.Sprintf("%d", *b.SeriesID)
+				}
+				b.SeriesID = &keepID
+				changed = true
+				return nil
+			})
+			if err != nil {
 				result.Errors = append(result.Errors,
 					fmt.Sprintf("failed to reassign book %s: %v", bookCore.ID, err))
-			} else {
-				members.Move(bookCore.ID, mergeID, &keepID)
-				moved++
+				continue
+			}
+			if written == nil {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("book %s vanished before its series could be reassigned; "+
+						"series %d kept, it may still reference it", bookCore.ID, mergeID))
+				continue
+			}
+			members.Move(bookCore.ID, mergeID, &keepID)
+			moved++
+			if changed {
 				_ = store.CreateOperationChange(&database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,

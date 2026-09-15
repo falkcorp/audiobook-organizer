@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.21.0
+// version: 2.22.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-09-14
 
@@ -37,7 +37,10 @@ type libraryCounters interface {
 type maintenanceBookStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook, not UpdateBook: the series merge and normalize passes write
+	// one column each and must not revert a concurrent writer's columns
+	// (database.BookMutator.ModifyBook).
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBookFilesForBook(bookID string) error
 }
 
