@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-14
 
@@ -106,7 +106,6 @@ var slogRatchet = map[string]int{
 	"internal/dedup/engine.go":                                   36,
 	"internal/dedup/lifecycle.go":                                11,
 	"internal/dedup/merge_journaled.go":                          1,
-	"internal/dedup/split_book_merge.go":                         2,
 	"internal/deluge/discovery.go":                               4,
 	"internal/deluge/integration.go":                             5,
 	"internal/errhandling/errhandling.go":                        1,
