@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
 // last-edited: 2026-09-14
 //
@@ -1204,7 +1204,7 @@ func writeStrippedSeriesPositions(
 				return nil
 			}
 			if book == nil {
-				note("GetBookByID(%s): no such book -- the position %d stripped from its series name was NOT recorded", bookID, pos)
+				note("ModifyBook(%s): no such book -- the position %d stripped from its series name was NOT recorded", bookID, pos)
 				return nil
 			}
 			if alreadySet {

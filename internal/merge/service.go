@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-14
 
@@ -653,8 +653,10 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		// accessor; regroup_apply.go:290 and reconcile.go:810 state the same
 		// rule for their own writes), and a column another writer commits
 		// between a read and a whole-row write would be reverted by it.
+		alreadyDemoted := false
 		demoted, err := ms.db.ModifyBook(member.ID, func(b *database.Book) error {
-			if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
+			alreadyDemoted = b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion
+			if alreadyDemoted {
 				return database.ErrSkipBookWrite
 			}
 			notPrimary := false
@@ -666,6 +668,9 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 		if demoted == nil {
 			return nil, fmt.Errorf("failed to load pre-existing version-group member %s for demotion: book not found", member.ID)
+		}
+		if alreadyDemoted {
+			continue
 		}
 		slog.Info("merge demoted pre-existing version-group member",
 			"id", member.ID, "group", versionGroupID, "primary", resolvedPrimaryID)
