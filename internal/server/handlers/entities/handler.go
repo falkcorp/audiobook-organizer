@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
 // last-edited: 2026-09-14
 
@@ -527,7 +527,8 @@ func (h *Handler) repointPrimaryAuthor(book *database.BookCore, deletedAuthorID 
 	// under its lock. Until 2026-09-14 this hydrated the row with GetBookByID,
 	// set the two fields and wrote the whole row back with UpdateBook -- and
 	// when the hydrate failed, wrote book.ToBook(), a BookCore PROJECTION, as
-	// the whole row. Both were column writes in disguise: AuthorID and Author
+	// the whole row (the store restores nine heavy columns on such a write,
+	// but not the rest). Both were column writes in disguise: AuthorID and Author
 	// are the only columns this function owns, the whole-row write reverted
 	// anything another writer committed meanwhile, and the projection write
 	// would have blanked every column BookCore does not carry. The store

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-09-14
 
@@ -631,20 +631,23 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 // closed: an unreadable lock set is an error for the whole suggestion, and
 // nothing is written.
 //
-// The locks are read before the row lock is taken; mutate itself runs inside
-// ModifyBook on the stored row, so only the suggestion's own column is written
-// and a column another writer committed meanwhile is kept. Until 2026-09-14
-// this was GetBookByID -> mutate -> UpdateBook, which wrote the whole stale
-// row back.
+// The locks are read INSIDE the ModifyBook callback, under the row's write
+// lock, so a lock set while the suggestion is being applied is honoured
+// (reading them first left a window in which a just-locked field went
+// through). The lock read is a plain Pebble read that takes no book lock.
+// mutate runs on the stored row, so only the suggestion's own column is
+// written and a column another writer committed meanwhile is kept. Until
+// 2026-09-14 this was GetBookByID -> mutate -> UpdateBook, which wrote the
+// whole stale row back.
 func applySuggestionRespectingLocks(store diagnosticsStore, bookIDs []string, mutate func(*database.Book)) ([]string, error) {
 	var locked []string
 	for _, bookID := range bookIDs {
-		locks, lerr := database.LoadFieldLocks(store, bookID)
-		if lerr != nil {
-			return nil, lerr
-		}
 		var restored []string
 		written, err := store.ModifyBook(bookID, func(b *database.Book) error {
+			locks, lerr := database.LoadFieldLocks(store, bookID)
+			if lerr != nil {
+				return lerr
+			}
 			restored = locks.Apply(b, mutate)
 			if len(restored) > 0 {
 				return database.ErrSkipBookWrite
