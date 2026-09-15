@@ -1,11 +1,12 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package jobs
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -41,16 +42,19 @@ type csFakeMerger struct {
 }
 
 // unhydratable models the memdb/Pebble split: GetAllSeriesBookRefCounts reads
-// the memdb when warm, GetBookByID reads Pebble, so a row can be listed and
-// counted while hydrating to (nil, nil) on every single run.
-func (f *csFakeMerger) GetBookByID(id string) (*database.Book, error) {
+// the memdb when warm, ModifyBook reads Pebble, so a row can be listed and
+// counted while resolving to (nil, nil) on every single run.
+func (f *csFakeMerger) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	if f.unhydratable[id] {
 		return nil, nil
 	}
-	return &database.Book{ID: id}, nil
-}
-
-func (f *csFakeMerger) UpdateBook(id string, b *database.Book) (*database.Book, error) {
+	b := &database.Book{ID: id}
+	if err := fn(b); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return b, nil
+		}
+		return nil, err
+	}
 	f.updated = append(f.updated, id)
 	return b, nil
 }

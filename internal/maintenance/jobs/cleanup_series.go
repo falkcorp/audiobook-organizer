@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -238,8 +238,10 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 // job's guard existed to refuse.
 //
 // Only book.ID is read from each passed-in row (BookCore is sufficient — see
-// caller); the real writeback target is hydrated via GetBookByID, so no
-// heavy-field fidelity is lost.
+// caller); the writeback goes through ModifyBook, which re-reads the full row
+// under the book's write lock and clears only SeriesID and SeriesSequence, so
+// no heavy-field fidelity is lost and a column another writer commits
+// meanwhile is not reverted (audit A1#15).
 //
 // Fail-closed and ordered: the delete happens only after every unlink has
 // SUCCEEDED. Returning early on the first failure leaves the series row in
@@ -257,17 +259,19 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 	}
 	for i := range books {
 		id := books[i].ID
-		current, err := store.GetBookByID(id)
+		written, err := store.ModifyBook(id, func(current *database.Book) error {
+			if current.SeriesID == nil && current.SeriesSequence == nil {
+				return database.ErrSkipBookWrite
+			}
+			current.SeriesID = nil
+			current.SeriesSequence = nil
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("GetBookByID(%s): %w", id, err)
+			return fmt.Errorf("ModifyBook(%s): %w", id, err)
 		}
-		if current == nil {
+		if written == nil {
 			return fmt.Errorf("book %s not found", id)
-		}
-		current.SeriesID = nil
-		current.SeriesSequence = nil
-		if _, err = store.UpdateBook(id, current); err != nil {
-			return fmt.Errorf("UpdateBook(%s): %w", id, err)
 		}
 		members.Move(id, seriesID, nil)
 	}
@@ -310,7 +314,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 		// nil-hydration skip below must NOT count -- and the resulting refusal
 		// is NOT merely a one-run deferral. GetAllSeriesBookRefCounts prefers
 		// the memdb whenever it is warm, which is the prod default, while
-		// GetBookByID reads Pebble directly (see
+		// ModifyBook reads Pebble directly (see
 		// internal/database/series_bookref.go and pebble_store.go). A row the
 		// memdb still holds but Pebble no longer does is therefore counted in
 		// refCounts and unhydratable on EVERY run, so this keeps the series row
@@ -323,16 +327,20 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 		// TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated.
 		moved := 0
 		for _, book := range books {
-			current, err := store.GetBookByID(book.ID)
+			// Repoint only SeriesID, under the book's write lock, so a column
+			// another writer commits meanwhile is not reverted (audit A1#15).
+			written, err := store.ModifyBook(book.ID, func(current *database.Book) error {
+				if current.SeriesID != nil && *current.SeriesID == keepID {
+					return database.ErrSkipBookWrite
+				}
+				current.SeriesID = &keepID
+				return nil
+			})
 			if err != nil {
-				return merged, refused, fmt.Errorf("GetBookByID(%s): %w", book.ID, err)
+				return merged, refused, fmt.Errorf("ModifyBook(%s): %w", book.ID, err)
 			}
-			if current == nil {
+			if written == nil {
 				continue
-			}
-			current.SeriesID = &keepID
-			if _, err = store.UpdateBook(book.ID, current); err != nil {
-				return merged, refused, fmt.Errorf("UpdateBook(%s): %w", book.ID, err)
 			}
 			members.Move(book.ID, fromID, &keepID)
 			moved++

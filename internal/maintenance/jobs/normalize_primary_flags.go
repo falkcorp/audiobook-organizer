@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/normalize_primary_flags.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b8e2d19-7c5a-4f60-9d3b-1e6a8c4f2b07
-// last-edited: 2026-08-17
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -100,19 +100,29 @@ func (j *normalizePrimaryFlagsJob) Run(ctx context.Context, store maintenance.Jo
 			if gctx.Err() != nil {
 				return gctx.Err()
 			}
-			// Hydrate the full row before write-back: the Core projection is
-			// slim, and UpdateBook persists the whole struct (same pattern as
-			// reconcile's elect-missing-primaries).
-			full, herr := store.GetBookByID(b.ID)
-			if herr != nil || full == nil {
-				slog.Warn("normalize-primary-flags: hydrate failed", "book", b.ID, "err", herr)
+			// Write through ModifyBook: it re-reads the full row (the Core
+			// projection is slim) under the book's write lock and sets only
+			// IsPrimaryVersion, so a column another writer commits between
+			// the listing read and this write is not reverted (audit A1#15;
+			// same pattern as reconcile's elect-missing-primaries). The
+			// classification is re-checked on the fresh row: a book that was
+			// grouped or flagged meanwhile is left for election.
+			t := true
+			full, uerr := store.ModifyBook(b.ID, func(cur *database.Book) error {
+				grouped := cur.VersionGroupID != nil && *cur.VersionGroupID != ""
+				if grouped || (cur.IsPrimaryVersion != nil && *cur.IsPrimaryVersion) {
+					return database.ErrSkipBookWrite
+				}
+				cur.IsPrimaryVersion = &t
+				return nil
+			})
+			if uerr != nil {
+				slog.Warn("normalize-primary-flags: write failed", "book", b.ID, "err", uerr)
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}
-			t := true
-			full.IsPrimaryVersion = &t
-			if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-				slog.Warn("normalize-primary-flags: write failed", "book", full.ID, "err", uerr)
+			if full == nil {
+				slog.Warn("normalize-primary-flags: book vanished before write", "book", b.ID)
 				atomic.AddInt64(&errCount, 1)
 				return nil
 			}

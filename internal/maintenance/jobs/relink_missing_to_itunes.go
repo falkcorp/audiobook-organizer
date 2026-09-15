@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -87,10 +88,10 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 			continue
 		}
 
-		// Hydrate before further processing — DUAL site: Author (a heavy
-		// field) is read below AND the eventual writeback must never persist
-		// a slim struct (that would wipe Author/Series on Pebble). A single
-		// hydrate serves both needs.
+		// Hydrate for the Author read below (a heavy field the Core listing
+		// lacks). This row is NOT the write target: the relink writes only
+		// FilePath through ModifyBook (rmt_writeFilePath), so an apply that
+		// lands during the iTunes search is not reverted (audit A1#15).
 		book, herr := store.GetBookByID(core.ID)
 		if herr != nil || book == nil {
 			slog.Warn("relink-missing-to-itunes failed to hydrate book", "book", core.ID, "herr", herr)
@@ -130,9 +131,8 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 			relinked++
 			if !dryRun {
 				fi, _ := os.Stat(newFP)
-				book.FilePath = newFP
-				if _, upErr := store.UpdateBook(book.ID, book); upErr != nil {
-					slog.Warn("relink-missing-to-itunes UpdateBook", "book", book.ID, "upErr", upErr)
+				if upErr := rmt_writeFilePath(store, book.ID, newFP); upErr != nil {
+					slog.Warn("relink-missing-to-itunes ModifyBook", "book", book.ID, "upErr", upErr)
 					relinked--
 					unresolved++
 					break
@@ -154,9 +154,8 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 				relinked++
 				if !dryRun {
 					fi, _ := os.Stat(best)
-					book.FilePath = best
-					if _, upErr := store.UpdateBook(book.ID, book); upErr != nil {
-						slog.Warn("relink-missing-to-itunes UpdateBook", "book", book.ID, "upErr", upErr)
+					if upErr := rmt_writeFilePath(store, book.ID, best); upErr != nil {
+						slog.Warn("relink-missing-to-itunes ModifyBook", "book", book.ID, "upErr", upErr)
 						relinked--
 						unresolved++
 						break
@@ -178,6 +177,28 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 }
 
 // rmt_updateBookFiles updates all book_file rows that pointed to the old organizer path.
+// rmt_writeFilePath records the relinked path on the book row. It sets only
+// FilePath, under the book's write lock (ModifyBook), so columns another writer
+// commits while this job walks the iTunes tree are kept. A book that vanished
+// between the listing and the write is an error, exactly as a failed
+// UpdateBook was: the caller undoes its relinked count.
+func rmt_writeFilePath(store maintenance.JobStore, bookID, newFP string) error {
+	written, err := store.ModifyBook(bookID, func(b *database.Book) error {
+		if b.FilePath == newFP {
+			return database.ErrSkipBookWrite
+		}
+		b.FilePath = newFP
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if written == nil {
+		return fmt.Errorf("book %s not found", bookID)
+	}
+	return nil
+}
+
 func rmt_updateBookFiles(store bookFileMutator, bookID, newFP string, fi os.FileInfo, organizerRoot string) {
 	bookFiles, bfErr := store.GetBookFiles(bookID)
 	if bfErr != nil {

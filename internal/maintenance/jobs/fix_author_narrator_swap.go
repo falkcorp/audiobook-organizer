@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a1000003-0000-0000-0000-000000000003
-// last-edited: 2026-08-17
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -12,6 +12,7 @@ import (
 
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -76,20 +77,30 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.Jo
 			msg := fmt.Sprintf("Author/narrator swap detected: %s = %s", author.Name, *book.Narrator)
 			reporter.Log("warn", msg, nil)
 			if !dryRun {
-				current, getErr := store.GetBookByID(book.ID)
-				if getErr != nil || current == nil {
-					errMsg := fmt.Sprintf("%v", getErr)
-					slog.Error("Failed to fetch book", "book", book.ID, "getErr", getErr)
-					reporter.Log("error", "Failed to fetch book for swap fix: "+book.ID, &errMsg)
-				} else {
-					current.AuthorID = nil
-					if _, updateErr := store.UpdateBook(book.ID, current); updateErr != nil {
-						errMsg := updateErr.Error()
-						slog.Error("Failed to update book", "book", book.ID, "updateErr", updateErr)
-						reporter.Log("error", "Failed to update book after swap fix: "+book.ID, &errMsg)
-					} else {
-						applied++
+				// Clear only AuthorID, under the book's write lock
+				// (ModifyBook), so a column another writer commits between
+				// the listing read and this write is not reverted (audit
+				// A1#15). The decision is re-made on the fresh row: a book
+				// whose author was already cleared or changed meanwhile is
+				// left alone.
+				written, updateErr := store.ModifyBook(book.ID, func(current *database.Book) error {
+					if current.AuthorID == nil || *current.AuthorID != *book.AuthorID {
+						return database.ErrSkipBookWrite
 					}
+					current.AuthorID = nil
+					return nil
+				})
+				switch {
+				case updateErr != nil:
+					errMsg := updateErr.Error()
+					slog.Error("Failed to update book", "book", book.ID, "updateErr", updateErr)
+					reporter.Log("error", "Failed to update book after swap fix: "+book.ID, &errMsg)
+				case written == nil:
+					errMsg := "book not found"
+					slog.Error("Failed to fetch book", "book", book.ID)
+					reporter.Log("error", "Failed to fetch book for swap fix: "+book.ID, &errMsg)
+				default:
+					applied++
 				}
 			}
 			reporter.Increment()

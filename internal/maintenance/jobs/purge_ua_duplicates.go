@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
-// last-edited: 2026-09-02
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -154,17 +154,26 @@ func (j *purgeUADuplicatesJob) Run(ctx context.Context, store maintenance.JobSto
 				if dryRun {
 					return nil
 				}
-				full, herr := store.GetBookByID(id)
-				if herr != nil || full == nil {
+				// Soft-delete through ModifyBook: only the two deletion
+				// columns are set, under the book's write lock, so a column
+				// another writer commits meanwhile is not reverted (audit
+				// A1#15). A row already marked is left as it is.
+				t := true
+				now := time.Now()
+				full, uerr := store.ModifyBook(id, func(cur *database.Book) error {
+					if cur.MarkedForDeletion != nil && *cur.MarkedForDeletion {
+						return database.ErrSkipBookWrite
+					}
+					cur.MarkedForDeletion = &t
+					cur.MarkedForDeletionAt = &now
+					return nil
+				})
+				if uerr != nil {
+					slog.Warn("purge-ua-duplicates: soft-delete failed", "book", id, "err", uerr)
 					atomic.AddInt64(&errCount, 1)
 					return nil
 				}
-				t := true
-				now := time.Now()
-				full.MarkedForDeletion = &t
-				full.MarkedForDeletionAt = &now
-				if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-					slog.Warn("purge-ua-duplicates: soft-delete failed", "book", id, "err", uerr)
+				if full == nil {
 					atomic.AddInt64(&errCount, 1)
 					return nil
 				}

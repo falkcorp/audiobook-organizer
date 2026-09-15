@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.7.0
+// version: 1.10.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package jobs
 
@@ -80,11 +80,12 @@ type retentionFlagStore interface {
 	SetSetting(key, value, typ string, isSecret bool) error
 }
 
-// bookMutator is the two-method read-modify-write slice. It is by far the most
-// common shape in this package: fetch a book, change a field, write it back.
+// bookMutator is the read-modify-write slice: change a field on the stored
+// row under its write lock. It deliberately has no GetBookByID/UpdateBook
+// pair, so a whole-row write-back of a pre-read copy (the lost-update shape,
+// audit A1#15) cannot be written against it.
 type bookMutator interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // bookFileMutator is the book-file equivalent of bookMutator.
@@ -140,10 +141,10 @@ type bookSoftDeleter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
-// seriesUnlinker moves books off a series and then removes the series row.
+// seriesUnlinker moves books off a series (under each book's write lock) and
+// then removes the series row.
 type seriesUnlinker interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteSeries(id int) error
 }
 
@@ -154,8 +155,7 @@ type seriesUnlinker interface {
 // Pebble scan per series once memdb is tainted -- is a compile error here
 // (SERIES-MERGE-PERSERIES-SCAN-COST).
 type seriesMerger interface {
-	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteSeries(id int) error
 }
 
