@@ -1,5 +1,5 @@
 // file: internal/organizer/rename_tags.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2e8f5a13-7b4c-4d91-a6e0-3c9d1b7f5e28
 // last-edited: 2026-09-14
 
@@ -118,6 +118,24 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			renameTagLog.Warn("not writing tags to %s: its current tags could not be read, so the write could not be undone: %v", t.path, err)
 			continue
 		}
+		// A key whose pre-write value the reader could not record (a
+		// property holding several values) is not written to this file: its
+		// undo row would carry "" and the write could never be undone.
+		// filtered may be tagMeta itself, shared by every file, so the kept
+		// keys go into a new map.
+		recordable := make(map[string]any, len(filtered))
+		for field, val := range filtered {
+			if _, known := current[field]; !known {
+				renameTagLog.Warn("not writing tag %s to %s: its current value cannot be recorded (a tag holding several values), so the write could not be undone",
+					field, t.path)
+				continue
+			}
+			recordable[field] = val
+		}
+		filtered = recordable
+		if len(filtered) == 0 {
+			continue
+		}
 		write := rs.WriteTags
 		if write == nil {
 			write = defaultWriteTags
@@ -136,11 +154,10 @@ func (rs *RenameService) writeTagsRecordingOld(bookID, operationID, oldPath, tar
 			if t.fileID != "" {
 				name = undo.TagWriteField(field, t.fileID)
 			}
-			// A tag the reader knows but the file does not carry is recorded
-			// as absent, so the revert removes it. A tag the reader does not
-			// know keeps "": its pre-write value is unknown, not restorable.
-			old, known := current[field]
-			if known && old == "" {
+			// A tag the file does not carry is recorded as absent, so the
+			// revert removes it. Every key here is known (filtered above).
+			old := current[field]
+			if old == "" {
 				old = undo.TagAbsentValue
 			}
 			if err := rs.db.CreateOperationChange(&database.OperationChange{

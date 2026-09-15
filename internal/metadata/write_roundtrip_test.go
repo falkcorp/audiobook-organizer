@@ -1,6 +1,7 @@
 // file: internal/metadata/write_roundtrip_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f4a7b8c9-d1e2-3f4a-5b6c-7d8e9f0a1b2c
+// last-edited: 2026-09-14
 
 package metadata
 
@@ -568,7 +569,6 @@ func buildStandardTagMap(metadata map[string]any) map[string][]string {
 	if artist, ok := metadata["artist"].(string); ok && artist != "" {
 		tags["ALBUMARTIST"] = []string{artist}
 		tags["ARTIST"] = []string{artist}
-		tags["COMPOSER"] = []string{artist}
 	}
 	if album, ok := metadata["album"].(string); ok && album != "" {
 		tags["ALBUM"] = []string{album}

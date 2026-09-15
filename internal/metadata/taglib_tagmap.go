@@ -1,6 +1,7 @@
 // file: internal/metadata/taglib_tagmap.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
+// last-edited: 2026-09-14
 //
 // Shared tag map builder used by both WASM and CGO taglib writers.
 
@@ -78,9 +79,12 @@ func buildWriteTagMap(metadata map[string]any) map[string][]string {
 		tags["TITLE"] = []string{title}
 	}
 	if artist, ok := metadata["artist"].(string); ok && artist != "" {
+		// Album Artist is the author (owner decision 2026-09-14), the same
+		// two properties the organize writes. COMPOSER is never written or
+		// blanked: it may hold a value the owner set, and writing "" there
+		// erased it on every manual author edit and metafetch write-back.
 		tags["ALBUMARTIST"] = []string{artist}
 		tags["ARTIST"] = []string{artist}
-		tags["COMPOSER"] = []string{""}
 	}
 	if album, ok := metadata["album"].(string); ok && album != "" {
 		tags["ALBUM"] = []string{album}

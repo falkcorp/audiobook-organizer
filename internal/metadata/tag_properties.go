@@ -1,5 +1,5 @@
 // file: internal/metadata/tag_properties.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6f3c9a27-4e1d-4b85-9c20-7a5e1d8b3f64
 // last-edited: 2026-09-14
 
@@ -14,25 +14,30 @@ import (
 	"strings"
 )
 
-// tagProperties maps each tag key the organizer records for undo to every
-// TagLib property a write of that key can change. A revert puts one key back,
-// so it reads and writes through this table and never through
-// buildWriteTagMap, which is not the inverse of the reader: it fans artist out
-// to ALBUMARTIST and writes COMPOSER="" (where this project keeps the
-// narrator), writes narrator to NARRATOR and PERFORMER, sets ALBUM="" for a
-// lone series, drops every empty value (so a tag could never be removed), and
-// ignores album_artist and composer.
+// tagProperties maps each tag key the organizer writes and records for undo to
+// exactly the TagLib properties the organize writes for it: WriteTagProperties
+// writes a plain value to all of them, ReadTagProperties snapshots all of them
+// and the revert puts back only them. The organize writes the author to ARTIST
+// and ALBUMARTIST (Album Artist is the author, owner decision 2026-09-14) and
+// the narrator to NARRATOR and PERFORMER. COMPOSER is never written, so it is
+// not in the artist key: a snapshot that recorded it made the undo write an
+// old COMPOSER back over a later edit.
+//
+// A revert reads and writes through this table and never through
+// buildWriteTagMap, which is not the inverse of the reader: it sets ALBUM=""
+// for a lone series, drops every empty value (so a tag could never be
+// removed), and ignores album_artist and composer.
 //
 // A key with more than one property is recorded as a per-property snapshot
 // (encodeTagSnapshot): each property's own pre-write value, or its absence.
 // Those properties legitimately differ (ARTIST a co-author while ALBUMARTIST
 // is the author; PERFORMER and NARRATOR naming different readers), so one
-// string could not restore them. Restoring ARTIST alone after an author edit
-// left the new author in ALBUMARTIST, which is the author.
+// string could not restore them, and the revert compares and restores each
+// property on its own (PlanSnapshotRestore).
 var tagProperties = map[string][]string{
 	"title":        {"TITLE"},
 	"album":        {"ALBUM"},
-	"artist":       {"ARTIST", "ALBUMARTIST", "COMPOSER"},
+	"artist":       {"ARTIST", "ALBUMARTIST"},
 	"album_artist": {"ALBUMARTIST"},
 	"composer":     {"COMPOSER"},
 	"genre":        {"GENRE"},
@@ -46,21 +51,6 @@ var tagProperties = map[string][]string{
 	// snapshots (see LegacyTagKey). They are never written by the organize.
 	"artist_tag_only":   {"ARTIST"},
 	"narrator_tag_only": {"NARRATOR"},
-}
-
-// tagWriteProperties overrides, per key, the properties a plain value is
-// written to (WriteTagProperties); every other key writes to all of its
-// tagProperties.
-//
-// The organize writes the author to ARTIST and ALBUMARTIST (owner decision
-// 2026-09-14). This reverses the ALBUMARTIST half of c81b39801, which wrote
-// ARTIST only so a narrator could never land in ALBUMARTIST: ALBUMARTIST is the
-// author and every reader takes it first, so an organize that left a stale
-// ALBUMARTIST had the next scan read the old author back. Only the author is
-// written there; the narrator goes to NARRATOR/PERFORMER, and COMPOSER (where
-// the narrator is kept) is never written or blanked.
-var tagWriteProperties = map[string][]string{
-	"artist": {"ARTIST", "ALBUMARTIST"},
 }
 
 // legacyTagKeys maps a multi-property key to the one-property key its undo rows
@@ -97,13 +87,6 @@ func IsTagSnapshot(v string) bool {
 func LegacyTagKey(key string) (string, bool) {
 	k, ok := legacyTagKeys[key]
 	return k, ok
-}
-
-func writeProps(key string) []string {
-	if p, ok := tagWriteProperties[key]; ok {
-		return p
-	}
-	return tagProperties[key]
 }
 
 func encodeTagSnapshot(snap map[string]*string) string {
@@ -166,8 +149,7 @@ next:
 // property it writes holds, or "" when none is present. A key is left out when
 // those properties are not all in the same state (one absent, two different
 // values, or one holding several), so the unchanged-tag filter writes it
-// (ARTIST already the author with ALBUMARTIST absent is not unchanged) and the
-// revert's compare-and-set refuses rather than overwrite a later change.
+// (ARTIST already the author with ALBUMARTIST absent is not unchanged).
 func ReadTagValues(path string) (map[string]string, error) {
 	raw, err := readTagsWithTaglib(path)
 	if err != nil {
@@ -175,7 +157,7 @@ func ReadTagValues(path string) (map[string]string, error) {
 	}
 	out := make(map[string]string, len(tagProperties))
 	for key := range tagProperties {
-		if v, ok := samePropertyValue(raw, writeProps(key)); ok {
+		if v, ok := samePropertyValue(raw, tagProperties[key]); ok {
 			out[key] = v
 		}
 	}
@@ -202,6 +184,69 @@ func samePropertyValue(raw map[string][]string, props []string) (string, bool) {
 		value = v
 	}
 	return value, true
+}
+
+// SnapshotRestore is the per-property plan for reverting one snapshot undo
+// row (PlanSnapshotRestore).
+type SnapshotRestore struct {
+	// Write is the snapshot to pass to WriteTagProperties for the key: only
+	// the properties being put back. "" when nothing is to be written.
+	Write string
+	// Restored names the properties Write puts back.
+	Restored []string
+	// Already names the properties that already hold their pre-write state.
+	Already []string
+	// Kept names the properties changed since the organize wrote them; they
+	// are left as they are.
+	Kept []string
+}
+
+// PlanSnapshotRestore compares, property by property, the file's current
+// snapshot of key (ReadTagProperties) with the snapshot the organize recorded
+// (oldSnap) and the plain value it wrote (newValue). A property that still
+// holds newValue is put back to its recorded value, or removed when it was
+// absent; one that already holds its recorded state needs nothing; any other
+// is kept as a later change. A property the recorded snapshot names but the
+// key no longer owns (a COMPOSER in a snapshot taken before COMPOSER left the
+// artist key) was never written by the organize and is left alone.
+func PlanSnapshotRestore(key, oldSnap, newValue, currentSnap string) (SnapshotRestore, error) {
+	var plan SnapshotRestore
+	props, ok := tagProperties[key]
+	if !ok {
+		return plan, fmt.Errorf("%w: %q", ErrTagKeyNotWritable, key)
+	}
+	old, err := decodeTagSnapshot(oldSnap)
+	if err != nil {
+		return plan, fmt.Errorf("tag %s: %w", key, err)
+	}
+	if !IsTagSnapshot(currentSnap) {
+		return plan, fmt.Errorf("tag %s: the current value is not a tag snapshot", key)
+	}
+	cur, err := decodeTagSnapshot(currentSnap)
+	if err != nil {
+		return plan, fmt.Errorf("tag %s: %w", key, err)
+	}
+	write := map[string]*string{}
+	for _, prop := range props {
+		want, recorded := old[prop]
+		if !recorded {
+			continue
+		}
+		have := cur[prop]
+		switch {
+		case (want == nil && have == nil) || (want != nil && have != nil && *want == *have):
+			plan.Already = append(plan.Already, prop)
+		case have != nil && *have == newValue:
+			write[prop] = want
+			plan.Restored = append(plan.Restored, prop)
+		default:
+			plan.Kept = append(plan.Kept, prop)
+		}
+	}
+	if len(write) > 0 {
+		plan.Write = encodeTagSnapshot(write)
+	}
+	return plan, nil
 }
 
 // WriteTagProperties writes exactly the given keys and leaves every other
@@ -236,7 +281,7 @@ func WriteTagProperties(path string, values map[string]string) error {
 			}
 			continue
 		}
-		for _, prop := range writeProps(key) {
+		for _, prop := range props {
 			if v == "" {
 				tags[prop] = []string{}
 			} else {

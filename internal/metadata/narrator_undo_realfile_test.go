@@ -1,5 +1,5 @@
 // file: internal/metadata/narrator_undo_realfile_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8c4e1a7d-2b9f-4d63-a0e5-6f1c3b8d9e24
 // last-edited: 2026-09-14
 
@@ -20,14 +20,27 @@ import (
 // fixtures under testdata/ are not fetched by CI). Skips without ffmpeg.
 func makeNarratorTestAudio(t *testing.T, props map[string][]string) string {
 	t.Helper()
+	return makeTestAudioExt(t, "m4a", props)
+}
+
+// testAudioCodecs maps each container the real-file tests cover to the ffmpeg
+// encoder that produces it.
+var testAudioCodecs = map[string]string{"m4a": "aac", "mp3": "libmp3lame", "flac": "flac"}
+
+// makeTestAudioExt synthesizes a real ext file with ffmpeg and writes props to
+// it. Skips when ffmpeg or its encoder for ext is unavailable.
+func makeTestAudioExt(t *testing.T, ext string, props map[string][]string) string {
+	t.Helper()
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available; skipping real-file narrator undo test")
+		t.Skip("ffmpeg not available; skipping real-file tag undo test")
 	}
-	path := filepath.Join(t.TempDir(), "book.m4a")
+	path := filepath.Join(t.TempDir(), "book."+ext)
 	out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",
-		"-c:a", "aac", path).CombinedOutput()
-	require.NoError(t, err, "ffmpeg: %s", out)
+		"-c:a", testAudioCodecs[ext], path).CombinedOutput()
+	if err != nil {
+		t.Skipf("ffmpeg cannot encode %s here: %v: %s", ext, err, out)
+	}
 	if len(props) > 0 {
 		require.NoError(t, taglib.WriteTags(path, props, 0))
 	}
