@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/bulk_fetch_metadata.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: b3c9d7e8-0f1a-2b3c-4d5e-6f7a8b9c0d1e
 // last-edited: 2026-09-14
 
@@ -18,10 +18,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
+
+var bulkFetchLog = logger.New("bulk-fetch-metadata")
 
 func init() { maintenance.Register(&bulkFetchMetadataJob{}) }
 
@@ -159,6 +162,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	found := 0
 	notFound := 0
 	errored := 0
+	cacheWriteFailed := 0
 
 	maxAge := time.Duration(ttlDays) * 24 * time.Hour
 	// Bound concurrent calls per provider exactly as the v2 operation does, so
@@ -188,7 +192,17 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 		case metafetch.FetchStatusCached:
 			if !cacheHit {
 				if blob, merr := json.Marshal(out.Results); merr == nil {
-					_ = database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0)
+					if perr := database.PutCachedMetadataFetch(store, bookID, out.ProviderKey, out.SearchIdentity, blob, 0); perr != nil {
+						// The result still counts as found; only the cache row is
+						// missing, so the next run refetches this book.
+						cacheWriteFailed++
+						bulkFetchLog.Warn("bulk-fetch-metadata: caching the result for book %s failed: %v",
+							logger.SanitizeLogValue(bookID), perr)
+					}
+				} else {
+					cacheWriteFailed++
+					bulkFetchLog.Warn("bulk-fetch-metadata: encoding the result for book %s failed: %v",
+						logger.SanitizeLogValue(bookID), merr)
 				}
 			}
 			found++
@@ -224,7 +238,7 @@ func (j *bulkFetchMetadataJob) Run(ctx context.Context, store maintenance.JobSto
 	}
 
 	finalCount := atomic.LoadInt64(&completed)
-	slog.Info("bulk-fetch-metadata done", "opID", opID, "finalCount", finalCount, "found", found, "notFound", notFound, "errors", errored)
+	slog.Info("bulk-fetch-metadata done", "opID", opID, "finalCount", finalCount, "found", found, "notFound", notFound, "errors", errored, "cacheWriteFailed", cacheWriteFailed)
 	slog.Info("complete", "found", found, "notFound", notFound, "errors", errored)
 	return nil
 }

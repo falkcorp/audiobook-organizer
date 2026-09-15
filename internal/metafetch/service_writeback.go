@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-09-14
 
@@ -1140,7 +1140,13 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 			slog.Warn("failed to stamp last_written_at for book", "id", book.ID, "error", err)
 		}
 		// Flag for rescan so the next incremental scan re-reads the updated tags.
-		_ = mfs.db.MarkNeedsRescan(book.ID)
+		// Not fatal to the write-back (the tags are already on disk), but a
+		// lost flag means the next incremental scan keeps the pre-write tags,
+		// so it is logged rather than discarded.
+		if err := mfs.db.MarkNeedsRescan(book.ID); err != nil {
+			writeBackLog.Warn("write-back for book %s: could not flag it for rescan; the next incremental scan will not re-read its new tags: %v",
+				logger.SanitizeLogValue(book.ID), err)
+		}
 	}
 
 	failedCount += int(failedN.Load())
