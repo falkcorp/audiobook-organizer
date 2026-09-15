@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.2.0
-// last-edited: 2026-08-20
+// version: 1.3.0
+// last-edited: 2026-09-14
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -140,6 +140,22 @@ func (m *MockBookStore) UpdateBook(id string, book *database.Book) (*database.Bo
 	m.updCnt++
 	m.books[id] = book
 	return book, nil
+}
+
+// ModifyBook composes the mock's own GetBookByID and UpdateBook, so getErr,
+// setErr and updateFn keep injecting faults into the converted write path.
+func (m *MockBookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	book, err := m.GetBookByID(id)
+	if err != nil || book == nil {
+		return nil, err
+	}
+	if err := fn(book); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return book, nil
+		}
+		return nil, err
+	}
+	return m.UpdateBook(id, book)
 }
 
 func (m *MockBookStore) DeleteBook(id string) error {

@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -43,7 +43,13 @@ type OrganizerBookReader interface {
 // rescan when its files changed underneath it.
 type OrganizerBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
+	// UpdateBook is kept for the one whole-row write of a book CreateBook
+	// just returned; every write of an existing row goes through ModifyBook.
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook sets the columns a site owns on the stored row under the
+	// book's write lock, so a column another writer committed between the
+	// organizer's read and its write is kept. See database.BookMutator.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	MarkNeedsRescan(bookID string) error
 	// DeleteBook is here only to roll back a half-built organized copy. It is
 	// NOT a general delete path for this package -- CreateOrganizedVersion is
@@ -933,15 +939,16 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 
 	if oldPath == targetPath {
 		// Already in correct location — still stamp as organized. Written via
-		// hydrateAndUpdateBook (hydrate-before-write), not the in-memory
+		// modifyBook (column-scoped, under the book lock), not the in-memory
 		// `book` pointer directly — see that helper's doc comment.
 		organizedState := "organized"
 		book.LibraryState = &organizedState
 		now := time.Now()
 		book.LastOrganizedAt = &now
-		if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+		if err := orgSvc.modifyBook(book.ID, func(b *database.Book) error {
 			b.LibraryState = &organizedState
 			b.LastOrganizedAt = &now
+			return nil
 		}); err != nil {
 			log.Debug("Organize: failed to stamp already-in-place book %s: %s", book.ID, err.Error())
 		}
@@ -1008,17 +1015,18 @@ func (orgSvc *Service) reOrganizeInPlace(book *database.Book, log logger.Logger)
 	}
 
 	// Update the book record — set path and mark as organized. Written via
-	// hydrateAndUpdateBook (hydrate-before-write), not the in-memory `book`
-	// pointer directly — see that helper's doc comment.
+	// modifyBook (column-scoped, under the book lock), not the in-memory
+	// `book` pointer directly — see that helper's doc comment.
 	book.FilePath = targetPath
 	organizedState := "organized"
 	book.LibraryState = &organizedState
 	now := time.Now()
 	book.LastOrganizedAt = &now
-	if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+	if err := orgSvc.modifyBook(book.ID, func(b *database.Book) error {
 		b.FilePath = targetPath
 		b.LibraryState = &organizedState
 		b.LastOrganizedAt = &now
+		return nil
 	}); err != nil {
 		log.Warn("Failed to update book path for %s: %s", book.ID, err.Error())
 	}
@@ -1118,36 +1126,39 @@ func (orgSvc *Service) cleanupEmptyParents(dir, stopAt string, log logger.Logger
 	}
 }
 
-// hydrateAndUpdateBook fetches the full book row via GetBookByID, applies
-// mutate to that hydrated struct, and writes it back via UpdateBook — never
-// writing a BookCore-derived (.ToBook()) copy directly, so a full-fidelity
-// store backend never has its heavy fields (Description, BookSigV1, etc.)
-// wiped by an organizer writeback. This does not rely on
-// PebbleStore.UpdateBook's own STOR-1 self-heal (which already restores 7/9
-// heavy fields from the old row); doing it explicitly here matches the
-// STOREFID sweep's pattern so every organizer writeback call site is correct
-// independent of that store-internal guard.
+// modifyBook writes the columns mutate sets onto the stored book row through
+// store.ModifyBook. Until 2026-09-14 this was hydrateAndUpdateBook: a
+// GetBookByID -> mutate -> UpdateBook round trip whose "hydrate" step existed
+// so an organizer writeback never wrote a BookCore-derived (.ToBook()) copy
+// and wiped the heavy fields (Description, BookSigV1, etc.) under a
+// full-fidelity backend. That read-then-whole-row write still lost updates:
+// a column another writer committed between the read and the write (a
+// metadata apply's Duration, a scan's file counts) was reverted by it.
 //
-// If hydration fails (book deleted mid-organize, store error) the write is
-// skipped entirely (fail-closed) rather than falling back to writing the
-// possibly-Core-derived in-memory copy — the one shape of write this helper
-// exists to prevent.
-func (orgSvc *Service) hydrateAndUpdateBook(bookID string, mutate func(*database.Book)) error {
-	hydrated, err := orgSvc.db.GetBookByID(bookID)
+// ModifyBook reads the row under the book's write lock and writes what mutate
+// changed, so "hydrate" now means: mutate is handed the stored row as it is at
+// write time and sets ONLY the columns its site owns. It must never copy
+// fields from a page-derived in-memory Book onto b, and may return
+// database.ErrSkipBookWrite to write nothing.
+//
+// Fail-closed is unchanged: a store error, or a book deleted mid-organize
+// ((nil, nil) from ModifyBook), skips the write and returns an error rather
+// than falling back to writing the possibly-Core-derived in-memory copy — the
+// one shape of write this helper exists to prevent.
+func (orgSvc *Service) modifyBook(bookID string, mutate func(*database.Book) error) error {
+	updated, err := orgSvc.db.ModifyBook(bookID, mutate)
 	if err != nil {
 		return err
 	}
-	if hydrated == nil {
-		return fmt.Errorf("book %s not found for hydrate-before-write", bookID)
+	if updated == nil {
+		return fmt.Errorf("book %s not found for organizer write", bookID)
 	}
-	mutate(hydrated)
-	_, err = orgSvc.db.UpdateBook(bookID, hydrated)
-	return err
+	return nil
 }
 
-// stampOrganizeMetadata hydrates the full book row via GetBookByID and writes
-// the LibraryState/LastOrganizeOperationID/LastOrganizedAt stamp back onto that
-// hydrated struct. See hydrateAndUpdateBook for the rationale.
+// stampOrganizeMetadata writes the LibraryState/LastOrganizeOperationID/
+// LastOrganizedAt stamp onto the stored book row through modifyBook, which
+// sets only those columns. See modifyBook for the rationale.
 //
 // LibraryState MUST be set here, not just the two timestamps. All three callers
 // mean "this book is now sitting at its correct organized path": the
@@ -1172,12 +1183,13 @@ func (orgSvc *Service) hydrateAndUpdateBook(bookID string, mutate func(*database
 // written; only the audit attribution is conditional.
 func (orgSvc *Service) stampOrganizeMetadata(bookID, operationID string, when time.Time) error {
 	organizedState := "organized"
-	return orgSvc.hydrateAndUpdateBook(bookID, func(b *database.Book) {
+	return orgSvc.modifyBook(bookID, func(b *database.Book) error {
 		b.LibraryState = &organizedState
 		if operationID != "" {
 			b.LastOrganizeOperationID = &operationID
 		}
 		b.LastOrganizedAt = &when
+		return nil
 	})
 }
 
@@ -1380,7 +1392,10 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 		return LandingUnchanged, nil, createErr
 	}
 
-	// Stamp the new organized book record with this operation.
+	// Stamp the new organized book record with this operation. This stays a
+	// whole-row UpdateBook on purpose: it is the first write of a row CreateBook
+	// returned moments ago, not a read-modify-write of a shared row, so there is
+	// no concurrent writer's column for a whole-row write to revert.
 	createdBook.LastOrganizeOperationID = &operationID
 	createdBook.LastOrganizedAt = &now
 	if _, updateErr := orgSvc.db.UpdateBook(createdBook.ID, createdBook); updateErr != nil {
@@ -2125,27 +2140,29 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	// `book` here is a page-derived (GetAllBooksCore→ToBook, heavy-field-nil)
 	// projection, so writing it directly would wipe the original's denormalized
 	// Author/Series under a full-fidelity backend (STOREFID W5d-1, #1887).
-	// Fixed via hydrate-before-write, matching hydrateAndUpdateBook's pattern —
-	// but NOT that helper itself: its fail-closed skip-on-hydrate-error would
-	// leave the version group with two primaries, which is worse than the rare
-	// Author/Series wipe this fallback accepts. So: hydrate and write the full
-	// row on success; if hydration fails, fall back to the direct state-only
-	// write (today's pre-fix behavior) so the state transition always lands —
-	// fail-OPEN for the state transition, preserve-heavy-when-possible.
+	// Written through ModifyBook, which sets only the three columns this
+	// transition owns on the stored row under the book's write lock — so the
+	// heavy fields survive AND a column another writer committed since `book`
+	// was paged (the file copy above is slow) is kept, not reverted. NOT via
+	// modifyBook itself: its fail-closed skip-on-error would leave the version
+	// group with two primaries, which is worse than the rare Author/Series wipe
+	// this fallback accepts. So: locked column write on success; if that fails
+	// or the row is gone, fall back to the direct state-only write (the
+	// pre-fix behavior) so the state transition always lands — fail-OPEN for
+	// the state transition, preserve-everything-else-when-possible.
 	organizedSourceState := "organized_source"
 	book.VersionGroupID = &versionGroupID
 	book.IsPrimaryVersion = &isNotPrimary
 	book.LibraryState = &organizedSourceState
-	if hydrated, hydrateErr := orgSvc.db.GetBookByID(book.ID); hydrateErr == nil && hydrated != nil {
-		hydrated.VersionGroupID = &versionGroupID
-		hydrated.IsPrimaryVersion = &isNotPrimary
-		hydrated.LibraryState = &organizedSourceState
-		if _, err := orgSvc.db.UpdateBook(book.ID, hydrated); err != nil {
-			log.Warn("Failed to update original book %s version group: %v", book.ID, err)
-		}
-	} else {
-		if hydrateErr != nil {
-			log.Warn("organize: hydrate-before-write failed for original book %s, falling back to state-only write (Author/Series may be wiped): %v", book.ID, hydrateErr)
+	modified, modifyErr := orgSvc.db.ModifyBook(book.ID, func(b *database.Book) error {
+		b.VersionGroupID = &versionGroupID
+		b.IsPrimaryVersion = &isNotPrimary
+		b.LibraryState = &organizedSourceState
+		return nil
+	})
+	if modifyErr != nil || modified == nil {
+		if modifyErr != nil {
+			log.Warn("organize: locked write failed for original book %s, falling back to state-only write (Author/Series may be wiped): %v", book.ID, modifyErr)
 		}
 		if _, err := orgSvc.db.UpdateBook(book.ID, book); err != nil {
 			log.Warn("Failed to update original book %s version group: %v", book.ID, err)

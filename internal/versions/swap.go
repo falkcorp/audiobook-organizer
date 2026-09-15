@@ -1,7 +1,7 @@
 // file: internal/versions/swap.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-09-14
 //
 // Primary-version swap tracked operation (spec 3.1 task 3).
 //
@@ -151,7 +151,20 @@ func RunVersionSwap(
 	if len(newToPaths) > 0 {
 		oldPath := book.FilePath
 		book.FilePath = newToPaths[0]
-		if _, err := store.UpdateBook(book.ID, book); err != nil {
+		// `book` was read before the file moves above, so it is not written
+		// back whole: only file_path is set, on the row as stored now, and any
+		// column another writer committed meanwhile is kept.
+		updated, err := store.ModifyBook(book.ID, func(b *database.Book) error {
+			if b.FilePath == newToPaths[0] {
+				return database.ErrSkipBookWrite
+			}
+			b.FilePath = newToPaths[0]
+			return nil
+		})
+		if err == nil && updated == nil {
+			err = fmt.Errorf("book %s no longer exists", book.ID)
+		}
+		if err != nil {
 			slog.Warn("update book file_path", "error", err)
 		} else {
 			_ = store.RecordPathChange(&database.BookPathChange{

@@ -1,7 +1,7 @@
 // file: internal/quarantine/service_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7c2e9d41-5a3b-4f86-b0e7-1d9a6c3f8e52
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package quarantine
 
@@ -179,6 +179,11 @@ type failingUpdateStore struct{ *database.PebbleStore }
 
 func (failingUpdateStore) UpdateBook(string, *database.Book) (*database.Book, error) {
 	return nil, errors.New("injected UpdateBook failure")
+}
+
+// ModifyBook is the write quarantine makes now; it carries the same fault.
+func (failingUpdateStore) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, errors.New("injected ModifyBook failure")
 }
 
 // failingHistoryStore fails every history write of one change type.

@@ -1,7 +1,7 @@
 // file: internal/organizer/stamp_library_state_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2b8f04-3a71-4e59-b8c2-1f7a09e4d35c
-// last-edited: 2026-09-07
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/mock"
 )
@@ -47,7 +46,7 @@ func TestStampOrganizeMetadata_SetsLibraryStateOrganized(t *testing.T) {
 	}
 
 	var captured *database.Book
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-1").Return(book, nil)
 	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).
 		Run(func(args mock.Arguments) {
@@ -100,7 +99,7 @@ func TestStampOrganizeMetadata_KeepsAlreadyOrganizedState(t *testing.T) {
 	}
 
 	var captured *database.Book
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-2").Return(book, nil)
 	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*database.Book")).
 		Run(func(args mock.Arguments) {
@@ -143,7 +142,7 @@ func TestStampOrganizeMetadata_EmptyOperationIDStillStampsButKeepsAttribution(t 
 	}
 
 	var captured *database.Book
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-3").Return(book, nil)
 	mockStore.On("UpdateBook", "book-3", mock.AnythingOfType("*database.Book")).
 		Run(func(args mock.Arguments) { captured = args.Get(1).(*database.Book) }).
@@ -192,7 +191,7 @@ func TestStampOrganizeMetadata_EmptyOperationIDStillStampsButKeepsAttribution(t 
 func TestStampAlreadyCorrect_StampsWithNoOperationID(t *testing.T) {
 	const n = 25 // more than the worker count, so the pool is genuinely exercised
 	books := make([]database.Book, 0, n)
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 
 	var mu sync.Mutex
 	stampedState := map[string]string{}
@@ -245,7 +244,7 @@ func TestStampAlreadyCorrect_CountsOnlyStampsThatLanded(t *testing.T) {
 	ok1 := &database.Book{ID: "ok-1", LibraryState: &imported}
 	bad := &database.Book{ID: "bad", LibraryState: &imported}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "ok-1").Return(ok1, nil)
 	mockStore.On("UpdateBook", "ok-1", mock.Anything).Return(ok1, nil)
 	// The failing book fails at hydrate, the realistic shape (row deleted between
@@ -266,7 +265,7 @@ func TestStampAlreadyCorrect_CountsOnlyStampsThatLanded(t *testing.T) {
 // run with nothing already-correct must not start workers or write rows. The
 // mock has no expectations, so any store call fails the test.
 func TestStampAlreadyCorrect_EmptyInputTouchesNothing(t *testing.T) {
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 	if got := svc.stampAlreadyCorrect(context.Background(), nil, "op-1", logger.New("test")); got != 0 {
 		t.Fatalf("stampAlreadyCorrect on an empty slice = %d, want 0", got)
 	}

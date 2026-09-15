@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -21,7 +21,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 )
 
 // The Landing contract (2026-09-02): rows follow what LANDED, rollback removes
@@ -184,7 +183,7 @@ func derefStr(p *string) string {
 func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 	rootDir := t.TempDir()
 	config.AppConfig = config.Config{RootDir: rootDir}
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 
 	targetDir := filepath.Join(rootDir, "Author", "Title")
 	require.NoError(t, os.MkdirAll(targetDir, 0o775))
@@ -211,7 +210,7 @@ func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 func TestRollbackOrganizedVersion_EmptyDirectoryIsRemoved(t *testing.T) {
 	rootDir := t.TempDir()
 	config.AppConfig = config.Config{RootDir: rootDir}
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 
 	targetDir := filepath.Join(rootDir, "Author", "Title")
 	require.NoError(t, os.MkdirAll(targetDir, 0o775))
@@ -230,7 +229,7 @@ func TestRollbackOrganizedVersion_EmptyDirectoryIsRemoved(t *testing.T) {
 func TestRollbackOrganizedVersion_AdoptedSingleFileSurvives(t *testing.T) {
 	rootDir := t.TempDir()
 	config.AppConfig = config.Config{RootDir: rootDir}
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 
 	dst := filepath.Join(rootDir, "Author", "Title.m4b")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o775))
@@ -246,7 +245,7 @@ func TestRollbackOrganizedVersion_AdoptedSingleFileSurvives(t *testing.T) {
 func TestRollbackOrganizedVersion_RefusesPathsOutsideRoot(t *testing.T) {
 	rootDir := t.TempDir()
 	config.AppConfig = config.Config{RootDir: rootDir}
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 
 	outside := filepath.Join(t.TempDir(), "elsewhere.m4b")
 	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o644))
@@ -565,7 +564,7 @@ func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *test
 		Format:   "mp3",
 		Author:   &database.Author{Name: "Author"},
 	}
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.EXPECT().GetBookFiles("book-multi").Return([]database.BookFile{
 		{ID: "bf-1", BookID: "book-multi", FilePath: ch1, TrackNumber: 1},
 		{ID: "bf-2", BookID: "book-multi", FilePath: ch2, TrackNumber: 2},
@@ -612,7 +611,7 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 		Format:   "m4b",
 		Author:   &database.Author{Name: "New Author"},
 	}
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.EXPECT().GetBookFiles("book-inplace").Return([]database.BookFile{
 		{ID: "bf-1", BookID: "book-inplace", FilePath: stale},
@@ -670,7 +669,7 @@ func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *tes
 	require.Equal(t, target, landing.Path)
 	require.Empty(t, landing.Created, "an adopted target was not created by this run")
 
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 	svc.rollbackOrganizedVersion("", landing, &noopLogger{})
 	got, err := os.ReadFile(target)
 	require.NoError(t, err, "rollback must not remove a file this run only adopted")
@@ -695,7 +694,7 @@ func TestOrganizeSingleFile_FreshCopy_IsCreatedAndRolledBack(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{landing.Path}, landing.Created)
 
-	svc := NewService(mocks.NewMockStore(t))
+	svc := NewService(newMockStore(t))
 	svc.rollbackOrganizedVersion("", landing, &noopLogger{})
 	_, err = os.Stat(landing.Path)
 	require.True(t, errors.Is(err, fs.ErrNotExist), "the copy this run wrote must be removed")

@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_one_book_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6e2a91d4-3c58-4b7f-8a06-1d94f2e7b350
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -13,7 +13,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -98,7 +97,7 @@ func TestOrganizeBook_RejectsDirectory(t *testing.T) {
 func TestOrganizeOneBook_DirectoryBook_TakesDirectoryPath(t *testing.T) {
 	book := directoryBookFixture(t)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookFiles", "book-dir-1").Return([]database.BookFile{}, nil)
 
 	svc := NewService(mockStore)
@@ -122,7 +121,7 @@ func TestOrganizeOneBook_DirectoryBook_TakesDirectoryPath(t *testing.T) {
 func TestOrganizeOneBook_DirectoryBook_OrganizesSegments(t *testing.T) {
 	book := directoryBookFixture(t)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookFiles", "book-dir-1").Return([]database.BookFile{
 		{ID: "bf-1", FilePath: filepath.Join(book.FilePath, "part1.mp3")},
 		{ID: "bf-2", FilePath: filepath.Join(book.FilePath, "part2.mp3")},
@@ -181,7 +180,7 @@ func TestOrganizeOneBook_SingleFileBook_TakesSingleFilePath(t *testing.T) {
 	// (>1 rows is a directory book even when file_path names a file). A single
 	// row plus a file at file_path is the single-file shape. Nothing else may be
 	// called — the directory branch's further reads would fail this mock.
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.EXPECT().GetBookFiles("book-file-1").Return([]database.BookFile{
 		{ID: "bf-1", BookID: "book-file-1", FilePath: srcFile},
 	}, nil).Once()
