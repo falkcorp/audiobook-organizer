@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-15
 
@@ -1127,43 +1127,33 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 			continue
 		}
 
-		// before is the primary as hydrated (or as last written); the write
-		// below copies onto the stored row only what the merge changed from it.
-		before, serr := database.SnapshotBook(primary)
-		if serr != nil {
-			pkgLog.Warn("merge-dupes failed to snapshot primary %s: %v", primary.ID, serr)
-			entry.Action = "error"
-			result.Errors++
-			result.Details = append(result.Details, entry)
-			continue
+		// Dry run merges into the hydrated copy (nothing is written). A real
+		// run merges into the STORED row under its lock, so "fill where empty"
+		// is decided on the fresh row and a column a concurrent writer filled
+		// since the hydrate is kept, not overwritten with the dupe's value.
+		var merged []string
+		var written *database.Book
+		var merr error
+		if dryRun {
+			merged, merr = mergeBookMetadataRespectingLocks(store, primary, dupe)
+			database.DropDanglingSeriesRef(store, primary, "reconcile.merge-primary")
+		} else {
+			written, merged, merr = mergeDupeIntoStoredRow(store, primary, dupe, "reconcile.merge-primary")
 		}
-		merged, merr := mergeBookMetadataRespectingLocks(store, primary, dupe)
 		if merr != nil {
-			slog.Warn("merge-dupes refused: field locks unreadable", "primary", primary.ID, "err", merr)
+			pkgLog.Warn("merge-dupes failed to merge into primary %s: %v", primary.ID, merr)
 			entry.Action = "error"
 			result.Errors++
 			result.Details = append(result.Details, entry)
 			continue
 		}
-		database.DropDanglingSeriesRef(store, primary, "reconcile.merge-primary")
 		entry.FieldsMerged = merged
 
 		if !dryRun {
+			// Later dupes merging into this primary work from the row as
+			// written, so they see this merge and any concurrent columns.
+			hydrated[primary.ID] = written
 			if len(merged) > 0 {
-				written, err := writeMergedFields(store, primary, before)
-				if err != nil {
-					pkgLog.Warn("merge-dupes failed to update primary %s: %v", primary.ID, err)
-					// Drop the unwritten merge from the cache so a later dupe's
-					// diff is measured against what the store actually holds.
-					hydrated[primary.ID] = before
-					entry.Action = "error"
-					result.Errors++
-					result.Details = append(result.Details, entry)
-					continue
-				}
-				// Later dupes merging into this primary work from the row as
-				// written, so they see this merge and any concurrent columns.
-				hydrated[primary.ID] = written
 				result.MetadataMerged++
 			}
 			if err := softDelete(dupe.ID); err != nil {
@@ -1247,39 +1237,32 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 				continue
 			}
 
-			before, serr := database.SnapshotBook(keeper)
-			if serr != nil {
-				pkgLog.Warn("merge-self-dupes failed to snapshot keeper %s: %v", keeper.ID, serr)
-				entry.Action = "error"
-				result.Errors++
-				result.Details = append(result.Details, entry)
-				continue
+			// See the primary merge above: dry run merges into the hydrated
+			// copy, a real run merges into the stored row under its lock.
+			var merged []string
+			var written *database.Book
+			var merr error
+			if dryRun {
+				merged, merr = mergeBookMetadataRespectingLocks(store, keeper, dupe)
+				database.DropDanglingSeriesRef(store, keeper, "reconcile.merge-keeper")
+			} else {
+				written, merged, merr = mergeDupeIntoStoredRow(store, keeper, dupe, "reconcile.merge-keeper")
 			}
-			merged, merr := mergeBookMetadataRespectingLocks(store, keeper, dupe)
 			if merr != nil {
-				slog.Warn("merge-self-dupes refused: field locks unreadable", "keeper", keeper.ID, "err", merr)
+				pkgLog.Warn("merge-self-dupes failed to merge into keeper %s: %v", keeper.ID, merr)
 				entry.Action = "error"
 				result.Errors++
 				result.Details = append(result.Details, entry)
 				continue
 			}
-			database.DropDanglingSeriesRef(store, keeper, "reconcile.merge-keeper")
 			entry.FieldsMerged = merged
 
 			if !dryRun {
+				// Later dupes merge into the row as written.
+				keeper = written
+				hydrated[keeper.ID] = written
 				if len(merged) > 0 {
-					if written, err := writeMergedFields(store, keeper, before); err != nil {
-						pkgLog.Warn("merge-self-dupes failed to update keeper %s: %v", keeper.ID, err)
-						// Drop the unwritten merge so the next dupe's diff is
-						// measured against what the store actually holds.
-						keeper = before
-						hydrated[keeper.ID] = keeper
-					} else {
-						// Later dupes merge into the row as written.
-						keeper = written
-						hydrated[keeper.ID] = written
-						result.MetadataMerged++
-					}
+					result.MetadataMerged++
 				}
 				if err := softDelete(dupe.ID); err != nil {
 					slog.Warn("merge-self-dupes failed to soft-delete", "dupe", dupe.ID, "err", err)
@@ -1312,32 +1295,70 @@ func MergeNoVGDuplicates(store Store, rootDir string, dryRun bool) (*MergeDuplic
 	return result, nil
 }
 
-// writeMergedFields writes what a metadata merge changed on working (compared
-// with before, the snapshot taken right before the merge) onto the stored row
-// through ModifyBook, and returns the row as written. Only the changed fields
-// are copied, so a column another writer committed between the hydrate and this
-// write is not reverted (audit A1#15); a field both sides changed ends with the
-// merge's value, per database.MergeBookChanges. The merge and its lock read
-// stay outside the book lock. A row that vanished is an error, as the old
-// whole-row UpdateBook of a missing row was.
-func writeMergedFields(store bookWriter, working, before *database.Book) (*database.Book, error) {
-	written, err := store.ModifyBook(working.ID, func(b *database.Book) error {
-		changed, merr := database.MergeBookChanges(b, before, working)
-		if merr != nil {
-			return merr
+// mergeDupeStore is what mergeDupeIntoStoredRow needs: the locked write and
+// the field-lock read (DropDanglingSeriesRef takes any store).
+type mergeDupeStore interface {
+	bookWriter
+	fieldLockReader
+}
+
+// mergeDupeIntoStoredRow merges src's metadata into the STORED row for cached
+// (the hydrated copy of the winner) under that row's write lock. "Fill where
+// empty" is decided on the fresh row, so a column a concurrent writer filled
+// between the hydrate and this write is kept rather than overwritten with the
+// dupe's value (audit A1#15; the earlier snapshot-and-diff write decided it on
+// the stale copy). The field locks and the dangling-series check are read
+// OUTSIDE the lock; inside it only pure struct work runs. A dangling series
+// ref found on cached is cleared on the stored row when it still points at
+// that series. Returns the row as written (the unchanged row when nothing
+// merged) and the merged field names, locked fields excluded. A row that
+// vanished is an error, as the old whole-row UpdateBook of a missing row was.
+func mergeDupeIntoStoredRow(store mergeDupeStore, cached, src *database.Book, caller string) (*database.Book, []string, error) {
+	locks, err := database.LoadFieldLocks(store, cached.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var danglingSID *int
+	if cached.SeriesID != nil {
+		sid := *cached.SeriesID
+		if database.DropDanglingSeriesRef(store, cached, caller) {
+			danglingSID = &sid
 		}
-		if len(changed) == 0 {
+	}
+	var merged []string
+	var restored []string
+	written, err := store.ModifyBook(cached.ID, func(b *database.Book) error {
+		merged, restored = nil, nil
+		changed := false
+		if danglingSID != nil && b.SeriesID != nil && *b.SeriesID == *danglingSID {
+			b.SeriesID = nil
+			changed = true
+		}
+		var all []string
+		restored = locks.Apply(b, func(b *database.Book) { all = MergeBookMetadata(b, src) })
+		for _, name := range all {
+			if !slices.Contains(restored, name) {
+				merged = append(merged, name)
+			}
+		}
+		if len(merged) > 0 {
+			changed = true
+		}
+		if !changed {
 			return database.ErrSkipBookWrite
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if written == nil {
-		return nil, fmt.Errorf("book %s vanished before the merged metadata could be written", working.ID)
+		return nil, nil, fmt.Errorf("book %s vanished before the merged metadata could be written", cached.ID)
 	}
-	return written, nil
+	if len(restored) > 0 {
+		pkgLog.Info("merge left the winner's user-locked fields alone book=%s locked=%v", cached.ID, restored)
+	}
+	return written, merged, nil
 }
 
 // mergeBookMetadataRespectingLocks is MergeBookMetadata behind the user's

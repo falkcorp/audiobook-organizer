@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-15
 
@@ -230,7 +230,7 @@ var slogRatchet = map[string]int{
 	"internal/realtime/events.go":                                11,
 	"internal/reconcile/elect_primaries.go":                      6,
 	"internal/reconcile/itunes_heal.go":                          2,
-	"internal/reconcile/reconcile.go":                            17,
+	"internal/reconcile/reconcile.go":                            15,
 	"internal/remux/remux.go":                                    5,
 	"internal/remux/transcode.go":                                7,
 	"internal/scheduler/extra_ops.go":                            6,
