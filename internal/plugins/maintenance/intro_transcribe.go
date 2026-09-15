@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.27.1
+// version: 3.28.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -389,7 +389,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 	ListBookIDs() ([]string, error)
 	GetBookByID(string) (*database.Book, error)
-	UpdateBook(string, *database.Book) (*database.Book, error)
+	ModifyBook(string, func(*database.Book) error) (*database.Book, error)
 }, reporter sdk.Reporter, ids []string, dryRun bool) error {
 	log := reporter.Logger()
 	total := len(ids)
@@ -437,16 +437,42 @@ func (p *Plugin) reparseStoredIntros(ctx context.Context, store interface {
 		nt, na, nn := strPtrOrNil(f.Title), strPtrOrNil(f.Author), strPtrOrNil(f.Narrator)
 		// A credits verdict guarantees title and author; narrator is optional, so
 		// keep any existing narrator rather than dropping it.
+		parsedNarrator := nn
 		if nn == nil {
 			nn = b.TranscribedNarrator
 		}
 		if eqStrPtr(b.TranscribedTitle, nt) && eqStrPtr(b.TranscribedAuthor, na) && eqStrPtr(b.TranscribedNarrator, nn) {
 			continue // unchanged — skip the write
 		}
-		b.TranscribedTitle, b.TranscribedAuthor, b.TranscribedNarrator = nt, na, nn
 		if !dryRun {
-			if _, err := store.UpdateBook(b.ID, b); err != nil {
+			// The parse above came from the transcript this loop read. Write
+			// only the three parsed columns, under the book's write lock
+			// (ModifyBook), so a column another writer commits meanwhile is
+			// not reverted (audit A1#15). The fresh row decides: a transcript
+			// replaced meanwhile no longer backs this parse and is left for
+			// the next run, and a narrator filled meanwhile is kept.
+			transcript := *b.IntroTranscription
+			wrote := false
+			written, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
+				if cur.IntroTranscription == nil || *cur.IntroTranscription != transcript {
+					return database.ErrSkipBookWrite
+				}
+				narrator := parsedNarrator
+				if narrator == nil {
+					narrator = cur.TranscribedNarrator
+				}
+				if eqStrPtr(cur.TranscribedTitle, nt) && eqStrPtr(cur.TranscribedAuthor, na) && eqStrPtr(cur.TranscribedNarrator, narrator) {
+					return database.ErrSkipBookWrite
+				}
+				cur.TranscribedTitle, cur.TranscribedAuthor, cur.TranscribedNarrator = nt, na, narrator
+				wrote = true
+				return nil
+			})
+			if err != nil {
 				log.Warn("reparse-intros: update failed", "book_id", b.ID, "err", err)
+				continue
+			}
+			if written == nil || !wrote {
 				continue
 			}
 		}
@@ -1038,13 +1064,31 @@ func (p *Plugin) processTranscribePage(
 				if batchResults[s.book.ID].Text != "" {
 					continue
 				}
-				b := s.book
-				b.IntroTranscription = &sentinel
-				if _, uerr := store.UpdateBook(b.ID, &b); uerr != nil {
-					log.Warn("transcribe: silence sentinel write failed", "book_id", b.ID, "err", uerr)
-				} else {
-					markedSilent++
-					silencedBookIDs[b.ID] = true
+				// s.book was copied before ffmpeg and two whisper passes ran.
+				// Write only the sentinel column, under the book's write lock
+				// (ModifyBook), so a column another writer committed meanwhile
+				// is not reverted (audit A1#15). A transcript that landed
+				// meanwhile outranks the sentinel and is kept.
+				id := s.book.ID
+				wrote := false
+				written, uerr := store.ModifyBook(id, func(cur *database.Book) error {
+					if cur.IntroTranscription != nil && *cur.IntroTranscription != "" && *cur.IntroTranscription != sentinel {
+						return database.ErrSkipBookWrite
+					}
+					cur.IntroTranscription = &sentinel
+					wrote = true
+					return nil
+				})
+				switch {
+				case uerr != nil:
+					log.Warn("transcribe: silence sentinel write failed", "book_id", id, "err", uerr)
+				case written == nil:
+					log.Warn("transcribe: silence sentinel write skipped, book gone", "book_id", id)
+				default:
+					if wrote {
+						markedSilent++
+					}
+					silencedBookIDs[id] = true
 				}
 			}
 			if markedSilent > 0 {
@@ -1100,7 +1144,7 @@ func (p *Plugin) processTranscribePage(
 // produced a transcript this run (OK or Unparsed), which the caller counts as
 // processed.
 func (p *Plugin) applyOutcome(
-	store bookUpdater,
+	store bookModifier,
 	log interface {
 		Info(string, ...any)
 		Warn(string, ...any)
@@ -1114,47 +1158,62 @@ func (p *Plugin) applyOutcome(
 	accum.recordOutcome(status, now)
 
 	newDetail := strPtrOrNil(detail)
-
-	// A transcript outcome (OK or Unparsed) always carries fresh text and must
-	// write. Only pure failures are change-guarded: identical status+detail
-	// already stored → no write (avoids churning ~45K stale-path books on re-run).
 	hasTranscript := status == statusOK || status == statusUnparsed
-	if !hasTranscript &&
-		book.TranscribeStatus != nil && *book.TranscribeStatus == status &&
-		eqStrPtr(book.TranscribeError, newDetail) {
+
+	// `book` is the page's copy, taken before ffmpeg and whisper ran; only its
+	// ID is used here. ModifyBook re-reads the row under its write lock and
+	// sets only the transcribe columns, so a column another writer committed
+	// while the clip was being transcribed is not reverted (audit A1#15).
+	wrote := false
+	written, err := store.ModifyBook(book.ID, func(cur *database.Book) error {
+		// A transcript outcome (OK or Unparsed) always carries fresh text and must
+		// write. Only pure failures are change-guarded: identical status+detail
+		// already stored → no write (avoids churning ~45K stale-path books on re-run).
+		if !hasTranscript &&
+			cur.TranscribeStatus != nil && *cur.TranscribeStatus == status &&
+			eqStrPtr(cur.TranscribeError, newDetail) {
+			return database.ErrSkipBookWrite
+		}
+
+		cur.TranscribeAttemptedAt = &now
+		st := status
+		cur.TranscribeStatus = &st
+		cur.TranscribeError = newDetail
+
+		if hasTranscript {
+			cur.IntroTranscription = &text
+			cur.IntroTranscribedAt = &now
+			// Parsed fields are set only when present. For statusUnparsed Title is
+			// empty by definition, leaving TranscribedTitle nil — which is exactly
+			// what OnlyParsedTranscription filters on.
+			if fields.Title != "" {
+				cur.TranscribedTitle = &fields.Title
+			}
+			if fields.Author != "" {
+				cur.TranscribedAuthor = &fields.Author
+			}
+			if fields.Narrator != "" {
+				cur.TranscribedNarrator = &fields.Narrator
+			}
+			if fields.Translator != "" {
+				cur.TranscribedTranslator = &fields.Translator
+			}
+			if fields.CoverArtist != "" {
+				cur.TranscribedCoverArtist = &fields.CoverArtist
+			}
+		}
+		wrote = true
+		return nil
+	})
+	if err != nil {
+		log.Warn("transcribe: update failed", "book_id", book.ID, "status", status, "err", err)
 		return false
 	}
-
-	book.TranscribeAttemptedAt = &now
-	st := status
-	book.TranscribeStatus = &st
-	book.TranscribeError = newDetail
-
-	if hasTranscript {
-		book.IntroTranscription = &text
-		book.IntroTranscribedAt = &now
-		// Parsed fields are set only when present. For statusUnparsed Title is
-		// empty by definition, leaving TranscribedTitle nil — which is exactly
-		// what OnlyParsedTranscription filters on.
-		if fields.Title != "" {
-			book.TranscribedTitle = &fields.Title
-		}
-		if fields.Author != "" {
-			book.TranscribedAuthor = &fields.Author
-		}
-		if fields.Narrator != "" {
-			book.TranscribedNarrator = &fields.Narrator
-		}
-		if fields.Translator != "" {
-			book.TranscribedTranslator = &fields.Translator
-		}
-		if fields.CoverArtist != "" {
-			book.TranscribedCoverArtist = &fields.CoverArtist
-		}
+	if written == nil {
+		log.Warn("transcribe: update skipped, book gone", "book_id", book.ID, "status", status)
+		return false
 	}
-
-	if _, err := store.UpdateBook(book.ID, book); err != nil {
-		log.Warn("transcribe: update failed", "book_id", book.ID, "status", status, "err", err)
+	if !wrote {
 		return false
 	}
 	return hasTranscript

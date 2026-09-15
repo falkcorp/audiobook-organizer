@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_status_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a1c9e73-2b48-4f60-8d31-6c0af5b2e719
-// last-edited: 2026-07-01
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -14,9 +14,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
-// newOutcomeStore returns a MockStore that captures every UpdateBook payload.
+// newOutcomeStore returns a MockStore that captures every book write.
+// ModifyBook's MockStore fallback reads the row, runs the mutation and writes
+// it through UpdateBookFunc, so the captured payload is the written row.
 func newOutcomeStore(written *[]database.Book) *database.MockStore {
 	return &database.MockStore{
+		GetBookByIDFunc: func(id string) (*database.Book, error) { return &database.Book{ID: id}, nil },
 		UpdateBookFunc: func(_ string, b *database.Book) (*database.Book, error) {
 			*written = append(*written, *b)
 			return b, nil

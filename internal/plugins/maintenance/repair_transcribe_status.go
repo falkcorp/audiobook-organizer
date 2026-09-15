@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-09-02
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -270,14 +270,28 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 				local[v.Reason]++
 				continue
 			}
-			// Only the two status fields change. GetBookByID returns the full
-			// row, so writing it back preserves everything else — and critically
-			// this op never assigns IntroTranscription, so the transcript cannot
-			// be disturbed by a repair.
-			b.TranscribeStatus = v.NewStatus
-			b.TranscribeError = nil
-			if _, uerr := store.UpdateBook(b.ID, b); uerr != nil {
+			// Only the two status fields change, written under the book's
+			// write lock (ModifyBook) so a column another writer commits
+			// meanwhile is not reverted (audit A1#15) — and critically this
+			// op never assigns IntroTranscription, so the transcript cannot
+			// be disturbed by a repair. The verdict is re-made on the fresh
+			// row; a book repaired meanwhile is left alone.
+			written, uerr := store.ModifyBook(b.ID, func(cur *database.Book) error {
+				fresh := classifyStatusRepair(*cur)
+				if !fresh.Write {
+					return database.ErrSkipBookWrite
+				}
+				cur.TranscribeStatus = fresh.NewStatus
+				cur.TranscribeError = nil
+				return nil
+			})
+			if uerr != nil {
 				log.Warn("repair-transcribe-status: update failed", "book_id", b.ID, "err", uerr)
+				local[repairWriteFailed]++
+				continue
+			}
+			if written == nil {
+				log.Warn("repair-transcribe-status: update skipped, book gone", "book_id", b.ID)
 				local[repairWriteFailed]++
 				continue
 			}

@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -138,20 +139,14 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			"book %s: %q → %q", u.book.ID, u.book.Title, u.newTitle))
 
 		if !params.DryRun {
-			// Hydrate before writeback — u.book is Core (slim); writing it
-			// straight through UpdateBook would wipe Author/Series.
-			full, herr := store.GetBookByID(u.book.ID)
-			if herr != nil || full == nil {
+			// u.book is Core (slim); retitleBook re-reads the full row and
+			// writes only Title, so nothing else on the row is disturbed.
+			if err := retitleBook(store, u.book.ID, u.book.Title, u.newTitle); err != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: hydrate failed: %v", u.book.ID, herr))
-				errCount++
-				continue
-			}
-			full.Title = u.newTitle
-			if _, err := store.UpdateBook(full.ID, full); err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s: UpdateBook failed: %v", u.book.ID, err))
-				errCount++
+					"book %s: retitle failed: %v", u.book.ID, err))
+				if !errors.Is(err, errRetitleChangedUnderneath) {
+					errCount++
+				}
 				continue
 			}
 		}

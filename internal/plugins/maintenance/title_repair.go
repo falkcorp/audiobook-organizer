@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
-// last-edited: 2026-09-02
+// last-edited: 2026-09-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -159,6 +160,41 @@ func (p *Plugin) titleRepairDef() sdk.OperationDef {
 	}
 }
 
+// errRetitleChangedUnderneath reports that the stored title was no longer the
+// one the new title was derived from when the write took the row.
+var errRetitleChangedUnderneath = errors.New("title changed underneath, left as it is")
+
+// retitleBook is the title write shared by title-repair, title-backfill and
+// repair-junk-titles. It sets only Title, under the book's write lock
+// (ModifyBook), so a column another writer commits between the listing read
+// and this write is not reverted (audit A1#15), and only while the stored
+// title is still oldTitle, the value newTitle was derived from; otherwise it
+// returns errRetitleChangedUnderneath and writes nothing. Provenance note:
+// the persisted field-state store only holds fetched/override values; the
+// file-level value IS Book.Title, and the provenance map is recomputed at read
+// time, so no separate provenance write is needed.
+func retitleBook(store bookModifier, id, oldTitle, newTitle string) error {
+	changed := false
+	written, err := store.ModifyBook(id, func(cur *database.Book) error {
+		if cur.Title != oldTitle {
+			return database.ErrSkipBookWrite
+		}
+		cur.Title = newTitle
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("ModifyBook: %w", err)
+	}
+	if written == nil {
+		return errors.New("book not found")
+	}
+	if !changed {
+		return errRetitleChangedUnderneath
+	}
+	return nil
+}
+
 // titleRepairWorkers caps the RunItems pool: the per-book work is disk-IO +
 // tag-read bound, so more than 8 workers just thrashes the disk.
 func titleRepairWorkers() int {
@@ -289,22 +325,14 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 				"book %s: %s %q → %q", b.ID, verb, b.Title, d.NewTitle))
 			if params.Apply {
-				// UpdateBook is a FULL replacement — hydrate the full row and
-				// patch ONLY Title so denormalized Author/Series/fingerprints
-				// survive. Provenance note: the persisted field-state store
-				// only holds fetched/override values; the file-level value IS
-				// Book.Title, and the provenance map is recomputed at read
-				// time, so no separate provenance write is needed.
-				full, herr := store.GetBookByID(b.ID)
-				if herr != nil || full == nil {
-					errs.Add(1)
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: hydrate failed: %v", b.ID, herr))
-					return nil
-				}
-				full.Title = d.NewTitle
-				if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
-					errs.Add(1)
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook failed: %v", b.ID, uerr))
+				// retitleBook patches ONLY Title under the book's write lock,
+				// and only while the stored title is still the one the
+				// decision above was made against.
+				if uerr := retitleBook(store, b.ID, b.Title, d.NewTitle); uerr != nil {
+					if !errors.Is(uerr, errRetitleChangedUnderneath) {
+						errs.Add(1)
+					}
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: retitle failed: %v", b.ID, uerr))
 					return nil
 				}
 			}

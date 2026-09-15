@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-08-19
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -312,14 +312,22 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		}
 
 		// Set the canonical title (fixes chapter-suffix leaks on survivors too).
-		if tb, err := store.GetBookByID(target); err == nil && tb != nil && tb.Title != a.Title {
-			tb.Title = a.Title
-			if _, err := store.UpdateBook(target, tb); err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("set title on %s failed: %v", target, err))
-				errCount++
-			} else {
-				titled++
+		// Write only Title, under the book's write lock (ModifyBook), so a
+		// column another writer commits meanwhile is not reverted (audit
+		// A1#15); a survivor already carrying the canonical title is skipped.
+		retitled := false
+		if written, err := store.ModifyBook(target, func(tb *database.Book) error {
+			if tb.Title == a.Title {
+				return database.ErrSkipBookWrite
 			}
+			tb.Title = a.Title
+			retitled = true
+			return nil
+		}); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("set title on %s failed: %v", target, err))
+			errCount++
+		} else if written != nil && retitled {
+			titled++
 		}
 		touched[target] = true
 	}

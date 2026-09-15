@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -367,17 +367,26 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 		// projection: BookCore has heavy fields nil, and its guard-preserved
 		// Author would still name the row being deleted (STOREFID W5d-1).
 		if book.AuthorID != nil && *book.AuthorID == from.ID {
-			if full, err := store.GetBookByID(book.ID); err == nil && full != nil {
-				target := into
-				full.AuthorID = &into.ID
-				full.Author = &target
-				if _, err := store.UpdateBook(book.ID, full); err != nil {
-					log.Warn("author-conjunction-repair: primary author rewrite failed",
-						"book_id", book.ID, "err", err)
+			// Rewrite only AuthorID/Author, under the book's write lock
+			// (ModifyBook), so a column another writer commits meanwhile is
+			// not reverted (audit A1#15); a primary already moved off the
+			// stranded row meanwhile is left alone.
+			target := into
+			written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
+				if full.AuthorID == nil || *full.AuthorID != from.ID {
+					return database.ErrSkipBookWrite
 				}
-			} else {
-				log.Warn("author-conjunction-repair: hydrate failed, primary author left stale",
+				full.AuthorID = &target.ID
+				full.Author = &target
+				return nil
+			})
+			switch {
+			case err != nil:
+				log.Warn("author-conjunction-repair: primary author rewrite failed",
 					"book_id", book.ID, "err", err)
+			case written == nil:
+				log.Warn("author-conjunction-repair: book gone, primary author left stale",
+					"book_id", book.ID)
 			}
 		}
 		relinked++

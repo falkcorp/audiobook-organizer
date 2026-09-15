@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -399,24 +399,34 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 
 		movedAll := true
 		for i := range books {
-			full, gerr := store.GetBookByID(books[i].ID)
-			if gerr != nil || full == nil {
-				failed++
-				movedAll = false
-				continue
-			}
 			sid := targetID
 			pos := pl.Position
-			full.SeriesID = &sid
-			// Only fill the position when the book has none — an existing sequence
-			// was set deliberately and outranks one parsed from a name.
-			if full.SeriesSequence == nil {
-				full.SeriesSequence = &pos
-			}
-			if _, uerr := store.UpdateBook(full.ID, full); uerr != nil {
+			// Write only SeriesID (and a missing SeriesSequence), under the
+			// book's write lock (ModifyBook), so a column another writer
+			// commits meanwhile is not reverted (audit A1#15). The fresh row
+			// decides: a book moved off the source series meanwhile no longer
+			// holds it and is left alone.
+			written, uerr := store.ModifyBook(books[i].ID, func(full *database.Book) error {
+				if full.SeriesID == nil || *full.SeriesID != pl.FromID {
+					return database.ErrSkipBookWrite
+				}
+				full.SeriesID = &sid
+				// Only fill the position when the book has none — an existing sequence
+				// was set deliberately and outranks one parsed from a name.
+				if full.SeriesSequence == nil {
+					full.SeriesSequence = &pos
+				}
+				return nil
+			})
+			if uerr != nil {
 				failed++
 				movedAll = false
-				log.Warn("series-denumber: UpdateBook failed", "book", full.ID, "err", uerr)
+				log.Warn("series-denumber: ModifyBook failed", "book", books[i].ID, "err", uerr)
+				continue
+			}
+			if written == nil {
+				failed++
+				movedAll = false
 				continue
 			}
 			// 🔑 LOAD-BEARING, not a safeguard. A target can be a LATER plan's
@@ -428,7 +438,7 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			// read misses those books, leaves them behind, and deletes the series
 			// under them. Pinned by
 			// TestRunSeriesDenumber_HoistedMembershipFollowsBooksIntoALaterSource.
-			members.Move(full.ID, pl.FromID, &sid)
+			members.Move(books[i].ID, pl.FromID, &sid)
 			movedBooks++
 		}
 

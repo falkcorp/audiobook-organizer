@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-09-13
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -433,11 +433,31 @@ func (p *Plugin) authorIDRepairDangling(
 			record(ch, "failed")
 			return nil
 		}
-		full.AuthorID = &target.ID
-		full.Author = target
-		if _, uErr := store.UpdateBook(c.ID, full); uErr != nil {
+		// Repoint only AuthorID/Author, under the book's write lock
+		// (ModifyBook), so a column another writer commits meanwhile is not
+		// reverted (audit A1#15). The row decides again: a book whose
+		// AuthorID moved off the dangling id meanwhile is left alone.
+		repointed := false
+		written, uErr := store.ModifyBook(c.ID, func(cur *database.Book) error {
+			if cur.AuthorID == nil || *cur.AuthorID != old {
+				return database.ErrSkipBookWrite
+			}
+			cur.AuthorID = &target.ID
+			cur.Author = target
+			repointed = true
+			return nil
+		})
+		switch {
+		case uErr != nil:
 			ch.Error = uErr.Error()
 			record(ch, "failed")
+			return nil
+		case written == nil:
+			ch.Error = "book vanished before the repoint"
+			record(ch, "failed")
+			return nil
+		case !repointed:
+			record(authorIDScalarChange{}, "changed_since_scan")
 			return nil
 		}
 		ch.Applied = true
@@ -691,12 +711,26 @@ func (p *Plugin) authorIDMergeOne(
 		}
 		if scalarHit {
 			target := canonical
-			full.AuthorID = &target.ID
-			full.Author = &target
-			if _, uErr := store.UpdateBook(bookID, full); uErr != nil {
+			// Repoint only AuthorID/Author, under the book's write lock
+			// (ModifyBook), so a column another writer commits meanwhile is
+			// not reverted (audit A1#15); a row moved off the duplicate
+			// meanwhile is left alone.
+			written, uErr := store.ModifyBook(bookID, func(cur *database.Book) error {
+				if cur.AuthorID == nil || *cur.AuthorID != dup.ID {
+					return database.ErrSkipBookWrite
+				}
+				cur.AuthorID = &target.ID
+				cur.Author = &target
+				return nil
+			})
+			switch {
+			case uErr != nil:
 				ch.Error = uErr.Error()
 				log.Warn("author-id-repair: scalar repoint failed", "book_id", bookID, "err", uErr)
-			} else {
+			case written == nil:
+				ch.Error = "book vanished before the scalar repoint"
+				log.Warn("author-id-repair: scalar repoint skipped, book gone", "book_id", bookID)
+			default:
 				wrote, bookMoved = true, true
 			}
 		}

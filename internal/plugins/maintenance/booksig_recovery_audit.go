@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-08-19
+// last-edited: 2026-09-15
 
 package maintenance
 
@@ -334,57 +334,60 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 // the caller) to carry a non-nil Description/BookSigV1 respectively; either
 // may be nil if that field isn't recoverable for this book.
 func restoreRecoverableFields(
-	store bookFieldWriter,
+	store bookModifier,
 	id string,
 	descSnapBook *database.Book,
 	sigSnapBook *database.Book,
 	reporter sdk.Reporter,
 ) (restored int, skippedNonEmpty int, err error) {
-	fresh, gerr := store.GetBookByID(id)
-	if gerr != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read failed: %v", id, gerr))
-		return 0, 0, gerr
+	// ModifyBook re-reads the row under its write lock and fills only the
+	// recovered columns that are still empty there, so a column another
+	// writer commits meanwhile is not reverted (audit A1#15).
+	title := ""
+	changed := false
+	written, uerr := store.ModifyBook(id, func(fresh *database.Book) error {
+		title = fresh.Title
+		if descSnapBook != nil {
+			if fresh.Description != nil {
+				skippedNonEmpty++
+				_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
+			} else {
+				fresh.Description = descSnapBook.Description
+				changed = true
+			}
+		}
+
+		if sigSnapBook != nil {
+			if fresh.BookSigV1 != nil {
+				skippedNonEmpty++
+				_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: booksig_v1 no longer empty at write time, skipping", id))
+			} else {
+				fresh.BookSigV1 = sigSnapBook.BookSigV1
+				fresh.BookSigV1Mask = sigSnapBook.BookSigV1Mask
+				fresh.BookSigSegments = sigSnapBook.BookSigSegments
+				fresh.BookSigBuiltAt = sigSnapBook.BookSigBuiltAt
+				fresh.BookSigCoveragePct = sigSnapBook.BookSigCoveragePct
+				changed = true
+			}
+		}
+
+		if !changed {
+			return database.ErrSkipBookWrite
+		}
+		return nil
+	})
+	if uerr != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
+		return 0, skippedNonEmpty, uerr
 	}
-	if fresh == nil {
+	if written == nil {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read found no row, skipping", id))
 		return 0, 0, fmt.Errorf("book %s: not found on restore re-read", id)
 	}
-
-	changed := false
-
-	if descSnapBook != nil {
-		if fresh.Description != nil {
-			skippedNonEmpty++
-			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
-		} else {
-			fresh.Description = descSnapBook.Description
-			changed = true
-		}
-	}
-
-	if sigSnapBook != nil {
-		if fresh.BookSigV1 != nil {
-			skippedNonEmpty++
-			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: booksig_v1 no longer empty at write time, skipping", id))
-		} else {
-			fresh.BookSigV1 = sigSnapBook.BookSigV1
-			fresh.BookSigV1Mask = sigSnapBook.BookSigV1Mask
-			fresh.BookSigSegments = sigSnapBook.BookSigSegments
-			fresh.BookSigBuiltAt = sigSnapBook.BookSigBuiltAt
-			fresh.BookSigCoveragePct = sigSnapBook.BookSigCoveragePct
-			changed = true
-		}
-	}
-
 	if !changed {
 		return 0, skippedNonEmpty, nil
 	}
 
-	if _, uerr := store.UpdateBook(id, fresh); uerr != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
-		return 0, skippedNonEmpty, uerr
-	}
-
-	_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, fresh.Title))
+	_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, title))
 	return 1, skippedNonEmpty, nil
 }
