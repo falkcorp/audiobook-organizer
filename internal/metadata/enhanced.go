@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-09-14
 
@@ -542,7 +542,9 @@ func writeM4BMetadata(filePath string, metadata map[string]any, config fileops.O
 		args = append(args, "--title", title)
 	}
 	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		args = append(args, "--artist", artist)
+		// Album Artist = author (owner rule): readers take aART first, so
+		// leaving an old one behind reads the old author back on the next scan.
+		args = append(args, "--artist", artist, "--albumArtist", artist)
 	}
 	if album, ok := metadata["album"].(string); ok && album != "" {
 		args = append(args, "--album", album)
@@ -559,9 +561,9 @@ func writeM4BMetadata(filePath string, metadata map[string]any, config fileops.O
 	if desc, ok := metadata["description"].(string); ok && desc != "" {
 		args = append(args, "--description", desc)
 	}
-	// Clear composer to prevent stale narrator data from polluting author on re-read.
-	// Do NOT write narrator to --composer (©wrt) — use custom NARRATOR tag instead.
-	args = append(args, "--composer", "")
+	// COMPOSER (©wrt) is never written or blanked (owner rule): blanking it
+	// erased owner-set values with no undo record. Narrator goes to the custom
+	// NARRATOR atom below.
 	// --grouping maps to ©grp; use for series name
 	if series, ok := metadata["series"].(string); ok && series != "" {
 		args = append(args, "--grouping", series)
@@ -645,7 +647,8 @@ func writeMP3Metadata(filePath string, metadata map[string]any, config fileops.O
 		args = append(args, "--title", title)
 	}
 	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		args = append(args, "--artist", artist)
+		// Album Artist (TPE2) = author, as organize and the taglib path write it.
+		args = append(args, "--artist", artist, "--album-artist", artist)
 	}
 	if album, ok := metadata["album"].(string); ok && album != "" {
 		args = append(args, "--album", album)
@@ -708,33 +711,43 @@ func writeFLACMetadata(filePath string, metadata map[string]any, config fileops.
 		}
 	}()
 
-	// Build metaflac command (remove old tags first, then set new)
-	removeArgs := []string{"--remove-tag=TITLE", "--remove-tag=ARTIST", "--remove-tag=ALBUM", "--remove-tag=GENRE", "--remove-tag=DATE", "--remove-tag=NARRATOR", filePath}
-	if err := exec.Command("metaflac", removeArgs...).Run(); err != nil {
-		// Non-fatal if tags don't exist
+	// Remove only the tags about to be set, then set them. It used to remove
+	// TITLE/ARTIST/ALBUM/GENRE/DATE/NARRATOR unconditionally, so a write that
+	// carried only some fields erased the others from the file.
+	var removeArgs []string
+	removeFor := func(tags ...string) {
+		for _, t := range tags {
+			removeArgs = append(removeArgs, "--remove-tag="+t)
+		}
 	}
-
-	// Set new tags
 	var args []string
 	if title, ok := metadata["title"].(string); ok && title != "" {
+		removeFor("TITLE")
 		args = append(args, "--set-tag=TITLE="+title)
 	}
 	if artist, ok := metadata["artist"].(string); ok && artist != "" {
-		args = append(args, "--set-tag=ARTIST="+artist)
+		// Album Artist = author, as organize and the taglib path write it.
+		removeFor("ARTIST", "ALBUMARTIST")
+		args = append(args, "--set-tag=ARTIST="+artist, "--set-tag=ALBUMARTIST="+artist)
 	}
 	if album, ok := metadata["album"].(string); ok && album != "" {
+		removeFor("ALBUM")
 		args = append(args, "--set-tag=ALBUM="+album)
 	}
 	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
+		removeFor("NARRATOR")
 		args = append(args, "--set-tag=NARRATOR="+narrator)
 	}
 	if genre, ok := metadata["genre"].(string); ok && genre != "" {
+		removeFor("GENRE")
 		args = append(args, "--set-tag=GENRE="+genre)
 	}
 	if year, ok := metadata["year"].(int); ok && year > 0 {
+		removeFor("DATE")
 		args = append(args, fmt.Sprintf("--set-tag=DATE=%d", year))
 	}
 	if track, ok := metadata["track"].(string); ok && track != "" {
+		removeFor("TRACKNUMBER")
 		args = append(args, "--set-tag=TRACKNUMBER="+track)
 	}
 	// Write custom AUDIOBOOK_ORGANIZER_* Vorbis comments
@@ -746,11 +759,15 @@ func writeFLACMetadata(filePath string, metadata map[string]any, config fileops.
 	}
 	for _, pair := range customPairs {
 		if val, ok := metadata[pair[1]].(string); ok && val != "" {
+			removeFor(pair[0])
 			args = append(args, "--set-tag="+pair[0]+"="+val)
 		}
 	}
+	removeFor(TagVersion)
 	args = append(args, "--set-tag="+TagVersion+"="+CustomTagVersion)
-	args = append(args, filePath)
+	// One metaflac run applies the removes then the sets in order, so a
+	// failure restores from the backup instead of leaving tags removed.
+	args = append(append(removeArgs, args...), filePath)
 
 	cmd := exec.Command("metaflac", args...)
 	output, err := cmd.CombinedOutput()

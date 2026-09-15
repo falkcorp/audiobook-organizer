@@ -13,3 +13,4 @@
 - Organize undo records and restores only the tags organize writes: ARTIST and ALBUMARTIST for the author, NARRATOR and PERFORMER for the narrator. The undo record for the author also held COMPOSER, so an undo wrote an old COMPOSER back over a later edit.
 - Organize no longer writes a tag whose prior value it cannot record (a tag holding several values) to that file; it logs the skip. Before, the undo record held an empty value and the write could not be undone.
 - The manual author edit and metafetch write-back no longer blank COMPOSER. They already wrote the author to ARTIST and ALBUMARTIST, the same as organize.
+- The command-line fallback tag writers (used when the native writer fails) no longer blank COMPOSER on m4b/m4a, now write Album Artist = author on m4b, mp3 and flac, and the FLAC writer no longer erases TITLE, ALBUM, GENRE, DATE and NARRATOR when a write carries only some fields.
