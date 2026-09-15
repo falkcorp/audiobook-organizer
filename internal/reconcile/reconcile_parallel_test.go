@@ -1,11 +1,12 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-09-02
+// last-edited: 2026-09-15
 
 package reconcile
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,6 +68,29 @@ func (f *fakeReconcileStore) UpdateBook(id string, book *database.Book) (*databa
 	defer f.unlock()
 	f.updated[id] = book
 	return book, nil
+}
+
+// ModifyBook is the locked read-modify-write the reconcile passes now use: fn
+// runs on a copy of the stored row and the result lands in both byID and
+// updated, so the existing `updated` assertions keep working unchanged.
+func (f *fakeReconcileStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	f.lock()
+	defer f.unlock()
+	b := f.byID[id]
+	if b == nil {
+		return nil, nil
+	}
+	cp := *b
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cp, nil
+		}
+		return nil, err
+	}
+	stored := cp
+	f.byID[id] = &stored
+	f.updated[id] = &stored
+	return &cp, nil
 }
 
 // TestFindBrokenSegmentBooks_ParallelOrderAndCounts verifies the parallelized
