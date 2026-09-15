@@ -22,3 +22,4 @@
   precondition takes either the combined state or the recorded pre-combine state,
   and every undo step skips what is already restored, so the retry ends where a
   clean undo does.
+- The split-book merge now clears a merged-away book's FilePath when soft-deleting it, as CombineBooks does, so a later purge with delete-files on cannot remove audio the kept book now owns. Undo restores the path from the journal.

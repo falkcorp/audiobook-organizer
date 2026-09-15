@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge_integrity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f81c3d2-9e4a-4b67-a0d8-2c7e9b13f456
 // last-edited: 2026-09-14
 
@@ -130,6 +130,7 @@ func TestMergeSplitBookCluster_ReassignsExternalIDsAndIsUndoable(t *testing.T) {
 	src, err := store.GetBookByID(srcID)
 	require.NoError(t, err)
 	assert.True(t, src.IsSoftDeleted())
+	assert.Empty(t, src.FilePath, "a purge with delete-files would otherwise remove the keep's audio at this path")
 
 	ms := merge.NewService(store)
 	j, err := ms.GetCombineJournal(res.JournalID)
@@ -142,6 +143,7 @@ func TestMergeSplitBookCluster_ReassignsExternalIDsAndIsUndoable(t *testing.T) {
 	src, err = store.GetBookByID(srcID)
 	require.NoError(t, err)
 	assert.False(t, src.IsSoftDeleted(), "undo restores the src")
+	assert.Equal(t, "/tmp/split/s", src.FilePath, "undo restores the src's FilePath from the journal")
 	f, err := store.GetBookFileByID(srcID, fileID)
 	require.NoError(t, err)
 	assert.NotNil(t, f, "undo moves the file back to the src")

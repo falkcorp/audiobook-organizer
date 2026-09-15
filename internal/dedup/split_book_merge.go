@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-09-14
 
@@ -335,6 +335,12 @@ func softDeleteSplitSource(store Store, srcID string) (*time.Time, error) {
 		now := time.Now()
 		b.MarkedForDeletion = &t
 		b.MarkedForDeletionAt = &now
+		// Clear FilePath, as CombineBooks' softDeleteAbsorbed does: the path
+		// now belongs to a file row the keeper owns, and a purge with
+		// delete-files on os.Remove()s a purged book's FilePath, which would
+		// delete the keeper's audio. The combine journal keeps the original,
+		// and UndoCombine restores it.
+		b.FilePath = ""
 		return nil
 	})
 	if err != nil {
