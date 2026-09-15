@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-08-19
+// last-edited: 2026-09-14
 
 package versions
 
@@ -66,7 +66,10 @@ type swapStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookVersion(id string) (*database.BookVersion, error)
 	RecordPathChange(change *database.BookPathChange) error
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook replaced UpdateBook on 2026-09-14: the swap's one book write
+	// lands after the file moves, so it sets only file_path on the stored row
+	// under the book's write lock. See database.BookMutator.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 

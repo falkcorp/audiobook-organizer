@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -14,7 +14,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/mock"
 )
@@ -526,7 +525,7 @@ func TestRenameFiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewPreviewService(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewPreviewService(mockStore)
 	if svc == nil {
 		t.Fatal("NewPreviewService returned nil")
@@ -561,7 +560,7 @@ func TestNewPreviewService(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewRenameService(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 	if svc == nil {
 		t.Fatal("NewRenameService returned nil")
@@ -590,7 +589,7 @@ func TestNewRenameService(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildTagMetadata(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	t.Run("basic metadata", func(t *testing.T) {
@@ -673,7 +672,7 @@ func TestBuildTagMetadata(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeTagChanges(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	t.Run("all fields populated", func(t *testing.T) {
@@ -727,7 +726,7 @@ func TestComputeTagChanges(t *testing.T) {
 
 func TestResolveNarratorNames(t *testing.T) {
 	t.Run("uses book narrators from DB", func(t *testing.T) {
-		mockStore := mocks.NewMockStore(t)
+		mockStore := newMockStore(t)
 		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-1").Return([]database.BookNarrator{
@@ -745,7 +744,7 @@ func TestResolveNarratorNames(t *testing.T) {
 	})
 
 	t.Run("falls back to book.Narrator field", func(t *testing.T) {
-		mockStore := mocks.NewMockStore(t)
+		mockStore := newMockStore(t)
 		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-2").Return([]database.BookNarrator{}, nil)
@@ -759,7 +758,7 @@ func TestResolveNarratorNames(t *testing.T) {
 	})
 
 	t.Run("empty when no narrators", func(t *testing.T) {
-		mockStore := mocks.NewMockStore(t)
+		mockStore := newMockStore(t)
 		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-3").Return([]database.BookNarrator{}, nil)
@@ -821,7 +820,7 @@ func TestIsDirectoryPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPreviewOrganize_BookNotFound(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewPreviewService(mockStore)
 
 	mockStore.On("GetBookByID", "nonexistent").Return(nil, fmt.Errorf("not found"))
@@ -837,7 +836,7 @@ func TestPreviewOrganize_BookNotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPreviewRename_BookNotFound(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	mockStore.On("GetBookByID", "gone").Return(nil, fmt.Errorf("not found"))
@@ -931,7 +930,7 @@ func TestGenerateTargetDirPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMoveBookFile_SamePath(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	err := MoveBookFile(mockStore, "book-1", "/same/path.m4b", "/same/path.m4b", nil)
 	if err != nil {
 		t.Errorf("expected nil for same path, got %v", err)
@@ -939,7 +938,7 @@ func TestMoveBookFile_SamePath(t *testing.T) {
 }
 
 func TestMoveBookFile_SourceMissing(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	err := MoveBookFile(mockStore, "book-1", "/no/such/file.m4b", "/dst/file.m4b", nil)
 	if err == nil {
 		t.Fatal("expected error for missing source")
@@ -953,7 +952,7 @@ func TestMoveBookFile_DestExists(t *testing.T) {
 	os.WriteFile(src, []byte("a"), 0644)
 	os.WriteFile(dst, []byte("b"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	err := MoveBookFile(mockStore, "book-1", src, dst, nil)
 	if err == nil {
 		t.Fatal("expected error when destination exists")
@@ -966,7 +965,7 @@ func TestMoveBookFile_Success(t *testing.T) {
 	dst := filepath.Join(tmpDir, "out", "dst.m4b")
 	os.WriteFile(src, []byte("content"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	// With extraUpdates=nil, MoveBookFile hydrates the full row before the
 	// write so it never total-wipes the record (Author/Series/...). The write
 	// must carry the new FilePath on the hydrated row.
@@ -1000,7 +999,7 @@ func TestMoveBookFile_DBUpdateFails_Rollback(t *testing.T) {
 	dst := filepath.Join(tmpDir, "out", "dst.m4b")
 	os.WriteFile(src, []byte("content"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-1").
 		Return(&database.Book{ID: "book-1"}, nil)
 	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).Return(nil, fmt.Errorf("db error"))
@@ -1021,7 +1020,7 @@ func TestMoveBookFile_WithExtraUpdates(t *testing.T) {
 	dst := filepath.Join(tmpDir, "out", "dst.m4b")
 	os.WriteFile(src, []byte("content"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).
 		Run(func(args mock.Arguments) {
 			book := args.Get(1).(*database.Book)
@@ -1070,7 +1069,7 @@ func TestEnsureUnderRoot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMoveFile(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	t.Run("same filesystem rename", func(t *testing.T) {
@@ -1112,7 +1111,7 @@ func TestMoveFile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHardlinkOrCopy(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	t.Run("creates file at destination", func(t *testing.T) {
@@ -1153,7 +1152,7 @@ func TestHardlinkOrCopy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCopyAndDelete(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	t.Run("copies and removes source", func(t *testing.T) {
@@ -1192,7 +1191,7 @@ func TestCopyAndDelete(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewService(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewService(mockStore)
 	if svc == nil {
 		t.Fatal("NewService returned nil")
@@ -1211,7 +1210,7 @@ func TestNewService(t *testing.T) {
 }
 
 func TestServiceSetters(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewService(mockStore)
 
 	t.Run("SetOrganizeHooks", func(t *testing.T) {
@@ -1300,7 +1299,7 @@ func TestPreviewRename_Success(t *testing.T) {
 		FileNamingPattern:   "{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewRenameService(mockStore)
 
@@ -1554,7 +1553,7 @@ func TestPreviewOrganize_Success(t *testing.T) {
 		OrganizationStrategy: "copy",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
@@ -1621,7 +1620,7 @@ func TestPreviewOrganize_AlreadyAtTarget(t *testing.T) {
 	targetPath := filepath.Join(targetDir, "Foundation.m4b")
 	os.WriteFile(targetPath, []byte("audio"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
@@ -1662,7 +1661,7 @@ func TestPreviewOrganize_InRootNeedsRename(t *testing.T) {
 	wrongPath := filepath.Join(tmpDir, "WrongName.m4b")
 	os.WriteFile(wrongPath, []byte("audio"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
@@ -1712,7 +1711,7 @@ func TestPreviewOrganize_WithCoverURL(t *testing.T) {
 	targetPath := filepath.Join(targetDir, "Book.m4b")
 	os.WriteFile(targetPath, []byte("x"), 0644)
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 
@@ -1758,7 +1757,7 @@ func TestPreviewOrganize_ProtectedPath(t *testing.T) {
 		FileNamingPattern:   "{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 	svc.IsProtectedPath = func(path string) bool { return true }
@@ -1806,7 +1805,7 @@ func TestPreviewOrganize_MultiFileProtected(t *testing.T) {
 		FileNamingPattern:   "{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewPreviewService(mockStore)
 	svc.IsProtectedPath = func(path string) bool { return true }
@@ -1851,7 +1850,7 @@ func TestPreviewOrganize_MultiFileProtected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewRenameService_DefaultResolve(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	book := &database.Book{
@@ -1939,7 +1938,7 @@ func TestOrganizeFile_AutoStrategy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCleanupEmptyParents(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewService(mockStore)
 
 	tmpDir := t.TempDir()
@@ -1959,7 +1958,7 @@ func TestCleanupEmptyParents(t *testing.T) {
 }
 
 func TestCleanupEmptyParents_NonEmpty(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewService(mockStore)
 
 	tmpDir := t.TempDir()
@@ -2006,7 +2005,7 @@ func TestBookNeedsReOrganize_FileAtCorrectPath(t *testing.T) {
 		FileNamingPattern:   "{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}
@@ -2036,7 +2035,7 @@ func TestBookNeedsReOrganize_FileAtWrongPath(t *testing.T) {
 		FileNamingPattern:   "{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}
@@ -2063,7 +2062,7 @@ func TestBookNeedsReOrganize_DirectoryBook(t *testing.T) {
 		FolderNamingPattern: "{author}/{title}",
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	svc := NewService(mockStore)
 	noopLog := &noopLogger{}

@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package quarantine
 
@@ -41,7 +41,11 @@ const (
 // BookRows reads and writes the book rows quarantine moves.
 type BookRows interface {
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the write path for every quarantine change to a book row:
+	// the file moves are slow work between the read and the write, so the
+	// write sets only the columns quarantine owns on the row as stored at
+	// write time, under the book's write lock. See database.BookMutator.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetITunesPurgePendingBooks() ([]database.Book, error)
 }
@@ -239,18 +243,27 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 
 	now := time.Now()
 	if bookChanged || complete {
-		if rl.bookAtDest {
-			book.FilePath = dest
-		}
-		if complete {
-			book.QuarantineReason = &reason
-			book.QuarantinedAt = &now
-			if book.ITunesPersistentID != nil {
-				purge := "purge_pending"
-				book.ITunesSyncStatus = &purge
+		// `book` was read before the file moves; a whole-row write of it here
+		// would revert any column another writer committed meanwhile. The
+		// columns quarantine owns are set on the stored row instead.
+		updated, err := qs.store.ModifyBook(bookID, func(b *database.Book) error {
+			if rl.bookAtDest {
+				b.FilePath = dest
 			}
+			if complete {
+				b.QuarantineReason = &reason
+				b.QuarantinedAt = &now
+				if b.ITunesPersistentID != nil {
+					purge := "purge_pending"
+					b.ITunesSyncStatus = &purge
+				}
+			}
+			return nil
+		})
+		if err == nil && updated == nil {
+			err = fmt.Errorf("book %s no longer exists", bookID)
 		}
-		if _, err := qs.store.UpdateBook(bookID, book); err != nil {
+		if err != nil {
 			qs.rollback(rl, "QuarantineBook")
 			return fmt.Errorf("update book: %w", err)
 		}
@@ -376,18 +389,26 @@ func (qs *QuarantineService) UnquarantineBook(bookID string) error {
 	bookChanged := rl.bookAtDest && oldPath != origPath
 
 	if bookChanged || complete {
-		if rl.bookAtDest {
-			book.FilePath = origPath
-		}
-		if complete {
-			book.QuarantineReason = nil
-			book.QuarantinedAt = nil
-			if book.ITunesSyncStatus != nil && *book.ITunesSyncStatus == "purge_pending" {
-				dirty := "dirty"
-				book.ITunesSyncStatus = &dirty
+		// See QuarantineBook: column-scoped write of the stored row, not a
+		// whole-row write of the `book` read before the file moves.
+		updated, err := qs.store.ModifyBook(bookID, func(b *database.Book) error {
+			if rl.bookAtDest {
+				b.FilePath = origPath
 			}
+			if complete {
+				b.QuarantineReason = nil
+				b.QuarantinedAt = nil
+				if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "purge_pending" {
+					dirty := "dirty"
+					b.ITunesSyncStatus = &dirty
+				}
+			}
+			return nil
+		})
+		if err == nil && updated == nil {
+			err = fmt.Errorf("book %s no longer exists", bookID)
 		}
-		if _, err := qs.store.UpdateBook(bookID, book); err != nil {
+		if err != nil {
 			qs.rollback(rl, "UnquarantineBook")
 			return fmt.Errorf("update book: %w", err)
 		}
@@ -923,12 +944,19 @@ func (qs *QuarantineService) ProcessITunesPurgePending() {
 		qs.batcher.EnqueueRemove(*b.ITunesPersistentID)
 		slog.Info("ProcessITunesPurgePending queued ITL removal for", "persistentID", *b.ITunesPersistentID, "bookID", b.ID)
 
-		// Clear iTunes linkage so the book is no longer tied to iTunes.
+		// Clear iTunes linkage so the book is no longer tied to iTunes. Only
+		// the two iTunes columns change; `b` came from a list read and is not
+		// written back whole. A row that is gone by now needs nothing.
 		cleared := "unlinked"
-		b.ITunesSyncStatus = &cleared
-		b.ITunesPersistentID = nil
-		if _, err := qs.store.UpdateBook(b.ID, &b); err != nil {
-			slog.Warn("ProcessITunesPurgePending UpdateBook", "bookID", b.ID, "err", err)
+		if _, err := qs.store.ModifyBook(b.ID, func(row *database.Book) error {
+			if row.ITunesPersistentID == nil && row.ITunesSyncStatus != nil && *row.ITunesSyncStatus == cleared {
+				return database.ErrSkipBookWrite
+			}
+			row.ITunesSyncStatus = &cleared
+			row.ITunesPersistentID = nil
+			return nil
+		}); err != nil {
+			slog.Warn("ProcessITunesPurgePending ModifyBook", "bookID", b.ID, "err", err)
 		}
 	}
 }

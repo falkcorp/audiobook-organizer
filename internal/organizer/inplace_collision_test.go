@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 99027475-b084-4603-adf4-4061987f30b0
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -596,6 +596,15 @@ func (s *faultyInPlaceStore) UpdateBook(id string, b *database.Book) (*database.
 		return nil, errors.New("injected: update failed")
 	}
 	return s.PebbleStore.UpdateBook(id, b)
+}
+
+// ModifyBook carries the same injected fault: the organizer's book writes go
+// through it now, so a test that fails "the update of book X" must fail here.
+func (s *faultyInPlaceStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if id == s.failUpdate {
+		return nil, errors.New("injected: update failed")
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
 }
 
 // A version-group lookup that errors must not be read as "no primary": the

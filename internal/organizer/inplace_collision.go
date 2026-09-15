@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-09-12
+// last-edited: 2026-09-14
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -317,7 +317,7 @@ func (orgSvc *Service) bookFileAt(bookID, path string) *database.BookFile {
 // group of the book that owns target, the way CreateOrganizedVersion links an
 // organized copy (that function refuses in-place landings, so the demote is
 // done here). The incumbent keeps or takes primary: it is the copy already at
-// the organized path. Both rows are written through hydrateAndUpdateBook so a
+// the organized path. Both rows are written through modifyBook so a
 // Core projection never wipes Author/Series.
 func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target string, res *InPlaceResolution, outcome string, decline func(string, string) error) (*InPlaceResolution, error) {
 	occupant, err := orgSvc.db.GetBookByFilePath(target)
@@ -374,12 +374,13 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 		makePrimary := !hasPrimary
 		res.OccupantGroupSet = occGroup == ""
 		res.OccupantMadePrimary = makePrimary
-		if err := orgSvc.hydrateAndUpdateBook(occupant.ID, func(b *database.Book) {
+		if err := orgSvc.modifyBook(occupant.ID, func(b *database.Book) error {
 			b.VersionGroupID = &group
 			if makePrimary {
 				t := true
 				b.IsPrimaryVersion = &t
 			}
+			return nil
 		}); err != nil {
 			return nil, fmt.Errorf("adopt %s into version group of %s: update occupant: %w", book.ID, occupant.ID, err)
 		}
@@ -387,14 +388,16 @@ func (orgSvc *Service) adoptIntoOccupantGroup(book *database.Book, src, target s
 	}
 
 	notPrimary := false
-	if err := orgSvc.hydrateAndUpdateBook(book.ID, func(b *database.Book) {
+	if err := orgSvc.modifyBook(book.ID, func(b *database.Book) error {
 		b.VersionGroupID = &group
 		b.IsPrimaryVersion = &notPrimary
+		return nil
 	}); err != nil {
 		if occupantWritten {
-			if rbErr := orgSvc.hydrateAndUpdateBook(occupant.ID, func(b *database.Book) {
+			if rbErr := orgSvc.modifyBook(occupant.ID, func(b *database.Book) error {
 				b.VersionGroupID = priorOccGroup
 				b.IsPrimaryVersion = priorOccPrimary
+				return nil
 			}); rbErr != nil {
 				return nil, fmt.Errorf("adopt %s into version group %s: %w; restoring occupant %s also failed: %v", book.ID, group, err, occupant.ID, rbErr)
 			}

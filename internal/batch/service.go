@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-14
 
 package batch
 
@@ -17,7 +17,11 @@ import (
 // carried by every caller purely to satisfy the parameter.
 type batchBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook is the write path for every batch edit of a book: it sets
+	// only the columns the action owns on the stored row under the book's
+	// write lock, so a column another writer committed between the batch's
+	// read and its write is kept. See database.BookMutator.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	// UserOverrideRecorder: a batch update is a HUMAN editing many books at
 	// once. It must record a lock row per edited field, exactly as the
@@ -94,14 +98,23 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		return resp
 	}
 	for _, id := range req.IDs {
-		book, err := bs.db.GetBookByID(id)
-		if err != nil || book == nil {
+		if book, err := bs.db.GetBookByID(id); err != nil || book == nil {
 			resp.addError(id, "not found")
 			continue
 		}
-		applyUpdates(book, req.Updates)
-		if _, err := bs.db.UpdateBook(id, book); err != nil {
+		updated, err := bs.db.ModifyBook(id, func(b *database.Book) error {
+			if len(req.Updates) == 0 {
+				return database.ErrSkipBookWrite
+			}
+			applyUpdates(b, req.Updates)
+			return nil
+		})
+		if err != nil {
 			resp.addError(id, err.Error())
+			continue
+		}
+		if updated == nil {
+			resp.addError(id, "not found")
 			continue
 		}
 		if err := bs.recordUserLocks(id, req.Updates); err != nil {
@@ -135,14 +148,23 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 	for _, op := range req.Operations {
 		switch op.Action {
 		case "update":
-			book, err := bs.db.GetBookByID(op.ID)
-			if err != nil || book == nil {
+			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			applyUpdates(book, op.Updates)
-			if _, err := bs.db.UpdateBook(op.ID, book); err != nil {
+			updated, err := bs.db.ModifyBook(op.ID, func(b *database.Book) error {
+				if len(op.Updates) == 0 {
+					return database.ErrSkipBookWrite
+				}
+				applyUpdates(b, op.Updates)
+				return nil
+			})
+			if err != nil {
 				resp.addError(op.ID, err.Error())
+				continue
+			}
+			if updated == nil {
+				resp.addError(op.ID, "not found")
 				continue
 			}
 			if err := bs.recordUserLocks(op.ID, op.Updates); err != nil {
@@ -152,8 +174,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			resp.addSuccess(op.ID)
 
 		case "delete":
-			book, err := bs.db.GetBookByID(op.ID)
-			if err != nil || book == nil {
+			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
@@ -164,30 +185,50 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 					resp.addSuccess(op.ID)
 				}
 			} else {
-				// Soft delete
-				marked := true
-				book.MarkedForDeletion = &marked
-				now := time.Now()
-				book.MarkedForDeletionAt = &now
-				if _, err := bs.db.UpdateBook(op.ID, book); err != nil {
+				// Soft delete: only the two deletion columns change.
+				updated, err := bs.db.ModifyBook(op.ID, func(b *database.Book) error {
+					if b.MarkedForDeletion != nil && *b.MarkedForDeletion && b.MarkedForDeletionAt != nil {
+						return database.ErrSkipBookWrite
+					}
+					marked := true
+					now := time.Now()
+					b.MarkedForDeletion = &marked
+					b.MarkedForDeletionAt = &now
+					return nil
+				})
+				switch {
+				case err != nil:
 					resp.addError(op.ID, err.Error())
-				} else {
+				case updated == nil:
+					resp.addError(op.ID, "not found")
+				default:
 					resp.addSuccess(op.ID)
 				}
 			}
 
 		case "restore":
-			book, err := bs.db.GetBookByID(op.ID)
-			if err != nil || book == nil {
+			if book, err := bs.db.GetBookByID(op.ID); err != nil || book == nil {
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			notMarked := false
-			book.MarkedForDeletion = &notMarked
-			book.MarkedForDeletionAt = nil
-			if _, err := bs.db.UpdateBook(op.ID, book); err != nil {
+			// Restore: only the two deletion columns change. A nil flag is
+			// still written as an explicit false, as it always was; only a row
+			// already carrying that false is left alone.
+			updated, err := bs.db.ModifyBook(op.ID, func(b *database.Book) error {
+				if b.MarkedForDeletion != nil && !*b.MarkedForDeletion && b.MarkedForDeletionAt == nil {
+					return database.ErrSkipBookWrite
+				}
+				notMarked := false
+				b.MarkedForDeletion = &notMarked
+				b.MarkedForDeletionAt = nil
+				return nil
+			})
+			switch {
+			case err != nil:
 				resp.addError(op.ID, err.Error())
-			} else {
+			case updated == nil:
+				resp.addError(op.ID, "not found")
+			default:
 				resp.addSuccess(op.ID)
 			}
 

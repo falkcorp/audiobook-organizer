@@ -1,7 +1,7 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
-// last-edited: 2026-09-05
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -13,7 +13,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -50,7 +49,7 @@ func TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan(t *testing.T) {
 		Author:   &database.Author{Name: "NewAuthor"},
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-1").Return(book, nil)
 	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).Return(book, nil)
@@ -109,7 +108,7 @@ func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 		Author:   &database.Author{Name: "OtherAuthor"},
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-2").Return(book, nil)
 	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*database.Book")).Return(book, nil)
@@ -159,7 +158,7 @@ func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 	}
 
 	var wroteRow *database.BookFile
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-sf").Return(book, nil)
 	mockStore.On("UpdateBook", "book-sf", mock.AnythingOfType("*database.Book")).Return(book, nil)
@@ -224,7 +223,7 @@ func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 	}
 
 	var updated []string
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-dir").Return(book, nil)
 	mockStore.On("UpdateBook", "book-dir", mock.AnythingOfType("*database.Book")).Return(book, nil)
@@ -279,7 +278,7 @@ func TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan(t *testing.T) {
 		Author:   &database.Author{Name: "NewAuthor"},
 	}
 
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-stale").Return(book, nil)
 	mockStore.On("UpdateBook", "book-stale", mock.AnythingOfType("*database.Book")).Return(book, nil)

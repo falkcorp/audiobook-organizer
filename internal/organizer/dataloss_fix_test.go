@@ -1,7 +1,7 @@
 // file: internal/organizer/dataloss_fix_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ff38c140-155a-4c69-b3ea-b350a8503066
-// last-edited: 2026-09-07
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 )
 
 // Tests for the 2026-07-17 organizer data-loss fixes (DL-1/DL-2/DL-3):
@@ -216,7 +214,7 @@ func TestRenameFilesPartialSucceededReportedOnFailure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMoveFileRefusesOverwrite(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	tmpDir := t.TempDir()
@@ -242,7 +240,7 @@ func TestMoveFileRefusesOverwrite(t *testing.T) {
 }
 
 func TestHardlinkOrCopyRefusesOverwrite(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
+	mockStore := newMockStore(t)
 	svc := NewRenameService(mockStore)
 
 	tmpDir := t.TempDir()

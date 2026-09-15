@@ -1,7 +1,7 @@
 // file: internal/organizer/target_path_collision_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1a9e4f-2b3d-4c5e-8f6a-1d2e3f4a5b6c
-// last-edited: 2026-09-11
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -73,7 +73,7 @@ func (l *warnCapturingLogger) snapshot() []string {
 
 // newCollisionMockStore builds a MockStore that can hydrate/update the given
 // books by ID — the minimum organizeBooks' already-in-place branch needs
-// (stampOrganizeMetadata -> hydrateAndUpdateBook -> GetBookByID/UpdateBook).
+// (stampOrganizeMetadata -> modifyBook -> ModifyBook).
 func newCollisionMockStore(books map[string]*database.Book) *database.MockStore {
 	return &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
