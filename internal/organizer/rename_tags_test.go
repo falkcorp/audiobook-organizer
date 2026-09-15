@@ -1,7 +1,7 @@
 // file: internal/organizer/rename_tags_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5f7b3d19-2a6e-4c84-9d05-1e8a4c6b2f73
-// last-edited: 2026-09-13
+// last-edited: 2026-09-14
 
 package organizer
 
@@ -108,6 +108,32 @@ func TestWriteTagsRecordingOld_UnreadableFileIsNotWritten(t *testing.T) {
 	changes, err := store.GetOperationChanges("op-x")
 	require.NoError(t, err)
 	require.Empty(t, changes)
+}
+
+// A tag whose pre-write value the reader could not record (a property holding
+// several values) is not written to that file: its undo row would carry "" and
+// the write could never be undone. The other tags are still written.
+func TestWriteTagsRecordingOld_UnknownPriorValueIsNotWritten(t *testing.T) {
+	store := newTagTestStore(t)
+	p := filepath.Join(t.TempDir(), "a.m4b")
+	require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+	book, err := store.CreateBook(&database.Book{Title: "A", FilePath: p, Format: "m4b"})
+	require.NoError(t, err)
+	rs := NewRenameService(store)
+	rs.ReadCurrentTags = func(string) (map[string]string, error) {
+		return map[string]string{"title": "Orig"}, nil // artist unknown
+	}
+	var got map[string]any
+	rs.WriteTags = func(_ string, m map[string]any) error { got = m; return nil }
+
+	written, lost := rs.writeTagsRecordingOld(book.ID, "op-unknown", p, p, map[string]any{"title": "A", "artist": "Someone"})
+	require.Zero(t, lost)
+	require.Equal(t, 1, written)
+	require.Equal(t, map[string]any{"title": "A"}, got, "artist has no recordable prior value, so it is not written")
+	changes, err := store.GetOperationChanges("op-unknown")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, "Orig", changes[0].OldValue)
 }
 
 // A multi-file book copied out of a protected source: the book_file rows still

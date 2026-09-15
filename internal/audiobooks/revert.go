@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.19.3
+// version: 1.20.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-09-14
 
@@ -101,8 +101,10 @@ func SetRevertPathLocker(lock func(path string) func()) {
 // RevertService handles reverting operations by undoing recorded changes.
 type RevertService struct {
 	db revertServiceStore
-	// ReadTags reads a file's current tag values by write key (the same map
-	// the organizer recorded its pre-write values from). A tag revert is a
+	// ReadTags reads a file's current tag values by write key, in the same
+	// form the organizer recorded its pre-write values in
+	// (metadata.ReadTagProperties: a plain value for a one-property key, a
+	// per-property snapshot for artist and narrator). A tag revert is a
 	// compare-and-set against it.
 	ReadTags func(path string) (map[string]string, error)
 	// WriteTags writes tags into one file.
@@ -119,7 +121,7 @@ type RevertService struct {
 func NewRevertService(db revertServiceStore) *RevertService {
 	rs := &RevertService{
 		db:                db,
-		ReadTags:          metadata.ReadTagValues,
+		ReadTags:          metadata.ReadTagProperties,
 		WriteTags:         defaultRevertWriteTags,
 		ComputeITunesPath: metafetch.ComputeITunesPath,
 	}
@@ -196,6 +198,13 @@ type RevertResult struct {
 	// caller can drop the caches a restore made stale (the server clears the
 	// series caches when a series_rename row was restored).
 	RestoredTypes map[string]int `json:"restored_types,omitempty"`
+	// PartiallyRestored counts Restored tag_write rows whose tags were put
+	// back only in part: a tag another tool changed after the operation was
+	// kept, and Kept names each one.
+	PartiallyRestored int `json:"partially_restored,omitempty"`
+	// Kept lists, per partially restored row, the tags left as they are
+	// because they changed since the operation.
+	Kept []string `json:"kept,omitempty"`
 	// ChangedSince counts the Failed rows the compare-and-set refused because
 	// their target no longer holds what the operation wrote
 	// (undo.ReasonChangedSince, or undo.ReasonSeriesRenamedSince for a
@@ -220,6 +229,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.AlreadyReverted > 0 {
 		fmt.Fprintf(&b, "; %d already reverted earlier", r.AlreadyReverted)
+	}
+	if r.PartiallyRestored > 0 {
+		fmt.Fprintf(&b, "; %d restored in part (tags changed since the operation were left as they are)", r.PartiallyRestored)
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
@@ -307,7 +319,18 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	var errMsgs []string
 	var restoredIDs []string
 	for _, c := range slices.Backward(restorable) {
-		if err := rs.revertChange(c); err != nil {
+		err := rs.revertChange(c)
+		var partial *partialTagRestore
+		if errors.As(err, &partial) {
+			// Every tag that still held what the operation wrote was put
+			// back; the rest are later changes and stay. The row is done:
+			// a retry could only overwrite those later changes.
+			result.PartiallyRestored++
+			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, partial.detail))
+			revertLog.Warn("revert of change %s restored in part: %s", c.ID, partial.detail)
+			err = nil
+		}
+		if err != nil {
 			result.Failed++
 			switch undo.RefusalReason(err) {
 			case undo.ReasonChangedSince, undo.ReasonSeriesRenamedSince:
@@ -548,6 +571,48 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 	return nil
 }
 
+// partialTagRestore reports a snapshot tag_write row put back only in part:
+// the kept properties changed since the operation. RevertOperation counts the
+// row restored and reports detail.
+type partialTagRestore struct{ detail string }
+
+func (p *partialTagRestore) Error() string { return "tag restored in part: " + p.detail }
+
+// revertTagSnapshot is revertTagWrite for a per-property snapshot row. The
+// caller holds the path lock and has checked the file exists and is not
+// protected.
+func (rs *RevertService) revertTagSnapshot(c *database.OperationChange, tag, target string) error {
+	current, err := rs.ReadTags(target)
+	if err != nil {
+		return fmt.Errorf("tag %s not restored: the current tags of %s cannot be read: %w", tag, target, err)
+	}
+	cur, known := current[tag]
+	if !known {
+		// ReadTagProperties leaves a key out when one of its properties
+		// holds several values: none the organize wrote, so something
+		// changed since, and one string per property cannot compare it.
+		return driftRefusal("tag %s of %s now holds several values in one property, not %q as the organize wrote it; the later value is kept", tag, target, c.NewValue)
+	}
+	plan, err := metadata.PlanSnapshotRestore(tag, c.OldValue, c.NewValue, cur)
+	if err != nil {
+		return fmt.Errorf("tag %s not restored: %w", tag, err)
+	}
+	if len(plan.Restored) == 0 && len(plan.Already) == 0 {
+		return driftRefusal("tag %s of %s: %s changed since the organize wrote %q; the later values are kept",
+			tag, target, strings.Join(plan.Kept, ", "), c.NewValue)
+	}
+	if plan.Write != "" {
+		if err := rs.WriteTags(target, map[string]any{tag: plan.Write}); err != nil {
+			return fmt.Errorf("failed to write tag %s back to %s: %w", tag, target, err)
+		}
+	}
+	if len(plan.Kept) > 0 {
+		return &partialTagRestore{detail: fmt.Sprintf("tag %s of %s: restored %s; kept %s, changed since the organize wrote %q",
+			tag, target, strings.Join(append(plan.Restored, plan.Already...), ", "), strings.Join(plan.Kept, ", "), c.NewValue)}
+	}
+	return nil
+}
+
 // driftRefusal refuses a row whose field no longer holds the value the
 // operation wrote: restoring OldValue would overwrite a later change. The
 // preflight reports the same state (undo.ReasonChangedSince).
@@ -768,7 +833,18 @@ func renameRefusal(err error) error {
 // changed the tag is kept and the row refused as changed since. A file that
 // already holds the pre-organize value is left alone and the row counts as
 // restored. A tag that was absent before (undo.TagAbsentValue) is removed. A
-// key with no single property fails the row: nothing is written for it.
+// key with no property fails the row: nothing is written for it.
+//
+// A per-property snapshot row (artist: ARTIST and ALBUMARTIST; narrator:
+// NARRATOR and PERFORMER) is compared property by property
+// (metadata.PlanSnapshotRestore): each property still holding what the
+// organize wrote is put back or removed, one already in its pre-write state
+// is left alone, and one changed since is kept and reported
+// (partialTagRestore) instead of refusing the whole row. Only when every
+// property changed since is the row refused. The plain-value comparison could
+// not do this: it read artist only when ARTIST and ALBUMARTIST agreed, so an
+// ALBUMARTIST changed by another tool, or an ALBUMARTIST absent before the
+// organize on a second revert, refused the row.
 //
 // Only that property is written, and the writer reads it back. The write used
 // to go through the organizer's write map, which dropped "" (so an absent tag
@@ -813,6 +889,10 @@ func (rs *RevertService) revertTagWrite(c *database.OperationChange) error {
 	}
 	if isProtectedPath(rs.db, target) {
 		return fmt.Errorf("tag %s not restored: %s is a protected path", tag, target)
+	}
+
+	if metadata.IsTagSnapshot(c.OldValue) {
+		return rs.revertTagSnapshot(c, tag, target)
 	}
 
 	restore := c.OldValue

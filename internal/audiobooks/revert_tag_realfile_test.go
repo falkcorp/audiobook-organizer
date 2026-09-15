@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
 // last-edited: 2026-09-14
 
@@ -31,14 +31,28 @@ import (
 // be used here. Skips when ffmpeg is unavailable.
 func makeRevertTestAudio(t *testing.T, props map[string][]string) string {
 	t.Helper()
+	return makeRevertTestAudioExt(t, "m4a", props)
+}
+
+// revertTestCodecs maps each container the real-file tests cover to the
+// ffmpeg encoder that produces it. Album Artist is aART in m4a, TPE2 in mp3
+// and ALBUMARTIST in flac; TagLib exposes all three as ALBUMARTIST.
+var revertTestCodecs = map[string]string{"m4a": "aac", "mp3": "libmp3lame", "flac": "flac"}
+
+// makeRevertTestAudioExt synthesizes a real ext file with ffmpeg and writes
+// props to it. Skips when ffmpeg or its encoder for ext is unavailable.
+func makeRevertTestAudioExt(t *testing.T, ext string, props map[string][]string) string {
+	t.Helper()
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not available; skipping real-file tag revert test")
 	}
-	path := filepath.Join(t.TempDir(), "book.m4a")
+	path := filepath.Join(t.TempDir(), "book."+ext)
 	out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",
-		"-c:a", "aac", path).CombinedOutput()
-	require.NoError(t, err, "ffmpeg: %s", out)
+		"-c:a", revertTestCodecs[ext], path).CombinedOutput()
+	if err != nil {
+		t.Skipf("ffmpeg cannot encode %s here: %v: %s", ext, err, out)
+	}
 	require.NoError(t, taglib.WriteTags(path, props, 0))
 	return path
 }
@@ -84,54 +98,148 @@ func TestOrganizeTagWrite_RealFile_RowsMatchTheFileAndUndoRestoresIt(t *testing.
 		},
 	}
 	for name, orig := range cases {
+		for _, ext := range []string{"m4a", "mp3", "flac"} {
+			t.Run(name+"/"+ext, func(t *testing.T) {
+				organizeRoundTrip(t, ext, orig)
+			})
+		}
+	}
+}
+
+// organizeRoundTrip runs the organize tag write on a real ext file carrying
+// orig, records its rows the way the organizer does, reverts them and checks
+// the file is back as it was.
+func organizeRoundTrip(t *testing.T, ext string, orig map[string][]string) {
+	t.Helper()
+	store := newRevertPebble(t)
+	path := makeRevertTestAudioExt(t, ext, orig)
+	rows := organizeAndRecord(t, store, path, "op-organize-roundtrip")
+
+	res, err := NewRevertService(store).RevertOperation("op-organize-roundtrip")
+	require.NoError(t, err, "result %+v", res)
+	assert.Equal(t, rows, res.Restored, "result %+v", res)
+	tags := diskTags(t, path)
+	for k, v := range orig {
+		assert.Equal(t, v, tags[k], "%s after undo", k)
+	}
+	if _, had := orig["ALBUMARTIST"]; !had {
+		assert.NotContains(t, tags, "ALBUMARTIST", "undo removes the ALBUMARTIST organize added")
+	}
+	assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
+}
+
+// organizeAndRecord runs the organize tag write NewRenameService wires on path
+// ("New Title" by "New Author", read by "The Narrator"), records one tag_write
+// row per written key under op the way the organizer does, and returns the
+// number of rows.
+func organizeAndRecord(t *testing.T, store *database.PebbleStore, path, op string) int {
+	t.Helper()
+	svc := NewRenameService(store)
+	meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
+
+	filtered := svc.FilterUnchangedTags(path, meta)
+	current, err := svc.ReadCurrentTags(path)
+	require.NoError(t, err)
+	if current["genre"] == "Audiobook" {
+		assert.NotContains(t, filtered, "genre", "an unchanged tag is not written")
+	}
+	write := svc.WriteTags
+	if write == nil { // the organizer's own default
+		write = func(p string, m map[string]any) error {
+			return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
+		}
+	}
+	require.NoError(t, write(path, filtered))
+
+	written := diskTags(t, path)
+	assert.Equal(t, []string{"New Author"}, written["ALBUMARTIST"], "organize writes ALBUMARTIST = author")
+	assert.Equal(t, []string{"New Author"}, written["ARTIST"])
+	after, err := metadata.ReadTagValues(path)
+	require.NoError(t, err)
+	var rows [][3]string
+	for k, v := range filtered {
+		assert.Equal(t, fmt.Sprint(v), after[k], "the %s row records %q; the file must hold it", k, v)
+		old, known := current[k]
+		require.True(t, known, "the pre-write value of %s must be recorded", k)
+		if old == "" {
+			old = undo.TagAbsentValue
+		}
+		rows = append(rows, [3]string{k, old, fmt.Sprint(v)})
+	}
+	realTagBook(t, store, op, path, rows...)
+	return len(rows)
+}
+
+// Another tool changed ALBUMARTIST after the organize. The undo restores
+// ARTIST (still what organize wrote) and keeps the later ALBUMARTIST, instead
+// of refusing the whole artist row.
+func TestRevertTagWrite_RealFile_AlbumArtistChangedSinceIsKeptArtistRestored(t *testing.T) {
+	store := newRevertPebble(t)
+	path := makeRevertTestAudio(t, map[string][]string{
+		"TITLE": {"Orig Title"}, "ARTIST": {"Orig Artist"}, "ALBUMARTIST": {"Orig AA"},
+	})
+	rows := organizeAndRecord(t, store, path, "op-aa-drift")
+	require.NoError(t, taglib.WriteTags(path, map[string][]string{"ALBUMARTIST": {"Later AA"}}, 0))
+
+	res, err := NewRevertService(store).RevertOperation("op-aa-drift")
+	require.NoError(t, err, "result %+v", res)
+	assert.Equal(t, rows, res.Restored, "the artist row is restored in part, not refused: %+v", res)
+	assert.Equal(t, 1, res.PartiallyRestored, "result %+v", res)
+	require.Len(t, res.Kept, 1)
+	assert.Contains(t, res.Kept[0], "kept ALBUMARTIST")
+	tags := diskTags(t, path)
+	assert.Equal(t, []string{"Orig Artist"}, tags["ARTIST"])
+	assert.Equal(t, []string{"Later AA"}, tags["ALBUMARTIST"], "the later ALBUMARTIST is kept")
+	assert.Equal(t, []string{"Orig Title"}, tags["TITLE"])
+}
+
+// A snapshot row whose file already holds the pre-organize values counts as
+// restored: here a second operation carries the same rows as one already
+// reverted, including an ALBUMARTIST that was absent before.
+func TestRevertTagWrite_RealFile_AlreadyRestoredSnapshotCountsRestored(t *testing.T) {
+	for name, orig := range map[string]map[string][]string{
+		"ALBUMARTIST absent before": {"TITLE": {"Orig Title"}, "ARTIST": {"Orig Artist"}},
+		"ALBUMARTIST set before":    {"TITLE": {"Orig Title"}, "ARTIST": {"Orig Artist"}, "ALBUMARTIST": {"Orig AA"}},
+	} {
 		t.Run(name, func(t *testing.T) {
 			store := newRevertPebble(t)
 			path := makeRevertTestAudio(t, orig)
-			svc := NewRenameService(store)
-			meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
-
-			filtered := svc.FilterUnchangedTags(path, meta)
-			assert.NotContains(t, filtered, "genre", "an unchanged tag is not written")
-			current, err := svc.ReadCurrentTags(path)
+			rows := organizeAndRecord(t, store, path, "op-first")
+			changes, err := store.GetOperationChanges("op-first")
 			require.NoError(t, err)
-			write := svc.WriteTags
-			if write == nil { // the organizer's own default
-				write = func(p string, m map[string]any) error {
-					return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
-				}
+			var again [][3]string
+			for _, c := range changes {
+				tag, _, _ := undo.TagWriteFromField(c.FieldName)
+				again = append(again, [3]string{tag, c.OldValue, c.NewValue})
 			}
-			require.NoError(t, write(path, filtered))
+			realTagBook(t, store, "op-second", path, again...)
 
-			written := diskTags(t, path)
-			assert.Equal(t, []string{"New Author"}, written["ALBUMARTIST"], "organize writes ALBUMARTIST = author")
-			assert.Equal(t, []string{"New Author"}, written["ARTIST"])
-			assert.Equal(t, []string{"Orig Composer"}, written["COMPOSER"], "organize never writes COMPOSER")
-			after, err := metadata.ReadTagValues(path)
-			require.NoError(t, err)
-			var rows [][3]string
-			for k, v := range filtered {
-				assert.Equal(t, fmt.Sprint(v), after[k], "the %s row records %q; the file must hold it", k, v)
-				old, known := current[k]
-				if known && old == "" {
-					old = undo.TagAbsentValue
-				}
-				rows = append(rows, [3]string{k, old, fmt.Sprint(v)})
-			}
-			realTagBook(t, store, "op-organize-roundtrip", path, rows...)
-
-			res, err := NewRevertService(store).RevertOperation("op-organize-roundtrip")
+			res, err := NewRevertService(store).RevertOperation("op-first")
 			require.NoError(t, err, "result %+v", res)
-			assert.Equal(t, len(rows), res.Restored, "result %+v", res)
-			tags := diskTags(t, path)
-			for k, v := range orig {
-				assert.Equal(t, v, tags[k], "%s after undo", k)
-			}
-			if _, had := orig["ALBUMARTIST"]; !had {
-				assert.NotContains(t, tags, "ALBUMARTIST", "undo removes the ALBUMARTIST organize added")
-			}
-			assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
+			require.Equal(t, rows, res.Restored)
+			res, err = NewRevertService(store).RevertOperation("op-second")
+			require.NoError(t, err, "result %+v", res)
+			assert.Equal(t, rows, res.Restored, "already restored, not drift: %+v", res)
+			assert.Zero(t, res.ChangedSince)
 		})
 	}
+}
+
+// Organize never writes COMPOSER, so its undo never writes COMPOSER either: a
+// COMPOSER edited after the organize survives the undo.
+func TestRevertTagWrite_RealFile_UndoLeavesLaterComposer(t *testing.T) {
+	store := newRevertPebble(t)
+	path := makeRevertTestAudio(t, map[string][]string{
+		"TITLE": {"Orig Title"}, "ARTIST": {"Orig Artist"}, "COMPOSER": {"Orig Composer"},
+	})
+	organizeAndRecord(t, store, path, "op-composer")
+	require.NoError(t, taglib.WriteTags(path, map[string][]string{"COMPOSER": {"Later Composer"}}, 0))
+
+	res, err := NewRevertService(store).RevertOperation("op-composer")
+	require.NoError(t, err, "result %+v", res)
+	tags := diskTags(t, path)
+	assert.Equal(t, []string{"Later Composer"}, tags["COMPOSER"], "undo must not write COMPOSER back")
+	assert.Equal(t, []string{"Orig Artist"}, tags["ARTIST"])
 }
 
 // After organize, the file reader must read the book's author back as the

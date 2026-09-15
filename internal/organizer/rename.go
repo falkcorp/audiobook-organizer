@@ -1,5 +1,5 @@
 // file: internal/organizer/rename.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-09-14
 
@@ -41,10 +41,11 @@ type RenameService struct {
 
 	// ReadCurrentTags returns a file's current value for each tag key, read
 	// from the properties the revert writes back (metadata.ReadTagProperties;
-	// "" for a property the file does not carry, a key left out when unknown).
-	// ApplyRename records them as each tag_write row's OldValue before it
-	// writes, and does not write to a file it cannot read. Nil means no file
-	// is written.
+	// "" for a property the file does not carry, a key left out when its
+	// value cannot be recorded). ApplyRename records them as each tag_write
+	// row's OldValue before it writes, does not write a key left out (its
+	// write could not be undone), and does not write to a file it cannot
+	// read. Nil means no file is written.
 	ReadCurrentTags func(filePath string) (map[string]string, error)
 
 	// WriteTags writes tags to one file. Nil uses metadata.WriteMetadataToFile.
