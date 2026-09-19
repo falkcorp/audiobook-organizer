@@ -1,5 +1,5 @@
 // file: internal/ai/pool_routing.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
 // last-edited: 2026-09-19
 
@@ -95,15 +95,19 @@ func (p *PoolSource) apiKeyFor(ep aidispatch.Endpoint) (string, error) {
 // through the pool for llm.filename_parse. It satisfies the scanner's
 // aiBatchParser interface.
 type RoutedFilenameParser struct {
-	pool *PoolSource
+	pool    *PoolSource
+	llmMode string
 
 	mu      sync.Mutex
 	parsers map[string]*OpenAIParser
 }
 
-// NewRoutedFilenameParser returns a parser routed through pool.
-func NewRoutedFilenameParser(pool *PoolSource) *RoutedFilenameParser {
-	return &RoutedFilenameParser{pool: pool, parsers: map[string]*OpenAIParser{}}
+// NewRoutedFilenameParser returns a parser routed through pool. llmMode is the
+// effective llm_mode: only openai and openai-fallback-local may route to a
+// cloud endpoint (see aidispatch.EndpointLocality); every other mode is
+// local-only.
+func NewRoutedFilenameParser(pool *PoolSource, llmMode string) *RoutedFilenameParser {
+	return &RoutedFilenameParser{pool: pool, llmMode: llmMode, parsers: map[string]*OpenAIParser{}}
 }
 
 // IsEnabled is always true: whether any endpoint can serve is decided per
@@ -142,7 +146,15 @@ func (r *RoutedFilenameParser) parserFor(t aidispatch.Target) (*OpenAIParser, er
 // otherwise read the reply's model-written text and could mistake it for a
 // transport error.
 func (r *RoutedFilenameParser) ParseBatch(ctx context.Context, filenames []string) ([]*ParsedMetadata, error) {
-	d := r.pool.dispatcher()
+	var opts []aidispatch.Option
+	if r.llmMode != config.AIBackendModeOpenAI && r.llmMode != config.AIBackendModeOpenAIFallbackLocal {
+		// Only the openai and openai-fallback-local modes may reach a hosted
+		// API. In local mode (and any unknown mode) a cloud row is never a
+		// candidate, so spillover and failover stay on the operator's network
+		// exactly as legacy local mode did.
+		opts = append(opts, aidispatch.WithLocalOnly())
+	}
+	d := r.pool.dispatcher(opts...)
 	return aidispatch.Call(ctx, d, aidispatch.LLMFilenameParse, func(ctx context.Context, t aidispatch.Target) ([]*ParsedMetadata, error) {
 		p, err := r.parserFor(t)
 		if err != nil {
@@ -188,7 +200,9 @@ func (c *EmbeddingClient) WithPoolRouting(pool *PoolSource) *EmbeddingClient {
 func (c *EmbeddingClient) poolRoutingActive() bool { return c.pool.IsActive() }
 
 func (c *EmbeddingClient) embedRouted(ctx context.Context, texts []string) ([][]float32, error) {
-	d := c.pool.dispatcher(aidispatch.WithPinnedModel(aidispatch.EmbedText, c.model))
+	// Local-only: WithPoolRouting is installed only for embedding_mode local,
+	// which never contacts a hosted API on the legacy path either.
+	d := c.pool.dispatcher(aidispatch.WithPinnedModel(aidispatch.EmbedText, c.model), aidispatch.WithLocalOnly())
 	return aidispatch.Call(ctx, d, aidispatch.EmbedText, func(ctx context.Context, t aidispatch.Target) ([][]float32, error) {
 		key, err := c.pool.apiKeyFor(t.Endpoint)
 		if err != nil {

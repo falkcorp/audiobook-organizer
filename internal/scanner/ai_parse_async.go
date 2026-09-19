@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
 // last-edited: 2026-09-19
 
@@ -606,7 +606,7 @@ func newAIParser(scanLog logger.Logger) (aiBatchParser, bool) {
 	// never routed; disabled stays disabled. Off, nothing below changes.
 	if cfg.AIEndpointsRouting && (mode == config.AIBackendModeLocal || mode == config.AIBackendModeOpenAIFallbackLocal) {
 		scanLog.Info("AI parsing routed through the ai_endpoints pool (capability llm.filename_parse, llm_mode=%s)", mode)
-		return ai.NewRoutedFilenameParser(ai.ConfigPool()), true
+		return ai.NewRoutedFilenameParser(ai.ConfigPool(), mode), true
 	}
 
 	switch mode {
