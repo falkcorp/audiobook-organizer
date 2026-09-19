@@ -146,6 +146,10 @@ type LibrarySummaryReader interface {
 // LibrarySearchReader covers search and facets.
 type LibrarySearchReader interface {
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	// SearchBooksFiltered applies a BookSummaryFilter INSIDE the search scan, so
+	// only admitted books count toward limit. The ABS search uses it with
+	// absItemFilterBase(); see buildSearch for why SearchBooks alone was wrong.
+	SearchBooksFiltered(query string, limit, offset int, f database.BookSummaryFilter) ([]database.Book, error)
 	GetDistinctGenres() ([]string, error)
 	// GetGenreCounts feeds /filterdata's genre list AND the per-genre numItems
 	// that a /search genre hit must carry (AudioBooth decodes search genres as

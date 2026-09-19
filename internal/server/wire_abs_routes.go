@@ -35,6 +35,12 @@ var _ abshandler.ProgressListStore = (*database.PebbleStore)(nil)
 var (
 	_ abshandler.ProgressStore = (*database.PebbleStore)(nil)
 	_ abshandler.BookmarkStore = (*database.PebbleStore)(nil)
+	// LibraryStore is resolved at boot with database.AsCapability, which looks
+	// through the indexedStore decorator to the PebbleStore. Its methods beyond
+	// database.Store (SearchBooksFiltered, GetBookFilesForIDsCore, GetBooksByTag)
+	// would otherwise surface only as an os.Exit(1) there; this makes a missing
+	// or drifted method a build failure instead.
+	_ abshandler.LibraryStore = (*database.PebbleStore)(nil)
 )
 
 // absReservedPaths are the exact top-level paths the Audiobookshelf-compatible surface

@@ -1,7 +1,7 @@
 // file: internal/database/memdb_search.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
@@ -101,6 +101,24 @@ func SubstringSearchMatches(title string, narrator *string, authorID *int, autho
 //   - Soft-deleted books are NOT excluded. The disk scan does not filter them,
 //     so neither does this. (Worth revisiting — separately.)
 func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, error) {
+	return m.searchBookIDs(query, limit, offset, nil)
+}
+
+// SearchBookIDsFiltered is SearchBookIDs restricted to the books f admits,
+// applied INSIDE the scan so only admitted matches count toward offset and
+// limit. Post-filtering a limit-capped SearchBookIDs result would return fewer
+// than limit hits — often none — whenever hidden rows sort first, which on
+// production was 89% of matches.
+func (m *MemStore) SearchBookIDsFiltered(query string, limit, offset int, f BookSummaryFilter) ([]string, error) {
+	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
+		return []string{}, nil
+	}
+	return m.searchBookIDs(query, limit, offset, func(b *Book) bool { return bookMatchesSummaryFilter(b, f) })
+}
+
+// searchBookIDs is the shared scan; keep (nil = admit all) runs before a match
+// is counted.
+func (m *MemStore) searchBookIDs(query string, limit, offset int, keep func(*Book) bool) ([]string, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -154,6 +172,9 @@ func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, err
 			continue
 		}
 
+		if keep != nil && !keep(b) {
+			continue
+		}
 		if SubstringSearchMatches(b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery) {
 			// limit == 0 means "no limit" (return all matches).
 			if count >= offset && (limit == 0 || len(ids) < limit) {
