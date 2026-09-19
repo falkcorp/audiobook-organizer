@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.12.3
+// version: 1.13.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package scanner
 
@@ -1562,21 +1562,32 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 
 	// The batch write recomputes and persists the book's aggregates, so the copy
 	// fetched at the top of createBookFilesForBook is stale by this point. The
-	// FilePath normalization below must send the RE-READ book, not that copy —
-	// UpdateBook does not preserve FileSize on nil, so writing the stale one back
-	// erases what the batch just computed.
+	// FilePath normalization runs inside a ModifyBook callback, which receives
+	// the STORED row and must set only FilePath — UpdateBook does not preserve
+	// FileSize on nil, so an overlay that wrote the stale snapshot back would
+	// erase what the batch just computed.
 	freshSize := int64(4096)
-	store.EXPECT().GetBookByID("book-1").Return(&database.Book{
-		ID:       "book-1",
-		Title:    "Test Book",
-		FilePath: bookPath,
-		FileSize: &freshSize,
-	}, nil)
-
-	store.EXPECT().UpdateBook("book-1", mock.MatchedBy(func(b *database.Book) bool {
-		// Normalized to the parent directory, and still carrying the aggregate.
-		return b != nil && b.FilePath == tmp && b.FileSize != nil && *b.FileSize == freshSize
-	})).Return(nil, nil)
+	store.EXPECT().ModifyBook("book-1", mock.Anything).
+		RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			stored := &database.Book{
+				ID:       "book-1",
+				Title:    "Test Book",
+				FilePath: bookPath,
+				FileSize: &freshSize,
+			}
+			if err := fn(stored); err != nil {
+				return nil, err
+			}
+			// Normalized to the parent directory, and still carrying the aggregate.
+			if stored.FilePath != tmp {
+				t.Errorf("FilePath: want %q, got %q", tmp, stored.FilePath)
+			}
+			if stored.FileSize == nil || *stored.FileSize != freshSize {
+				t.Errorf("FileSize erased by the normalization callback: want %d, got %v",
+					freshSize, stored.FileSize)
+			}
+			return stored, nil
+		})
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })

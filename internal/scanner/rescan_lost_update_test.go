@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
 // version: 1.0.0
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-09-18
+// last-edited: 2026-09-19
 
 package scanner
 
