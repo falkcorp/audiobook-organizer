@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.60.0
+// version: 2.61.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -499,7 +499,7 @@ func NewServer(store database.Store) *Server {
 	//
 	// /api/events is an SSE stream: buffering it through a compressor defeats
 	// incremental delivery, so events arrive only when the buffer flushes.
-	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/api/events", "/metrics"})))
+	router.Use(compressionMiddleware())
 	// OpenTelemetry instrumentation: create per-handler spans and record metrics
 	router.Use(otelgin.Middleware("audiobook-organizer"))
 
@@ -1385,4 +1385,22 @@ func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error
 		return false, cerr
 	}
 	return true, nil
+}
+
+// compressionMiddleware is the router-wide response compressor, shared with the
+// tests so they exercise the exact exclusions production uses.
+//
+// Excluded:
+//   - /metrics: promhttp compresses on its own (see the comment at the call site).
+//   - /api/events: an SSE stream; a compressor buffers it.
+//   - /api/v1/operations/v2/:id/logs/download: the handler streams its own
+//     .log.gz body. gin-contrib/gzip v1.2.7 wraps it anyway, and its "already
+//     gzip" check passes the first chunk through raw, strips Content-Encoding,
+//     then compresses every later chunk, so browsers saved a file gunzip rejects
+//     ("data stream error") on every operation's log download.
+func compressionMiddleware() gin.HandlerFunc {
+	return gzip.Gzip(gzip.DefaultCompression,
+		gzip.WithExcludedPaths([]string{"/api/events", "/metrics"}),
+		gzip.WithExcludedPathsRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`}),
+	)
 }
