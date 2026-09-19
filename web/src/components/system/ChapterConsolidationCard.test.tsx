@@ -134,6 +134,31 @@ describe('ChapterConsolidationCard', () => {
     expect(api.runMaintenanceJob).toHaveBeenCalledTimes(1);
   });
 
+  it('the confirm count leaves out groups the preview would skip', async () => {
+    mockRun(
+      result({
+        groups_found: 2,
+        books_merged: 2,
+        books_skipped: 1,
+        groups: [
+          { ...group, status: 'would_merge' },
+          {
+            ...group,
+            primary_book_id: 'x01',
+            source_book_ids: ['x02'],
+            status: 'would_skip',
+          },
+        ],
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Dry Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
+    expect(await screen.findByRole('button', { name: 'Merge 2 record(s)' })).toBeInTheDocument();
+  });
+
   it('surfaces a failed operation instead of a result', async () => {
     vi.mocked(api.runMaintenanceJob).mockResolvedValue({ operation_id: 'op-2' });
     vi.mocked(api.pollOperation).mockResolvedValue({
