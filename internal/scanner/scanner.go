@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.101.0
+// version: 1.102.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -3213,15 +3213,31 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			// versions of each other. applySmartVersionLink decides which,
 			// links only genuine copies, and elects exactly one primary; see
 			// version_link.go for the predicate and the election rule.
-			if dbBook.Title != "" {
-				parentDir := filepath.Dir(book.FilePath)
+			//
+			// The sibling read, the election and the CreateBook below are all
+			// held under one folder+title stripe. ProcessBooksParallel runs a
+			// folder's files concurrently, and the row being decided for is
+			// invisible to another worker until CreateBook lands, so without
+			// that span two new files in one folder each read a primary-less
+			// folder and each crown themselves. The lock is released the
+			// moment the row exists.
+			parentDir := filepath.Dir(book.FilePath)
+			unlockVersionLink := lockVersionLinkFor(dbBook, parentDir)
+			if versionLinkEligible(dbBook) {
 				siblings, lookupErr := getStore().GetBooksByTitleInDir(strings.ToLower(dbBook.Title), parentDir)
-				if lookupErr == nil && len(siblings) > 0 {
+				if lookupErr != nil {
+					// Cannot tell whether this row has versions, so do not
+					// guess one. Leaving it ungrouped keeps it visible in the
+					// library, which is the safe side of this call.
+					defaultLog.Warn("Version link skipped for %s: same-title lookup in %s failed: %v",
+						book.FilePath, parentDir, lookupErr)
+				} else if len(siblings) > 0 {
 					applySmartVersionLink(dbBook, siblings, parentDir)
 				}
 			}
 
 			_, err = getStore().CreateBook(dbBook)
+			unlockVersionLink()
 			if err == nil {
 				followSyncIdentityOnVersionLink(supersededBookID, supersededBookPath, dbBook.ID)
 				// Check for metadata hash duplicates

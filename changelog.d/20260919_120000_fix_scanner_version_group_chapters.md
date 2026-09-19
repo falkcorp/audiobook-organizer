@@ -20,7 +20,12 @@
   `" (N)"` copy-suffix pattern rather than a second title parser — known durations
   must not disagree by more than 5%, and then either the formats differ (the
   feature's stated purpose, an .m4b and an .mp3 of one book) or one file carries
-  the `" (N)"` copy suffix over the other's stem. Same-format records with no copy
+  the `" (N)"` copy suffix over the other's stem. The positional-part gate applies
+  to the mixed-format case too, so a pair whose file names end in a track number
+  — what `config.DefaultFileNamingPattern` (`{title} - {track:02d}`) produces for
+  every organized single-file book — reads as parts and is left ungrouped. Under
+  that pattern the mixed-format link is effectively off; this deployment's
+  configured pattern is not the default and is unaffected. Same-format records with no copy
   suffix no longer group on similar durations alone: two adjacent chapters are the
   likeliest pair in a library to have similar durations.
 
@@ -31,4 +36,11 @@
   siblings can no longer be crowned, and if the elected sibling's write does not
   land the new row takes primacy rather than leaving the group empty-handed. A
   record whose every sibling link fails is left with no group at all instead of
-  becoming an orphan group of one.
+  becoming an orphan group of one, and a row a content-hash branch has already
+  grouped is left alone rather than being re-grouped by title.
+
+  One downstream interaction to watch: rows this now leaves ungrouped become
+  candidates for `reconcile.AssignOrphanVGs`, which mints a group of one AND
+  stamps `library_state = "organized"` — so an imported row it picks up becomes
+  ABS-visible before anything organized it. That is pre-existing behaviour of
+  that op, not new here, but this change feeds it more rows.

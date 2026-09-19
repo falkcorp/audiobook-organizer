@@ -327,3 +327,77 @@ func TestSmartVersionLink_JoiningZeroPrimaryGroupTakesPrimacy(t *testing.T) {
 		t.Errorf("the already-grouped sibling was rewritten %d time(s)", store.writes)
 	}
 }
+
+// A row already placed in a group by a CONTENT-based rule (scanner.go's
+// hash-duplicate and multi-file dedup branches set both version fields and
+// then clear `existing`, so the create path still runs) must not have that
+// grouping overwritten by the weaker title-based one -- which would also
+// strand its hash partner as a group of one.
+func TestSmartVersionLink_DoesNotOverwriteAHashGroup(t *testing.T) {
+	dir := "/lib/Author/Foundation"
+	siblings := []database.Book{
+		{ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)},
+	}
+	store := newVLStore(&siblings[0])
+	useVLStore(t, store)
+
+	hashGroup := "vg-0123456789abcdef"
+	yes := true
+	newBook := &database.Book{
+		Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3", Duration: intPtr(36000),
+		VersionGroupID: &hashGroup, IsPrimaryVersion: &yes,
+	}
+	applySmartVersionLink(newBook, siblings, dir)
+
+	if *newBook.VersionGroupID != hashGroup {
+		t.Errorf("hash-duplicate group %q was overwritten with %q", hashGroup, *newBook.VersionGroupID)
+	}
+	if !vlPrimary(t, newBook) {
+		t.Error("the hash branch's primacy decision was overwritten")
+	}
+	if store.writes != 0 {
+		t.Errorf("siblings were written %d time(s) for a row that already has a group", store.writes)
+	}
+	if store.rows["b1"].VersionGroupID != nil {
+		t.Error("an unrelated sibling was pulled into the hash group")
+	}
+}
+
+// Incumbency is a property of the GROUP, not of the candidate set. A row can
+// hold the group and still fail the same-work predicate -- a chapter row
+// crowned by elect-missing-primaries is exactly that -- and it is still the
+// group's primary. Asking only the candidates would crown a second one.
+func TestSmartVersionLink_IncumbentOutsideCandidatesStillCounts(t *testing.T) {
+	dir := "/lib/Author/Foundation"
+	group := "vg-cafebabecafebabe"
+	yes, no := true, false
+	siblings := []database.Book{
+		// A chapter row, crowned by the repair pass. versionLinkIsPart
+		// excludes it from the candidate set, but it IS the group's primary.
+		{
+			ID: "b1", Title: "Foundation", FilePath: dir + "/01 Foundation.mp3", Format: "mp3",
+			Duration: intPtr(1800), VersionGroupID: &group, IsPrimaryVersion: &yes,
+		},
+		// A full-length mp3 in the same group: a genuine candidate, and the
+		// row through which the new .m4b reaches the group.
+		{
+			ID: "b2", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3",
+			Duration: intPtr(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
+		},
+	}
+	store := newVLStore(&siblings[0], &siblings[1])
+	useVLStore(t, store)
+
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)}
+	applySmartVersionLink(newBook, siblings, dir)
+
+	if newBook.VersionGroupID == nil || *newBook.VersionGroupID != group {
+		t.Fatalf("new row landed in group %v, want %q", newBook.VersionGroupID, group)
+	}
+	if vlPrimary(t, newBook) {
+		t.Error("crowned a second primary: the group already had one outside the candidate set")
+	}
+	if !vlPrimary(t, store.rows["b1"]) {
+		t.Error("the incumbent primary lost its flag")
+	}
+}

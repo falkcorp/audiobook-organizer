@@ -1,5 +1,5 @@
 // file: internal/scanner/version_link.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f4ff5e2-d0d7-45eb-ac42-18142fcf22cb
 // last-edited: 2026-09-19
 
@@ -8,8 +8,10 @@ package scanner
 import (
 	"crypto/sha256"
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -119,6 +121,11 @@ func versionLinkDurationsConflict(a, b *int) bool {
 //     a. The formats DIFFER -- the feature's stated purpose, an .m4b and an
 //     .mp3 of one book, and the shape the 2026-09-19 census found to be
 //     essentially always correct (9 groups, no observed false positive).
+//     Gate 1 still applies to it: a mixed-format pair whose file names end in
+//     a track number -- what config.DefaultFileNamingPattern
+//     ("{title} - {track:02d}") produces for every organized single-file book
+//     -- reads as parts and does NOT group. Under that naming pattern this
+//     branch is effectively off.
 //     b. The formats MATCH and one file name carries the " (N)" copy suffix
 //     over the other's stem -- the canonical shape of a second copy landing
 //     beside the original.
@@ -211,6 +218,49 @@ func versionLinkInt64(p *int64) int64 {
 	return *p
 }
 
+// versionLinkEligible reports whether a row about to be created may take part
+// in same-folder version linking at all. An untitled row has no grouping key,
+// and a row that ALREADY carries a group was put there by a stronger,
+// content-based rule (scanner.go's hash-duplicate and multi-file dedup
+// branches both set the two version fields and then clear `existing` so the
+// create path runs) -- title-based linking must not overwrite either field.
+func versionLinkEligible(dbBook *database.Book) bool {
+	if dbBook == nil || strings.TrimSpace(dbBook.Title) == "" {
+		return false
+	}
+	return dbBook.VersionGroupID == nil || *dbBook.VersionGroupID == ""
+}
+
+// versionLinkStripes serialise the read-siblings -> elect -> write sequence
+// per folder+title. A fixed stripe array rather than a per-key map: the key
+// space is the whole library (76k+ folders), a map would have to be reaped,
+// and two unrelated keys sharing a stripe costs only a little contention
+// inside one folder's worth of work.
+//
+// This guards the scan's own worker pool (ProcessBooksParallel runs a folder's
+// files concurrently), which is where the race is. It is a process-local lock
+// and claims nothing about a second process: linkVersionGroup's ModifyBook
+// still refuses to move a row another writer has already grouped, which is the
+// cross-process backstop.
+const versionLinkStripeCount = 64
+
+var versionLinkStripeMu [versionLinkStripeCount]sync.Mutex
+
+// lockVersionLinkFor locks the stripe for this row's folder+title and returns
+// its unlock. The caller holds it across applySmartVersionLink AND the
+// CreateBook that follows. A row that cannot be linked takes no lock and gets
+// a no-op unlock.
+func lockVersionLinkFor(dbBook *database.Book, parentDir string) func() {
+	if !versionLinkEligible(dbBook) {
+		return func() {}
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(parentDir + "\x00" + strings.ToLower(dbBook.Title)))
+	mu := &versionLinkStripeMu[h.Sum32()%versionLinkStripeCount]
+	mu.Lock()
+	return mu.Unlock
+}
+
 // applySmartVersionLink decides whether the row about to be created belongs
 // in a version group with any of its same-title, same-folder siblings, and
 // if so links them and elects exactly one primary.
@@ -229,7 +279,23 @@ func versionLinkInt64(p *int64) int64 {
 // zero-primary to the repair pass and invite it to crown a second member
 // (the #2668 double-primary defect). Explicit on both sides is the only
 // form both readers agree on.
+//
+// The caller must hold this folder+title's stripe (lockVersionLinkFor) across
+// both this call AND the CreateBook that follows it: the row being decided for
+// is invisible to another worker until CreateBook lands, so without that span
+// two new files in one folder each read a primary-less folder and each crown
+// themselves.
 func applySmartVersionLink(dbBook *database.Book, siblings []database.Book, parentDir string) {
+	if !versionLinkEligible(dbBook) {
+		// A content-hash branch above (scanner.go's single-hash duplicate and
+		// multi-file dedup paths) already put this row in a group and set its
+		// primacy before clearing `existing`. That grouping is evidence-based
+		// -- identical bytes -- where this one is title-based, so overwriting
+		// it would trade the stronger claim for the weaker one AND strand the
+		// hash partner as a group of one, which is the very shape this file
+		// exists to prevent.
+		return
+	}
 	// Candidates: live siblings that read as another copy of this same book.
 	cands := make([]*database.Book, 0, len(siblings))
 	for i := range siblings {
@@ -262,12 +328,38 @@ func applySmartVersionLink(dbBook *database.Book, siblings []database.Book, pare
 
 	// An incumbent primary already in the joined group settles primacy: a
 	// second one would be the double-primary defect.
+	//
+	// Incumbency is asked of EVERY live row in this folder that carries
+	// groupID, not just of the candidates. A row can hold groupID and still
+	// fail versionLinkIsSameWork -- it reads as a part, or its duration
+	// conflicts -- and it is still a member of that group and still the thing
+	// the UI shows for it. Scoping the question to cands was wrong for the
+	// exact case the repair pass creates: elect-missing-primaries crowns one
+	// chapter row of a chapter-run group, versionLinkIsPart then excludes
+	// that row here, and the next .m4b dropped into the folder would crown
+	// itself alongside it.
 	incumbent := false
+	for i := range siblings {
+		sib := &siblings[i]
+		if !versionLinkLive(sib) || sib.VersionGroupID == nil || *sib.VersionGroupID != groupID {
+			continue
+		}
+		if database.EffectiveIsPrimaryVersion(sib.IsPrimaryVersion) {
+			incumbent = true
+			break
+		}
+	}
+
 	var unlinked []*database.Book
 	for _, sib := range cands {
 		if sib.VersionGroupID != nil && *sib.VersionGroupID != "" {
-			if *sib.VersionGroupID == groupID && database.EffectiveIsPrimaryVersion(sib.IsPrimaryVersion) {
-				incumbent = true
+			if *sib.VersionGroupID != groupID {
+				// Two candidates for one book already sit in different
+				// groups. Nothing here can repair that -- this row can only
+				// join one of them -- so say so plainly rather than leaving a
+				// silently split group behind.
+				defaultLog.Warn("Sibling %s is in version group %s, not %s: the group for %q in %s is split",
+					sib.FilePath, *sib.VersionGroupID, groupID, dbBook.Title, parentDir)
 			}
 			continue
 		}
