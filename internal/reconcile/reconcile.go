@@ -848,8 +848,8 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 			// so the preview counts what an apply would really remove.
 			owned, ownErr := store.GetBookFiles(dup.ID)
 			if ownErr != nil || len(owned) > 0 {
-				slog.Warn("version-group cleanup keeping duplicate: it still owns book_file rows (or they could not be read)",
-					"dupID", dup.ID, "rows", len(owned), "err", ownErr, "groupID", groupID)
+				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: it still owns %d book_file row(s) (read error: %v)",
+					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), len(owned), ownErr)
 				result.SkippedOwnsFiles++
 				continue
 			}
