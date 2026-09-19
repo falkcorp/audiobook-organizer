@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_maintenance_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f8b6d41-9c3e-4a75-b1d8-7e0a5c2f9b64
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 package database
 
@@ -182,8 +182,8 @@ func TestMigratingActivityStore_RepairActivityIndexesRepairsInactivePebble(t *te
 	if err != nil {
 		t.Fatalf("RepairActivityIndexes: %v", err)
 	}
-	if res.Deleted != 12 || res.Orphaned != 12 {
-		t.Errorf("RepairActivityIndexes = %+v, want Orphaned=12 Deleted=12 (6 orphans × 2 index families)", res)
+	if res.Deleted != 30 || res.Orphaned != 30 {
+		t.Errorf("RepairActivityIndexes = %+v, want Orphaned=30 Deleted=30 (6 orphans × 5 index families: op, book, source, type, level)", res)
 	}
 	if op, bk := countIndexKeys(t, pebbleStore); op != 0 || bk != 0 {
 		t.Errorf("pebble (inactive primary) still holds (%d, %d) orphaned index keys — repair ran on the active no-op backend only", op, bk)

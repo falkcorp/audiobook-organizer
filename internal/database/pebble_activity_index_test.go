@@ -250,9 +250,12 @@ func TestPebbleActivityStore_RepairRemovesOrphanedIndexEntries(t *testing.T) {
 
 	res, err := s.RepairActivityIndexes(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, int64(20), res.Scanned)
-	assert.Equal(t, int64(12), res.Orphaned, "6 orphaned rows × 2 index families")
-	assert.Equal(t, int64(12), res.Deleted)
+	// Every seeded row carries an op, a book, a source, a type and a level, so
+	// it has 5 index keys: act:op:, act:bk: and the act:src:/act:typ:/act:lvl:
+	// filter families, which repair covers too.
+	assert.Equal(t, int64(50), res.Scanned)
+	assert.Equal(t, int64(30), res.Orphaned, "6 orphaned rows × 5 index families")
+	assert.Equal(t, int64(30), res.Deleted)
 	assert.Equal(t, int64(0), res.Malformed)
 
 	opAfter, bookAfter := countIndexKeys(t, s)
@@ -305,9 +308,9 @@ func TestPebbleActivityStore_RepairIsChunkedAcrossWorkers(t *testing.T) {
 
 	res, err := s.RepairActivityIndexes(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, int64(64), res.Scanned)
-	assert.Equal(t, int64(50), res.Orphaned)
-	assert.Equal(t, int64(50), res.Deleted)
+	assert.Equal(t, int64(160), res.Scanned, "32 rows × 5 index families")
+	assert.Equal(t, int64(125), res.Orphaned, "25 orphans × 5 index families")
+	assert.Equal(t, int64(125), res.Deleted)
 
 	opAfter, bookAfter := countIndexKeys(t, s)
 	assert.Equal(t, 7, opAfter)
@@ -323,7 +326,7 @@ func TestPebbleActivityStore_RepairIsIdempotent(t *testing.T) {
 
 	first, err := s.RepairActivityIndexes(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, int64(10), first.Deleted)
+	require.Equal(t, int64(25), first.Deleted, "5 orphans × 5 index families")
 
 	second, err := s.RepairActivityIndexes(context.Background())
 	require.NoError(t, err)

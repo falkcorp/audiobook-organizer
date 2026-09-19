@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package activity
 
@@ -234,6 +234,14 @@ func (s *Service) writeDeferred(batch []database.ActivityEntry) {
 // scanning the whole log after the client has disconnected.
 func (s *Service) Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error) {
 	return s.store.Query(ctx, filter)
+}
+
+// QueryWithPartial is Query plus whether the answer is partial — the store's
+// walk hit its budget before filling the page or exhausting the matches, so
+// older matches were not examined. The /activity handler returns it so the UI
+// can say so rather than presenting a short result as complete.
+func (s *Service) QueryWithPartial(ctx context.Context, filter database.ActivityFilter) (database.ActivityQueryResult, error) {
+	return database.QueryWithPartialOf(ctx, s.store, filter)
 }
 
 // Summarize collapses old entries in the given tier that are older than olderThan.

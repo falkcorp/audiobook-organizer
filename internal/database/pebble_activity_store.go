@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-19
 
@@ -18,6 +18,8 @@
 //	act:<tier>:<20d-unix-nano>:<ulid>        = JSON(ActivityEntry)   primary
 //	act:op:<op_id>:<20d-unix-nano>:<ulid>    = []byte("<tier>:<20d-unix-nano>:<ulid>")  op index
 //	act:bk:<book_id>:<20d-unix-nano>:<ulid>  = []byte("<tier>:<20d-unix-nano>:<ulid>")  book index
+//	act:src|typ|lvl:<esc(value)>:<tier>:<20d-unix-nano>:<ulid> = same ref   filter indexes
+//	                                         (see pebble_activity_filter_index.go)
 //
 // Compared with NutsDB, Pebble is a single shared key-space so every key is
 // scoped with "act:" to avoid collisions with other prefixes. The "tier" component
@@ -141,6 +143,9 @@ type PebbleActivityStore struct {
 
 	sourcesMu    sync.Mutex
 	sourcesCache map[string]pactSourcesCacheEntry
+
+	// filterIndexReady caches a positive FilterIndexBackfillDone answer.
+	filterIndexReady atomic.Bool
 }
 
 // pactSourcesCacheEntry is one memoized GetDistinctSources result.
@@ -417,7 +422,11 @@ func pactIndexKeyNamesExactly(key []byte, prefix string) bool {
 // writes alongside every primary row. They are NOT tiers — actTiers contains
 // none of them — so a tier range scan never sees them, which is exactly how
 // they went undeleted for so long.
-var pactIndexFamilyPrefixes = []string{"act:op:", "act:bk:"}
+//
+// The source/type/level filter families (pebble_activity_filter_index.go) are
+// listed too: they store the same ref value, so RepairActivityIndexes removes
+// their orphans with no family-specific code.
+var pactIndexFamilyPrefixes = []string{"act:op:", "act:bk:", "act:src:", "act:typ:", "act:lvl:"}
 
 // pactPrimaryKeySuffix splits a primary key "act:<tier>:<20d-unix-nano>:<ulid>"
 // and returns everything after the tier — "<20d-unix-nano>:<ulid>" — which is
@@ -508,7 +517,14 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 	if e.BookID != "" {
 		keys = append(keys, []byte("act:bk:"+e.BookID+":"+suffix))
 	}
-	return keys, true
+	// The source/type/level families come from the SAME derivation, so the
+	// write path (prepareEntry) and every pactDeleteEntry caller keep them in
+	// step with the row in one batch.
+	filterKeys, ok := pactFilterIndexKeysFor(primaryKey, e)
+	if !ok {
+		return nil, false
+	}
+	return append(keys, filterKeys...), true
 }
 
 // pactDeleteEntry stages the full deletion of one activity row: its primary key
@@ -845,16 +861,33 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (written int,
 // entry, which is the behaviour this method exists to remove.
 func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []ActivityEntry, _ int, err error) {
 	defer recoverPebbleClosed("pebble_activity_store.Query", &err)
+	entries, total, _, err := s.query(ctx, f)
+	return entries, total, err
+}
+
+// query is Query plus the partial flag (see ActivityQueryResult). The planner:
+//
+//  1. operation_id, then book_id → their secondary index (unchanged; exact).
+//  2. source / type / level, once the filter-index backfill sentinel is set →
+//     queryByFilterIndex over the smallest of those families' ranges, the
+//     others checked by key probe, everything else by matchesFilter.
+//  3. otherwise → the budgeted newest-first scan below.
+func (s *PebbleActivityStore) query(ctx context.Context, f ActivityFilter) (_ []ActivityEntry, _ int, partial bool, err error) {
 	if f.Limit == 0 {
 		f.Limit = 50
 	}
 
 	// Fast path: op_id or book_id filter → use secondary index.
 	if f.OperationID != "" {
-		return s.queryByIndexPrefix(ctx, fmt.Sprintf("act:op:%s:", f.OperationID), f)
+		entries, total, err := s.queryByIndexPrefix(ctx, fmt.Sprintf("act:op:%s:", f.OperationID), f)
+		return entries, total, false, err
 	}
 	if f.BookID != "" {
-		return s.queryByIndexPrefix(ctx, fmt.Sprintf("act:bk:%s:", f.BookID), f)
+		entries, total, err := s.queryByIndexPrefix(ctx, fmt.Sprintf("act:bk:%s:", f.BookID), f)
+		return entries, total, false, err
+	}
+	if fams := pactFilterIndexFamilies(f); len(fams) > 0 && f.Limit > 0 && f.Offset >= 0 && s.FilterIndexBackfillDone() {
+		return s.queryByFilterIndex(ctx, f, fams)
 	}
 
 	// General path: bounded newest-first merge over the tier key ranges.
@@ -897,7 +930,7 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []
 		examined += ex
 		if err != nil {
 			// Explicitly nil: drop the partial page rather than returning it.
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		if !phaseExhausted {
 			exhausted = false
@@ -909,7 +942,8 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []
 	// bound: either it equals probe (one row past this page, so pagination
 	// still advances) or the scan budget cut the walk short.
 	total := matched
-	if !exhausted && matched < probe {
+	partial = !exhausted && matched < probe
+	if partial {
 		slog.Warn("[activity] query hit the scan budget; total is a lower bound and older matches were not examined",
 			"budget", activityQueryScanBudget,
 			"examined", examined,
@@ -922,7 +956,7 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []
 			"source", f.Source,
 			"search", f.Search)
 	}
-	return page, total, nil
+	return page, total, partial, nil
 }
 
 // pactSummarizeDeleteBatch bounds how many originals one Summarize batch
@@ -1908,10 +1942,16 @@ func (s *PebbleActivityStore) stageDayDigest(batch *pebble.Batch, startOfDay tim
 		return fmt.Errorf("pebble_activity_store: compact marshal digest: %w", err)
 	}
 
-	// Delete old digest if present. This is a plain Delete, not pactDeleteEntry:
-	// digest rows are written with neither an OperationID nor a BookID, so Record
-	// never indexed them and there is nothing for the helper to find.
+	// Delete old digest if present. Digest rows carry neither an OperationID nor
+	// a BookID, so they have no op/book index keys — but they DO carry a source
+	// ("compaction"), a type ("daily_digest") and a level, so they have filter
+	// index keys, and those go with the row in this batch. The old digest's keys
+	// are derived from its stored body rather than assumed from the constants
+	// below, because a digest written by an older build may differ.
 	if existingKey != nil {
+		if err := s.stageDeleteFilterIndexesForKey(batch, existingKey); err != nil {
+			return fmt.Errorf("pebble_activity_store: compact delete old digest indexes: %w", err)
+		}
 		if err := batch.Delete(existingKey, nil); err != nil {
 			return fmt.Errorf("pebble_activity_store: compact delete old digest: %w", err)
 		}
@@ -1919,7 +1959,7 @@ func (s *PebbleActivityStore) stageDayDigest(batch *pebble.Batch, startOfDay tim
 	if err := batch.Set(digestKey, digestBytes, nil); err != nil {
 		return fmt.Errorf("pebble_activity_store: compact set digest: %w", err)
 	}
-	return nil
+	return pactStageFilterIndexes(batch, digestKey, digest)
 }
 
 // OptimizeStatistics is a no-op for the Pebble backend: an LSM store has no
@@ -2064,6 +2104,9 @@ func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (result Reco
 			return result, fmt.Errorf("pebble_activity_store: recompact marshal entry key=%s: %w", c.key, merr)
 		}
 
+		// An in-place rewrite of the same key: it changes Details and Summary
+		// only, never Source/Type/Level or the key's tier, so the row's filter
+		// index keys stay correct without being touched.
 		if err := s.db.Set(c.key, entryBytes, pebble.Sync); err != nil {
 			return result, fmt.Errorf("pebble_activity_store: recompact write key=%s: %w", c.key, err)
 		}

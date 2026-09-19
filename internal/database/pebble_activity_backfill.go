@@ -1,6 +1,7 @@
 // file: internal/database/pebble_activity_backfill.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a7b8c9d0-e1f2-0007-0123-000000000007
+// last-edited: 2026-09-19
 
 // Package database — NutsDB → PebbleDB activity backfill.
 //
@@ -140,21 +141,20 @@ func BackfillNutsActivityToPebble(
 					return res, fmt.Errorf("backfill: set entry: %w", err)
 				}
 
-				// Rebuild secondary indexes.
-				if e.OperationID != "" {
-					opKey := []byte(fmt.Sprintf("act:op:%s:%020d:%s", e.OperationID, e.Timestamp.UnixNano(), entryID))
-					ref := pactIndexRef(tier, e.Timestamp, entryID)
-					if err := pebbleBatch.Set(opKey, ref, nil); err != nil {
-						pebbleBatch.Close()
-						return res, fmt.Errorf("backfill: set op index: %w", err)
-					}
+				// Rebuild secondary indexes — op, book AND the source/type/level
+				// filter families — through the one derivation Record and every
+				// delete path share, so a backfilled row is indexed exactly like
+				// a recorded one.
+				idxKeys, ok := pactIndexKeysFor(pkey, e)
+				if !ok {
+					pebbleBatch.Close()
+					return res, fmt.Errorf("backfill: derive index keys for %q", pkey)
 				}
-				if e.BookID != "" {
-					bkKey := []byte(fmt.Sprintf("act:bk:%s:%020d:%s", e.BookID, e.Timestamp.UnixNano(), entryID))
-					ref := pactIndexRef(tier, e.Timestamp, entryID)
-					if err := pebbleBatch.Set(bkKey, ref, nil); err != nil {
+				ref := pactIndexRef(tier, e.Timestamp, entryID)
+				for _, k := range idxKeys {
+					if err := pebbleBatch.Set(k, ref, nil); err != nil {
 						pebbleBatch.Close()
-						return res, fmt.Errorf("backfill: set book index: %w", err)
+						return res, fmt.Errorf("backfill: set index %q: %w", k, err)
 					}
 				}
 			}
