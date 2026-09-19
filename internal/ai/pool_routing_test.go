@@ -1,5 +1,5 @@
 // file: internal/ai/pool_routing_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bc526593-a37c-4d58-a9b8-2ebb97aeef5f
 // last-edited: 2026-09-19
 
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // fakeOpenAI is an OpenAI-compatible server: /v1/chat/completions answers a
@@ -165,7 +166,7 @@ func TestRoutedParse_CapabilityGating(t *testing.T) {
 	off.Enabled = false
 	pool := newTestPool(ep("embed-only", unticked.url(), 1, et), off, ep("parser", ticked.url(), 9, fp))
 
-	res, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"A - B.m4b", "C - D.m4b"})
+	res, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"A - B.m4b", "C - D.m4b"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestRoutedParse_CapabilityModelOverride(t *testing.T) {
 	f := newFakeOpenAI(t)
 	e := ep("box", f.url(), 1, fp)
 	e.CapabilityModels = map[string]string{fp: "qwen2.5:7b-instruct"}
-	if _, err := NewRoutedFilenameParser(newTestPool(e).PoolSource).ParseBatch(context.Background(), []string{"x"}); err != nil {
+	if _, err := NewRoutedFilenameParser(newTestPool(e).PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"x"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.seenModels(); len(got) != 1 || got[0] != "qwen2.5:7b-instruct" {
@@ -201,7 +202,7 @@ func TestRoutedParse_CapabilityModelOverride(t *testing.T) {
 func TestRoutedParse_NoCapableEndpointFailsClosed(t *testing.T) {
 	f := newFakeOpenAI(t)
 	pool := newTestPool(ep("embed-only", f.url(), 1, et))
-	_, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"x"})
+	_, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"x"})
 	if !errors.Is(err, aidispatch.ErrNoCapableEndpoint) {
 		t.Fatalf("err = %v, want ErrNoCapableEndpoint", err)
 	}
@@ -216,7 +217,7 @@ func TestRoutedParse_FailoverOnTransportError(t *testing.T) {
 	live := newFakeOpenAI(t)
 	pool := newTestPool(ep("dead", deadURL(t), 1, fp), ep("live", live.url(), 2, fp))
 
-	res, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"a", "b", "c"})
+	res, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"a", "b", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestRoutedParse_ShortReplyIsQualityFailureNotFailover(t *testing.T) {
 	short.short = 1
 	pool := newTestPool(ep("short", short.url(), 1, fp), ep("peer", peer.url(), 2, fp))
 
-	res, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"a", "b", "c"})
+	res, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"a", "b", "c"})
 	if _, ok := errors.AsType[*ResultCountError](err); !ok {
 		t.Fatalf("err = %v (res len %d), want *ResultCountError", err, len(res))
 	}
@@ -265,7 +266,7 @@ func TestRoutedParse_ReplyTextNeverTriggersFailover(t *testing.T) {
 	garbled.rawReply = "dial tcp: connection refused"
 	pool := newTestPool(ep("garbled", garbled.url(), 1, fp), ep("peer", peer.url(), 2, fp))
 
-	_, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"a"})
+	_, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"a"})
 	if _, ok := errors.AsType[*ReplyParseError](err); !ok {
 		t.Fatalf("err = %v, want *ReplyParseError", err)
 	}
@@ -284,7 +285,7 @@ func TestRoutedParse_SpilloverWhenPreferredSaturated(t *testing.T) {
 	p := ep("pref", pref.url(), 1, fp)
 	p.Concurrency = 1
 	pool := newTestPool(p, ep("peer", peer.url(), 2, fp))
-	parser := NewRoutedFilenameParser(pool.PoolSource)
+	parser := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal)
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -422,7 +423,7 @@ func TestRoutedParse_MissingSecretFailsOver(t *testing.T) {
 	c := ep("cloud", cloud.url(), 1, fp)
 	c.AuthRef = "openai_api_key"
 	pool := newTestPool(c, ep("local", local.url(), 2, fp))
-	if _, err := NewRoutedFilenameParser(pool.PoolSource).ParseBatch(context.Background(), []string{"x"}); err != nil {
+	if _, err := NewRoutedFilenameParser(pool.PoolSource, config.AIBackendModeOpenAIFallbackLocal).ParseBatch(context.Background(), []string{"x"}); err != nil {
 		t.Fatal(err)
 	}
 	if cloud.chats.Load() != 0 || local.chats.Load() != 1 {
