@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.40.0
+// version: 1.40.1
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -698,8 +698,10 @@ func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, af
 	}
 	for _, bookID := range affected {
 		if err := s.RecomputeBookAggregates(bookID); err != nil {
-			slog.Warn("UpdateBookFiles: aggregate recompute failed",
-				"book_id", bookID, "error", err)
+			// Not logged here: unlike notifyBookFileChange, which swallows the
+			// error and must therefore be loud, this failure is RETURNED to the
+			// caller (wrapped with ErrBookAggregatesRecompute), and every caller
+			// logs it with its own operation's context.
 			errs = append(errs, fmt.Errorf("%w for book %s: %w", ErrBookAggregatesRecompute, bookID, err))
 		}
 	}
