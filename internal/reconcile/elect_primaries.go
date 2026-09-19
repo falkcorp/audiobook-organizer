@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
 // last-edited: 2026-09-19
 
@@ -57,9 +57,16 @@ type ElectPrimaryResult struct {
 	// by a merge (MergedIntoBookID set) or soft-deleted. Such a group is
 	// left with no primary on purpose: its work is represented by the merge
 	// survivor, and crowning a loser lists the same work twice.
-	SkippedNoEligible int                    `json:"skipped_no_eligible"`
-	Errors            int                    `json:"errors"`
-	Samples           []ElectedPrimarySample `json:"samples,omitempty"`
+	SkippedNoEligible int `json:"skipped_no_eligible"`
+	// GroupsNoEligible counts groups the scan found with no primary and no
+	// electable member. They are not candidates and not in
+	// GroupsWithoutPrimary.
+	GroupsNoEligible int `json:"groups_no_eligible"`
+	// SkippedWinnerChanged counts groups whose chosen winner was merged
+	// away or trashed between the group read and the write.
+	SkippedWinnerChanged int                    `json:"skipped_winner_changed"`
+	Errors               int                    `json:"errors"`
+	Samples              []ElectedPrimarySample `json:"samples,omitempty"`
 }
 
 // maxElectionSamples bounds the dry-run preview payload. The full counts are
@@ -81,10 +88,10 @@ const maxElectionSamples = 50
 // absorbed. The 09-19 census found 302 merged books flagged primary and 218
 // both primary and organized, i.e. listed by ABS next to their survivor.
 // Returns nil when no member is electable.
-func electPrimaryFor(members []database.Book) *database.Book {
+func electPrimaryFor(members []database.Book, alive survivorAlive) *database.Book {
 	sorted := make([]*database.Book, 0, len(members))
 	for i := range members {
-		if electable(&members[i]) {
+		if electable(&members[i], alive) {
 			sorted = append(sorted, &members[i])
 		}
 	}
@@ -106,13 +113,55 @@ func electPrimaryFor(members []database.Book) *database.Book {
 	return sorted[0]
 }
 
-// electable reports whether b may become its group's primary: not absorbed
-// by a merge and not soft-deleted.
-func electable(b *database.Book) bool {
-	if b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" {
+// survivorAlive reports whether a merge target still exists and is not
+// soft-deleted.
+type survivorAlive func(id string) bool
+
+// electable reports whether b may be (or count as) its group's primary: not
+// soft-deleted, and not a merge loser whose survivor is alive. MergedIntoBookID
+// is never cleared, so a loser whose survivor was later trashed or removed is
+// electable again: otherwise its group could never have a primary.
+func electable(b *database.Book, alive survivorAlive) bool {
+	return electableRow(b.IsSoftDeleted(), b.MergedIntoBookID, alive)
+}
+
+func electableRow(softDeleted bool, mergedInto *string, alive survivorAlive) bool {
+	if softDeleted {
 		return false
 	}
-	return !b.IsSoftDeleted()
+	return mergedInto == nil || *mergedInto == "" || !alive(*mergedInto)
+}
+
+// countsAsPrimary is the primary test the pass uses everywhere: a flagged
+// member that is not electable (a merge loser with a live survivor, or
+// trashed) does not give its group a primary. The census found 302 merge
+// losers flagged primary; counting them left their groups unrepaired.
+func countsAsPrimary(primary *bool, softDeleted bool, mergedInto *string, alive survivorAlive) bool {
+	return primary != nil && *primary && electableRow(softDeleted, mergedInto, alive)
+}
+
+// storeSurvivorAlive checks a merge target with a point read. A read error
+// counts as alive: the loser then stays ineligible, which leaves the group as
+// it is rather than crowning a book that may still be merged away.
+func storeSurvivorAlive(store Store) survivorAlive {
+	return func(id string) bool {
+		b, err := store.GetBookByID(id)
+		if err != nil {
+			return true
+		}
+		return b != nil && !b.IsSoftDeleted()
+	}
+}
+
+func sameMergeTarget(a, b *string) bool {
+	av, bv := "", ""
+	if a != nil {
+		av = *a
+	}
+	if b != nil {
+		bv = *b
+	}
+	return av == bv
 }
 
 // errNotElectable aborts a ModifyBook whose re-read row stopped being
@@ -160,8 +209,16 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	// Serial in-memory pass: bucket books by group and count primaries.
 	type groupState struct {
 		members   int
+		electable int
 		primaries int
 	}
+	// Survivor liveness from the same snapshot: a target absent from it, or
+	// trashed, is not alive.
+	liveIDs := make(map[string]bool, len(allBooks))
+	for i := range allBooks {
+		liveIDs[allBooks[i].ID] = !allBooks[i].IsSoftDeleted()
+	}
+	snapAlive := func(id string) bool { return liveIDs[id] }
 	groups := make(map[string]*groupState)
 	for i := range allBooks {
 		b := &allBooks[i]
@@ -175,7 +232,10 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 			groups[*b.VersionGroupID] = gs
 		}
 		gs.members++
-		if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
+		if electableRow(b.IsSoftDeleted(), b.MergedIntoBookID, snapAlive) {
+			gs.electable++
+		}
+		if countsAsPrimary(b.IsPrimaryVersion, b.IsSoftDeleted(), b.MergedIntoBookID, snapAlive) {
 			gs.primaries++
 		}
 	}
@@ -184,6 +244,12 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	var candidates []string
 	for gid, gs := range groups {
 		if gs.primaries > 0 {
+			continue
+		}
+		if gs.electable == 0 {
+			// Nothing to elect: every member is merged away or trashed.
+			// Reported, not a candidate, so "needs repair" can reach zero.
+			result.GroupsNoEligible++
 			continue
 		}
 		candidates = append(candidates, gid)
@@ -205,10 +271,11 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	}
 
 	var (
-		elected, skippedConcurrent, skippedVanished, skippedNoEligible, errCount, processed int64
-		sampleMu                                                                            sync.Mutex
+		elected, skippedConcurrent, skippedVanished, skippedNoEligible, skippedWinnerChanged, errCount, processed int64
+		sampleMu                                                                                                  sync.Mutex
 	)
 
+	alive := storeSurvivorAlive(store)
 	var g errgroup.Group
 	g.SetLimit(max(runtime.NumCPU(), 1))
 	for _, gid := range candidates {
@@ -232,13 +299,14 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 				return nil
 			}
 			for i := range members {
-				if members[i].IsPrimaryVersion != nil && *members[i].IsPrimaryVersion {
+				m := &members[i]
+				if countsAsPrimary(m.IsPrimaryVersion, m.IsSoftDeleted(), m.MergedIntoBookID, alive) {
 					atomic.AddInt64(&skippedConcurrent, 1)
 					return nil
 				}
 			}
 
-			winner := electPrimaryFor(members)
+			winner := electPrimaryFor(members, alive)
 			if winner == nil {
 				atomic.AddInt64(&skippedNoEligible, 1)
 				return nil
@@ -265,17 +333,21 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 			// commits meanwhile is not reverted (audit A1#15).
 			// LibraryState is intentionally left alone — see doc comment.
 			isPrimary := true
+			observedMerge := winner.MergedIntoBookID
 			written, err := store.ModifyBook(winner.ID, func(full *database.Book) error {
 				// Re-checked on the locked re-read: a merge that absorbed
-				// the winner after the group read must not be undone here.
-				if !electable(full) {
+				// the winner (or a trash) after the group read must not be
+				// undone here. Liveness of a survivor was decided above; any
+				// change to the merge target since then aborts, because
+				// the callback must not read other books under this lock.
+				if full.IsSoftDeleted() || !sameMergeTarget(full.MergedIntoBookID, observedMerge) {
 					return errNotElectable
 				}
 				full.IsPrimaryVersion = &isPrimary
 				return nil
 			})
 			if errors.Is(err, errNotElectable) {
-				atomic.AddInt64(&skippedConcurrent, 1)
+				atomic.AddInt64(&skippedWinnerChanged, 1)
 				return nil
 			}
 			if err != nil {
@@ -298,6 +370,7 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	result.SkippedConcurrent = int(skippedConcurrent)
 	result.SkippedVanished = int(skippedVanished)
 	result.SkippedNoEligible = int(skippedNoEligible)
+	result.SkippedWinnerChanged = int(skippedWinnerChanged)
 	result.Errors = int(errCount)
 
 	// Keep samples deterministic regardless of worker completion order.
@@ -317,6 +390,8 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 		"skipped_concurrent", result.SkippedConcurrent,
 		"skipped_vanished", result.SkippedVanished,
 		"skipped_no_eligible", result.SkippedNoEligible,
+		"skipped_winner_changed", result.SkippedWinnerChanged,
+		"groups_no_eligible", result.GroupsNoEligible,
 		"errors", result.Errors,
 	)
 

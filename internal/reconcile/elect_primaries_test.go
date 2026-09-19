@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
 // last-edited: 2026-09-19
 
@@ -377,7 +377,7 @@ func TestElectPrimaryFor_DeterministicOrder(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := electPrimaryFor(tc.members)
+			got := electPrimaryFor(tc.members, func(string) bool { return true })
 			if tc.want == "" {
 				if got != nil {
 					t.Fatalf("got %q, want no winner", got.ID)
@@ -401,6 +401,11 @@ func (f *electFakeStore) markElectMerged(id, into string) {
 	defer f.unlock()
 	v := into
 	f.byID[id].MergedIntoBookID = &v
+	for i := range f.books {
+		if f.books[i].ID == id {
+			f.books[i].MergedIntoBookID = &v
+		}
+	}
 	for gid, ms := range f.byGroup {
 		for i := range ms {
 			if ms[i].ID == id {
@@ -419,6 +424,7 @@ func TestElectMissingPrimaries_NeverCrownsAMergeLoser(t *testing.T) {
 	store := newElectFakeStore()
 	store.addElectBook("loser", "Old", "vg-m", false, base)
 	store.addElectBook("keeper", "New", "vg-m", false, base.Add(time.Hour))
+	store.addElectBook("survivor-elsewhere", "S", "vg-s", true, base)
 	store.markElectMerged("loser", "survivor-elsewhere")
 
 	res, err := ElectMissingPrimaries(store, false)
@@ -444,10 +450,16 @@ func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *tes
 	store := newElectFakeStore()
 	store.addElectBook("m1", "A", "vg-all", false, base)
 	store.addElectBook("d1", "B", "vg-all", false, base.Add(time.Minute))
+	store.addElectBook("s", "S", "vg-s", true, base)
 	store.markElectMerged("m1", "s")
 	yes := true
 	store.byID["d1"].MarkedForDeletion = &yes
 	store.byGroup["vg-all"][1].MarkedForDeletion = &yes
+	for i := range store.books {
+		if store.books[i].ID == "d1" {
+			store.books[i].MarkedForDeletion = &yes
+		}
+	}
 
 	res, err := ElectMissingPrimaries(store, false)
 	if err != nil {
@@ -456,8 +468,10 @@ func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *tes
 	if len(store.updated) != 0 {
 		t.Fatalf("wrote %d books, want 0", len(store.updated))
 	}
-	if res.SkippedNoEligible != 1 || res.Elected != 0 {
-		t.Errorf("SkippedNoEligible=%d Elected=%d, want 1 and 0", res.SkippedNoEligible, res.Elected)
+	// Not a candidate at all, so "needs repair" can reach zero.
+	if res.GroupsNoEligible != 1 || res.GroupsWithoutPrimary != 0 || res.Elected != 0 {
+		t.Errorf("GroupsNoEligible=%d GroupsWithoutPrimary=%d Elected=%d, want 1, 0, 0",
+			res.GroupsNoEligible, res.GroupsWithoutPrimary, res.Elected)
 	}
 }
 
@@ -482,7 +496,46 @@ func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing
 	if w, ok := store.updated["w"]; ok && w.IsPrimaryVersion != nil && *w.IsPrimaryVersion {
 		t.Fatalf("book merged after the group read was crowned")
 	}
-	if res.Elected != 0 || res.Errors != 0 {
-		t.Errorf("Elected=%d Errors=%d, want 0 and 0", res.Elected, res.Errors)
+	if res.Elected != 0 || res.Errors != 0 || res.SkippedWinnerChanged != 1 {
+		t.Errorf("Elected=%d Errors=%d SkippedWinnerChanged=%d, want 0, 0, 1", res.Elected, res.Errors, res.SkippedWinnerChanged)
+	}
+}
+
+// A merge loser flagged primary does not give its group a primary while its
+// survivor is alive (census: 302 such rows): the live member is elected.
+func TestElectMissingPrimaries_MergedPrimaryDoesNotCount(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore()
+	store.addElectBook("loser", "Old", "vg-p", true, base)
+	store.addElectBook("live", "New", "vg-p", false, base.Add(time.Hour))
+	store.addElectBook("surv", "S", "vg-s", true, base)
+	store.markElectMerged("loser", "surv")
+
+	res, err := ElectMissingPrimaries(store, false)
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	w, ok := store.updated["live"]
+	if !ok || w.IsPrimaryVersion == nil || !*w.IsPrimaryVersion {
+		t.Fatalf("live member not elected; result %+v", res)
+	}
+}
+
+// MergedIntoBookID is never cleared. When the survivor is gone, the loser is
+// the work's only copy and must be electable, or its group never has a
+// primary again.
+func TestElectMissingPrimaries_LoserOfDeadSurvivorIsElectable(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore()
+	store.addElectBook("orphan", "O", "vg-d", false, base)
+	store.markElectMerged("orphan", "hard-deleted-survivor")
+
+	res, err := ElectMissingPrimaries(store, false)
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	w, ok := store.updated["orphan"]
+	if !ok || w.IsPrimaryVersion == nil || !*w.IsPrimaryVersion {
+		t.Fatalf("loser of a dead survivor not elected; result %+v", res)
 	}
 }
