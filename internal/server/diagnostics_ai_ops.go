@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ai_ops.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5c8f2a91-3d6e-4b07-9e14-8a2f7c0d3b56
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // diagnostics_ai_ops registers the diagnostics.ai-analyze OperationDef, which
 // replaces the bare goroutine in handlers.SubmitAI that used to mint a legacy
@@ -111,7 +111,7 @@ func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
 			if err != nil {
 				return fmt.Errorf("upload batch file: %w", err)
 			}
-			batchID, err := parser.CreateBatchWithMetadata(ctx, fileID, "diagnostics")
+			batchID, err := parser.CreateBatchWithMetadata(ctx, fileID, "diagnostics", nil)
 			if err != nil {
 				return fmt.Errorf("create batch: %w", err)
 			}

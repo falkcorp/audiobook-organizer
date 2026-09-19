@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/aijobs_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 92b8a4e2-1647-48c3-acc3-ae3e101623d7
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package aijobs
 
@@ -87,6 +87,7 @@ type fakeBatchClient struct {
 	createCalls   int
 	lastJSONL     []byte
 	lastType      string
+	lastExtra     map[string]string
 	returnBatchID string
 	returnErr     error
 }
@@ -96,9 +97,10 @@ func (f *fakeBatchClient) UploadBatchFile(ctx context.Context, data []byte) (str
 	f.lastJSONL = append([]byte(nil), data...)
 	return "file_123", f.returnErr
 }
-func (f *fakeBatchClient) CreateBatchWithMetadata(ctx context.Context, fileID, batchType string) (string, error) {
+func (f *fakeBatchClient) CreateBatchWithMetadata(ctx context.Context, fileID, batchType string, extra map[string]string) (string, error) {
 	f.createCalls++
 	f.lastType = batchType
+	f.lastExtra = extra
 	if f.returnErr != nil {
 		return "", f.returnErr
 	}

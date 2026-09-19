@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review.go
-// version: 2.0.3
+// version: 2.1.0
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package ai
 
@@ -159,6 +159,12 @@ func SubmitDedupReviewJob(ctx context.Context, deps aijobs.Deps, model string, i
 // dedupReviewCallback is the completion handler for dedup review batches.
 // It deserializes the payload, reloads candidates fresh from the store,
 // and applies verdicts through the injected applier.
+//
+// Replay-safe, as aijobs.CompletionCallback requires (a kill between this
+// returning and the job row being marked completed runs it once more): each
+// verdict is an overwrite of the candidate's LLM fields, and an auto-merge is
+// skipped when either book is already soft-deleted, which the first run's merge
+// left it.
 func dedupReviewCallback(ctx context.Context, itemsJSON []byte, results []aijobs.RowResult) (successCount, errorCount int, rowErrors []database.AIJobRowError, fatalErr error) {
 	// Deserialize the payload.
 	var payload dedupReviewPayload

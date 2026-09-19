@@ -1,6 +1,7 @@
 // file: internal/server/batch_poller_register.go
-// version: 1.2.0
-// last-edited: 2026-08-23
+// version: 1.3.0
+// guid: 63de386f-af67-4943-a370-725ccc28ca6f
+// last-edited: 2026-09-19
 
 package server
 
@@ -29,7 +30,10 @@ func init() {
 
 			// Create the OpenAI parser instance and BatchPoller
 			parser := ai.NewOpenAIParser(cfg, cfg.OpenAIAPIKey, cfg.EnableAIParsing)
-			poller := NewBatchPoller(store, parser)
+			poller, err := NewBatchPoller(store, parser)
+			if err != nil {
+				return nil, err
+			}
 			slog.Info("batchpoller initialized")
 			return poller, nil
 		},
