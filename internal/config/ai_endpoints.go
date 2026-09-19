@@ -1,7 +1,7 @@
 // file: internal/config/ai_endpoints.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f0b6c2e-8a41-4d7e-9b15-6e2c7a9d4f10
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package config
 
@@ -28,9 +28,10 @@ import (
 // custom decoder would silently stop PUT /config from rejecting a typo such
 // as ai_endpoints[0].capabilites.
 //
-// NOTHING ROUTES ON THIS YET. PR 2 only stores, validates, migrates and
-// reports these rows; every AI call site still resolves its backend from the
-// legacy fields, which the migration keeps writing.
+// Routing on these rows is gated by Config.AIEndpointsRouting (default off).
+// With it off, every AI call site resolves its backend from the legacy
+// fields, which the migration keeps writing; with it on, only the call sites
+// listed on that field route through the pool.
 type AIEndpoint struct {
 	ID       string `json:"id"       mapstructure:"id"`
 	Label    string `json:"label"    mapstructure:"label"`
@@ -87,7 +88,8 @@ const (
 var knownAIAuthRefs = []string{"openai_api_key"}
 
 // DispatchEndpoint converts the stored row into the dispatcher's input type.
-// Only the status API and tests call it in PR 2; no dispatch path does.
+// Used by the status API and, when ai_endpoints_routing is on, by the routed
+// call sites in internal/ai.
 func (e AIEndpoint) DispatchEndpoint() aidispatch.Endpoint {
 	return aidispatch.Endpoint{
 		ID:               e.ID,

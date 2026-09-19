@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.119.0
+// version: 1.120.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package config
 
@@ -1222,9 +1222,22 @@ type Config struct {
 	// migrateAIEndpointsBlob. No omitempty: an operator's empty list must
 	// round-trip as [] so the migration does not re-run over it.
 	//
-	// NOT READ FOR DISPATCH YET — every call site still resolves its backend
-	// from ai_backend / openai_api_key / whisper_endpoints.
+	// Read for dispatch ONLY when AIEndpointsRouting is true, and then only by
+	// the call sites listed on that field; every other site still resolves its
+	// backend from ai_backend / openai_api_key / whisper_endpoints.
 	AIEndpoints []AIEndpoint `json:"ai_endpoints" mapstructure:"ai_endpoints"`
+
+	// AIEndpointsRouting switches the routed call sites from the legacy
+	// scalar backend fields onto the ai_endpoints pool (design rollout step
+	// 2). Default false: with it off every AI call resolves its backend
+	// exactly as before this field existed. It is read at CALL time, so a
+	// PUT /api/v1/config takes effect on the next request without a restart.
+	//
+	// Routed when true (and only in llm_mode / embedding_mode local or
+	// openai-fallback-local; explicit openai mode is never routed):
+	//   - llm.filename_parse — the scan / library.ai-parse batch parser
+	//   - embed.text         — the embedclient service (EmbedBatch)
+	AIEndpointsRouting bool `json:"ai_endpoints_routing" mapstructure:"ai_endpoints_routing"`
 
 	// Performance
 	ConcurrentScans int `json:"concurrent_scans"`
@@ -2661,9 +2674,10 @@ func InitConfig() {
 			GoogleBooksAPIKey: viper.GetString("google_books_api_key"),
 
 			// AI parsing
-			EnableAIParsing: viper.GetBool("enable_ai_parsing"),
-			OpenAIAPIKey:    viper.GetString("openai_api_key"),
-			AcoustIDAPIKey:  viper.GetString("acoustid_api_key"),
+			EnableAIParsing:    viper.GetBool("enable_ai_parsing"),
+			AIEndpointsRouting: viper.GetBool("ai_endpoints_routing"),
+			OpenAIAPIKey:       viper.GetString("openai_api_key"),
+			AcoustIDAPIKey:     viper.GetString("acoustid_api_key"),
 
 			// Activity-log store backend. Read from viper here so config.yaml's
 			// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
