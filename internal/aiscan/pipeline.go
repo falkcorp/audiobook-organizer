@@ -214,15 +214,15 @@ func (pm *PipelineManager) nextPhases(completedPhase, status string, phaseStates
 	case "full_scan":
 		next = append(next, "full_enrich")
 	case "groups_enrich", "full_enrich":
-		// Cross-validate when both enrichments are done
-		groupsDone := phaseStates["groups_enrich"] == "complete" || (phaseStates["groups_scan"] == "complete" && phaseStates["groups_enrich"] == "")
-		fullDone := phaseStates["full_enrich"] == "complete" || (phaseStates["full_scan"] == "complete" && phaseStates["full_enrich"] == "")
-		if completedPhase == "groups_enrich" {
-			groupsDone = true
-		}
-		if completedPhase == "full_enrich" {
-			fullDone = true
-		}
+		// Cross-validate only when BOTH enrichment phases exist and are
+		// complete. This used to also count an enrichment as done when its row
+		// was absent and its source was complete — but runEnrichment is
+		// launched with `go` and creates its row a moment later, so whichever
+		// enrichment finished first saw the other as "done", ran
+		// cross-validation on the UN-enriched suggestions, and the second
+		// finish ran it again. Every scan wrote two sets of results.
+		groupsDone := phaseStates["groups_enrich"] == "complete" || completedPhase == "groups_enrich"
+		fullDone := phaseStates["full_enrich"] == "complete" || completedPhase == "full_enrich"
 		if groupsDone && fullDone {
 			next = append(next, "cross_validate")
 		}

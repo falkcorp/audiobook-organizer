@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c9d5e1f3-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-05-05
+// last-edited: 2026-09-19
 
 package aiscan
 
@@ -63,17 +63,19 @@ func TestPipelineCrossValidateNotReady(t *testing.T) {
 	require.NotContains(t, next, "cross_validate")
 }
 
-func TestPipelineSkipEnrichment(t *testing.T) {
+// TestPipelineCrossValidateWaitsForBothEnrichRows: an ABSENT enrichment row is
+// not a finished one. runEnrichment is launched with `go` and always creates
+// its row (even when nothing is uncertain), so an absent row means it has not
+// started yet. Counting it as done ran cross-validation on un-enriched
+// suggestions and then ran it again when the enrichment finished.
+func TestPipelineCrossValidateWaitsForBothEnrichRows(t *testing.T) {
 	pm := &PipelineManager{}
 
-	// If enrichment phases don't exist (all results high confidence),
-	// completing the last enrich should still trigger cross_validate
-	// when the other scan is done with no enrich phase
 	next := pm.nextPhases("groups_enrich", "complete", map[string]string{
 		"groups_scan":   "complete",
 		"full_scan":     "complete",
 		"groups_enrich": "complete",
-		// full_enrich not present — full scan had all high confidence
+		// full_enrich not created yet
 	})
-	require.Contains(t, next, "cross_validate")
+	require.NotContains(t, next, "cross_validate")
 }
