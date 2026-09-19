@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-09-19
 
@@ -108,12 +108,13 @@ func CheckEvidenceInBatch(book *database.Book, rt database.BookRuntime, c *metaf
 	v.Overwrites = overwrites(book, c)
 
 	runtime := checkRuntime(rt, c, len(v.Overwrites) > 0)
+	narratorArmed := narratorVetoArmed(rt, c, runtime.Outcome)
 	v.Checks = append(v.Checks,
 		runtime,
 		checkAuthorRole(c),
 		checkAuthorPath(book, c),
 		checkTitle(book, c),
-		checkNarrator(book, c, runtime.Outcome),
+		checkNarrator(book, c, narratorArmed),
 		checkASIN(book, c),
 		checkCastInAuthor(&nameSource{author: bookAuthor(book), narrator: bookNarrator(book)}, c.Author, c.Narrator),
 		checkSeriesNumberLost(book, c, v.Overwrites),
@@ -190,12 +191,20 @@ func set(xs []string) map[string]bool {
 
 func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overwriting bool) CheckResult {
 	r := CheckResult{Name: "runtime"}
-	// Only a COMPLETE runtime is compared. A partial one (some files' durations
-	// never probed) is a lower bound: comparing it made a 10 h book with two
-	// known 20-minute chapters a "40 min vs 10 h" runtime_mismatch and vetoed
-	// the right candidate. It is missing evidence, exactly like no runtime.
+	// Only a COMPLETE runtime is compared as a total. A partial one (some
+	// files' durations never probed, or chapters missing from disk) is a
+	// LOWER BOUND: comparing it as a total made a 10 h book with two known
+	// 20-minute chapters a "40 min vs 10 h" runtime_mismatch and vetoed the
+	// right candidate. A lower bound can still PROVE a mismatch in one
+	// direction, and that is kept: see lowerBoundContradicts.
 	bookSec, known := rt.KnownSeconds()
 	if !known || c.DurationSec <= 0 {
+		if lb, ratio, ok := lowerBoundContradicts(rt, c.DurationSec); ok {
+			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
+			r.Detail = "files at least " + mins(lb) + " (" + runtimeDesc(rt) + "), candidate " + mins(c.DurationSec) +
+				" (at least " + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
+			return r
+		}
 		r.Outcome = OutcomeUnknown
 		r.Detail = "files " + runtimeDesc(rt) + ", candidate " + mins(c.DurationSec)
 		if overwriting {
@@ -326,10 +335,11 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 }
 
 // checkNarrator compares narrator surnames. A contradiction blocks only when
-// the runtime is KNOWN and outside the agree band: a different narrator with
-// a different runtime is another recording, but with no runtime the stored
-// narrator is often a tag guess (the author, "Unknown") and proves nothing.
-func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, runtimeOutcome string) CheckResult {
+// vetoArmed (narratorVetoArmed): the runtime did not confirm the match. A
+// different narrator with a different runtime is another recording, but with
+// no runtime at all the stored narrator is often a tag guess (the author,
+// "Unknown") and proves nothing.
+func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, vetoArmed bool) CheckResult {
 	r := CheckResult{Name: "narrator"}
 	cur := ""
 	if book.Narrator != nil {
@@ -347,7 +357,7 @@ func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, runtimeO
 		}
 	}
 	r.Detail = strconv.Quote(cur) + " vs " + strconv.Quote(c.Narrator)
-	if runtimeOutcome != OutcomeNeutral && runtimeOutcome != OutcomeBlock {
+	if !vetoArmed {
 		r.Outcome = OutcomeNeutral
 		return r
 	}
@@ -587,4 +597,57 @@ func runtimeDesc(rt database.BookRuntime) string {
 	default:
 		return mins(0)
 	}
+}
+
+// runtimeLowerBound is a value the book's true runtime cannot be below, when
+// the runtime is not complete: the known sum of a partial runtime, or — for a
+// multi-file book with no file durations at all — the stored Book.Duration,
+// which on such a book is a sum of some chapters or one chapter's probe. Main
+// compared that stored value as the total; keeping it as a lower bound means
+// the gate still blocks every contradiction main blocked in this direction.
+func runtimeLowerBound(rt database.BookRuntime) int {
+	switch {
+	case rt.Complete():
+		return 0
+	case rt.Partial():
+		return rt.Seconds
+	default:
+		return rt.BookAggregateSec
+	}
+}
+
+// lowerBoundContradicts reports whether an incomplete runtime still PROVES
+// a runtime_mismatch: its lower bound LB exceeds the candidate by more than
+// RuntimeBlockRatio. The true runtime T is >= LB, and for T above the
+// candidate the gate's ratio (T-cand)/T only grows with T, so
+// (LB-cand)/LB > RuntimeBlockRatio implies the complete runtime would block
+// too. This is exactly main's block for a book whose Book.Duration was that
+// lower bound; the opposite direction (LB below the candidate) proves nothing,
+// which is the fix.
+func lowerBoundContradicts(rt database.BookRuntime, candSec int) (lb int, ratio float64, ok bool) {
+	lb = runtimeLowerBound(rt)
+	if lb <= 0 || candSec <= 0 || lb <= candSec {
+		return lb, 0, false
+	}
+	ratio = float64(lb-candSec) / float64(lb)
+	return lb, ratio, ratio > RuntimeBlockRatio
+}
+
+// narratorVetoArmed reports whether a narrator contradiction blocks. With a
+// complete runtime it is main's rule: the runtime check looked and did not
+// agree (neutral or block). With an INCOMPLETE runtime there is no runtime
+// confirmation to excuse a different narrator, so the veto is armed whenever
+// the book has any runtime data and the candidate a runtime — main compared
+// the stored partial sum there and armed the veto unless that sum happened to
+// land in the agree band, so this is never looser. No runtime data at all,
+// or a candidate without one, keeps main's neutral.
+func narratorVetoArmed(rt database.BookRuntime, c *metafetch.MetadataCandidate, runtimeOutcome string) bool {
+	// main's rule, unchanged: the runtime check looked and did not agree.
+	if runtimeOutcome == OutcomeNeutral || runtimeOutcome == OutcomeBlock {
+		return true
+	}
+	if rt.Complete() {
+		return false
+	}
+	return c.DurationSec > 0 && runtimeLowerBound(rt) > 0
 }

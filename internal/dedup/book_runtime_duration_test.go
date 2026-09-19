@@ -1,5 +1,5 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -92,3 +93,120 @@ func TestDurationMatch_MultiFileComparedAtFullRuntime(t *testing.T) {
 		t.Fatal("10h multi-file book did not pair with a 10h copy: compared at the stale aggregate")
 	}
 }
+
+// introAndMissingChapters is a book whose only present file is a 45 s intro;
+// its 20 × 30 min chapters are rows flagged missing with no present copy.
+func introAndMissingChapters(bookID string) []database.BookFile {
+	files := []database.BookFile{{ID: bookID + "-intro", BookID: bookID, FilePath: "/lib/x/00 intro.mp3", Duration: 45}}
+	for i := 0; i < 20; i++ {
+		files = append(files, database.BookFile{
+			ID: fmt.Sprintf("%s-m%02d", bookID, i), BookID: bookID,
+			FilePath: fmt.Sprintf("/old/x/%02d.mp3", i+1), Duration: 1800, Missing: true,
+		})
+	}
+	return files
+}
+
+// TestDrainStale_MissingChaptersAreNotAShortBook (review ERROR 3): the
+// min-duration gate must not read "45 s intro present, chapters missing" as a
+// 45-second book — drain would soft-delete the candidate as short_duration.
+func TestDrainStale_MissingChaptersAreNotAShortBook(t *testing.T) {
+	engine, es := setupDrainTest(t, []drainBook{
+		{id: "BOOK_A", title: "A Real Book", duration: new(36045), files: introAndMissingChapters("BOOK_A")},
+		{id: "BOOK_B", title: "A Real Book", duration: new(36000), files: chapterRows("BOOK_B", 20, 1800, 20)},
+	})
+	seedDrainCandidate(t, es, "BOOK_A", "BOOK_B")
+	res, err := engine.DrainStaleCandidates(context.Background(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := res.ReasonCounts[drainReasonShortDuration]; n != 0 {
+		t.Fatalf("book with missing chapters drained as short_duration (%v)", res.ReasonCounts)
+	}
+	if engine.hasKnownShortDuration(&database.Book{ID: "BOOK_A"}) {
+		t.Fatal("hasKnownShortDuration: missing chapters read as a 45 s book")
+	}
+}
+
+// TestDrainStale_ReadsEachBooksFilesOnce: the drain's runtime gates cost one
+// GetBookFiles per BOOK, not per candidate.
+func TestDrainStale_ReadsEachBooksFilesOnce(t *testing.T) {
+	engine, mock, es := setupTestEngine(t)
+	reads := map[string]int{}
+	mock.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		return &database.Book{ID: id, Title: "Book " + id}, nil
+	}
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		reads[id]++
+		return chapterRows(id, 3, 1200, 3), nil
+	}
+	for _, other := range []string{"B", "C", "D"} {
+		seedDrainCandidate(t, es, "A", other)
+	}
+	if _, err := engine.DrainStaleCandidates(context.Background(), "", false); err != nil {
+		t.Fatal(err)
+	}
+	for id, n := range reads {
+		if n != 1 {
+			t.Fatalf("GetBookFiles(%s) called %d times, want 1 (all: %v)", id, n, reads)
+		}
+	}
+}
+
+// TestDurationMatch_NoFileReadForTitleMismatches: checkDurationMatch reads
+// file rows only for same-author books that pass every title guard, since
+// only those can act.
+func TestDurationMatch_NoFileReadForTitleMismatches(t *testing.T) {
+	engine, mock, _ := setupTestEngine(t)
+	authorID := 1
+	d := 36000
+	book := &database.Book{ID: "A", Title: "Foundation", AuthorID: &authorID, Duration: &d}
+	cores := []database.BookCore{book.Core()}
+	for i := 0; i < 10; i++ {
+		o := &database.Book{ID: fmt.Sprintf("O%d", i), Title: fmt.Sprintf("Entirely Different Story %c", 'A'+i), AuthorID: &authorID, Duration: &d}
+		cores = append(cores, o.Core())
+	}
+	reads := map[string]int{}
+	mock.GetBooksByAuthorIDCoreFunc = func(int) ([]database.BookCore, error) { return cores, nil }
+	mock.GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+		reads[id]++
+		return chapterRows(id, 1, 36000, 1), nil
+	}
+	if err := engine.checkDurationMatch(book); err != nil {
+		t.Fatal(err)
+	}
+	if len(reads) != 1 || reads["A"] != 1 {
+		t.Fatalf("file reads = %v, want only the book itself", reads)
+	}
+}
+
+// TestBookRuntimeMemo_ReadsOncePerUpdatedAt: within a run the memo reads a
+// book's rows once, and again only after the book row changed.
+func TestBookRuntimeMemo_ReadsOncePerUpdatedAt(t *testing.T) {
+	reads := 0
+	store := filesGetterFunc(func(id string) ([]database.BookFile, error) {
+		reads++
+		return chapterRows(id, 2, 600, 2), nil
+	})
+	memo := newBookRuntimeMemo()
+	t0 := time.Unix(1_700_000_000, 0)
+	book := &database.Book{ID: "A", UpdatedAt: &t0}
+	for i := 0; i < 3; i++ {
+		if rt, rows, ok := runtimeAndRows(store, memo, book); !ok || rows != 2 || rt.Seconds != 1200 {
+			t.Fatalf("runtime = %+v rows=%d ok=%v", rt, rows, ok)
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("reads = %d, want 1", reads)
+	}
+	t1 := t0.Add(time.Second)
+	book.UpdatedAt = &t1
+	runtimeAndRows(store, memo, book)
+	if reads != 2 {
+		t.Fatalf("reads after UpdatedAt changed = %d, want 2", reads)
+	}
+}
+
+type filesGetterFunc func(string) ([]database.BookFile, error)
+
+func (f filesGetterFunc) GetBookFiles(id string) ([]database.BookFile, error) { return f(id) }

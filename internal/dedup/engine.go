@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.83.0
+// version: 1.83.1
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -83,12 +83,15 @@ type Engine struct {
 	// rescoreWriter overrides the embedding store as Rescore's write target.
 	// nil means "use embedStore"; only SetRescoreWriter sets it.
 	rescoreWriter RescoreWriter
-	chromemStore  database.VectorANNStore
-	bookStore     Store
-	embedClient   *ai.EmbeddingClient
-	llmParser     *ai.OpenAIParser
-	mergeService  *merge.Service
-	aiJobsStore   database.AIJobsStore
+	// rtMemo is the run-scoped canonical-runtime cache (bookRuntimeMemo);
+	// FullScan installs it for its duration, nil otherwise.
+	rtMemo       atomic.Pointer[bookRuntimeMemo]
+	chromemStore database.VectorANNStore
+	bookStore    Store
+	embedClient  *ai.EmbeddingClient
+	llmParser    *ai.OpenAIParser
+	mergeService *merge.Service
+	aiJobsStore  database.AIJobsStore
 
 	// Thresholds (read from config or set directly)
 	BookHighThreshold   float64
@@ -953,7 +956,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// otherwise. Passing ctx makes the scan cancellable mid-flight (#19).
 	allISBNSigs, _ := CollectISBNASIN(ctx, de.bookStore, de.isbnIndexStore, book)
 	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
-	allDurationSigs, _ := CollectDuration(de.bookStore, de.bookStore, book, durCfg)
+	allDurationSigs, _ := collectDuration(de.bookStore, de.bookStore, de.runtimeMemo(), book, durCfg)
 
 	// AcoustID: collect across all bookFiles once (same hoist rationale).
 	var allExactAcoustSigs, allLSHAcoustSigs []unified.Signal
@@ -1731,7 +1734,8 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		return nil
 	}
 	// Canonical runtime, complete only (see knownRuntimeSec).
-	bookDur, known := knownRuntimeSec(de.bookStore, book)
+	memo := de.runtimeMemo()
+	bookDur, known := knownRuntimeSec(de.bookStore, memo, book)
 	if !known {
 		return nil
 	}
@@ -1768,7 +1772,32 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		if !prefilterOtherDuration(bookDur, other, durationAbridgedThreshold) {
 			continue
 		}
-		otherDur, otherKnown := knownRuntimeSec(de.bookStore, other)
+
+		// Every guard that needs no file read runs BEFORE the runtime read
+		// (a Pebble range scan per book). Both actions below require
+		// titleDist <= durationLevenshteinMax, so a pair that fails it, or a
+		// series/digit guard, can never act and is dropped here.
+		//
+		// Series-volume guard: same rejection as checkExactTitle.
+		// If both books identify as distinct series volumes, don't
+		// emit a candidate even when duration matches (a reread of
+		// the series often has every volume at the same length).
+		bookSeriesNum := seriesNumberOf(book)
+		otherSeriesNum := seriesNumberOf(other)
+		if bookSeriesNum != "" && otherSeriesNum != "" && bookSeriesNum != otherSeriesNum {
+			continue
+		}
+		otherNorm := normalizeTitle(other.Title)
+		if titlesDifferOnlyInDigits(bookNorm, otherNorm) {
+			continue
+		}
+		otherForms := de.allNormalizedTitleForms(other)
+		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
+		if titleDist > durationLevenshteinMax {
+			continue
+		}
+
+		otherDur, otherKnown := knownRuntimeSec(de.bookStore, memo, other)
 		if !otherKnown {
 			continue
 		}
@@ -1779,23 +1808,6 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		// generous upper bound — anything past that can't be the
 		// same book content even in abridged form.
 		if pct >= durationAbridgedThreshold {
-			continue
-		}
-
-		otherForms := de.allNormalizedTitleForms(other)
-		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
-		otherNorm := normalizeTitle(other.Title)
-
-		// Series-volume guard: same rejection as checkExactTitle.
-		// If both books identify as distinct series volumes, don't
-		// emit a candidate even when duration matches (a reread of
-		// the series often has every volume at the same length).
-		bookSeriesNum := seriesNumberOf(book)
-		otherSeriesNum := seriesNumberOf(other)
-		if bookSeriesNum != "" && otherSeriesNum != "" && bookSeriesNum != otherSeriesNum {
-			continue
-		}
-		if titlesDifferOnlyInDigits(bookNorm, otherNorm) {
 			continue
 		}
 
@@ -1978,8 +1990,8 @@ func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
 	if book == nil {
 		return false
 	}
-	sec, known := knownRuntimeSec(de.bookStore, book)
-	return known && sec < minFingerprintMatchSeconds
+	rt, _, _ := runtimeAndRows(de.bookStore, de.runtimeMemo(), book)
+	return shortRuntime(rt)
 }
 
 // isPartVsWholeMismatch reports whether a and b look like a single-file part
@@ -1996,40 +2008,16 @@ func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
 	if a == nil || b == nil || de.bookStore == nil {
 		return false
 	}
-	filesA, err := de.bookStore.GetBookFiles(a.ID)
-	if err != nil || len(filesA) == 0 {
+	memo := de.runtimeMemo()
+	rtA, rowsA, okA := runtimeAndRows(de.bookStore, memo, a)
+	if !okA || rowsA == 0 {
 		return false
 	}
-	filesB, err := de.bookStore.GetBookFiles(b.ID)
-	if err != nil || len(filesB) == 0 {
+	rtB, rowsB, okB := runtimeAndRows(de.bookStore, memo, b)
+	if !okB || rowsB == 0 {
 		return false
 	}
-
-	var partFiles, wholeFiles []database.BookFile
-	switch {
-	case len(filesA) == 1 && len(filesB) >= 2:
-		partFiles, wholeFiles = filesA, filesB
-	case len(filesB) == 1 && len(filesA) >= 2:
-		partFiles, wholeFiles = filesB, filesA
-	default:
-		return false
-	}
-
-	// Canonical runtimes (database.ComputeBookRuntime). The part must be a
-	// COMPLETE runtime. The whole's Seconds is never MORE than its true
-	// runtime: a partial runtime is a known-file lower bound, and counting
-	// present rows only drops either duplicate content (a repoint's missing
-	// row beside its present copy, which the old raw sum counted twice) or
-	// content not on disk. So part < ratio × whole.Seconds implies
-	// part < ratio × true whole: the gate can only fire less often than an
-	// exact measurement would, never drop a pair it should keep.
-	partRT := database.ComputeBookRuntime(nil, partFiles)
-	wholeRT := database.ComputeBookRuntime(nil, wholeFiles)
-	partDuration, partKnown := partRT.KnownSeconds()
-	if !partKnown || wholeRT.Seconds <= 0 || wholeRT.Source != database.RuntimeSourceFiles {
-		return false
-	}
-	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeRT.Seconds)
+	return partVsWholeRuntime(rtA, rowsA, rtB, rowsB)
 }
 
 const (
@@ -3072,6 +3060,17 @@ func (de *Engine) deleteBookFromChromem(ctx context.Context, bookID string) {
 func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done, total int)) error {
 	_, span := dedupTracer.Start(ctx, "dedup.full_scan")
 	defer span.End()
+
+	// One canonical-runtime memo for the whole scan: every book's file rows
+	// are read at most once (per UpdatedAt) however many pairs and gates ask.
+	// Only install it when no other run holds one, and only remove our own.
+	memo := newBookRuntimeMemo()
+	if de.rtMemo.CompareAndSwap(nil, memo) {
+		defer func() {
+			de.rtMemo.CompareAndSwap(memo, nil)
+			logging.Info(ctx, "dedup full scan runtime reads", "book_file_reads", memo.reads.Load(), "books_cached", memo.size())
+		}()
+	}
 
 	// Unfiltered (includes non-primary version-group members): FullScan is
 	// also the mechanism that keeps non-primary embeddings fresh as
