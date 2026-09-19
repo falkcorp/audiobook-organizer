@@ -6,6 +6,7 @@
 package abs_test
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -509,13 +510,15 @@ func TestSessionLocalAll_RewindOnlyWhenSessionStartedAfterStoredProgress(t *test
 	if err := w.seed.lib.SetUserPosition(w.userID, w.bookID, "abs", 500); err != nil {
 		t.Fatal(err)
 	}
-	older := time.Now().Add(-time.Hour).UnixMilli()
+	// The stored position was written two hours ago.
+	w.seed.lib.positions[w.userID+"|"+w.bookID].UpdatedAt = time.Now().Add(-2 * time.Hour)
+	older := time.Now().Add(-3 * time.Hour).UnixMilli()
 	localAll(t, w, map[string]any{"id": "old", "userId": w.userID, "libraryItemId": w.syncID,
 		"currentTime": 100.0, "startedAt": older})
 	if got := storedPosition(t, w); got != 500 {
 		t.Fatalf("a session that started BEFORE the stored progress rewound it to %v", got)
 	}
-	newer := time.Now().Add(time.Minute).UnixMilli()
+	newer := time.Now().Add(-10 * time.Minute).UnixMilli()
 	rows := localAll(t, w, map[string]any{"id": "new", "userId": w.userID, "libraryItemId": w.syncID,
 		"currentTime": 100.0, "startedAt": newer})
 	if rows[0]["progressSynced"] != true {
@@ -531,7 +534,7 @@ func TestSessionLocalAll_RewindOnlyWhenSessionStartedAfterStoredProgress(t *test
 func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 300.0})
-	before := time.Now().Add(-time.Minute).UnixMilli()
+	before := time.Now().Add(-10 * time.Minute).UnixMilli()
 	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
 		t.Fatalf("reset = %d %s", code, raw)
 	}
@@ -543,7 +546,7 @@ func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
 	if got := storedPosition(t, w); got != 0 {
 		t.Fatalf("the reset position was resurrected: %v", got)
 	}
-	after := time.Now().Add(time.Minute).UnixMilli()
+	after := time.Now().Add(-30 * time.Second).UnixMilli() // a device clock slightly behind
 	localAll(t, w, map[string]any{"id": "post-reset", "userId": w.userID, "libraryItemId": w.syncID,
 		"currentTime": 30.0, "startedAt": after})
 	if got := storedPosition(t, w); got != 30 {
@@ -586,5 +589,44 @@ func TestSessionLocal_AppliesTheSession(t *testing.T) {
 	}
 	if got := storedPosition(t, w); got != 77 {
 		t.Fatalf("position = %v, want 77: /api/session/local still discards its session", got)
+	}
+}
+
+// Re-review MEDIUM #3: fail-safe offline replay around resets and clock skew.
+
+// A session with no startedAt after a reset is NOT refused forever: it is
+// applied forward-only.
+func TestSessionLocalAll_NoStartedAtAfterResetFallsBackToForwardOnly(t *testing.T) {
+	w := newWriteHarness(t)
+	w.patch(t, map[string]any{"currentTime": 300.0})
+	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
+		t.Fatalf("reset = %d %s", code, raw)
+	}
+	for i, ct := range []float64{40, 90} {
+		rows := localAll(t, w, map[string]any{"id": fmt.Sprintf("nostart-%d", i), "userId": w.userID,
+			"libraryItemId": w.syncID, "currentTime": ct})
+		if rows[0]["success"] != true {
+			t.Fatalf("session without startedAt refused after a reset: %v", rows)
+		}
+	}
+	if got := storedPosition(t, w); got != 90 {
+		t.Fatalf("position = %v, want 90 (forward-only applies)", got)
+	}
+}
+
+// A device clock running AHEAD (within tolerance) must not let an older listen
+// rewind a position written after it; an implausibly-future startedAt is not
+// trusted at all.
+func TestSessionLocalAll_ClockAheadNeverRewindsANewerPosition(t *testing.T) {
+	w := newWriteHarness(t)
+	if err := w.seed.lib.SetUserPosition(w.userID, w.bookID, "abs", 500); err != nil {
+		t.Fatal(err)
+	}
+	for _, ahead := range []time.Duration{time.Minute, 24 * time.Hour} {
+		localAll(t, w, map[string]any{"id": "ahead-" + ahead.String(), "userId": w.userID, "libraryItemId": w.syncID,
+			"currentTime": 100.0, "startedAt": time.Now().Add(ahead).UnixMilli()})
+		if got := storedPosition(t, w); got != 500 {
+			t.Fatalf("startedAt %v ahead rewound a newer position to %v", ahead, got)
+		}
 	}
 }
