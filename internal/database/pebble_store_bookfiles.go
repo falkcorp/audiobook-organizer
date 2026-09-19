@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -1244,9 +1244,13 @@ func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
 	id := found.ID
 	batch := s.db.NewIndexedBatch()
 
-	// Delete primary key.
+	// Delete primary key, and tombstone the ID (bookFileGoneKey).
 	primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", found.BookID, found.ID))
 	if err := batch.Delete(primaryKey, nil); err != nil {
+		batch.Close()
+		return err
+	}
+	if err := stageBookFileTombstone(batch, found.ID); err != nil {
 		batch.Close()
 		return err
 	}
@@ -1295,6 +1299,10 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 		f := &files[i]
 		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
 		if err := batch.Delete(primaryKey, nil); err != nil {
+			batch.Close()
+			return err
+		}
+		if err := stageBookFileTombstone(batch, f.ID); err != nil {
 			batch.Close()
 			return err
 		}
@@ -1492,6 +1500,10 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 			batch.Close()
 			return err
 		}
+		if err := stageBookFileTombstone(batch, f.ID); err != nil {
+			batch.Close()
+			return err
+		}
 		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
 			batch.Close()
 			return err
@@ -1537,6 +1549,25 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 		existing, err = s.GetBookFileByPath(file.FilePath)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Same ID rule as the batch path (batchUpsertBookFilesAttempt): never
+	// recreate a deleted row; a live ID is updated in place unless its PID is
+	// held by a different live row.
+	if file.ID != "" {
+		live, gone, idErr := s.bookFileIDState(file.ID)
+		if idErr != nil {
+			return idErr
+		}
+		switch {
+		case gone:
+			return fmt.Errorf("UpsertBookFile %s: %w", file.ID, ErrBookFileRowDeleted)
+		case live != nil:
+			if existing != nil && existing.ID != live.ID && file.ITunesPersistentID != "" && existing.ITunesPersistentID == file.ITunesPersistentID {
+				return fmt.Errorf("UpsertBookFile %s: iTunes PID %s is held by live row %s: %w", file.ID, file.ITunesPersistentID, existing.ID, ErrBookFilePIDConflict)
+			}
+			existing = live
 		}
 	}
 
@@ -1722,35 +1753,40 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				}
 			}
 
-			// A row that names an ID is an UPDATE of exactly that row, never
-			// an insert and never a merge into another row. Callers that hold
-			// rows across a long run (tag/duration backfill) can be handed a
-			// row that a dedupe or DeleteBookFile removed meanwhile; without
-			// this, the upsert found no match and wrote the deleted row back
-			// under the same ID, or matched the survivor at the same path and
-			// merged the stale struct onto it. Rows with no ID (the scanner's
-			// and the iTunes sync's bare rows) still insert.
+			// A row that names the ID of a DELETED row must not bring it back.
+			// Callers that hold rows across a long run (tag/duration backfill)
+			// can be handed a row that a dedupe or DeleteBookFile removed
+			// meanwhile; without this, the upsert found no match and wrote the
+			// deleted row back under the same ID. So:
+			//   - the ID is tombstoned (deleted): refuse the row, with a reason;
+			//   - the ID names a LIVE row: update THAT row, even when another
+			//     row shares its path (production still has duplicate-path
+			//     rows; refusing would repeat on every backfill). The one
+			//     exception is a real PID conflict: the incoming PID resolved
+			//     to a different live row, which the PID-uniqueness rule owns;
+			//   - the ID is unknown and not tombstoned: a fresh ID (the
+			//     scanner pre-assigns ULIDs to new rows), so the path/PID
+			//     matching above decides, as it always has.
 			//
-			// Chosen over row versions: IDs are ULIDs and never reused, so
-			// "does this ID still exist, and is it the row I matched?" answers
-			// the only hazard (a deleted row) without a version field that
-			// every writer would have to stamp. A stale-but-live row is the
-			// existing merge rules' business, as before.
+			// Chosen over row versions: IDs are ULIDs and never reused, so a
+			// per-ID deletion tombstone answers "was this row deleted?" with
+			// one point read and no field every writer must stamp.
 			if file.ID != "" {
-				byID, idErr := s.resolveBookFileByIDStrict(file.ID)
+				live, gone, idErr := s.bookFileIDState(file.ID)
 				if idErr != nil {
 					batch.Close()
 					return nil, idErr
 				}
 				switch {
-				case byID == nil:
-					refusals[file] = "row " + file.ID + " no longer exists (deleted after it was read); an upsert that names a row ID only updates that row"
+				case gone:
+					refusals[file] = "row " + file.ID + " was deleted after it was read; an upsert never recreates a deleted row"
 					continue
-				case existing != nil && existing.ID != file.ID:
-					refusals[file] = "row " + file.ID + " no longer holds this path/PID (row " + existing.ID + " does); an upsert that names a row ID only updates that row"
-					continue
-				case existing == nil:
-					existing = byID
+				case live != nil:
+					if existing != nil && existing.ID != live.ID && file.ITunesPersistentID != "" && existing.ITunesPersistentID == file.ITunesPersistentID {
+						refusals[file] = "row " + file.ID + " carries iTunes PID " + file.ITunesPersistentID + ", which live row " + existing.ID + " holds"
+						continue
+					}
+					existing = live
 				}
 			}
 		}

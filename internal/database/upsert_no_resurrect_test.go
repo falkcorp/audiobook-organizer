@@ -1,5 +1,5 @@
 // file: internal/database/upsert_no_resurrect_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2edb83b-f462-4f1e-86d2-36acb3f92f29
 // last-edited: 2026-09-19
 
@@ -98,5 +98,81 @@ func TestBatchUpsert_InsertsAndLiveUpdatesStillWork(t *testing.T) {
 	got, _ := store.GetBookFiles(b.ID)
 	if len(got) != 2 {
 		t.Fatalf("rows = %d, want 2", len(got))
+	}
+}
+
+// The single-row UpsertBookFile had the same hole: create, delete, then
+// upsert a stale copy (with a new PID) recreated the row.
+// Real caller: itunes/service/track_provisioner.go.
+func TestUpsertBookFile_StaleStructOfDeletedRowIsRefused(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/s1/book"})
+	row := &BookFile{BookID: b.ID, FilePath: "/lib/s1/book/01.mp3"}
+	if err := store.CreateBookFile(row); err != nil {
+		t.Fatal(err)
+	}
+	stale := *row
+	stale.ITunesPersistentID = "NEWPID01"
+	if err := store.DeleteBookFile(row.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := store.UpsertBookFile(&stale)
+	if !errors.Is(err, ErrBookFileRowDeleted) {
+		t.Fatalf("UpsertBookFile = %v, want ErrBookFileRowDeleted", err)
+	}
+	if rows, _ := store.GetBookFiles(b.ID); len(rows) != 0 {
+		t.Fatalf("%d row(s) recreated", len(rows))
+	}
+}
+
+// Duplicate-path rows A and C (production still has them): an upsert naming
+// A updates A. It used to be refused ("row C holds this path") on every run.
+func TestBatchUpsert_DuplicatePathRowIsUpdatedByID(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/dp/book"})
+	a := &BookFile{BookID: b.ID, FilePath: "/lib/dp/book/01.mp3"}
+	if err := store.CreateBookFile(a); err != nil {
+		t.Fatal(err)
+	}
+	c := &BookFile{BookID: b.ID, FilePath: "/lib/dp/book/01.mp3"}
+	if err := store.CreateBookFile(c); err != nil {
+		t.Fatal(err)
+	}
+	upd := *a
+	upd.Title = "tagged"
+	if err := store.BatchUpsertBookFiles([]*BookFile{&upd}); err != nil {
+		t.Fatalf("upsert of a live duplicate-path row: %v", err)
+	}
+	got, err := store.GetBookFileByID(b.ID, a.ID)
+	if err != nil || got == nil || got.Title != "tagged" {
+		t.Fatalf("row A = %+v (%v), want it updated", got, err)
+	}
+}
+
+// Resolving a deleted ID is point reads only — no full book_file scan per
+// stale row (each staging pass would repeat it).
+func TestBatchUpsert_DeletedIDNeedsNoScan(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	ps := store.(*PebbleStore)
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/ns/book"})
+	var stale []*BookFile
+	for i := range 20 {
+		r := &BookFile{BookID: b.ID, FilePath: "/lib/ns/book/" + string(rune('a'+i)) + ".mp3"}
+		if err := store.CreateBookFile(r); err != nil {
+			t.Fatal(err)
+		}
+		c := *r
+		stale = append(stale, &c)
+		if err := store.DeleteBookFile(r.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := ps.bookFileIDScans.Load()
+	_ = store.BatchUpsertBookFiles(stale)
+	if n := ps.bookFileIDScans.Load() - before; n != 0 {
+		t.Fatalf("%d full book_file scan(s) to resolve 20 deleted IDs, want 0", n)
 	}
 }
