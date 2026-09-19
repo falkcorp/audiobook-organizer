@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -71,6 +71,11 @@ type CandidateResult struct {
 	// cache review list so a single-row Apply can pin exactly the record the
 	// owner looked at (metafetch.CandidatePin.ContentHash). Empty elsewhere.
 	CandidateHash string `json:"candidate_hash,omitempty"`
+	// Cached is set when the batch fetch answered this book from the
+	// candidate cache instead of asking the providers: "candidates" for a
+	// fresh cached candidate list, "known_empty" for a durable verdict that
+	// every enabled provider already answered these inputs with nothing.
+	Cached string `json:"cached,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.
@@ -80,6 +85,9 @@ type BatchFetchRequest struct {
 	BookIDs       []string                  `json:"book_ids"`
 	Selection     *operations.SelectionSpec `json:"selection"`
 	OnlyUnmatched bool                      `json:"only_unmatched"`
+	// Force bypasses the candidate-cache skip in the fetch op (see
+	// FetchOpParams.Force). Default false: an unchanged book is not refetched.
+	Force bool `json:"force"`
 }
 
 // BatchApplyRequest is the JSON body for the batch candidate apply handler.

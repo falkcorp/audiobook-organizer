@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
 // last-edited: 2026-09-19
 //
@@ -47,6 +47,20 @@ type MetadataCandidateCache struct {
 	// "nobody has looked at this in 30 days" from "we looked an hour ago and
 	// the providers have nothing".
 	LastEmptyFetchAt *time.Time `json:"last_empty_fetch_at,omitempty"`
+	// EmptySources names the metadata sources that ANSWERED a search for these
+	// same inputs (SourceHash) and had nothing, accumulated across searches:
+	// a source that errored, was throttled or was cut off by a cancel is NOT
+	// in it, because "the provider could not be asked" is not "the provider
+	// has nothing". Sorted, de-duplicated.
+	//
+	// It is what makes an empty result a durable verdict. The batch candidate
+	// fetch skips a book whose inputs are unchanged and whose EmptySources
+	// covers every source currently enabled -- refetching it would ask the
+	// same providers the same question again. A newly enabled provider, or a
+	// title/author edit (which changes SourceHash), re-opens the question.
+	// Rows written before this field existed carry none; see
+	// metafetch.Service.CachedBatchVerdict for how those are treated.
+	EmptySources []string `json:"empty_sources,omitempty"`
 }
 
 // MetadataCacheTTL is the freshness window. Entries older than this
