@@ -6,6 +6,7 @@
 package abs_test
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -228,5 +229,63 @@ func TestMembership_MergeLoserShowsAsSurvivorAndIsRemovable(t *testing.T) {
 	}
 	if got, _ := v.cols.GetCollection(col.ID); len(got.BookIDs) != 0 {
 		t.Fatalf("collection still stores %v after removing the survivor id", got.BookIDs)
+	}
+}
+
+// Review HIGH #1: a whole-list PATCH must never drop a member it did not know
+// about. The app read {A,B}; the web UI added C (version bump); the app's
+// reorder [B,A] must land as [B,A,C], not [B,A].
+func TestPlaylists_PatchItemsNeverDropsAConcurrentlyAddedMember(t *testing.T) {
+	v := newVisFixture(t)
+	for _, id := range []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B", "01CCCC0000000000000000000C"} {
+		v.add(id, "Book "+id[2:6], true, "organized")
+	}
+	a, _ := v.lib.MintOrGetSyncID("01AAAA0000000000000000000A")
+	b, _ := v.lib.MintOrGetSyncID("01BBBB0000000000000000000B")
+	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", Version: 1, BookIDs: []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B"}}}
+	v.lists.beforeUpdate = func(f *absplFakeStore) {
+		f.lists[0].BookIDs = append(f.lists[0].BookIDs, "01CCCC0000000000000000000C")
+		f.lists[0].Version++
+	}
+	code, body := v.h.doAny(t, request{method: http.MethodPatch, path: "/api/playlists/01PL", headers: bearer(v.tok),
+		body: map[string]any{"items": []map[string]any{{"libraryItemId": b}, {"libraryItemId": a}}}})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH = %d %v", code, body)
+	}
+	want := []string{"01BBBB0000000000000000000B", "01AAAA0000000000000000000A", "01CCCC0000000000000000000C"}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, want) {
+		t.Fatalf("stored %v, want %v: the concurrently added member was lost", got, want)
+	}
+}
+
+// Review HIGH #1: a sync-id lookup ERROR must fail the request, never be
+// treated as "no such book" and silently dropped from the written list.
+func TestPlaylists_ResolveErrorFailsClosed(t *testing.T) {
+	v := newVisFixture(t)
+	v.add("01AAAA0000000000000000000A", "A", true, "organized")
+	v.add("01BBBB0000000000000000000B", "B", true, "organized")
+	a, _ := v.lib.MintOrGetSyncID("01AAAA0000000000000000000A")
+	b, _ := v.lib.MintOrGetSyncID("01BBBB0000000000000000000B")
+	stored := []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B"}
+	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", Version: 1, BookIDs: slices.Clone(stored)}}
+	v.lib.resolveErr = map[string]error{a: errors.New("transient pebble read")}
+
+	for _, r := range []request{
+		{method: http.MethodPatch, path: "/api/playlists/01PL",
+			body: map[string]any{"items": []map[string]any{{"libraryItemId": b}, {"libraryItemId": a}}}},
+		{method: http.MethodPost, path: "/api/playlists/01PL/batch/add",
+			body: map[string]any{"items": []map[string]any{{"libraryItemId": a}}}},
+		{method: http.MethodPost, path: "/api/playlists/01PL/batch/remove",
+			body: map[string]any{"items": []map[string]any{{"libraryItemId": a}}}},
+	} {
+		r.headers = bearer(v.tok)
+		if code, _ := v.h.doAny(t, r); code != http.StatusServiceUnavailable {
+			t.Errorf("%s %s with a failing lookup = %d, want 503", r.method, r.path, code)
+		}
+	}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, stored) {
+		t.Fatalf("a lookup error changed the stored list to %v", got)
 	}
 }

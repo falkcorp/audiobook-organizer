@@ -344,7 +344,11 @@ func (h *Handler) progressFilterBookIDs(c *gin.Context, state string) ([]string,
 				if uerr := json.Unmarshal(buf, &row); uerr != nil || row.LibraryItemID == "" {
 					continue
 				}
-				bookID = h.bookIDForSyncID(row.LibraryItemID)
+				id, rerr := h.bookIDForSyncID(row.LibraryItemID)
+				if rerr != nil {
+					return nil, filterResolved, rerr
+				}
+				bookID = id
 			}
 			if bookID == "" {
 				continue
