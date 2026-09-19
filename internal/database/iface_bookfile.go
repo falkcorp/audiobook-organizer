@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package database
 
@@ -129,6 +129,7 @@ type BookFileHashStore interface {
 
 // BookFileFingerprintStore covers acoustic fingerprints and their failure modes.
 type BookFileFingerprintStore interface {
+	FingerprintWindowStore
 	GetBookFileByAcoustID(fingerprint string) (*BookFile, error)
 	GetBookFileByAcoustIDFuzzy(fingerprint string, minSimilarity float64) (*BookFile, error)
 	// GetFilesWithFingerprintFailures returns book_files where FingerprintFailedAt is set,
@@ -139,6 +140,35 @@ type BookFileFingerprintStore interface {
 	// — legacy rows the memdb-proxy-based fingerprint ops silently skip). Returns the
 	// filtered page plus total matching count.
 	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]BookFile, int64, error)
+}
+
+// FingerprintWindowStore covers the windowed-fingerprint sidecar (fpwin:), one
+// row per window. Types and key scheme: fingerprint_window.go; storage and
+// lifecycle: pebble_store_fpwin.go.
+//
+// Deleting a book_file row deletes its windows in the same batch, a move
+// between books keeps them (they are keyed by file ID), and a row merge must
+// call CarryOverFingerprintWindows before deleting the donor.
+//
+// Embedded in BookFileFingerprintStore, so it is part of database.Store and the
+// production indexedStore decorator promotes it through its embedded Store.
+type FingerprintWindowStore interface {
+	// PutFingerprintWindow stores one window, replacing the same ref/kind/slot.
+	// An f: ref whose book_file row does not exist is refused.
+	PutFingerprintWindow(w *FingerprintWindow) error
+	// GetFingerprintWindows returns the stored windows of ref, ordered head,
+	// window by slot, whole. Never the virtual legacy head.
+	GetFingerprintWindows(ref FingerprintWindowRef) ([]FingerprintWindow, error)
+	// WindowsForFile returns the file's stored windows plus a virtual kind=head
+	// row synthesized from BookFile.AcoustIDFingerprint when one exists.
+	WindowsForFile(fileID string) ([]FingerprintWindow, error)
+	// DeleteFingerprintWindows removes every window of ref and its failure
+	// tombstone, returning how many windows were removed.
+	DeleteFingerprintWindows(ref FingerprintWindowRef) (int, error)
+	// CarryOverFingerprintWindows moves from's windows onto to (a row merge, or
+	// a p: candidate repointed to an f: row). to's own windows win on a
+	// kind/slot collision. Returns how many were written under to.
+	CarryOverFingerprintWindows(from, to FingerprintWindowRef) (int, error)
 }
 
 // BookFileITunesStore covers the iTunes persistent-ID linkage.

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package database
 
@@ -1162,9 +1162,20 @@ func (s *PebbleStore) DeleteBookFile(id string) error {
 		return err
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// Cascade the row's fingerprint windows in the same batch
+	// (pebble_store_fpwin.go). fpwinMu is held across stage and commit so a
+	// concurrent window write cannot land between them and orphan itself.
+	s.fpwinMu.Lock()
+	if err := s.stageFileWindowCascade(batch, found); err != nil {
+		s.fpwinMu.Unlock()
+		batch.Close()
 		return err
 	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		s.fpwinMu.Unlock()
+		return err
+	}
+	s.fpwinMu.Unlock()
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "delete_book_file")
 	s.DeleteBookFileFromMemDB(id)
@@ -1200,9 +1211,20 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 		}
 	}
 
+	// Fingerprint-window cascade, same batch; see DeleteBookFile.
+	s.fpwinMu.Lock()
+	for i := range files {
+		if err := s.stageFileWindowCascade(batch, &files[i]); err != nil {
+			s.fpwinMu.Unlock()
+			batch.Close()
+			return err
+		}
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
+		s.fpwinMu.Unlock()
 		return err
 	}
+	s.fpwinMu.Unlock()
 	// Derived state, mirroring DeleteBookFilesByIDs' pass 3 exactly. Until
 	// 2026-08-14 this method skipped the memdb delete and the quick-query
 	// dirty mark, so Pebble and memdb diverged after every call: the rows were
@@ -1388,9 +1410,18 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 			return err
 		}
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// Fingerprint-window cascade, same batch; see DeleteBookFile.
+	s.fpwinMu.Lock()
+	if err := s.stageFileWindowCascade(batch, resolved...); err != nil {
+		s.fpwinMu.Unlock()
+		batch.Close()
 		return err
 	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		s.fpwinMu.Unlock()
+		return err
+	}
+	s.fpwinMu.Unlock()
 
 	// ── Pass 3: derived state. Everything below is best-effort by design. ──
 	// The rows are committed and gone; a failure to refresh a cache or an
