@@ -1,3 +1,4 @@
 ### Fixed
 
 - ABS offline replay: a progress reset now records the position it discarded, and a replayed session that lands back on it is dropped whatever its timestamps, so a pre-reset backlog replayed hours later can no longer undo the reset. The 4x "physical bound" is retired (kept only for tombstones written before positions were recorded), so seeking ahead right after a reset is accepted at once.
+- Book-state writes fail closed on an unreadable state row. ABS progress writes (PATCH, batch, reset, hide, offline replay) and `readstatus` (recompute, set/clear manual status) used to treat a read error as "no row yet" and write a fresh row, wiping the reset tombstone, the hide flag and a manual status. They now write nothing and answer 503. A reset reads the state before clearing positions, so a failed reset never leaves positions cleared without a tombstone.

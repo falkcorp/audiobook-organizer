@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -219,7 +219,14 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		res.transient = true
 		return res
 	}
-	state, _ := h.progress.GetUserBookState(userID, bookID)
+	state, err := h.progress.GetUserBookState(userID, bookID)
+	if err != nil {
+		// Unreadable state: the reset tombstone cannot be checked, and
+		// applying blind could undo a reset. Transient: retry (503).
+		res.Error = "could not read book state"
+		res.transient = true
+		return res
+	}
 
 	now := h.now()
 	tol := absClockSkewTolerance.Milliseconds()
