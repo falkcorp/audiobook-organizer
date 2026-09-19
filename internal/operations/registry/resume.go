@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-09-12
+// last-edited: 2026-09-18
 
 package registry
 
@@ -366,6 +366,31 @@ func (r *Registry) recordResumeResetFailure(row database.OperationV2Row, resetEr
 	}
 }
 
+// recordResumeRequeueFailure writes an op_errors_v2 row for a requeue whose
+// retire write was refused by the store, the sibling of
+// recordResumeResetFailure. Best effort for the same reason: the store has just
+// failed a write, so this one may fail too, and the process log already carries
+// the Error line.
+func (r *Registry) recordResumeRequeueFailure(row database.OperationV2Row, retireErr error) {
+	attrs, _ := json.Marshal(map[string]string{
+		"error":      retireErr.Error(),
+		"row_status": row.Status,
+		"hint":       "no replacement op was inserted; the row keeps its resumable status and the next startup resume sweep retries the requeue",
+	})
+	errRow := database.OpErrorV2Row{
+		OperationID: row.ID,
+		Plugin:      row.Plugin,
+		DefID:       row.DefID,
+		Message:     "resume: failed to retire op for requeue; no replacement op inserted",
+		Attrs:       string(attrs),
+		OccurredAt:  time.Now().UTC(),
+	}
+	if err := r.store.InsertOpErrorV2(errRow); err != nil {
+		r.logger.Warn("registry: resume: failed to record requeue failure in op_errors_v2",
+			"op_id", row.ID, "error", err)
+	}
+}
+
 // resumeQuiescedOp re-queues a single interrupted_quiesced op from its
 // checkpoint at runtime, used by releaseScanStandDown when the last gate holder
 // releases. It reuses resumeRestart — the same verified checkpoint-merge path the
@@ -433,13 +458,26 @@ func mergeJSONParams(base, overlay []byte) ([]byte, error) {
 func (r *Registry) resumeRequeue(ctx context.Context, row database.OperationV2Row, def OperationDef) {
 	_ = ctx
 
-	// Clear any saved state.
-	_ = r.store.DeleteOpStateV2(row.ID)
-
-	// Mark the old op as dropped to avoid double-running.
+	// Retire the original FIRST, and only continue if that write landed. The
+	// replacement is what makes the old row redundant, so inserting it while
+	// the old row is still in a resumable status leaves two live rows for the
+	// same work: the replacement runs now, and the next startup sweep resumes
+	// the un-retired original too. Bail instead and let the next sweep retry
+	// the whole requeue — the row is untouched, so that retry is safe.
 	now := time.Now().UTC()
 	msg := "requeued: original op replaced"
-	_ = r.store.UpdateOperationV2Status(row.ID, "interrupted_dropped", nil, &now, &msg)
+	if err := r.store.UpdateOperationV2Status(row.ID, "interrupted_dropped", nil, &now, &msg); err != nil {
+		r.logger.Error("registry: resumeAfterStartup: failed to retire op for requeue; no replacement inserted",
+			"op_id", row.ID, "def_id", def.ID, "error", err)
+		r.recordResumeRequeueFailure(row, err)
+		return
+	}
+
+	// Clear any saved state. Deliberately after the retire write: a requeued op
+	// restarts from scratch so the checkpoint is dead weight once the original
+	// is dropped, but while the original is still resumable that checkpoint is
+	// the only thing letting it pick up where it left off.
+	_ = r.store.DeleteOpStateV2(row.ID)
 
 	// Insert a fresh queued row with a new ULID.
 	newID := ulid.Make().String()
