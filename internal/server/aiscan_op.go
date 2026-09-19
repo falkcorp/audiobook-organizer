@@ -1,7 +1,7 @@
 // file: internal/server/aiscan_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f7a2c91-8d63-4e05-b1a7-9c3e5d80f624
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 // aiscan_op registers the ai.author-scan OperationDef. Before 2026-08-22 the
 // multi-pass AI author dedup pipeline was the last subsystem with no
@@ -50,21 +50,20 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 
 		// ResumeRestart, not ResumeDrop like its ai.* siblings. Those siblings do
 		// all their work inside Run, so an interrupted one has nothing left to
-		// rejoin. A batch scan does: OpenAI is still holding the job and
-		// PollBatchPhases will still collect it, so dropping the op would leave
-		// the scan completing with no operation tracking it — the v1 pathology
-		// this migration exists to remove. RunScan decides from PERSISTED phase
-		// state whether to re-launch or re-attach.
+		// rejoin. A scan does: OpenAI is still holding a batch scan's jobs, and a
+		// realtime scan has persisted every chunk it finished. RunScan decides
+		// from PERSISTED phase state, per phase, what still has to run.
 		//
-		// RESUME AUDIT 2026-09-11 (c): kept, with no reporter.Checkpoint, and
-		// that is correct here. The checkpoint this op needs already lives in
-		// the ai_scans store: decideResume reads the persisted phase rows — no
-		// phase started means nothing was spent, so launching from zero IS the
-		// resume; a started batch scan re-attaches to the job OpenAI is still
-		// holding and spends nothing again; a started realtime scan is marked
-		// failed and returns ErrRealtimeNotResumable rather than re-billing a
-		// whole-library pass. From-zero re-entry is therefore idempotent on
-		// cost by construction, and the only param, scan_id, never changes.
+		// RESUME AUDIT 2026-09-11 (c), revised 2026-09-19: kept, with no
+		// reporter.Checkpoint, and that is correct here. The checkpoint this op
+		// needs lives in the ai_scans store: drive (internal/aiscan/pipeline.go)
+		// reads the phase rows — pending phases launch; a realtime full_scan
+		// continues from its persisted chunks and re-requests none of them; a
+		// submitted batch re-attaches to the job OpenAI holds; a batch phase that
+		// died mid-submit ("submitting") re-attaches by batch metadata or fails
+		// visibly rather than paying for a second batch; finished phases feed
+		// enrichment and cross-validation, which replace rather than append
+		// their results. The only param, scan_id, never changes.
 		ResumePolicy: opsregistry.ResumeRestart,
 
 		// Serializes scans. Two could previously run at once; a second now

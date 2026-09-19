@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a9dc63b-e7ec-4a27-ad84-f117b891a41f
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 package server
 
@@ -86,10 +86,13 @@ func TestWireHandlers_CancelOperationV2ReachesAIScanPipeline(t *testing.T) {
 	// LinkOperation is the production link between the scan and its v2 op, and
 	// the only field CancelOperationV2 matches the requested id against.
 	require.NoError(t, pm.LinkOperation(scan.ID, opID))
-	// A started batch phase makes RunScan ATTACH (wait on existing work) rather
-	// than launch phase goroutines that would call the nil parser. Empty
-	// batchID keeps CancelScan away from the parser too.
-	require.NoError(t, scanStore.UpdatePhaseStatus(scan.ID, "groups_scan", "processing", ""))
+	// Both source phases already submitted makes RunScan ATTACH (wait on the
+	// batches) rather than launch phase goroutines that would call the nil
+	// parser — RunScan decides per phase, so a phase left pending would be
+	// launched. Empty batchID keeps CancelScan and the heartbeat poll away
+	// from the parser too.
+	require.NoError(t, scanStore.UpdatePhaseStatus(scan.ID, "groups_scan", "submitted", ""))
+	require.NoError(t, scanStore.UpdatePhaseStatus(scan.ID, "full_scan", "submitted", ""))
 
 	sink := &attachSignalSink{attached: make(chan struct{})}
 	runCtx, stopRun := context.WithCancel(context.Background())

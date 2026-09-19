@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -471,7 +471,7 @@ func (s *Server) registerBatchPollerHandlers() {
 	// the other two producers already own their batches end to end:
 	// maintenance/dedup_ops.go polls its own and writes batch_id only after it
 	// completes, and aiscan/pipeline.go keeps the id on the scan-phase row that
-	// pipeline.go's own loop polls. SubmitAI is now the diagnostics.ai-analyze
+	// PollBatchPhases (registered below) collects. SubmitAI is now the diagnostics.ai-analyze
 	// OperationDef, which likewise polls its own batch, so the last caller went
 	// with it.
 	//
@@ -479,15 +479,25 @@ func (s *Server) registerBatchPollerHandlers() {
 	// and an operation that had scrolled past that 100-row window by the time
 	// its results arrived had them dropped with nothing but an info log.
 
-	// pipeline: delegate to the pipeline manager. PollBatchPhases only acts on
-	// phases still "submitted", so re-delivery after a restart is a no-op.
-	s.batchPoller.RegisterHandler("pipeline", func(ctx context.Context, batchID, outputFileID string) error {
+	// author_review / author_dedup: the ai.author-scan batches. Those are the
+	// types CreateBatchAuthorReview / CreateBatchAuthorDedup tag them with.
+	// Until 2026-09-19 PollBatchPhases was registered only under "pipeline", a
+	// type no code creates a batch with, so this dispatch never reached it and
+	// a batch scan's results were never collected. PollBatchPhases polls every
+	// scanning batch scan and is idempotent per phase, so it is safe to run for
+	// any completed batch of these types — including maintenance.ai-dedup-batch's
+	// own author_dedup batches, which match no scan phase and are left alone.
+	pollScans := func(ctx context.Context, batchID, outputFileID string) error {
 		if s.pipelineManager == nil {
 			return fmt.Errorf("pipeline manager not initialized")
 		}
 		s.pipelineManager.PollBatchPhases(ctx)
 		return nil
-	})
+	}
+	s.batchPoller.RegisterHandler("author_review", pollScans)
+	s.batchPoller.RegisterHandler("author_dedup", pollScans)
+	// pipeline: kept for any batch still tagged with it.
+	s.batchPoller.RegisterHandler("pipeline", pollScans)
 
 	// aijobs: unified layer for all bulk-scale LLM work. All such batches
 	// carry metadata.type="aijobs"; the per-feature routing happens inside
