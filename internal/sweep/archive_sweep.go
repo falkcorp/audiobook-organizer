@@ -1,5 +1,5 @@
 // file: internal/sweep/archive_sweep.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a9f8e7d6-c5b4-3a21-9087-654321fedcba
 // last-edited: 2026-09-19
 //
@@ -18,9 +18,14 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 const archiveRetentionDays = 30
+
+// sweepLog routes the sweep's own messages through internal/logger (the
+// log-injection barrier) rather than bare log/slog.
+var sweepLog = logger.New("archive-sweep")
 
 // ArchiveSweepStore is the three-method slice the archive sweep needs. Exported
 // so a caller that forwards into SweepArchivedBooks can name it. It
@@ -54,8 +59,7 @@ func SweepArchivedBooks(store ArchiveSweepStore) int {
 	ownsFiles := 0
 	defer func() {
 		if ownsFiles > 0 {
-			slog.Info("archive sweep: left soft-deleted books that still own book_file rows",
-				"count", ownsFiles)
+			sweepLog.Info("archive sweep: left %d soft-deleted book(s) that still own book_file rows", ownsFiles)
 		}
 	}()
 
@@ -82,7 +86,8 @@ func SweepArchivedBooks(store ArchiveSweepStore) int {
 		// a read error: an unreadable file list is not proof there are none.
 		files, ferr := store.GetBookFiles(book.ID)
 		if ferr != nil {
-			slog.Warn("archive sweep: cannot read book_file rows; not sweeping", "book", book.ID, "err", ferr)
+			sweepLog.Warn("archive sweep: cannot read book_file rows of %s; not sweeping: %v",
+				logger.SanitizeLogValue(book.ID), ferr)
 			continue
 		}
 		if len(files) > 0 {
