@@ -1,13 +1,14 @@
 // file: internal/server/handlers/playlists_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f1e2d3c4-b5a6-7890-cdef-1234567890ab
-// last-edited: 2026-06-03
+// last-edited: 2026-09-19
 
 package handlers_test
 
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -79,6 +80,11 @@ func TestPlaylistHandler_UpdatePlaylist_CrossUser_Returns404(t *testing.T) {
 
 	h := handlers.NewPlaylistHandler(store, nil)
 	c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "userA")
+	// A VALID body: the payload is validated before the playlist is read (a
+	// malformed body is a 400 whichever id it names, so that order leaks
+	// nothing), and this test is about the ownership 404.
+	c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", strings.NewReader(`{"name":"mine now"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
 	h.UpdatePlaylist(c)
 

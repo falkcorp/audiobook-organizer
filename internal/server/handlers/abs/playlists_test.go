@@ -33,6 +33,9 @@ type absplFakeStore struct {
 	// scoping can be asserted directly instead of inferred from the result.
 	gotUserID string
 	calls     int
+	// beforeUpdate, when set, runs once at the start of the next
+	// UpdateUserPlaylist, before the version compare.
+	beforeUpdate func(f *absplFakeStore)
 }
 
 func (f *absplFakeStore) ListUserPlaylistsForUser(userID, _ string, _, _ int) ([]database.UserPlaylist, int, error) {
@@ -55,7 +58,9 @@ func (f *absplFakeStore) GetUserPlaylist(id string) (*database.UserPlaylist, err
 	}
 	for i := range f.lists {
 		if f.lists[i].ID == id {
-			return &f.lists[i], nil
+			cp := f.lists[i]
+			cp.BookIDs = append([]string(nil), f.lists[i].BookIDs...)
+			return &cp, nil
 		}
 	}
 	return nil, nil
@@ -70,7 +75,7 @@ func (f *absplFakeStore) CreateUserPlaylist(pl *database.UserPlaylist) (*databas
 	f.calls++
 	for i := range f.lists {
 		if strings.EqualFold(f.lists[i].Name, pl.Name) {
-			return nil, fmt.Errorf("playlist name %q already in use", pl.Name)
+			return nil, database.ErrUserPlaylistNameInUse
 		}
 	}
 	cp := *pl
@@ -85,8 +90,22 @@ func (f *absplFakeStore) CreateUserPlaylist(pl *database.UserPlaylist) (*databas
 
 func (f *absplFakeStore) UpdateUserPlaylist(pl *database.UserPlaylist) error {
 	f.calls++
+	if hook := f.beforeUpdate; hook != nil {
+		// One-shot: simulates another writer (the native API) committing
+		// between this writer's read and its write.
+		f.beforeUpdate = nil
+		hook(f)
+	}
+	for i := range f.lists {
+		if f.lists[i].ID != pl.ID && strings.EqualFold(f.lists[i].Name, pl.Name) {
+			return database.ErrUserPlaylistNameInUse
+		}
+	}
 	for i := range f.lists {
 		if f.lists[i].ID == pl.ID {
+			if f.lists[i].Version != pl.Version {
+				return fmt.Errorf("%w: stored %d, got %d", database.ErrUserPlaylistVersionConflict, f.lists[i].Version, pl.Version)
+			}
 			cp := *pl
 			cp.BookIDs = append([]string(nil), pl.BookIDs...)
 			cp.Version = f.lists[i].Version + 1

@@ -338,14 +338,6 @@ type Handler struct {
 	// devices — an attacker replaying random tokens cannot make it grow.
 	refreshLocks sync.Map // sessionID -> *sync.Mutex
 
-	// playlistLocks serializes the ABS playlist mutations (playlists_write.go) per
-	// playlist id. UpdateUserPlaylist has no compare-and-swap, so two concurrent
-	// batch adds on the same playlist would each read the same membership and the
-	// second write would silently drop the first one's books. Keyed only after the
-	// playlist resolved AND is owned by the caller, so its size is bounded by the
-	// number of real playlists.
-	playlistLocks sync.Map // playlistID -> *sync.Mutex
-
 	// itemsCount caches the filtered library-item count per filter identity.
 	// CountBookSummariesFiltered is a full-library scan, and this endpoint is polled
 	// on every library page, so an uncached count made latency a flat ~2s regardless

@@ -1,15 +1,15 @@
 // file: internal/server/handlers/abs/playlists_write.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6ddbf78d-bfe3-47a7-946a-c677d6f16821
 // last-edited: 2026-09-19
 
 package abs
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -92,15 +92,6 @@ func playlistItemSyncIDs(items []absPlaylistItemRef) []string {
 	return out
 }
 
-// playlistNameConflict reports whether a store error is the duplicate-name
-// rejection. The store enforces names globally (idx:upl:name), and the message is
-// the only signal it gives; a duplicate name is the user's to fix, so it is a 409
-// rather than a 500.
-func playlistNameConflict(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "already in use") || strings.Contains(msg, "already exists")
-}
-
 // CreatePlaylist handles POST /api/playlists.
 func (h *Handler) CreatePlaylist(c *gin.Context) {
 	u, ok := h.playlistWriter(c)
@@ -132,7 +123,9 @@ func (h *Handler) CreatePlaylist(c *gin.Context) {
 	}
 	created, err := h.playlists.CreateUserPlaylist(pl)
 	if err != nil {
-		if playlistNameConflict(err) {
+		if errors.Is(err, database.ErrUserPlaylistNameInUse) {
+			// Generic on purpose: the name index is global across users, so the
+			// message confirms only that the requested name is taken.
 			respondError(c, http.StatusConflict, err.Error())
 			return
 		}
@@ -182,8 +175,6 @@ func (h *Handler) DeletePlaylist(c *gin.Context) {
 	if !ok {
 		return
 	}
-	mu := h.lockPlaylist(pl.ID)
-	defer mu.Unlock()
 	if err := h.playlists.DeleteUserPlaylist(pl.ID); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not delete playlist")
 		return
@@ -304,53 +295,56 @@ func (h *Handler) ownedPlaylist(c *gin.Context) (*database.UserPlaylist, bool) {
 	return pl, true
 }
 
-// lockPlaylist takes the per-playlist write lock and returns it held.
-func (h *Handler) lockPlaylist(id string) *sync.Mutex {
-	v, _ := h.playlistLocks.LoadOrStore(id, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu
+// absPlaylistReject aborts a mutation with a status.
+type absPlaylistReject struct {
+	status int
+	msg    string
 }
 
+func (e *absPlaylistReject) Error() string { return e.msg }
+
+// errABSPlaylistNotOwned: another user's playlist is a 404, like a missing one.
+var errABSPlaylistNotOwned = errors.New("playlist not owned by caller")
+
 // mutateOwnedPlaylist is the read-modify-write behind every membership/metadata
-// mutation: resolve + ownership check, lock, RE-READ under the lock (so two
-// concurrent batch adds cannot both start from the same membership), apply,
-// persist, and answer with the full ABS playlist.
+// mutation. It goes through database.UpdateUserPlaylistWithRetry — the same
+// path the native /api/v1 handlers use — so the store's Version compare-and-swap
+// makes a concurrent edit from EITHER surface compose with this one (re-read,
+// re-apply, retry) instead of one whole-record write erasing the other. An
+// ABS-only lock would not have protected against the native writers.
 //
 // mutate returns a non-zero status to reject the request without writing.
 func (h *Handler) mutateOwnedPlaylist(c *gin.Context, mutate func(pl *database.UserPlaylist) (int, string)) {
-	owned, ok := h.ownedPlaylist(c)
+	u, ok := h.playlistWriter(c)
 	if !ok {
 		return
 	}
-	mu := h.lockPlaylist(owned.ID)
-	defer mu.Unlock()
-
-	pl, err := h.playlists.GetUserPlaylist(owned.ID)
-	if err != nil {
-		respondError(c, http.StatusInternalServerError, "could not read playlist")
-		return
-	}
-	if pl == nil {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
 		respondError(c, http.StatusNotFound, "playlist not found")
 		return
 	}
-	// Work on a copy whose slices are not shared with whatever the store handed
-	// back, so a rejected mutation can never leak into a cached record.
-	next := *pl
-	next.BookIDs = append([]string(nil), pl.BookIDs...)
-	if status, msg := mutate(&next); status != 0 {
-		respondError(c, status, msg)
-		return
-	}
-	next.Dirty = true // same as every native playlist write: pending iTunes sync
-	if err := h.playlists.UpdateUserPlaylist(&next); err != nil {
-		if playlistNameConflict(err) {
-			respondError(c, http.StatusConflict, err.Error())
-			return
+	updated, err := database.UpdateUserPlaylistWithRetry(h.playlists, id, func(pl *database.UserPlaylist) error {
+		if pl.CreatedByUserID != u.ID {
+			return errABSPlaylistNotOwned
 		}
+		if status, msg := mutate(pl); status != 0 {
+			return &absPlaylistReject{status: status, msg: msg}
+		}
+		pl.Dirty = true // same as every native playlist write: pending iTunes sync
+		return nil
+	})
+	var rej *absPlaylistReject
+	switch {
+	case err == nil:
+		respondJSON(c, http.StatusOK, h.playlistDTO(c, updated))
+	case errors.As(err, &rej):
+		respondError(c, rej.status, rej.msg)
+	case errors.Is(err, database.ErrUserPlaylistNotFound), errors.Is(err, errABSPlaylistNotOwned):
+		respondError(c, http.StatusNotFound, "playlist not found")
+	case errors.Is(err, database.ErrUserPlaylistNameInUse), errors.Is(err, database.ErrUserPlaylistVersionConflict):
+		respondError(c, http.StatusConflict, err.Error())
+	default:
 		respondError(c, http.StatusInternalServerError, "could not update playlist")
-		return
 	}
-	respondJSON(c, http.StatusOK, h.playlistDTO(c, &next))
 }

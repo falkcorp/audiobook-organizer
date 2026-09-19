@@ -1,11 +1,12 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-08-23
+// last-edited: 2026-09-19
 
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -147,7 +148,9 @@ func (h *PlaylistHandler) CreatePlaylist(c *gin.Context) {
 	}
 	created, err := h.store.CreateUserPlaylist(pl)
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "duplicate") {
+		// errors.Is, not the message: the store's text said "already in use"
+		// while this matched "already exists", so a duplicate name was a 500.
+		if errors.Is(err, database.ErrUserPlaylistNameInUse) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
@@ -231,62 +234,44 @@ func (h *PlaylistHandler) GetPlaylist(c *gin.Context) {
 
 // UpdatePlaylist — PUT /api/v1/playlists/:id
 func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
-	id := c.Param("id")
-	pl, err := h.store.GetUserPlaylist(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to load playlist", err)
-		return
-	}
-	if pl == nil {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if !ownedByCaller(c, pl) {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-
 	var req PlaylistUpdateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	if req.Name != nil {
-		pl.Name = strings.TrimSpace(*req.Name)
-	}
-	if req.Description != nil {
-		pl.Description = *req.Description
-	}
-	if req.BookIDs != nil {
-		if pl.Type != database.UserPlaylistTypeStatic {
-			httputil.RespondWithBadRequest(c, "book_ids only valid for static playlists")
-			return
-		}
-		pl.BookIDs = *req.BookIDs
-	}
 	if req.Query != nil {
-		if pl.Type != database.UserPlaylistTypeSmart {
-			httputil.RespondWithBadRequest(c, "query only valid for smart playlists")
-			return
-		}
 		if _, err := search.ParseQuery(*req.Query); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid query: "+err.Error())
 			return
 		}
-		pl.Query = *req.Query
 	}
-	if req.SortJSON != nil {
-		pl.SortJSON = *req.SortJSON
-	}
-	if req.Limit != nil {
-		pl.Limit = *req.Limit
-	}
-	pl.Dirty = true
-	if err := h.store.UpdateUserPlaylist(pl); err != nil {
-		httputil.InternalError(c, "failed to update playlist", err)
-		return
-	}
-	httputil.RespondWithOK(c, pl)
+	h.mutatePlaylist(c, "failed to update playlist", func(pl *database.UserPlaylist) error {
+		if req.Name != nil {
+			pl.Name = strings.TrimSpace(*req.Name)
+		}
+		if req.Description != nil {
+			pl.Description = *req.Description
+		}
+		if req.BookIDs != nil {
+			if pl.Type != database.UserPlaylistTypeStatic {
+				return playlistBadRequest("book_ids only valid for static playlists")
+			}
+			pl.BookIDs = append([]string(nil), (*req.BookIDs)...)
+		}
+		if req.Query != nil {
+			if pl.Type != database.UserPlaylistTypeSmart {
+				return playlistBadRequest("query only valid for smart playlists")
+			}
+			pl.Query = *req.Query
+		}
+		if req.SortJSON != nil {
+			pl.SortJSON = *req.SortJSON
+		}
+		if req.Limit != nil {
+			pl.Limit = *req.Limit
+		}
+		return nil
+	})
 }
 
 // DeletePlaylist — DELETE /api/v1/playlists/:id
@@ -314,122 +299,116 @@ func (h *PlaylistHandler) DeletePlaylist(c *gin.Context) {
 // Appends book IDs to a static playlist, de-duplicating against
 // existing entries. No-op on smart playlists.
 func (h *PlaylistHandler) AddBooksToPlaylist(c *gin.Context) {
-	id := c.Param("id")
 	var req PlaylistBooksAddReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	pl, err := h.store.GetUserPlaylist(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to load playlist", err)
-		return
-	}
-	if pl == nil {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if !ownedByCaller(c, pl) {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if pl.Type != database.UserPlaylistTypeStatic {
-		httputil.RespondWithBadRequest(c, "cannot add books to smart playlist")
-		return
-	}
-	existing := make(map[string]bool, len(pl.BookIDs))
-	for _, bid := range pl.BookIDs {
-		existing[bid] = true
-	}
-	for _, bid := range req.BookIDs {
-		if bid == "" || existing[bid] {
-			continue
+	h.mutatePlaylist(c, "failed to add books", func(pl *database.UserPlaylist) error {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return playlistBadRequest("cannot add books to smart playlist")
 		}
-		pl.BookIDs = append(pl.BookIDs, bid)
-		existing[bid] = true
-	}
-	pl.Dirty = true
-	if err := h.store.UpdateUserPlaylist(pl); err != nil {
-		httputil.InternalError(c, "failed to add books", err)
-		return
-	}
-	httputil.RespondWithOK(c, pl)
+		existing := make(map[string]bool, len(pl.BookIDs))
+		for _, bid := range pl.BookIDs {
+			existing[bid] = true
+		}
+		for _, bid := range req.BookIDs {
+			if bid == "" || existing[bid] {
+				continue
+			}
+			pl.BookIDs = append(pl.BookIDs, bid)
+			existing[bid] = true
+		}
+		return nil
+	})
 }
 
 // RemoveBookFromPlaylist — DELETE /api/v1/playlists/:id/books/:bookID
 func (h *PlaylistHandler) RemoveBookFromPlaylist(c *gin.Context) {
-	id := c.Param("id")
 	bookID := c.Param("bookID")
-	pl, err := h.store.GetUserPlaylist(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to load playlist", err)
-		return
-	}
-	if pl == nil {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if !ownedByCaller(c, pl) {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if pl.Type != database.UserPlaylistTypeStatic {
-		httputil.RespondWithBadRequest(c, "cannot remove books from smart playlist")
-		return
-	}
-	filtered := pl.BookIDs[:0]
-	for _, b := range pl.BookIDs {
-		if b != bookID {
-			filtered = append(filtered, b)
+	h.mutatePlaylist(c, "failed to remove book", func(pl *database.UserPlaylist) error {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return playlistBadRequest("cannot remove books from smart playlist")
 		}
-	}
-	pl.BookIDs = filtered
-	pl.Dirty = true
-	if err := h.store.UpdateUserPlaylist(pl); err != nil {
-		httputil.InternalError(c, "failed to remove book", err)
-		return
-	}
-	httputil.RespondWithOK(c, pl)
+		filtered := make([]string, 0, len(pl.BookIDs))
+		for _, b := range pl.BookIDs {
+			if b != bookID {
+				filtered = append(filtered, b)
+			}
+		}
+		pl.BookIDs = filtered
+		return nil
+	})
 }
 
 // ReorderPlaylist — POST /api/v1/playlists/:id/reorder
 // Replaces book order. Rejects if the payload changes the set of
 // books (use add/remove endpoints for that).
 func (h *PlaylistHandler) ReorderPlaylist(c *gin.Context) {
-	id := c.Param("id")
 	var req PlaylistReorderReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	pl, err := h.store.GetUserPlaylist(id)
-	if err != nil {
-		httputil.InternalError(c, "failed to load playlist", err)
-		return
-	}
-	if pl == nil {
+	h.mutatePlaylist(c, "failed to reorder", func(pl *database.UserPlaylist) error {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return playlistBadRequest("cannot reorder smart playlist")
+		}
+		// Checked against the CURRENT row on every attempt: if a concurrent add
+		// changed the set, this reorder is rejected rather than dropping the add.
+		if !sameBookSet(pl.BookIDs, req.BookIDs) {
+			return playlistBadRequest("reorder must keep the same book set")
+		}
+		pl.BookIDs = append([]string(nil), req.BookIDs...)
+		return nil
+	})
+}
+
+// playlistRequestError aborts a mutation with a client error.
+type playlistRequestError struct{ msg string }
+
+func (e *playlistRequestError) Error() string { return e.msg }
+
+func playlistBadRequest(msg string) error { return &playlistRequestError{msg: msg} }
+
+// errPlaylistNotOwned makes another user's playlist indistinguishable from a
+// missing one (404, never 403), as ownedByCaller's doc requires.
+var errPlaylistNotOwned = errors.New("playlist not owned by caller")
+
+// mutatePlaylist is the read-modify-write behind every native playlist edit.
+//
+// 🔴 IT MUST GO THROUGH database.UpdateUserPlaylistWithRetry. These handlers
+// used to read the row, change it, and write the WHOLE record back with no
+// version check, so a concurrent edit from any other writer (the ABS surface's
+// playlist routes since 2026-09-19, the iTunes dirty-clear) was silently erased
+// by whichever write landed second. The store now compares Version and the
+// helper re-reads and re-applies mutate on a conflict, so concurrent edits
+// compose.
+func (h *PlaylistHandler) mutatePlaylist(c *gin.Context, failMsg string, mutate func(pl *database.UserPlaylist) error) {
+	id := c.Param("id")
+	updated, err := database.UpdateUserPlaylistWithRetry(h.store, id, func(pl *database.UserPlaylist) error {
+		if !ownedByCaller(c, pl) {
+			return errPlaylistNotOwned
+		}
+		if err := mutate(pl); err != nil {
+			return err
+		}
+		pl.Dirty = true
+		return nil
+	})
+	var reqErr *playlistRequestError
+	switch {
+	case err == nil:
+		httputil.RespondWithOK(c, updated)
+	case errors.As(err, &reqErr):
+		httputil.RespondWithBadRequest(c, reqErr.msg)
+	case errors.Is(err, database.ErrUserPlaylistNotFound), errors.Is(err, errPlaylistNotOwned):
 		httputil.RespondWithNotFound(c, "playlist", id)
-		return
+	case errors.Is(err, database.ErrUserPlaylistNameInUse), errors.Is(err, database.ErrUserPlaylistVersionConflict):
+		httputil.RespondWithConflict(c, err.Error())
+	default:
+		httputil.InternalError(c, failMsg, err)
 	}
-	if !ownedByCaller(c, pl) {
-		httputil.RespondWithNotFound(c, "playlist", id)
-		return
-	}
-	if pl.Type != database.UserPlaylistTypeStatic {
-		httputil.RespondWithBadRequest(c, "cannot reorder smart playlist")
-		return
-	}
-	if !sameBookSet(pl.BookIDs, req.BookIDs) {
-		httputil.RespondWithBadRequest(c, "reorder must keep the same book set")
-		return
-	}
-	pl.BookIDs = req.BookIDs
-	pl.Dirty = true
-	if err := h.store.UpdateUserPlaylist(pl); err != nil {
-		httputil.InternalError(c, "failed to reorder", err)
-		return
-	}
-	httputil.RespondWithOK(c, pl)
 }
 
 // ExportPlaylistM3U — GET /api/v1/playlists/:id/export.m3u
