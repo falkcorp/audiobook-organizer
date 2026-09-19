@@ -1,11 +1,15 @@
 // file: internal/database/book_runtime.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 64a8ba17-7539-4be1-a2f7-1ee0f0e0cc44
 // last-edited: 2026-09-19
 
 package database
 
-import "math"
+import (
+	"math"
+	"path/filepath"
+	"strings"
+)
 
 // Canonical book runtime.
 //
@@ -44,8 +48,9 @@ const (
 
 // BookRuntime is a book's runtime together with how much of the book it covers.
 type BookRuntime struct {
-	// Seconds is the runtime. When Complete() is false it is a LOWER BOUND
-	// (the sum of the files whose durations are known) or 0, never a total.
+	// Seconds is the runtime. When Complete() is false it is the sum of the
+	// counted files whose durations are known — the book's recorded runtime so
+	// far, a lower bound on it — or 0. Never a total to compare as one.
 	Seconds int `json:"seconds"`
 	// Source is where Seconds came from.
 	Source RuntimeSource `json:"source"`
@@ -58,6 +63,11 @@ type BookRuntime struct {
 	// AllFilesMissing is true when every row is flagged missing and the
 	// runtime was computed over the missing rows.
 	AllFilesMissing bool `json:"all_files_missing,omitempty"`
+	// FilesMissingUnmatched counts missing rows that match no present row
+	// (see ComputeBookRuntime): chapters the book records but does not have
+	// on disk. They are counted in FilesCounted, and any of them makes the
+	// runtime partial — never complete.
+	FilesMissingUnmatched int `json:"files_missing_unmatched,omitempty"`
 	// BookAggregateSec is the stored Book.Duration, reported for display and
 	// diagnosis only. It is NOT a runtime when Source != RuntimeSourceBook.
 	BookAggregateSec int `json:"book_aggregate_sec,omitempty"`
@@ -71,17 +81,18 @@ func (r BookRuntime) Complete() bool {
 	}
 	switch r.Source {
 	case RuntimeSourceFiles:
-		return r.FilesKnown > 0 && r.FilesKnown == r.FilesCounted
+		return r.FilesKnown > 0 && r.FilesKnown == r.FilesCounted && r.FilesMissingUnmatched == 0
 	case RuntimeSourceBook:
 		return true
 	}
 	return false
 }
 
-// Partial reports whether some but not all counted files had a known duration,
-// i.e. Seconds is a lower bound that must not be compared as a total.
+// Partial reports whether Seconds is a lower bound that must not be compared
+// as a total: some counted file has no known duration, or the book records a
+// chapter that is missing from disk.
 func (r BookRuntime) Partial() bool {
-	return r.Source == RuntimeSourceFiles && r.FilesKnown > 0 && r.FilesKnown < r.FilesCounted
+	return r.Source == RuntimeSourceFiles && r.FilesKnown > 0 && !r.Complete()
 }
 
 // KnownSeconds returns the full runtime and true only when Complete(); every
@@ -132,40 +143,55 @@ func BookFileRuntimeSec(f *BookFile) int {
 // book_file rows (as GetBookFiles returns them, missing rows included); book
 // may be nil when only the rows are at hand.
 //
-// Rules:
-//   - rows counted = the present rows; when no row is present, every row.
-//     Missing rows are excluded when present ones exist because a repoint
-//     leaves the old missing row beside the new present one for the same
-//     content, and summing both double-counts.
-//   - every counted row has a duration → Complete, Source files.
-//   - some do → Partial: Seconds is the known sum, a lower bound.
-//   - none do, or there are no rows, and the book has at most one row →
-//     Book.Duration when positive, Source book_aggregate, Complete.
-//   - none do and the book has several rows → unknown. Book.Duration is then
-//     whatever an earlier writer put there (a single chapter's probe, or a
-//     partial sum from before a file went unknown) and cannot be trusted as
-//     the total; it is reported in BookAggregateSec only.
+// Rows counted:
+//   - every present row;
+//   - every missing row that matches NO present row (missingDuplicateOf). A
+//     missing row that matches one is the old half of a repoint — the same
+//     content at its previous path — and counting it would double the file.
+//     An unmatched missing row is a chapter the book has and the disk lacks:
+//     it is counted, and it makes the runtime partial. Dropping it instead
+//     (the first version of this function) turned "45 s intro present, 20
+//     chapters missing" into a COMPLETE 45 s runtime, which the dedup
+//     min-duration gate read as a 45-second book;
+//   - when no row is present, every row (AllFilesMissing).
+//
+// Result:
+//   - every counted row has a duration and none is an unmatched missing row
+//     → Complete, Source files;
+//   - some counted row has a duration → Partial: Seconds is the known sum;
+//   - none has, and the book has at most one row → Book.Duration when
+//     positive, Source book_aggregate, Complete;
+//   - none has and the book has several rows → unknown. Book.Duration is
+//     then whatever an earlier writer put there and cannot be trusted as the
+//     total; it is reported in BookAggregateSec only.
 func ComputeBookRuntime(book *Book, files []BookFile) BookRuntime {
 	var rt BookRuntime
 	if book != nil && book.Duration != nil && *book.Duration > 0 {
 		rt.BookAggregateSec = *book.Duration
 	}
 
-	present := 0
+	var present []int
 	for i := range files {
 		if !files[i].Missing {
-			present++
+			present = append(present, i)
 		}
 	}
-	useAll := present == 0
+	useAll := len(present) == 0
 	rt.AllFilesMissing = useAll && len(files) > 0
+	// Each present row can absorb at most one missing duplicate.
+	absorbed := make([]bool, len(present))
 
 	for i := range files {
-		if !useAll && files[i].Missing {
-			continue
+		f := &files[i]
+		if f.Missing && !useAll {
+			if j := missingDuplicateOf(f, files, present, absorbed); j >= 0 {
+				absorbed[j] = true
+				continue
+			}
+			rt.FilesMissingUnmatched++
 		}
 		rt.FilesCounted++
-		if sec := BookFileRuntimeSec(&files[i]); sec > 0 {
+		if sec := BookFileRuntimeSec(f); sec > 0 {
 			rt.Seconds += sec
 			rt.FilesKnown++
 		}
@@ -185,11 +211,50 @@ func ComputeBookRuntime(book *Book, files []BookFile) BookRuntime {
 	return rt
 }
 
+// missingDuplicateOf returns the index into present of an unabsorbed present
+// row that the missing row m is a copy of, or -1. A repoint (or an organize
+// move whose old row was left behind) keeps the content and usually one of:
+// a content hash (current or pre-organize), the original filename, the base
+// name, or the byte size. Only non-empty / positive values match, so rows
+// that carry nothing identifying are never treated as duplicates — the
+// conservative direction, since an unmatched row can only make the runtime
+// partial, never shrink it.
+func missingDuplicateOf(m *BookFile, files []BookFile, present []int, absorbed []bool) int {
+	mHashes := [...]string{m.FileHash, m.OriginalFileHash}
+	mName := strings.ToLower(filepath.Base(m.FilePath))
+	if m.FilePath == "" {
+		mName = ""
+	}
+	for j, pi := range present {
+		if absorbed[j] {
+			continue
+		}
+		p := &files[pi]
+		for _, h := range mHashes {
+			if h != "" && (h == p.FileHash || h == p.OriginalFileHash) {
+				return j
+			}
+		}
+		if m.OriginalFilename != "" && strings.EqualFold(m.OriginalFilename, p.OriginalFilename) {
+			return j
+		}
+		if mName != "" && p.FilePath != "" && mName == strings.ToLower(filepath.Base(p.FilePath)) {
+			return j
+		}
+		if m.FileSize > 0 && m.FileSize == p.FileSize {
+			return j
+		}
+	}
+	return -1
+}
+
 // StoredAggregateSec is the value Book.Duration should hold for this runtime,
-// and false when the rows give no value (keep what is stored). It is the
-// file-derived sum — COMPLETE or, for a partial runtime, the known-file lower
-// bound, which is what Book.Duration has always meant — computed over the same
-// rows as the canonical runtime (present rows; millisecond rows normalized).
+// and false when the rows give no value (keep what is stored). It is the known
+// sum over the canonical runtime's counted rows: present rows plus every
+// missing row that is not a repoint duplicate of a present one, millisecond
+// rows normalized. That is the all-rows sum RecomputeBookAggregates always
+// stored MINUS only the duplicated copies, so a chapter going missing never
+// lowers it; only removing a double count does.
 // Book.Duration is a display and sort field; anything that COMPARES runtimes
 // must use ComputeBookRuntime and KnownSeconds instead.
 func (r BookRuntime) StoredAggregateSec() (int, bool) {

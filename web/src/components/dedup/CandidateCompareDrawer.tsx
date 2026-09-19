@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.8.0
+// version: 1.8.1
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
 // last-edited: 2026-09-19
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
@@ -90,13 +90,18 @@ function totalFileSize(book: DedupBookDetail): number | undefined {
 function describeRuntime(book: DedupBookDetail): string {
   const rt = book.runtime;
   if (!rt) return formatDuration(book.duration);
+  const missing = rt.files_missing_unmatched ?? 0;
   const complete =
     rt.seconds > 0 &&
     (rt.source === 'book_aggregate' ||
-      (rt.source === 'files' && rt.files_known === rt.files_counted));
+      (rt.source === 'files' && rt.files_known === rt.files_counted && missing === 0));
   if (complete) return formatDuration(rt.seconds);
   if (rt.source === 'files' && rt.files_known > 0) {
-    return `at least ${formatDuration(rt.seconds)} (${rt.files_known} of ${rt.files_counted} files)`;
+    const gap =
+      rt.files_known < rt.files_counted
+        ? `${rt.files_known} of ${rt.files_counted} files measured`
+        : `${missing} ${missing === 1 ? 'file' : 'files'} missing from disk`;
+    return `at least ${formatDuration(rt.seconds)} (${gap})`;
   }
   return 'Unknown';
 }
