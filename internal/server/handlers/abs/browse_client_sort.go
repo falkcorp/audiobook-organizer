@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_client_sort.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b122ca1-3d17-4eb2-b2dd-5707ab882ef2
 // last-edited: 2026-09-19
 //
@@ -45,6 +45,7 @@ const (
 	absSortProgressFinished = "progress.finishedAt"
 	absSortProgressCreated  = "progress.createdAt"
 	absSortRandom           = "random"
+	absSortSize             = "size"
 )
 
 // absHandlerSort recognises the client sort keys this file orders. It returns
@@ -70,6 +71,15 @@ func absHandlerSort(raw string) string {
 	}
 	if key == "authornamelf" {
 		return absSortAuthorLF
+	}
+	// 🔴 size is ordered HERE, not by the store (item-6 B3, 2026-09-19). The store
+	// key absSortFields["size"] = file_size sorts on Book.FileSize, but the size
+	// every item DISPLAYS is the sum of its book_file sizes (mapper.go
+	// loadOneItemView), with Book.FileSize only as the fallback for a book with no
+	// files. Measured on prod with desc: position 19 showed 3.45 GB and position 20
+	// 6.03 GB. The map entry stays so absSupportedSortParams still lists size.
+	if key == "size" {
+		return absSortSize
 	}
 	return ""
 }
@@ -130,6 +140,12 @@ func (h *Handler) orderIDsByClientSort(c *gin.Context, key string, ids []string,
 		return out, nil
 	case absSortAuthorLF:
 		keys, err := h.authorLFKeys(c, out)
+		if err != nil {
+			return nil, err
+		}
+		return orderByClientKey(out, keys, desc), nil
+	case absSortSize:
+		keys, err := h.sizeKeys(out)
 		if err != nil {
 			return nil, err
 		}
@@ -285,6 +301,54 @@ func (h *Handler) progressKeys(c *gin.Context, key string) map[string]clientSort
 		keys[item.CurrentBookID] = v
 	}
 	return keys
+}
+
+// sizeKeys maps book id -> the size the item mapper displays for it: the sum of
+// the book's book_file sizes, falling back to Book.FileSize when that sum is 0.
+//
+// ONE deliberate difference from the mapper: loadFileView replaces a file's
+// stored size with os.Stat's when the file exists. Statting every file in the
+// library to order one page is not viable, so this uses the STORED sizes the
+// mapper starts from. They differ only for a file rewritten on disk since it was
+// last scanned; the ~2x mis-ordering this fixes came from comparing a different
+// field altogether.
+//
+// Files are read through the batched Core projection in chunks, never one
+// GetBookFiles per book: this runs over the whole visible library.
+func (h *Handler) sizeKeys(ids []string) (map[string]clientSortKey, error) {
+	keys := make(map[string]clientSortKey, len(ids))
+	var fallback []string
+	const chunk = 5000
+	for start := 0; start < len(ids); start += chunk {
+		part := ids[start:min(start+chunk, len(ids))]
+		files, err := h.library.GetBookFilesForIDsCore(part)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range part {
+			var total int64
+			for i := range files[id] {
+				total += files[id][i].FileSize
+			}
+			if total > 0 {
+				keys[id] = clientSortKey{has: true, num: total}
+			} else {
+				fallback = append(fallback, id)
+			}
+		}
+	}
+	for start := 0; start < len(fallback); start += chunk {
+		books, err := h.library.GetBooksByIDs(fallback[start:min(start+chunk, len(fallback))])
+		if err != nil {
+			return nil, err
+		}
+		for i := range books {
+			if fs := books[i].FileSize; fs != nil && *fs > 0 {
+				keys[books[i].ID] = clientSortKey{has: true, num: *fs}
+			}
+		}
+	}
+	return keys, nil
 }
 
 // ── series ──────────────────────────────────────────────────────────────────

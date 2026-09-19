@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -108,6 +108,34 @@ type fakeLibrary struct {
 	// bookFilesErr fails GetBookFiles for the named book ids only, so a test can
 	// make ONE book's item view unbuildable while its neighbours still render.
 	bookFilesErr map[string]error
+
+	// tags backs GetBooksByTag: normalized tag -> book ids.
+	tags map[string][]string
+}
+
+// GetBooksByTag mirrors PebbleStore: the tag is normalized, and an empty tag is
+// an error rather than "every book".
+func (f *fakeLibrary) GetBooksByTag(tag string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if tag == "" {
+		return nil, fmt.Errorf("tag cannot be empty")
+	}
+	return append([]string(nil), f.tags[tag]...), nil
+}
+
+// GetBookFilesForIDsCore is the batched Core projection the size sort reads.
+func (f *fakeLibrary) GetBookFilesForIDsCore(ids []string) (map[string][]database.BookFileCore, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]database.BookFileCore, len(ids))
+	for _, id := range ids {
+		for _, bf := range f.files[id] {
+			out[id] = append(out[id], bf.Core())
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeLibrary) setBooksByIDsErr(err error) {
@@ -472,6 +500,7 @@ func (f *fakeLibrary) GetAllBooksCore(limit, offset int) ([]database.BookCore, e
 		out = append(out, database.BookCore{
 			ID: b.ID, Title: b.Title, PrintYear: b.PrintYear,
 			AudiobookReleaseYear: b.AudiobookReleaseYear,
+			Genre:                b.Genre, Language: b.Language, Publisher: b.Publisher,
 		})
 	}
 	return out, nil

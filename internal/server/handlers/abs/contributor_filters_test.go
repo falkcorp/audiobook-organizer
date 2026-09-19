@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/contributor_filters_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3f8c1d54-9a20-4e7b-b6d1-8c4a2f01e9b7
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package abs_test
 
@@ -38,7 +38,9 @@ func seedContributors(t *testing.T, w *writeHarness) []string {
 	w.seed.lib.attachNarrators(w.seed.singleID, "Real Narrator")
 	w.seed.lib.addOrphanNarrators("Orphan Narrator")
 
-	return []string{"Homer", "Zed Author", "transl. Samuel Butler Homer"}
+	// Name order is CASE-INSENSITIVE (absNameLess, item-6 B5): the lowercase
+	// "transl." sorts between H and Z, not after every capitalised name.
+	return []string{"Homer", "transl. Samuel Butler Homer", "Zed Author"}
 }
 
 func authorNames(t *testing.T, body map[string]any, key string) []string {
