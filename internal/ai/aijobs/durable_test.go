@@ -75,9 +75,6 @@ func TestDispatch_CompletedJobIsNoOp(t *testing.T) {
 			require.NoError(t, store.MarkAIJobSubmitted("J1", "batch_done"))
 			j := store.jobs["J1"]
 			j.Status = status
-			if status == "failed" {
-				j.ApplyAttempts = MaxApplyAttempts // failed is terminal only once the budget is spent
-			}
 			store.jobs["J1"] = j
 
 			err := Dispatch(context.Background(), store, "batch_done", []RowResult{{CustomID: "J1-0", Content: "{}"}})
@@ -274,9 +271,9 @@ func TestDispatch_PermanentFailureTerminalAfterMaxAttempts(t *testing.T) {
 	assert.Equal(t, MaxApplyAttempts, fc.calls, "no attempt after the budget is spent")
 }
 
-// A job an earlier build marked failed on its first apply error still gets the
-// retry budget instead of being dropped.
-func TestDispatch_LegacyFailedJobStillRetried(t *testing.T) {
+// A job an earlier build marked failed on its first apply error is terminal:
+// its old verdicts are not replayed on deploy.
+func TestDispatch_LegacyFailedJobNotReplayed(t *testing.T) {
 	store := newFakeStore()
 	sink := newEffectSink()
 	Register("durable_legacy", sink.callback)
@@ -284,8 +281,8 @@ func TestDispatch_LegacyFailedJobStillRetried(t *testing.T) {
 	require.NoError(t, store.MarkAIJobFailed("JL", "callback panic: old build"))
 
 	require.NoError(t, Dispatch(context.Background(), store, "batch_legacy", []RowResult{{CustomID: "JL-0"}}))
-	assert.Equal(t, 1, sink.calls)
-	assert.Equal(t, "completed", store.jobs["JL"].Status)
+	assert.Equal(t, 0, sink.calls)
+	assert.Equal(t, "failed", store.jobs["JL"].Status)
 }
 
 // OpenAI failing or expiring the batch is terminal at once (nothing to retry),

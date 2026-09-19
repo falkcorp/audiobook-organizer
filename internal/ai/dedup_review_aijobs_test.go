@@ -1,5 +1,5 @@
 // file: internal/ai/dedup_review_aijobs_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7f3c4a8d-9b2e-4f6a-8c1d-2e5f9a1b3c7d
 // last-edited: 2026-09-19
 
@@ -31,7 +31,7 @@ func newFakeDedupApplier() *fakeDedupApplier {
 	}
 }
 
-func (f *fakeDedupApplier) ApplyVerdicts(verdicts []DedupPairVerdict, byIndex map[int]database.DedupCandidate) int {
+func (f *fakeDedupApplier) ApplyVerdicts(verdicts []DedupPairVerdict, byIndex map[int]database.DedupCandidate) ApplyVerdictsResult {
 	f.byIndex = byIndex
 	applied := 0
 	for _, v := range verdicts {
@@ -40,7 +40,7 @@ func (f *fakeDedupApplier) ApplyVerdicts(verdicts []DedupPairVerdict, byIndex ma
 			applied++
 		}
 	}
-	return applied
+	return ApplyVerdictsResult{Applied: applied}
 }
 
 func (f *fakeDedupApplier) LookupCandidate(id int64) (database.DedupCandidate, bool) {

@@ -1,5 +1,5 @@
 // file: internal/ai/dedup_review.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
 // last-edited: 2026-09-19
 
@@ -75,12 +75,22 @@ Include one verdict per input pair, using the same index as the input.`
 // DedupVerdictApplier applies LLM dedup verdicts back to the candidate store.
 // Implemented by *dedup.Engine.
 type DedupVerdictApplier interface {
-	// ApplyVerdicts persists verdicts and may trigger auto-merges.
-	// Returns the count of verdicts successfully applied.
-	ApplyVerdicts(verdicts []DedupPairVerdict, byIndex map[int]database.DedupCandidate) int
+	// ApplyVerdicts persists verdicts and may trigger auto-merges. It must
+	// leave alone any candidate that is no longer pending.
+	ApplyVerdicts(verdicts []DedupPairVerdict, byIndex map[int]database.DedupCandidate) ApplyVerdictsResult
 	// LookupCandidate reloads a candidate by ID. Returns ok=false if the
 	// candidate has since been deleted or purged.
 	LookupCandidate(id int64) (database.DedupCandidate, bool)
+}
+
+// ApplyVerdictsResult is what one ApplyVerdicts call did.
+type ApplyVerdictsResult struct {
+	// Applied counts verdicts written to a pending candidate.
+	Applied int
+	// SkippedStale counts verdicts for candidates no longer pending (the owner
+	// dismissed it, it was merged, or an earlier apply of this same batch
+	// already resolved it). Nothing is written for these and nothing is merged.
+	SkippedStale int
 }
 
 // dedupReviewPayload is the serialized state persisted with each aijobs batch.
@@ -161,10 +171,10 @@ func SubmitDedupReviewJob(ctx context.Context, deps aijobs.Deps, model string, i
 // and applies verdicts through the injected applier.
 //
 // Replay-safe, as aijobs.CompletionCallback requires (a kill between this
-// returning and the job row being marked completed runs it once more): each
-// verdict is an overwrite of the candidate's LLM fields, and an auto-merge is
-// skipped when either book is already soft-deleted, which the first run's merge
-// left it.
+// returning and the job recording it ran replays it once): ApplyVerdicts only
+// touches candidates still "pending", and the first run left every candidate it
+// merged "merged"; an auto-merge is also skipped when either book is already
+// soft-deleted.
 func dedupReviewCallback(ctx context.Context, itemsJSON []byte, results []aijobs.RowResult) (successCount, errorCount int, rowErrors []database.AIJobRowError, fatalErr error) {
 	// Deserialize the payload.
 	var payload dedupReviewPayload
@@ -218,8 +228,8 @@ func dedupReviewCallback(ctx context.Context, itemsJSON []byte, results []aijobs
 		return successCount, errorCount, rowErrors, fmt.Errorf("dedupVerdictApplier not set")
 	}
 
-	applied := dedupVerdictApplier.ApplyVerdicts(allVerdicts, byIndex)
-	slog.Info("dedup_review callback applied verdicts (from successful rows, errors)", "applied", applied, "successCount", successCount, "errorCount", errorCount)
+	res := dedupVerdictApplier.ApplyVerdicts(allVerdicts, byIndex)
+	slog.Info("dedup_review callback applied verdicts (from successful rows, errors)", "applied", res.Applied, "skippedStale", res.SkippedStale, "successCount", successCount, "errorCount", errorCount)
 
 	return successCount, errorCount, rowErrors, nil
 }

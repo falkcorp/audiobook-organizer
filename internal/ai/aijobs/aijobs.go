@@ -206,15 +206,12 @@ var terminalJobStatuses = map[string]bool{
 // IsTerminalJob reports whether a job has been dispatched to an outcome and
 // must not be applied again.
 //
-// "failed" is terminal only once the apply budget is spent. A failed row with
-// ApplyAttempts < MaxApplyAttempts is either a submit-time failure (never has
-// a batch id, so Dispatch never sees it) or a row an earlier build marked
-// failed on its first apply error — that build retried such rows every tick,
-// so they still get the bounded retry budget rather than being dropped.
+// "failed" is always terminal. This build reaches it only once the apply
+// budget is spent or OpenAI itself failed the batch; retriable failures stay
+// "apply_failed". Rows an earlier build marked failed on a first apply error
+// (ApplyAttempts == 0) are deliberately NOT revived on deploy: their verdicts
+// may be days old and would be replayed over decisions made since.
 func IsTerminalJob(job database.AIJob) bool {
-	if job.Status == "failed" {
-		return job.ApplyAttempts >= MaxApplyAttempts
-	}
 	return terminalJobStatuses[job.Status]
 }
 
