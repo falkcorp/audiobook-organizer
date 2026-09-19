@@ -1,11 +1,12 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package reconcile
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -51,9 +52,14 @@ type ElectPrimaryResult struct {
 	SkippedConcurrent int `json:"skipped_concurrent"`
 	// SkippedVanished counts groups whose members could no longer be read
 	// (deleted or re-grouped mid-run).
-	SkippedVanished int                    `json:"skipped_vanished"`
-	Errors          int                    `json:"errors"`
-	Samples         []ElectedPrimarySample `json:"samples,omitempty"`
+	SkippedVanished int `json:"skipped_vanished"`
+	// SkippedNoEligible counts groups whose every live member was absorbed
+	// by a merge (MergedIntoBookID set) or soft-deleted. Such a group is
+	// left with no primary on purpose: its work is represented by the merge
+	// survivor, and crowning a loser lists the same work twice.
+	SkippedNoEligible int                    `json:"skipped_no_eligible"`
+	Errors            int                    `json:"errors"`
+	Samples           []ElectedPrimarySample `json:"samples,omitempty"`
 }
 
 // maxElectionSamples bounds the dry-run preview payload. The full counts are
@@ -68,13 +74,22 @@ const maxElectionSamples = 50
 // reference. This deliberately does NOT try to pick the "best quality" copy;
 // that is a separate concern and re-electing later is a cheap, safe operation,
 // whereas leaving the group with no primary keeps the book invisible.
+//
+// Only an electable member (electable) can win. Until 2026-09-19 this picked
+// among every member, and a merge loser is usually the OLDEST record in its
+// group, so a group that lost its primary re-crowned the book a merge had
+// absorbed. The 09-19 census found 302 merged books flagged primary and 218
+// both primary and organized, i.e. listed by ABS next to their survivor.
+// Returns nil when no member is electable.
 func electPrimaryFor(members []database.Book) *database.Book {
-	if len(members) == 0 {
-		return nil
-	}
-	sorted := make([]*database.Book, len(members))
+	sorted := make([]*database.Book, 0, len(members))
 	for i := range members {
-		sorted[i] = &members[i]
+		if electable(&members[i]) {
+			sorted = append(sorted, &members[i])
+		}
+	}
+	if len(sorted) == 0 {
+		return nil
 	}
 	sort.SliceStable(sorted, func(i, j int) bool {
 		a, b := sorted[i], sorted[j]
@@ -90,6 +105,19 @@ func electPrimaryFor(members []database.Book) *database.Book {
 	})
 	return sorted[0]
 }
+
+// electable reports whether b may become its group's primary: not absorbed
+// by a merge and not soft-deleted.
+func electable(b *database.Book) bool {
+	if b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" {
+		return false
+	}
+	return !b.IsSoftDeleted()
+}
+
+// errNotElectable aborts a ModifyBook whose re-read row stopped being
+// electable (merged or soft-deleted) after the group was read.
+var errNotElectable = errors.New("elect-missing-primaries: winner no longer electable")
 
 // ElectMissingPrimaries repairs the data invariant "every version group elects
 // exactly one primary" for the zero-primary half of that invariant.
@@ -177,8 +205,8 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	}
 
 	var (
-		elected, skippedConcurrent, skippedVanished, errCount, processed int64
-		sampleMu                                                         sync.Mutex
+		elected, skippedConcurrent, skippedVanished, skippedNoEligible, errCount, processed int64
+		sampleMu                                                                            sync.Mutex
 	)
 
 	var g errgroup.Group
@@ -212,7 +240,7 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 
 			winner := electPrimaryFor(members)
 			if winner == nil {
-				atomic.AddInt64(&skippedVanished, 1)
+				atomic.AddInt64(&skippedNoEligible, 1)
 				return nil
 			}
 
@@ -238,9 +266,18 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 			// LibraryState is intentionally left alone — see doc comment.
 			isPrimary := true
 			written, err := store.ModifyBook(winner.ID, func(full *database.Book) error {
+				// Re-checked on the locked re-read: a merge that absorbed
+				// the winner after the group read must not be undone here.
+				if !electable(full) {
+					return errNotElectable
+				}
 				full.IsPrimaryVersion = &isPrimary
 				return nil
 			})
+			if errors.Is(err, errNotElectable) {
+				atomic.AddInt64(&skippedConcurrent, 1)
+				return nil
+			}
 			if err != nil {
 				slog.Warn("elect-missing-primaries write failed", "book", winner.ID, "err", err)
 				atomic.AddInt64(&errCount, 1)
@@ -260,6 +297,7 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 	result.Elected = int(elected)
 	result.SkippedConcurrent = int(skippedConcurrent)
 	result.SkippedVanished = int(skippedVanished)
+	result.SkippedNoEligible = int(skippedNoEligible)
 	result.Errors = int(errCount)
 
 	// Keep samples deterministic regardless of worker completion order.
@@ -278,6 +316,7 @@ func ElectMissingPrimaries(store Store, dryRun bool) (*ElectPrimaryResult, error
 		"elected", result.Elected,
 		"skipped_concurrent", result.SkippedConcurrent,
 		"skipped_vanished", result.SkippedVanished,
+		"skipped_no_eligible", result.SkippedNoEligible,
 		"errors", result.Errors,
 	)
 
