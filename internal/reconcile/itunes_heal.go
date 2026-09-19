@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.11.4
+// version: 1.12.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -306,7 +306,16 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 	ref := rows[0].fp
 	for _, r := range rows[1:] {
 		sim, err := fingerprint.WholeFileSimilarity(ref, r.fp)
-		if err != nil || sim < 0.9 {
+		if err != nil {
+			// Unreadable stored print (empty or not whole uint32 frames):
+			// that is UNKNOWN, not "acoustically distinct". Returning
+			// ("", 0) is the fail-safe for both — no merge, and the
+			// candidate falls through to the next resolver layer — so the
+			// two outcomes must stay identical; never turn this into a
+			// negative verdict that blocks later layers.
+			return "", 0
+		}
+		if sim < 0.9 {
 			return "", 0
 		}
 	}
