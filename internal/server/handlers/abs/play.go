@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package abs
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/gin-gonic/gin"
@@ -358,30 +359,35 @@ func (h *Handler) SessionClose(c *gin.Context) {
 // 🔴 THIS ENDPOINT EXISTS SO IT CANNOT 404. §1.8.8 item 1: ShelfPlayer sends it after
 // every play/pause with maxAttempts:1, so a 404 immediately marks the whole connection
 // offline; §1.9.1 softens that to "still implement it, but a 404 is no longer fatal"
-// for the two clients we actually target. Either way the minimum bar is a 2xx with a
-// non-empty body, and that is deliberately ALL this does — the sibling
-// /api/session/local-all is the endpoint that actually applies progress.
+// for the two clients we actually target. So it ALWAYS answers a 2xx with a
+// non-empty body, whatever happens to the session inside it.
 //
-// The auth check is present but, exactly as in applySessionUpdate, is not reported: a
-// caller that fails it still gets the same idempotent 200 rather than a status code
-// that would wedge a client which cannot recover from one.
+// Since 2026-09-19 it also APPLIES the session (it used to acknowledge and drop
+// it), through the same applyLocalSession rules as /api/session/local-all. A
+// session that cannot be applied is logged, never reported as an HTTP error: a
+// 4xx here would wedge a client that cannot recover from one.
 func (h *Handler) SessionLocal(c *gin.Context) {
 	// Answered before anything else can fail, so no error path can produce an empty
 	// 200 — fatal for these decoders (§1.8.6).
 	defer respondPlainOK(c)
 
-	// ⚠️ THIS BRANCH HAS NO OBSERVABLE EFFECT TODAY, and that is deliberate rather
-	// than an oversight. respondPlainOK is deferred, so authenticated and anonymous
-	// callers get a byte-identical 200 "OK"; nothing is read from `user` because
-	// nothing is persisted yet. It is here to hold applySessionUpdate's exact shape
-	// — both conditions, including the nil guard — for when /api/session/local-all
-	// lands and this handler grows a body that genuinely needs the user id.
-	//
-	// Do NOT read it as auth ENFORCEMENT: there is none on this path, by design.
-	// Deleting it because a mutation test shows nothing change would be correct
-	// about the present and wrong about the next commit.
-	if user, ok := servermiddleware.CurrentUser(c); !ok || user == nil {
+	user, ok := servermiddleware.CurrentUser(c)
+	if !ok || user == nil {
 		return
+	}
+	// The body is ONE PlaybackSession — the same object local-all carries in its
+	// array — and it is applied by the same rules (applyLocalSession): offline
+	// replay is forward-only unless the session began after the server's newest
+	// position, a reset tombstone refuses older sessions, and an out-of-range
+	// position is rejected. Until 2026-09-19 this acknowledged and discarded it.
+	var req localSessionReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return
+	}
+	res := h.applyLocalSession(user.ID, req)
+	if !res.Success {
+		playlistsLog.Warn("abs: /api/session/local not applied: session_id=%s err=%s",
+			logger.SanitizeLogValue(res.ID), res.Error)
 	}
 }
 
@@ -503,13 +509,30 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	// Continue Listening) and StatusManual (the user pinned a read status by hand).
 	// A sync fires roughly every 20 s of listening, so constructing a literal here
 	// un-hides and un-pins within seconds of the user's choice.
+	//
+	// Read-modify-write alone does NOT protect StatusManual: it keeps the FLAG
+	// but, until 2026-09-19, this then overwrote Status anyway, so a sync
+	// silently replaced a status the user pinned by hand (the contract on
+	// UserBookStatus, store.go, and readstatus.go both say a manual status is
+	// left alone). setDerivedStatus is what honours it.
 	_ = h.updateUserBookState(s.UserID, s.BookID, func(state *database.UserBookState) {
-		state.Status = status
+		setDerivedStatus(state, status)
 		state.LastActivityAt = now
 		state.LastSegmentID = absProgressSegmentID
 		state.TotalListenedSeconds = timeListening
 		state.ProgressPct = pct
 	})
+}
+
+// setDerivedStatus writes a status the server COMPUTED from a position, unless
+// the user pinned one by hand (StatusManual), which the server must leave alone
+// (UserBookStatus contract in database/store.go; readstatus.Recompute does the
+// same). Every automatic ABS write path sets Status through here.
+func setDerivedStatus(state *database.UserBookState, status string) {
+	if state.StatusManual {
+		return
+	}
+	state.Status = status
 }
 
 // updateUserBookState read-modify-writes the (user, book) state row.
