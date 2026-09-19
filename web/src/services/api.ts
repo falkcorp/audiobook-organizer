@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.111.0
+// version: 2.112.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6336,10 +6336,27 @@ export async function getCacheStats(): Promise<CacheStatsResponse> {
 // merge-chapter-groups) started through POST /maintenance/jobs/:job_id; the
 // structured result is read from GET /operations/:id/result once the run ends.
 
+/** One reviewed group a real merge applies (from a merge preview). */
+export interface ChapterGroupSelection {
+  primary_book_id: string;
+  book_ids: string[];
+  fingerprint: string;
+}
+
 export interface ChapterGroupsParams {
   min_files?: number;
   max_per_file_duration?: number;
   path_prefix?: string;
+  /** Required for a real merge: exactly the previewed groups to apply. */
+  groups?: ChapterGroupSelection[];
+}
+
+export interface ChapterMemberSnapshot {
+  book_id: string;
+  title: string;
+  file_count: number;
+  duration: number;
+  updated_at: string;
 }
 
 /** Per-group outcome. The merge-only fields are absent on a scan. */
@@ -6351,8 +6368,13 @@ export interface ChapterGroup {
   total_duration: number;
   file_count: number;
   directory: string;
-  /** would_merge / would_skip (dry run) or merged / partial / failed. */
-  status?: 'would_merge' | 'would_skip' | 'merged' | 'partial' | 'failed';
+  members?: ChapterMemberSnapshot[];
+  /** What the preview saw; a real merge sends it back and drifted groups are skipped. */
+  fingerprint?: string;
+  /** would_merge / would_skip / blocked (dry run) or merged / partial / failed / drifted / blocked. */
+  status?: 'would_merge' | 'would_skip' | 'blocked' | 'drifted' | 'merged' | 'partial' | 'failed';
+  /** Data a merge cannot carry; a group with any is never merged. */
+  blockers?: string[];
   primary_title?: string;
   /** set = filename-derived title replaced; kept = curated title left alone. */
   title_action?: 'set' | 'kept' | 'kept_locked';
@@ -6371,9 +6393,13 @@ export interface ChapterGroupsResult {
   groups_found: number;
   total_books_affected: number;
   groups_skipped_unknown_duration: number;
+  groups_skipped_duplicate_copies?: number;
+  books_excluded?: number;
   books_merged: number;
   books_skipped: number;
   groups_failed: number;
+  groups_blocked?: number;
+  groups_drifted?: number;
   groups: ChapterGroup[];
 }
 

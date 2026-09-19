@@ -15,6 +15,7 @@ vi.mock('../../services/api', () => ({
 }));
 
 const group: api.ChapterGroup = {
+  fingerprint: 'fp-1',
   primary_book_id: 'ch01',
   book_ids: ['ch01', 'ch02', 'ch03'],
   source_book_ids: ['ch02', 'ch03'],
@@ -170,5 +171,83 @@ describe('ChapterConsolidationCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scan for Chapter Groups' }));
     expect(await screen.findByText('boom')).toBeInTheDocument();
     expect(api.getOperationResult).not.toHaveBeenCalled();
+  });
+
+  it('confirm sends the previewed params and groups, never the form as edited since', async () => {
+    mockRun(
+      result({
+        params: {
+          dry_run: true,
+          min_files: 2,
+          max_per_file_duration: 600,
+          path_prefix: '/lib/Foo',
+        },
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.change(screen.getByLabelText('Path prefix (optional)'), {
+      target: { value: '/lib/Foo' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+
+    // The operator clears the prefix after reviewing a /lib/Foo preview.
+    fireEvent.change(screen.getByLabelText('Path prefix (optional)'), { target: { value: '' } });
+    fireEvent.click(screen.getByLabelText('Dry Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge 2 record(s)' }));
+    await waitFor(() => expect(api.runMaintenanceJob).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.runMaintenanceJob).mock.calls[1]).toEqual([
+      'merge-chapter-groups',
+      false,
+      {
+        min_files: 2,
+        max_per_file_duration: 600,
+        path_prefix: '/lib/Foo',
+        groups: [
+          { primary_book_id: 'ch01', book_ids: ['ch01', 'ch02', 'ch03'], fingerprint: 'fp-1' },
+        ],
+      },
+    ]);
+  });
+
+  it('a scan result does not unlock a real merge; only a merge preview does', async () => {
+    mockRun(result({ job: 'scan-chapter-groups', dry_run: true, groups: [group] }));
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scan for Chapter Groups' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Dry Run'));
+    expect(screen.getByRole('button', { name: 'Merge Chapter Groups…' })).toBeDisabled();
+  });
+
+  it('a deselected group is left out of the request and the count', async () => {
+    mockRun(
+      result({
+        groups_found: 2,
+        books_merged: 3,
+        groups: [
+          { ...group, status: 'would_merge' },
+          {
+            ...group,
+            primary_book_id: 'x01',
+            book_ids: ['x01', 'x02'],
+            source_book_ids: ['x02'],
+            fingerprint: 'fp-2',
+            status: 'would_merge',
+          },
+        ],
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Show 2 group/ }));
+    fireEvent.click(screen.getByLabelText('Include x01'));
+    fireEvent.click(screen.getByLabelText('Dry Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge 2 record(s)' }));
+    await waitFor(() => expect(api.runMaintenanceJob).toHaveBeenCalledTimes(2));
+    const sent = vi.mocked(api.runMaintenanceJob).mock.calls[1][2] as { groups: unknown[] };
+    expect(sent.groups).toHaveLength(1);
   });
 });

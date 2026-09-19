@@ -1,5 +1,5 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -11,6 +11,7 @@ import {
   CardActions,
   CardContent,
   CardHeader,
+  Checkbox,
   Chip,
   CircularProgress,
   Collapse,
@@ -266,6 +267,8 @@ const chapterStatusColor: Record<
 > = {
   would_merge: 'info',
   would_skip: 'warning',
+  blocked: 'warning',
+  drifted: 'warning',
   merged: 'success',
   partial: 'warning',
   failed: 'error',
@@ -277,8 +280,12 @@ const chapterStatusColor: Record<
  * jobs: the card starts one, follows the operation to a terminal status, then
  * renders the structured result the job stored on the operation.
  *
- * A real merge is never one click: it needs a preview (or scan) result first,
- * and a confirm dialog that names the counts from that result.
+ * A real merge is never one click: it needs a merge PREVIEW (a dry run, which
+ * also runs the iTunes guard and the carry checks -- a scan does not count),
+ * and a confirm dialog that names the counts. The real merge sends exactly the
+ * previewed groups (minus any the operator unticked) with their fingerprints and
+ * the preview's own params -- never the form as edited since -- and the server
+ * merges only those, skipping any group that changed after the preview.
  */
 export function ChapterConsolidationCard() {
   const [running, setRunning] = useState<ChapterJobId | null>(null);
@@ -290,6 +297,7 @@ export function ChapterConsolidationCard() {
   const [result, setResult] = useState<api.ChapterGroupsResult | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deselected, setDeselected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const params = useCallback((): api.ChapterGroupsParams => {
@@ -303,14 +311,15 @@ export function ChapterConsolidationCard() {
   }, [minFiles, maxPerFile, pathPrefix]);
 
   const runJob = useCallback(
-    async (jobId: ChapterJobId, jobDryRun: boolean) => {
+    async (jobId: ChapterJobId, jobDryRun: boolean, jobParams: api.ChapterGroupsParams) => {
       setRunning(jobId);
       setProgress('Starting…');
       setError(null);
       setResult(null);
+      setDeselected(new Set());
       try {
         const { operation_id: opId } = await api.runMaintenanceJob(jobId, jobDryRun, {
-          ...params(),
+          ...jobParams,
         });
         if (!opId) throw new Error('The server did not return an operation id');
         const op = await api.pollOperation(opId, (o) => {
@@ -331,12 +340,25 @@ export function ChapterConsolidationCard() {
         setProgress(null);
       }
     },
-    [params]
+    []
   );
+
+  // A real merge needs a merge PREVIEW to confirm against. A scan does not
+  // count (it runs neither the iTunes guard nor the carry checks), and a
+  // result that was itself a real merge does not either.
+  const preview = result && result.job === 'merge-chapter-groups' && result.dry_run ? result : null;
+  // Only groups the preview would merge, and the operator left ticked, are
+  // sent -- blocked / would_skip groups never are.
+  const selectedGroups = preview
+    ? preview.groups.filter(
+        (g) => g.status === 'would_merge' && g.fingerprint && !deselected.has(g.primary_book_id)
+      )
+    : [];
+  const previewSources = selectedGroups.reduce((n, g) => n + g.source_book_ids.length, 0);
 
   const handleMergeClick = () => {
     if (dryRun) {
-      void runJob('merge-chapter-groups', true);
+      void runJob('merge-chapter-groups', true, params());
     } else {
       setConfirmOpen(true);
     }
@@ -344,20 +366,29 @@ export function ChapterConsolidationCard() {
 
   const handleConfirmMerge = () => {
     setConfirmOpen(false);
-    void runJob('merge-chapter-groups', false);
+    if (!preview) return;
+    // The PREVIEW's params, not the form's current values, and exactly the
+    // reviewed groups with their fingerprints.
+    const { dry_run: _ignored, groups: _prev, ...previewParams } = preview.params;
+    void _ignored;
+    void _prev;
+    void runJob('merge-chapter-groups', false, {
+      ...previewParams,
+      groups: selectedGroups.map((g) => ({
+        primary_book_id: g.primary_book_id,
+        book_ids: g.book_ids,
+        fingerprint: g.fingerprint ?? '',
+      })),
+    });
   };
 
-  // A real merge needs a preview to confirm against: the dialog's counts come
-  // from it. A result that was itself a real merge does not count.
-  const preview = result && result.dry_run ? result : null;
-  // Groups the preview marked would_skip (iTunes guard, unreadable primary)
-  // are not merged, so they do not count toward what the dialog promises.
-  const previewSources = preview
-    ? preview.groups.reduce(
-        (n, g) => n + (g.status === 'would_skip' ? 0 : g.source_book_ids.length),
-        0
-      )
-    : 0;
+  const toggleGroup = (primaryId: string) =>
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (next.has(primaryId)) next.delete(primaryId);
+      else next.add(primaryId);
+      return next;
+    });
   const groups = result?.groups ?? [];
   const isMergeResult = result?.job === 'merge-chapter-groups';
 
@@ -407,7 +438,7 @@ export function ChapterConsolidationCard() {
               running === 'scan-chapter-groups' ? <CircularProgress size={14} /> : undefined
             }
             disabled={running !== null}
-            onClick={() => void runJob('scan-chapter-groups', true)}
+            onClick={() => void runJob('scan-chapter-groups', true, params())}
           >
             {running === 'scan-chapter-groups' ? 'Scanning…' : 'Scan for Chapter Groups'}
           </Button>
@@ -432,7 +463,7 @@ export function ChapterConsolidationCard() {
                 <CircularProgress size={14} color="inherit" />
               ) : undefined
             }
-            disabled={running !== null || (!dryRun && !preview)}
+            disabled={running !== null || (!dryRun && selectedGroups.length === 0)}
             onClick={handleMergeClick}
           >
             {running === 'merge-chapter-groups'
@@ -498,12 +529,23 @@ export function ChapterConsolidationCard() {
               <List dense disablePadding>
                 {groups.map((g) => (
                   <ListItem key={g.primary_book_id} disableGutters>
+                    {preview && g.status === 'would_merge' && (
+                      <Checkbox
+                        size="small"
+                        checked={!deselected.has(g.primary_book_id)}
+                        onChange={() => toggleGroup(g.primary_book_id)}
+                        slotProps={{ input: { 'aria-label': `Include ${g.primary_book_id}` } }}
+                      />
+                    )}
                     <ListItemText
                       primary={g.common_title || '(unknown title)'}
                       secondary={
                         `${g.file_count} files · ${Math.round(g.total_duration / 60)} min total · ${g.directory}` +
                         (g.title_action === 'kept' && g.primary_title
                           ? ` · keeps title "${g.primary_title}"`
+                          : '') +
+                        (g.blockers && g.blockers.length > 0
+                          ? ` · blocked: ${g.blockers.join('; ')}`
                           : '') +
                         (g.errors && g.errors.length > 0 ? ` · ${g.errors.join('; ')}` : '')
                       }
