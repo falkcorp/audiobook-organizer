@@ -1,5 +1,5 @@
 // file: internal/ai/openai_batch.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -7,10 +7,10 @@ package ai
 
 import (
 	"bufio"
-	"errors"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"

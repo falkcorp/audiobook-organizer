@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"log/slog"
 	"slices"
 	"sync"
@@ -116,9 +117,12 @@ type TaskScheduler struct {
 	// (see interval_clock.go). It is the fallback used when the settings store
 	// is unavailable, and it is written on every stamp so the two never diverge
 	// while the process lives. Guarded by mu.
-	intervalTick       map[string]time.Time
-	mu                 sync.RWMutex
-	shutdown           chan struct{}
+	intervalTick map[string]time.Time
+	mu           sync.RWMutex
+	shutdown     chan struct{}
+	// lifeCtx ends when shutdown closes, with lifecycle.ErrShutdown as its
+	// cause. Built on first use by lifecycleContext. Guarded by mu.
+	lifeCtx            context.Context
 	maintenanceOrder   []string
 	lastMaintenanceRun time.Time
 
@@ -239,6 +243,31 @@ func (ts *TaskScheduler) RegisterTask(def TaskDefinition) {
 // registerTask is the internal alias used during construction.
 func (ts *TaskScheduler) registerTask(def TaskDefinition) {
 	ts.RegisterTask(def)
+}
+
+// lifecycleContext is the context for work a task starts that outlives the
+// task call itself (the batch poller's collection, which launches AI-scan
+// enrichment and cross-validation). It ends when the scheduler's shutdown
+// channel closes, with lifecycle.ErrShutdown as the cause, so that work stops
+// with the server and knows it was a restart rather than a cancel. Before
+// Start (no shutdown channel) it is context.Background().
+func (ts *TaskScheduler) lifecycleContext() context.Context {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.lifeCtx != nil {
+		return ts.lifeCtx
+	}
+	if ts.shutdown == nil {
+		return context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	shutdown := ts.shutdown
+	go func() {
+		<-shutdown
+		cancel(lifecycle.ErrShutdown)
+	}()
+	ts.lifeCtx = ctx
+	return ctx
 }
 
 // Start launches background goroutines for all scheduled and startup tasks.

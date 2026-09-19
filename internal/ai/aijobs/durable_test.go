@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
 // last-edited: 2026-09-19
 
@@ -381,7 +381,13 @@ func TestWriteOffUnlinked_OnlyOnConfirmedAbsence(t *testing.T) {
 	}
 	listed := []OrphanBatch{{ID: "b1", Metadata: map[string]string{MetadataJobIDKey: "old-listed"}}}
 
-	n, err := WriteOffUnlinked(store, listed, now)
+	n, err := WriteOffUnlinked(store, listed, now, time.Time{})
+	require.NoError(t, err)
+	require.Zero(t, n, "no covered window, nothing is known absent")
+	n, err = WriteOffUnlinked(store, listed, now, now.Add(-2*time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, n, "old-gone predates the covered window")
+	n, err = WriteOffUnlinked(store, listed, now, now.Add(-4*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Equal(t, "failed", store.jobs["old-gone"].Status)
