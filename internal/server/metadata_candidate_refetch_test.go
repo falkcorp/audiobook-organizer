@@ -11,6 +11,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -212,5 +213,44 @@ func TestCandidateFetch_FreshCachedCandidatesAreServedFromCache(t *testing.T) {
 	r := second[book.ID]
 	if r.Status != "matched" || r.Cached != candidateCachedCandidates || r.Candidate == nil || r.Candidate.Title != "The Hobbit" {
 		t.Fatalf("second run result = {status %q, cached %q, candidate %+v}, want matched The Hobbit from cache", r.Status, r.Cached, r.Candidate)
+	}
+}
+
+// TestCandidateFetch_KnownEmptyExpiresAfterBackstop: provider catalogs add
+// releases, so a "known empty" verdict is re-asked once it is older than
+// database.MetadataKnownEmptyTTL, even with unchanged inputs and sources.
+func TestCandidateFetch_KnownEmptyExpiresAfterBackstop(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := s.storeForWiring()
+
+	book, err := store.CreateBook(&database.Book{Title: "Old Empty Verdict", FilePath: "/lib/old/book.m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	src := &countingSource{name: "Empty"}
+	mfs := metafetch.NewService(store)
+	mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	s.metadataFetchService = mfs
+
+	runCandidateFetch(t, s, "op-backstop-1", []string{book.ID}, false)
+	entry, err := store.GetMetadataCache(book.ID)
+	if err != nil || entry == nil || entry.LastEmptyFetchAt == nil || len(entry.EmptySources) == 0 {
+		t.Fatalf("first run did not record a known-empty verdict: %+v (err %v)", entry, err)
+	}
+	old := time.Now().UTC().Add(-91 * 24 * time.Hour)
+	entry.LastEmptyFetchAt = &old
+	entry.FetchedAt = old
+	if err := store.PutMetadataCache(entry); err != nil {
+		t.Fatalf("PutMetadataCache: %v", err)
+	}
+
+	before := src.calls.Load()
+	second := runCandidateFetch(t, s, "op-backstop-2", []string{book.ID}, false)
+	if src.calls.Load() == before {
+		t.Fatal("a known-empty verdict older than the 90-day backstop was reused; providers were not asked again")
+	}
+	if second[book.ID].Cached != "" {
+		t.Fatalf("expired verdict was served from cache (%q)", second[book.ID].Cached)
 	}
 }

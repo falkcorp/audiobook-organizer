@@ -14,7 +14,8 @@
   answered with nothing is reported as "no match" without asking again. That
   answer only counts when every provider really answered: one that errored or
   was out of quota is asked again next time. Editing the title or author, or
-  enabling another provider, asks again. So does sending `force: true` to the
+  enabling another provider, asks again, and a "nothing found" answer is
+  re-checked after 90 days because provider catalogs add new releases. So does sending `force: true` to the
   batch-fetch endpoint. The progress line and the finish log now show how many
   books were answered from the cache and how many were already known to be empty.
 

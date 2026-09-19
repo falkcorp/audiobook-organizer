@@ -57,7 +57,8 @@ type MetadataCandidateCache struct {
 	// fetch skips a book whose inputs are unchanged and whose EmptySources
 	// covers every source currently enabled -- refetching it would ask the
 	// same providers the same question again. A newly enabled provider, or a
-	// title/author edit (which changes SourceHash), re-opens the question.
+	// title/author edit (which changes SourceHash), re-opens the question, and
+	// so does age: see MetadataKnownEmptyTTL.
 	// Rows written before this field existed carry none; see
 	// metafetch.Service.CachedBatchVerdict for how those are treated.
 	EmptySources []string `json:"empty_sources,omitempty"`
@@ -66,6 +67,10 @@ type MetadataCandidateCache struct {
 // MetadataCacheTTL is the freshness window. Entries older than this
 // are still readable but the UI flags them and offers a Refresh.
 const MetadataCacheTTL = 30 * 24 * time.Hour
+
+// MetadataKnownEmptyTTL bounds a "every provider answered with nothing" verdict:
+// provider catalogs add releases, so after this the batch fetch asks again.
+const MetadataKnownEmptyTTL = 90 * 24 * time.Hour
 
 // Age returns how long ago the cache was written.
 func (c *MetadataCandidateCache) Age() time.Duration {
