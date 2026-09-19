@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -308,7 +308,38 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		}
 	}
 
-	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested, dedup.SplitMergeOptions{FileOrder: order, FillEmpty: true})
+	// Re-verify UNDER the merge lock (Precheck runs after
+	// merge.LockMergeRMW): the reads above are outside it, so a file, title or
+	// bookmark that changed between them and the lock would otherwise be
+	// merged unreviewed. The fingerprint covers titles, durations, updated_at
+	// and every file id+path, so a match proves the title decision, audit
+	// record and play order computed above describe what is merged; the play
+	// order itself is recomputed under the lock (OrderByBooks: the primary,
+	// then the sources in chapter order).
+	precheck := func() error {
+		cur, err := readChapterGroup(store, sel.BookIDs)
+		if err != nil {
+			return &chapterStepError{status: "failed", msg: err.Error()}
+		}
+		if _, why := verifyChapterSelection(sel, cur, opts); why != "" {
+			return &chapterStepError{status: "drifted", msg: why}
+		}
+		if b, _ := cc.chapterGroupBlockers(cur.books[0], cur.books[1:]); len(b) > 0 {
+			return &chapterStepError{status: "blocked", msg: fmt.Sprint(b), blockers: b}
+		}
+		return nil
+	}
+	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested,
+		dedup.SplitMergeOptions{OrderByBooks: true, FillEmpty: true, Precheck: precheck})
+	var stepErr *chapterStepError
+	if errors.As(merr, &stepErr) {
+		out.Status = stepErr.status
+		out.Blockers = stepErr.blockers
+		if stepErr.blockers == nil {
+			out.Errors = append(out.Errors, stepErr.msg)
+		}
+		return
+	}
 	switch {
 	case merr != nil:
 		out.Status = "failed"
@@ -362,6 +393,15 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 			logger.SanitizeLogValue(out.PrimaryBookID), logger.SanitizeLogValue(cerr.Error()))
 	}
 }
+
+// chapterStepError is a Precheck refusal, carrying the outcome status.
+type chapterStepError struct {
+	status   string
+	msg      string
+	blockers []string
+}
+
+func (e *chapterStepError) Error() string { return e.status + ": " + e.msg }
 
 // chapterTitleDecision returns the title to offer the merge ("" = leave the
 // primary's title alone) and the action to report. Only a title that is still

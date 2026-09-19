@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -89,6 +89,10 @@ type chapterMemberSnapshot struct {
 	FileCount int    `json:"file_count"`
 	Duration  int    `json:"duration"`
 	UpdatedAt string `json:"updated_at"`
+	// Files is "id|path" for each of the member's files, sorted: a file
+	// swapped, added or moved on disk after the preview changes the
+	// fingerprint even when the count does not.
+	Files []string `json:"files"`
 }
 
 // chapterGroupOutcome is one group as the Maintenance card renders it. The
@@ -237,6 +241,10 @@ func readChapterGroup(store maintenance.JobStore, bookIDs []string) (*chapterGro
 		if b.UpdatedAt != nil {
 			m.UpdatedAt = b.UpdatedAt.UTC().Format(time.RFC3339Nano)
 		}
+		for _, f := range files {
+			m.Files = append(m.Files, f.ID+"|"+f.FilePath)
+		}
+		sort.Strings(m.Files)
 		st.members = append(st.members, m)
 	}
 	return st, nil
@@ -246,7 +254,8 @@ func readChapterGroup(store maintenance.JobStore, bookIDs []string) (*chapterGro
 func chapterFingerprint(members []chapterMemberSnapshot) string {
 	h := sha256.New()
 	for _, m := range members {
-		for _, part := range []string{m.BookID, m.Title, strconv.Itoa(m.FileCount), strconv.Itoa(m.Duration), m.UpdatedAt} {
+		parts := []string{m.BookID, m.Title, strconv.Itoa(m.FileCount), strconv.Itoa(m.Duration), m.UpdatedAt}
+		for _, part := range append(parts, m.Files...) {
 			h.Write([]byte(part))
 			h.Write([]byte{0x1f})
 		}

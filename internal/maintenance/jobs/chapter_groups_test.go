@@ -358,3 +358,27 @@ func TestMergeChapterGroups_MetadataFillsOrConflictBlocks(t *testing.T) {
 		t.Fatal("a group with a metadata conflict was merged")
 	}
 }
+
+// The fingerprint covers each member's files, not only their count: a file
+// swapped or moved on disk after the preview is drift.
+func TestMergeChapterGroups_FileChangeAfterPreviewIsDrift(t *testing.T) {
+	s := ddRealStore(t)
+	tale := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
+	preview, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	files, err := s.GetBookFiles(tale[1].ID)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("GetBookFiles: %v %d", err, len(files))
+	}
+	f := files[0]
+	f.FilePath = "/lib/A/Tale/02 - Tale (replaced).mp3"
+	if err := s.UpdateBookFile(f.ID, &f); err != nil {
+		t.Fatalf("UpdateBookFile: %v", err)
+	}
+	res := chRun(t, &mergeChapterGroupsJob{}, s, chReviewedParams(t, preview), false)
+	if res.GroupsDrifted != 1 || res.BooksMerged != 0 {
+		t.Fatalf("a file change after the preview was merged: %+v", res)
+	}
+}

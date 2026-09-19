@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.113.0
+// version: 2.114.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6357,6 +6357,8 @@ export interface ChapterMemberSnapshot {
   file_count: number;
   duration: number;
   updated_at: string;
+  /** "id|path" of each file, sorted; part of the group fingerprint. */
+  files?: string[];
 }
 
 /** Per-group outcome. The merge-only fields are absent on a scan. */
