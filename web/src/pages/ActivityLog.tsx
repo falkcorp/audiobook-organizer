@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.36.0
+// version: 2.37.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -315,6 +315,9 @@ export default function ActivityLog() {
   // Feed
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [total, setTotal] = useState(0);
+  // The last feed answer was cut off by the server's scan budget: older
+  // matches were not searched, so "no more results" is not a fact.
+  const [partial, setPartial] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
@@ -628,6 +631,7 @@ export default function ActivityLog() {
         if (!isCurrent()) return;
         setEntries(result.entries || []);
         setTotal(result.total || 0);
+        setPartial(result.partial === true);
         setError(null);
         setLastUpdated(new Date());
       } catch (err) {
@@ -643,6 +647,7 @@ export default function ActivityLog() {
         if (!silent) {
           setEntries([]);
           setTotal(0);
+          setPartial(false);
         }
       } finally {
         if (isCurrent()) {
@@ -3038,6 +3043,13 @@ export default function ActivityLog() {
               empty    — request succeeded and the log really is empty
               table    — data (optionally with a stale-data warning on top)
             Before this, all four collapsed into "No activity entries found." */}
+        {!loading && partial && (
+          <Alert severity="info" data-testid="activity-partial" sx={{ m: 1 }}>
+            Only the most recent part of the log was searched for this filter, so older matches
+            may be missing and the count is a minimum. Add a type or level filter, or narrow
+            the time range, to search further back.
+          </Alert>
+        )}
         {loading ? (
           <Box
             data-testid="activity-loading"

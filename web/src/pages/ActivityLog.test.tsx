@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -177,6 +177,26 @@ describe('ActivityLog error state', () => {
     expect(await screen.findByText('Added The Odyssey')).toBeInTheDocument();
     expect(screen.queryByTestId('activity-error')).not.toBeInTheDocument();
     expect(screen.queryByTestId('activity-empty')).not.toBeInTheDocument();
+  });
+
+  it('says the search was partial when the server cut the scan short', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0, partial: true });
+
+    renderPage();
+
+    // Both: the empty state is still shown, but it is no longer presented as
+    // the whole answer.
+    expect(await screen.findByTestId('activity-partial')).toBeInTheDocument();
+    expect(screen.getByTestId('activity-empty')).toBeInTheDocument();
+  });
+
+  it('shows no partial notice for a complete answer', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1, partial: false });
+
+    renderPage();
+
+    expect(await screen.findByText('Added The Odyssey')).toBeInTheDocument();
+    expect(screen.queryByTestId('activity-partial')).not.toBeInTheDocument();
   });
 
   it('keeps the visible page and warns when a BACKGROUND refresh fails', async () => {
