@@ -1,7 +1,7 @@
 // file: internal/server/metrics_gzip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 75ace827-acfe-4e59-8a02-2b989251a9cc
-// last-edited: 2026-08-02
+// last-edited: 2026-09-19
 
 package server
 
@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	ginzip "github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -65,11 +64,11 @@ func isGzip(b []byte) bool {
 }
 
 // metricsRouter builds a router wired exactly as setupRoutes wires the real one:
-// the same global gzip middleware with the same exclusions, and promhttp on /metrics.
+// the same global gzip middleware (compressionMiddleware), and promhttp on /metrics.
 func metricsRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(ginzip.Gzip(ginzip.DefaultCompression, ginzip.WithExcludedPaths([]string{"/api/events", "/metrics"})))
+	r.Use(compressionMiddleware())
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	// A representative ordinary endpoint, to prove the exclusion is narrow.
 	r.GET("/api/v1/books", func(c *gin.Context) {
