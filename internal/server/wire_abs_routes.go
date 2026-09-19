@@ -40,6 +40,13 @@ var (
 	// database.Store (SearchBooksFiltered, GetBookFilesForIDsCore, GetBooksByTag)
 	// would otherwise surface only as an os.Exit(1) there; this makes a missing
 	// or drifted method a build failure instead.
+	//
+	// Resolution lands on the bare *PebbleStore, never the indexedStore
+	// decorator (it carries none of those three methods). Verified harmless on
+	// 2026-09-19: indexedStore overrides only WRITE methods (CreateBook,
+	// UpdateBook, ModifyBook, FillBookMediaInfo, DeleteBook — indexed_store.go),
+	// and LibraryStore is read-only, so every read the ABS surface makes is the
+	// same call either way.
 	_ abshandler.LibraryStore = (*database.PebbleStore)(nil)
 )
 
