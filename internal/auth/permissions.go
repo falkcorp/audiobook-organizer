@@ -1,5 +1,5 @@
 // file: internal/auth/permissions.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d8a1f4e-5c3b-4f90-a7d6-1e8c0f2b9a45
 // last-edited: 2026-09-19
 //
@@ -76,10 +76,12 @@ const (
 	// PermFingerprintWorker gates the remote fingerprint worker API
 	// (/api/v1/fingerprint/worker/*): leasing windowed-fingerprint jobs
 	// from a running acoustid.window-backfill and posting their results.
-	// Meant for a dedicated service user whose API key is scoped to
-	// exactly this atom (Scopes=["fingerprint.worker"], narrowed by
-	// intersectPermissions), so a worker's key can do nothing else. Only
-	// admin holds it among the seed roles.
+	// Meant for a service user holding the fp-worker seed role (only this
+	// atom), or any key scoped to exactly this atom. A credential whose
+	// permissions are this atom alone is confined by the auth middleware
+	// to /api/v1/fingerprint/worker/, so it reaches nothing else, not even
+	// the protected routes that check no permission. Admin and fp-worker
+	// hold it among the seed roles.
 	PermFingerprintWorker Permission = "fingerprint.worker"
 )
 

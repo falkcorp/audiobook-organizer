@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -74,11 +74,19 @@ const maxWorkerIDLen = 128
 // calibrationFiles is how many calibration files hello offers.
 const calibrationFiles = 3
 
+// calibrationCandidates is how many current files the plan keeps for hello
+// to choose from: some may be worker-made or have moved since.
+const calibrationCandidates = 20
+
 // calibrationHeadBytes is how much of a calibration file is hashed.
 const calibrationHeadBytes = 64 << 10
 
 // hubSweepEvery is the sweeper period; a variable so tests can shorten it.
 var hubSweepEvery = workerapi.SweepEvery
+
+// hubStat is the stat Lease runs on each picked file; a variable so a test
+// can make it slow.
+var hubStat = os.Stat
 
 // maxRemoteTimeouts: the second timeout sends a job to the server lane.
 const maxRemoteTimeouts = 2
@@ -108,7 +116,8 @@ type queueItem struct {
 	serverOnly bool   // never offered to a worker again this run
 	timeouts   int
 	remote     int8
-	rel        string // root-relative path when remote == remoteYes
+	jobs       []string // job IDs issued for it; pruned when it is done
+	rel        string   // root-relative path when remote == remoteYes
 	dur        fingerprint.DurationUsed
 	specs      []fingerprint.WindowSpec
 }
@@ -118,7 +127,8 @@ type workerLease struct {
 	worker   string
 	expires  time.Time
 	jobs     []string
-	open     int // jobs still qLeased by this lease
+	items    []int // every item picked for it, so a sweep finds them even before jobs exist
+	open     int   // items still qLeased by this lease
 	versions workerapi.ToolVersions
 }
 
@@ -144,6 +154,7 @@ type hubRun struct {
 	allowed []workerapi.ToolVersions
 	roots   []pathutil.PathVar
 	calib   []windowItem
+	probe   libraryScanProbe // nil: no library.scan gate (tests)
 
 	calibOnce sync.Once
 	calibOut  []workerapi.CalibrationFile
@@ -181,35 +192,25 @@ func (p *Plugin) WorkerHub() *WorkerHub {
 	return p.hub
 }
 
-// allowedToolVersions is the server's own pair plus the configured allowlist.
+// allowedToolVersions is the server's own pair plus the configured
+// allowlist: the fingerprint.ToolsEquivalent class.
 func allowedToolVersions(server fingerprint.ToolVersionInfo) []workerapi.ToolVersions {
 	out := []workerapi.ToolVersions{{Fpcalc: server.Fpcalc, FFmpeg: server.FFmpeg}}
-	for _, e := range config.AppConfig.FingerprintWorkerToolVersions {
-		fp, ff, ok := strings.Cut(strings.TrimSpace(e), "/")
-		fp, ff = strings.TrimSpace(fp), strings.TrimSpace(ff)
-		if !ok || fp == "" || ff == "" {
-			continue
+	for _, p := range fingerprint.ParseToolPairs(config.AppConfig.FingerprintWorkerToolVersions) {
+		if p != server {
+			out = append(out, workerapi.ToolVersions{Fpcalc: p.Fpcalc, FFmpeg: p.FFmpeg})
 		}
-		out = append(out, workerapi.ToolVersions{Fpcalc: fp, FFmpeg: ff})
 	}
 	return out
 }
 
 // windowVersionAllowed reports whether a stored window's tool pair counts as
-// current: the server's own pair, or a configured allowlisted pair (proven
-// byte-identical by a worker's parity gate). versions nil means unknown (a dry
+// current: equivalent to the server's pair under fingerprint.ToolsEquivalent,
+// the same rule WindowSetSimilarity applies, so a window that is "current" is
+// always comparable with a server-cut one. versions nil means unknown (a dry
 // run without tools) and accepts anything, as before.
 func windowVersionAllowed(fp, ff string, versions *fingerprint.ToolVersionInfo) bool {
-	if versions == nil || (fp == versions.Fpcalc && ff == versions.FFmpeg) {
-		return true
-	}
-	for _, e := range config.AppConfig.FingerprintWorkerToolVersions {
-		efp, eff, ok := strings.Cut(strings.TrimSpace(e), "/")
-		if ok && strings.TrimSpace(efp) == fp && strings.TrimSpace(eff) == ff && fp != "" && ff != "" {
-			return true
-		}
-	}
-	return false
+	return versions == nil || fingerprint.ToolsEquivalent(fingerprint.ToolVersionInfo{Fpcalc: fp, FFmpeg: ff}, *versions)
 }
 
 func versionsAllowed(allowed []workerapi.ToolVersions, fp, ff string) bool {
@@ -234,6 +235,7 @@ func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.Window
 		allowed:   allowedToolVersions(wt.Versions),
 		roots:     pathutil.PathVars(config.AppConfig.RootDir),
 		calib:     calib,
+		probe:     p.currentScanProbe(),
 		cancel:    cancel,
 		sweepDone: make(chan struct{}),
 		changed:   make(chan struct{}, 1),
@@ -323,19 +325,33 @@ func (h *WorkerHub) serverDone(idx int) {
 }
 
 // takeBacklog claims, for the server lane, every requeued item nobody holds.
-func (h *WorkerHub) takeBacklog() []windowItem {
+func (h *WorkerHub) takeBacklog() []windowItem { return h.takeBacklogN(-1, false) }
+
+// takeBacklogN claims up to limit (<0: all) requeued items for the server
+// lane. With inPass set (the tier's pass is still running) it takes only
+// what workers must not have again (server-only items), plus every requeued
+// item when no lease is open (no worker is around to take them); the rest
+// stay at the head of the tier for workers. Taking them during the pass is
+// what lets the checkpoint move past them before the tier ends.
+func (h *WorkerHub) takeBacklogN(limit int, inPass bool) []windowItem {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.run
 	if r == nil {
 		return nil
 	}
+	idle := len(r.leases) == 0
 	var out []windowItem
 	for idx := range r.open {
-		if r.st[idx].state == qPending {
-			r.setState(idx, qServer)
-			out = append(out, r.items[idx])
+		if limit >= 0 && len(out) >= limit {
+			break
 		}
+		st := &r.st[idx]
+		if st.state != qPending || (inPass && !st.serverOnly && !idle) {
+			continue
+		}
+		r.setState(idx, qServer)
+		out = append(out, r.items[idx])
 	}
 	return out
 }
@@ -406,6 +422,12 @@ func (r *hubRun) setState(idx int, s qState) {
 	switch {
 	case s == qDone:
 		delete(r.open, idx)
+		// Finished: its job records are no longer needed (a repost is
+		// recognized from the stored rows, see duplicateOfStored).
+		for _, jid := range it.jobs {
+			delete(r.jobs, jid)
+		}
+		it.jobs = nil
 		r.signal()
 	case s == qLeased:
 		it.touched = true
@@ -489,10 +511,12 @@ func (h *WorkerHub) sweep() int {
 		if now.Before(l.expires) {
 			continue
 		}
+		// By item, not by job: a lease swept while Lease is still statting
+		// its files has items but no jobs yet.
 		k := 0
-		for _, jid := range l.jobs {
-			if j := r.jobs[jid]; j != nil && r.st[j.idx].state == qLeased && r.st[j.idx].lease == id {
-				r.requeueItem(j.idx)
+		for _, idx := range l.items {
+			if r.st[idx].state == qLeased && r.st[idx].lease == id {
+				r.requeueItem(idx)
 				k++
 			}
 		}
@@ -576,6 +600,23 @@ func (r *hubRun) buildCalibration() []workerapi.CalibrationFile {
 		}
 		cf := workerapi.CalibrationFile{Root: root, RelB64: base64.StdEncoding.EncodeToString([]byte(rel)), Rel: rel,
 			Size: it.Size, MtimeUnix: it.MtimeUnix, Head64K: head}
+		serverMade := true
+		for _, w := range stored {
+			if w.Kind != database.WindowKindWindow {
+				continue
+			}
+			// The reference a worker must reproduce is the SERVER's own
+			// print, cut by the server's own tools: a worker-made window
+			// (even an allowlisted one) would let a worker calibrate
+			// against another worker.
+			if strings.HasPrefix(w.Host, workerHostPrefix) || w.FpcalcVersion != r.server.Fpcalc || w.FFmpegVersion != r.server.FFmpeg {
+				serverMade = false
+				break
+			}
+		}
+		if !serverMade {
+			continue
+		}
 		for _, w := range stored {
 			if w.Kind != database.WindowKindWindow || w.Pipeline != fingerprint.WindowPipelineID ||
 				w.SourceSize != it.Size || w.SourceMtimeUnix != it.MtimeUnix {
@@ -585,12 +626,16 @@ func (r *hubRun) buildCalibration() []workerapi.CalibrationFile {
 			cf.Windows = append(cf.Windows, workerapi.CalibrationWindow{
 				Window: workerapi.Window{Kind: string(w.Kind), SlotBP: w.SlotBP, OffsetSec: w.OffsetSec,
 					LengthSec: w.LengthSec, CoversWhole: w.CoversWhole},
-				RawSHA256: hex.EncodeToString(sum[:]),
-				Frames:    w.Frames,
+				RawSHA256:    hex.EncodeToString(sum[:]),
+				Frames:       w.Frames,
+				ToolVersions: workerapi.ToolVersions{Fpcalc: w.FpcalcVersion, FFmpeg: w.FFmpegVersion},
 			})
 		}
 		if len(cf.Windows) > 0 {
 			out = append(out, cf)
+		}
+		if len(out) == calibrationFiles {
+			break
 		}
 	}
 	return out
@@ -642,6 +687,12 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: pipeline=%q fpcalc=%q ffmpeg=%q", ErrToolsNotAllowed, req.Pipeline, req.FpcalcVersion, req.FFmpegVersion)
 	}
+	// Same gate as the server lane (waitForLibraryScan): nothing new is cut
+	// while a library.scan may be rewriting the files. 204: retry later.
+	if r.probe != nil && r.probe.LibraryScanRunning() {
+		h.mu.Unlock()
+		return nil, nil
+	}
 	held := 0
 	for _, l := range r.leases {
 		if l.worker == req.WorkerID {
@@ -661,6 +712,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 	r.leases[leaseID] = lease
 	picked := r.pick(n, leaseID)
 	lease.open = len(picked)
+	lease.items = picked
 	gen := r.gen
 	type cand struct {
 		idx  int
@@ -682,7 +734,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 	// sees now, and the worker refuses the job if its mount disagrees.
 	stats := make([]os.FileInfo, len(cands))
 	for i, c := range cands {
-		if fi, err := os.Stat(c.path); err == nil && fi.Mode().IsRegular() {
+		if fi, err := hubStat(c.path); err == nil && fi.Mode().IsRegular() {
 			stats[i] = fi
 		}
 	}
@@ -691,6 +743,16 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 	defer h.mu.Unlock()
 	if h.run != r || r.gen != gen {
 		return nil, nil // the tier moved on while we statted
+	}
+	if r.leases[leaseID] != lease {
+		// Swept while we statted (the stats outlasted the TTL): the sweep
+		// requeued its items by lease; make sure none is left behind.
+		for _, c := range cands {
+			if st := &r.st[c.idx]; st.state == qLeased && st.lease == leaseID {
+				r.requeueItem(c.idx)
+			}
+		}
+		return nil, nil
 	}
 	resp := &workerapi.LeaseResponse{LeaseID: leaseID}
 	for i, c := range cands {
@@ -709,6 +771,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		j := &workerJob{id: jid, lease: leaseID, worker: req.WorkerID, idx: c.idx, ref: database.FileWindowRef(it.FileID),
 			size: stats[i].Size(), mtime: stats[i].ModTime().Unix(), dur: st.dur, specs: st.specs, versions: lease.versions}
 		r.jobs[jid] = j
+		st.jobs = append(st.jobs, jid)
 		lease.jobs = append(lease.jobs, jid)
 		wj := workerapi.Job{JobID: jid, Ref: string(j.ref), Root: "libroot",
 			RelB64: base64.StdEncoding.EncodeToString([]byte(st.rel)), Rel: strings.ToValidUTF8(st.rel, "�"),
@@ -731,7 +794,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 
 // Renew extends a lease by LeaseTTL. ErrLeaseGone when it expired or was
 // reclaimed (or every job in it is resolved).
-func (h *WorkerHub) Renew(leaseID string) (*workerapi.RenewResponse, error) {
+func (h *WorkerHub) Renew(leaseID string, req workerapi.RenewRequest) (*workerapi.RenewResponse, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r := h.run
@@ -740,7 +803,8 @@ func (h *WorkerHub) Renew(leaseID string) (*workerapi.RenewResponse, error) {
 	}
 	l := r.leases[leaseID]
 	now := h.now()
-	if l == nil || !now.Before(l.expires) {
+	// Another worker's lease answers exactly like a missing one.
+	if l == nil || !now.Before(l.expires) || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
 	}
 	l.expires = now.Add(workerapi.LeaseTTL)
@@ -756,7 +820,7 @@ func (h *WorkerHub) Release(leaseID string, req workerapi.ReleaseRequest) (*work
 		return nil, ErrNoWindowRun
 	}
 	l := r.leases[leaseID]
-	if l == nil {
+	if l == nil || l.worker != req.WorkerID {
 		return nil, ErrLeaseGone
 	}
 	want := map[string]bool{}
@@ -823,7 +887,16 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 	j := r.jobs[res.JobID]
 	if j == nil {
 		h.mu.Unlock()
+		// Pruned when its file finished, or from another run: a repost of
+		// what is stored is still a duplicate.
+		if res.Outcome == workerapi.OutcomeOK {
+			return r.repostOfStored(res)
+		}
 		return workerapi.StatusStale, "unknown_job"
+	}
+	if j.worker != worker {
+		h.mu.Unlock()
+		return workerapi.StatusRejected, "not_your_job"
 	}
 	if res.Ref != string(j.ref) {
 		h.mu.Unlock()
@@ -838,13 +911,21 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 		if res.Outcome != workerapi.OutcomeOK {
 			return workerapi.StatusDuplicate, "already_done"
 		}
-		return r.compareWithStored(j, res)
+		return r.repostOfStored(res)
 	case st.state == qWriting:
 		h.mu.Unlock()
 		return workerapi.StatusStale, "in_flight"
 	case st.state == qServer:
 		h.mu.Unlock()
 		return workerapi.StatusStale, "server_claimed"
+	case st.serverOnly:
+		// Already routed to the server lane (decode error, bad print,
+		// second timeout): no worker result is taken for it any more.
+		h.mu.Unlock()
+		if res.Outcome == workerapi.OutcomeOK {
+			return workerapi.StatusRejected, "server_lane"
+		}
+		return workerapi.StatusStale, "server_lane"
 	case st.state == qLeased && st.lease != j.lease:
 		// A late result from an expired lease whose file was re-leased:
 		// the newer lease owns it now.
@@ -858,7 +939,7 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 
 	var d resultDecision
 	if res.Outcome == workerapi.OutcomeOK {
-		d = r.writeResult(worker, j, res, it)
+		d = r.writeResult(j, res, it)
 	} else {
 		d = r.decideErrorOutcome(j, res, it)
 	}
@@ -922,10 +1003,13 @@ func (r *hubRun) decideErrorOutcome(j *workerJob, res workerapi.JobResult, it wi
 
 // writeResult validates an ok result, re-stats the server's file and writes
 // the windows through storeWindows (the server lane's own write).
-func (r *hubRun) writeResult(worker string, j *workerJob, res workerapi.JobResult, it windowItem) resultDecision {
+//
+// The row's host is the LEASEHOLDER (j.worker), which applyResult has
+// already checked equals the poster.
+func (r *hubRun) writeResult(j *workerJob, res workerapi.JobResult, it windowItem) resultDecision {
 	prints, why := validateWorkerResult(j, res)
 	if why != "" {
-		hubLog.Warn("worker %s job %s (%s) rejected: %s", logger.SanitizeLogValue(worker), j.id, j.ref, why)
+		hubLog.Warn("worker %s job %s (%s) rejected: %s", logger.SanitizeLogValue(j.worker), j.id, j.ref, why)
 		return resultDecision{status: workerapi.StatusRejected, reason: why, next: qPending, serverOnly: true}
 	}
 	fi, err := os.Stat(it.Path)
@@ -940,7 +1024,7 @@ func (r *hubRun) writeResult(worker string, j *workerJob, res workerapi.JobResul
 		return resultDecision{status: workerapi.StatusStale, reason: "changed_on_server", next: qPending}
 	}
 	it.Size, it.MtimeUnix = j.size, j.mtime
-	err = r.p.storeWindows(it, prints, windowProvenance{host: "fp-worker:" + worker, leaseID: j.lease}, r.tally)
+	err = r.p.storeWindows(it, prints, windowProvenance{host: workerHostPrefix + j.worker, leaseID: j.lease}, r.tally)
 	switch {
 	case err == nil:
 		return resultDecision{status: workerapi.StatusAccepted, next: qDone}
@@ -951,16 +1035,21 @@ func (r *hubRun) writeResult(worker string, j *workerJob, res workerapi.JobResul
 	}
 }
 
-// compareWithStored answers a result for a job already done: byte-identical
-// to what is stored is a duplicate; anything else is refused, never written.
-func (r *hubRun) compareWithStored(j *workerJob, res workerapi.JobResult) (string, string) {
-	prints, why := validateWorkerResult(j, res)
-	if why != "" {
-		return workerapi.StatusRejected, why
+// workerHostPrefix marks a window a remote worker computed.
+const workerHostPrefix = "fp-worker:"
+
+// repostOfStored answers an ok result for a job the hub no longer tracks
+// (pruned when its file finished, or from an earlier run): byte-identical,
+// slot for slot, to the stored windows of its ref is a duplicate; different
+// from stored windows is refused; with nothing stored it is an unknown job.
+// Nothing is ever written from here.
+func (r *hubRun) repostOfStored(res workerapi.JobResult) (string, string) {
+	if !strings.HasPrefix(res.Ref, "f:") || len(res.Windows) == 0 {
+		return workerapi.StatusStale, "unknown_job"
 	}
-	stored, err := r.p.store.GetFingerprintWindows(j.ref)
+	stored, err := r.p.store.GetFingerprintWindows(database.FingerprintWindowRef(res.Ref))
 	if err != nil {
-		return workerapi.StatusStale, "server_read_failed"
+		return workerapi.StatusStale, "unknown_job"
 	}
 	bySlot := map[int][]byte{}
 	for _, w := range stored {
@@ -969,14 +1058,15 @@ func (r *hubRun) compareWithStored(j *workerJob, res workerapi.JobResult) (strin
 		}
 	}
 	if len(bySlot) == 0 {
-		return workerapi.StatusStale, "already_resolved"
+		return workerapi.StatusStale, "unknown_job"
 	}
-	if len(bySlot) != len(prints) {
+	if len(bySlot) != len(res.Windows) {
 		return workerapi.StatusRejected, "conflicts_with_stored"
 	}
-	for _, wp := range prints {
-		raw, ok := bySlot[wp.SlotBP]
-		if !ok || string(raw) != string(wp.Raw) {
+	for _, w := range res.Windows {
+		raw, err := base64.StdEncoding.DecodeString(w.RawB64)
+		prev, ok := bySlot[w.SlotBP]
+		if err != nil || !ok || string(raw) != string(prev) {
 			return workerapi.StatusRejected, "conflicts_with_stored"
 		}
 	}

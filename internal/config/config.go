@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.122.0
+// version: 1.122.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-19
 
@@ -1126,10 +1126,17 @@ type Config struct {
 
 	// FingerprintWorkerToolVersions allowlists the tool builds a remote worker
 	// may compute windows with, beyond the server's own (always allowed). Each
-	// entry is "<fpcalc version>/<ffmpeg version>", e.g. "1.6.1/8.0.1". Add a
-	// pair only after the worker's parity gate showed byte-identical windows
-	// from it: windows stamped with an allowlisted pair count as current, so
-	// the server lane never recomputes them.
+	// entry is "<fpcalc version>/<ffmpeg version>", e.g. "1.6.1/8.0.1".
+	//
+	// !!! READ BEFORE ADDING A PAIR !!! An entry is a declaration that this
+	// build's windows are BYTE-IDENTICAL to the server's. Every listed pair and
+	// the server's own pair become ONE equivalence class
+	// (fingerprint.ToolsEquivalent): windows stamped with any of them count as
+	// current, so the server lane NEVER recomputes them, and WindowSetSimilarity
+	// compares them with each other as if one build cut them all. Add a pair only
+	// after the worker's parity gate proved byte-identical output on the
+	// calibration files. A wrong entry silently poisons every comparison that
+	// touches that worker's windows, and removing it later re-queues all of them.
 	FingerprintWorkerToolVersions []string `json:"fingerprint_worker_tool_versions" mapstructure:"fingerprint_worker_tool_versions"`
 
 	// FingerprintLengthSec is how many seconds of audio fpcalc analyses per

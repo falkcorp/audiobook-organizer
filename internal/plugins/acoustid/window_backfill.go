@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -294,6 +294,10 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	var versions *fingerprint.ToolVersionInfo
 	if terr == nil {
 		versions = &wt.Versions
+		// One equivalence class for every reader of tool versions: this
+		// op's "current" check and WindowSetSimilarity's provenance check.
+		fingerprint.SetToolEquivalence(wt.Versions,
+			fingerprint.ParseToolPairs(config.AppConfig.FingerprintWorkerToolVersions))
 	}
 
 	plan, err := p.planWindowBackfill(ctx, reporter, versions)
@@ -351,11 +355,17 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		run.progCur.Store(int64(done))
 		run.progTotal.Store(int64(total))
 		err := registry.RunItems(ctx, reporter, items, func(ctx context.Context, it windowItem) error {
-			if !hub.claimServer(it.qi) {
-				return nil // a remote lease holds it; the drain below waits for it
-			}
-			defer hub.serverDone(it.qi)
-			return run.file(ctx, it)
+			if hub.claimServer(it.qi) {
+				err := run.file(ctx, it)
+				hub.serverDone(it.qi)
+				if err != nil {
+					return err
+				}
+			} // else a remote lease holds it; it comes back done or requeued
+			// Files workers handed to the server lane are cut here, by the
+			// same pool, while the pass runs: left for the drain, each one
+			// would pin the checkpoint below it until the tier ends.
+			return run.serveBacklog(ctx, hub)
 		}, opts)
 		if err == nil {
 			err = run.drainRemote(ctx, hub, tier, workers)
@@ -514,7 +524,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 		switch r.state {
 		case windowCurrent:
 			plan.current[tier]++
-			if len(plan.calibration) < calibrationFiles {
+			if len(plan.calibration) < calibrationCandidates {
 				if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && root == "libroot" {
 					plan.calibration = append(plan.calibration, r.item)
 				}
@@ -796,6 +806,13 @@ type libraryScanProbe interface {
 	LibraryScanRunning() bool
 }
 
+// currentScanProbe returns the wired scan probe (nil when none).
+func (p *Plugin) currentScanProbe() libraryScanProbe {
+	p.toolsMu.Lock()
+	defer p.toolsMu.Unlock()
+	return p.scanProbe
+}
+
 // setScanProbe wires the registry so the op yields to a library.scan.
 func (p *Plugin) setScanProbe(sp libraryScanProbe) {
 	p.toolsMu.Lock()
@@ -881,6 +898,23 @@ func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, worke
 		case <-time.After(windowDrainPoll):
 		}
 	}
+}
+
+// serveBacklog cuts, one at a time, the requeued files the hub hands the
+// server lane during a tier's pass (takeBacklogN with inPass).
+func (r *windowRun) serveBacklog(ctx context.Context, hub *WorkerHub) error {
+	for ctx.Err() == nil {
+		back := hub.takeBacklogN(1, true)
+		if len(back) == 0 {
+			return nil
+		}
+		err := r.file(ctx, back[0])
+		hub.serverDone(back[0].qi)
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 // good resets the breaker after a file that produced an outcome.

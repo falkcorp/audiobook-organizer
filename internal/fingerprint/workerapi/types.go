@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
 // last-edited: 2026-09-19
 
@@ -105,11 +105,14 @@ type CalibrationFile struct {
 	Windows   []CalibrationWindow `json:"windows"`
 }
 
-// CalibrationWindow is one stored window of a calibration file.
+// CalibrationWindow is one stored window of a calibration file. Only windows
+// the server cut itself are offered, never a worker's: the tool pair says
+// which server build made the print the worker must reproduce.
 type CalibrationWindow struct {
 	Window
 	RawSHA256 string `json:"raw_sha256"`
 	Frames    int    `json:"frames"`
+	ToolVersions
 }
 
 // HelloResponse answers GET hello.
@@ -171,6 +174,12 @@ type LeaseResponse struct {
 	Jobs      []Job     `json:"jobs"`
 }
 
+// RenewRequest is the body of POST lease/{id}/renew. Only the worker that
+// holds the lease may renew it.
+type RenewRequest struct {
+	WorkerID string `json:"worker_id"`
+}
+
 // RenewResponse answers POST lease/{id}/renew.
 type RenewResponse struct {
 	LeaseID   string    `json:"lease_id"`
@@ -180,7 +189,8 @@ type RenewResponse struct {
 // ReleaseRequest is the body of POST lease/{id}/release. Empty JobIDs hands
 // back every unfinished job of the lease.
 type ReleaseRequest struct {
-	JobIDs []string `json:"job_ids,omitempty"`
+	WorkerID string   `json:"worker_id"`
+	JobIDs   []string `json:"job_ids,omitempty"`
 }
 
 // ReleaseResponse answers POST lease/{id}/release.

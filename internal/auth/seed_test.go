@@ -1,6 +1,7 @@
 // file: internal/auth/seed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4d1e2f-5b3a-4f60-b9c7-2d8e0f1b9a56
+// last-edited: 2026-09-19
 
 package auth
 
@@ -22,8 +23,8 @@ func TestSeedRoles_FirstRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if created != 3 {
-		t.Errorf("created = %d, want 3", created)
+	if created != 4 {
+		t.Errorf("created = %d, want 4 (admin, editor, viewer, fp-worker)", created)
 	}
 	if updated != 0 {
 		t.Errorf("updated = %d, want 0", updated)
@@ -108,8 +109,8 @@ func TestSeedRoles_UpgradeAddsNewPermission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if created != 2 {
-		t.Errorf("created = %d, want 2 (editor + viewer)", created)
+	if created != 3 {
+		t.Errorf("created = %d, want 3 (editor + viewer + fp-worker)", created)
 	}
 	if updated != 1 {
 		t.Errorf("updated = %d, want 1 (stale admin refreshed)", updated)
@@ -118,5 +119,25 @@ func TestSeedRoles_UpgradeAddsNewPermission(t *testing.T) {
 	admin, _ := store.GetRoleByID(SeedRoleAdmin)
 	if len(admin.Permissions) != len(All()) {
 		t.Errorf("admin still has %d perms after re-seed, want %d", len(admin.Permissions), len(All()))
+	}
+}
+
+// TestSeedRoles_FPWorkerHoldsOnlyTheWorkerPermission: the service user for a
+// remote fingerprint worker need not be an admin.
+func TestSeedRoles_FPWorkerHoldsOnlyTheWorkerPermission(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, _, err := SeedRoles(store); err != nil {
+		t.Fatal(err)
+	}
+	r, err := store.GetRoleByID(SeedRoleFPWorker)
+	if err != nil || r == nil {
+		t.Fatalf("fp-worker role: %v, %v", r, err)
+	}
+	if len(r.Permissions) != 1 || r.Permissions[0] != PermFingerprintWorker {
+		t.Fatalf("fp-worker permissions = %v, want only %s", r.Permissions, PermFingerprintWorker)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 561e8ac1-7cd0-46f4-8b06-e0461af0be94
 // last-edited: 2026-09-19
 
@@ -34,7 +34,7 @@ import (
 type Hub interface {
 	Hello(ctx context.Context) (*workerapi.HelloResponse, error)
 	Lease(ctx context.Context, req workerapi.LeaseRequest) (*workerapi.LeaseResponse, error)
-	Renew(leaseID string) (*workerapi.RenewResponse, error)
+	Renew(leaseID string, req workerapi.RenewRequest) (*workerapi.RenewResponse, error)
 	Release(leaseID string, req workerapi.ReleaseRequest) (*workerapi.ReleaseResponse, error)
 	Results(ctx context.Context, req workerapi.ResultsRequest) (*workerapi.ResultsResponse, error)
 }
@@ -112,9 +112,9 @@ func decode(c *gin.Context, v any, allowEmpty bool) bool {
 	return false
 }
 
-// respondErr maps the hub's errors to status codes. Messages are the
-// sentinels' own text: nothing from the request (and never the key) is
-// echoed back.
+// respondErr maps the hub's errors to status codes. Every message is a
+// sentinel's fixed text except 400, whose detail the hub builds from limits
+// (never from request values); the API key is never part of any message.
 func (h *Handler) respondErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, workerapi.ErrNoRun):
@@ -122,7 +122,7 @@ func (h *Handler) respondErr(c *gin.Context, err error) {
 	case errors.Is(err, workerapi.ErrLeaseGone):
 		httputil.RespondWithError(c, http.StatusGone, workerapi.ErrLeaseGone.Error(), "LEASE_GONE")
 	case errors.Is(err, workerapi.ErrToolsNotAllowed):
-		httputil.RespondWithError(c, http.StatusConflict, err.Error(), "TOOLS_NOT_ALLOWED")
+		httputil.RespondWithError(c, http.StatusConflict, workerapi.ErrToolsNotAllowed.Error(), "TOOLS_NOT_ALLOWED")
 	case errors.Is(err, workerapi.ErrTooManyLeases):
 		httputil.RespondWithError(c, http.StatusTooManyRequests, workerapi.ErrTooManyLeases.Error(), "TOO_MANY_LEASES")
 	case errors.Is(err, workerapi.ErrBadRequest):
@@ -176,7 +176,11 @@ func (h *Handler) renew(c *gin.Context) {
 	if !h.available(c) {
 		return
 	}
-	resp, err := h.hub.Renew(c.Param("id"))
+	var req workerapi.RenewRequest
+	if !decode(c, &req, false) {
+		return
+	}
+	resp, err := h.hub.Renew(c.Param("id"), req)
 	if err != nil {
 		h.respondErr(c, err)
 		return

@@ -1,10 +1,10 @@
 // file: internal/auth/seed.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e8f4a1d-7c3b-4f60-b9d5-1c6e0f2b9a57
-// last-edited: 2026-08-18
+// last-edited: 2026-09-19
 //
-// Seed roles — idempotent upsert of the three canonical roles
-// (admin, editor, viewer) with their permission sets. Called at
+// Seed roles — idempotent upsert of the canonical roles (admin,
+// editor, viewer, fp-worker) with their permission sets. Called at
 // server startup per spec 3.7.
 //
 // Seed roles are defined in code, not config. Adding a new
@@ -33,6 +33,9 @@ const (
 	SeedRoleAdmin  = "admin"
 	SeedRoleEditor = "editor"
 	SeedRoleViewer = "viewer"
+	// SeedRoleFPWorker holds only PermFingerprintWorker: the role for the
+	// service user a remote fp-worker authenticates as.
+	SeedRoleFPWorker = "fp-worker"
 )
 
 // adminPermissions returns every permission constant. Admin always
@@ -57,6 +60,13 @@ func editorPermissions() []Permission {
 	}
 }
 
+// fpWorkerPermissions is the fp-worker role: the remote fingerprint worker
+// API and nothing else (the auth middleware also confines a credential holding
+// only this permission to that API, so permission-free routes stay closed).
+func fpWorkerPermissions() []Permission {
+	return []Permission{PermFingerprintWorker}
+}
+
 // viewerPermissions returns the viewer role's permissions: read-only
 // library access plus the ability to file requests.
 func viewerPermissions() []Permission {
@@ -66,7 +76,7 @@ func viewerPermissions() []Permission {
 	}
 }
 
-// SeedRoles ensures the three canonical roles (admin, editor, viewer)
+// SeedRoles ensures the canonical roles (admin, editor, viewer, fp-worker)
 // exist in the store with their current permission sets. Safe to call
 // repeatedly — existing role permissions are updated on every call
 // so a deploy that adds a new permission constant automatically
@@ -84,6 +94,7 @@ func SeedRoles(store database.RoleStore) (created, updated int, err error) {
 		{SeedRoleAdmin, "admin", "Full access — manage users, integrations, and library", adminPermissions()},
 		{SeedRoleEditor, "editor", "Library editor — can view, edit metadata, organize, scan", editorPermissions()},
 		{SeedRoleViewer, "viewer", "Read-only library access", viewerPermissions()},
+		{SeedRoleFPWorker, "fp-worker", "Remote fingerprint worker service account — the worker API only", fpWorkerPermissions()},
 	}
 	for _, s := range specs {
 		existing, lookupErr := store.GetRoleByID(s.id)

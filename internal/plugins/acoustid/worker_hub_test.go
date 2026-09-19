@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -134,7 +135,7 @@ func TestWorkerHub_NoRunIsUnavailable(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoWindowRun)
 	_, err = h.Hello(context.Background())
 	require.ErrorIs(t, err, ErrNoWindowRun)
-	_, err = h.Renew("x")
+	_, err = h.Renew("x", workerapi.RenewRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrNoWindowRun)
 	_, err = h.Results(context.Background(), workerapi.ResultsRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrNoWindowRun)
@@ -199,16 +200,16 @@ func TestWorkerHub_RenewExpiryReclaim(t *testing.T) {
 	first := resp.Jobs[0]
 
 	h.clock.advance(workerapi.RenewEvery)
-	rn, err := h.hub.Renew(resp.LeaseID)
+	rn, err := h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w1"})
 	require.NoError(t, err)
 	require.True(t, rn.ExpiresAt.After(resp.ExpiresAt), "renew extends the lease")
 
 	require.Zero(t, h.hub.sweep(), "a live lease is not reclaimed")
 	h.clock.advance(workerapi.LeaseTTL + time.Second)
 	require.Equal(t, 1, h.hub.sweep())
-	_, err = h.hub.Renew(resp.LeaseID)
+	_, err = h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrLeaseGone, "renewing a reclaimed lease is 410")
-	_, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{})
+	_, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrLeaseGone)
 	require.Equal(t, qPending, h.state(jobIdx(h, first)))
 
@@ -220,11 +221,11 @@ func TestWorkerHub_RenewExpiryReclaim(t *testing.T) {
 func TestWorkerHub_ReleaseRequeues(t *testing.T) {
 	h := newHubEnv(t, 3)
 	resp := h.lease("w1", 3)
-	rel, err := h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{JobIDs: []string{resp.Jobs[0].JobID}})
+	rel, err := h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w1", JobIDs: []string{resp.Jobs[0].JobID}})
 	require.NoError(t, err)
 	require.Equal(t, 1, rel.Requeued)
 	require.Equal(t, 2, h.hub.inFlight())
-	rel, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{})
+	rel, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w1"})
 	require.NoError(t, err)
 	require.Equal(t, 2, rel.Requeued)
 	require.Zero(t, h.hub.inFlight())
@@ -509,8 +510,8 @@ func TestWorkerHub_ConcurrentLeaseResultsSweepAndServerLane(t *testing.T) {
 						h.post(id, workerapi.JobResult{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeTimeout})
 					}
 				}
-				_, _ = h.hub.Renew(resp.LeaseID)
-				_, _ = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{})
+				_, _ = h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: id})
+				_, _ = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: id})
 			}
 		}(w)
 	}
@@ -633,4 +634,196 @@ func TestWindowBackfill_AllowlistedWorkerVersionsAreCurrent(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, res.written, "without the allowlist the old pair is stale")
 	require.Equal(t, "8.0.1-server", e.windows(id)[0].FFmpegVersion)
+}
+
+// ---- review round 1 ----
+
+type scanSwitch struct{ running atomic.Bool }
+
+func (f *scanSwitch) LibraryScanRunning() bool { return f.running.Load() }
+
+// TestWorkerHub_NoLeasesDuringLibraryScan: remote leases honour the same
+// library.scan gate as the server lane (waitForLibraryScan): 204 while a scan
+// runs, leases again once it ends.
+func TestWorkerHub_NoLeasesDuringLibraryScan(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	e.addFile("", "book/a.m4b", true, 3600)
+	probe := &scanSwitch{}
+	probe.running.Store(true)
+	e.plugin.setScanProbe(probe)
+	h := attachHub(t, e)
+	require.Nil(t, h.lease("w1", 1), "no lease while library.scan runs")
+	require.Zero(t, h.hub.inFlight())
+	probe.running.Store(false)
+	require.NotNil(t, h.lease("w1", 1))
+}
+
+// TestWorkerHub_SlowStatPastTTLDoesNotStrandItems: Lease stats outside the
+// lock; if the lease expires and is swept meanwhile, its files must go back
+// to the queue, not stay qLeased under a lease nobody holds.
+func TestWorkerHub_SlowStatPastTTLDoesNotStrandItems(t *testing.T) {
+	h := newHubEnv(t, 2)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	prev := hubStat
+	hubStat = func(p string) (os.FileInfo, error) {
+		once.Do(func() { close(entered); <-release })
+		return os.Stat(p)
+	}
+	t.Cleanup(func() { hubStat = prev })
+
+	got := make(chan *workerapi.LeaseResponse, 1)
+	go func() {
+		resp, _ := h.hub.Lease(context.Background(), h.leaseReq("w1", 2))
+		got <- resp
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lease never statted through hubStat")
+	}
+	h.clock.advance(workerapi.LeaseTTL + time.Second)
+	h.hub.sweep()
+	close(release)
+	resp := <-got
+	require.Nil(t, resp, "a lease swept while it was being built must not be handed out")
+	require.Zero(t, h.hub.inFlight(), "no file may stay leased to a swept lease")
+	for i := range h.items {
+		require.Equal(t, qPending, h.state(i))
+	}
+	require.NotNil(t, h.lease("w2", 2), "the files are leaseable again")
+}
+
+// TestWorkerHub_CalibrationUsesOnlyServerMadeWindows: hello never offers a
+// worker's print as the reference a worker must reproduce, and each offered
+// window names the server tool pair that cut it.
+func TestWorkerHub_CalibrationUsesOnlyServerMadeWindows(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	_, srv := e.addFileWith("", "cal/server.m4b", fakeAudio(3600, 70<<10), 3600)
+	_, wrk := e.addFileWith("", "cal/worker.m4b", fakeAudio(3600, 70<<10), 3600)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	// Rewrite one file's windows as a worker would have written them.
+	ws := e.windows(wrk)
+	for i := range ws {
+		ws[i].Host = "fp-worker:mac1"
+	}
+	require.NoError(t, e.store.ReplaceFingerprintWindows(database.FileWindowRef(wrk), ws))
+	h := attachHub(t, e)
+
+	hello, err := h.hub.Hello(context.Background())
+	require.NoError(t, err)
+	require.Len(t, hello.Calibration, 1)
+	rel, _ := base64.StdEncoding.DecodeString(hello.Calibration[0].RelB64)
+	require.Equal(t, "cal/server.m4b", string(rel))
+	for _, w := range hello.Calibration[0].Windows {
+		require.Equal(t, e.tools.Versions.Fpcalc, w.Fpcalc)
+		require.Equal(t, e.tools.Versions.FFmpeg, w.FFmpeg)
+	}
+	_ = srv
+}
+
+func TestWorkerHub_OnlyTheLeaseholderMayRenewReleaseOrPost(t *testing.T) {
+	h := newHubEnv(t, 1)
+	resp := h.lease("w1", 1)
+	_, err := h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w2"})
+	require.ErrorIs(t, err, ErrLeaseGone)
+	_, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w2"})
+	require.ErrorIs(t, err, ErrLeaseGone)
+	st := h.post("w2", h.okResult(resp.Jobs[0], 160, 1))
+	require.Equal(t, workerapi.StatusRejected, st[0].Status)
+	require.Equal(t, "not_your_job", st[0].Reason)
+	require.Empty(t, h.windows(h.fileID(resp.Jobs[0])))
+	st = h.post("w1", h.okResult(resp.Jobs[0], 160, 1))
+	require.Equal(t, workerapi.StatusAccepted, st[0].Status, st[0].Reason)
+	require.Equal(t, "fp-worker:w1", h.windows(h.fileID(resp.Jobs[0]))[0].Host)
+}
+
+// TestWorkerHub_ServerLaneJobRejectsALaterWorkerOK: once a file was routed to
+// the server lane (decode error here), a worker's later ok for it is refused
+// even before the server lane claims it.
+func TestWorkerHub_ServerLaneJobRejectsALaterWorkerOK(t *testing.T) {
+	h := newHubEnv(t, 1)
+	job := h.lease("w1", 1).Jobs[0]
+	h.post("w1", workerapi.JobResult{JobID: job.JobID, Ref: job.Ref, Outcome: workerapi.OutcomeDecodeError})
+	st := h.post("w1", h.okResult(job, 160, 1))
+	require.Equal(t, workerapi.StatusRejected, st[0].Status)
+	require.Equal(t, "server_lane", st[0].Reason)
+	require.Empty(t, h.windows(h.fileID(job)))
+	require.Len(t, h.hub.takeBacklog(), 1)
+}
+
+// TestWorkerHub_DoneJobsArePrunedButRepostsStayDuplicates: the job table does
+// not grow with finished work, and a byte-identical repost after pruning is
+// still recognized as a duplicate from the stored rows.
+func TestWorkerHub_DoneJobsArePrunedButRepostsStayDuplicates(t *testing.T) {
+	h := newHubEnv(t, 1)
+	job := h.lease("w1", 1).Jobs[0]
+	res := h.okResult(job, 160, 5)
+	require.Equal(t, workerapi.StatusAccepted, h.post("w1", res)[0].Status)
+	h.hub.mu.Lock()
+	n := len(h.hub.run.jobs)
+	h.hub.mu.Unlock()
+	require.Zero(t, n, "a finished job is pruned")
+	require.Equal(t, workerapi.StatusDuplicate, h.post("w1", res)[0].Status)
+	other := h.post("w1", h.okResult(job, 160, 6))[0]
+	require.NotEqual(t, workerapi.StatusAccepted, other.Status)
+	require.NotEqual(t, workerapi.StatusDuplicate, other.Status)
+}
+
+// TestWindowBackfill_CheckpointAdvancesPastServerRequeuedItem: a file a worker
+// hands to the server lane (decode error) is cut during the tier's pass, so
+// the resume checkpoint moves past it before the tier ends instead of being
+// pinned below it until the final drain.
+func TestWindowBackfill_CheckpointAdvancesPastServerRequeuedItem(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	for i := range 8 {
+		e.addFile("", filepath.Join("slow", string(rune('a'+i))+".m4b"), true, 3600)
+	}
+	prevEvery := windowCheckpointEvery
+	windowCheckpointEvery = 1
+	t.Cleanup(func() { windowCheckpointEvery = prevEvery })
+	hub := e.plugin.WorkerHub()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	handed := make(chan string, 1)
+	go func() {
+		for ctx.Err() == nil {
+			resp, err := hub.Lease(ctx, workerapi.LeaseRequest{WorkerID: "mac1", MaxJobs: 1, Pipeline: fingerprint.WindowPipelineID,
+				FpcalcVersion: e.tools.Versions.Fpcalc, FFmpegVersion: e.tools.Versions.FFmpeg})
+			if err != nil || resp == nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			j := resp.Jobs[0]
+			// Hold the job until the server lane has walked two files past
+			// it, then hand it back: the server's in-order pass is behind it.
+			rel, _ := base64.StdEncoding.DecodeString(j.RelB64)
+			k := int(rel[len("slow/")] - 'a')
+			later := filepath.Join(e.lib, "slow", string(rune('a'+k+2))+".m4b")
+			for ctx.Err() == nil && !slices.Contains(e.invoked(), later) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{
+				{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeDecodeError}}})
+			handed <- j.Ref[2:]
+			return
+		}
+	}()
+	rep := &wbReporter{}
+	_, err := e.run(ctx, rep, WindowBackfillParams{Live: true, Concurrency: 1})
+	require.NoError(t, err)
+	fileID := <-handed
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	passed := false
+	for _, cp := range rep.checkpoints {
+		if cp.Resume != nil && cp.Resume.Tier == windowTierPresent && cp.Resume.AfterFileID >= fileID {
+			passed = true
+		}
+	}
+	require.True(t, passed, "no in-tier checkpoint ever passed the handed-back file %s: %+v", fileID, rep.checkpoints)
 }
