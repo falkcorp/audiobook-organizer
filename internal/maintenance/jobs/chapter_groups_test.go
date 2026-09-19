@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -142,14 +142,16 @@ func TestScanChapterGroups_StructuredResultAndParams(t *testing.T) {
 }
 
 // chSeedBare creates n single-file records titled only by their position
-// ("1", "2", ...) in dir, file "<name> - N.mp3", no durations known.
+// ("1", "2", ...) in dir, file "<name> - N.mp3", with the corroboration a
+// bare-titled run needs: a known chapter-length duration and an author.
 func chSeedBare(t *testing.T, s *database.PebbleStore, dir, name string, n int) []*database.Book {
 	t.Helper()
+	author := 1
 	out := make([]*database.Book, n)
 	for i := n; i >= 1; i-- {
 		path := fmt.Sprintf("%s/%s - %d.mp3", dir, name, i)
-		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprint(i), FilePath: path})
-		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path})
+		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprint(i), FilePath: path, Duration: chIntP(1200), AuthorID: &author})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: 1200})
 		out[i-1] = b
 	}
 	return out
@@ -174,7 +176,7 @@ func TestChapterGroups_BareNumberTitlesScanAndMerge(t *testing.T) {
 	if scan.GroupsFound != 1 || scan.GroupsBlocked != 1 || len(scan.Groups) != 2 {
 		t.Fatalf("want 1 mergeable + 1 blocked group, got %+v", scan)
 	}
-	if g := scan.Groups[0]; g.CommonTitle != "Eldritch" || g.PrimaryBookID != books[0].ID || g.DurationsKnown != 0 {
+	if g := scan.Groups[0]; g.CommonTitle != "Eldritch" || g.PrimaryBookID != books[0].ID || g.DurationsKnown != 4 {
 		t.Fatalf("bare group wrong: %+v", g)
 	}
 	if g := scan.Groups[1]; g.Status != "blocked" || len(g.Blockers) == 0 || !strings.Contains(g.Blockers[0], "non-primary") {
@@ -463,5 +465,78 @@ func TestMergeChapterGroups_FileChangeAfterPreviewIsDrift(t *testing.T) {
 	res := chRun(t, &mergeChapterGroupsJob{}, s, chReviewedParams(t, preview), false)
 	if res.GroupsDrifted != 1 || res.BooksMerged != 0 {
 		t.Fatalf("a file change after the preview was merged: %+v", res)
+	}
+}
+
+// chApply sends one hand-built selection for a real merge.
+func chApply(t *testing.T, s maintenance.JobStore, sel chapterGroupSelection) chapterGroupsResult {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "groups": []chapterGroupSelection{sel}})
+	return chRun(t, &mergeChapterGroupsJob{}, s, string(raw), false)
+}
+
+// chSelectionFor builds the selection a preview would return for ids, with
+// the fingerprint of the members as they are now.
+func chSelectionFor(t *testing.T, s maintenance.JobStore, ids []string) chapterGroupSelection {
+	t.Helper()
+	st, err := readChapterGroup(s, ids)
+	if err != nil {
+		t.Fatalf("readChapterGroup: %v", err)
+	}
+	return chapterGroupSelection{PrimaryBookID: ids[0], BookIDs: ids, Fingerprint: chapterFingerprint(st.members)}
+}
+
+// The server, not only the card, refuses a LOW-confidence group unless the
+// selection carries allow_low_confidence, and refuses a group the detector
+// blocks whatever the request says.
+func TestMergeChapterGroups_ApplyRefusesLowAndBlockedSelections(t *testing.T) {
+	s := ddRealStore(t)
+	// Low: a gap (4 missing) plus one unknown duration.
+	var low []*database.Book
+	for _, i := range []int{6, 5, 3, 2, 1} {
+		path := fmt.Sprintf("/lib/A/Tale/%02d - Tale.mp3", i)
+		var dur *int
+		fileDur := 0
+		if i != 3 {
+			dur, fileDur = chIntP(300), 300
+		}
+		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprintf("%02d - Tale", i), FilePath: path, Duration: dur})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: fileDur})
+		low = append([]*database.Book{b}, low...)
+	}
+	preview := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if len(preview.Groups) != 1 || preview.Groups[0].Confidence != "low" || preview.Groups[0].Status != "would_merge" {
+		t.Fatalf("want one low would_merge group, got %+v", preview.Groups)
+	}
+	ids := preview.Groups[0].BookIDs
+	sel := chSelectionFor(t, s, ids)
+
+	res := chApply(t, s, sel)
+	if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "allow_low_confidence") {
+		t.Fatalf("low group merged without acknowledgement: %+v", res.Groups)
+	}
+	if got := ddMustGet(t, s, low[1].ID); got.IsSoftDeleted() {
+		t.Fatalf("refused low merge still soft-deleted a source")
+	}
+	sel.AllowLowConfidence = true
+	if res = chApply(t, s, sel); res.BooksMerged != 4 || res.Groups[0].Status != "merged" {
+		t.Fatalf("acknowledged low group did not merge: %+v", res.Groups)
+	}
+
+	// Blocked: a non-primary run, sent with a valid fingerprint anyway.
+	copies := chSeedBare(t, s, "/lib/B/Wyrm", "Wyrm", 3)
+	no := false
+	cids := make([]string, len(copies))
+	for i, b := range copies {
+		cids[i] = b.ID
+		if _, err := s.ModifyBook(b.ID, func(x *database.Book) error { x.IsPrimaryVersion = &no; return nil }); err != nil {
+			t.Fatalf("ModifyBook: %v", err)
+		}
+	}
+	bsel := chSelectionFor(t, s, cids)
+	bsel.AllowLowConfidence = true
+	res = chApply(t, s, bsel)
+	if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "non-primary") {
+		t.Fatalf("blocked group merged: %+v", res.Groups)
 	}
 }

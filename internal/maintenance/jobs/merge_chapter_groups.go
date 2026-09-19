@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -240,10 +240,18 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 }
 
 // verifyChapterSelection checks a reviewed group against the library now.
-// Returns the re-detected group and "" when it may be merged, else why not.
-func verifyChapterSelection(sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions) (scanner.ChapterGroup, string) {
+// Returns the re-detected group and "" when it may be merged, else why not
+// and the outcome status ("drifted", or "blocked" for a group the detector
+// blocks or a low-confidence group sent without an acknowledgement).
+//
+// Low confidence is refused HERE, not only in the card: a low group (e.g.
+// positions from trailing file numbers only, several book-length members,
+// gaps plus unknown durations) merges only when its selection carries
+// allow_low_confidence -- the card sets it only for a group the operator
+// ticked one by one, never through "Select all".
+func verifyChapterSelection(sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions) (scanner.ChapterGroup, string, string) {
 	if chapterFingerprint(st.members) != sel.Fingerprint {
-		return scanner.ChapterGroup{}, "members changed since the preview (fingerprint mismatch)"
+		return scanner.ChapterGroup{}, "members changed since the preview (fingerprint mismatch)", "drifted"
 	}
 	cores := make([]database.BookCore, len(st.books))
 	for i, b := range st.books {
@@ -251,16 +259,19 @@ func verifyChapterSelection(sel chapterGroupSelection, st *chapterGroupState, op
 	}
 	det := scanner.DetectChapterGroupsWithOptions(cores, opts)
 	if len(det.Groups) == 0 && len(det.Blocked) == 1 {
-		return scanner.ChapterGroup{}, "group is blocked: " + strings.Join(det.Blocked[0].Blockers, "; ")
+		return scanner.ChapterGroup{}, "group is blocked: " + strings.Join(det.Blocked[0].Blockers, "; "), "blocked"
 	}
 	if len(det.Groups) != 1 {
-		return scanner.ChapterGroup{}, fmt.Sprintf("members no longer form one chapter group (detected %d)", len(det.Groups))
+		return scanner.ChapterGroup{}, fmt.Sprintf("members no longer form one chapter group (detected %d)", len(det.Groups)), "drifted"
 	}
 	g := det.Groups[0]
 	if g.PrimaryBookID != sel.PrimaryBookID || !slices.Equal(g.BookIDs, sel.BookIDs) {
-		return scanner.ChapterGroup{}, "members no longer form this exact group in this chapter order"
+		return scanner.ChapterGroup{}, "members no longer form this exact group in this chapter order", "drifted"
 	}
-	return g, ""
+	if g.Confidence == scanner.ChapterConfidenceLow && !sel.AllowLowConfidence {
+		return scanner.ChapterGroup{}, "low-confidence group: a merge needs an explicit allow_low_confidence acknowledgement for it", "blocked"
+	}
+	return g, "", ""
 }
 
 func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
@@ -287,10 +298,14 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	}
 	out.Members = st.members
 	out.PrimaryTitle = st.books[0].Title
-	g, why := verifyChapterSelection(sel, st, opts)
+	g, why, status := verifyChapterSelection(sel, st, opts)
 	if why != "" {
-		out.Status = "drifted"
-		out.Errors = append(out.Errors, why)
+		out.Status = status
+		if status == "blocked" {
+			out.Blockers = append(out.Blockers, why)
+		} else {
+			out.Errors = append(out.Errors, why)
+		}
 		return
 	}
 	out.CommonTitle, out.Directory = g.CommonTitle, g.Directory
@@ -336,8 +351,11 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		if err != nil {
 			return &chapterStepError{status: "failed", msg: err.Error()}
 		}
-		if _, why := verifyChapterSelection(sel, cur, opts); why != "" {
-			return &chapterStepError{status: "drifted", msg: why}
+		if _, why, status := verifyChapterSelection(sel, cur, opts); why != "" {
+			if status == "blocked" {
+				return &chapterStepError{status: status, msg: why, blockers: []string{why}}
+			}
+			return &chapterStepError{status: status, msg: why}
 		}
 		b, _ := cc.chapterGroupBlockers(cur.books[0], cur.books[1:])
 		if b = append(b, chapterFileCountBlockers(cur)...); len(b) > 0 {

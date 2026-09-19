@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -235,8 +235,9 @@ type seqCand struct {
 	disc  int
 	index int
 	total int
-	// titleMarker is true when the TITLE (not just the file) is a position.
-	titleMarker bool
+	// titleMarker is true when the TITLE (not just the file) is a position;
+	// titleBare when it is ONLY a position.
+	titleMarker, titleBare bool
 	// key is the normalised residual the record groups by; key2 the part of
 	// it before a chapter token (the book's name when the rest is a
 	// chapter's own name), used only when key alone groups nothing.
@@ -274,6 +275,9 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 		return c, false
 	}
 	c.titleMarker = tok
+	// A bare title ("157", "Part 3") says nothing but a position; it needs
+	// corroboration whatever key the file supplies.
+	c.titleBare = tok && sequenceResidualKey(tm.Residual) == ""
 	var residual string
 	if tok {
 		c.shape, c.disc, c.index, c.total = tm.Shape, tm.Disc, tm.Index, tm.Total
@@ -455,6 +459,12 @@ func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOption
 	for _, k := range sortedBucketKeys(buckets) {
 		cs := buckets[k]
 		if len(cs) != 1 || cs[0].key2 == cs[0].key {
+			continue
+		}
+		// Only with corroboration: a known chapter-length duration. A
+		// book-length record whose name contains "Part 2 - Subtitle" is a
+		// volume, and must never regroup by the part before the token.
+		if d := cs[0].book.Duration; d == nil || *d <= 0 || *d >= fullBookSeconds {
 			continue
 		}
 		delete(buckets, k)
@@ -847,25 +857,50 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 	if bookLength > 0 {
 		missingEv = append(missingEv, fmt.Sprintf("%d member(s) are book-length (>= %d s)", bookLength, fullBookSeconds))
 	}
-	allBookLength := len(known) == n && bookLength == n
-	if allBookLength && nonMarkerTitles > 0 {
-		g.Blockers = append(g.Blockers, "every member is book-length and the titles are not positions: separate books, not chapters")
+	// Every member with a known duration book-length is a set of volumes,
+	// not chapters -- unless the titles declare "N of M" parts.
+	declared := g.DeclaredTotal > 0
+	knownAllBook := len(known) >= 2 && bookLength == len(known)
+	if knownAllBook && !declared {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("every member with a known duration (%d) is book-length and no \"N of M\" total is declared: separate volumes, not chapters", len(known)))
 	}
-	if key == "" {
-		// A bare run ("1", "2", "3" with bare or track-numbered files) says
-		// nothing about which book it is; it needs corroboration.
-		if isCatchAllFolder(dir) {
-			g.Blockers = append(g.Blockers, fmt.Sprintf("folder %q is a catch-all: nothing shows these bare-numbered records are one book", filepath.Base(dir)))
+	bareTitles := 0
+	for _, c := range cs {
+		if c.titleBare {
+			bareTitles++
 		}
-		switch {
-		case len(known) < n:
+	}
+	if key == "" && isCatchAllFolder(dir) {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("folder %q is a catch-all: nothing shows these bare-numbered records are one book", filepath.Base(dir)))
+	}
+	if key == "" || bareTitles > 0 {
+		// A title that is only a position ("157") says nothing about which
+		// book it is, whatever key the file supplied; it needs
+		// corroboration.
+		if len(known) < n {
 			g.Blockers = append(g.Blockers, fmt.Sprintf("needs durations: bare position titles are corroborated only by known chapter-length durations (%d of %d known)", len(known), n))
-		case allBookLength:
-			g.Blockers = append(g.Blockers, "every member is book-length: separate books, not chapters")
 		}
 		if len(authors) == 0 {
 			g.Blockers = append(g.Blockers, "no author known on any member: nothing ties the bare-numbered records together")
 		}
+	}
+	// More than one book-length member never reaches medium; a run whose
+	// positions come only from trailing file numbers under non-position
+	// titles ("Lore - 001" episodes) is indistinguishable from episodes or
+	// volumes and is low at most.
+	forceLow := ""
+	if bookLength > 1 {
+		forceLow = fmt.Sprintf("%d members are book-length", bookLength)
+	}
+	trailingOnly := true
+	for _, c := range cs {
+		if c.shape != SeqShapeTrailing || c.titleMarker {
+			trailingOnly = false
+			break
+		}
+	}
+	if trailingOnly {
+		forceLow = "positions come only from trailing file numbers under non-position titles (episodes and volumes look the same)"
 	}
 	if long > 0 {
 		g.Reasons = append(g.Reasons, fmt.Sprintf("%d member(s) at least %d s long", long, opts.MaxPerFileDuration))
@@ -894,8 +929,11 @@ func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts Ch
 
 	// Confidence: high only with every piece of evidence; each missing
 	// piece is named.
+	if forceLow != "" {
+		missingEv = append(missingEv, forceLow)
+	}
 	switch {
-	case len(missingEv) >= 2:
+	case forceLow != "" || len(missingEv) >= 2:
 		demote(ChapterConfidenceLow)
 	case len(missingEv) == 1:
 		demote(ChapterConfidenceMedium)

@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_detect_shapes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d2b6c1e-47a9-4b35-a0f2-6e1c9d3b7a52
 // last-edited: 2026-09-19
 
@@ -57,16 +57,16 @@ func TestDetectChapterGroups_RealTitleShapes(t *testing.T) {
 	}{
 		{
 			name: "bare number title, 'Title - NNN' file",
-			books: shRun("e", "/lib/Author/Cycle/Eldritch", 1, 40,
+			books: shEv(shRun("e", "/lib/Author/Cycle/Eldritch", 1, 40,
 				func(i int) string { return fmt.Sprint(i) },
-				func(i int) string { return fmt.Sprintf("Eldritch - %d.mp3", i) }),
+				func(i int) string { return fmt.Sprintf("Eldritch - %d.mp3", i) }), 1500),
 			wantN: 40, wantTitle: "Eldritch",
 		},
 		{
 			name: "N of M title",
-			books: shRun("w", "/lib/Author/Prism/Prism - 5 - The Burning Glass", 1, 30,
+			books: shEv(shRun("w", "/lib/Author/Prism/Prism - 5 - The Burning Glass", 1, 30,
 				func(i int) string { return fmt.Sprintf("%d of 30", i) },
-				func(i int) string { return fmt.Sprintf("%d Some Other Book - %d of 30.mp3", i, i) }),
+				func(i int) string { return fmt.Sprintf("%d Some Other Book - %d of 30.mp3", i, i) }), 1500),
 			wantN: 30, wantTitle: "The Burning Glass",
 		},
 		{
@@ -78,20 +78,20 @@ func TestDetectChapterGroups_RealTitleShapes(t *testing.T) {
 		},
 		{
 			name: "bare title mixed with NNN_Title, folder names the book",
-			books: append(
+			books: shEv(append(
 				shRun("x", "/lib/imported/Author/07_The Wide Sea", 1, 10,
 					func(i int) string { return fmt.Sprintf("%03d_The Wide Sea", i) },
 					func(i int) string { return fmt.Sprintf("%03d_The Wide Sea.mp3", i) }),
 				shRun("y", "/lib/imported/Author/07_The Wide Sea", 11, 20,
 					func(i int) string { return fmt.Sprint(i) },
-					func(i int) string { return fmt.Sprintf("%03d_The Wide Sea.mp3", i) })...),
+					func(i int) string { return fmt.Sprintf("%03d_The Wide Sea.mp3", i) })...), 1500),
 			wantN: 20, wantTitle: "The Wide Sea",
 		},
 		{
 			name: "zero-padded bare title, 'Title - Author - NNN' file",
-			books: shRun("f", "/lib/Author/Moon and Stone/Moon and Stone", 1, 12,
+			books: shEv(shRun("f", "/lib/Author/Moon and Stone/Moon and Stone", 1, 12,
 				func(i int) string { return fmt.Sprintf("%03d", i) },
-				func(i int) string { return fmt.Sprintf("Moon and Stone - Jane Author - %03d.mp3", i) }),
+				func(i int) string { return fmt.Sprintf("Moon and Stone - Jane Author - %03d.mp3", i) }), 1500),
 			wantN: 12, wantTitle: "Moon and Stone",
 		},
 		{
@@ -239,7 +239,7 @@ func TestDetectChapterGroups_GapsReportedAndSparseBlocked(t *testing.T) {
 		}
 		books = append(books, shBook(fmt.Sprintf("a%02d", i), fmt.Sprint(i), fmt.Sprintf("/lib/A/Tale/Tale - %02d.mp3", i)))
 	}
-	d := shDetect(books)
+	d := shDetect(shEv(books, 1500))
 	if len(d.Groups) != 1 || !slices.Equal(d.Groups[0].Gaps, []string{"7"}) {
 		t.Fatalf("want one group with gap [7], got %+v", d)
 	}
@@ -247,7 +247,7 @@ func TestDetectChapterGroups_GapsReportedAndSparseBlocked(t *testing.T) {
 	for _, i := range []int{1, 2, 9, 15, 20} {
 		sparse = append(sparse, shBook(fmt.Sprintf("s%02d", i), fmt.Sprint(i), fmt.Sprintf("/lib/B/Saga/Saga - %02d.mp3", i)))
 	}
-	d = shDetect(sparse)
+	d = shDetect(shEv(sparse, 1500))
 	if len(d.Groups) != 0 || len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "sparse") {
 		t.Fatalf("want sparse run blocked, got %+v", d)
 	}
@@ -272,6 +272,8 @@ func TestDetectChapterGroups_Authors(t *testing.T) {
 	mk := func(id, title string, a *int) database.BookCore {
 		b := shBook(id, title, "/lib/A/Tale/Tale - "+title+".mp3")
 		b.AuthorID = a
+		dur := 1500
+		b.Duration = &dur
 		return b
 	}
 	d := shDetect([]database.BookCore{mk("a", "01", &one), mk("b", "02", nil), mk("c", "03", &one)})
@@ -338,9 +340,9 @@ func TestDetectChapterGroups_MultiFileRecordsAreNotCandidates(t *testing.T) {
 // names the folder, and chapter-named tracks regrouped by their book part.
 func TestDetectChapterGroups_SubsetReproducesGroup(t *testing.T) {
 	cases := map[string][]database.BookCore{
-		"file-keyed bare titles": append(shRun("e", "/lib/A/Eldritch", 1, 30,
+		"file-keyed bare titles": append(shEv(shRun("e", "/lib/A/Eldritch", 1, 30,
 			func(i int) string { return fmt.Sprint(i) },
-			func(i int) string { return fmt.Sprintf("Eldritch - %d.mp3", i) }),
+			func(i int) string { return fmt.Sprintf("Eldritch - %d.mp3", i) }), 1500),
 			shBook("z", "Other Book", "/lib/A/Eldritch/Other Book.mp3")),
 		"bare members join the folder-named residual": shEv(append(
 			shRun("a", "/lib/A/Moon and Stone", 1, 5,
@@ -382,9 +384,9 @@ func TestDetectChapterGroups_DeterministicAcrossFolders(t *testing.T) {
 	var books []database.BookCore
 	for f := 0; f < 50; f++ {
 		dir := fmt.Sprintf("/lib/A/Book%02d", f)
-		books = append(books, shRun(fmt.Sprintf("f%02d-", f), dir, 1, 5,
+		books = append(books, shEv(shRun(fmt.Sprintf("f%02d-", f), dir, 1, 5,
 			func(i int) string { return fmt.Sprint(i) },
-			func(i int) string { return fmt.Sprintf("Book%02d - %d.mp3", f, i) })...)
+			func(i int) string { return fmt.Sprintf("Book%02d - %d.mp3", f, i) }), 1500)...)
 	}
 	a := shDetect(books)
 	slices.Reverse(books)

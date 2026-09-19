@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_sequence.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0e2d47-93c1-4f8a-b5e6-1d7a4c9f2e38
 // last-edited: 2026-09-19
 
@@ -39,7 +39,7 @@ var (
 	seqBareRe      = regexp.MustCompile(`^(\d{1,4})$`)
 	seqNofMRe      = regexp.MustCompile(`(?i)^(\d{1,4})\s*(?:of|/)\s*(\d{1,4})$`)
 	seqDiscTrackRe = regexp.MustCompile(`^(\d{1,2})-(\d{2,3})(?:[\s_.]+(.*))?$`)
-	seqTokenRe     = regexp.MustCompile(`(?i)^(?:part|pt\.?|chapter|chap\.?|ch\.?|track|trk|section)\s*[-_.]?\s*(\d{1,4})\b\s*[-_:.,]*\s*(.*)$`)
+	seqTokenRe     = regexp.MustCompile(`(?i)^(?:part|pt\.?|chapter|chap\.?|ch\.?|track|trk|section)\s*[-_.]?\s*(\d{1,4})\b(?:\s*(?:of|/)\s*(\d{1,4})\b)?\s*[-_:.,]*\s*(.*)$`)
 	// seqPrefixRe needs a real separator after the number: an underscore, a
 	// dash with whitespace on at least one side, a colon or ')', a dot, or
 	// whitespace. "86-Neon" (a dash joining a word) and "84K" are titles, not
@@ -100,7 +100,8 @@ func ParseSequenceMarker(s string) (SequenceMarker, bool) {
 		return sm, true
 	}
 	if m := seqTokenRe.FindStringSubmatch(s); m != nil {
-		return SequenceMarker{Shape: SeqShapeToken, Index: seqAtoi(m[1]), Residual: strings.TrimSpace(m[2])}, true
+		// "Part 2 of 3" declares the total.
+		return SequenceMarker{Shape: SeqShapeToken, Index: seqAtoi(m[1]), Total: seqAtoi(m[2]), Residual: strings.TrimSpace(m[3])}, true
 	}
 	if m := seqPrefixRe.FindStringSubmatch(s); m != nil {
 		rest := m[3]
