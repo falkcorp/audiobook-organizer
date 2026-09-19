@@ -1,13 +1,14 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package scanner
 
 import (
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -19,11 +20,40 @@ import (
 var chapterNumPrefixDetectRe = regexp.MustCompile(`^\d{1,3}[\s\-_\.\:]+`)
 
 // ChapterGroup is a set of book IDs that belong to the same multi-part audiobook.
+//
+// BookIDs is ordered by chapter number (the numeric filename prefix, then the
+// file name, then the ID as a final tie-break), so the order is deterministic
+// whatever order the store listed the rows in. PrimaryBookID is BookIDs[0] --
+// the lowest-numbered chapter -- and is the book a merge folds the others into.
 type ChapterGroup struct {
+	PrimaryBookID string   `json:"primary_book_id"`
 	BookIDs       []string `json:"book_ids"`
-	CommonTitle   string   `json:"common_title"`   // title with numeric prefix stripped
+	CommonTitle   string   `json:"common_title"`   // primary's title with numeric prefix stripped
 	TotalDuration float64  `json:"total_duration"` // sum of all file durations in seconds
 	FileCount     int      `json:"file_count"`
+	Directory     string   `json:"directory"`
+}
+
+// ChapterDetectOptions tunes DetectChapterGroupsWithOptions.
+type ChapterDetectOptions struct {
+	// MinFiles is the file count at which the average-duration branch of
+	// heuristic 4 applies. Defaults to 3 when <= 0.
+	MinFiles int
+	// MaxPerFileDuration is the per-file "short chapter" ceiling in seconds.
+	// Defaults to 600 when <= 0.
+	MaxPerFileDuration int
+	// PathPrefix, when set, limits detection to books whose file path is the
+	// prefix itself or lies beneath it (directory-boundary match, so "/a/b"
+	// does not match "/a/bc").
+	PathPrefix string
+}
+
+// ChapterDetection is the full detector output.
+type ChapterDetection struct {
+	Groups []ChapterGroup
+	// SkippedUnknownDuration counts chapter-shaped groups that were NOT
+	// returned because at least one member's duration is unknown (nil or <= 0).
+	SkippedUnknownDuration int
 }
 
 // stripNumPrefix removes a leading numeric chapter/track number from a filename
@@ -76,60 +106,146 @@ func chapterTitlesAreSimilar(a, b string) bool {
 	return float64(common)/float64(longer) >= 0.80
 }
 
-// DetectChapterGroups inspects already-scanned database.Book records and
-// returns groups that look like sequential chapters of the same audiobook.
+// DetectChapterGroups is DetectChapterGroupsWithOptions without a path
+// filter, returning only the groups.
+func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration int) []ChapterGroup {
+	return DetectChapterGroupsWithOptions(books, ChapterDetectOptions{
+		MinFiles:           minFiles,
+		MaxPerFileDuration: maxPerFileDuration,
+	}).Groups
+}
+
+// chapterNumber returns the numeric chapter prefix of a filename stem, or -1.
+func chapterNumber(stem string) int {
+	n, digits := 0, 0
+	for _, r := range stem {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+		digits++
+	}
+	if digits == 0 {
+		return -1
+	}
+	return n
+}
+
+// pathUnderPrefix reports whether p is prefix or lies beneath it.
+func pathUnderPrefix(p, prefix string) bool {
+	prefix = filepath.Clean(prefix)
+	p = filepath.Clean(p)
+	if p == prefix {
+		return true
+	}
+	if strings.HasSuffix(prefix, string(filepath.Separator)) {
+		return strings.HasPrefix(p, prefix) // prefix is the root
+	}
+	return strings.HasPrefix(p, prefix+string(filepath.Separator))
+}
+
+// chapterCandidateEligible reports whether a book may take part in chapter
+// detection at all. Books already absorbed by an earlier merge
+// (MergedIntoBookID), soft-deleted books (a chapter merge soft-deletes its
+// sources), and non-primary versions of another book are all excluded, so a
+// re-run can never regroup or re-merge what a previous run already merged.
+func chapterCandidateEligible(b *database.BookCore) bool {
+	if b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" {
+		return false
+	}
+	if b.IsSoftDeleted() {
+		return false
+	}
+	return database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion)
+}
+
+// DetectChapterGroupsWithOptions inspects already-scanned database.BookCore
+// records and returns groups that look like sequential chapters of the same
+// audiobook.
 //
 // All four heuristics must be satisfied for a group to be returned:
 //  1. Files share the same parent directory.
 //  2. Filenames match a sequential chapter pattern (leading 1-3 digit prefix).
-//  3. After stripping the numeric prefix, base titles are ≥ 80% similar.
-//  4. Each individual file's duration is < maxPerFileDuration seconds  OR
-//     the group has ≥ minFiles files and the average per-file duration is
+//  3. After stripping the numeric prefix, base titles are >= 80% similar.
+//  4. Each individual file's duration is < MaxPerFileDuration seconds OR
+//     the group has >= MinFiles files and the average per-file duration is
 //     < 1800 s (30 min).
 //
-// minFiles defaults to 3 when ≤ 0. maxPerFileDuration defaults to 600 s
-// (10 min) when ≤ 0.
-func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration int) []ChapterGroup {
+// Heuristic 4 needs every member's duration. A member whose duration is
+// unknown (nil, or <= 0 -- what a failed probe leaves) makes the whole group
+// ineligible: it is neither "short" nor part of a meaningful average, and
+// treating it as 0 s is what used to make unprobed full-length books look like
+// short chapters. Such groups are counted in SkippedUnknownDuration so an
+// operator can backfill durations and re-run, instead of silently vanishing.
+// Excluding only the unknown member instead would merge the rest and strand
+// that chapter as its own book, which is worse than not merging at all.
+func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetectOptions) ChapterDetection {
+	var out ChapterDetection
 	if len(books) == 0 {
-		return nil
+		return out
 	}
+	minFiles := opts.MinFiles
 	if minFiles <= 0 {
 		minFiles = 3
 	}
+	maxPerFileDuration := opts.MaxPerFileDuration
 	if maxPerFileDuration <= 0 {
 		maxPerFileDuration = 600
 	}
 
 	type candidate struct {
 		book          database.BookCore
+		base          string
+		chapter       int
 		strippedTitle string
 	}
 
 	// Group candidates by parent directory.
 	byDir := make(map[string][]candidate)
-	dirOrder := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, b := range books {
+	for i := range books {
+		b := books[i]
+		if !chapterCandidateEligible(&b) {
+			continue
+		}
+		if opts.PathPrefix != "" && !pathUnderPrefix(b.FilePath, opts.PathPrefix) {
+			continue
+		}
 		dir := filepath.Dir(b.FilePath)
-		stem := strings.TrimSuffix(filepath.Base(b.FilePath), filepath.Ext(b.FilePath))
+		base := filepath.Base(b.FilePath)
+		stem := strings.TrimSuffix(base, filepath.Ext(b.FilePath))
 		if !chapterNumPrefixDetectRe.MatchString(stem) {
 			continue // not a chapter-numbered file
 		}
-		stripped := stripNumPrefix(stem)
-		if !seen[dir] {
-			seen[dir] = true
-			dirOrder = append(dirOrder, dir)
-		}
-		byDir[dir] = append(byDir[dir], candidate{book: b, strippedTitle: stripped})
+		byDir[dir] = append(byDir[dir], candidate{
+			book: b, base: base, chapter: chapterNumber(stem), strippedTitle: stripNumPrefix(stem),
+		})
 	}
 
-	var groups []ChapterGroup
+	// Directories in sorted order so the output does not depend on the order
+	// the store listed rows in.
+	dirs := make([]string, 0, len(byDir))
+	for d := range byDir {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
 
-	for _, dir := range dirOrder {
+	for _, dir := range dirs {
 		cands := byDir[dir]
 		if len(cands) < 2 {
 			continue
 		}
+		// Chapter order first, so sub-grouping below seeds each sub-group
+		// with its lowest-numbered chapter and the primary is chapter 01.
+		sort.SliceStable(cands, func(i, j int) bool {
+			a, b := cands[i], cands[j]
+			if a.chapter != b.chapter {
+				return a.chapter < b.chapter
+			}
+			if a.base != b.base {
+				return a.base < b.base
+			}
+			return a.book.ID < b.book.ID
+		})
 
 		// Sub-group by title similarity: each new candidate either joins an
 		// existing sub-group or starts a new one.
@@ -156,28 +272,26 @@ func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration
 			}
 
 			totalSec := 0
-			for _, c := range sg.cands {
-				if c.book.Duration != nil {
-					totalSec += *c.book.Duration
-				}
-			}
-			avgSec := 0
-			if fc > 0 {
-				avgSec = totalSec / fc
-			}
-
-			// Heuristic 4: all short OR (enough files AND avg short enough).
+			allKnown := true
 			allShort := true
 			for _, c := range sg.cands {
-				dur := 0
-				if c.book.Duration != nil {
-					dur = *c.book.Duration
-				}
-				if dur >= maxPerFileDuration {
-					allShort = false
+				if c.book.Duration == nil || *c.book.Duration <= 0 {
+					allKnown = false
 					break
 				}
+				d := *c.book.Duration
+				totalSec += d
+				if d >= maxPerFileDuration {
+					allShort = false
+				}
 			}
+			if !allKnown {
+				out.SkippedUnknownDuration++
+				continue
+			}
+			avgSec := totalSec / fc
+
+			// Heuristic 4: all short OR (enough files AND avg short enough).
 			if !allShort && !(fc >= minFiles && avgSec < 1800) {
 				continue
 			}
@@ -186,14 +300,16 @@ func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration
 			for i, c := range sg.cands {
 				ids[i] = c.book.ID
 			}
-			groups = append(groups, ChapterGroup{
+			out.Groups = append(out.Groups, ChapterGroup{
+				PrimaryBookID: ids[0],
 				BookIDs:       ids,
 				CommonTitle:   sg.cands[0].strippedTitle,
 				TotalDuration: float64(totalSec),
 				FileCount:     fc,
+				Directory:     dir,
 			})
 		}
 	}
 
-	return groups
+	return out
 }
