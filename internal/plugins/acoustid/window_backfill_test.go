@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
 // last-edited: 2026-09-19
 
@@ -207,6 +207,16 @@ func TestWindowBackfill_DefUsesFingerprintKey(t *testing.T) {
 	require.Equal(t, "acoustid.fingerprint", def.ConcurrencyKey)
 	require.NotEqual(t, "library.scan", def.ConcurrencyKey)
 	require.NotNil(t, def.Run)
+	require.NoError(t, registry.ValidateOpDef(def))
+
+	// Register publishes it, and no two of the plugin's defs share an ID.
+	seen := map[string]bool{}
+	for _, d := range (&Plugin{}).opDefs() {
+		require.NoError(t, registry.ValidateOpDef(d), d.ID)
+		require.False(t, seen[d.ID], "duplicate def %s", d.ID)
+		seen[d.ID] = true
+	}
+	require.True(t, seen[windowBackfillDefID], "Register does not publish %s", windowBackfillDefID)
 	// Compile-time: the production store type satisfies the op's store needs.
 	var _ pluginStore = (database.Store)(nil)
 }

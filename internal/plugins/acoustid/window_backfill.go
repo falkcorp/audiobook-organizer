@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -75,6 +75,12 @@ const windowBackfillMaxWorkers = 32
 // file, I/O-bound, so it is not tied to the CPU count.
 const windowPlanWorkers = 32
 
+// windowPlanChunk is how many rows one planning work item covers. RunItems
+// reports progress (a bus event, and an op_log line per distinct label) once
+// per item; per-row items would be ~742k of them for microseconds of work
+// each on prod.
+const windowPlanChunk = 500
+
 // windowCheckpointEvery throttles checkpoints to one per this many completed
 // files. A variable so the resume test can checkpoint every file.
 var windowCheckpointEvery = 25
@@ -98,6 +104,12 @@ type WindowBackfillParams struct {
 // It is derived from RunItems' contiguous-completion watermark, which is the
 // only checkpoint hook RunItems honours at Concurrency > 1 (CheckpointFn is
 // called only on the sequential path).
+//
+// "Done" means handled, not necessarily written: a file that failed
+// transiently (stat error, per-window timeout, unknown duration) returns
+// normally and moves the watermark past it. A resumed run therefore does not
+// retry a transient failure below the cursor; the next run without a cursor
+// does (it has neither windows nor a tombstone, so it is planned again).
 type WindowBackfillCursor struct {
 	Tier        int    `json:"tier"`
 	AfterFileID string `json:"after_file_id,omitempty"`
@@ -329,7 +341,9 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 
 	eligible := plan.eligible[0] + plan.eligible[1]
 	current := plan.current[0] + plan.current[1] + int(res.written)
-	msg := fmt.Sprintf("Window backfill: %d/%d eligible present files have current windows (%s)", current, eligible, tally.summary())
+	tombstoned := plan.tombstoned[0] + plan.tombstoned[1] + int(res.failed)
+	msg := fmt.Sprintf("Window backfill: %d/%d eligible present files have current windows, %d tombstoned (%s)",
+		current, eligible, tombstoned, tally.summary())
 	wbLog.Info("%s", msg)
 	_ = reporter.UpdateProgress(total, max(total, 1), msg)
 	return res, nil
@@ -402,26 +416,31 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	}
 	roots := iTunesRoots()
 	rows := make([]windowPlanRow, len(cores))
-	idx := make([]int, len(cores))
-	for i := range idx {
-		idx[i] = i
+	var chunks [][2]int
+	for lo := 0; lo < len(cores); lo += windowPlanChunk {
+		chunks = append(chunks, [2]int{lo, min(lo+windowPlanChunk, len(cores))})
 	}
-	var planErrs atomic.Int64
-	err = registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
-		r, perr := p.planOne(cores[i], roots, versions)
-		if perr != nil {
-			// A store read failure on one file must not read as "needs
-			// work" (it would recompute) or "current" (it would skip); the
-			// file is left out of this run and counted.
-			planErrs.Add(1)
-			wbLog.Warn("plan %s: %v", cores[i].ID, perr)
-			r = windowPlanRow{excluded: "plan_error"}
+	err = registry.RunItems(ctx, reporter, chunks, func(ctx context.Context, c [2]int) error {
+		for i := c[0]; i < c[1]; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			r, perr := p.planOne(cores[i], roots, versions)
+			if perr != nil {
+				// A store read failure on one file must not read as "needs
+				// work" (it would recompute) or "current" (it would skip);
+				// the file is left out of this run and counted.
+				wbLog.Warn("plan %s: %v", cores[i].ID, perr)
+				r = windowPlanRow{excluded: "plan_error"}
+			}
+			rows[i] = r // each index written by exactly one chunk
 		}
-		rows[i] = r
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: windowPlanWorkers,
-		Label:       func(i, t int) string { return fmt.Sprintf("Planning windows: file %d/%d", i+1, t) },
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Planning windows: rows %d-%d of %d", chunks[i][0]+1, chunks[i][1], len(cores))
+		},
 	})
 	if err != nil {
 		return nil, err

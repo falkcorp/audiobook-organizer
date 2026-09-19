@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -54,16 +54,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		return nil
 	}
 
-	ops := []sdk.OperationDef{
-		p.scanDef(),
-		p.backfillDef(),
-		p.fingerprintRescanDef(),
-		p.resetAllDef(),
-		p.lshBackfillDef(),
-		p.onlineLookupDef(),
-		p.durationBackfillDef(),
-		p.windowBackfillDef(),
-	}
+	ops := p.opDefs()
 
 	for _, op := range ops {
 		if err := r.RegisterOp(op); err != nil {
@@ -73,11 +64,28 @@ func (p *Plugin) Register(r sdk.Registry) error {
 	return nil
 }
 
+// opDefs is every op the plugin registers, split out of Register so a test can
+// validate each def without a dedup engine.
+func (p *Plugin) opDefs() []sdk.OperationDef {
+	return []sdk.OperationDef{
+		p.scanDef(),
+		p.backfillDef(),
+		p.fingerprintRescanDef(),
+		p.resetAllDef(),
+		p.lshBackfillDef(),
+		p.onlineLookupDef(),
+		p.durationBackfillDef(),
+		p.windowBackfillDef(),
+	}
+}
+
 // pluginStore is what this plugin reads and writes, measured with an
 // empty-interface compiler probe under -gcflags=-e: nine methods (split
 // below to stay under the interfacebloat limit), no
 // forwarding constraints. It was pluginStore -- 398 methods -- until
-// 2026-08-19.
+// 2026-08-19. The window backfill added the four fpwin: sidecar methods
+// (2026-09-19); the set is split into three embedded interfaces to stay under
+// the interfacebloat width gate.
 //
 // The batched fast paths (ClearAllAcoustIDFingerprints and friends) live on
 // *PebbleStore, not on this interface, and are resolved with
