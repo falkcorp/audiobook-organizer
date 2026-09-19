@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.16.0
+// version: 3.16.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-09-19
 
@@ -499,7 +499,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			}
 			bookID, nSeg := res.book.ID, len(rows)
 			lastSegLog := time.Now()
-			_, uErr := store.UpdateBookFiles(ctx, rows, func(done int) {
+			_, uErr := store.UpdateBookFiles(ctx, rows, func(i int, _ bool) {
 				// A row write just finished: real work, so stamp liveness.
 				registry.TouchLiveness(reporter)
 				if time.Since(lastSegLog) >= reextractSegmentProgressInterval {
@@ -509,7 +509,7 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 					}
 					_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
 						"book %s: wrote segment %d/%d (examined=%d corrected=%d)",
-						bookID, done, nSeg, examined, written))
+						bookID, i+1, nSeg, examined, written))
 					lastSegLog = time.Now()
 				}
 			})

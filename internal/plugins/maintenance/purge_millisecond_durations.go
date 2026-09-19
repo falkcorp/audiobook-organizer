@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
 // last-edited: 2026-09-19
 
@@ -211,7 +211,7 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 		// its rows each time -- O(n^2) on a large book, the defect that got
 		// duration-reextract killed as stuck on 2026-09-19. ctx is checked
 		// between rows and liveness is stamped after each one.
-		n, uerr := store.UpdateBookFiles(ctx, toWrite, func(int) {
+		n, uerr := store.UpdateBookFiles(ctx, toWrite, func(int, bool) {
 			registry.TouchLiveness(reporter)
 		})
 		mu.Lock()

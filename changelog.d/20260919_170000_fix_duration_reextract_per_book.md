@@ -17,3 +17,17 @@
   cancel, and its workers no longer block forever on the result send.
   `maintenance.purge-millisecond-durations` had the same per-row recompute and
   now uses the same method.
+- **The regroup track passes recompute the survivor once, not once per row.**
+  `fs-regroup-xml`'s fragments track renumbering and the multidisc review
+  apply (`applyDiscTrackNumbers`) wrote one `UpdateBookFile` per row.
+  `UpdateBookFile` recomputes the book on every call, even for a
+  TrackNumber-only change, so each row re-read all of the survivor's rows. Both
+  now make one `UpdateBookFiles` call per survivor. fs-regroup journals exactly
+  the rows that landed, stamps liveness per row, and skips its now-redundant
+  trailing recompute. `UpdateBookFiles`' callback now reports the index of each
+  row and whether it was applied.
+- **A book_file write whose fsync failed now updates the book's totals.**
+  `UpdateBookFile`, `ModifyBookFile` and `UpdateBookFileHashes` skipped the
+  aggregate recompute on any error, including `ErrBookFileDurabilityUnknown`,
+  where the row *was* applied and is visible. The book's totals then disagreed
+  with its rows. They now recompute whenever the row was applied.
