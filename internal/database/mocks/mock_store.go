@@ -16815,6 +16815,68 @@ func (_c *MockStore_GetFilesWithZeroDurationFingerprint_Call) RunAndReturn(run f
 	return _c
 }
 
+// GetFingerprintWindowFailure provides a mock function for the type MockStore
+func (_mock *MockStore) GetFingerprintWindowFailure(ref database.FingerprintWindowRef) (*database.FingerprintWindowFailure, error) {
+	ret := _mock.Called(ref)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFingerprintWindowFailure")
+	}
+
+	var r0 *database.FingerprintWindowFailure
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(database.FingerprintWindowRef) (*database.FingerprintWindowFailure, error)); ok {
+		return returnFunc(ref)
+	}
+	if returnFunc, ok := ret.Get(0).(func(database.FingerprintWindowRef) *database.FingerprintWindowFailure); ok {
+		r0 = returnFunc(ref)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.FingerprintWindowFailure)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(database.FingerprintWindowRef) error); ok {
+		r1 = returnFunc(ref)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetFingerprintWindowFailure_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFingerprintWindowFailure'
+type MockStore_GetFingerprintWindowFailure_Call struct {
+	*mock.Call
+}
+
+// GetFingerprintWindowFailure is a helper method to define mock.On call
+//   - ref database.FingerprintWindowRef
+func (_e *MockStore_Expecter) GetFingerprintWindowFailure(ref any) *MockStore_GetFingerprintWindowFailure_Call {
+	return &MockStore_GetFingerprintWindowFailure_Call{Call: _e.mock.On("GetFingerprintWindowFailure", ref)}
+}
+
+func (_c *MockStore_GetFingerprintWindowFailure_Call) Run(run func(ref database.FingerprintWindowRef)) *MockStore_GetFingerprintWindowFailure_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.FingerprintWindowRef
+		if args[0] != nil {
+			arg0 = args[0].(database.FingerprintWindowRef)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetFingerprintWindowFailure_Call) Return(fingerprintWindowFailure *database.FingerprintWindowFailure, err error) *MockStore_GetFingerprintWindowFailure_Call {
+	_c.Call.Return(fingerprintWindowFailure, err)
+	return _c
+}
+
+func (_c *MockStore_GetFingerprintWindowFailure_Call) RunAndReturn(run func(ref database.FingerprintWindowRef) (*database.FingerprintWindowFailure, error)) *MockStore_GetFingerprintWindowFailure_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetFingerprintWindows provides a mock function for the type MockStore
 func (_mock *MockStore) GetFingerprintWindows(ref database.FingerprintWindowRef) ([]database.FingerprintWindow, error) {
 	ret := _mock.Called(ref)
@@ -25970,6 +26032,57 @@ func (_c *MockStore_RecomputeBookAggregates_Call) RunAndReturn(run func(bookID s
 	return _c
 }
 
+// RecordFingerprintWindowFailure provides a mock function for the type MockStore
+func (_mock *MockStore) RecordFingerprintWindowFailure(f *database.FingerprintWindowFailure) error {
+	ret := _mock.Called(f)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RecordFingerprintWindowFailure")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(*database.FingerprintWindowFailure) error); ok {
+		r0 = returnFunc(f)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_RecordFingerprintWindowFailure_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecordFingerprintWindowFailure'
+type MockStore_RecordFingerprintWindowFailure_Call struct {
+	*mock.Call
+}
+
+// RecordFingerprintWindowFailure is a helper method to define mock.On call
+//   - f *database.FingerprintWindowFailure
+func (_e *MockStore_Expecter) RecordFingerprintWindowFailure(f any) *MockStore_RecordFingerprintWindowFailure_Call {
+	return &MockStore_RecordFingerprintWindowFailure_Call{Call: _e.mock.On("RecordFingerprintWindowFailure", f)}
+}
+
+func (_c *MockStore_RecordFingerprintWindowFailure_Call) Run(run func(f *database.FingerprintWindowFailure)) *MockStore_RecordFingerprintWindowFailure_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 *database.FingerprintWindowFailure
+		if args[0] != nil {
+			arg0 = args[0].(*database.FingerprintWindowFailure)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_RecordFingerprintWindowFailure_Call) Return(err error) *MockStore_RecordFingerprintWindowFailure_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_RecordFingerprintWindowFailure_Call) RunAndReturn(run func(f *database.FingerprintWindowFailure) error) *MockStore_RecordFingerprintWindowFailure_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RecordMetadataChange provides a mock function for the type MockStore
 func (_mock *MockStore) RecordMetadataChange(record *database.MetadataChangeRecord) error {
 	ret := _mock.Called(record)
@@ -26841,6 +26954,63 @@ func (_c *MockStore_RepairOpsV2MissingCompletedAt_Call) Return(n int, err error)
 }
 
 func (_c *MockStore_RepairOpsV2MissingCompletedAt_Call) RunAndReturn(run func() (int, error)) *MockStore_RepairOpsV2MissingCompletedAt_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReplaceFingerprintWindows provides a mock function for the type MockStore
+func (_mock *MockStore) ReplaceFingerprintWindows(ref database.FingerprintWindowRef, ws []database.FingerprintWindow) error {
+	ret := _mock.Called(ref, ws)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReplaceFingerprintWindows")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(database.FingerprintWindowRef, []database.FingerprintWindow) error); ok {
+		r0 = returnFunc(ref, ws)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_ReplaceFingerprintWindows_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReplaceFingerprintWindows'
+type MockStore_ReplaceFingerprintWindows_Call struct {
+	*mock.Call
+}
+
+// ReplaceFingerprintWindows is a helper method to define mock.On call
+//   - ref database.FingerprintWindowRef
+//   - ws []database.FingerprintWindow
+func (_e *MockStore_Expecter) ReplaceFingerprintWindows(ref any, ws any) *MockStore_ReplaceFingerprintWindows_Call {
+	return &MockStore_ReplaceFingerprintWindows_Call{Call: _e.mock.On("ReplaceFingerprintWindows", ref, ws)}
+}
+
+func (_c *MockStore_ReplaceFingerprintWindows_Call) Run(run func(ref database.FingerprintWindowRef, ws []database.FingerprintWindow)) *MockStore_ReplaceFingerprintWindows_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 database.FingerprintWindowRef
+		if args[0] != nil {
+			arg0 = args[0].(database.FingerprintWindowRef)
+		}
+		var arg1 []database.FingerprintWindow
+		if args[1] != nil {
+			arg1 = args[1].([]database.FingerprintWindow)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ReplaceFingerprintWindows_Call) Return(err error) *MockStore_ReplaceFingerprintWindows_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_ReplaceFingerprintWindows_Call) RunAndReturn(run func(ref database.FingerprintWindowRef, ws []database.FingerprintWindow) error) *MockStore_ReplaceFingerprintWindows_Call {
 	_c.Call.Return(run)
 	return _c
 }

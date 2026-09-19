@@ -588,11 +588,14 @@ type MockStore struct {
 	GetAcoustIDStatsFunc                    func() (*AcoustIDStats, error)
 
 	// Fingerprint windows (fpwin: sidecar)
-	PutFingerprintWindowFunc        func(w *FingerprintWindow) error
-	GetFingerprintWindowsFunc       func(ref FingerprintWindowRef) ([]FingerprintWindow, error)
-	WindowsForFileFunc              func(fileID string) ([]FingerprintWindow, error)
-	DeleteFingerprintWindowsFunc    func(ref FingerprintWindowRef) (int, error)
-	CarryOverFingerprintWindowsFunc func(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error)
+	PutFingerprintWindowFunc           func(w *FingerprintWindow) error
+	GetFingerprintWindowsFunc          func(ref FingerprintWindowRef) ([]FingerprintWindow, error)
+	WindowsForFileFunc                 func(fileID string) ([]FingerprintWindow, error)
+	DeleteFingerprintWindowsFunc       func(ref FingerprintWindowRef) (int, error)
+	CarryOverFingerprintWindowsFunc    func(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error)
+	ReplaceFingerprintWindowsFunc      func(ref FingerprintWindowRef, ws []FingerprintWindow) error
+	RecordFingerprintWindowFailureFunc func(f *FingerprintWindowFailure) error
+	GetFingerprintWindowFailureFunc    func(ref FingerprintWindowRef) (*FingerprintWindowFailure, error)
 
 	// Path history
 	RecordPathChangeFunc   func(change *BookPathChange) error
@@ -3522,6 +3525,27 @@ func (m *MockStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, to 
 		return m.CarryOverFingerprintWindowsFunc(from, to)
 	}
 	return 0, nil
+}
+
+func (m *MockStore) ReplaceFingerprintWindows(ref FingerprintWindowRef, ws []FingerprintWindow) error {
+	if m.ReplaceFingerprintWindowsFunc != nil {
+		return m.ReplaceFingerprintWindowsFunc(ref, ws)
+	}
+	return nil
+}
+
+func (m *MockStore) RecordFingerprintWindowFailure(f *FingerprintWindowFailure) error {
+	if m.RecordFingerprintWindowFailureFunc != nil {
+		return m.RecordFingerprintWindowFailureFunc(f)
+	}
+	return nil
+}
+
+func (m *MockStore) GetFingerprintWindowFailure(ref FingerprintWindowRef) (*FingerprintWindowFailure, error) {
+	if m.GetFingerprintWindowFailureFunc != nil {
+		return m.GetFingerprintWindowFailureFunc(ref)
+	}
+	return nil, nil
 }
 
 func (m *MockStore) CreateAIJob(job AIJob, payloadJSON []byte) error {

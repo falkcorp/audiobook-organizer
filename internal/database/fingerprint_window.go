@@ -1,5 +1,5 @@
 // file: internal/database/fingerprint_window.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c23e6967-5192-4584-a48c-2b5d89c2e887
 // last-edited: 2026-09-19
 
@@ -211,4 +211,44 @@ func legacyHeadWindow(f *BookFile) (FingerprintWindow, bool) {
 		Raw:             f.AcoustIDFingerprint,
 		Virtual:         true,
 	}, true
+}
+
+// FingerprintWindowFailure is the fpwin_fail:<ref> tombstone: the window
+// pipeline failed on this file in a way that retrying the same bytes with the
+// same tools will not fix (a non-zero ffmpeg/fpcalc exit, unparseable output,
+// too few frames, audio shorter than the planned window).
+//
+// It is durable only for what it names. A backfill treats it as current only
+// while the file's size and mtime, the pipeline, the window set and both tool
+// versions all still match; any change means the failure no longer describes
+// the file and the file is planned again. Transient conditions (cancellation,
+// a timeout, an unknown duration) are never recorded here.
+type FingerprintWindowFailure struct {
+	SchemaVersion   int                  `json:"v"`
+	Ref             FingerprintWindowRef `json:"ref"`
+	Reason          string               `json:"reason"`
+	Detail          string               `json:"detail,omitempty"`
+	SlotBP          int                  `json:"slot_bp"`
+	WindowSet       string               `json:"window_set"`
+	Pipeline        string               `json:"pipeline"`
+	FpcalcVersion   string               `json:"fpcalc_version"`
+	FFmpegVersion   string               `json:"ffmpeg_version"`
+	SourceSize      int64                `json:"source_size"`
+	SourceMtimeUnix int64                `json:"source_mtime_unix"`
+	FailedAt        time.Time            `json:"failed_at"`
+	Host            string               `json:"host"`
+}
+
+// validate checks the invariants the tombstone key depends on.
+func (f *FingerprintWindowFailure) validate() error {
+	if f == nil {
+		return fmt.Errorf("fingerprint window failure: nil")
+	}
+	if err := f.Ref.validate(); err != nil {
+		return err
+	}
+	if f.Reason == "" {
+		return fmt.Errorf("fingerprint window failure %s: empty reason", f.Ref)
+	}
+	return nil
 }

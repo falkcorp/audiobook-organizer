@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-09-19
 
@@ -473,4 +473,135 @@ func fileIDOfWindowRef(ref FingerprintWindowRef) (string, bool) {
 		return s[2:], true
 	}
 	return "", false
+}
+
+// ReplaceFingerprintWindows atomically replaces the stored windows of ref, and
+// its failure tombstone, with ws. It is the write a backfill makes when it has
+// recomputed a file: a plain Put per window would leave a slot the new plan no
+// longer has (a file that crossed the 600 s threshold) sitting next to the new
+// rows, and a crash between a delete and the puts would leave the file with
+// nothing. One batch, under the ref's stripe, avoids both.
+//
+// ws must be non-empty and every row must name ref. For an f: ref the
+// book_file row must exist, re-checked under the stripe exactly as
+// PutFingerprintWindow does.
+func (s *PebbleStore) ReplaceFingerprintWindows(ref FingerprintWindowRef, ws []FingerprintWindow) error {
+	if err := ref.validate(); err != nil {
+		return err
+	}
+	if len(ws) == 0 {
+		return fmt.Errorf("ReplaceFingerprintWindows %s: no windows (use DeleteFingerprintWindows to clear)", ref)
+	}
+	encoded := make([][2][]byte, 0, len(ws))
+	for i := range ws {
+		row := ws[i]
+		if row.Ref != ref {
+			return fmt.Errorf("ReplaceFingerprintWindows %s: row %d names ref %s", ref, i, row.Ref)
+		}
+		if err := row.validate(); err != nil {
+			return err
+		}
+		if row.SchemaVersion == 0 {
+			row.SchemaVersion = FingerprintWindowSchemaVersion
+		}
+		data, err := json.Marshal(&row)
+		if err != nil {
+			return fmt.Errorf("ReplaceFingerprintWindows %s: marshal: %w", ref, err)
+		}
+		encoded = append(encoded, [2][]byte{fpwinKey(&row), data})
+	}
+	return s.commitRefWrite(ref, "ReplaceFingerprintWindows", func(batch *pebble.Batch) error {
+		for _, kv := range encoded {
+			if err := batch.Set(kv[0], kv[1], nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RecordFingerprintWindowFailure drops ref's stored windows and writes its
+// fpwin_fail: tombstone, in one batch. The windows go because a durable
+// failure is only ever recorded after the caller decided the stored windows
+// were not current for the file as it is now; keeping them would leave a
+// stale print beside a tombstone that says the file cannot be printed.
+func (s *PebbleStore) RecordFingerprintWindowFailure(f *FingerprintWindowFailure) error {
+	if err := f.validate(); err != nil {
+		return err
+	}
+	row := *f
+	if row.SchemaVersion == 0 {
+		row.SchemaVersion = FingerprintWindowSchemaVersion
+	}
+	data, err := json.Marshal(&row)
+	if err != nil {
+		return fmt.Errorf("RecordFingerprintWindowFailure %s: marshal: %w", row.Ref, err)
+	}
+	return s.commitRefWrite(row.Ref, "RecordFingerprintWindowFailure", func(batch *pebble.Batch) error {
+		return batch.Set(fpwinFailKey(row.Ref), data, nil)
+	})
+}
+
+// GetFingerprintWindowFailure returns ref's tombstone, or nil, nil when there
+// is none. An undecodable tombstone is an error, not "no tombstone": a
+// backfill reading nil would retry a file that is known to fail, every run.
+func (s *PebbleStore) GetFingerprintWindowFailure(ref FingerprintWindowRef) (*FingerprintWindowFailure, error) {
+	if err := ref.validate(); err != nil {
+		return nil, err
+	}
+	val, closer, err := s.db.Get(fpwinFailKey(ref))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetFingerprintWindowFailure %s: %w", ref, err)
+	}
+	defer closer.Close()
+	var f FingerprintWindowFailure
+	if err := json.Unmarshal(val, &f); err != nil {
+		return nil, fmt.Errorf("undecodable fingerprint window failure %s: %w", ref, err)
+	}
+	return &f, nil
+}
+
+// commitRefWrite is the shared body of the replace-style writes: resolve an
+// f: ref's row before the stripe (the pre-index fallback is a full scan),
+// take the stripe, re-confirm the row with point reads, stage the deletes of
+// every stored window and the tombstone, let stage add the new keys, commit.
+func (s *PebbleStore) commitRefWrite(ref FingerprintWindowRef, op string, stage func(*pebble.Batch) error) error {
+	fileID, isFile := fileIDOfWindowRef(ref)
+	var hint *BookFile
+	if isFile {
+		var err error
+		if hint, err = s.resolveBookFileByID(fileID); err != nil {
+			return fmt.Errorf("%s %s: %w", op, ref, err)
+		}
+		if hint == nil {
+			return fmt.Errorf("%s %s: book_file %s does not exist", op, ref, fileID)
+		}
+	}
+	unlock := s.lockWindowRefs(ref)
+	defer unlock()
+	if isFile {
+		ok, err := s.fileRowStillExists(fileID, hint)
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", op, ref, err)
+		}
+		if !ok {
+			return fmt.Errorf("%s %s: book_file %s was deleted", op, ref, fileID)
+		}
+	}
+	batch := s.db.NewBatch()
+	if _, err := s.stageFingerprintWindowDeletes(batch, ref); err != nil {
+		batch.Close()
+		return fmt.Errorf("%s %s: %w", op, ref, err)
+	}
+	if err := stage(batch); err != nil {
+		batch.Close()
+		return fmt.Errorf("%s %s: %w", op, ref, err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("%s %s: %w", op, ref, err)
+	}
+	return nil
 }
