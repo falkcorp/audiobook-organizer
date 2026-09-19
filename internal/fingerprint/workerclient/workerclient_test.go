@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1003,5 +1004,87 @@ func TestProcess_MixedFormComponents(t *testing.T) {
 		if res.Outcome != workerapi.OutcomeOK {
 			t.Errorf("%q: %s (%s)", rel, res.Outcome, res.Error)
 		}
+	}
+}
+
+// bootstrapHello turns the test server's hello into a remote-only bootstrap:
+// identity-only calibration files and ref as the announced reference pair.
+func (e *testEnv) bootstrapHello(ref fingerprint.ToolVersionInfo) {
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	rt := workerapi.ToolVersions{Fpcalc: ref.Fpcalc, FFmpeg: ref.FFmpeg}
+	e.srv.hello.Bootstrap = true
+	e.srv.hello.ReferenceTools = &rt
+	for i := range e.srv.hello.Calibration {
+		e.srv.hello.Calibration[i].Windows = []workerapi.CalibrationWindow{}
+	}
+	if !slices.Contains(e.srv.hello.ToolVersions, rt) {
+		e.srv.hello.ToolVersions = append(e.srv.hello.ToolVersions, rt)
+	}
+}
+
+// TestRun_BootstrapReferencePairPasses: in a remote-only bootstrap the worker
+// running exactly the reference pair passes on the identity checks alone and
+// works.
+func TestRun_BootstrapReferencePairPasses(t *testing.T) {
+	e := newTestEnv(t)
+	e.bootstrapHello(testVersions)
+	e.addJob("A/B/c.mp3", []byte("bootstrap audio"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if e.srv.results[0].Outcome != workerapi.OutcomeOK {
+		t.Fatalf("outcome %s (%s)", e.srv.results[0].Outcome, e.srv.results[0].Error)
+	}
+}
+
+// TestRun_BootstrapNonReferencePairRefuses: any other pair, even one the
+// server allowlists, refuses a bootstrap: there is no reference yet to prove
+// it byte-identical to.
+func TestRun_BootstrapNonReferencePairRefuses(t *testing.T) {
+	e := newTestEnv(t)
+	e.bootstrapHello(fingerprint.ToolVersionInfo{Fpcalc: "1.6.1", FFmpeg: "9.0.2"})
+	e.addJob("A/B/c.mp3", []byte("x"))
+	// Bounded: a worker that wrongly passes the gate would lease forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, make(chan struct{}), e.cfg)
+	if !errors.Is(err, ErrParity) || !strings.Contains(err.Error(), "reference pair") {
+		t.Fatalf("Run = %v, want ErrParity naming the reference pair", err)
+	}
+	if n := e.srv.leaseCallsSafe(); n != 0 {
+		t.Errorf("leased %d times", n)
+	}
+}
+
+// TestRun_BootstrapWrongMountRefuses: the bootstrap skips only the parity
+// cut; a reference-pair worker whose mount does not hold the server's bytes
+// still refuses.
+func TestRun_BootstrapWrongMountRefuses(t *testing.T) {
+	for name, mutate := range map[string]func(*workerapi.CalibrationFile){
+		"head": func(cf *workerapi.CalibrationFile) { cf.Head64K = strings.Repeat("b", 64) },
+		"size": func(cf *workerapi.CalibrationFile) { cf.Size++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.bootstrapHello(testVersions)
+			mutate(&e.srv.hello.Calibration[0])
+			e.addJob("A/B/c.mp3", []byte("x"))
+			// Bounded: a worker that wrongly passes the gate would lease forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := Run(ctx, make(chan struct{}), e.cfg)
+			if !errors.Is(err, ErrMountCheck) {
+				t.Fatalf("Run = %v, want ErrMountCheck", err)
+			}
+			if n := e.srv.leaseCallsSafe(); n != 0 {
+				t.Errorf("leased %d times", n)
+			}
+		})
 	}
 }

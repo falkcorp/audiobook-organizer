@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -19,6 +19,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -55,6 +56,15 @@ import (
 // never enough to tombstone a file: not_found is re-checked by the server,
 // decode errors and repeated timeouts are handed to the server lane, which
 // makes its own tombstone decision.
+//
+// Remote-only runs (WindowBackfillParams.RemoteOnly; owner rule: nothing is
+// decoded on the server): the server lane cuts nothing. It waits on each item
+// in order (awaitRemote) until a worker finished it, and marks done WITHOUT a
+// write every item a worker may not have (not remote-eligible, or routed to
+// the server lane by a decode error, rejection, mount not_found, repeated
+// timeouts, ...): it is "deferred", gets no tombstone, and a later run plans it
+// again. The run's "server" pair is the configured reference pair, and
+// calibration relaxes accordingly (see buildCalibration and Hello).
 
 var hubLog = logger.New("acoustid.worker-hub")
 
@@ -114,12 +124,15 @@ type queueItem struct {
 	lease      string // owning lease while qLeased
 	touched    bool   // ever leased: holds the checkpoint back until done
 	serverOnly bool   // never offered to a worker again this run
-	timeouts   int
-	remote     int8
-	jobs       []string // job IDs issued for it; pruned when it is done
-	rel        string   // root-relative path when remote == remoteYes
-	dur        fingerprint.DurationUsed
-	specs      []fingerprint.WindowSpec
+	// whyServer is why a worker may not have the item (not eligible, or the
+	// reason it became serverOnly): the deferral reason in a remote-only run.
+	whyServer string
+	timeouts  int
+	remote    int8
+	jobs      []string // job IDs issued for it; pruned when it is done
+	rel       string   // root-relative path when remote == remoteYes
+	dur       fingerprint.DurationUsed
+	specs     []fingerprint.WindowSpec
 }
 
 type workerLease struct {
@@ -148,20 +161,36 @@ type workerJob struct {
 // hubRun is one attached live run. Every field below mu-guarded is only
 // touched with WorkerHub.mu held.
 type hubRun struct {
-	p       *Plugin
-	tally   *windowTally
+	p     *Plugin
+	tally *windowTally
+	// server is the pair the run's windows are judged against: the server's
+	// own tools, or in a remote-only run the configured reference pair.
 	server  fingerprint.ToolVersionInfo
 	allowed []workerapi.ToolVersions
 	roots   []pathutil.PathVar
 	calib   []windowItem
 	probe   libraryScanProbe // nil: no library.scan gate (tests)
 
-	calibOnce sync.Once
-	calibOut  []workerapi.CalibrationFile
+	// remoteOnly: the server lane decodes nothing (see the package comment).
+	remoteOnly bool
+	// identity are present libroot files offered identity-only (no windows)
+	// while a remote-only run bootstraps its reference windows.
+	identity []windowItem
+
+	calibMu    sync.Mutex
+	calibBuilt bool // calibOut is final for this run
+	calibOut   []workerapi.CalibrationFile
+	calibExtra []windowItem // remote-only: files written this run with the reference pair
+	// refReady: a remote-only Hello found reference-pair calibration windows,
+	// so a non-reference (allowlisted) pair can be parity-checked and may lease.
+	refReady atomic.Bool
 
 	cancel    context.CancelFunc
 	sweepDone chan struct{}
 	changed   chan struct{} // cap 1: an item became done or was requeued
+	// bcast is closed (and replaced) on the same events as changed, for the
+	// many awaitRemote waiters of a remote-only run. mu-guarded.
+	bcast chan struct{}
 
 	// mu-guarded
 	gen       int // bumped by beginTier
@@ -174,6 +203,14 @@ type hubRun struct {
 	inflight  int              // qLeased + qWriting
 	leases    map[string]*workerLease
 	jobs      map[string]*workerJob
+	doneCount int // items in qDone this tier
+}
+
+// hubMode is how a live run attaches.
+type hubMode struct {
+	remoteOnly bool
+	// identity: identity-only calibration candidates (remote-only bootstrap).
+	identity []windowItem
 }
 
 // WorkerHub is the lease manager. The zero value is not usable; Plugin owns
@@ -226,22 +263,29 @@ func versionsAllowed(allowed []workerapi.ToolVersions, fp, ff string) bool {
 
 // attach makes run the live run the endpoints serve and starts the sweeper.
 // The op's ConcurrencyKey guarantees one live run at a time.
-func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.WindowTools, tally *windowTally, calib []windowItem) {
+//
+// In a remote-only run wt carries only Versions, the reference pair: the
+// equivalence class and the lease allowlist are built from it, and the
+// server's own pair (never resolved) is in neither.
+func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.WindowTools, tally *windowTally, calib []windowItem, mode hubMode) {
 	sctx, cancel := context.WithCancel(ctx)
 	r := &hubRun{
-		p:         p,
-		tally:     tally,
-		server:    wt.Versions,
-		allowed:   allowedToolVersions(wt.Versions),
-		roots:     pathutil.PathVars(config.AppConfig.RootDir),
-		calib:     calib,
-		probe:     p.currentScanProbe(),
-		cancel:    cancel,
-		sweepDone: make(chan struct{}),
-		changed:   make(chan struct{}, 1),
-		open:      map[int]struct{}{},
-		leases:    map[string]*workerLease{},
-		jobs:      map[string]*workerJob{},
+		p:          p,
+		tally:      tally,
+		server:     wt.Versions,
+		allowed:    allowedToolVersions(wt.Versions),
+		roots:      pathutil.PathVars(config.AppConfig.RootDir),
+		calib:      calib,
+		remoteOnly: mode.remoteOnly,
+		identity:   mode.identity,
+		probe:      p.currentScanProbe(),
+		cancel:     cancel,
+		sweepDone:  make(chan struct{}),
+		changed:    make(chan struct{}, 1),
+		bcast:      make(chan struct{}),
+		open:       map[int]struct{}{},
+		leases:     map[string]*workerLease{},
+		jobs:       map[string]*workerJob{},
 	}
 	h.mu.Lock()
 	h.run = r
@@ -295,6 +339,7 @@ func (h *WorkerHub) beginTier(tier int, items []windowItem) {
 	r.inflight = 0
 	r.leases = map[string]*workerLease{}
 	r.jobs = map[string]*workerJob{}
+	r.doneCount = 0
 }
 
 // claimServer is the server lane's claim: true when the item was pending and
@@ -421,6 +466,7 @@ func (r *hubRun) setState(idx int, s qState) {
 	it.state = s
 	switch {
 	case s == qDone:
+		r.doneCount++
 		delete(r.open, idx)
 		// Finished: its job records are no longer needed (a repost is
 		// recognized from the stored rows, see duplicateOfStored).
@@ -447,6 +493,67 @@ func (r *hubRun) signal() {
 	case r.changed <- struct{}{}:
 	default:
 	}
+	close(r.bcast)
+	r.bcast = make(chan struct{})
+}
+
+// awaitRemote is the remote-only server lane for one item: it cuts nothing.
+// It returns once a worker finished the item, or marks the item done without
+// a write and returns the deferral reason when no worker may have it (not
+// remote-eligible, or serverOnly after a decode error, rejection, mount
+// not_found, repeated timeouts, ...). A deferred item gets no tombstone, so a
+// later run plans it again.
+//
+// Called by RunItems' workers in item order, so the run's checkpoint
+// watermark is the unbroken prefix of items that are finished or deferred:
+// it moves past deferred items and never past one a worker still owes.
+// progress is called every windowDrainPoll while it waits, so the watchdog
+// sees a live op.
+func (h *WorkerHub) awaitRemote(ctx context.Context, idx int, progress func(done, leased, total int)) (string, error) {
+	for {
+		h.mu.Lock()
+		r := h.run
+		if r == nil || idx < 0 || idx >= len(r.st) {
+			h.mu.Unlock()
+			return "", nil
+		}
+		st := &r.st[idx]
+		if st.state == qDone {
+			h.mu.Unlock()
+			return "", nil
+		}
+		if st.state == qPending && !r.remoteEligible(idx) {
+			why := st.whyServer
+			if why == "" {
+				why = "server_only"
+			}
+			r.setState(idx, qDone)
+			h.mu.Unlock()
+			return why, nil
+		}
+		ch := r.bcast
+		done, leased, total := r.doneCount, r.inflight, len(r.st)
+		h.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ch:
+		case <-time.After(windowDrainPoll):
+			if progress != nil {
+				progress(done, leased, total)
+			}
+		}
+	}
+}
+
+// markServerOnly routes an item to the server lane for the rest of the run.
+// Called with mu held.
+func (r *hubRun) markServerOnly(idx int, why string) {
+	st := &r.st[idx]
+	st.serverOnly = true
+	if st.whyServer == "" {
+		st.whyServer = why
+	}
 }
 
 // remoteEligible decides once whether an item may go to a worker: under
@@ -459,12 +566,21 @@ func (r *hubRun) remoteEligible(idx int) bool {
 		st.remote = remoteNo
 		it := r.items[idx]
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
-		if ok && root == "libroot" {
-			if dur, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, nil); err == nil {
-				if specs, perr := fingerprint.PlanWindows(dur, fingerprint.WindowSetWS1); perr == nil && len(specs) > 0 {
-					st.remote, st.rel, st.dur, st.specs = remoteYes, rel, dur, specs
-				}
+		switch {
+		case !ok || root != "libroot":
+			st.whyServer = "not_under_libroot"
+		default:
+			dur, err := fingerprint.ChooseDuration(it.FpDuration, it.Duration, nil)
+			if err != nil {
+				st.whyServer = "unknown_duration"
+				break
 			}
+			specs, perr := fingerprint.PlanWindows(dur, fingerprint.WindowSetWS1)
+			if perr != nil || len(specs) == 0 {
+				st.whyServer = "no_window_plan"
+				break
+			}
+			st.remote, st.rel, st.dur, st.specs = remoteYes, rel, dur, specs
 		}
 	}
 	return st.remote == remoteYes && !st.serverOnly
@@ -553,12 +669,13 @@ func (h *WorkerHub) Hello(_ context.Context) (*workerapi.HelloResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.calibOnce.Do(func() { r.calibOut = r.buildCalibration() })
+	calib, bootstrap := r.calibration()
 	resp := &workerapi.HelloResponse{
 		Pipeline:     fingerprint.WindowPipelineID,
 		WindowSet:    fingerprint.WindowSetWS1,
 		ToolVersions: r.allowed,
-		Calibration:  r.calibOut,
+		Calibration:  calib,
+		Bootstrap:    bootstrap,
 		Limits: workerapi.Limits{
 			MaxJobsPerLease:    workerapi.MaxJobsPerLease,
 			LeaseTTLSec:        int(workerapi.LeaseTTL / time.Second),
@@ -570,18 +687,75 @@ func (h *WorkerHub) Hello(_ context.Context) (*workerapi.HelloResponse, error) {
 	for _, v := range r.roots {
 		resp.Roots = append(resp.Roots, workerapi.Root{ID: v.Name, Remote: v.Name == "libroot"})
 	}
+	if r.remoteOnly {
+		resp.ReferenceTools = &workerapi.ToolVersions{Fpcalc: r.server.Fpcalc, FFmpeg: r.server.FFmpeg}
+	}
 	if resp.Calibration == nil {
 		resp.Calibration = []workerapi.CalibrationFile{}
 	}
 	return resp, nil
 }
 
-// buildCalibration reads the calibration candidates the plan chose: files
-// under libroot whose stored windows are current. A candidate whose bytes
-// moved since is dropped.
-func (r *hubRun) buildCalibration() []workerapi.CalibrationFile {
+// calibration returns the calibration files Hello offers, and whether they
+// are a remote-only bootstrap (identity only, no windows).
+//
+// A normal run builds once and keeps the result. A remote-only run keeps a
+// result only once it carries reference windows: until then every Hello
+// rebuilds, now also from the files workers wrote with the reference pair
+// during this run (calibExtra), so the first reference worker's windows
+// become the calibration of every later worker without a restart.
+func (r *hubRun) calibration() ([]workerapi.CalibrationFile, bool) {
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	if r.calibBuilt {
+		return r.calibOut, false
+	}
+	cands := append(append([]windowItem(nil), r.calib...), r.calibExtra...)
+	out := r.buildCalibration(cands)
+	if !r.remoteOnly || len(out) > 0 {
+		r.calibOut, r.calibBuilt = out, true
+		if r.remoteOnly {
+			r.refReady.Store(true)
+		}
+		return out, false
+	}
+	return r.buildIdentityCalibration(), true
+}
+
+// buildIdentityCalibration offers present libroot files with NO windows: the
+// remote-only bootstrap, when no reference-pair window exists yet. They prove
+// only a worker's root mapping (size, mtime, first 64 KiB); the worker gate
+// lets the reference pair alone pass on that (workerclient.calibrationTargets).
+func (r *hubRun) buildIdentityCalibration() []workerapi.CalibrationFile {
 	out := []workerapi.CalibrationFile{}
-	for _, it := range r.calib {
+	for _, it := range r.identity {
+		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
+		if !ok || root != "libroot" {
+			continue
+		}
+		fi, err := os.Stat(it.Path)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		head, err := headSHA256(it.Path)
+		if err != nil {
+			continue
+		}
+		out = append(out, workerapi.CalibrationFile{Root: root, RelB64: base64.StdEncoding.EncodeToString([]byte(rel)), Rel: rel,
+			Size: fi.Size(), MtimeUnix: fi.ModTime().Unix(), Head64K: head, Windows: []workerapi.CalibrationWindow{}})
+		if len(out) == calibrationFiles {
+			break
+		}
+	}
+	return out
+}
+
+// buildCalibration reads the calibration candidates: files under libroot
+// whose stored windows are current. A candidate whose bytes moved since is
+// dropped.
+func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFile {
+	out := []workerapi.CalibrationFile{}
+	for _, it := range cands {
 		root, rel, ok := pathutil.SplitRoot(it.Path, r.roots)
 		if !ok || root != "libroot" {
 			continue
@@ -609,7 +783,14 @@ func (r *hubRun) buildCalibration() []workerapi.CalibrationFile {
 			// print, cut by the server's own tools: a worker-made window
 			// (even an allowlisted one) would let a worker calibrate
 			// against another worker.
-			if strings.HasPrefix(w.Host, workerHostPrefix) || w.FpcalcVersion != r.server.Fpcalc || w.FFmpegVersion != r.server.FFmpeg {
+			//
+			// Remote-only runs replace that rule on purpose: the server
+			// cuts nothing, so the reference is the configured reference
+			// PAIR (r.server), whoever ran it. Only windows stamped with
+			// exactly that pair qualify; an allowlisted pair's windows
+			// never do.
+			workerMade := strings.HasPrefix(w.Host, workerHostPrefix) && !r.remoteOnly
+			if workerMade || w.FpcalcVersion != r.server.Fpcalc || w.FFmpegVersion != r.server.FFmpeg {
 				serverMade = false
 				break
 			}
@@ -687,6 +868,15 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: pipeline=%q fpcalc=%q ffmpeg=%q", ErrToolsNotAllowed, req.Pipeline, req.FpcalcVersion, req.FFmpegVersion)
 	}
+	// Remote-only bootstrap: until reference windows exist, a non-reference
+	// (allowlisted) pair has nothing to have passed its parity gate against,
+	// so only the reference pair may lease. The worker enforces the same rule
+	// on itself; this holds against one that skipped its gate.
+	if r.remoteOnly && !r.refReady.Load() && (req.FpcalcVersion != r.server.Fpcalc || req.FFmpegVersion != r.server.FFmpeg) {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w: no reference windows exist yet; only the reference pair fpcalc=%q ffmpeg=%q may lease until they do",
+			ErrToolsNotAllowed, r.server.Fpcalc, r.server.FFmpeg)
+	}
 	// Same gate as the server lane (waitForLibraryScan): nothing new is cut
 	// while a library.scan may be rewriting the files. 204: retry later.
 	if r.probe != nil && r.probe.LibraryScanRunning() {
@@ -762,7 +952,7 @@ func (h *WorkerHub) Lease(_ context.Context, req workerapi.LeaseRequest) (*worke
 		}
 		if stats[i] == nil {
 			// Unstattable here: the server lane owns the diagnosis.
-			st.serverOnly = true
+			r.markServerOnly(c.idx, "server_stat_failed")
 			r.requeueItem(c.idx)
 			continue
 		}
@@ -864,7 +1054,23 @@ type resultDecision struct {
 	status, reason string
 	next           qState // qDone or qPending (requeued at the head of the tier)
 	serverOnly     bool
+	why            string // with serverOnly: the deferral reason in a remote-only run
 	timeout        bool
+	written        bool // the windows were stored
+}
+
+// noteReferenceWrite makes a file a worker just wrote with the reference pair
+// a calibration candidate for later Hellos of this remote-only run, until the
+// calibration is final. Called with WorkerHub.mu held; calibMu nests inside it
+// and is never held while taking mu.
+func (r *hubRun) noteReferenceWrite(it windowItem, j *workerJob) {
+	r.calibMu.Lock()
+	defer r.calibMu.Unlock()
+	if r.calibBuilt || len(r.calibExtra) >= calibrationCandidates {
+		return
+	}
+	it.Size, it.MtimeUnix = j.size, j.mtime
+	r.calibExtra = append(r.calibExtra, it)
 }
 
 // applyResult is one job's result. Ownership moves under mu; validation, the
@@ -953,13 +1159,16 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 	if d.timeout {
 		st.timeouts++
 		if st.timeouts >= maxRemoteTimeouts {
-			d.serverOnly, d.reason = true, "server_lane"
+			d.serverOnly, d.reason, d.why = true, "server_lane", "repeated_timeouts"
 		}
 	}
 	if d.serverOnly {
-		st.serverOnly = true
+		r.markServerOnly(j.idx, d.why)
 	}
 	if d.next == qDone {
+		if d.written && r.remoteOnly && j.versions.Fpcalc == r.server.Fpcalc && j.versions.FFmpeg == r.server.FFmpeg {
+			r.noteReferenceWrite(it, j)
+		}
 		r.setState(j.idx, qDone)
 	} else {
 		r.requeueItem(j.idx)
@@ -984,16 +1193,18 @@ func (r *hubRun) decideErrorOutcome(j *workerJob, res workerapi.JobResult, it wi
 			r.tally.transient.Add(1)
 			return resultDecision{status: workerapi.StatusAccepted, reason: "gone_on_server", next: qDone}
 		case err != nil:
-			return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true}
+			return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "server_stat_failed"}
 		case fi.Size() == j.size && fi.ModTime().Unix() == j.mtime:
 			// The server sees the file as leased: the worker's mount is the
 			// problem, so only the server cuts it.
-			return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true}
+			return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "worker_not_found"}
 		default:
 			return resultDecision{status: workerapi.StatusAccepted, reason: "changed_requeued", next: qPending}
 		}
-	case workerapi.OutcomeDecodeError, workerapi.OutcomeRejected:
-		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true}
+	case workerapi.OutcomeDecodeError:
+		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "worker_decode_error"}
+	case workerapi.OutcomeRejected:
+		return resultDecision{status: workerapi.StatusAccepted, reason: "server_lane", next: qPending, serverOnly: true, why: "worker_rejected"}
 	case workerapi.OutcomeTimeout:
 		return resultDecision{status: workerapi.StatusAccepted, reason: "requeued", next: qPending, timeout: true}
 	default: // OutcomeStale
@@ -1010,7 +1221,7 @@ func (r *hubRun) writeResult(j *workerJob, res workerapi.JobResult, it windowIte
 	prints, why := validateWorkerResult(j, res)
 	if why != "" {
 		hubLog.Warn("worker %s job %s (%s) rejected: %s", logger.SanitizeLogValue(j.worker), j.id, j.ref, why)
-		return resultDecision{status: workerapi.StatusRejected, reason: why, next: qPending, serverOnly: true}
+		return resultDecision{status: workerapi.StatusRejected, reason: why, next: qPending, serverOnly: true, why: "invalid_worker_result"}
 	}
 	fi, err := os.Stat(it.Path)
 	switch {
@@ -1018,7 +1229,7 @@ func (r *hubRun) writeResult(j *workerJob, res workerapi.JobResult, it windowIte
 		r.tally.transient.Add(1)
 		return resultDecision{status: workerapi.StatusStale, reason: "gone_on_server", next: qDone}
 	case err != nil:
-		return resultDecision{status: workerapi.StatusStale, reason: "server_stat_failed", next: qPending, serverOnly: true}
+		return resultDecision{status: workerapi.StatusStale, reason: "server_stat_failed", next: qPending, serverOnly: true, why: "server_stat_failed"}
 	case fi.Size() != j.size || fi.ModTime().Unix() != j.mtime:
 		r.tally.stale.Add(1)
 		return resultDecision{status: workerapi.StatusStale, reason: "changed_on_server", next: qPending}
@@ -1027,11 +1238,11 @@ func (r *hubRun) writeResult(j *workerJob, res workerapi.JobResult, it windowIte
 	err = r.p.storeWindows(it, prints, windowProvenance{host: workerHostPrefix + j.worker, leaseID: j.lease}, r.tally)
 	switch {
 	case err == nil:
-		return resultDecision{status: workerapi.StatusAccepted, next: qDone}
+		return resultDecision{status: workerapi.StatusAccepted, next: qDone, written: true}
 	case errors.Is(err, database.ErrFingerprintWindowRowGone):
 		return resultDecision{status: workerapi.StatusStale, reason: "row_gone", next: qDone}
 	default:
-		return resultDecision{status: workerapi.StatusStale, reason: "server_write_failed", next: qPending, serverOnly: true}
+		return resultDecision{status: workerapi.StatusStale, reason: "server_write_failed", next: qPending, serverOnly: true, why: "server_write_failed"}
 	}
 }
 

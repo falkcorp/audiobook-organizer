@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
 // last-edited: 2026-09-19
 
@@ -105,9 +105,11 @@ type CalibrationFile struct {
 	Windows   []CalibrationWindow `json:"windows"`
 }
 
-// CalibrationWindow is one stored window of a calibration file. Only windows
-// the server cut itself are offered, never a worker's: the tool pair says
-// which server build made the print the worker must reproduce.
+// CalibrationWindow is one stored window of a calibration file. Normally only
+// windows the server cut itself are offered, never a worker's; in a
+// remote-only run they are the windows cut with the reference pair, by
+// whichever worker cut them. The tool pair says which build made the print
+// the worker must reproduce.
 type CalibrationWindow struct {
 	Window
 	RawSHA256 string `json:"raw_sha256"`
@@ -123,6 +125,19 @@ type HelloResponse struct {
 	ToolVersions []ToolVersions    `json:"tool_versions"`
 	Calibration  []CalibrationFile `json:"calibration"`
 	Limits       Limits            `json:"limits"`
+
+	// ReferenceTools is set by a remote-only run (the server decodes
+	// nothing): the configured reference pair that stands in for the
+	// server's own. Calibration windows carry exactly this pair.
+	ReferenceTools *ToolVersions `json:"reference_tools,omitempty"`
+	// Bootstrap is set by a remote-only run while no window cut with
+	// ReferenceTools exists under a remote root yet. Its calibration files
+	// then carry NO windows (identity only: size, mtime, Head64K): a worker
+	// whose exact pair equals ReferenceTools passes on the identity checks
+	// alone and becomes the reference; any other worker must refuse. A worker
+	// that predates this field sees calibration files without windows and
+	// refuses, which is the safe reading.
+	Bootstrap bool `json:"bootstrap,omitempty"`
 }
 
 // Limits restates the protocol constants so a worker need not hard-code them.
