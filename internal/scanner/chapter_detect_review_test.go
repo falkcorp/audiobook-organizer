@@ -207,3 +207,112 @@ func TestReview_ConfidenceReflectsEvidence(t *testing.T) {
 		t.Fatalf("gap: want not-high listing gaps, got %+v", d.Groups)
 	}
 }
+
+// --- Second review round (probe cases) ---
+
+// (R2-1) Untagged series volumes whose titles are their stems ("01 - The
+// Tower") are positions in shape, but every member is book-length and no
+// "N of M" total says they are parts: blocked. Declaring a total lets a
+// book-length run through (capped at low).
+func TestReview2_BookLengthVolumesBlockUnlessTotalDeclared(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for i, d := range []int{25000, 40000, 55000, 60000, 80000, 90000, 100000} {
+		n := fmt.Sprintf("%02d - The Tower", i+1)
+		books = append(books, rvBook(fmt.Sprintf("v%d", i), n, "/lib/Kin Q/The Tower/"+n+".m4b", d, &a))
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "book-length") {
+		t.Fatalf("want book-length volumes blocked, got %+v", d.Blocked)
+	}
+	// "Part N" bare-token volumes are the same case.
+	var parts []database.BookCore
+	for i := 1; i <= 3; i++ {
+		parts = append(parts, rvBook(fmt.Sprintf("s%d", i), fmt.Sprintf("Part %d", i), fmt.Sprintf("/lib/A/Stand/The Stand Part %d.m4b", i), 40000+i*5000, &a))
+	}
+	noMergeable(t, shDetect(parts))
+	// One unknown duration does not hide the rest being book-length.
+	var saga []database.BookCore
+	for i, dur := range []int{60000, 65000, 0, 72000} {
+		n := fmt.Sprintf("The Saga - %02d", i+1)
+		saga = append(saga, rvBook(fmt.Sprintf("g%d", i), n, "/lib/Jim Q/The Saga/"+n+".m4b", dur, &a))
+	}
+	noMergeable(t, shDetect(saga))
+	// A declared total ("Part N of M") admits book-length parts, at low.
+	var declared []database.BookCore
+	for i := 1; i <= 3; i++ {
+		declared = append(declared, rvBook(fmt.Sprintf("p%d", i), fmt.Sprintf("Part %d of 3", i), fmt.Sprintf("/lib/A/Long Epic/Part %d of 3.m4b", i), 40000, &a))
+	}
+	dd := shDetect(declared)
+	if len(dd.Groups) != 1 || dd.Groups[0].Confidence != ChapterConfidenceLow {
+		t.Fatalf("declared-total book-length parts: want one low group, got groups=%+v blocked=%+v", dd.Groups, dd.Blocked)
+	}
+}
+
+// (R2-2) Book names containing "Part N - Subtitle" never regroup by the
+// part before the token; a singleton needs chapter-length duration to move.
+func TestReview2_PartNamedVolumesDoNotRegroup(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for i, s := range []string{"The Gunslinger", "The Drawing of the Three", "The Waste Lands", "Wizard and Glass"} {
+		n := fmt.Sprintf("%02d - The Tower Part %d - %s", i+1, i+1, s)
+		books = append(books, rvBook(fmt.Sprintf("t%d", i), n, "/lib/Kin Q/The Tower/"+n+".m4b", 30000+i*9000, &a))
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 0 {
+		t.Fatalf("book-length singletons must not regroup at all: %+v", d.Blocked)
+	}
+	// Same shape at chapter length with unknown durations: no corroboration, no regroup.
+	var unk []database.BookCore
+	for i := 1; i <= 4; i++ {
+		n := fmt.Sprintf("%02d - Tunnels Chapter %d - Name %d", i, i, i)
+		unk = append(unk, rvBook(fmt.Sprintf("u%d", i), n, "/lib/A/Tunnels/"+n+".m4b", 0, &a))
+	}
+	if d := shDetect(unk); len(d.Groups) != 0 {
+		t.Fatalf("uncorroborated singletons regrouped: %+v", d.Groups)
+	}
+}
+
+// (R2-4) Episodes numbered only by a trailing file number with non-position
+// titles are at most low confidence (never bulk-selectable, and the merge
+// job refuses low without an explicit acknowledgement).
+func TestReview2_TrailingEpisodesAreLow(t *testing.T) {
+	a := 7
+	var books []database.BookCore
+	for i := 1; i <= 6; i++ {
+		n := fmt.Sprintf("Lore - %03d", i)
+		books = append(books, rvBook(fmt.Sprintf("e%d", i), n, "/lib/Aar Q/Lore/"+n+".mp3", 2700, &a))
+	}
+	d := shDetect(books)
+	for _, g := range d.Groups {
+		if g.Confidence != ChapterConfidenceLow {
+			t.Fatalf("episodic trailing run offered at %s: %+v", g.Confidence, g)
+		}
+	}
+}
+
+// (R2-5) Bare titles need corroboration whatever the key: no author and no
+// durations block even when the file supplies a residual.
+func TestReview2_BareTitlesNeedCorroborationWhateverTheKey(t *testing.T) {
+	var books []database.BookCore
+	for i := 1; i <= 5; i++ {
+		books = append(books, rvBook(fmt.Sprintf("b%d", i), fmt.Sprint(i), fmt.Sprintf("/lib/Poe/Poe/%02d - Poe.mp3", i), 1800, nil))
+	}
+	d := shDetect(books)
+	noMergeable(t, d)
+	if len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "no author") {
+		t.Fatalf("want bare/no-author run blocked, got %+v", d.Blocked)
+	}
+	a := 7
+	var nodur []database.BookCore
+	for i := 1; i <= 5; i++ {
+		nodur = append(nodur, rvBook(fmt.Sprintf("n%d", i), fmt.Sprint(i), fmt.Sprintf("/lib/Poe/Poe/%02d - Poe.mp3", i), 0, &a))
+	}
+	d = shDetect(nodur)
+	noMergeable(t, d)
+	if len(d.Blocked) != 1 || !anyContains(d.Blocked[0].Blockers, "needs durations") {
+		t.Fatalf("want bare/no-duration run blocked, got %+v", d.Blocked)
+	}
+}

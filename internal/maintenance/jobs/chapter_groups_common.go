@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -43,6 +43,10 @@ type chapterGroupSelection struct {
 	PrimaryBookID string   `json:"primary_book_id"`
 	BookIDs       []string `json:"book_ids"`
 	Fingerprint   string   `json:"fingerprint"`
+	// AllowLowConfidence is the operator's per-group acknowledgement that a
+	// LOW-confidence group should merge anyway. Without it the merge refuses
+	// a low group server-side (verifyChapterSelection).
+	AllowLowConfidence bool `json:"allow_low_confidence,omitempty"`
 }
 
 // chapterGroupParams is the operator-facing parameter shape shared by

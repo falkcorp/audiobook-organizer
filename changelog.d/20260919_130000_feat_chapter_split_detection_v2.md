@@ -11,5 +11,10 @@
   - A bare-numbered run needs corroboration: known chapter-length durations (otherwise `needs durations`), a known author, and a folder that is not a catch-all like `Unknown Author`. A catch-all folder name is never proposed as a title.
   - Bare records join a folder-named run only when durations, container and codec match. Otherwise they are reported for review.
   - `high` confidence needs position titles, a contiguous run and known chapter-length durations. Any missing evidence is listed.
+  - A run where every member with a known duration is book-length is blocked as separate volumes, unless the titles declare "N of M" / "Part N of M". A run with more than one book-length member is low at most.
+  - A single record regroups by the book-name part of a "Title Part N - Subtitle" name only when its duration is known and chapter-length. Book-length volumes never regroup.
+  - Runs numbered only by a trailing file number under titles that are not positions ("Lore - 001" episodes) are low at most.
+  - Bare position titles ("157") need known durations and a known author whatever key the file name gives.
+  - The merge job refuses a low-confidence group unless its selection carries `allow_low_confidence: true`, and refuses a detector-blocked group outright (status `blocked`). The card sends the acknowledgement only for a low group ticked one by one.
 - Merge card: selection is opt-in (nothing is pre-ticked), "Select all" skips low-confidence groups, each group expands to show every member's position, title, duration and file, and the proposed title is shown.
 - Detection runs one folder per worker across all CPUs, and its output is deterministic.

@@ -1,5 +1,5 @@
 // file: web/src/components/system/ChapterConsolidationCard.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: dad38fac-1352-4ced-9735-5811865fa668
 // last-edited: 2026-09-19
 
@@ -322,6 +322,20 @@ describe('ChapterConsolidationCard', () => {
     expect(screen.getByLabelText('Include lo01')).not.toBeChecked();
     fireEvent.click(screen.getByLabelText('Include lo01'));
     expect(screen.getByLabelText('Include lo01')).toBeChecked();
+
+    // The individually ticked low group carries the acknowledgement; the
+    // bulk-selected one does not.
+    fireEvent.click(screen.getByLabelText('Dry Run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Merge \d+ record/ }));
+    await waitFor(() => expect(api.runMaintenanceJob).toHaveBeenCalledTimes(2));
+    const sent = vi.mocked(api.runMaintenanceJob).mock.calls[1][2] as {
+      groups: api.ChapterGroupSelection[];
+    };
+    expect(sent.groups.find((g) => g.primary_book_id === 'lo01')?.allow_low_confidence).toBe(true);
+    expect(
+      sent.groups.find((g) => g.primary_book_id === 'ch01')?.allow_low_confidence
+    ).toBeUndefined();
   });
 
   it('each group expands to list every member and shows the proposed title', async () => {

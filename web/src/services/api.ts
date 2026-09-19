@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.118.0
+// version: 2.119.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6351,6 +6351,8 @@ export interface ChapterGroupSelection {
   primary_book_id: string;
   book_ids: string[];
   fingerprint: string;
+  /** Per-group acknowledgement for a LOW-confidence group; the server refuses low without it. */
+  allow_low_confidence?: boolean;
 }
 
 export interface ChapterGroupsParams {
