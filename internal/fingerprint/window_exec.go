@@ -45,7 +45,48 @@ var (
 	ErrWindowParse        = errors.New("fingerprint window: cannot parse fpcalc output")
 	ErrWindowShortDecode  = errors.New("fingerprint window: decoded audio shorter than the planned window")
 	ErrWindowToolsMissing = errors.New("fingerprint window: ffmpeg and fpcalc paths are both required")
+
+	// ErrWindowTransient is wrapped ALONGSIDE ErrWindowFFmpeg/ErrWindowFpcalc
+	// when the failure says nothing about the file: the process could not
+	// start (fork EAGAIN/ENOMEM, a missing binary), it died of a signal while
+	// the context was live (the OOM killer), or the tool reported a
+	// filesystem I/O error (EIO/ESTALE on NFS or ZFS). A caller that records
+	// durable failures must not record one of these.
+	ErrWindowTransient = errors.New("fingerprint window: transient failure")
 )
+
+// transientIOMarkers are strerror texts a tool prints when the READ failed
+// rather than the decode: the bytes may be fine next time.
+var transientIOMarkers = []string{
+	"Input/output error",
+	"Stale file handle",
+	"Stale NFS file handle",
+	"Resource temporarily unavailable",
+	"Cannot allocate memory",
+	"Transport endpoint is not connected",
+	"No such device",
+}
+
+// toolFailure wraps a tool's Wait error: always sentinel, plus
+// ErrWindowTransient for a signal death or an I/O-error message.
+func toolFailure(sentinel error, stderr *cappedBuffer, waitErr error) error {
+	msg := toolMsg(stderr, waitErr)
+	var ee *exec.ExitError
+	if errors.As(waitErr, &ee) && ee.ExitCode() == -1 {
+		// ExitCode is -1 when the process was terminated by a signal.
+		return fmt.Errorf("%w: %w: killed by signal: %s", sentinel, ErrWindowTransient, msg)
+	}
+	if !errors.As(waitErr, &ee) {
+		// Not an exit status at all (a Wait/IO error of our own).
+		return fmt.Errorf("%w: %w: %s", sentinel, ErrWindowTransient, msg)
+	}
+	for _, m := range transientIOMarkers {
+		if strings.Contains(stderr.String(), m) {
+			return fmt.Errorf("%w: %w: %s", sentinel, ErrWindowTransient, msg)
+		}
+	}
+	return fmt.Errorf("%w: %s", sentinel, msg)
+}
 
 // ToolResolver is the part of tools.ToolRegistry this package needs.
 // *tools.ToolRegistry satisfies it; ffmpeg must be registered on it
@@ -292,14 +333,14 @@ func runWindowPipe(ctx context.Context, ffmpegPath, fpcalcPath string, ffArgs, f
 
 	if err := ff.Start(); err != nil {
 		_ = pw.Close()
-		return nil, 0, fmt.Errorf("%w: start: %v", ErrWindowFFmpeg, err)
+		return nil, 0, fmt.Errorf("%w: %w: start: %v", ErrWindowFFmpeg, ErrWindowTransient, err)
 	}
 	_ = pw.Close() // the child holds its own copy
 	if err := fp.Start(); err != nil {
 		_ = pr.Close()
 		_ = ff.Process.Kill()
 		_ = ff.Wait()
-		return nil, 0, fmt.Errorf("%w: start: %v", ErrWindowFpcalc, err)
+		return nil, 0, fmt.Errorf("%w: %w: start: %v", ErrWindowFpcalc, ErrWindowTransient, err)
 	}
 
 	// Cancellation kills both children (CommandContext), but a grandchild
@@ -325,10 +366,10 @@ func runWindowPipe(ctx context.Context, ffmpegPath, fpcalcPath string, ffArgs, f
 		return nil, counter.n, fmt.Errorf("fingerprint window: %w", ctxErr)
 	}
 	if ffWait != nil {
-		return nil, counter.n, fmt.Errorf("%w: %s", ErrWindowFFmpeg, toolMsg(&ffErr, ffWait))
+		return nil, counter.n, toolFailure(ErrWindowFFmpeg, &ffErr, ffWait)
 	}
 	if fpWait != nil {
-		return nil, counter.n, fmt.Errorf("%w: %s", ErrWindowFpcalc, toolMsg(&fpErr, fpWait))
+		return nil, counter.n, toolFailure(ErrWindowFpcalc, &fpErr, fpWait)
 	}
 	frames, err := parseRawFpcalcJSON(fpOut.Bytes())
 	if err != nil {
