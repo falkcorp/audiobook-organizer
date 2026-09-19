@@ -70,6 +70,10 @@ var ErrStateUnreadable = errors.New("readstatus: stored book state is unreadable
 // it to 503.
 var ErrPositionsUnreadable = errors.New("readstatus: stored positions are unreadable")
 
+// ErrBookFilesUnreadable is returned when the book's files (the durations
+// the status is derived from) could not be read. Nothing is written; 503.
+var ErrBookFilesUnreadable = errors.New("readstatus: book files are unreadable")
+
 // RecomputeUserBookState reads positions + segment durations and
 // updates user_book_state with fresh auto-computed fields. Returns
 // the new state (or a no-op unchanged state if there's nothing to
@@ -91,9 +95,26 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	if len(positions) == 0 && existing == nil {
 		return nil, nil
 	}
+	state, err := deriveState(store, userID, bookID, existing, positions)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.SetUserBookState(state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
 
-	// Gather book_files for durations. Index by segment ID.
-	files, _ := store.GetBookFiles(bookID)
+// deriveState computes the auto fields of a UserBookState IN MEMORY from the
+// positions and the book's file durations, starting from a copy of existing
+// (which keeps status_manual, an explicit status and the fields this package
+// does not own) or a fresh row. It writes nothing. The files read fails
+// closed: without durations the derived status and percent are wrong.
+func deriveState(store Store, userID, bookID string, existing *database.UserBookState, positions []database.UserPosition) (*database.UserBookState, error) {
+	files, err := store.GetBookFiles(bookID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrBookFilesUnreadable, bookID, err)
+	}
 	segDuration := make(map[string]float64, len(files))
 	var totalDuration float64
 	for _, f := range files {
@@ -120,8 +141,6 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 		}
 	}
 
-	// Start from the existing state (preserves status_manual +
-	// explicit status) or a fresh one.
 	var state *database.UserBookState
 	if existing != nil {
 		copied := *existing
@@ -131,8 +150,7 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	}
 	state.TotalListenedSeconds = listened
 	if totalDuration > 0 {
-		pct := min(max(int((listened/totalDuration)*100), 0), 100)
-		state.ProgressPct = pct
+		state.ProgressPct = min(max(int((listened/totalDuration)*100), 0), 100)
 	} else {
 		state.ProgressPct = 0
 	}
@@ -151,10 +169,6 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 		default:
 			state.Status = database.UserBookStatusUnstarted
 		}
-	}
-
-	if err := store.SetUserBookState(state); err != nil {
-		return nil, err
 	}
 	return state, nil
 }
@@ -180,17 +194,22 @@ func SetManualStatus(store Store, userID, bookID, status string) (*database.User
 		state = &database.UserBookState{UserID: userID, BookID: bookID}
 	}
 	if status == "" {
-		// Read the positions BEFORE clearing the flag: if they are unreadable
-		// the recompute below fails, and the flag must not already be gone.
-		if _, err := store.ListUserPositionsForBook(userID, bookID); err != nil {
+		// Back to auto: derive the new state IN MEMORY with the flag cleared
+		// and write it ONCE. Every read happens before the write, so a failed
+		// read leaves the stored row (flag included) untouched.
+		positions, err := store.ListUserPositionsForBook(userID, bookID)
+		if err != nil {
 			return nil, fmt.Errorf("%w: %s/%s: %w", ErrPositionsUnreadable, userID, bookID, err)
 		}
 		state.StatusManual = false
-		// Recompute to refresh status from positions.
-		if err := store.SetUserBookState(state); err != nil {
+		derived, err := deriveState(store, userID, bookID, state, positions)
+		if err != nil {
 			return nil, err
 		}
-		return RecomputeUserBookState(store, userID, bookID)
+		if err := store.SetUserBookState(derived); err != nil {
+			return nil, err
+		}
+		return derived, nil
 	}
 	state.Status = status
 	state.StatusManual = true
@@ -199,4 +218,62 @@ func SetManualStatus(store Store, userID, bookID, status string) (*database.User
 		return nil, err
 	}
 	return state, nil
+}
+
+// RebuildReport describes one RebuildUserBookState run.
+type RebuildReport struct {
+	UserID        string `json:"user_id"`
+	BookID        string `json:"book_id"`
+	StateReadable bool   `json:"state_readable"`
+	StateError    string `json:"state_error,omitempty"`
+	WouldRebuild  bool   `json:"would_rebuild"`
+	Applied       bool   `json:"applied"`
+	// Rebuilt is the state derived from positions (the preview on a dry run).
+	Rebuilt *database.UserBookState `json:"rebuilt,omitempty"`
+	// Lost names what an undecodable row carried that positions cannot
+	// restore; it is gone either way, the rebuild only makes that explicit.
+	Lost []string `json:"lost,omitempty"`
+}
+
+// RebuildUserBookState is the repair path for an UNREADABLE user_book_state
+// row. Every state write fails closed on such a row (ErrStateUnreadable, 503),
+// so without this the book stays unwritable for that user forever.
+//
+// A readable row is never touched. For an unreadable one it derives a fresh
+// state from the positions (exactly as RecomputeUserBookState would for a
+// user with no stored state) and, only when apply is true, writes it over the
+// bad row. Dry run by default at the call sites. Fields only the lost row
+// carried (a manual status, hide-from-continue-listening, the progress-reset
+// tombstone) cannot be recovered and are listed in Lost. Positions and files
+// must be readable: this never guesses.
+func RebuildUserBookState(store Store, userID, bookID string, apply bool) (RebuildReport, error) {
+	rep := RebuildReport{UserID: userID, BookID: bookID}
+	if store == nil || userID == "" || bookID == "" {
+		return rep, fmt.Errorf("readstatus: rebuild needs a store, user and book")
+	}
+	if _, err := store.GetUserBookState(userID, bookID); err == nil {
+		rep.StateReadable = true
+		return rep, nil
+	} else {
+		rep.StateError = err.Error()
+	}
+	positions, err := store.ListUserPositionsForBook(userID, bookID)
+	if err != nil {
+		return rep, fmt.Errorf("%w: %s/%s: %w", ErrPositionsUnreadable, userID, bookID, err)
+	}
+	rebuilt, err := deriveState(store, userID, bookID, nil, positions)
+	if err != nil {
+		return rep, err
+	}
+	rep.WouldRebuild = true
+	rep.Rebuilt = rebuilt
+	rep.Lost = []string{"status_manual", "hide_from_continue_listening", "progress_reset_at", "progress_reset_positions", "finished_at"}
+	if !apply {
+		return rep, nil
+	}
+	if err := store.SetUserBookState(rebuilt); err != nil {
+		return rep, err
+	}
+	rep.Applied = true
+	return rep, nil
 }

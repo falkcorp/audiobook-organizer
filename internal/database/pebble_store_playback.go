@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -33,26 +34,50 @@ func (p *PebbleStore) SetUserPosition(userID, bookID, segmentID string, position
 	return p.db.Set([]byte("upos:"+userID+":"+bookID+":"+segmentID), data, pebble.NoSync)
 }
 
-func (p *PebbleStore) GetUserPosition(userID, bookID string) (*UserPosition, error) {
-	if userID == "" || bookID == "" {
-		return nil, nil
-	}
+// ErrUserPositionUndecodable: a stored upos: row could not be decoded. It is
+// NOT "no position": a caller that read it as empty merged against 0 and
+// rewound the listener. Zero matching rows is still (nil, nil).
+var ErrUserPositionUndecodable = errors.New("database: stored user position is undecodable")
+
+// scanUserPositions decodes every upos: row for (user, book). Any row that
+// fails to decode, and any iterator error (including on Close), is an error.
+func (p *PebbleStore) scanUserPositions(userID, bookID string) (out []UserPosition, err error) {
 	prefix := []byte("upos:" + userID + ":" + bookID + ":")
 	upper := []byte("upos:" + userID + ":" + bookID + ":~")
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
 	if err != nil {
 		return nil, err
 	}
-	defer iter.Close()
-	var latest *UserPosition
+	defer func() {
+		if cerr := iter.Close(); cerr != nil && err == nil {
+			out, err = nil, fmt.Errorf("closing position iterator for %s/%s: %w", userID, bookID, cerr)
+		}
+	}()
 	for iter.First(); iter.Valid(); iter.Next() {
 		var pos UserPosition
-		if err := json.Unmarshal(iter.Value(), &pos); err != nil {
-			continue
+		if uerr := json.Unmarshal(iter.Value(), &pos); uerr != nil {
+			return nil, fmt.Errorf("%w: key %q: %w", ErrUserPositionUndecodable, iter.Key(), uerr)
 		}
-		if latest == nil || pos.UpdatedAt.After(latest.UpdatedAt) {
-			posCopy := pos
-			latest = &posCopy
+		out = append(out, pos)
+	}
+	if ierr := iter.Error(); ierr != nil {
+		return nil, fmt.Errorf("iterating positions for %s/%s: %w", userID, bookID, ierr)
+	}
+	return out, nil
+}
+
+func (p *PebbleStore) GetUserPosition(userID, bookID string) (*UserPosition, error) {
+	if userID == "" || bookID == "" {
+		return nil, nil
+	}
+	all, err := p.scanUserPositions(userID, bookID)
+	if err != nil {
+		return nil, err
+	}
+	var latest *UserPosition
+	for i := range all {
+		if latest == nil || all[i].UpdatedAt.After(latest.UpdatedAt) {
+			latest = &all[i]
 		}
 	}
 	return latest, nil
@@ -62,40 +87,18 @@ func (p *PebbleStore) ListUserPositionsForBook(userID, bookID string) ([]UserPos
 	if userID == "" || bookID == "" {
 		return nil, nil
 	}
-	prefix := []byte("upos:" + userID + ":" + bookID + ":")
-	upper := []byte("upos:" + userID + ":" + bookID + ":~")
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	var out []UserPosition
-	for iter.First(); iter.Valid(); iter.Next() {
-		var pos UserPosition
-		if err := json.Unmarshal(iter.Value(), &pos); err != nil {
-			continue
-		}
-		out = append(out, pos)
-	}
-	return out, nil
+	return p.scanUserPositions(userID, bookID)
 }
 
+// ClearUserPositions deletes every upos: row for (user, book) by KEY, without
+// decoding them, so an undecodable row cannot make a reset impossible.
 func (p *PebbleStore) ClearUserPositions(userID, bookID string) error {
-	positions, err := p.ListUserPositionsForBook(userID, bookID)
-	if err != nil {
-		return err
-	}
-	if len(positions) == 0 {
+	if userID == "" || bookID == "" {
 		return nil
 	}
-	b := p.db.NewBatch()
-	for _, pos := range positions {
-		if err := b.Delete([]byte("upos:"+pos.UserID+":"+pos.BookID+":"+pos.SegmentID), nil); err != nil {
-			b.Close()
-			return err
-		}
-	}
-	return b.Commit(pebble.Sync)
+	prefix := []byte("upos:" + userID + ":" + bookID + ":")
+	upper := []byte("upos:" + userID + ":" + bookID + ":~")
+	return p.db.DeleteRange(prefix, upper, pebble.Sync)
 }
 
 // stampFinishedAt maintains state.FinishedAt (see UserBookState) against the
@@ -170,6 +173,20 @@ func (p *PebbleStore) SetUserBookState(state *UserBookState) error {
 	if err := b.Set([]byte("ubs:"+state.UserID+":"+state.BookID), data, nil); err != nil {
 		b.Close()
 		return err
+	}
+	if prevErr != nil {
+		// The old status is unknown, so its index entry is too: drop every
+		// status entry for this book except the one being written, or the
+		// book stays listed under the status the unreadable row had.
+		for _, st := range []string{UserBookStatusUnstarted, UserBookStatusInProgress, UserBookStatusFinished, UserBookStatusAbandoned} {
+			if st == state.Status {
+				continue
+			}
+			if err := b.Delete([]byte("idx:ubs:status:"+state.UserID+":"+st+":"+state.BookID), nil); err != nil {
+				b.Close()
+				return err
+			}
+		}
 	}
 	if prev != nil && prev.Status != "" && prev.Status != state.Status {
 		if err := b.Delete([]byte("idx:ubs:status:"+state.UserID+":"+prev.Status+":"+state.BookID), nil); err != nil {

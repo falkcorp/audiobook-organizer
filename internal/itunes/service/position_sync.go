@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -96,13 +96,23 @@ func (p *PositionSync) pullBookmarks() int {
 			continue
 		}
 
-		existing, _ := p.store.GetUserPosition(adminUserID, book.ID)
+		existing, err := p.store.GetUserPosition(adminUserID, book.ID)
+		if err != nil {
+			// Unreadable is not "no position": seeding here would replace
+			// the listener's real position with the iTunes bookmark.
+			p.log.Warn("itunes position sync: read position for %s: %v; not seeding the bookmark", book.ID, err)
+			continue
+		}
 		if existing != nil {
 			continue
 		}
 
 		// Find the first segment to use as the position target.
-		files, _ := p.store.GetBookFiles(book.ID)
+		files, err := p.store.GetBookFiles(book.ID)
+		if err != nil {
+			p.log.Warn("itunes position sync: read files for %s: %v; not seeding the bookmark", book.ID, err)
+			continue
+		}
 		segmentID := ""
 		if len(files) > 0 {
 			segmentID = files[0].ID

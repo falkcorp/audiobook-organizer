@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-19
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/gin-gonic/gin"
@@ -141,7 +142,7 @@ func (h *Handler) MediaProgressPatch(c *gin.Context) {
 		return
 	}
 	if err := h.applyProgressUpdate(user.ID, bookID, req); err != nil {
-		respondError(c, progressWriteStatus(err), "could not save progress")
+		respondProgressWriteError(c, "PATCH progress", user.ID, bookID, err, "could not save progress")
 		return
 	}
 	respondPlainOK(c)
@@ -178,7 +179,7 @@ func (h *Handler) MediaProgressBatchUpdate(c *gin.Context) {
 			continue
 		}
 		if err := h.applyProgressUpdate(user.ID, bookID, item); err != nil {
-			respondError(c, progressWriteStatus(err), "could not save progress")
+			respondProgressWriteError(c, "PATCH progress batch", user.ID, bookID, err, "could not save progress")
 			return
 		}
 	}
@@ -209,6 +210,7 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 	pos, err := h.progress.GetUserPosition(user.ID, bookID)
 	if err != nil {
 		// Transient: nothing was changed, a retry can succeed.
+		logProgressUnavailable("reset: read position", user.ID, bookID, err)
 		respondError(c, http.StatusServiceUnavailable, "could not load progress")
 		return
 	}
@@ -216,18 +218,15 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		respondNotFoundPlain(c)
 		return
 	}
-	// Read the state BEFORE clearing anything: positions cleared with no
-	// tombstone written would let any offline backlog replay undo the reset.
-	// An unreadable state is transient; nothing is changed and it answers 503.
-	if _, err := h.progress.GetUserBookState(user.ID, bookID); err != nil {
-		respondError(c, http.StatusServiceUnavailable, "could not load progress state")
-		return
-	}
 
-	if err := h.progress.ClearUserPositions(user.ID, bookID); err != nil {
-		respondError(c, http.StatusInternalServerError, "could not reset progress")
-		return
-	}
+	// ORDER MATTERS. The tombstone is written FIRST, positions cleared second:
+	//   - tombstone write fails → nothing changed; the retry finds the
+	//     position and records it (503 for an unreadable state row);
+	//   - clear fails → the tombstone already guards replay; the retry finds
+	//     the position still there and clears it (appendResetPosition does not
+	//     record the same position twice).
+	// The reverse order left positions cleared with no tombstone, and the
+	// retry then answered 404 with nothing recorded.
 	if err := h.updateUserBookState(user.ID, bookID, func(state *database.UserBookState) {
 		state.Status = database.UserBookStatusUnstarted
 		state.StatusManual = false
@@ -244,7 +243,12 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		state.ProgressResetAt = &resetAt
 		state.ProgressResetPositions = appendResetPosition(state.ProgressResetPositions, pos.PositionSeconds)
 	}); err != nil {
-		respondError(c, progressWriteStatus(err), "could not reset progress")
+		respondProgressWriteError(c, "reset: write tombstone", user.ID, bookID, err, "could not reset progress")
+		return
+	}
+	if err := h.progress.ClearUserPositions(user.ID, bookID); err != nil {
+		logProgressUnavailable("reset: clear positions (tombstone already written)", user.ID, bookID, err)
+		respondError(c, http.StatusServiceUnavailable, "could not reset progress")
 		return
 	}
 	respondPlainOK(c)
@@ -254,6 +258,11 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 // keeping the newest database.MaxProgressResetPositions. It returns a new
 // slice, never aliasing the caller's.
 func appendResetPosition(positions []float64, discarded float64) []float64 {
+	if n := len(positions); n > 0 && positions[n-1] == discarded {
+		// A retried reset (the earlier attempt wrote the tombstone but could
+		// not clear the positions) records the same position once.
+		return slices.Clone(positions)
+	}
 	out := append(slices.Clone(positions), discarded)
 	if n := len(out) - database.MaxProgressResetPositions; n > 0 {
 		out = out[n:]
@@ -285,7 +294,7 @@ func (h *Handler) RemoveFromContinueListening(c *gin.Context) {
 	if err := h.updateUserBookState(user.ID, bookID, func(state *database.UserBookState) {
 		state.HideFromContinueListening = true
 	}); err != nil {
-		respondError(c, progressWriteStatus(err), "could not update progress")
+		respondProgressWriteError(c, "remove-from-continue-listening", user.ID, bookID, err, "could not update progress")
 		return
 	}
 	respondJSON(c, http.StatusOK, gin.H{})
@@ -348,7 +357,9 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 			stored.UpdatedAtMs = ms
 		}
 	}
-	stored.Duration = h.durationForBook(bookID, req.Duration)
+	if stored.Duration, err = h.durationForBook(bookID, req.Duration); err != nil {
+		return err
+	}
 
 	now := h.now().UnixMilli()
 	incoming := progress.Progress{
@@ -404,25 +415,36 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 // mixing sources is what leaves a fully-listened book stuck at 99% forever.
 //
 // A client-supplied duration is a last-resort fallback only, never a preference.
-func (h *Handler) durationForBook(bookID string, clientDuration *float64) float64 {
+func (h *Handler) durationForBook(bookID string, clientDuration *float64) (float64, error) {
 	if h.library != nil {
-		if files, err := h.library.GetBookFiles(bookID); err == nil && len(files) > 0 {
+		files, err := h.library.GetBookFiles(bookID)
+		if err != nil {
+			// Fail closed: the duration decides "finished" and the percent;
+			// silently substituting the client's value is not a fallback, it
+			// is a different answer.
+			return 0, fmt.Errorf("%w: files for %s: %w", errBookDurationUnreadable, bookID, err)
+		}
+		if len(files) > 0 {
 			total := 0.0
 			for i := range files {
 				total += float64(files[i].Duration)
 			}
 			if total > 0 {
-				return total
+				return total, nil
 			}
 		}
-		if book, err := h.library.GetBookByID(bookID); err == nil && book != nil && book.Duration != nil {
-			return float64(*book.Duration)
+		book, err := h.library.GetBookByID(bookID)
+		if err != nil {
+			return 0, fmt.Errorf("%w: book %s: %w", errBookDurationUnreadable, bookID, err)
+		}
+		if book != nil && book.Duration != nil {
+			return float64(*book.Duration), nil
 		}
 	}
 	if clientDuration != nil && *clientDuration > 0 {
-		return *clientDuration
+		return *clientDuration, nil
 	}
-	return 0
+	return 0, nil
 }
 
 // durationBoundsForBook is durationForBook for code that must JUDGE a position
@@ -430,38 +452,33 @@ func (h *Handler) durationForBook(bookID string, clientDuration *float64) float6
 // has no duration: the sum is then an undercount, and the caller must neither
 // refuse nor clamp a position against it. For an unknown duration it returns the
 // client's duration when given, else 0, so an uncertain value never auto-finishes
-// a book.
-func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) (float64, bool) {
+// a book. fileCount is the number of book_file rows, for the per-file rounding
+// slack. A read error is returned (errBookDurationUnreadable), never guessed past.
+func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) (duration float64, known bool, fileCount int, err error) {
 	if h.library != nil {
-		if files, err := h.library.GetBookFiles(bookID); err == nil && len(files) > 0 {
+		files, err := h.library.GetBookFiles(bookID)
+		if err != nil {
+			return 0, false, 0, fmt.Errorf("%w: files for %s: %w", errBookDurationUnreadable, bookID, err)
+		}
+		if len(files) > 0 {
 			total := 0.0
 			for i := range files {
 				if files[i].Duration <= 0 {
 					if clientDuration != nil && *clientDuration > 0 {
-						return *clientDuration, false
+						return *clientDuration, false, len(files), nil
 					}
-					return 0, false
+					return 0, false, len(files), nil
 				}
 				total += float64(files[i].Duration)
 			}
-			return total, true
+			return total, true, len(files), nil
 		}
 	}
-	d := h.durationForBook(bookID, clientDuration)
-	return d, d > 0
-}
-
-// fileCount is the number of book_file rows (0 when unreadable), for the
-// per-file rounding slack in duration checks.
-func (h *Handler) fileCount(bookID string) int {
-	if h.library == nil {
-		return 0
-	}
-	files, err := h.library.GetBookFiles(bookID)
+	d, err := h.durationForBook(bookID, clientDuration)
 	if err != nil {
-		return 0
+		return 0, false, 0, err
 	}
-	return len(files)
+	return d, d > 0, 0, nil
 }
 
 // ── id resolution ───────────────────────────────────────────────────────────
@@ -551,15 +568,45 @@ var errNoProgressStore = errors.New("abs: no listening-progress store is wired")
 // (I/O or decode). Nothing was written; the handler answers 503 (retryable).
 var errProgressStateUnreadable = errors.New("abs: stored book state is unreadable")
 
+// errBookDurationUnreadable: the book's files (or row) could not be read, so
+// its authoritative duration is unknown. Nothing is written; 503.
+var errBookDurationUnreadable = errors.New("abs: book duration is unreadable")
+
 // errProgressPositionUnreadable: the stored listening position could not be
 // read. Not "no position yet" (that is nil, nil); nothing was written and the
 // handler answers 503, exactly as for errProgressStateUnreadable.
 var errProgressPositionUnreadable = errors.New("abs: stored listening position is unreadable")
 
+// progressLog records every fail-closed 503 on the progress paths with the
+// wrapped cause, so an unreadable row is visible to the operator instead of
+// only to the client.
+var progressLog = logger.New("abs")
+
+// logProgressUnavailable logs a fail-closed refusal: op, user, book and cause.
+func logProgressUnavailable(op, userID, bookID string, err error) {
+	progressLog.Warn("abs: %s: user_id=%s book_id=%s: nothing written, answering 503: %v",
+		op, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), err)
+}
+
+// respondProgressWriteError answers a progress write error with
+// progressWriteStatus, logging it first (Warn for an unreadable row, Error
+// otherwise).
+func respondProgressWriteError(c *gin.Context, op, userID, bookID string, err error, msg string) {
+	status := progressWriteStatus(err)
+	if status == http.StatusServiceUnavailable {
+		logProgressUnavailable(op, userID, bookID, err)
+	} else {
+		progressLog.Error("abs: %s: user_id=%s book_id=%s: %v",
+			op, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), err)
+	}
+	respondError(c, status, msg)
+}
+
 // progressWriteStatus maps a progress write error to its HTTP status: 503 for
 // an unreadable state row (transient, nothing written), 500 otherwise.
 func progressWriteStatus(err error) int {
-	if errors.Is(err, errProgressStateUnreadable) || errors.Is(err, errProgressPositionUnreadable) {
+	if errors.Is(err, errProgressStateUnreadable) || errors.Is(err, errProgressPositionUnreadable) ||
+		errors.Is(err, errBookDurationUnreadable) {
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError

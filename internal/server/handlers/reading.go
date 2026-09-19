@@ -1,5 +1,5 @@
 // file: internal/server/handlers/reading.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
 // last-edited: 2026-09-19
 
@@ -178,14 +178,69 @@ func (h *ReadingHandler) ClearBookStatus(c *gin.Context) {
 	httputil.RespondWithOK(c, state)
 }
 
-// respondReadStatusError answers 503 when the stored state row or the
-// positions could not be read (readstatus wrote nothing; a retry can succeed) and 500 otherwise.
+// readingLog records the fail-closed refusals of the reading endpoints with
+// their cause, so an unreadable row is visible to the operator.
+var readingLog = logger.New("reading")
+
+// respondReadStatusError answers 503 when a read the status derivation needs
+// failed (the stored state row, the positions or the book files) and 500
+// otherwise, logging the wrapped error either way. On a 503 readstatus itself
+// wrote nothing; for SetPosition the position was already stored before the
+// recompute ran, and it stays stored (a retry of the same position is
+// idempotent).
 func respondReadStatusError(c *gin.Context, msg string, err error) {
-	if errors.Is(err, readstatus.ErrStateUnreadable) || errors.Is(err, readstatus.ErrPositionsUnreadable) {
+	userID := CallingUserID(c)
+	bookID := c.Param("id")
+	if errors.Is(err, readstatus.ErrStateUnreadable) || errors.Is(err, readstatus.ErrPositionsUnreadable) ||
+		errors.Is(err, readstatus.ErrBookFilesUnreadable) {
+		readingLog.Warn("reading: %s: user_id=%s book_id=%s: nothing written by readstatus, answering 503: %v",
+			msg, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), err)
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, msg, "STATE_UNREADABLE")
 		return
 	}
+	readingLog.Error("reading: %s: user_id=%s book_id=%s: %v",
+		msg, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), err)
 	httputil.InternalError(c, msg, err)
+}
+
+// RepairStatusRequest is the optional JSON body for POST
+// /api/v1/books/:id/status/repair. Apply defaults to false: a dry run.
+type RepairStatusRequest struct {
+	Apply bool `json:"apply"`
+}
+
+// RepairBookStatus is the repair path for an UNREADABLE user_book_state row
+// for the calling user and this book. Every state write fails closed on such
+// a row (503), so without it the book stays unwritable. Dry run by default:
+// it reports whether the row is readable and, if not, the state it would
+// rebuild from the positions (readstatus.RebuildUserBookState). With
+// {"apply":true} it writes that state over the bad row. A readable row is
+// never touched.
+// POST /api/v1/books/:id/status/repair
+func (h *ReadingHandler) RepairBookStatus(c *gin.Context) {
+	bookID := c.Param("id")
+	if bookID == "" {
+		httputil.RespondWithBadRequest(c, "book id required")
+		return
+	}
+	var req RepairStatusRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid repair body")
+			return
+		}
+	}
+	userID := CallingUserID(c)
+	rep, err := readstatus.RebuildUserBookState(h.store, userID, bookID, req.Apply)
+	if err != nil {
+		respondReadStatusError(c, "failed to repair book state", err)
+		return
+	}
+	if rep.WouldRebuild {
+		readingLog.Warn("reading: repair book state: user_id=%s book_id=%s apply=%t applied=%t unreadable_row_error=%s",
+			logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), req.Apply, rep.Applied, logger.SanitizeLogValue(rep.StateError))
+	}
+	httputil.RespondWithOK(c, rep)
 }
 
 // ListByStatus returns the calling user's books filtered by status, paginated.

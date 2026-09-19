@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -43,6 +43,11 @@ type fakeLibrary struct {
 	stateErr error
 	// posErr, when set, makes GetUserPosition fail the same way.
 	posErr error
+	// setStateErrOnce, when set, fails the NEXT SetUserBookState and clears.
+	setStateErrOnce error
+	// realPositions, when set, stores positions in a real PebbleStore so a
+	// test can plant an undecodable upos: row and exercise the real decode.
+	realPositions *database.PebbleStore
 
 	// order preserves seed order, which is what the list endpoints iterate.
 	order    []string
@@ -921,6 +926,9 @@ func (f *fakeLibrary) GetUserPosition(userID, bookID string) (*database.UserPosi
 	if f.posErr != nil {
 		return nil, f.posErr
 	}
+	if f.realPositions != nil {
+		return f.realPositions.GetUserPosition(userID, bookID)
+	}
 	return f.positions[userID+"|"+bookID], nil
 }
 
@@ -930,6 +938,9 @@ func (f *fakeLibrary) SetUserPosition(userID, bookID, segmentID string, pos floa
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.realPositions != nil {
+		return f.realPositions.SetUserPosition(userID, bookID, segmentID, pos)
+	}
 	f.positions[userID+"|"+bookID] = &database.UserPosition{
 		UserID: userID, BookID: bookID, SegmentID: segmentID,
 		PositionSeconds: pos, UpdatedAt: time.Now(),
@@ -943,6 +954,9 @@ func (f *fakeLibrary) SetUserPosition(userID, bookID, segmentID string, pos floa
 func (f *fakeLibrary) ClearUserPositions(userID, bookID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.realPositions != nil {
+		return f.realPositions.ClearUserPositions(userID, bookID)
+	}
 	delete(f.positions, userID+"|"+bookID)
 	return nil
 }
@@ -962,6 +976,10 @@ func (f *fakeLibrary) SetUserBookState(s *database.UserBookState) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.setStateErrOnce; err != nil {
+		f.setStateErrOnce = nil
+		return err
+	}
 	cp := *s
 	// Deep-copy slice fields: the real store round-trips the row through
 	// JSON, so a caller must never share a backing array with the stored row.
