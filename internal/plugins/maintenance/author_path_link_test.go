@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
 // last-edited: 2026-09-19
 
@@ -103,13 +103,20 @@ func runPathLink(t *testing.T, p *Plugin, params string) *authorPathLinkResult {
 
 func outcomeOf(t *testing.T, res *authorPathLinkResult, bookID string) authorPathLinkChange {
 	t.Helper()
+	c, ok := findChange(res, bookID)
+	if !ok {
+		t.Fatalf("book %s missing from the change list (%d entries)", bookID, len(res.Changes))
+	}
+	return c
+}
+
+func findChange(res *authorPathLinkResult, bookID string) (authorPathLinkChange, bool) {
 	for _, c := range res.Changes {
 		if c.BookID == bookID {
-			return c
+			return c, true
 		}
 	}
-	t.Fatalf("book %s missing from the change list (%d entries)", bookID, len(res.Changes))
-	return authorPathLinkChange{}
+	return authorPathLinkChange{}, false
 }
 
 // --- classification ---
@@ -175,7 +182,21 @@ func TestAuthorPathLink_Classification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.book, func(t *testing.T) {
-			got := outcomeOf(t, res, tc.book)
+			got, listed := findChange(res, tc.book)
+			// The library-scale buckets are counted, not listed: a full entry
+			// per already-authored book would bury the rows worth reading.
+			if !authorPathLinkDetailed(tc.outcome) {
+				if listed {
+					t.Fatalf("book %s: %q is counter-only but was listed: %+v", tc.book, tc.outcome, got)
+				}
+				if res.Outcomes[tc.outcome] == 0 {
+					t.Fatalf("book %s: outcome %q not counted (outcomes=%v)", tc.book, tc.outcome, res.Outcomes)
+				}
+				return
+			}
+			if !listed {
+				t.Fatalf("book %s: %q is detailed but was not listed (outcomes=%v)", tc.book, tc.outcome, res.Outcomes)
+			}
 			if got.Outcome != tc.outcome {
 				t.Fatalf("book %s: outcome %q, want %q (derived=%q author=%d)", tc.book, got.Outcome, tc.outcome, got.DerivedName, got.AuthorID)
 			}
@@ -379,6 +400,26 @@ func TestAuthorPathLink_CreateIsIdempotentUnderRace(t *testing.T) {
 		if b == nil || b.AuthorID == nil || *b.AuthorID != want {
 			t.Fatalf("book newrow%d scalar = %+v, want %d", i, b, want)
 		}
+	}
+}
+
+// 🔴 create_missing=false mints nothing, and says so in its own bucket rather
+// than reporting a creation that will not happen.
+func TestAuthorPathLink_CreateMissingDisabled(t *testing.T) {
+	s := pathLinkPebble(t)
+	pathLinkCreateBook(t, s, "newrow", "/mnt/bigdata/books/abooks/imported/Ursula Le Guin/A Title/x.m4b", nil)
+
+	p := New(&fakeDeps{store: s})
+	res := runPathLink(t, p, `{"dry_run":false,"create_missing":false}`)
+	if res.Outcomes[authorPathLinkCreateDisabled] != 1 {
+		t.Fatalf("outcomes=%v, want one %s", res.Outcomes, authorPathLinkCreateDisabled)
+	}
+	authors, _ := s.GetAllAuthors()
+	if len(authors) != 0 {
+		t.Fatalf("author rows = %+v, want none minted", authors)
+	}
+	if b, _ := s.GetBookByID("newrow"); b == nil || b.AuthorID != nil {
+		t.Fatalf("book was linked: %+v", b)
 	}
 }
 

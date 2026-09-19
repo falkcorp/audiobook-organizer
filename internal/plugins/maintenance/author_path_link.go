@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-19
 
@@ -51,8 +51,9 @@ import (
 //	                        existing row. REPORTED, NEVER WRITTEN: 266 books sit
 //	                        under a misspelled "Christopher Paolin" folder, and
 //	                        minting that row would park a twin next to the real
-//	                        "Christopher Paolini". The fix is the folder, or an
-//	                        explicit-id apply.
+//	                        "Christopher Paolini". The remedy is to fix the
+//	                        FOLDER; listing the book ids does not override this
+//	                        hold (see BookIDs).
 //	suspect_thin_row        the target row has book_count <= 1, the shape of a
 //	                        title-fragment "author" row. Skipped.
 //	suspect_leaf_dir        the only match was the book's OWN folder, not an
@@ -64,7 +65,8 @@ import (
 // dangling one -- that is author-id-repair's), a book under books/itunes/**
 // (standing hands-off rule on the live iTunes library), and anything
 // applygate.IsOwnerManualOnly flags (Doctor Who / Big Finish / Torchwood, which
-// the owner applies by hand, by explicit book id).
+// the owner curates by hand). None of the three is overridable from params:
+// bookIds and pathPrefix narrow a run, they do not unlock a refusal.
 //
 // 🔴 DERIVATION IS THE SCANNER'S, NOT A SECOND COPY. The segment split and the
 // person-shape gate are metadata.SplitPathSegments and
@@ -117,7 +119,29 @@ const (
 	authorPathLinkExistingCredits  = "existing_credits_left_alone"
 	authorPathLinkChangedSinceScan = "changed_since_scan"
 	authorPathLinkFailed           = "failed"
+	// authorPathLinkCreateDisabled is would_create under create_missing=false:
+	// a name with no row, which this run will not mint.
+	authorPathLinkCreateDisabled = "would_create_row_but_creation_disabled"
 )
+
+// authorPathLinkDetailed reports whether an outcome's full entry belongs in the
+// change list, or only in the counters.
+//
+// Detail is for what a reader acts on: everything that was or would be written,
+// everything held back for review, and every failure. The three "was never a
+// candidate" buckets and not_derivable are library-scale -- 70,000-odd books
+// between them -- and are counted only.
+func authorPathLinkDetailed(outcome string) bool {
+	switch outcome {
+	case authorPathLinkLinked, authorPathLinkWouldLink,
+		authorPathLinkCreatedAndLinked, authorPathLinkWouldCreate, authorPathLinkCreateDisabled,
+		authorPathLinkNearMiss, authorPathLinkSuspectThin, authorPathLinkSuspectLeaf,
+		authorPathLinkAmbiguous, authorPathLinkExistingCredits,
+		authorPathLinkChangedSinceScan, authorPathLinkFailed:
+		return true
+	}
+	return false
+}
 
 // Match kinds, recorded on every derived candidate.
 const (
@@ -153,8 +177,18 @@ type authorPathLinkParams struct {
 	DryRun      *bool `json:"dry_run,omitempty"`
 	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// BookIDs restricts the run to these books. Everything else is not even
-	// classified. This is how the owner applies a manual-only library (Doctor
-	// Who) or a near miss: by naming the rows.
+	// classified.
+	//
+	// 🔴 IT IS A SCOPE, NOT AN OVERRIDE. Naming a book does not buy it past any
+	// refusal: the manual-only filter (Doctor Who / Big Finish / Torchwood),
+	// the iTunes hands-off rule, the near-miss hold and the suspect bars all
+	// still apply to a book listed here. So the 266 books under the misspelled
+	// "Christopher Paolin" folder cannot be linked to "Christopher Paolini" by
+	// listing their ids -- this op only ever writes the author its NAME
+	// resolves to, and that name resolves to nothing. The remedy for a near
+	// miss is to fix the folder (after which this op links it on the next run),
+	// not to hand the op a list. Widening bookIds into a real override is an
+	// owner decision, not a detail of this op.
 	BookIDs      []string `json:"bookIds,omitempty"`
 	BookIDsSnake []string `json:"book_ids,omitempty"`
 	// PathPrefix restricts the run to books whose FilePath starts with it.
@@ -495,6 +529,11 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 // authorPathLinkIsITunes reports whether the path runs through the live iTunes
 // library, which is hands-off by standing owner rule. Segment equality, not
 // substring: a title with "itunes" in it must not match.
+//
+// It matches "<...>/books/itunes/<...>" specifically -- the ONE iTunes root
+// this library has -- rather than any segment named "itunes", because an
+// audiobook whose own folder is called "iTunes" would otherwise be excluded
+// from a repair it belongs in. A second iTunes root would need adding here.
 func authorPathLinkIsITunes(path string) bool {
 	segs := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	for i, s := range segs {
@@ -569,34 +608,62 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	}
 	res.BooksInScope = len(scoped)
 
-	// Classification is pure and cheap, so it runs in the scan pass; only the
-	// books that might be written go to the worker pool below.
 	var mu sync.Mutex
 	done := 0
+	// record counts every classified book, and keeps the FULL entry only for
+	// the outcomes a reader acts on (authorPathLinkDetailed). The library-wide
+	// buckets -- 70,000-odd books that already have an author, 2,390 with no
+	// author anywhere in the path -- would otherwise put a book id and a full
+	// path each into the op result, burying the few hundred rows the dry run
+	// exists to show. author_id_repair.go makes the same split by recording an
+	// empty struct for its no-op outcomes.
 	record := func(ch authorPathLinkChange) {
 		mu.Lock()
 		defer mu.Unlock()
 		done++
 		res.Outcomes[ch.Outcome]++
-		res.Changes = append(res.Changes, ch)
-	}
-
-	var actionable []authorPathLinkChange
-	for i := range scoped {
-		ch := authorPathLinkClassify(&scoped[i], idx)
-		switch ch.Outcome {
-		case authorPathLinkWouldLink:
-			actionable = append(actionable, ch)
-		case authorPathLinkWouldCreate:
-			if createMissing {
-				actionable = append(actionable, ch)
-				continue
-			}
-			record(ch)
-		default:
-			record(ch)
+		if authorPathLinkDetailed(ch.Outcome) {
+			res.Changes = append(res.Changes, ch)
 		}
 	}
+
+	// 🔴 CLASSIFICATION IS PARALLEL, and has to be: the near-miss check is a
+	// fuzzy string compare against every author row in a +/-2 length band, and
+	// it runs for every book with no exact match (~2,500 of them in prod). That
+	// is exactly the fuzzy-compare-over-a-whole-library shape CLAUDE.md names.
+	// The frozen index is read-only from here on, so workers share it without a
+	// lock; only record() needs one.
+	var actionable []authorPathLinkChange
+	classifyErr := registry.RunItems(ctx, reporter, scoped, func(_ context.Context, b database.BookCore) error {
+		ch := authorPathLinkClassify(&b, idx)
+		if ch.Outcome == authorPathLinkWouldLink || (ch.Outcome == authorPathLinkWouldCreate && createMissing) {
+			mu.Lock()
+			actionable = append(actionable, ch)
+			mu.Unlock()
+			return nil
+		}
+		if ch.Outcome == authorPathLinkWouldCreate {
+			// create_missing=false: nothing will be created, so it does not
+			// claim it would be.
+			ch.Outcome = authorPathLinkCreateDisabled
+		}
+		record(ch)
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		// Label runs inside each worker goroutine, so it reads done under mu.
+		Label: func(i, total int) string {
+			mu.Lock()
+			d := done
+			mu.Unlock()
+			return fmt.Sprintf("Classifying paths %d/%d (decided %d)", i+1, total, d)
+		},
+	})
+	if classifyErr != nil {
+		return res, classifyErr
+	}
+	// The apply order is the book id order, not the order workers finished in.
+	sort.Slice(actionable, func(i, j int) bool { return actionable[i].BookID < actionable[j].BookID })
 
 	creator := newAuthorPathLinkCreator(linkStore, dryRun)
 	runErr := registry.RunItems(ctx, reporter, actionable, func(ctx context.Context, ch authorPathLinkChange) error {
