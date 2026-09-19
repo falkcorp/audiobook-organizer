@@ -118,3 +118,18 @@ func TestMaintenanceOpRun_EmptyParamsHonourAdvertisedDryRun(t *testing.T) {
 		require.Equal(t, []bool{true}, job.runs, "params %q ran the job for real", raw)
 	}
 }
+
+// A real chapter merge with no reviewed group list is refused at the door
+// (400), before an operation is queued.
+func TestRunMaintenanceJob_RealChapterMergeWithoutGroupsIs400(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	w := postMaintenanceJob(t, server, "merge-chapter-groups", `{"dry_run": false}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	w = postMaintenanceJob(t, server, "merge-chapter-groups", `{"dry_run": true}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("dry run: status = %d, want 202; body = %s", w.Code, w.Body.String())
+	}
+}

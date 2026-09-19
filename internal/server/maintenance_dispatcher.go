@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 package server
 
@@ -202,6 +202,16 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	dryRun := advertisedDryRunDefault(job)
 	if reqDryRun != nil {
 		dryRun = *reqDryRun
+	}
+
+	// A job that can tell a request is unsafe before it runs says so here,
+	// with the resolved dry_run: merge-chapter-groups refuses a real merge
+	// that carries no reviewed group list. The job re-checks in Run.
+	if pv, ok := job.(maintenance.ParamsValidator); ok {
+		if err := pv.ValidateParams(json.RawMessage(body), dryRun); err != nil {
+			httputil.RespondWithBadRequest(c, err.Error())
+			return
+		}
 	}
 
 	// Enqueue the run. This mints a v2 operations row and nothing else.

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -41,6 +41,62 @@ func chRun(t *testing.T, job maintenance.MaintenanceJob, store maintenance.JobSt
 }
 
 func chIntP(v int) *int { return &v }
+
+// chRunRaw runs job and returns the persisted result as raw JSON, or the error.
+func chRunRaw(t *testing.T, job maintenance.MaintenanceJob, store maintenance.JobStore, params string, dryRun bool) ([]byte, error) {
+	t.Helper()
+	var got any
+	ctx := maintenance.WithOperationID(context.Background(), "op-chapter-test")
+	ctx = maintenance.WithRawParams(ctx, json.RawMessage(params))
+	ctx = maintenance.WithResultSetter(ctx, func(v any) error { got = v; return nil })
+	if err := job.Run(ctx, store, ddJobReporter{}, dryRun); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	return raw, nil
+}
+
+// chReviewedParams turns a dry-run preview (raw JSON) into the params of a
+// real merge of exactly its would_merge groups -- what the card sends.
+func chReviewedParams(t *testing.T, preview []byte) string {
+	t.Helper()
+	var r struct {
+		Groups []struct {
+			PrimaryBookID string   `json:"primary_book_id"`
+			BookIDs       []string `json:"book_ids"`
+			Fingerprint   string   `json:"fingerprint"`
+			Status        string   `json:"status"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(preview, &r); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	type sel struct {
+		PrimaryBookID string   `json:"primary_book_id"`
+		BookIDs       []string `json:"book_ids"`
+		Fingerprint   string   `json:"fingerprint"`
+	}
+	var groups []sel
+	for _, g := range r.Groups {
+		if g.Status == "would_merge" {
+			groups = append(groups, sel{g.PrimaryBookID, g.BookIDs, g.Fingerprint})
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "groups": groups})
+	return string(raw)
+}
+
+func chPreviewThenApply(t *testing.T, s maintenance.JobStore) chapterGroupsResult {
+	t.Helper()
+	preview, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	return chRun(t, &mergeChapterGroupsJob{}, s, chReviewedParams(t, preview), false)
+}
 
 // chSeedGroup creates n chapter books under dir, each owning one file, created
 // in REVERSE chapter order so store order is not chapter order.
@@ -117,7 +173,7 @@ func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 		t.Fatalf("ModifyBook: %v", err)
 	}
 
-	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":false}`, false)
+	res := chPreviewThenApply(t, s)
 	if res.DryRun || res.GroupsFound != 2 || res.BooksMerged != 3 || res.BooksSkipped != 0 || res.GroupsFailed != 0 {
 		t.Fatalf("merge summary wrong: %+v", res)
 	}
@@ -160,7 +216,7 @@ func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 	}
 
 	// (d) a re-run finds nothing: sources are soft-deleted, primary is alone.
-	again := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":false}`, false)
+	again := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
 	if again.GroupsFound != 0 || again.BooksMerged != 0 {
 		t.Fatalf("re-run regrouped merged books: %+v", again)
 	}
@@ -187,5 +243,85 @@ func TestMergeChapterGroups_AdvertisesDryRunTrue(t *testing.T) {
 	_ = json.Unmarshal(raw, &p)
 	if p["dry_run"] != true || p["min_files"] == nil || p["max_per_file_duration"] == nil {
 		t.Fatalf("DefaultParams = %s", raw)
+	}
+}
+
+// A real merge without a reviewed group list is refused before any write: it
+// must never detect on its own what to merge.
+func TestMergeChapterGroups_RealMergeWithoutGroupsIsRefused(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 3, 300)
+	if _, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, `{"dry_run":false}`, false); err == nil {
+		t.Fatal("a real merge with no groups ran")
+	}
+	for _, b := range books[1:] {
+		if ddMustGet(t, s, b.ID).IsSoftDeleted() {
+			t.Fatalf("book %s merged without a reviewed group", b.ID)
+		}
+	}
+	if err := (&mergeChapterGroupsJob{}).ValidateParams(json.RawMessage(`{}`), false); err == nil {
+		t.Fatal("ValidateParams accepted a real merge with no groups")
+	}
+	if err := (&mergeChapterGroupsJob{}).ValidateParams(json.RawMessage(`{}`), true); err != nil {
+		t.Fatalf("ValidateParams refused a dry run: %v", err)
+	}
+}
+
+// The real merge applies exactly the reviewed set: a group whose member changed
+// since the preview is skipped as drifted, and a chapter imported after the
+// preview is not folded in.
+func TestMergeChapterGroups_MergesExactlyTheReviewedSet(t *testing.T) {
+	s := ddRealStore(t)
+	tale := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
+	saga := chSeedGroup(t, s, "/lib/B/Saga", "Saga", 2, 300)
+	preview, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	params := chReviewedParams(t, preview)
+
+	// After review: a new chapter lands in Tale, and a Saga member changes.
+	late := ddMustBook(t, s, &database.Book{Title: "03 - Tale", FilePath: "/lib/A/Tale/03 - Tale.mp3", Duration: chIntP(300)})
+	ddMustFile(t, s, &database.BookFile{BookID: late.ID, FilePath: "/lib/A/Tale/03 - Tale.mp3", Duration: 300})
+	if _, err := s.ModifyBook(saga[1].ID, func(b *database.Book) error { b.Title = "02 - Saga (edited)"; return nil }); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+
+	res := chRun(t, &mergeChapterGroupsJob{}, s, params, false)
+	if res.BooksMerged != 1 || res.GroupsDrifted != 1 {
+		t.Fatalf("want Tale merged (1 source) and Saga drifted, got %+v", res)
+	}
+	if !ddMustGet(t, s, tale[1].ID).IsSoftDeleted() {
+		t.Fatal("reviewed Tale chapter 02 was not merged")
+	}
+	if ddMustGet(t, s, late.ID).IsSoftDeleted() {
+		t.Fatal("a chapter imported after the preview was merged unreviewed")
+	}
+	if ddMustGet(t, s, saga[1].ID).IsSoftDeleted() {
+		t.Fatal("a group that changed since the preview was merged")
+	}
+}
+
+// Data the merge cannot carry blocks the group instead of being lost at purge.
+func TestMergeChapterGroups_UncarriableDataBlocksTheGroup(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
+	rating := 4.5
+	if _, err := s.ModifyBook(books[1].ID, func(b *database.Book) error { b.UserRatingOverall = &rating; return nil }); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if len(res.Groups) != 1 || res.Groups[0].Status != "blocked" || len(res.Groups[0].Blockers) == 0 || res.BooksMerged != 0 {
+		t.Fatalf("rated source not blocked in preview: %+v", res)
+	}
+}
+
+// The owner's manual-only libraries are never offered for a bulk merge.
+func TestMergeChapterGroups_ExcludesManualOnlyLibraries(t *testing.T) {
+	s := ddRealStore(t)
+	chSeedGroup(t, s, "/lib/Doctor Who/Story", "Story", 2, 300)
+	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if res.GroupsFound != 0 || res.BooksExcluded != 2 {
+		t.Fatalf("Doctor Who chapters offered for merge: %+v", res)
 	}
 }

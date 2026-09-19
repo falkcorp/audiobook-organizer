@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-09-19
 
@@ -392,6 +392,15 @@ type JobStore interface {
 	jobOperationStore
 	jobKVStore
 	jobExternalIDStore
+}
+
+// ParamsValidator is implemented by jobs that can reject a request's params
+// before an operation is queued. The dispatcher calls it with the raw request
+// body and the resolved dry_run and answers 400 on an error. It is a front
+// door only: a job must still check the same thing in Run, because other paths
+// (a requeue, a resume, a direct enqueue) reach Run without the dispatcher.
+type ParamsValidator interface {
+	ValidateParams(raw json.RawMessage, dryRun bool) error
 }
 
 // PolicyAware is satisfied by every MaintenanceJob. It is a separate interface
