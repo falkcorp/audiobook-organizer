@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -356,7 +356,9 @@ func (f *fakeLLM) counts() (discover, create, downloads int) {
 // or truncated listing).
 type finderLLM struct {
 	*fakeLLM
-	err *error
+	// err is read by the pipeline goroutine and written by the test, so it
+	// is atomic (a plain *error raced under -race in CI, 2026-09-19).
+	err *atomic.Pointer[error]
 	// hide, while true, makes every batch invisible (a listing that has not
 	// caught up with a batch OpenAI just accepted).
 	hide *atomic.Bool
@@ -368,8 +370,10 @@ type finderLLM struct {
 }
 
 func (f finderLLM) FindBatchByMetadata(_ context.Context, match map[string]string, _ time.Time) (string, bool, error) {
-	if f.err != nil && *f.err != nil {
-		return "", false, *f.err
+	if f.err != nil {
+		if e := f.err.Load(); e != nil && *e != nil {
+			return "", false, *e
+		}
 	}
 	n := int32(0)
 	if f.lookups != nil {
