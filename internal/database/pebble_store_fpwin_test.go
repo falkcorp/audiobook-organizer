@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 67f3605a-acce-4382-9555-a1a26ed37eb0
 // last-edited: 2026-09-19
 
@@ -175,7 +175,13 @@ func TestFpwin_WindowsForFileAddsTheLegacyHead(t *testing.T) {
 	require.True(t, head.Virtual)
 	require.Equal(t, WindowKindHead, head.Kind)
 	require.Equal(t, 0, head.SlotBP)
-	require.Equal(t, LegacyHeadPipeline, head.Pipeline)
+	// Pipeline and tool fields stay EMPTY on the legacy head, so similarity
+	// code that pairs on Pipeline can never pair it with a PCM-pipe window.
+	require.Empty(t, head.Pipeline)
+	require.Empty(t, head.WindowSet)
+	require.Empty(t, head.FpcalcVersion)
+	require.Empty(t, head.FFmpegVersion)
+	require.Zero(t, head.Algorithm)
 	require.Equal(t, FileWindowRef(withPrint), head.Ref)
 	require.Equal(t, legacy, head.Raw)
 	require.Equal(t, 960, head.Frames)
@@ -427,4 +433,31 @@ func TestFpwin_UndecodableRowIsAnError(t *testing.T) {
 	_, err := env.store.GetFingerprintWindows(FileWindowRef(id))
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "undecodable"))
+}
+
+// window:0 is a real slot (a short file's single whole-file window) and must be
+// stored and read back as a window, never collapsed into head:0 or whole:0.
+func TestFpwin_WindowSlotZeroIsDistinctFromHead(t *testing.T) {
+	env := newBookSigEnv(t)
+	_, id := fpwinSeedFile(t, env.store, "/lib/z/short.mp3", fpwinRaw(70, 960))
+	ref := FileWindowRef(id)
+
+	w0 := fpwinFixture(ref, WindowKindWindow, 0, 11)
+	w0.CoversWhole = true
+	require.Equal(t, "fpwin:f:"+id+":window:0", string(fpwinKey(w0)))
+	require.NoError(t, env.store.PutFingerprintWindow(w0))
+	require.NoError(t, env.store.PutFingerprintWindow(fpwinFixture(ref, WindowKindHead, 0, 12)))
+	require.NoError(t, env.store.PutFingerprintWindow(fpwinFixture(ref, WindowKindWhole, 0, 13)))
+
+	got, err := env.reopen(t).WindowsForFile(id)
+	require.NoError(t, err)
+	require.Len(t, got, 4, "virtual head + stored head + window:0 + whole")
+	require.True(t, got[0].Virtual)
+	require.Equal(t, WindowKindHead, got[1].Kind)
+	require.Equal(t, fpwinRaw(12, 960), got[1].Raw)
+	require.Equal(t, WindowKindWindow, got[2].Kind)
+	require.Equal(t, 0, got[2].SlotBP)
+	require.True(t, got[2].CoversWhole)
+	require.Equal(t, fpwinRaw(11, 960), got[2].Raw)
+	require.Equal(t, WindowKindWhole, got[3].Kind)
 }
