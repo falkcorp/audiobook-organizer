@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-09
+// last-edited: 2026-09-19
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
@@ -12,6 +12,7 @@ package database
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -282,4 +283,57 @@ func detailNumber(details map[string]any, key string) int {
 // OR if it has no tags (i.e. was compacted before tag enrichment was added).
 func isLegacyItem(item DigestItem) bool {
 	return (item.Type == "system_log" || item.Type == "system") || len(item.Tags) == 0
+}
+
+// summarizeOpSampleMax caps how many operation ids a Summarize row keeps.
+//
+// Summarize groups by (day, type, source) and NEVER by operation_id. An
+// operation id is unique per run, so grouping by it made the pass write one
+// summary row per operation: a day with thousands of operations became
+// thousands of rows, which is the opposite of summarizing. The ids are still
+// worth keeping for tracing, so each summary records how many distinct
+// operations it covers plus the lowest summarizeOpSampleMax of them (sorted, so
+// all three backends agree on the sample), and says when the sample is cut.
+const summarizeOpSampleMax = 20
+
+// summarizeGroupKey is the Summarize group key shared by every backend.
+type summarizeGroupKey struct{ day, typ, source string }
+
+// summarizeDetails renders the Details map of one Summarize row. opIDs is the
+// group's set of distinct non-empty operation ids.
+//
+// Keys:
+//   - summarized_source: the Source the folded entries had (the row's own
+//     Source is "summarize", which is what marks it as a summary).
+//   - distinct_ops:      how many distinct operations the group covered.
+//   - op_ids_sample:     at most summarizeOpSampleMax ids, lowest first.
+//   - op_ids_truncated:  true when distinct_ops exceeds the sample.
+//
+// Summary rows written before 2026-09-19 have no Details and one OperationID;
+// nothing reads these keys as required, so both shapes stay readable.
+func summarizeDetails(source string, opIDs map[string]struct{}) map[string]any {
+	ids := make([]string, 0, len(opIDs))
+	for id := range opIDs {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return summarizeDetailsSorted(source, len(ids), ids)
+}
+
+// summarizeDetailsSorted is summarizeDetails for a caller that already holds
+// the distinct count and an ascending (possibly already capped) id list, as
+// the SQLite backend does from its own query.
+func summarizeDetailsSorted(source string, distinct int, sortedIDs []string) map[string]any {
+	sample := sortedIDs
+	if len(sample) > summarizeOpSampleMax {
+		sample = sample[:summarizeOpSampleMax]
+	}
+	return map[string]any{
+		"summarized_source": source,
+		"distinct_ops":      distinct,
+		"op_ids_sample":     append([]string{}, sample...),
+		"op_ids_truncated":  distinct > len(sample),
+	}
 }

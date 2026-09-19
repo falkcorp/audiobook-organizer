@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.24.1
+// version: 1.25.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -915,13 +915,16 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []
 	return page, total, nil
 }
 
-// Summarize groups old entries by (day, operation_id, type), writes one
-// summary row per day, and deletes the originals. Returns count of deleted
-// rows.
+// Summarize groups old entries by (day, type, source), writes one summary row
+// per group, and deletes the originals. Returns count of deleted rows.
+//
+// operation_id is deliberately NOT in the group key: it is unique per run, so
+// grouping by it wrote one summary row per operation. The group's operation ids
+// are kept in the summary's Details instead — see summarizeDetails.
 //
 // The day is part of the group key — not just an artifact of scan order —
-// because entries sharing an operation_id and type (most commonly both
-// empty, e.g. routine "scan_progress" noise) can otherwise span the entire
+// because entries sharing a type and source (most commonly routine
+// "scan_progress" noise) can otherwise span the entire
 // olderThan window. Without the day boundary, a single summary row silently
 // swallowed weeks or months of entries into one "N entries (day1 to dayN)"
 // row, the opposite of the per-day boundary CompactByDay enforces.
@@ -932,23 +935,26 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 		return 0, err
 	}
 
-	type groupKey struct{ day, opID, typ string }
-	type group struct{ kvs []pactKV }
-	groups := make(map[groupKey]*group)
+	type group struct {
+		kvs   []pactKV
+		opIDs map[string]struct{}
+	}
+	groups := make(map[summarizeGroupKey]*group)
 
 	for _, kv := range kvs {
 		if kv.entry.PrunedAt != nil {
 			continue
 		}
-		k := groupKey{
-			day:  kv.entry.Timestamp.UTC().Format("2006-01-02"),
-			opID: kv.entry.OperationID,
-			typ:  kv.entry.Type,
+		k := summarizeGroupKey{
+			day:    kv.entry.Timestamp.UTC().Format("2006-01-02"),
+			typ:    kv.entry.Type,
+			source: kv.entry.Source,
 		}
 		if groups[k] == nil {
-			groups[k] = &group{}
+			groups[k] = &group{opIDs: make(map[string]struct{})}
 		}
 		groups[k].kvs = append(groups[k].kvs, kv)
+		groups[k].opIDs[kv.entry.OperationID] = struct{}{}
 	}
 	if len(groups) == 0 {
 		return 0, nil
@@ -983,15 +989,15 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 
 		prunedAt := now
 		summary := ActivityEntry{
-			ID:          s.counter.Add(1),
-			Timestamp:   now,
-			Tier:        tier,
-			Type:        gk.typ,
-			Level:       "info",
-			Source:      "summarize",
-			OperationID: gk.opID,
-			Summary:     summaryText,
-			PrunedAt:    &prunedAt,
+			ID:        s.counter.Add(1),
+			Timestamp: now,
+			Tier:      tier,
+			Type:      gk.typ,
+			Level:     "info",
+			Source:    "summarize",
+			Summary:   summaryText,
+			Details:   summarizeDetails(gk.source, g.opIDs),
+			PrunedAt:  &prunedAt,
 		}
 
 		summaryID := ulid.Make().String()

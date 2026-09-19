@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -646,31 +646,35 @@ func (s *SQLActivityStore) GetDistinctSources(ctx context.Context, f ActivityFil
 	return out, rows.Err()
 }
 
-// Summarize groups entries older than olderThan in tier by (day, operation_id,
-// type), writes one summary row per group (PrunedAt set), and deletes the
-// group's originals — mirroring PebbleActivityStore.Summarize. Returns rows
+// Summarize groups entries older than olderThan in tier by (day, type, source),
+// writes one summary row per group (PrunedAt set), and deletes the group's
+// originals. Not by operation_id: that is unique per run and made one summary
+// row per operation; the group's ids go into Details (see summarizeDetails).
+// The DELETE is scoped by exactly the group key, so it removes only the rows
+// the summary it commits with describes — mirroring PebbleActivityStore.Summarize. Returns rows
 // deleted.
 func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
 	s.backfillGate.Lock()
 	defer s.backfillGate.Unlock()
 	cutoff := olderThan.UnixNano()
 	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(
-		`SELECT date(ts/1000000000,'unixepoch') AS d, operation_id, type, COUNT(*), MIN(ts), MAX(ts)
+		`SELECT date(ts/1000000000,'unixepoch') AS d, type, source, COUNT(*), MIN(ts), MAX(ts),
+		        COUNT(DISTINCT NULLIF(operation_id, ''))
 		 FROM activity WHERE tier = ? AND ts < ? AND pruned_at IS NULL
-		 GROUP BY d, operation_id, type`), tier, cutoff)
+		 GROUP BY d, type, source`), tier, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("sql_activity: summarize scan: %w", err)
 	}
 	type grp struct {
-		day, typ     string
-		opID         sql.NullString
-		count        int
-		minTS, maxTS int64
+		day, typ, source string
+		count            int
+		minTS, maxTS     int64
+		distinctOps      int
 	}
 	var groups []grp
 	for rows.Next() {
 		var g grp
-		if err := rows.Scan(&g.day, &g.opID, &g.typ, &g.count, &g.minTS, &g.maxTS); err != nil {
+		if err := rows.Scan(&g.day, &g.typ, &g.source, &g.count, &g.minTS, &g.maxTS, &g.distinctOps); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -710,15 +714,22 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 		if terr != nil {
 			return total, terr
 		}
+		// The sample is read inside the transaction that deletes the rows, so
+		// it describes exactly what this summary replaces.
+		sample, serr := sqlSummarizeOpSample(ctx, tx, s.dialect, tier, lo, hi, g.typ, g.source)
+		if serr != nil {
+			_ = tx.Rollback()
+			return total, serr
+		}
 		summary := ActivityEntry{
-			Timestamp:   now,
-			Tier:        tier,
-			Type:        g.typ,
-			Level:       "info",
-			Source:      "summarize",
-			OperationID: g.opID.String,
-			Summary:     summaryText,
-			PrunedAt:    &now,
+			Timestamp: now,
+			Tier:      tier,
+			Type:      g.typ,
+			Level:     "info",
+			Source:    "summarize",
+			Summary:   summaryText,
+			Details:   summarizeDetailsSorted(g.source, g.distinctOps, sample),
+			PrunedAt:  &now,
 		}
 		insArgs, aerr := rowArgs(summary, nil)
 		if aerr != nil {
@@ -730,15 +741,8 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 			return total, eerr
 		}
 
-		delSQL := `DELETE FROM activity WHERE tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ?`
-		delArgs := []any{tier, lo, hi, g.typ}
-		if g.opID.Valid {
-			delSQL += ` AND operation_id = ?`
-			delArgs = append(delArgs, g.opID.String)
-		} else {
-			delSQL += ` AND operation_id IS NULL`
-		}
-		res, derr := tx.ExecContext(ctx, s.dialect.rebind(delSQL), delArgs...)
+		delSQL := `DELETE FROM activity WHERE tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ? AND source = ?`
+		res, derr := tx.ExecContext(ctx, s.dialect.rebind(delSQL), tier, lo, hi, g.typ, g.source)
 		if derr != nil {
 			_ = tx.Rollback()
 			return total, derr
@@ -750,6 +754,30 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 		total += int(n)
 	}
 	return total, nil
+}
+
+// sqlSummarizeOpSample returns the lowest summarizeOpSampleMax distinct
+// operation ids of one Summarize group, ascending — the same sample the Pebble
+// and Nuts backends keep, so a summary reads the same whichever wrote it.
+func sqlSummarizeOpSample(ctx context.Context, tx *sql.Tx, d sqlDialect, tier string, lo, hi int64, typ, source string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, d.rebind(
+		`SELECT DISTINCT operation_id FROM activity
+		 WHERE tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ? AND source = ?
+		   AND operation_id IS NOT NULL AND operation_id <> ''
+		 ORDER BY operation_id LIMIT ?`), tier, lo, hi, typ, source, summarizeOpSampleMax)
+	if err != nil {
+		return nil, fmt.Errorf("sql_activity: summarize op sample: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // ── ActivityRetention ───────────────────────────────────────────────────────

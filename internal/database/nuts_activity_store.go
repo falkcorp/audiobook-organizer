@@ -1,7 +1,7 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.13.2
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -233,13 +233,18 @@ func (s *NutsActivityStore) Query(_ context.Context, f ActivityFilter) ([]Activi
 	return filtered[start:end], total, nil
 }
 
-// Summarize groups old entries by (day, operation_id, type), writes one
-// summary row per day, and deletes the originals. Returns count of deleted
-// rows.
+// Summarize groups old entries by (day, type, source), writes one summary row
+// per group, and deletes the originals. Returns count of deleted rows. Not by
+// operation_id: that is unique per run and made one row per operation; the ids
+// go into the summary's Details (see summarizeDetails).
+//
+// Unlike the Pebble and SQLite backends this one never sets PrunedAt on the
+// summary row, so a summary older than the cutoff is folded again on a later
+// run. Left as found: Nuts is the legacy backend.
 //
 // The day is part of the group key — not just an artifact of scan order —
-// because entries sharing an operation_id and type (most commonly both
-// empty, e.g. routine "scan_progress" noise) can otherwise span the entire
+// because entries sharing a type and source (most commonly routine
+// "scan_progress" noise) can otherwise span the entire
 // olderThan window. Without the day boundary, a single summary row silently
 // swallowed weeks or months of entries into one "N entries (day1 to dayN)"
 // row, the opposite of the per-day boundary CompactByDay enforces.
@@ -249,25 +254,28 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 		return 0, err
 	}
 
-	type groupKey struct{ day, opID, typ string }
+	// Grouped by (day, type, source), never operation_id — see
+	// summarizeOpSampleMax for why.
 	type group struct {
 		entries []ActivityEntry
+		opIDs   map[string]struct{}
 	}
-	groups := make(map[groupKey]*group)
+	groups := make(map[summarizeGroupKey]*group)
 
 	for _, e := range entries {
 		if e.PrunedAt != nil {
 			continue
 		}
-		k := groupKey{
-			day:  e.Timestamp.UTC().Format("2006-01-02"),
-			opID: e.OperationID,
-			typ:  e.Type,
+		k := summarizeGroupKey{
+			day:    e.Timestamp.UTC().Format("2006-01-02"),
+			typ:    e.Type,
+			source: e.Source,
 		}
 		if groups[k] == nil {
-			groups[k] = &group{}
+			groups[k] = &group{opIDs: make(map[string]struct{})}
 		}
 		groups[k].entries = append(groups[k].entries, e)
+		groups[k].opIDs[e.OperationID] = struct{}{}
 	}
 	if len(groups) == 0 {
 		return 0, nil
@@ -297,14 +305,14 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 		)
 
 		summary := ActivityEntry{
-			ID:          s.counter.Add(1),
-			Timestamp:   now,
-			Tier:        tier,
-			Type:        gk.typ,
-			Level:       "info",
-			Source:      "summarize",
-			OperationID: gk.opID,
-			Summary:     summaryText,
+			ID:        s.counter.Add(1),
+			Timestamp: now,
+			Tier:      tier,
+			Type:      gk.typ,
+			Level:     "info",
+			Source:    "summarize",
+			Summary:   summaryText,
+			Details:   summarizeDetails(gk.source, g.opIDs),
 		}
 		summaryKey := actTimeKey(now, ulid.Make().String())
 		summaryBytes, err := json.Marshal(summary)
