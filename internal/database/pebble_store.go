@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.177.0
+// version: 1.178.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
@@ -1144,69 +1144,19 @@ func (p *PebbleStore) walkFilteredBooksPebble(f BookSummaryFilter, visit func(*B
 		return nil
 	}
 
-	// excludeDeleted: by default marked-for-deletion rows are dropped. An
-	// explicit f.MarkedForDeletion inverts this into an equality test, so
-	// MarkedForDeletion=true returns ONLY deleted rows. The old fallback
-	// reached the corpus through GetAllBooksCore, which drops deleted rows
-	// unconditionally before any filter runs — so that filter could only
-	// ever return the empty set.
-	excludeDeleted := true
-	requireDeleted := false
-	if f.MarkedForDeletion != nil {
-		excludeDeleted = false
-		requireDeleted = *f.MarkedForDeletion
-	}
-
+	// The predicate is bookMatchesSummaryFilter, shared with SearchBooksFiltered
+	// so search and the library list can never disagree about what is visible.
+	// Deletion semantics are unchanged: marked-for-deletion rows are dropped by
+	// default, and an explicit f.MarkedForDeletion is an equality test (the old
+	// GetAllBooksCore-based fallback dropped deleted rows before any filter ran,
+	// so MarkedForDeletion=true could only ever return the empty set).
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 
 		var book Book
 		if err := json.Unmarshal(rowValue, &book); err != nil {
 			return err
 		}
-
-		if f.IsPrimaryVersion != nil {
-			// A nil IsPrimaryVersion on the row counts as primary, matching
-			// memdb and the historical service behavior.
-			eff := book.IsPrimaryVersion == nil || *book.IsPrimaryVersion
-			if eff != *f.IsPrimaryVersion {
-				return nil
-			}
-		}
-		isDeleted := bookIsSoftDeleted(&book)
-		if excludeDeleted {
-			if isDeleted {
-				return nil
-			}
-		} else if isDeleted != requireDeleted {
-			return nil
-		}
-		if f.ExcludeQuarantined && book.QuarantinedAt != nil {
-			return nil
-		}
-		if f.LibraryState != "" {
-			ls := ""
-			if book.LibraryState != nil {
-				ls = *book.LibraryState
-			}
-			if ls != f.LibraryState {
-				return nil
-			}
-		}
-		if f.ReviewStatus != "" {
-			rs := ""
-			if book.MetadataReviewStatus != nil {
-				rs = *book.MetadataReviewStatus
-			}
-			if !strings.EqualFold(rs, f.ReviewStatus) {
-				return nil
-			}
-		}
-		if f.RestrictToIDs != nil {
-			if _, ok := f.RestrictToIDs[book.ID]; !ok {
-				return nil
-			}
-		}
-		if f.Predicate != nil && !f.Predicate(&book) {
+		if !bookMatchesSummaryFilter(&book, f) {
 			return nil
 		}
 
@@ -3565,8 +3515,37 @@ func deleteKeysWithPrefix(db *pebble.DB, batch *pebble.Batch, prefix []byte, onK
 // re-read from Pebble here so the returned Books are byte-for-byte what the disk
 // scan produced.
 func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, error) {
+	return p.searchBooks(query, limit, offset, nil)
+}
+
+// SearchBooksFiltered is SearchBooks restricted to the books f admits (the
+// BookSummaryFilter visibility predicate — see bookMatchesSummaryFilter),
+// applied inside the scan on both the memdb and the Pebble path so only
+// admitted matches count toward offset and limit. f's sort fields are ignored:
+// results are in book-ID order like SearchBooks.
+//
+// SearchBooks itself stays unfiltered on purpose: the iTunes handler overfetches
+// through it and relies on seeing every row.
+func (p *PebbleStore) SearchBooksFiltered(query string, limit, offset int, f BookSummaryFilter) ([]Book, error) {
+	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
+		return []Book{}, nil
+	}
+	fc := f
+	return p.searchBooks(query, limit, offset, &fc)
+}
+
+// searchBooks is the shared body; f == nil means unfiltered.
+func (p *PebbleStore) searchBooks(query string, limit, offset int, f *BookSummaryFilter) ([]Book, error) {
 	if p.UseMemDB && p.mem() != nil {
-		ids, err := p.mem().SearchBookIDs(query, limit, offset)
+		var (
+			ids []string
+			err error
+		)
+		if f != nil {
+			ids, err = p.mem().SearchBookIDsFiltered(query, limit, offset, *f)
+		} else {
+			ids, err = p.mem().SearchBookIDs(query, limit, offset)
+		}
 		if err == nil {
 			books := make([]Book, 0, len(ids))
 			for _, id := range ids {
@@ -3623,6 +3602,9 @@ func (p *PebbleStore) SearchBooks(query string, limit, offset int) ([]Book, erro
 			return nil
 		}
 
+		if f != nil && !bookMatchesSummaryFilter(&book, *f) {
+			return nil
+		}
 		// Shared with the memdb scan and the scoped service fallback; see
 		// SubstringSearchMatches in memdb_search.go.
 		if SubstringSearchMatches(book.Title, book.Narrator, book.AuthorID, authorNames, lowerQuery) {

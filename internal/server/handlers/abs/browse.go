@@ -2586,7 +2586,17 @@ func (h *Handler) buildSearch(ctx context.Context, query string, limit int) (res
 		slog.Warn("abs: search source unavailable, serving that list empty", "source", what, "query", logger.SanitizeLogValue(query), "err", err)
 	}
 
-	books, err := h.library.SearchBooks(query, limit, 0)
+	// 🔴 VISIBLE BOOKS ONLY, FILTERED INSIDE THE SCAN (item-6 B6, 2026-09-19).
+	// This called SearchBooks, which applies no visibility filter at all, so
+	// search served the rows /items deliberately hides: merge losers, non-primary
+	// copies, iTunes-source rows, soft-deleted books. A merge loser's sync id is a
+	// REDIRECT record, so GET /api/items/<hit id> answered a different id — 96 of
+	// 652 prod search hits (14.7%), and 89% of self-resolving hits were books the
+	// library tab does not show. The filter is absItemFilterBase, the exact
+	// predicate /items uses, and it runs before a match counts toward limit: a
+	// post-filtered limit-capped result would return fewer hits than limit, often
+	// none, while visible matches exist.
+	books, err := h.library.SearchBooksFiltered(query, limit, 0, absItemFilterBase())
 	if err != nil {
 		return nil, false, err
 	}

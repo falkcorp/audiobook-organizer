@@ -1,13 +1,14 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-09-08
+// last-edited: 2026-09-19
 
 package abs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,6 +117,7 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 	}
 
 	out := make([]itemView, len(books))
+	dropped := make([]bool, len(books))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i := range books {
@@ -124,6 +126,10 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 				return gctx.Err()
 			}
 			view, err := h.loadOneItemView(&books[i], authorsByBook[books[i].ID], narratorsByBook[books[i].ID], seriesByID)
+			if errors.Is(err, errRedirectedSyncID) {
+				dropped[i] = true
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -134,8 +140,26 @@ func (h *Handler) loadItemViews(ctx context.Context, books []database.Book) ([]i
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	return out, nil
+	kept := out[:0]
+	for i := range out {
+		if !dropped[i] {
+			kept = append(kept, out[i])
+		}
+	}
+	return kept, nil
 }
+
+// errRedirectedSyncID marks a book whose sync id is a merge REDIRECT: the book
+// lost a merge, and its sync item now forwards to the survivor's.
+//
+// 🔴 SUCH A BOOK MUST NEVER BE RENDERED AS AN ITEM (item-6 B6, 2026-09-19). Its
+// libraryItemId would be the redirect id, so GET /api/items/<that id> answers a
+// DIFFERENT id (the survivor's), and progress, bookmarks and downloads keyed by
+// the rendered id land on another book. The ABS search did exactly this for 96
+// of 652 prod hits. List callers (search, collections, playlists, sessions,
+// personalized shelves) DROP the book; the single-item route is unaffected
+// because it starts from the client's id and resolves forward to the survivor.
+var errRedirectedSyncID = errors.New("abs: book's sync id redirects to another item (merge loser)")
 
 // loadItemView is the single-book path (GET /api/items/:id, play sessions).
 func (h *Handler) loadItemView(ctx context.Context, book *database.Book) (*itemView, error) {
@@ -158,6 +182,12 @@ func (h *Handler) loadOneItemView(
 	syncID, err := h.identity.MintOrGetSyncID(book.ID)
 	if err != nil {
 		return nil, fmt.Errorf("mint sync id for %s: %w", book.ID, err)
+	}
+	// One point-get per item. A resolve ERROR is not treated as a redirect: the
+	// id is then no worse than it was before this guard existed, and failing the
+	// whole page over one unreadable sync record would blank the client's grid.
+	if item, rerr := h.identity.ResolveSyncItem(syncID); rerr == nil && item != nil && item.SyncID != syncID {
+		return nil, errRedirectedSyncID
 	}
 
 	files, err := h.library.GetBookFiles(book.ID)
@@ -912,9 +942,31 @@ func itemMissing(v *itemView) bool {
 
 // itemDir is the directory that holds the book, which is what ABS reports as the
 // item path.
+//
+// 🔴 THE PATH COMES FROM A PRESENT TRACK WHEN THE BOOK HAS ONE (item-6 S4,
+// 2026-09-19). It used to be the first track in playback order even when that
+// row was missing=true — a stale organize-destination row. For the B6 book that
+// put a "Reckoners - 2 - Firefight" directory on a White Sand item and made an
+// id bug look like cross-book corruption. Preference: a file the DB does not
+// flag missing AND that exists on disk, then one not flagged missing, then the
+// first track, then the book's own path.
 func itemDir(v *itemView) string {
-	if len(v.Files) > 0 && v.Files[0].File.FilePath != "" {
-		return filepath.Dir(v.Files[0].File.FilePath)
+	pick := func(ok func(f *fileView) bool) string {
+		for i := range v.Files {
+			if f := &v.Files[i]; f.File.FilePath != "" && ok(f) {
+				return filepath.Dir(f.File.FilePath)
+			}
+		}
+		return ""
+	}
+	if dir := pick(func(f *fileView) bool { return !f.File.Missing && f.Exists }); dir != "" {
+		return dir
+	}
+	if dir := pick(func(f *fileView) bool { return !f.File.Missing }); dir != "" {
+		return dir
+	}
+	if dir := pick(func(*fileView) bool { return true }); dir != "" {
+		return dir
 	}
 	if v.Book.FilePath != "" {
 		return filepath.Dir(v.Book.FilePath)

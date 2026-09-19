@@ -750,15 +750,74 @@ func (f *fakeLibrary) MintOrGetSyncID(bookID string) (string, error) {
 	return id, nil
 }
 
+// ResolveSyncItem follows RedirectTo like PebbleStore.ResolveSyncItem (bounded
+// hops), so a merge loser's id resolves to the SURVIVOR's record — the property
+// the redirect guard in loadOneItemView tests against.
 func (f *fakeLibrary) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	it, ok := f.syncItems[syncID]
-	if !ok {
-		return nil, nil
+	current := syncID
+	for range 10 {
+		it, ok := f.syncItems[current]
+		if !ok {
+			if current == syncID {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("dangling sync redirect from %s", syncID)
+		}
+		if it.RedirectTo == "" {
+			cp := *it
+			return &cp, nil
+		}
+		current = it.RedirectTo
 	}
-	cp := *it
-	return &cp, nil
+	return nil, fmt.Errorf("sync redirect chain too long from %s", syncID)
+}
+
+// mergeLoser records loserBookID as merged into winnerBookID the way
+// RecordSyncMerge does: the loser keeps its sync id (the reverse index stays),
+// but that id's record becomes a redirect to the winner's.
+func (f *fakeLibrary) mergeLoser(t *testing.T, loserBookID, winnerBookID string) (loserSync, winnerSync string) {
+	t.Helper()
+	loserSync, err := f.MintOrGetSyncID(loserBookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winnerSync, err = f.MintOrGetSyncID(winnerBookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it := f.syncItems[loserSync]
+	it.CurrentBookID = ""
+	it.RedirectTo = winnerSync
+	return loserSync, winnerSync
+}
+
+// SearchBooksFiltered mirrors the store: the visibility filter is applied
+// BEFORE a match counts toward limit.
+func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl database.BookSummaryFilter) ([]database.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.searchScans++
+	q := strings.ToLower(query)
+	out := []database.Book{}
+	count := 0
+	for _, id := range f.order {
+		b := f.books[id]
+		if !f.matchesFilter(b, database.BookSummary{}, fl) || !strings.Contains(strings.ToLower(b.Title), q) {
+			continue
+		}
+		if count >= offset && (limit <= 0 || len(out) < limit) {
+			out = append(out, *b)
+		}
+		count++
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 // MintOrGetSyncFileIDs mirrors the real store's batch form. It delegates to the
