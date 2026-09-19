@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/gate.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 35b498ed-d496-4677-81eb-adf09304d580
 // last-edited: 2026-09-19
 
@@ -284,6 +284,9 @@ func (w *worker) recheck() error {
 			return err
 		}
 	}
-	_, err := w.checkCalibrationFiles(w.calib)
+	w.calibMu.Lock()
+	cfs := w.calib
+	w.calibMu.Unlock()
+	_, err := w.checkCalibrationFiles(cfs)
 	return err
 }

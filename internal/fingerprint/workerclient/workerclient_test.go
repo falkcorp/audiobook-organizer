@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -70,6 +70,7 @@ type fakeServer struct {
 	hello        workerapi.HelloResponse
 	helloScript  []workerapi.HelloResponse // answered, in order, before hello
 	helloQueries []url.Values
+	runID        string // the live run; lease and results must echo it
 	pending      []workerapi.Job
 	leaseScript  []int // statuses answered to lease before any job is served
 	nLease       int
@@ -113,7 +114,9 @@ func (s *fakeServer) handler() http.Handler {
 			writeJSON(w, h)
 			return
 		}
-		writeJSON(w, s.hello)
+		h := s.hello
+		h.RunID = s.runID
+		writeJSON(w, h)
 	}))
 	mux.HandleFunc("POST "+p+"/lease", auth(func(w http.ResponseWriter, r *http.Request) {
 		var req workerapi.LeaseRequest
@@ -125,6 +128,10 @@ func (s *fakeServer) handler() http.Handler {
 		defer s.mu.Unlock()
 		s.leaseCalls++
 		s.leaseReqs = append(s.leaseReqs, req)
+		if req.RunID != s.runID {
+			writeRunChanged(w)
+			return
+		}
 		if len(s.leaseScript) > 0 {
 			st := s.leaseScript[0]
 			s.leaseScript = s.leaseScript[1:]
@@ -171,6 +178,11 @@ func (s *fakeServer) handler() http.Handler {
 			return
 		}
 		s.mu.Lock()
+		if req.RunID != s.runID {
+			s.mu.Unlock()
+			writeRunChanged(w)
+			return
+		}
 		s.resultPosts++
 		s.results = append(s.results, req.Results...)
 		resp := workerapi.ResultsResponse{}
@@ -184,6 +196,13 @@ func (s *fakeServer) handler() http.Handler {
 		}
 	}))
 	return mux
+}
+
+// writeRunChanged answers like the real handler for ErrRunChanged.
+func writeRunChanged(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": workerapi.ErrRunChanged.Error()})
 }
 
 func (s *fakeServer) nResults() int {
@@ -212,7 +231,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &testEnv{t: t, mount: mount, srv: &fakeServer{t: t, resultsCh: make(chan struct{}, 100)}}
+	e := &testEnv{t: t, mount: mount, srv: &fakeServer{t: t, resultsCh: make(chan struct{}, 100), runID: "run-1"}}
 	calContent := []byte(strings.Repeat("calibration audio ", 5000)) // > 64 KiB
 	calRel := "Author/Calibration Book/part1.m4b"
 	fi := e.writeFile(calRel, calContent)
@@ -780,7 +799,8 @@ func newTestWorker(t *testing.T, e *testEnv) *worker {
 	}
 	w := &worker{cfg: cfg, api: &apiClient{base: base, key: cfg.APIKey, hc: cfg.HTTPClient}, roots: roots,
 		sem: make(chan struct{}, 1), wake: make(chan struct{}, 1), recheckC: make(chan struct{}, 1),
-		stop: make(chan struct{}), maxBatchBytes: workerapi.MaxBodyBytes - bodyMargin}
+		stop: make(chan struct{}), maxBatchBytes: workerapi.MaxBodyBytes - bodyMargin,
+		runID: e.srv.runID} // as if it had said hello to the live run
 	w.tally.statuses = map[string]int{}
 	w.tally.outcomes = map[string]int{}
 	return w
@@ -1124,5 +1144,32 @@ func TestRun_BootstrapWrongMountRefuses(t *testing.T) {
 				t.Errorf("leased %d times", n)
 			}
 		})
+	}
+}
+
+// TestRun_RunChangedHellosAgainAndReGates: when the server's run changes, the
+// lease answer is ErrRunChanged; the worker says hello again, passes the new
+// run's gate, and leases under the new run ID instead of exiting.
+func TestRun_RunChangedHellosAgainAndReGates(t *testing.T) {
+	e := newTestEnv(t)
+	e.addJob("A/one.mp3", []byte("first run"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	e.srv.mu.Lock()
+	e.srv.runID = "run-2"
+	e.srv.mu.Unlock()
+	e.addJob("A/two.mp3", []byte("second run"))
+	e.waitResults(2, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if len(e.srv.helloQueries) < 2 {
+		t.Fatalf("%d hellos; the worker must hello again after the run changed", len(e.srv.helloQueries))
+	}
+	if last := e.srv.leaseReqs[len(e.srv.leaseReqs)-1]; last.RunID != "run-2" {
+		t.Errorf("last lease under run %q, want run-2", last.RunID)
 	}
 }

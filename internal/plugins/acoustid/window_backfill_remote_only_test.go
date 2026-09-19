@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
 // last-edited: 2026-09-19
 
@@ -109,7 +109,7 @@ func refLeaseReq(worker string, n int) workerapi.LeaseRequest {
 func fakeRefWorker(ctx context.Context, hub *WorkerHub, decide func(workerapi.Job) workerapi.JobResult) {
 	helloUntilReady(ctx, hub, "mac1")
 	for ctx.Err() == nil {
-		resp, err := hub.Lease(ctx, refLeaseReq("mac1", 4))
+		resp, err := hub.Lease(ctx, withRunL(hub, refLeaseReq("mac1", 4)))
 		if err != nil || resp == nil {
 			time.Sleep(2 * time.Millisecond)
 			continue
@@ -118,7 +118,7 @@ func fakeRefWorker(ctx context.Context, hub *WorkerHub, decide func(workerapi.Jo
 		for _, j := range resp.Jobs {
 			rs = append(rs, decide(j))
 		}
-		_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: rs})
+		_, _ = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "mac1", Results: rs}))
 	}
 }
 
@@ -334,16 +334,16 @@ func TestWindowBackfill_RemoteOnly_ReferencePairIsTheClassNotTheServerPair(t *te
 	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.NoError(t, err)
 	require.NotContains(t, hello.ToolVersions, workerapi.ToolVersions{Fpcalc: e.tools.Versions.Fpcalc, FFmpeg: e.tools.Versions.FFmpeg})
-	_, err = h.hub.Lease(context.Background(), h.leaseReq("srv", 1))
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, h.leaseReq("srv", 1)))
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "the server's own pair may not lease in remote-only")
 	req := refLeaseReq("allowed", 1)
 	req.FpcalcVersion, req.FFmpegVersion = allow.Fpcalc, allow.FFmpeg
-	_, err = h.hub.Lease(context.Background(), req)
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, req))
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "no reference windows yet: an allowlisted pair has nothing to be parity-checked against")
 	boot, err := h.hub.Hello(context.Background(), refHello("ref"))
 	require.NoError(t, err)
 	require.True(t, boot.Bootstrap)
-	resp, err := h.hub.Lease(context.Background(), refLeaseReq("ref", 1))
+	resp, err := h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq("ref", 1)))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Len(t, resp.Jobs, 1)
@@ -390,7 +390,7 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 	}
 
 	// The reference worker writes one file.
-	resp, err := h.hub.Lease(context.Background(), refLeaseReq("mac1", 1))
+	resp, err := h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq("mac1", 1)))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	st := h.post("mac1", refResult(h, resp.Jobs[0], 3))
@@ -411,7 +411,7 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 
 	req := refLeaseReq("allowed", 1)
 	req.FpcalcVersion, req.FFmpegVersion = allow.Fpcalc, allow.FFmpeg
-	_, err = h.hub.Lease(context.Background(), req)
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, req))
 	require.NoError(t, err, "with reference windows offered, an allowlisted pair may lease after its parity gate")
 }
 
@@ -464,29 +464,29 @@ func TestWindowBackfill_RemoteOnly_HeartbeatWhileAHeadLeaseIsStuck(t *testing.T)
 		}
 		var resp *workerapi.LeaseResponse
 		for ctx.Err() == nil && resp == nil {
-			resp, _ = hub.Lease(ctx, refLeaseReq("A", 8))
+			resp, _ = hub.Lease(ctx, withRunL(hub, refLeaseReq("A", 8)))
 		}
 		if resp == nil {
 			return
 		}
 		last := resp.Jobs[len(resp.Jobs)-1]
-		_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "A", Results: []workerapi.JobResult{refResult(h, last, 1)}})
+		_, _ = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "A", Results: []workerapi.JobResult{refResult(h, last, 1)}}))
 		// B works through everything else, one file every 2 ms.
 		helloUntilReady(ctx, hub, "B")
 		start := rep.beats.Load()
 		for ctx.Err() == nil {
-			r, err := hub.Lease(ctx, refLeaseReq("B", 1))
+			r, err := hub.Lease(ctx, withRunL(hub, refLeaseReq("B", 1)))
 			if err != nil || r == nil {
 				break // only A's stuck files are left
 			}
-			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "B", Results: []workerapi.JobResult{refResult(h, r.Jobs[0], 2)}})
+			_, _ = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "B", Results: []workerapi.JobResult{refResult(h, r.Jobs[0], 2)}}))
 			time.Sleep(2 * time.Millisecond)
 		}
 		beatsWhileStuck.Store(rep.beats.Load() - start)
 		// A's lease expires; the sweep hands its files back and B does them.
 		clock.advance(workerapi.LeaseTTL + time.Second)
 		for ctx.Err() == nil {
-			r, err := hub.Lease(ctx, refLeaseReq("B", 4))
+			r, err := hub.Lease(ctx, withRunL(hub, refLeaseReq("B", 4)))
 			if err != nil || r == nil {
 				time.Sleep(2 * time.Millisecond)
 				continue
@@ -495,7 +495,7 @@ func TestWindowBackfill_RemoteOnly_HeartbeatWhileAHeadLeaseIsStuck(t *testing.T)
 			for _, j := range r.Jobs {
 				rs = append(rs, refResult(h, j, 3))
 			}
-			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "B", Results: rs})
+			_, _ = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "B", Results: rs}))
 		}
 	}()
 	res, err := e.plugin.windowBackfill(ctx, rep, WindowBackfillParams{Live: true, RemoteOnly: true, Concurrency: 4})
@@ -545,9 +545,9 @@ func TestWorkerHub_RemoteOnly_OneBootstrapClaimAtATime(t *testing.T) {
 	require.True(t, r.ReferencePending)
 	require.False(t, r.Bootstrap)
 
-	_, err = h.hub.Lease(context.Background(), refLeaseReq(other, 1))
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq(other, 1)))
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "only the claimant may lease during the bootstrap")
-	resp, err := h.hub.Lease(context.Background(), refLeaseReq(claimant, 1))
+	resp, err := h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq(claimant, 1)))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -556,7 +556,7 @@ func TestWorkerHub_RemoteOnly_OneBootstrapClaimAtATime(t *testing.T) {
 	r, err = h.hub.Hello(context.Background(), refHello(other))
 	require.NoError(t, err)
 	require.True(t, r.Bootstrap, "a lapsed claim must pass to the next reference-pair worker")
-	_, err = h.hub.Lease(context.Background(), refLeaseReq(claimant, 1))
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq(claimant, 1)))
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "the lapsed claimant may not lease without reference windows")
 }
 
@@ -709,10 +709,10 @@ func TestWindowBackfill_RemoteOnly_WorkerGapShorterThanTTLDoesNotFail(t *testing
 	h := &hubEnv{wbEnv: e, hub: hub, clock: clock}
 	one := func() {
 		t.Helper()
-		resp, err := hub.Lease(ctx, refLeaseReq("mac1", 1))
+		resp, err := hub.Lease(ctx, withRunL(hub, refLeaseReq("mac1", 1)))
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		_, err = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}})
+		_, err = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}}))
 		require.NoError(t, err)
 	}
 	require.NotNil(t, helloUntilReady(ctx, hub, "mac1"))
@@ -742,31 +742,32 @@ func TestWorkerHub_RemoteOnly_SlowHelloDoesNotStallResults(t *testing.T) {
 	gate := make(chan struct{})
 	var release sync.Once
 	entered := make(chan struct{}, 1)
-	prev := calibHeadSHA256
-	calibHeadSHA256 = func(p string) (string, error) {
+	// Injected into this run only (no package global), before the hello
+	// goroutine starts, so nothing races the reads.
+	h.hub.mu.Lock()
+	run := h.hub.run
+	h.hub.mu.Unlock()
+	run.headHash = func(p string) (string, error) {
 		select {
 		case entered <- struct{}{}:
 		default:
 		}
 		<-gate
-		return prev(p)
+		return headSHA256(p)
 	}
-	t.Cleanup(func() {
-		release.Do(func() { close(gate) })
-		calibHeadSHA256 = prev
-	})
+	t.Cleanup(func() { release.Do(func() { close(gate) }) })
 	go func() { _, _ = h.hub.Hello(context.Background(), refHello("mac1")) }()
 	<-entered // the hello is now stuck reading a calibration file
 
 	done := make(chan error, 1)
 	go func() {
-		resp, err := h.hub.Lease(context.Background(), refLeaseReq("mac1", 1))
+		resp, err := h.hub.Lease(context.Background(), withRunL(h.hub, refLeaseReq("mac1", 1)))
 		if err != nil || resp == nil {
 			done <- fmt.Errorf("lease: %v", err)
 			return
 		}
-		st, err := h.hub.Results(context.Background(), workerapi.ResultsRequest{WorkerID: "mac1",
-			Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}})
+		st, err := h.hub.Results(context.Background(), withRunS(h.hub, workerapi.ResultsRequest{WorkerID: "mac1",
+			Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}}))
 		if err == nil && st.Statuses[0].Status != workerapi.StatusAccepted {
 			err = fmt.Errorf("status %+v", st.Statuses[0])
 		}
@@ -802,7 +803,7 @@ func TestWorkerHub_RemoteOnly_SupersededBootstrapWorkerCannotWrite(t *testing.T)
 	r, err := h.hub.Hello(ctx, refHello("macA"))
 	require.NoError(t, err)
 	require.True(t, r.Bootstrap)
-	leaseA, err := h.hub.Lease(ctx, refLeaseReq("macA", 2))
+	leaseA, err := h.hub.Lease(ctx, withRunL(h.hub, refLeaseReq("macA", 2)))
 	require.NoError(t, err)
 	require.Len(t, leaseA.Jobs, 2)
 
@@ -821,20 +822,20 @@ func TestWorkerHub_RemoteOnly_SupersededBootstrapWorkerCannotWrite(t *testing.T)
 		require.Empty(t, h.windows(h.fileID(j)), "macA's unchecked prints were stored")
 	}
 
-	leaseB, err := h.hub.Lease(ctx, refLeaseReq("llmB", 2))
+	leaseB, err := h.hub.Lease(ctx, withRunL(h.hub, refLeaseReq("llmB", 2)))
 	require.NoError(t, err)
 	require.NotNil(t, leaseB)
 	st = h.post("llmB", refResult(h, leaseB.Jobs[0], 2))
 	require.Equal(t, workerapi.StatusAccepted, st[0].Status, st[0].Reason)
 
-	_, err = h.hub.Lease(ctx, refLeaseReq("macA", 1))
+	_, err = h.hub.Lease(ctx, withRunL(h.hub, refLeaseReq("macA", 1)))
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "macA bootstrapped under a claim that did not define the reference")
 	r, err = h.hub.Hello(ctx, refHello("macA"))
 	require.NoError(t, err)
 	require.False(t, r.Bootstrap)
 	require.NotEmpty(t, r.Calibration)
 	require.NotEmpty(t, r.Calibration[0].Windows, "macA must now pass parity against llmB's windows")
-	resp, err := h.hub.Lease(ctx, refLeaseReq("macA", 1))
+	resp, err := h.hub.Lease(ctx, withRunL(h.hub, refLeaseReq("macA", 1)))
 	require.NoError(t, err, "after the real calibration macA may lease")
 	require.NotNil(t, resp)
 }
@@ -855,7 +856,7 @@ func TestWorkerHub_RemoteOnly_WrongPairLeaseDoesNotKeepTheClaim(t *testing.T) {
 	h.clock.advance(workerapi.LeaseTTL - time.Minute)
 	bad := refLeaseReq("mac1", 1)
 	bad.FpcalcVersion, bad.FFmpegVersion = "0.0", "0.0"
-	_, err = h.hub.Lease(ctx, bad)
+	_, err = h.hub.Lease(ctx, withRunL(h.hub, bad))
 	require.ErrorIs(t, err, ErrToolsNotAllowed)
 	h.clock.advance(2 * time.Minute)
 	r, err = h.hub.Hello(ctx, refHello("llm1"))
@@ -983,4 +984,67 @@ func TestWindowBackfill_RemoteOnly_RebootstrapReferenceIsTheDeliberateEscape(t *
 			require.Equal(t, !tc.wantBoot, r.ReferencePending)
 		})
 	}
+}
+
+// ---- review round 3 ----
+
+// TestWorkerHub_RemoteOnly_NewRunRequiresHelloAgain is the reviewer's
+// detach/attach probe: macA bootstrapped in run 1 but did not define the
+// reference (llmB did). A new run attaches (restart or resume); macA, which
+// says hello only at startup, keeps leasing with run 1's ID. Every call is
+// refused as a run change until macA hellos the new run and gets the real
+// calibration to pass; a worker that sends no run ID is refused the same way.
+func TestWorkerHub_RemoteOnly_NewRunRequiresHelloAgain(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	for i := range 4 {
+		e.addFileWith("", fmt.Sprintf("lib/r%d.m4b", i), fakeAudio(3600, 70<<10), 3600)
+	}
+	h := attachRemoteOnlyHub(t, e)
+	ctx := context.Background()
+	helloA, err := h.hub.Hello(ctx, refHello("macA"))
+	require.NoError(t, err)
+	require.True(t, helloA.Bootstrap)
+	runA := helloA.RunID
+	require.NotEmpty(t, runA)
+	reqA := refLeaseReq("macA", 2)
+	reqA.RunID = runA
+	leaseA, err := h.hub.Lease(ctx, reqA)
+	require.NoError(t, err)
+	require.NotNil(t, leaseA)
+	h.clock.advance(workerapi.LeaseTTL + time.Second)
+	h.hub.sweep()
+	r, err := h.hub.Hello(ctx, refHello("llmB"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap)
+	leaseB, err := h.hub.Lease(ctx, withRunL(h.hub, refLeaseReq("llmB", 1)))
+	require.NoError(t, err)
+	require.Equal(t, workerapi.StatusAccepted, h.post("llmB", refResult(h, leaseB.Jobs[0], 2))[0].Status)
+
+	// The run ends and a new one attaches.
+	h.hub.detach()
+	h2 := attachRemoteOnlyHub(t, e)
+	_, err = h2.hub.Lease(ctx, reqA)
+	require.ErrorIs(t, err, ErrRunChanged, "a worker gated in an earlier run must hello again")
+	old := reqA
+	old.RunID = ""
+	_, err = h2.hub.Lease(ctx, old)
+	require.ErrorIs(t, err, ErrRunChanged, "a worker that predates run IDs is refused the same way")
+	_, err = h2.hub.Renew(leaseA.LeaseID, workerapi.RenewRequest{WorkerID: "macA", RunID: runA})
+	require.ErrorIs(t, err, ErrRunChanged)
+	_, err = h2.hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "macA", RunID: runA,
+		Results: []workerapi.JobResult{refResult(h, leaseA.Jobs[1], 9)}})
+	require.ErrorIs(t, err, ErrRunChanged)
+
+	hello2, err := h2.hub.Hello(ctx, refHello("macA"))
+	require.NoError(t, err)
+	require.NotEqual(t, runA, hello2.RunID)
+	require.False(t, hello2.Bootstrap)
+	require.NotEmpty(t, hello2.Calibration)
+	require.NotEmpty(t, hello2.Calibration[0].Windows, "macA must pass parity against the reference in the new run")
+	reqA.RunID = hello2.RunID
+	resp, err := h2.hub.Lease(ctx, reqA)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
 }

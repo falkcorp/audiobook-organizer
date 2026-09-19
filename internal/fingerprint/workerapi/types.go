@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
 // last-edited: 2026-09-19
 
@@ -24,6 +24,12 @@ import (
 var (
 	// ErrNoRun: no live acoustid.window-backfill is running (503).
 	ErrNoRun = errors.New("fingerprint worker: acoustid.window-backfill is not running")
+	// ErrRunChanged: the request's run_id is not the live run's (a new run
+	// attached, or the caller predates run IDs). Sent as 409 with
+	// RunChangedMarker in the message: an fp-worker that knows the marker
+	// says hello again and re-runs its startup gate against the new run; one
+	// that predates it treats 409 as fatal and exits, which is also safe.
+	ErrRunChanged = errors.New(RunChangedMarker + ": the window backfill run changed; hello again and pass the startup gate before leasing")
 	// ErrLeaseGone: the lease expired, was reclaimed, or never existed (410).
 	ErrLeaseGone = errors.New("fingerprint worker: lease expired or reclaimed")
 	// ErrToolsNotAllowed: pipeline or tool versions not allowlisted (409).
@@ -146,7 +152,15 @@ type HelloResponse struct {
 	// call hello again, not exit. Waiting says why.
 	ReferencePending bool   `json:"reference_pending,omitempty"`
 	Waiting          string `json:"waiting,omitempty"`
+	// RunID identifies the live run. Lease, renew and results must echo it:
+	// the bootstrap claim and every "this worker passed its gate" fact live
+	// in one run's memory, so a worker must hello (and pass the gate) again
+	// for each run.
+	RunID string `json:"run_id,omitempty"`
 }
+
+// RunChangedMarker opens ErrRunChanged's message.
+const RunChangedMarker = "run_changed"
 
 // HelloRequest identifies the caller of GET hello, sent as the query
 // parameters worker_id, fpcalc_version and ffmpeg_version. All optional for
@@ -176,6 +190,8 @@ type Limits struct {
 
 // LeaseRequest is the body of POST lease.
 type LeaseRequest struct {
+	// RunID echoes HelloResponse.RunID (ErrRunChanged when stale or empty).
+	RunID         string `json:"run_id,omitempty"`
 	WorkerID      string `json:"worker_id"`
 	MaxJobs       int    `json:"max_jobs"`
 	FpcalcVersion string `json:"fpcalc_version"`
@@ -218,6 +234,7 @@ type LeaseResponse struct {
 // holds the lease may renew it.
 type RenewRequest struct {
 	WorkerID string `json:"worker_id"`
+	RunID    string `json:"run_id,omitempty"`
 }
 
 // RenewResponse answers POST lease/{id}/renew.
@@ -263,6 +280,7 @@ type JobResult struct {
 
 // ResultsRequest is the body of POST results.
 type ResultsRequest struct {
+	RunID    string      `json:"run_id,omitempty"`
 	WorkerID string      `json:"worker_id"`
 	LeaseID  string      `json:"lease_id"`
 	Results  []JobResult `json:"results"`

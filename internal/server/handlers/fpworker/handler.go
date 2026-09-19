@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 561e8ac1-7cd0-46f4-8b06-e0461af0be94
 // last-edited: 2026-09-19
 
@@ -121,6 +121,8 @@ func (h *Handler) respondErr(c *gin.Context, err error) {
 		httputil.RespondWithServiceUnavailable(c, workerapi.ErrNoRun.Error())
 	case errors.Is(err, workerapi.ErrLeaseGone):
 		httputil.RespondWithError(c, http.StatusGone, workerapi.ErrLeaseGone.Error(), "LEASE_GONE")
+	case errors.Is(err, workerapi.ErrRunChanged):
+		httputil.RespondWithError(c, http.StatusConflict, workerapi.ErrRunChanged.Error(), "RUN_CHANGED")
 	case errors.Is(err, workerapi.ErrToolsNotAllowed):
 		httputil.RespondWithError(c, http.StatusConflict, workerapi.ErrToolsNotAllowed.Error(), "TOOLS_NOT_ALLOWED")
 	case errors.Is(err, workerapi.ErrTooManyLeases):

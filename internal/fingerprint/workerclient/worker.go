@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
 // last-edited: 2026-09-19
 
@@ -61,7 +61,13 @@ type worker struct {
 	cfg   Config
 	api   *apiClient
 	roots map[string]string // root name -> resolved local mount
-	calib []workerapi.CalibrationFile
+	// calib is read by the re-check goroutine and replaced by admit after a
+	// run change, so it is guarded by calibMu.
+	calibMu sync.Mutex
+	calib   []workerapi.CalibrationFile
+	// runID is the server run this worker passed its gate for (hello).
+	// Written by admit only while no lease goroutine runs; read by them.
+	runID string
 
 	maxBatchBytes int
 	renewEvery    time.Duration
@@ -149,8 +155,43 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 	if hello == nil {
 		return nil // drained before the server had a run to serve
 	}
-	if err := w.checkHello(hello); err != nil {
+	if drained, err := w.admit(ctx, hello); err != nil || drained {
 		return err
+	}
+
+	go w.recheckLoop(ctx)
+	for w.loop(ctx) {
+		// The server's run changed (a restart, a resumed or new run): the
+		// gate this worker passed belongs to the old run. Hello again and
+		// pass the new run's gate before leasing anything.
+		log.Warn("the window backfill run changed on the server; saying hello again and re-running the startup gate")
+		hello, err := w.helloWithRetry(ctx)
+		if err != nil {
+			return err
+		}
+		if hello == nil {
+			break // drained
+		}
+		drained, err := w.admit(ctx, hello)
+		if err != nil {
+			return err
+		}
+		if drained {
+			break
+		}
+	}
+	w.logTally()
+	return w.fatalErr()
+}
+
+// admit is the startup gate for one server run: hello checks, limits, the
+// calibration identity checks and the parity cut (or the bootstrap). It
+// records the run ID the worker then leases under. drained is true when a
+// drain arrived during the parity cut.
+func (w *worker) admit(ctx context.Context, hello *workerapi.HelloResponse) (drained bool, err error) {
+	cfg := w.cfg
+	if err := w.checkHello(hello); err != nil {
+		return false, err
 	}
 	w.maxBatchBytes = workerapi.MaxBodyBytes - bodyMargin
 	if hello.Limits.MaxBodyBytes > 2*bodyMargin && hello.Limits.MaxBodyBytes-bodyMargin < w.maxBatchBytes {
@@ -170,15 +211,17 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 
 	cfs, bootstrap, err := w.calibrationTargets(hello)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// The identity checks run in every mode, bootstrap included: they are
 	// what proves the root mapping points at the server's tree.
 	paths, err := w.checkCalibrationFiles(cfs)
 	if err != nil {
-		return err
+		return false, err
 	}
+	w.calibMu.Lock()
 	w.calib = cfs
+	w.calibMu.Unlock()
 	if bootstrap {
 		log.Warn("!!! BOOTSTRAP REFERENCE: the server has no reference windows yet and this worker (fpcalc %s + ffmpeg %s) is the configured reference pair. "+
 			"Its root mapping was verified on %d calibration file(s), but NO byte-parity check ran: the windows it cuts DEFINE the reference every later worker must reproduce",
@@ -187,9 +230,9 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 		if err := w.parity(ctx, cfs, paths, hello.WindowSet); err != nil {
 			if errors.Is(err, errDrained) {
 				log.Info("drained during the parity gate; nothing was leased")
-				return nil
+				return true, nil
 			}
-			return err
+			return false, err
 		}
 		nWin := 0
 		for _, cf := range cfs {
@@ -197,11 +240,15 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 		}
 		log.Info("parity gate passed: %d calibration windows over %d files reproduced byte for byte", nWin, len(cfs))
 	}
+	w.runID = hello.RunID
+	return false, nil
+}
 
-	go w.recheckLoop(ctx)
-	w.loop(ctx)
-	w.logTally()
-	return w.fatalErr()
+// isRunChanged reports the server's ErrRunChanged answer (409 with the
+// run_changed marker), which is not fatal: the worker says hello again.
+func isRunChanged(st int, err error) bool {
+	var ae *apiError
+	return st == http.StatusConflict && errors.As(err, &ae) && strings.HasPrefix(ae.Message, workerapi.RunChangedMarker)
 }
 
 func (w *worker) beginStop() { w.stopOnce.Do(func() { close(w.stop) }) }
@@ -356,7 +403,10 @@ func (w *worker) recheckLoop(ctx context.Context) {
 // new one only once fewer than Concurrency leased jobs are still waiting to
 // start, so the worker keeps a short backlog without hoarding jobs other
 // workers (and the server lane) could run.
-func (w *worker) loop(ctx context.Context) {
+//
+// runChanged is true when the server answered a lease with ErrRunChanged:
+// loop returns once every lease in flight has finished, and Run re-admits.
+func (w *worker) loop(ctx context.Context) (runChanged bool) {
 	var wg sync.WaitGroup
 	leaseDone := make(chan struct{}, w.maxLeases)
 	held := 0
@@ -380,7 +430,7 @@ func (w *worker) loop(ctx context.Context) {
 		resp, st, err := w.api.lease(ctx, workerapi.LeaseRequest{
 			WorkerID: w.cfg.WorkerID, MaxJobs: w.cfg.MaxJobs,
 			FpcalcVersion: w.cfg.Versions.Fpcalc, FFmpegVersion: w.cfg.Versions.FFmpeg,
-			Pipeline: fingerprint.WindowPipelineID,
+			Pipeline: fingerprint.WindowPipelineID, RunID: w.runID,
 		})
 		if err == nil && resp != nil && len(resp.Jobs) > 0 {
 			attempt = 0
@@ -394,6 +444,9 @@ func (w *worker) loop(ctx context.Context) {
 				leaseDone <- struct{}{}
 			}()
 			continue
+		}
+		if isRunChanged(st, err) {
+			return true
 		}
 		if fatal := fatalStatus(st, err); fatal != nil {
 			w.fail(fatal)
@@ -523,7 +576,7 @@ func (w *worker) renewLoop(ctx context.Context, ls *leaseState) {
 			return
 		case <-t.C:
 		}
-		st, err := w.api.renew(ctx, ls.id, workerapi.RenewRequest{WorkerID: w.cfg.WorkerID})
+		st, err := w.api.renew(ctx, ls.id, workerapi.RenewRequest{WorkerID: w.cfg.WorkerID, RunID: w.runID})
 		switch {
 		case err == nil:
 			log.Debug("lease %s renewed", ls.id)
@@ -532,6 +585,10 @@ func (w *worker) renewLoop(ctx context.Context, ls *leaseState) {
 			ls.gone.Store(true)
 			return
 		case ctx.Err() != nil:
+			return
+		case isRunChanged(st, err):
+			log.Warn("lease %s belongs to an earlier server run; finishing jobs in flight, starting no more from it", ls.id)
+			ls.gone.Store(true)
 			return
 		default:
 			if fatal := fatalStatus(st, err); fatal != nil {
@@ -595,7 +652,7 @@ func encodedSize(r workerapi.JobResult) int {
 // Posting continues while draining (that is the point of a drain); only the
 // hard stop cuts it short.
 func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.JobResult) {
-	req := workerapi.ResultsRequest{WorkerID: w.cfg.WorkerID, LeaseID: ls.id, Results: batch}
+	req := workerapi.ResultsRequest{WorkerID: w.cfg.WorkerID, LeaseID: ls.id, Results: batch, RunID: w.runID}
 	for attempt := 0; ; attempt++ {
 		resp, st, err := w.api.results(ctx, req)
 		if err == nil {
@@ -604,6 +661,10 @@ func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.Job
 		}
 		if ctx.Err() != nil {
 			log.Warn("lease %s: hard stop; %d results not posted", ls.id, len(batch))
+			return
+		}
+		if isRunChanged(st, err) {
+			log.Warn("lease %s: the server run changed; %d results from the earlier run dropped (the server re-plans them)", ls.id, len(batch))
 			return
 		}
 		if fatal := fatalStatus(st, err); fatal != nil {
