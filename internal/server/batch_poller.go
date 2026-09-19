@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
+	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
@@ -469,8 +470,8 @@ func (s *Server) registerBatchPollerHandlers() {
 	// carried forward. To be found, an operation had to write batch_id into its
 	// legacy result_data at SUBMIT time, and only handlers.SubmitAI ever did —
 	// the other two producers already own their batches end to end:
-	// maintenance/dedup_ops.go polls its own and writes batch_id only after it
-	// completes, and aiscan/pipeline.go keeps the id on the scan-phase row that
+	// maintenance/dedup_ops.go now submits through aijobs (below), and
+	// aiscan/pipeline.go keeps the id on the scan-phase row that
 	// PollBatchPhases (registered below) collects. SubmitAI is now the diagnostics.ai-analyze
 	// OperationDef, which likewise polls its own batch, so the last caller went
 	// with it.
@@ -485,8 +486,8 @@ func (s *Server) registerBatchPollerHandlers() {
 	// type no code creates a batch with, so this dispatch never reached it and
 	// a batch scan's results were never collected. PollBatchPhases polls every
 	// scanning batch scan and is idempotent per phase, so it is safe to run for
-	// any completed batch of these types — including maintenance.ai-dedup-batch's
-	// own author_dedup batches, which match no scan phase and are left alone.
+	// any completed batch of these types, including one that matches no scan
+	// phase (it is left alone).
 	pollScans := func(ctx context.Context, batchID, outputFileID string) error {
 		if s.pipelineManager == nil {
 			return fmt.Errorf("pipeline manager not initialized")
@@ -498,6 +499,19 @@ func (s *Server) registerBatchPollerHandlers() {
 	s.batchPoller.RegisterHandler("author_dedup", pollScans)
 	// pipeline: kept for any batch still tagged with it.
 	s.batchPoller.RegisterHandler("pipeline", pollScans)
+
+	// maintenance.ai-dedup-batch submits through aijobs (type
+	// ai.AuthorDedupJobType); its callback applies through this sink, which
+	// records the suggestions as a completed AI scan so they land in the same
+	// review queue as ai.author-scan's. With no scan store the sink stays unset
+	// and the job's apply fails and is retried rather than dropping results.
+	if s.aiScanStore != nil {
+		scanStore := s.aiScanStore
+		ai.SetAuthorDedupResultSink(func(_ context.Context, sourceID string, suggestions []ai.AuthorDiscoverySuggestion) error {
+			_, err := aiscan.RecordFullScanResults(scanStore, sourceID, suggestions)
+			return err
+		})
+	}
 
 	// aijobs: unified layer for all bulk-scale LLM work. All such batches
 	// carry metadata.type="aijobs"; the per-feature routing happens inside
