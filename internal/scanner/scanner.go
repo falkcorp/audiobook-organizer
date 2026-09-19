@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.97.0
+// version: 1.98.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-18
 
 package scanner
 
@@ -3251,29 +3251,48 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// lifecycle timestamps, etc. — because UpdateBook replaces the whole row
 		// (data-loss bug).
 		//
-		// Fix (INVERT): start from the COMPLETE existing row and overlay ONLY
-		// the fields the scanner is authoritative for. Everything else survives
-		// by construction, so a newly-added Book field can never silently
-		// regress. `existing` is already loaded (GetBookByFilePath ->
-		// GetBookByID is a full-fidelity point-get), so this adds no extra DB
-		// read. Copy it first so the getter's pointer is never mutated in place.
-		merged := *existing
-		// Consult per-field provenance before overlaying: a field the user
-		// locked or explicitly set is not ours to rewrite from a file tag.
+		// Fix (INVERT): start from the COMPLETE stored row and overlay ONLY the
+		// fields the scanner is authoritative for. Everything else survives by
+		// construction, so a newly-added Book field can never silently regress.
+		//
+		// ModifyBook, not UpdateBook: the overlay has to run against the row as
+		// it stands at WRITE time. `existing` was read further up, and a
+		// metadata apply, an AI parse write-back or a maintenance op can commit
+		// in the gap between that read and this write -- on a full-library scan
+		// the gap spans everything this function does per book, and metadata
+		// applies run concurrently with scans by design. Overlaying a snapshot
+		// and writing the whole row back reverts whatever landed in between,
+		// with no error to show for it, because the write itself succeeds.
+		// Inside the callback the row is re-read under the book's write stripe,
+		// so "start from the complete existing row" is true at write time and
+		// not merely at read time.
+		//
+		// applyScannerFields is pure and lockedFieldsForBook is read outside,
+		// so the callback does no IO while the stripe is held.
 		locked, ok := lockedFieldsForBook(getStore(), existing.ID)
 		if !ok {
 			defaultLog.Warn("metadata field state unreadable for book %s (%s); "+
 				"treating every guarded field as locked so a scan cannot clobber a user edit",
 				existing.ID, existing.FilePath)
 		}
-		applyScannerFields(&merged, dbBook, locked)
-
-		_, err = getStore().UpdateBook(existing.ID, &merged)
-		if err == nil {
-			// Check for metadata hash duplicates after update
-			detectMetadataHashDuplicate(&merged, defaultLog)
+		written, uerr := getStore().ModifyBook(existing.ID, func(cur *database.Book) error {
+			applyScannerFields(cur, dbBook, locked)
+			return nil
+		})
+		if uerr != nil {
+			return uerr
 		}
-		return err
+		if written == nil {
+			// The row was deleted between the lookup above and this write. Not
+			// an error for the scan: the next scan re-imports the file.
+			defaultLog.Warn("book %s (%s) disappeared before the rescan merge could be written; skipping",
+				existing.ID, existing.FilePath)
+			return nil
+		}
+		// Check for metadata hash duplicates after update, against the row that
+		// was actually written rather than a local copy of it.
+		detectMetadataHashDuplicate(written, defaultLog)
+		return nil
 	}
 
 	return fmt.Errorf("database store not initialized")
