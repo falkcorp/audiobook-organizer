@@ -1,7 +1,7 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-08-30
+# last-edited: 2026-09-19
 #
 # /// script
 # requires-python = ">=3.11"
@@ -48,6 +48,8 @@
 #   WHISPER_PORT        port (default 19848 -- one above the CUDA server's
 #                       19847, so both can run on one host without colliding)
 
+import hashlib
+import json
 import logging
 import os
 import shutil
@@ -72,6 +74,25 @@ MODEL_REPO = (
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
     else os.environ.get("WHISPER_MLX_MODEL", DEFAULT_MODEL)
 )
+
+LANGUAGE = "en"
+CONDITION_ON_PREVIOUS_TEXT = False
+
+# DECODE_FINGERPRINT is a short hash of every setting that changes the text
+# this server returns for the same WAV bytes. The Go client folds it into the
+# whisper result-journal key (internal/transcribe/journal.go), so retuning any
+# of these -- a VAD threshold, the model, the decode path -- makes previously
+# journalled transcripts unreachable instead of being served for the new
+# configuration. Add a setting here whenever one is added to the decode call.
+DECODE_SETTINGS = {
+    "backend": "mlx",
+    "model": MODEL_REPO,
+    "language": LANGUAGE,
+    "condition_on_previous_text": CONDITION_ON_PREVIOUS_TEXT,
+}
+DECODE_FINGERPRINT = hashlib.sha256(
+    json.dumps(DECODE_SETTINGS, sort_keys=True).encode()
+).hexdigest()[:16]
 
 # Inference is serialized. MLX shares the Mac's unified memory with everything
 # else the desktop is doing, so two concurrent transcriptions do not run twice
@@ -129,12 +150,12 @@ def _transcribe_file(path: str) -> str:
         result = mlx_whisper.transcribe(
             path,
             path_or_hf_repo=MODEL_REPO,
-            language="en",
+            language=LANGUAGE,
             task="transcribe",
             # Audiobook intros are short and often start with music or a
             # publisher jingle. Conditioning on previous text makes Whisper
             # loop on those, emitting the same phrase repeatedly.
-            condition_on_previous_text=False,
+            condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
         )
     return (result.get("text") or "").strip()
 
@@ -204,6 +225,7 @@ async def health():
         "batch_pipeline": True,
         "device": "metal",
         "backend": "mlx",
+        "decode_fingerprint": DECODE_FINGERPRINT,
         # Reported because "can this worker decode audio" is a different
         # question from "is the model loaded", and only the first was ever
         # wrong. Looked up LIVE rather than frozen at import: the startup

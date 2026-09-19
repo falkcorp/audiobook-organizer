@@ -1,7 +1,7 @@
 # file: scripts/whisper_server.py
-# version: 2.10.0
+# version: 2.11.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-08-31
+# last-edited: 2026-09-19
 #
 # /// script
 # requires-python = ">=3.11"
@@ -47,7 +47,9 @@
 # typically 2-3x faster than single-chunk sequential transcription on Turing+.
 # Falls back to standard WhisperModel if the pipeline is unavailable.
 
+import hashlib
 import io
+import json
 import sys
 import logging
 from typing import List
@@ -175,6 +177,32 @@ VAD_PARAMS = {
     "min_speech_duration_ms": 200,    # default 250 — keep shorter speech fragments
 }
 
+BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", 8))
+BEAM_SIZE = 5
+LANGUAGE = "en"
+
+# DECODE_FINGERPRINT is a short hash of every setting that changes the text
+# this server returns for the same WAV bytes. The Go client folds it into the
+# whisper result-journal key (internal/transcribe/journal.go), so retuning any
+# of these -- a VAD threshold, the model, the decode path -- makes previously
+# journalled transcripts unreachable instead of being served for the new
+# configuration. Add a setting here whenever one is added to the decode call.
+DECODE_SETTINGS = {
+    "backend": "faster-whisper",
+    "model": model_name,
+    "compute_type": resolved_compute_type,
+    # The batched pipeline and the beam-search fallback are different decoders.
+    "path": "batched" if batched_model is not None else "beam",
+    "batch_size": BATCH_SIZE if batched_model is not None else None,
+    "beam_size": BEAM_SIZE if batched_model is None else None,
+    "language": LANGUAGE,
+    "vad_filter": True,
+    "vad_parameters": VAD_PARAMS,
+}
+DECODE_FINGERPRINT = hashlib.sha256(
+    json.dumps(DECODE_SETTINGS, sort_keys=True).encode()
+).hexdigest()[:16]
+
 app = FastAPI()
 
 
@@ -184,18 +212,18 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
         if batched_model is not None:
             segments, info = batched_model.transcribe(
                 io.BytesIO(data),
-                language="en",
+                language=LANGUAGE,
                 task="transcribe",
-                batch_size=int(os.environ.get("WHISPER_BATCH_SIZE", 8)),
+                batch_size=BATCH_SIZE,
                 vad_filter=True,
                 vad_parameters=VAD_PARAMS,
             )
         else:
             segments, info = model.transcribe(
                 io.BytesIO(data),
-                language="en",
+                language=LANGUAGE,
                 task="transcribe",
-                beam_size=5,
+                beam_size=BEAM_SIZE,
                 vad_filter=True,
                 vad_parameters=VAD_PARAMS,
             )
@@ -261,6 +289,7 @@ async def health():
         "requested_device": device,
         "requested_compute_type": compute_type,
         "device_source": resolved_device_source,
+        "decode_fingerprint": DECODE_FINGERPRINT,
     }
 
 

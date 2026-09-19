@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-09-19
 
@@ -79,6 +79,9 @@ type remoteHealth struct {
 	Model string `json:"model"`
 	// Backend ("mlx", ...) qualifies Model in the journal key; optional.
 	Backend string `json:"backend"`
+	// DecodeFingerprint is a short hash of the server's output-affecting
+	// decode settings; part of the journal key when present.
+	DecodeFingerprint string `json:"decode_fingerprint"`
 }
 
 // supportsBatch reports whether the server exposes /transcribe-batch.
@@ -215,7 +218,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 		if err != nil {
 			return nil, err
 		}
-		batchResults, err := sendBatch(ctx, client, remoteURL, chunk)
+		batchResults, uploaded, err := sendBatch(ctx, client, remoteURL, chunk)
 		release()
 		if err != nil {
 			// Everything this endpoint already transcribed is discarded and
@@ -226,7 +229,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 				"url", remoteURL, "completed", done, "total", total, "chunk_start", start)
 			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
 		}
-		ej.complete(batchResults)
+		ej.complete(batchResults, uploaded)
 		for id, r := range batchResults {
 			results[id] = r
 			done++
@@ -249,8 +252,11 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 
 // sendBatch sends one multipart request containing len(chunk) WAV files.
 // The filename of each part is the book ID so the server echoes it back as
-// the result key.
-func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk []wavJob) (map[string]BatchResult, error) {
+// the result key. uploaded maps each sent id to the sha256 of the bytes that
+// went into its part -- hashed while copying from the same fd, so it names
+// exactly what whisper heard.
+func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk []wavJob) (results map[string]BatchResult, uploaded map[string]string, err error) {
+	uploaded = make(map[string]string, len(chunk))
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 
@@ -268,30 +274,32 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 		fw, err := mw.CreateFormFile("files", e.id)
 		if err != nil {
 			f.Close()
-			return nil, fmt.Errorf("create form file %s: %w", e.id, err)
+			return nil, nil, fmt.Errorf("create form file %s: %w", e.id, err)
 		}
-		if _, err := io.Copy(fw, f); err != nil {
+		hr := newHashingReader(f)
+		if _, err := io.Copy(fw, hr); err != nil {
 			f.Close()
-			return nil, fmt.Errorf("copy wav %s: %w", e.id, err)
+			return nil, nil, fmt.Errorf("copy wav %s: %w", e.id, err)
 		}
 		f.Close()
+		uploaded[e.id] = hr.sum()
 	}
 	mw.Close()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteURL+"/transcribe-batch", &body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 	}
 
 	var out struct {
@@ -301,7 +309,7 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode batch response: %w", err)
+		return nil, nil, fmt.Errorf("decode batch response: %w", err)
 	}
 
 	ret := make(map[string]BatchResult, len(out.Results))
@@ -312,7 +320,7 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 		}
 		ret[id] = r
 	}
-	return ret, nil
+	return ret, uploaded, nil
 }
 
 // transcribeRemotePerFile is the original per-file worker-pool path, kept as
@@ -331,9 +339,10 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 		wavPath string
 	}
 	type resultItem struct {
-		id     string
-		result BatchResult
-		err    error
+		id       string
+		result   BatchResult
+		uploaded string // sha256 of the bytes sent
+		err      error
 	}
 
 	jobCh := make(chan jobItem, len(jobs))
@@ -355,9 +364,9 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 					cancel()
 					return
 				}
-				r, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
+				r, uploaded, err := transcribeOneRemote(batchCtx, client, remoteURL, j.wavPath)
 				release()
-				resultCh <- resultItem{id: j.id, result: r, err: err}
+				resultCh <- resultItem{id: j.id, result: r, uploaded: uploaded, err: err}
 				if err != nil {
 					cancel()
 					return
@@ -395,7 +404,7 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 			}
 			continue
 		}
-		ej.completeOne(item.id, item.result)
+		ej.completeOne(item.id, item.uploaded, item.result)
 		results[item.id] = item.result
 		if onProgress != nil {
 			onProgress(len(results), total)
@@ -407,10 +416,12 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 	return results, nil
 }
 
-func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wavPath string) (BatchResult, error) {
+// transcribeOneRemote sends one WAV to /transcribe. uploaded is the sha256
+// of the bytes sent, hashed while copying from the same fd.
+func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wavPath string) (result BatchResult, uploaded string, err error) {
 	f, err := os.Open(wavPath)
 	if err != nil {
-		return BatchResult{}, fmt.Errorf("open wav: %w", err)
+		return BatchResult{}, "", fmt.Errorf("open wav: %w", err)
 	}
 	defer f.Close()
 
@@ -418,27 +429,29 @@ func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wa
 	mw := multipart.NewWriter(&body)
 	fw, err := mw.CreateFormFile("file", filepath.Base(wavPath))
 	if err != nil {
-		return BatchResult{}, err
+		return BatchResult{}, "", err
 	}
-	if _, err := io.Copy(fw, f); err != nil {
-		return BatchResult{}, err
+	hr := newHashingReader(f)
+	if _, err := io.Copy(fw, hr); err != nil {
+		return BatchResult{}, "", err
 	}
 	mw.Close()
+	uploaded = hr.sum()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteURL+"/transcribe", &body)
 	if err != nil {
-		return BatchResult{}, err
+		return BatchResult{}, "", err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return BatchResult{}, err
+		return BatchResult{}, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return BatchResult{}, fmt.Errorf("remote returned HTTP %d", resp.StatusCode)
+		return BatchResult{}, "", fmt.Errorf("remote returned HTTP %d", resp.StatusCode)
 	}
 
 	var out struct {
@@ -446,10 +459,10 @@ func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wa
 		Error *string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return BatchResult{}, fmt.Errorf("decode response: %w", err)
+		return BatchResult{}, "", fmt.Errorf("decode response: %w", err)
 	}
 	if out.Error != nil && *out.Error != "" {
-		return BatchResult{Error: *out.Error}, nil
+		return BatchResult{Error: *out.Error}, uploaded, nil
 	}
-	return BatchResult{Text: out.Text}, nil
+	return BatchResult{Text: out.Text}, uploaded, nil
 }

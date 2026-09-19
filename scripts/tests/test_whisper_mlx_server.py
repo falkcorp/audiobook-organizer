@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-08-30
+# last-edited: 2026-09-19
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -87,6 +87,20 @@ def test_health_advertises_batch_pipeline(srv):
     assert "batch_pipeline" in body, "absent key demotes the worker to per-file"
     assert body["batch_pipeline"] is True
     assert body["status"] == "ok"
+
+
+def test_health_reports_decode_fingerprint(srv):
+    """The Go result journal keys transcripts by decode_fingerprint, so a
+    retuned worker never serves transcripts from its old configuration. It
+    must be present, and must change when a decode setting changes."""
+    mod, client = srv
+    fp = client.get("/health").json().get("decode_fingerprint")
+    assert isinstance(fp, str) and len(fp) == 16
+    import hashlib
+    import json
+    changed = dict(mod.DECODE_SETTINGS, language="de")
+    other = hashlib.sha256(json.dumps(changed, sort_keys=True).encode()).hexdigest()[:16]
+    assert other != fp
 
 
 # ── /transcribe: the single-file fallback path ───────────────────────────────

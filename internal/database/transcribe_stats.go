@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
-// last-edited: 2026-09-05
+// last-edited: 2026-09-19
 
 package database
 
@@ -66,6 +66,11 @@ type TranscribeStats struct {
 	// Extracted counts books whose WAV clip was (re)built in extract-only mode —
 	// cache rebuilt without invoking the GPU. Zero in normal transcription runs.
 	Extracted int `json:"extracted"`
+	// JournalWriteFailures counts transcripts the whisper result journal
+	// could not persist. Those books were still written; the transcripts are
+	// just not restart-protected, so a kill before the page applies would
+	// re-transcribe them.
+	JournalWriteFailures int `json:"journal_write_failures"`
 }
 
 // PutTranscribeStats writes the aggregate counters. Sync is intentional so a

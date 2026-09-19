@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"hash"
 	"io"
 	"os"
 	"slices"
@@ -25,7 +26,11 @@ import (
 // entries from before the change are never served for requests after it.
 // The clip's own extraction parameters (duration, sample rate, channels) need
 // no bump: they change the WAV bytes, and the bytes are hashed.
-const clipParamsVersion = "whisper-clip-v1"
+//
+// v2 (2026-09-19): v1 journalled empty-text results, which a retuned VAD or
+// decoder must be allowed to re-answer; v2 never journals them and adds the
+// endpoint's decode_fingerprint to the key, so no v1 entry is ever served.
+const clipParamsVersion = "whisper-clip-v2"
 
 var journalLog = logger.New("transcribe-journal")
 
@@ -35,18 +40,38 @@ type journalResult struct {
 }
 
 // endpointJournal is one endpoint call's view of the result journal: the
-// endpoint's model identity plus the content key of every job it was handed.
+// endpoint's model identity and decode fingerprint, which with the clip bytes
+// make up every key.
 // A nil *endpointJournal is valid and means "no journal": plan passes every
 // job through and complete is a no-op, which is the pre-journal behaviour.
 //
-// Built per transcribeRemoteWithHealth call and read-only after plan, so the
-// per-file workers and the batch loop can use it without locking; the
-// journal itself is safe for concurrent use.
+// Immutable after construction, so the per-file workers and the batch loop
+// can use it without locking; the journal itself is safe for concurrent use.
 type endpointJournal struct {
 	journal  ResultJournal
 	endpoint string
 	model    string
-	keys     map[string]string // job id -> content key (only jobs that could be hashed)
+	// fingerprint is the endpoint's /health decode_fingerprint: a hash of the
+	// server's output-affecting decode settings (VAD, decode path, beam size,
+	// compute type, language ...). Empty for a worker that predates it; such
+	// a worker is still journalled under model alone, because the running Mac
+	// workers are not all restarted at once -- the cost is that retuning one
+	// of those workers without also changing its model will serve transcripts
+	// from its previous settings until it is restarted on a current script.
+	fingerprint string
+}
+
+// key is the journal key for a clip with the given sha256.
+func (ej *endpointJournal) key(clipHash string) string {
+	return resultjournal.ContentKey(clipHash, ej.model, ej.fingerprint, clipParamsVersion)
+}
+
+// label is the Entry.Model recorded with a result: the key's model part.
+func (ej *endpointJournal) label() string {
+	if ej.fingerprint == "" {
+		return ej.model
+	}
+	return ej.model + "#" + ej.fingerprint
 }
 
 // modelIdentity is the model the endpoint reported on /health, qualified by
@@ -83,8 +108,36 @@ func newEndpointJournal(j ResultJournal, endpoint string, h remoteHealth, probed
 		journalLog.Warn("endpoint reports no model on /health, results from it are not journalled: url=%s probed=%t", endpoint, probed)
 		return nil
 	}
-	return &endpointJournal{journal: j, endpoint: endpoint, model: model}
+	fp := strings.TrimSpace(h.DecodeFingerprint)
+	if fp == "" {
+		journalLog.Info("endpoint reports no decode_fingerprint, journalling by model only: url=%s model=%s", endpoint, model)
+	}
+	return &endpointJournal{journal: j, endpoint: endpoint, model: model, fingerprint: fp}
 }
+
+// lookupBypass is a ResultJournal whose Lookup always misses: every clip is
+// sent, and fresh results are still journalled (they overwrite old entries).
+// TranscribeBatchOpts uses it for BatchOptions.RefreshJournal.
+type lookupBypass struct{ ResultJournal }
+
+func (lookupBypass) Lookup(string) (json.RawMessage, bool, error) { return nil, false, nil }
+
+// hashingReader hashes exactly the bytes read through it, so a key computed
+// from it describes what was uploaded, not what the file held earlier.
+type hashingReader struct {
+	r io.Reader
+	h hash.Hash
+}
+
+func newHashingReader(r io.Reader) *hashingReader { return &hashingReader{r: r, h: sha256.New()} }
+
+func (hr *hashingReader) Read(p []byte) (int, error) {
+	n, err := hr.r.Read(p)
+	hr.h.Write(p[:n])
+	return n, err
+}
+
+func (hr *hashingReader) sum() string { return hex.EncodeToString(hr.h.Sum(nil)) }
 
 // hashClip returns the hex sha256 of the WAV at path.
 func hashClip(path string) (string, error) {
@@ -108,14 +161,16 @@ func hashClip(path string) (string, error) {
 //   - followers: representative id -> the other job ids with the same content,
 //     which receive the representative's result (see fanOut).
 //
-// A clip that cannot be hashed is sent as-is, unjournalled; a lookup that
-// errors is treated as a miss and the clip is re-transcribed. Both fail
-// toward doing the work, never toward dropping a job.
+// A clip that cannot be hashed is sent as-is; a lookup that errors is treated
+// as a miss and the clip is re-transcribed. Both fail toward doing the work,
+// never toward dropping a job. plan's hash only decides lookups and dedup;
+// the key a result is journalled under comes from the bytes actually
+// uploaded (see completeOne), so a clip replaced between plan and upload is
+// never journalled under the old bytes' key.
 func (ej *endpointJournal) plan(jobs map[string]string) (served map[string]BatchResult, send map[string]string, followers map[string][]string) {
 	if ej == nil {
 		return nil, jobs, nil
 	}
-	ej.keys = make(map[string]string, len(jobs))
 	served = make(map[string]BatchResult)
 	send = make(map[string]string, len(jobs))
 	followers = make(map[string][]string)
@@ -135,8 +190,7 @@ func (ej *endpointJournal) plan(jobs map[string]string) (served map[string]Batch
 			send[id] = path
 			continue
 		}
-		key := resultjournal.ContentKey(clipHash, ej.model, clipParamsVersion)
-		ej.keys[id] = key
+		key := ej.key(clipHash)
 
 		raw, ok, lerr := ej.journal.Lookup(key)
 		if lerr != nil {
@@ -162,35 +216,33 @@ func (ej *endpointJournal) plan(jobs map[string]string) (served map[string]Batch
 }
 
 // complete journals every successful result in results before the caller
-// reports progress for them. Only results with no per-file Error are
-// journalled: a whisper decode error is often transient (server OOM, a
-// worker restart mid-request), and a journalled error would be served
-// forever, so it is retried instead. Transport failures never reach here --
-// they are error returns, not results. Empty text with no error IS journalled:
-// it is the model's real answer for those bytes, and the silence-retry ladder
-// sends different clips (300s / second file), so different bytes and keys.
+// reports progress for them. uploaded maps job id -> sha256 of the bytes that
+// were actually sent for it; a job without one is not journalled.
+//
+// Only results with non-empty text and no per-file Error are journalled. A
+// whisper decode error is often transient (server OOM, a worker restart
+// mid-request) and would be served forever. Empty text is the answer VAD or
+// decoder tuning exists to change, and retry_silence must reach the server
+// for it; journalling "" would serve it to every retry instead. Transport
+// failures never reach here -- they are error returns, not results.
 //
 // A failed Complete is logged, not returned: the transcript is still valid
 // and still flows to the caller, which writes it to the book; losing the
 // journal entry costs only restart protection for that clip.
-func (ej *endpointJournal) complete(results map[string]BatchResult) {
+func (ej *endpointJournal) complete(results map[string]BatchResult, uploaded map[string]string) {
 	if ej == nil {
 		return
 	}
 	for id, r := range results {
-		ej.completeOne(id, r)
+		ej.completeOne(id, uploaded[id], r)
 	}
 }
 
-func (ej *endpointJournal) completeOne(id string, r BatchResult) {
-	if ej == nil || r.Error != "" {
+func (ej *endpointJournal) completeOne(id, uploadedHash string, r BatchResult) {
+	if ej == nil || r.Error != "" || r.Text == "" || uploadedHash == "" {
 		return
 	}
-	key, ok := ej.keys[id]
-	if !ok {
-		return
-	}
-	if err := ej.journal.Complete(key, ej.endpoint, ej.model, journalResult{Text: r.Text}); err != nil {
+	if err := ej.journal.Complete(ej.key(uploadedHash), ej.endpoint, ej.label(), journalResult{Text: r.Text}); err != nil {
 		journalLog.Warn("journal write failed, result not restart-protected: job=%s err=%v", id, err)
 	}
 }

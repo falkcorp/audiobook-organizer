@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
 // last-edited: 2026-09-19
 
@@ -69,6 +69,11 @@ type BatchOptions struct {
 	// journalled before progress is reported for it. See endpointJournal.
 	// The local uv path ignores it (see TranscribeBatchOpts).
 	Journal ResultJournal
+	// RefreshJournal skips every journal LOOKUP -- every clip is sent -- while
+	// still journalling the fresh results. For runs whose point is to get a
+	// different answer for the same audio (retry_silence after VAD/decoder
+	// tuning); serving the journal there would defeat the run.
+	RefreshJournal bool
 }
 
 // TranscribeBatchOpts is TranscribeBatch with options. The journal applies to
@@ -78,6 +83,10 @@ type BatchOptions struct {
 // production transcribes.
 func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts BatchOptions) (map[string]BatchResult, error) {
 	onProgress := opts.OnProgress
+	journal := opts.Journal
+	if journal != nil && opts.RefreshJournal {
+		journal = lookupBypass{journal}
+	}
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -87,7 +96,7 @@ func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts Batch
 	// the historical direct path); else the local uv path below.
 	snap := config.Snapshot()
 	if endpoints := poolEndpoints(snap.WhisperEndpoints, snap.WhisperRemoteURL); len(endpoints) > 0 {
-		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress, opts.Journal)
+		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress, journal)
 		if err != nil {
 			// Do NOT fall back to the local uv path when remote endpoints are
 			// configured. The local subprocess loads the full Whisper model into

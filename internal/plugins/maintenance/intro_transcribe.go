@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.30.0
+// version: 3.31.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-09-19
 
@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -260,14 +261,18 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// concurrent runs would share it. The journal holds RESULTS only; whether
 	// a book already carries its transcript is read from the book row
 	// (applyOutcome), so byte-identical clips of two books both get written.
-	var journal transcribe.ResultJournal
+	//
+	// retry_silence refreshes the journal (lookups bypassed, results still
+	// journalled): that run exists to get a different answer for the same
+	// audio after VAD/decoder tuning, which a served entry would defeat.
+	startedAt := time.Now()
+	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
+	pj := pageJournal{refresh: retrySilence}
 	if j, jerr := resultjournal.New(store, whisperJournalKind); jerr != nil {
 		log.Warn("transcribe-book-intros: result journal unavailable, running without restart protection", "err", jerr)
 	} else {
-		journal = j
+		pj.journal = countingJournal{ResultJournal: j, accum: accum}
 	}
-	startedAt := time.Now()
-	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
 	accum.recordSkipped(sel.skipped)
 	accum.recordUnreadable(sel.unreadable())
 
@@ -350,7 +355,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, journal)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		log.Info("transcribe-book-intros: page complete",
@@ -362,6 +367,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
 		},
+		// NOTE: registry.runItemsPar never calls CheckpointFn -- only the
+		// sequential runItemsSeq does -- so at introTranscribePageConc > 1 this
+		// LastBookID checkpoint is never written and a resumed run starts from
+		// the top. Resume is still lossless: only_missing re-selects every book
+		// without a transcript, and the whisper result journal serves the
+		// clips a killed run already transcribed.
 		CheckpointFn: func(ctx context.Context) error {
 			lastIDMu.Lock()
 			lid := lastID
@@ -391,8 +402,75 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		"Done — %d ok, %d source-missing, %d ffmpeg-err, %d whisper-err, %d empty, %d deferred "+
 			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
 		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.Empty, st.Deferred, total,
-		st.SkippedExisting, sel.failedSkipped, st.Unreadable))
+		st.SkippedExisting, sel.failedSkipped, st.Unreadable)+journalFailureNote(st.JournalWriteFailures))
 	return nil
+}
+
+// journalFailureNote names journal write failures in the op's final message.
+// Those books still got their transcripts; what was lost is restart
+// protection for them, which a monitor should see rather than only a log.
+func journalFailureNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" — %d journal-write failures (transcripts written, not restart-protected)", n)
+}
+
+// pageJournal is the whisper result journal as processTranscribePage uses it.
+// A zero value means no journal.
+type pageJournal struct {
+	journal transcribe.ResultJournal
+	// refresh bypasses journal lookups (see transcribe.BatchOptions.RefreshJournal).
+	refresh bool
+}
+
+// countingJournal counts failed journal writes into the run's stats. The
+// failure itself stays non-fatal (transcribe logs it and the transcript is
+// still written to the book).
+type countingJournal struct {
+	transcribe.ResultJournal
+	accum *transcribeStatsAccum
+}
+
+func (c countingJournal) Complete(key, endpoint, model string, result any) error {
+	err := c.ResultJournal.Complete(key, endpoint, model, result)
+	if err != nil {
+		c.accum.recordJournalWriteFailure()
+	}
+	return err
+}
+
+// extractClip runs ffmpeg to write the first `seconds` of src as a 16 kHz mono
+// WAV at dst, returning ffmpeg's combined output.
+//
+// ffmpeg writes to a unique temp file in dst's directory, which is renamed
+// over dst only after ffmpeg succeeds. dst is usually the SHARED clip cache,
+// and another page (up to introTranscribePageConc run at once) may stat, hash
+// and upload the same path at any moment; with ffmpeg writing dst in place, a
+// half-written clip could be transcribed and its transcript journalled. The
+// rename is atomic within a directory, so dst is always absent or complete.
+func extractClip(ctx context.Context, src, dst string, seconds int) ([]byte, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".*.partial")
+	if err != nil {
+		return nil, fmt.Errorf("create temp clip: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	out, err := exec.CommandContext(ctx, "ffmpeg",
+		"-y", "-i", src,
+		"-t", strconv.Itoa(seconds),
+		"-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+		tmpPath,
+	).CombinedOutput()
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return out, err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return out, fmt.Errorf("publish clip: %w", err)
+	}
+	return out, nil
 }
 
 // reparseStoredIntros re-runs ParseAudiobookIntro over every book's stored
@@ -809,7 +887,7 @@ func (p *Plugin) processTranscribePage(
 	onBook transcribe.ProgressFunc,
 	accum *transcribeStatsAccum,
 	extractOnly bool,
-	journal transcribe.ResultJournal,
+	pj pageJournal,
 ) (processed int) {
 	cacheDir := wavCacheDir(rootDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -893,13 +971,7 @@ func (p *Plugin) processTranscribePage(
 				wavPath = filepath.Join(tmpDir, bookID+".wav")
 			}
 
-			ffCmd := exec.CommandContext(ctx, "ffmpeg",
-				"-y", "-i", src,
-				"-t", "90",
-				"-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
-				wavPath,
-			)
-			if out, err := ffCmd.CombinedOutput(); err != nil {
+			if out, err := extractClip(ctx, src, wavPath, 90); err != nil {
 				tail := ffmpegErrorTail(string(out))
 				log.Warn("transcribe: ffmpeg failed",
 					"book_id", bookID, "file", src, "err", err, "output", tail)
@@ -963,7 +1035,7 @@ func (p *Plugin) processTranscribePage(
 
 	// Step 3: one Python/Whisper process for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
-	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: journal}
+	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: pj.journal, RefreshJournal: pj.refresh}
 	batchResults, err := transcribeBatchFn(ctx, batchJobs, batchOpts)
 	var te *transcribe.TransportError
 	switch {

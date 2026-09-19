@@ -8,3 +8,6 @@
   transcript no longer rewrites them, and books that share an identical intro
   clip (such as the same publisher opening) are transcribed once but every one
   of those books still gets its transcript.
+- Saved transcripts are tied to each transcription server's settings, and a
+  "retry silent books" run always asks the server again, so tuning the server
+  to hear quiet intros is never undone by an old saved "silent" answer.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
 // last-edited: 2026-09-19
 
@@ -12,15 +12,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
 // fakeWhisper is an httptest whisper server speaking the batch protocol of
@@ -37,6 +41,13 @@ type fakeWhisper struct {
 	requests      int
 	killOnRequest int
 	kill          context.CancelFunc
+	respond       func(clip string) string // nil = transcriptFor
+}
+
+func (fw *fakeWhisper) setRespond(f func(string) string) {
+	fw.mu.Lock()
+	fw.respond = f
+	fw.mu.Unlock()
 }
 
 func newFakeWhisper(t *testing.T) *fakeWhisper {
@@ -84,8 +95,12 @@ func newFakeWhisper(t *testing.T) *fakeWhisper {
 			body, _ := io.ReadAll(part)
 			fw.mu.Lock()
 			fw.perClip[string(body)]++
+			respond := fw.respond
 			fw.mu.Unlock()
-			results[part.FileName()] = map[string]any{"text": transcriptFor(string(body)), "error": nil}
+			if respond == nil {
+				respond = transcriptFor
+			}
+			results[part.FileName()] = map[string]any{"text": respond(string(body)), "error": nil}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 	})
@@ -307,4 +322,167 @@ func TestIntroTranscribe_IdenticalClipsBothWritten(t *testing.T) {
 			t.Errorf("book %s written %d times, want 1", id, writes[id])
 		}
 	}
+}
+
+// retry_silence exists to get a different answer for the same audio after VAD
+// or decoder tuning, so the run must bypass journal lookups. A book whose
+// first run came back silent is transcribed again, reaches the server, and
+// takes the new text over its [SILENCE] sentinel.
+func TestIntroTranscribe_RetrySilenceReachesServer(t *testing.T) {
+	fw := newFakeWhisper(t)
+	cacheDir := journalTestEnv(t, fw, 8)
+	s := openJournalPebble(t, t.TempDir())
+	t.Cleanup(func() { _ = s.Close() })
+	const clip = "quiet-intro"
+	id := addClipBook(t, s, cacheDir, 1, clip)
+	writes := map[string]int{}
+	var wmu sync.Mutex
+	st := writeCountingStore{s, &wmu, writes}
+
+	fw.setRespond(func(string) string { return "" }) // before tuning: silent
+	if err := runTranscribeOnce(t, st, context.Background(), `{}`); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if b, _ := s.GetBookByID(id); b == nil || b.IntroTranscription == nil || *b.IntroTranscription != silenceSentinel {
+		t.Fatalf("setup: run 1 did not mark the book silent")
+	}
+	fw.setRespond(transcriptFor) // after tuning: speech found
+	if err := runTranscribeOnce(t, st, context.Background(), `{"retry_silence":true}`); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	perClip, _ := fw.snapshot()
+	if perClip[clip] != 2 {
+		t.Errorf("clip reached the server %d times across both runs, want 2", perClip[clip])
+	}
+	if b, _ := s.GetBookByID(id); b == nil || b.IntroTranscription == nil || *b.IntroTranscription != transcriptFor(clip) {
+		t.Errorf("book still lacks the retuned transcript (has %q)", derefStr(b.IntroTranscription))
+	}
+}
+
+// The plugin must ask TranscribeBatchOpts to bypass lookups on retry_silence
+// and only then.
+func TestProcessTranscribePage_RetrySilenceRefreshesJournal(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		store, _, books, rootDir := transportTestFixture(t, "b-refresh", "hash-refresh")
+		var got []bool
+		swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, o transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+			got = append(got, o.RefreshJournal)
+			out := map[string]transcribe.BatchResult{}
+			for id := range jobs {
+				out[id] = transcribe.BatchResult{Text: "hello"}
+			}
+			return out, nil
+		})
+		p := New(fakeDeps{store: store})
+		accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
+		p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false,
+			pageJournal{refresh: refresh})
+		if len(got) != 1 || got[0] != refresh {
+			t.Errorf("refresh=%v: RefreshJournal passed = %v", refresh, got)
+		}
+	}
+}
+
+// failingJournalStore fails every journal write; everything else is Pebble.
+type failingJournalStore struct{ writeCountingStore }
+
+func (failingJournalStore) SetRaw(key string, _ []byte) error {
+	return fmt.Errorf("disk full writing %s", key)
+}
+
+// A journal write failure does not fail the book (the transcript still lands)
+// but is counted in stats:transcribe and named in the final progress message.
+func TestIntroTranscribe_JournalWriteFailuresAreCounted(t *testing.T) {
+	fw := newFakeWhisper(t)
+	cacheDir := journalTestEnv(t, fw, 8)
+	s := openJournalPebble(t, t.TempDir())
+	t.Cleanup(func() { _ = s.Close() })
+	for i := range 3 {
+		addClipBook(t, s, cacheDir, i, fmt.Sprintf("clip-%d", i))
+	}
+	var wmu sync.Mutex
+	st := failingJournalStore{writeCountingStore{s, &wmu, map[string]int{}}}
+	p := &Plugin{deps: rootDeps{fakeDeps: fakeDeps{store: st}, root: t.TempDir()}}
+	rep := &denomReporter{}
+	if err := p.runIntroTranscribe(context.Background(), json.RawMessage(`{}`), rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	stats, err := s.GetTranscribeStats()
+	if err != nil || stats == nil {
+		t.Fatalf("stats: %v %v", stats, err)
+	}
+	if stats.JournalWriteFailures != 3 || stats.OK+stats.Unparsed != 3 {
+		t.Errorf("journal_write_failures=%d transcribed=%d, want 3/3", stats.JournalWriteFailures, stats.OK+stats.Unparsed)
+	}
+	if !strings.Contains(rep.last, "3 journal-write failures") {
+		t.Errorf("final message %q does not name the journal write failures", rep.last)
+	}
+}
+
+// extractClip must never expose a partially written WAV at the cache path:
+// another page may stat, hash and upload that path at any moment. A fake
+// ffmpeg writes half a clip, pauses, then the rest; the destination must be
+// absent or complete at every observation, and a failed ffmpeg must leave
+// neither the destination nor a temp file behind.
+func TestExtractClip_AtomicRename(t *testing.T) {
+	bin := t.TempDir()
+	script := `#!/bin/sh
+for a in "$@"; do out="$a"; done
+if [ "$FAKE_FFMPEG_FAIL" = 1 ]; then printf 'half' > "$out"; exit 1; fi
+printf 'half' > "$out"; sleep 0.3; printf '%s' '-and-rest' >> "$out"
+`
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "clip.wav")
+
+	stop := make(chan struct{})
+	var bad []string
+	var watch sync.WaitGroup
+	watch.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if b, err := os.ReadFile(dst); err == nil && string(b) != "half-and-rest" {
+				bad = append(bad, string(b))
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+	_, err := extractClip(context.Background(), "/src.m4b", dst, 90)
+	close(stop)
+	watch.Wait()
+	if err != nil {
+		t.Fatalf("extractClip: %v", err)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("partial clip visible at the cache path: %q", bad[0])
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "half-and-rest" {
+		t.Fatalf("final clip = %q", b)
+	}
+
+	t.Setenv("FAKE_FFMPEG_FAIL", "1")
+	dst2 := filepath.Join(dir, "failed.wav")
+	if _, err := extractClip(context.Background(), "/src.m4b", dst2, 90); err == nil {
+		t.Fatal("failing ffmpeg returned nil error")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "clip.wav" {
+			t.Errorf("failed extraction left %s behind", e.Name())
+		}
+	}
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
 }
