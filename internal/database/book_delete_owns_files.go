@@ -1,15 +1,17 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-09-19
 
 package database
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -541,4 +543,61 @@ type stagedBookFileRows struct {
 	// (an upsert naming a row ID that no longer exists, say). The rest of
 	// the pass committed without them.
 	refusals map[*BookFile]string
+}
+
+// ErrBookFileRowDeleted is returned by an upsert naming the ID of a book_file
+// row that has been deleted: an upsert never recreates a deleted row.
+var ErrBookFileRowDeleted = errors.New("book_file row was deleted")
+
+// ErrBookFilePIDConflict is returned by an upsert whose row ID is live but
+// whose iTunes PID is held by a different live row.
+var ErrBookFilePIDConflict = errors.New("book_file iTunes PID is held by another row")
+
+// bookFileGoneKey tombstones a deleted book_file ID. IDs are ULIDs and never
+// reused, so the tombstone answers "was this row deleted?" with one point
+// read (an upsert of a stale struct must not recreate it). One small key per
+// deleted row, kept forever; wipes by prefix do not write them.
+func bookFileGoneKey(id string) []byte { return []byte("book_file_gone:" + id) }
+
+func stageBookFileTombstone(batch *pebble.Batch, id string) error {
+	if id == "" {
+		return nil
+	}
+	return batch.Set(bookFileGoneKey(id), []byte(time.Now().UTC().Format(time.RFC3339)), nil)
+}
+
+// bookFileIDState resolves a book_file ID with point reads only (never a
+// scan): the live row, or gone=true when the ID carries a deletion tombstone,
+// or neither (an ID never written — a caller's fresh ULID — or a legacy row
+// written before the id index, which the caller's path/PID matching finds).
+func (p *PebbleStore) bookFileIDState(id string) (live *BookFile, gone bool, err error) {
+	idxVal, idxCloser, err := p.bookFileIDGet([]byte("book_file_id:" + id))
+	switch {
+	case err == nil:
+		pk := append([]byte(nil), idxVal...)
+		_ = idxCloser.Close()
+		val, closer, gerr := p.db.Get(pk)
+		if gerr == nil {
+			defer closer.Close()
+			var f BookFile
+			if uerr := json.Unmarshal(val, &f); uerr != nil {
+				return nil, false, fmt.Errorf("decode book_file %s: %w", pk, uerr)
+			}
+			return &f, false, nil
+		}
+		if !errors.Is(gerr, pebble.ErrNotFound) {
+			return nil, false, fmt.Errorf("book_file row %s: %w", pk, gerr)
+		}
+	case !errors.Is(err, pebble.ErrNotFound):
+		return nil, false, fmt.Errorf("book_file_id index for %s: %w", id, err)
+	}
+	_, closer, terr := p.db.Get(bookFileGoneKey(id))
+	if terr == nil {
+		_ = closer.Close()
+		return nil, true, nil
+	}
+	if !errors.Is(terr, pebble.ErrNotFound) {
+		return nil, false, fmt.Errorf("book_file tombstone for %s: %w", id, terr)
+	}
+	return nil, false, nil
 }
