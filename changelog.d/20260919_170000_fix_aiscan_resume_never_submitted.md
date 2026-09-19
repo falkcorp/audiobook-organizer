@@ -11,7 +11,16 @@
   attempt is recorded before it is made, so a pending phase with the marker and
   no recorded attempt is launched at once. Phases from older scans keep the
   lookup, because the build that made them did not record attempts first.
+- **A launched batch phase re-checks inside its claim that it never submitted.**
+  An earlier run in the same process could mark the phase "submitting" and
+  record a submit attempt between the resume reading the phase as pending and
+  the launched goroutine starting, and the launch would then submit a second
+  batch for a request OpenAI may already hold. It now leaves such a phase to the
+  metadata lookup.
+- **Reading a phase's saved artifacts reports a scan that stopped early.** The
+  iterator's error was dropped, so a partial read looked like a complete one,
+  and a missing artifact is what tells a resume that a phase never submitted.
 - The restart tests stopped letting the "dead" first manager keep running
   groups work alongside the resumed one, which made
-  `TestBatchScanCollectedOnceAcrossRestart` flake (measured locally: 19 failures
-  in 600 runs under `-race -cpu 1,2,8`, 0 in 600 after).
+  `TestBatchScanCollectedOnceAcrossRestart` flake (measured locally on that test
+  alone: 19 failures in 600 runs under `-race -cpu 1,2,8`, 0 in 600 after).

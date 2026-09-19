@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -776,4 +776,37 @@ func TestResumedNeverSubmittedPhaseIsLaunchedNotLookedUp(t *testing.T) {
 			require.Len(t, resultKeys(t, store, scan.ID), 7)
 		})
 	}
+}
+
+// TestLaunchAfterStaleSnapshotDoesNotResubmit: drive read a source phase as
+// "pending" and launched it, but before the launched goroutine took the phase
+// claim an earlier run in this process got there first — it marked the phase
+// "submitting", recorded last_submit_at, and its CreateBatch errored after
+// OpenAI accepted the batch. The launch must see that attempt inside the claim
+// and leave the phase to resolveSubmitting's lookup, not pay for a second
+// batch. The two runFullScanBatch calls are that interleaving, in order.
+func TestLaunchAfterStaleSnapshotDoesNotResubmit(t *testing.T) {
+	main := newFakeMainStore(3)
+	store := newScanStore(t)
+	acct := newFakeAccount()
+	llm := newFakeLLM(acct)
+	llm.createErr, llm.createErrAfterAccept = true, true
+	pm := NewPipelineManager(store, main, llm)
+	scan, err := pm.CreateScan("batch")
+	require.NoError(t, err)
+	authors, err := main.GetAllAuthors()
+	require.NoError(t, err)
+
+	// The earlier run: an ambiguous CreateBatch failure.
+	pm.runFullScanBatch(context.Background(), scan.ID, authors)
+	require.Equal(t, "submitting", phaseStatus(t, pm, scan.ID, "full_scan"))
+	require.Equal(t, 1, acct.count(), "OpenAI accepted the first batch")
+
+	// The launch drive decided on from its stale "pending" snapshot.
+	pm.runFullScanBatch(context.Background(), scan.ID, authors)
+
+	_, creates, _ := llm.counts()
+	require.Equal(t, 1, creates, "a launch must not resubmit a phase that already attempted CreateBatch")
+	require.Equal(t, 1, acct.count())
+	require.Equal(t, "submitting", phaseStatus(t, pm, scan.ID, "full_scan"), "left for the metadata lookup")
 }

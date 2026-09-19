@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.6.0
+// version: 2.7.0
 // last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -540,6 +540,13 @@ func (s *AIScanStore) GetPhaseArtifacts(scanID int, phaseType string) (map[strin
 	for iter.First(); iter.Valid(); iter.Next() {
 		name := string(iter.Key()[len(prefix):])
 		out[name] = append(json.RawMessage{}, iter.Value()...)
+	}
+	// A scan stopping early otherwise returns a SHORT map as a complete one,
+	// and callers read a missing artifact as proof that it was never written
+	// — aiscan's resume decides whether a phase ever submitted a batch that
+	// way.
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("read artifacts of %s for scan %d: %w", phaseType, scanID, err)
 	}
 	return out, nil
 }

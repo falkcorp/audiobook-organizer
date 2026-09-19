@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.6.0
+// version: 4.7.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -416,6 +416,17 @@ const submitLedgerArtifact = "submit_ledger"
 // reached CreateBatch: it carries submitLedgerArtifact and no
 // lastSubmitAtArtifact. Any doubt — including a failed artifact read — is
 // false, which sends the phase down the lookup path that cannot pay twice.
+//
+// It answers for THIS process only. Launching the phase instead of looking it
+// up is safe because one server runs a scan at a time: the operation
+// registry's ConcurrencyKey is in-process state, so two servers sharing this
+// store would not exclude each other — as the restart tests, which run two
+// managers over one store, show directly.
+//
+// Rollback caveat: a phase ledgered by this build, then submitted by a build
+// older than b120dc1de (which did not record lastSubmitAtArtifact before
+// CreateBatch), would look unattempted here. Rolling forward again after such
+// a rollback can submit a second batch for that phase.
 func (pm *PipelineManager) neverSubmitted(scanID int, phaseType string) bool {
 	arts, err := pm.scanStore.GetPhaseArtifacts(scanID, phaseType)
 	if err != nil {
@@ -425,6 +436,19 @@ func (pm *PipelineManager) neverSubmitted(scanID int, phaseType string) bool {
 	_, ledgered := arts[submitLedgerArtifact]
 	_, attempted := arts[lastSubmitAtArtifact]
 	return ledgered && !attempted
+}
+
+// submitAttempted reports whether a phase ever reached submitBatch's
+// pre-CreateBatch record. A failed read answers true: the caller must then
+// treat the phase as possibly holding a batch.
+func (pm *PipelineManager) submitAttempted(scanID int, phaseType string) bool {
+	arts, err := pm.scanStore.GetPhaseArtifacts(scanID, phaseType)
+	if err != nil {
+		plog.Warn("scan %d: cannot read %s artifacts; treating it as already submitted: %v", scanID, phaseType, err)
+		return true
+	}
+	_, attempted := arts[lastSubmitAtArtifact]
+	return attempted
 }
 
 // LinkOperation records which operation is running a scan.
@@ -682,7 +706,7 @@ func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, ph
 		handedOff = true // the submit goroutine now owns the claim
 		go func() {
 			defer pm.endPhase(scanID, phaseType)
-			pm.submitSourceClaimed(ctx, scanID, phaseType, authors)
+			pm.submitSourceClaimed(ctx, scanID, phaseType, authors, false)
 		}()
 	}
 }
@@ -1417,7 +1441,7 @@ func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, a
 		return
 	}
 	defer pm.endPhase(scanID, "groups_scan")
-	pm.submitSourceClaimed(ctx, scanID, "groups_scan", authors)
+	pm.submitSourceClaimed(ctx, scanID, "groups_scan", authors, true)
 }
 
 // submitSourceClaimed submits one batch source phase. The caller holds the
@@ -1425,9 +1449,21 @@ func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, a
 // or submitting with no batch id — because a claim alone does not stop a
 // second submit: another resolver may have attached or submitted the batch
 // between this caller deciding to submit and taking the claim.
-func (pm *PipelineManager) submitSourceClaimed(ctx context.Context, scanID int, phaseType string, authors []database.Author) {
+//
+// unattemptedOnly is set by the launch path (drive decided from a snapshot
+// that the phase was pending and never submitted). Inside the claim that
+// decision is re-checked: an earlier goroutine in this process may have marked
+// the phase "submitting" and recorded a CreateBatch attempt in between, and
+// submitting again could pay for a batch OpenAI already accepted. Such a phase
+// is left "submitting" for resolveSubmitting's lookup. resolveSubmitting
+// itself passes false: it has already settled the ambiguity.
+func (pm *PipelineManager) submitSourceClaimed(ctx context.Context, scanID int, phaseType string, authors []database.Author, unattemptedOnly bool) {
 	p, err := pm.scanStore.GetPhase(scanID, phaseType)
 	if err != nil || p == nil || p.BatchID != "" || (p.Status != "pending" && p.Status != "submitting") {
+		return
+	}
+	if unattemptedOnly && (p.Status != "pending" || pm.submitAttempted(scanID, phaseType)) {
+		plog.Info("scan %d: not launching %s: it is %s and has already attempted a submit", scanID, phaseType, p.Status)
 		return
 	}
 	if phaseType == "groups_scan" {
@@ -1470,7 +1506,7 @@ func (pm *PipelineManager) runFullScanBatch(ctx context.Context, scanID int, aut
 		return
 	}
 	defer pm.endPhase(scanID, "full_scan")
-	pm.submitSourceClaimed(ctx, scanID, "full_scan", authors)
+	pm.submitSourceClaimed(ctx, scanID, "full_scan", authors, true)
 }
 
 func (pm *PipelineManager) submitFullBatch(ctx context.Context, scanID int, authors []database.Author) {
