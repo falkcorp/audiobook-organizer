@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.100.0
+// version: 1.101.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -3206,55 +3206,18 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		}
 
 		if existing == nil {
-			// Smart dedup: check for same-title books in same directory (format-aware version linking)
+			// Smart dedup: same-title books in the same directory may be two
+			// COPIES of one book (an .m4b and an .mp3, or a second copy beside
+			// the original) -- or they may be the chapter files of ONE book,
+			// which share a folder and a title and must never be linked as
+			// versions of each other. applySmartVersionLink decides which,
+			// links only genuine copies, and elects exactly one primary; see
+			// version_link.go for the predicate and the election rule.
 			if dbBook.Title != "" {
 				parentDir := filepath.Dir(book.FilePath)
 				siblings, lookupErr := getStore().GetBooksByTitleInDir(strings.ToLower(dbBook.Title), parentDir)
 				if lookupErr == nil && len(siblings) > 0 {
-					// Determine or reuse version_group_id
-					var groupID string
-					for _, sib := range siblings {
-						if sib.VersionGroupID != nil && *sib.VersionGroupID != "" {
-							groupID = *sib.VersionGroupID
-							break
-						}
-					}
-					if groupID == "" {
-						h := sha256.Sum256([]byte(parentDir + "/" + strings.ToLower(dbBook.Title)))
-						groupID = fmt.Sprintf("vg-%x", h[:8])
-					}
-					dbBook.VersionGroupID = &groupID
-					isM4B := strings.EqualFold(dbBook.Format, "m4b")
-					isPrimary := isM4B
-					dbBook.IsPrimaryVersion = &isPrimary
-
-					// Update siblings to share the version group. Each sibling
-					// is written through ModifyBook so this loop cannot revert a
-					// concurrent write to a sibling row, and so a sibling that
-					// another writer linked first keeps its own group.
-					//
-					// groupID was chosen from the siblings as they were read, so
-					// a sibling that lands in a DIFFERENT group splits what was
-					// meant to be one group. Nothing here can repair that -- the
-					// new row's group is already fixed above -- so say so plainly
-					// rather than leaving a silently split group behind.
-					for _, sib := range siblings {
-						if sib.VersionGroupID != nil && *sib.VersionGroupID != "" {
-							continue
-						}
-						sibIsM4B := strings.EqualFold(sib.Format, "m4b")
-						sibGroup, ok := linkVersionGroup(sib.ID, groupID, sibIsM4B)
-						if !ok {
-							defaultLog.Warn("Sibling %s left out of version group %s: the group write did not land",
-								sib.FilePath, groupID)
-							continue
-						}
-						if sibGroup != groupID {
-							defaultLog.Warn("Sibling %s is in version group %s, not %s: the group for %q in %s is split",
-								sib.FilePath, sibGroup, groupID, dbBook.Title, parentDir)
-						}
-					}
-					defaultLog.Info("Auto-linked version group %s for %q in %s", groupID, dbBook.Title, parentDir)
+					applySmartVersionLink(dbBook, siblings, parentDir)
 				}
 			}
 
