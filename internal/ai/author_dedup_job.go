@@ -1,5 +1,5 @@
 // file: internal/ai/author_dedup_job.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 41243eb9-5540-41ac-8494-d0b58348a093
 // last-edited: 2026-09-19
 
@@ -106,6 +106,14 @@ func authorDedupJobCallback(ctx context.Context, itemsJSON []byte, results []aij
 		}
 		ok++
 		suggestions = append(suggestions, parsed.Suggestions...)
+	}
+
+	if ok == 0 {
+		// No row carried a usable answer (all decode failures, truncation, or
+		// OpenAI row errors). Recording that would put an empty "complete"
+		// scan in the review queue and supersede the last real one; failing
+		// the apply lets aijobs retry and then mark the job failed.
+		return ok, bad, rowErrors, fmt.Errorf("no usable rows in author dedup batch (%d failed)", bad)
 	}
 
 	authorDedupSinkMu.RLock()

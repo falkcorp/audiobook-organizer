@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
 // last-edited: 2026-09-19
 
@@ -85,20 +85,6 @@ type aiDedupBatchParams struct {
 	JobID string `json:"job_id,omitempty"`
 }
 
-// pendingJobStaleAfter is how long a "pending" author dedup job (row written,
-// batch id not recorded) keeps blocking a new submission.
-//
-// Writing one off is irreversible: aijobs.ReconcileOrphans deliberately never
-// attaches a batch to a "failed" row. A batch is listed from the moment it is
-// created, so the reconciler attaches it on the first poll the server makes
-// after the kill — the only way a job stays pending long is the batch never
-// having been created, or the poller not running at all (server down). 72h is
-// three whole 24h batch windows: a server down over a weekend still gets its
-// orphan attached (the reconciler pages back to the oldest pending job) before
-// the write-off can fire, and the cost of the margin is at most two skipped
-// nightly runs behind a job that truly has no batch.
-const pendingJobStaleAfter = 72 * time.Hour
-
 type authorDedupSubmitFunc func(ctx context.Context, sourceID string, inputs []ai.AuthorDiscoveryInput) (jobID string, err error)
 
 // submitAuthorDedupOnce submits the whole-library author dedup batch unless one
@@ -111,7 +97,7 @@ type authorDedupSubmitFunc func(ctx context.Context, sourceID string, inputs []a
 // second copy of the same suggestions.
 func submitAuthorDedupOnce(ctx context.Context, jobs database.AIJobsStore, params aiDedupBatchParams,
 	buildInputs func() ([]ai.AuthorDiscoveryInput, error), submit authorDedupSubmitFunc,
-	checkpoint func(any) error, now time.Time,
+	checkpoint func(any) error,
 ) (string, bool, error) {
 	if params.JobID != "" {
 		return params.JobID, false, nil
@@ -121,13 +107,14 @@ func submitAuthorDedupOnce(ctx context.Context, jobs database.AIJobsStore, param
 		if err != nil {
 			return "", false, fmt.Errorf("list %s author dedup jobs: %w", status, err)
 		}
-		for _, j := range inflight {
-			if status != "pending" || now.Sub(j.CreatedAt) < pendingJobStaleAfter {
-				return j.ID, false, nil
-			}
-			if err := jobs.MarkAIJobFailed(j.ID, fmt.Sprintf("no batch recorded %s after submit; written off", pendingJobStaleAfter)); err != nil {
-				return "", false, fmt.Errorf("write off stale job %s: %w", j.ID, err)
-			}
+		// A pending job counts as in flight however old it is. This op never
+		// writes one off itself: that is irreversible (a failed row is never
+		// re-attached), so it is left to aijobs, which attaches the job's batch
+		// when a listing shows it (by the ai_job_id metadata) and writes the
+		// job off only when a COMPLETE, non-truncated listing confirms no batch
+		// exists (aijobs.WriteOffUnlinked, run by the batch poller).
+		if len(inflight) > 0 {
+			return inflight[0].ID, false, nil
 		}
 	}
 
@@ -201,7 +188,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, raw json.RawMessage, repor
 		return parser.SubmitAuthorDedupJob(ctx, jobs, sourceID, inputs)
 	}
 
-	jobID, submitted, err := submitAuthorDedupOnce(ctx, jobs, params, buildInputs, submit, reporter.Checkpoint, time.Now())
+	jobID, submitted, err := submitAuthorDedupOnce(ctx, jobs, params, buildInputs, submit, reporter.Checkpoint)
 	if err != nil {
 		return err
 	}

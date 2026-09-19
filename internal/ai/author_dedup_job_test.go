@@ -1,5 +1,5 @@
 // file: internal/ai/author_dedup_job_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dee19992-4b40-4193-9395-eb90bb24dcc7
 // last-edited: 2026-09-19
 
@@ -53,4 +53,28 @@ func TestAuthorDedupJobCallbackWithoutSinkFails(t *testing.T) {
 	payload, _ := json.Marshal(authorDedupJobPayload{SourceID: "run-1"})
 	_, _, _, fatal := authorDedupJobCallback(context.Background(), payload, []aijobs.RowResult{{CustomID: "j-0", Content: `{"suggestions":[]}`}})
 	require.Error(t, fatal)
+}
+
+// Finding 8: a batch whose every row failed to decode (or errored at OpenAI)
+// carries no answer. Recording it would put an EMPTY complete scan in the
+// review queue — and, with supersede, hide the last real one. The apply must
+// fail instead, so aijobs retries it and finally marks the job failed.
+func TestAuthorDedupJobCallbackNoUsableRowIsFatal(t *testing.T) {
+	var called bool
+	SetAuthorDedupResultSink(func(context.Context, string, []AuthorDiscoverySuggestion) error {
+		called = true
+		return nil
+	})
+	t.Cleanup(func() { SetAuthorDedupResultSink(nil) })
+	payload, _ := json.Marshal(authorDedupJobPayload{SourceID: "run-1"})
+
+	for name, rows := range map[string][]aijobs.RowResult{
+		"truncated json": {{CustomID: "j-0", Content: `{"suggestions":[{"author_ids":[1`}},
+		"row error":      {{CustomID: "j-0", Err: "context_length_exceeded"}},
+		"no rows":        nil,
+	} {
+		_, _, _, fatal := authorDedupJobCallback(context.Background(), payload, rows)
+		require.Error(t, fatal, name)
+	}
+	require.False(t, called, "nothing is recorded from a batch with no usable answer")
 }
