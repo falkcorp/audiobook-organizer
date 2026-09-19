@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-09-19
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 321
-	slogRatchetCallCeiling = 1896
+	slogRatchetCallCeiling = 1894
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -45,7 +45,7 @@ var slogRatchet = map[string]int{
 	"internal/ai/retry.go":                                       3,
 	"internal/aidispatch/dispatch.go":                            1,
 	"internal/aidispatch/inflight.go":                            2,
-	"internal/aiscan/pipeline.go":                                17,
+	"internal/aiscan/pipeline.go":                                15,
 	"internal/audiobooks/helpers.go":                             2,
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
