@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
 // last-edited: 2026-09-19
 
@@ -347,4 +347,44 @@ func TestReconcileOrphans_OpenAIFailedBatchMarksJobFailed(t *testing.T) {
 	_, err := ReconcileOrphans(store, []OrphanBatch{{ID: "batch_r", Status: "in_progress", Metadata: map[string]string{MetadataJobIDKey: "JR"}}})
 	require.NoError(t, err)
 	assert.Equal(t, "submitted", store.jobs["JR"].Status)
+}
+
+// A CreateBatch error does not prove OpenAI rejected the batch (a timeout or
+// reset connection after it accepted). Marking the row failed would orphan a
+// billed batch for good — ReconcileOrphans never attaches a failed row — so
+// the row stays pending for the reconciler to attach or, on a confirmed
+// absence, WriteOffUnlinked to close.
+func TestSubmit_CreateErrorLeavesJobPendingForReconcile(t *testing.T) {
+	store := newFakeStore()
+	client := &fakeBatchClient{createErr: errors.New("read tcp: connection reset by peer")}
+	jobID, err := Submit(context.Background(), Deps{Store: store, Client: client}, SubmitRequest{
+		Type: "t", ItemCount: 1, PayloadJSON: []byte("[]"),
+		Build: func(int) (BatchRequest, error) { return BatchRequest{Body: map[string]any{}}, nil },
+	})
+	require.Error(t, err)
+	require.Equal(t, "pending", store.jobs[jobID].Status)
+
+	n, err := ReconcileOrphans(store, []OrphanBatch{{ID: "batch_late", Metadata: map[string]string{MetadataJobIDKey: jobID}}})
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "the batch OpenAI did accept is attached")
+	require.Equal(t, "submitted", store.jobs[jobID].Status)
+}
+
+// WriteOffUnlinked closes a pending job only on a confirmed absence: the
+// listing was complete, the job is past the grace window, and no listed batch
+// names it.
+func TestWriteOffUnlinked_OnlyOnConfirmedAbsence(t *testing.T) {
+	store := newFakeStore()
+	now := time.Now()
+	for id, age := range map[string]time.Duration{"old-gone": 3 * time.Hour, "old-listed": 3 * time.Hour, "young": time.Minute} {
+		require.NoError(t, store.CreateAIJob(database.AIJob{ID: id, Type: "t", Status: "pending", ItemCount: 1, CreatedAt: now.Add(-age)}, []byte("[]")))
+	}
+	listed := []OrphanBatch{{ID: "b1", Metadata: map[string]string{MetadataJobIDKey: "old-listed"}}}
+
+	n, err := WriteOffUnlinked(store, listed, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Equal(t, "failed", store.jobs["old-gone"].Status)
+	require.Equal(t, "pending", store.jobs["old-listed"].Status, "a listed batch is attached by ReconcileOrphans, never written off")
+	require.Equal(t, "pending", store.jobs["young"].Status, "a job inside the grace window may still be mid-submit")
 }

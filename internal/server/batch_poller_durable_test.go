@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller_durable_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fe113f87-b567-440e-8ec1-63022b2e72db
 // last-edited: 2026-09-19
 
@@ -346,4 +346,30 @@ func TestBatchPoller_ForeignAIJobsBatchSkippedInMemory(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, bp.IsProcessed("batch_foreign"))
 	assert.False(t, aijobsPoller(t, store, client).IsProcessed("batch_foreign"), "foreign batch must not be journaled")
+}
+
+// A pending aijobs row (CreateBatch errored, or the process died inside it) is
+// written off only when a COMPLETE listing shows no batch naming it. With a
+// truncated listing it must stay pending: a failed row is never attached
+// again, so writing it off there could orphan a billed batch.
+func TestBatchPoller_WritesOffUnlinkedJobOnlyOnCompleteListing(t *testing.T) {
+	store := newPollerTestStore(t)
+	require.NoError(t, store.CreateAIJob(database.AIJob{ID: "J", Type: "t", Status: "pending", ItemCount: 1,
+		CreatedAt: time.Now().Add(-2 * aijobs.UnlinkedWriteOffGrace)}, []byte("[]")))
+
+	client := &fakeBatchClient{listErr: ai.ErrBatchListTruncated}
+	bp := aijobsPoller(t, store, client)
+	_, _ = bp.Poll(context.Background())
+	job, err := store.GetAIJob("J")
+	require.NoError(t, err)
+	require.Equal(t, "pending", job.Status, "a truncated listing proves nothing")
+
+	client.mu.Lock()
+	client.listErr = nil
+	client.mu.Unlock()
+	_, err = bp.Poll(context.Background())
+	require.NoError(t, err)
+	job, err = store.GetAIJob("J")
+	require.NoError(t, err)
+	require.Equal(t, "failed", job.Status)
 }

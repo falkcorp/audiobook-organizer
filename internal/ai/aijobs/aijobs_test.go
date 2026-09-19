@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/aijobs_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 92b8a4e2-1647-48c3-acc3-ae3e101623d7
 // last-edited: 2026-09-19
 
@@ -108,6 +108,9 @@ type fakeBatchClient struct {
 	lastExtra     map[string]string
 	returnBatchID string
 	returnErr     error
+	// createErr fails only CreateBatchWithMetadata (upload succeeds): the
+	// ambiguous case, where OpenAI may or may not have accepted the batch.
+	createErr error
 }
 
 func (f *fakeBatchClient) UploadBatchFile(ctx context.Context, data []byte) (string, error) {
@@ -121,6 +124,9 @@ func (f *fakeBatchClient) CreateBatchWithMetadata(ctx context.Context, fileID, b
 	f.lastExtra = extra
 	if f.returnErr != nil {
 		return "", f.returnErr
+	}
+	if f.createErr != nil {
+		return "", f.createErr
 	}
 	return f.returnBatchID, nil
 }
