@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
 // last-edited: 2026-09-19
 
@@ -168,6 +168,9 @@ func (h *Handler) playlistItems(c *gin.Context, playlistID string, bookIDs []str
 	if len(bookIDs) == 0 {
 		return items
 	}
+	// A member that lost a merge is shown as its survivor, not dropped (see
+	// canonicalBookID), so the user can still see and remove it.
+	bookIDs = h.canonicalMembers(bookIDs)
 
 	books, err := h.library.GetBooksByIDs(bookIDs)
 	if err != nil {

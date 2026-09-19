@@ -221,7 +221,7 @@ func (h *Handler) BatchRemoveFromPlaylist(c *gin.Context) {
 		if pl.Type != database.UserPlaylistTypeStatic {
 			return http.StatusConflict, "this is a smart playlist; its members come from its query"
 		}
-		pl.BookIDs = withoutIDs(pl.BookIDs, h.resolveSyncIDs(playlistItemSyncIDs(req.Items)))
+		pl.BookIDs = h.withoutMembers(pl.BookIDs, h.resolveSyncIDs(playlistItemSyncIDs(req.Items)))
 		return 0, ""
 	})
 }
@@ -236,21 +236,9 @@ func (h *Handler) RemovePlaylistItem(c *gin.Context) {
 		if pl.Type != database.UserPlaylistTypeStatic {
 			return http.StatusConflict, "this is a smart playlist; its members come from its query"
 		}
-		pl.BookIDs = withoutIDs(pl.BookIDs, target)
+		pl.BookIDs = h.withoutMembers(pl.BookIDs, target)
 		return 0, ""
 	})
-}
-
-// withoutIDs returns ids minus every element of drop, preserving order. It
-// allocates a new slice so the stored record's backing array is never aliased.
-func withoutIDs(ids, drop []string) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if !slices.Contains(drop, id) {
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 // ── shared plumbing ─────────────────────────────────────────────────────────

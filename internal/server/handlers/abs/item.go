@@ -1,11 +1,12 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
-// last-edited: 2026-08-02
+// last-edited: 2026-09-19
 
 package abs
 
 import (
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -46,6 +47,10 @@ func (h *Handler) Item(c *gin.Context) {
 		return
 	}
 	view, err := h.loadItemView(c.Request.Context(), book)
+	if errors.Is(err, errRedirectedSyncID) {
+		respondError(c, http.StatusNotFound, "library item not found")
+		return
+	}
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "could not load library item")
 		return

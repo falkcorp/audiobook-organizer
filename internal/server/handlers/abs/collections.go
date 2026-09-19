@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-09-19
 
@@ -364,13 +364,10 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		return
 	}
 
-	kept := make([]string, 0, len(col.BookIDs))
-	for _, id := range col.BookIDs {
-		if id != target[0] {
-			kept = append(kept, id)
-		}
-	}
-	col.BookIDs = kept
+	// withoutMembers, not a plain id compare: the client holds the SURVIVOR's
+	// id for a member that is stored as a merge loser (the list renders the
+	// survivor in its place), and removing it must remove the stored loser.
+	col.BookIDs = h.withoutMembers(col.BookIDs, target)
 
 	if err := h.collections.UpdateCollection(col); err != nil {
 		// Same race as AddBookToCollection above: surface a stale-Version
@@ -413,7 +410,7 @@ func (h *Handler) BatchAddToCollection(c *gin.Context) {
 // BatchRemoveFromCollection handles POST /api/collections/:id/batch/remove.
 func (h *Handler) BatchRemoveFromCollection(c *gin.Context) {
 	h.batchEditCollection(c, func(col *database.Collection, ids []string) {
-		col.BookIDs = withoutIDs(col.BookIDs, ids)
+		col.BookIDs = h.withoutMembers(col.BookIDs, ids)
 	})
 }
 
@@ -551,8 +548,12 @@ func (h *Handler) collectionsPageBooks(
 
 	var ids []string
 	seen := make(map[string]struct{})
+	members := make([][]string, len(cols))
 	for i := range cols {
-		for _, id := range collectionBookIDs(&cols[i]) {
+		// Merge losers are shown as their survivor (canonicalMembers), so a
+		// member merged away stays visible and removable instead of vanishing.
+		members[i] = h.canonicalMembers(collectionBookIDs(&cols[i]))
+		for _, id := range members[i] {
 			if _, dup := seen[id]; dup {
 				continue
 			}
@@ -578,7 +579,7 @@ func (h *Handler) collectionsPageBooks(
 	}
 
 	for i := range cols {
-		member := collectionBookIDs(&cols[i])
+		member := members[i]
 		items := make([]any, 0, len(member))
 		for _, id := range member {
 			dto, ok := byID[id]
@@ -588,6 +589,68 @@ func (h *Handler) collectionsPageBooks(
 			items = append(items, dto)
 		}
 		out[cols[i].ID] = items
+	}
+	return out
+}
+
+// canonicalBookID returns the book a client sees for a stored member id: the
+// merge SURVIVOR when bookID lost a merge (its sync id now redirects), else
+// bookID itself.
+//
+// Membership lists (collections, playlists) store book ids and are not rewritten
+// when a merge happens, so a member can be a loser. Rendering the loser would
+// hand the client a redirecting id (the B6 bug); dropping it made the book
+// vanish from the list with no way to see or remove it. Substituting the
+// survivor keeps it visible under an id that resolves to itself.
+func (h *Handler) canonicalBookID(bookID string) string {
+	if h.identity == nil {
+		return bookID
+	}
+	syncID, err := h.identity.MintOrGetSyncID(bookID)
+	if err != nil {
+		return bookID
+	}
+	item, err := h.identity.ResolveSyncItem(syncID)
+	if err != nil || item == nil || item.SyncID == syncID || item.CurrentBookID == "" {
+		return bookID
+	}
+	return item.CurrentBookID
+}
+
+// canonicalMembers maps every member to canonicalBookID, keeping order and
+// collapsing duplicates (a loser and its survivor both listed show once).
+func (h *Handler) canonicalMembers(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		cid := h.canonicalBookID(id)
+		if _, dup := seen[cid]; dup {
+			continue
+		}
+		seen[cid] = struct{}{}
+		out = append(out, cid)
+	}
+	return out
+}
+
+// withoutMembers returns stored minus every member whose stored id OR
+// canonical (survivor) id is in drop, preserving order. The client can only
+// name the survivor for a merged-away member, so matching on the stored id
+// alone would leave the loser in place while reporting it removed.
+func (h *Handler) withoutMembers(stored, drop []string) []string {
+	dropSet := make(map[string]struct{}, len(drop))
+	for _, id := range drop {
+		dropSet[id] = struct{}{}
+	}
+	out := make([]string, 0, len(stored))
+	for _, id := range stored {
+		if _, hit := dropSet[id]; hit {
+			continue
+		}
+		if _, hit := dropSet[h.canonicalBookID(id)]; hit {
+			continue
+		}
+		out = append(out, id)
 	}
 	return out
 }
