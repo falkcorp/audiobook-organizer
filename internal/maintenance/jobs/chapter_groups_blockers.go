@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_blockers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ef5d7b19-e54c-4787-ba5b-cbc96add5858
 // last-edited: 2026-09-19
 
@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -18,6 +19,7 @@ import (
 type chapterBlockerStore interface {
 	merge.UserProgressMerger
 	ListUserPlaylists(playlistType string, limit, offset int) ([]database.UserPlaylist, int, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 }
 
 // chapterCarryContext is read once per run.
@@ -57,13 +59,18 @@ func newChapterCarryContext(store chapterBlockerStore) (*chapterCarryContext, er
 //   - static playlist entries naming a source (the entry would point at a
 //     soft-deleted book),
 //   - user ratings/notes on a source,
-//   - metadata only a source has (ASIN, series, narrator, author) -- the
-//     merge fills nothing it cannot journal,
-//   - listening progress on a store that cannot follow it.
+//   - listening progress on a store that cannot follow it,
+//   - metadata the primary lacks on which two sources DISAGREE (conflict).
 //
-// Any of those blocks the group: it is reported and left alone rather than
-// losing the data at the purge. Returns the reasons; empty means safe.
-func (cc *chapterCarryContext) chapterGroupBlockers(primary *database.Book, sources []*database.Book) []string {
+// Metadata the primary lacks and the sources agree on (ASIN, narrator,
+// series, author) is not a blocker: the merge fills it onto the primary's
+// EMPTY fields, never over a set or user-locked one, journaled so undo
+// empties it again (dedup.PlanFillEmpty / SplitMergeOptions.FillEmpty).
+//
+// Any blocker holds the group back: it is reported and left alone rather than
+// losing the data at the purge. Returns the reasons (empty means safe) and the
+// metadata fields the merge would fill.
+func (cc *chapterCarryContext) chapterGroupBlockers(primary *database.Book, sources []*database.Book) ([]string, []string) {
 	var out []string
 	add := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
 	// database.AsBookmarkStore unwraps the server's store decorators (a bare
@@ -108,20 +115,13 @@ func (cc *chapterCarryContext) chapterGroupBlockers(primary *database.Book, sour
 		if src.UserRatingOverall != nil || src.UserRatingStory != nil || src.UserRatingPerformance != nil || src.UserRatingNotes != nil {
 			add("%s: has a user rating or notes", src.ID)
 		}
-		if strPtrSet(src.ASIN) && !strPtrSet(primary.ASIN) {
-			add("%s: has an ASIN the primary lacks", src.ID)
-		}
-		if src.SeriesID != nil && primary.SeriesID == nil {
-			add("%s: has a series the primary lacks", src.ID)
-		}
-		if strPtrSet(src.Narrator) && !strPtrSet(primary.Narrator) {
-			add("%s: has a narrator the primary lacks", src.ID)
-		}
-		if src.AuthorID != nil && primary.AuthorID == nil {
-			add("%s: has an author the primary lacks", src.ID)
-		}
 	}
-	return out
+	plan, err := dedup.PlanFillEmpty(cc.store, primary, sources)
+	if err != nil {
+		add("metadata fill plan not readable: %v", err)
+	}
+	for _, c := range plan.Conflicts {
+		add("metadata conflict: %s", c)
+	}
+	return out, plan.Fields
 }
-
-func strPtrSet(s *string) bool { return s != nil && *s != "" }

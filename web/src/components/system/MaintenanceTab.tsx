@@ -1,5 +1,5 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -543,6 +543,9 @@ export function ChapterConsolidationCard() {
                         `${g.file_count} files · ${Math.round(g.total_duration / 60)} min total · ${g.directory}` +
                         (g.title_action === 'kept' && g.primary_title
                           ? ` · keeps title "${g.primary_title}"`
+                          : '') +
+                        (g.metadata_fills && g.metadata_fills.length > 0
+                          ? ` · fills empty ${g.metadata_fills.join(', ')}`
                           : '') +
                         (g.blockers && g.blockers.length > 0
                           ? ` · blocked: ${g.blockers.join('; ')}`

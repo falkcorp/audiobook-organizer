@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -112,6 +112,9 @@ type chapterGroupOutcome struct {
 	// Blockers name user data or metadata on a source that the merge cannot
 	// carry onto the primary; a group with any is never merged.
 	Blockers []string `json:"blockers,omitempty"`
+	// MetadataFills names the fields (asin, narrator, series, author) the
+	// merge copies from the sources onto the primary's EMPTY fields.
+	MetadataFills []string `json:"metadata_fills,omitempty"`
 	// PrimaryTitle is the primary's title before the merge.
 	PrimaryTitle string `json:"primary_title,omitempty"`
 	// TitleAction: "set" (a filename-derived title replaced by CommonTitle),

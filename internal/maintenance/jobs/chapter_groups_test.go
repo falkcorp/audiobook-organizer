@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -323,5 +323,38 @@ func TestMergeChapterGroups_ExcludesManualOnlyLibraries(t *testing.T) {
 	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
 	if res.GroupsFound != 0 || res.BooksExcluded != 2 {
 		t.Fatalf("Doctor Who chapters offered for merge: %+v", res)
+	}
+}
+
+// Source-only metadata is filled onto an empty primary, not a blocker; two
+// sources disagreeing on it is a conflict that blocks the group.
+func TestMergeChapterGroups_MetadataFillsOrConflictBlocks(t *testing.T) {
+	s := ddRealStore(t)
+	tale := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
+	asin := "B0TALEASIN"
+	if _, err := s.ModifyBook(tale[1].ID, func(b *database.Book) error { b.ASIN = &asin; return nil }); err != nil {
+		t.Fatalf("ModifyBook: %v", err)
+	}
+	saga := chSeedGroup(t, s, "/lib/B/Saga", "Saga", 3, 300)
+	for i, v := range []string{"Reader One", "Reader Two"} {
+		v := v
+		if _, err := s.ModifyBook(saga[i+1].ID, func(b *database.Book) error { b.Narrator = &v; return nil }); err != nil {
+			t.Fatalf("ModifyBook: %v", err)
+		}
+	}
+	pre := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if pre.GroupsBlocked != 1 || pre.BooksMerged != 1 {
+		t.Fatalf("preview: want Saga blocked on a narrator conflict and Tale mergeable, got %+v", pre)
+	}
+	res := chPreviewThenApply(t, s)
+	if res.BooksMerged != 1 || len(res.Groups) != 1 || res.Groups[0].Status != "merged" {
+		t.Fatalf("want only Tale merged, got %+v", res)
+	}
+	p := ddMustGet(t, s, tale[0].ID)
+	if p.ASIN == nil || *p.ASIN != asin {
+		t.Fatalf("source-only ASIN not filled onto the empty primary: %v", p.ASIN)
+	}
+	if ddMustGet(t, s, saga[1].ID).IsSoftDeleted() {
+		t.Fatal("a group with a metadata conflict was merged")
 	}
 }

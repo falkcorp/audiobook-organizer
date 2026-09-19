@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package merge
 
@@ -97,6 +97,10 @@ type CombineJournal struct {
 	// Override is non-nil when the combine applied a metadata override to the
 	// survivor; it records what the survivor held before.
 	Override *CombineOverrideUndo `json:"override,omitempty"`
+	// FilledEmpty records metadata a merge copied from absorbed books onto the
+	// survivor where the survivor's field was EMPTY (never an overwrite).
+	// Undo empties each such field again if it still holds the filled value.
+	FilledEmpty *CombineFillEmpty `json:"filled_empty,omitempty"`
 
 	// ITunesRemovals is always empty for a combine and is recorded so the
 	// journal states that explicitly: CombineBooks queues NO iTunes-library
@@ -171,6 +175,24 @@ type CombineUserProgress struct {
 	SurvivorPosBefore   []database.UserPosition `json:"survivor_positions_before,omitempty"`
 	SurvivorStateAfter  *database.UserBookState `json:"survivor_state_after,omitempty"`
 	SurvivorPosAfter    []database.UserPosition `json:"survivor_positions_after,omitempty"`
+}
+
+// CombineFillEmpty is the set of survivor fields a merge filled because they
+// were empty. Each non-nil field is a value written; its before-value was
+// empty (nil, or no book_authors rows for Authors).
+type CombineFillEmpty struct {
+	ASIN           *string               `json:"asin,omitempty"`
+	Narrator       *string               `json:"narrator,omitempty"`
+	SeriesID       *int                  `json:"series_id,omitempty"`
+	SeriesSequence *int                  `json:"series_sequence,omitempty"`
+	AuthorID       *int                  `json:"author_id,omitempty"`
+	Authors        []database.BookAuthor `json:"authors,omitempty"`
+}
+
+// Empty reports whether nothing was filled.
+func (f *CombineFillEmpty) Empty() bool {
+	return f == nil || (f.ASIN == nil && f.Narrator == nil && f.SeriesID == nil &&
+		f.SeriesSequence == nil && f.AuthorID == nil && len(f.Authors) == 0)
 }
 
 // CombineOverrideUndo records the survivor's metadata before an override.
@@ -836,6 +858,59 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			restored := *prior
 			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
 				return res, fmt.Errorf("restore override lock %s: %w", field, err)
+			}
+		}
+	}
+
+	// 4b. Fill-empty metadata. Each filled field goes back to empty only if it
+	//     still holds the value the merge wrote; a field someone set since is
+	//     theirs and is left, with a warning.
+	if f := j.FilledEmpty; !f.Empty() {
+		authorsCleared := false
+		_, err := ms.db.ModifyBook(j.SurvivorID, func(b *database.Book) error {
+			changed := false
+			if f.ASIN != nil {
+				if b.ASIN != nil && *b.ASIN == *f.ASIN {
+					b.ASIN, changed = nil, true
+				} else {
+					res.Warnings = append(res.Warnings, "survivor ASIN changed after the merge; left as is")
+				}
+			}
+			if f.Narrator != nil {
+				if b.Narrator != nil && *b.Narrator == *f.Narrator {
+					b.Narrator, changed = nil, true
+				} else {
+					res.Warnings = append(res.Warnings, "survivor narrator changed after the merge; left as is")
+				}
+			}
+			if f.SeriesID != nil {
+				if b.SeriesID != nil && *b.SeriesID == *f.SeriesID {
+					b.SeriesID, changed = nil, true
+					if f.SeriesSequence != nil && b.SeriesSequence != nil && *b.SeriesSequence == *f.SeriesSequence {
+						b.SeriesSequence = nil
+					}
+				} else {
+					res.Warnings = append(res.Warnings, "survivor series changed after the merge; left as is")
+				}
+			}
+			if f.AuthorID != nil {
+				if b.AuthorID != nil && *b.AuthorID == *f.AuthorID {
+					b.AuthorID, changed, authorsCleared = nil, true, true
+				} else {
+					res.Warnings = append(res.Warnings, "survivor author changed after the merge; left as is")
+				}
+			}
+			if !changed {
+				return database.ErrSkipBookWrite
+			}
+			return nil
+		})
+		if err != nil {
+			return res, fmt.Errorf("restore survivor fill-empty metadata: %w", err)
+		}
+		if authorsCleared && len(f.Authors) > 0 {
+			if err := ms.db.SetBookAuthors(j.SurvivorID, nil); err != nil {
+				return res, fmt.Errorf("restore survivor authors (fill-empty): %w", err)
 			}
 		}
 	}

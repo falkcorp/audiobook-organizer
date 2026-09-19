@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-09-19
 
@@ -103,6 +103,9 @@ type SplitMergeOptions struct {
 	// previous numbers are journaled (keep's own files and absorbed files), so
 	// UndoCombine restores them.
 	FileOrder []string
+	// FillEmpty copies ASIN, narrator, series and author from the sources
+	// onto the keep where the keep's field is EMPTY (see PlanFillEmpty).
+	FillEmpty bool
 }
 
 // MergeSplitBookClusterWithOptions is MergeSplitBookCluster with options.
@@ -157,6 +160,28 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		}
 		plans = append(plans, plan)
 	}
+	// Fill-empty metadata is planned before the first write: a conflict
+	// (sources disagreeing on a value the keep lacks) refuses the merge.
+	var fillPlan FillEmptyPlan
+	if opts.FillEmpty {
+		srcBooks := make([]*database.Book, 0, len(plans))
+		for _, p := range plans {
+			b, berr := store.GetBookByID(p.entry.BookID)
+			if berr != nil || b == nil {
+				return nil, fmt.Errorf("split-book merge refused: re-read src %s: %v", p.entry.BookID, berr)
+			}
+			srcBooks = append(srcBooks, b)
+		}
+		fp, perr := PlanFillEmpty(store, keep, srcBooks)
+		if perr != nil {
+			return nil, fmt.Errorf("split-book merge refused: %w", perr)
+		}
+		if len(fp.Conflicts) > 0 {
+			return nil, fmt.Errorf("split-book merge refused: metadata conflict: %v", fp.Conflicts)
+		}
+		fillPlan = fp
+	}
+
 	// A src whose listening progress cannot be carried (a store without a
 	// sync follower) is left out whole: retiring it would lose that progress
 	// at the purge.
@@ -338,6 +363,16 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			Applied:     merge.CombineOverride{Title: suggestedTitle},
 			TitleBefore: titleBefore,
 		}
+	}
+
+	// Step 3b: fill-empty metadata onto the keep, journaled for undo. Only
+	// done when at least one src was absorbed.
+	if opts.FillEmpty && len(kept) > 0 {
+		filled, ferr := applyFillEmpty(store, keepID, fillPlan)
+		if ferr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("fill-empty metadata on keep %s: %v", keepID, ferr))
+		}
+		journal.FilledEmpty = filled
 	}
 
 	// Step 4: finalize the journal. Duration needs no entry: UndoCombine
