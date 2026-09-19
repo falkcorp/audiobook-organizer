@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package abs
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -140,7 +141,7 @@ func (h *Handler) MediaProgressPatch(c *gin.Context) {
 		return
 	}
 	if err := h.applyProgressUpdate(user.ID, bookID, req); err != nil {
-		respondError(c, http.StatusInternalServerError, "could not save progress")
+		respondError(c, progressWriteStatus(err), "could not save progress")
 		return
 	}
 	respondPlainOK(c)
@@ -177,7 +178,7 @@ func (h *Handler) MediaProgressBatchUpdate(c *gin.Context) {
 			continue
 		}
 		if err := h.applyProgressUpdate(user.ID, bookID, item); err != nil {
-			respondError(c, http.StatusInternalServerError, "could not save progress")
+			respondError(c, progressWriteStatus(err), "could not save progress")
 			return
 		}
 	}
@@ -214,6 +215,13 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		respondNotFoundPlain(c)
 		return
 	}
+	// Read the state BEFORE clearing anything: positions cleared with no
+	// tombstone written would let any offline backlog replay undo the reset.
+	// An unreadable state is transient; nothing is changed and it answers 503.
+	if _, err := h.progress.GetUserBookState(user.ID, bookID); err != nil {
+		respondError(c, http.StatusServiceUnavailable, "could not load progress state")
+		return
+	}
 
 	if err := h.progress.ClearUserPositions(user.ID, bookID); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not reset progress")
@@ -235,7 +243,7 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		state.ProgressResetAt = &resetAt
 		state.ProgressResetPositions = appendResetPosition(state.ProgressResetPositions, pos.PositionSeconds)
 	}); err != nil {
-		respondError(c, http.StatusInternalServerError, "could not reset progress")
+		respondError(c, progressWriteStatus(err), "could not reset progress")
 		return
 	}
 	respondPlainOK(c)
@@ -276,7 +284,7 @@ func (h *Handler) RemoveFromContinueListening(c *gin.Context) {
 	if err := h.updateUserBookState(user.ID, bookID, func(state *database.UserBookState) {
 		state.HideFromContinueListening = true
 	}); err != nil {
-		respondError(c, http.StatusInternalServerError, "could not update progress")
+		respondError(c, progressWriteStatus(err), "could not update progress")
 		return
 	}
 	respondJSON(c, http.StatusOK, gin.H{})
@@ -319,7 +327,13 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 		stored.CurrentTime = pos.PositionSeconds
 		stored.UpdatedAtMs = msEpoch(pos.UpdatedAt)
 	}
-	state, _ := h.progress.GetUserBookState(userID, bookID)
+	state, err := h.progress.GetUserBookState(userID, bookID)
+	if err != nil {
+		// Fail closed: without the state the finished flag and the reset
+		// tombstone are unknown, and updateUserBookState would refuse the
+		// follow-up write anyway, leaving a position with no state.
+		return fmt.Errorf("%w: %s/%s: %w", errProgressStateUnreadable, userID, bookID, err)
+	}
 	if state != nil {
 		stored.IsFinished = state.Status == database.UserBookStatusFinished
 		if ms := msEpoch(state.LastActivityAt); ms > stored.UpdatedAtMs {
@@ -524,6 +538,19 @@ func (h *Handler) resolveBookID(userID, raw string) (bookID, syncID string, ok b
 // asserts the capability), but an explicit error beats a silent no-op that would
 // report a saved position the server never wrote.
 var errNoProgressStore = errors.New("abs: no listening-progress store is wired")
+
+// errProgressStateUnreadable: the stored user_book_state row could not be read
+// (I/O or decode). Nothing was written; the handler answers 503 (retryable).
+var errProgressStateUnreadable = errors.New("abs: stored book state is unreadable")
+
+// progressWriteStatus maps a progress write error to its HTTP status: 503 for
+// an unreadable state row (transient, nothing written), 500 otherwise.
+func progressWriteStatus(err error) int {
+	if errors.Is(err, errProgressStateUnreadable) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
+}
 
 // respondNotFoundPlain answers exactly what real ABS answers for a missing progress
 // row or bookmark: 404 with the plain-text body "Not Found".

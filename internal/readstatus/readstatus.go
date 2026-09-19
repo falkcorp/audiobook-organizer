@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.1.2
+// version: 2.2.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -30,6 +30,8 @@
 package readstatus
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -55,6 +57,13 @@ type Store interface {
 	SetUserBookState(state *database.UserBookState) error
 }
 
+// ErrStateUnreadable is returned when the stored user_book_state row could not
+// be read (I/O or decode error). That is NOT "no row yet": writing a fresh row
+// over it would silently drop the fields only the stored row carries (manual
+// status, hide-from-continue-listening, the progress-reset tombstone), so
+// nothing is written. Handlers map it to 503.
+var ErrStateUnreadable = errors.New("readstatus: stored book state is unreadable")
+
 // RecomputeUserBookState reads positions + segment durations and
 // updates user_book_state with fresh auto-computed fields. Returns
 // the new state (or a no-op unchanged state if there's nothing to
@@ -67,7 +76,10 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	if err != nil {
 		return nil, err
 	}
-	existing, _ := store.GetUserBookState(userID, bookID)
+	existing, err := store.GetUserBookState(userID, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s/%s: %w", ErrStateUnreadable, userID, bookID, err)
+	}
 
 	// If no existing state and no positions, there's nothing to record.
 	if len(positions) == 0 && existing == nil {
@@ -150,7 +162,10 @@ func SetManualStatus(store Store, userID, bookID, status string) (*database.User
 	if store == nil {
 		return nil, nil
 	}
-	existing, _ := store.GetUserBookState(userID, bookID)
+	existing, err := store.GetUserBookState(userID, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s/%s: %w", ErrStateUnreadable, userID, bookID, err)
+	}
 	var state *database.UserBookState
 	if existing != nil {
 		copied := *existing

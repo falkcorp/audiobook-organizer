@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -37,6 +37,10 @@ import (
 // ULIDs would let a regression through.
 type fakeLibrary struct {
 	mu sync.Mutex
+
+	// stateErr, when set, makes GetUserBookState fail: a transient read error
+	// (I/O, decode) as opposed to "no row yet" (nil, nil).
+	stateErr error
 
 	// order preserves seed order, which is what the list endpoints iterate.
 	order    []string
@@ -941,6 +945,9 @@ func (f *fakeLibrary) ClearUserPositions(userID, bookID string) error {
 func (f *fakeLibrary) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stateErr != nil {
+		return nil, f.stateErr
+	}
 	return f.states[userID+"|"+bookID], nil
 }
 
