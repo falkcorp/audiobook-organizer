@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.4.0
+// version: 4.5.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -101,6 +101,10 @@ type PipelineManager struct {
 	// whoever started it (RunScan, or the batch poller collecting a batch).
 	// CancelScan cancels it through cancels. Guarded by mu.
 	scanCtxs map[int]context.Context
+	// polling marks scans whose heartbeat poll is running (pollAsync).
+	polling map[int]bool
+	// heartbeat overrides heartbeatInterval when non-zero (tests).
+	heartbeat time.Duration
 }
 
 // clock returns the current time from pm.now (time.Now when unset).
@@ -221,25 +225,24 @@ func (pm *PipelineManager) CancelScan(scanID int) error {
 	pm.mu.Unlock()
 
 	if !exists {
-		return fmt.Errorf("scan %d not found or already completed", scanID)
-	}
-
-	// Cancel the context to stop in-flight realtime API calls
-	cancel()
-
-	// Cancel any submitted batch jobs with OpenAI
-	phases, _ := pm.scanStore.GetPhases(scanID)
-	for _, p := range phases {
-		if p.Status == "submitted" && p.BatchID != "" {
-			if err := pm.parser.CancelBatch(context.Background(), p.BatchID); err != nil {
-				slog.Warn("[AI Pipeline] Scan warning failed to cancel batch", "scanID", scanID, "p", p.BatchID, "err", err)
-			} else {
-				slog.Info("[AI Pipeline] Scan canceled batch", "scanID", scanID, "p", p.BatchID)
-			}
+		// No op attached in this process (e.g. between a restart and the
+		// op's resume). The scan row is the truth: a scan still running
+		// there still owns paid batches and must be cancelable.
+		scan, err := pm.scanStore.GetScan(scanID)
+		if err != nil || scan == nil || isTerminalScan(scan.Status) {
+			return fmt.Errorf("scan %d not found or already completed", scanID)
 		}
+	} else {
+		// Stop in-flight realtime calls and any poller-started work.
+		cancel()
 	}
 
+	// Mark phases and scan canceled FIRST, then cancel the batches: a
+	// CreateBatch returning after this point finds its phase no longer
+	// "submitting" and cancels its own batch (recordBatch).
+	phases, _ := pm.scanStore.GetPhases(scanID)
 	pm.cleanupScan(scanID, "canceled")
+	pm.cancelPhaseBatches(scanID, phases)
 	return nil
 }
 
@@ -617,10 +620,8 @@ func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, ph
 	case err != nil:
 		plog.Warn("scan %d: %s is mid-submit and its batch lookup was inconclusive; will look again: %v", scanID, phaseType, err)
 	case found:
-		plog.Info("scan %d: re-attached %s to batch %s found by metadata", scanID, phaseType, batchID)
-		if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
-			plog.Error("scan %d: record re-attached batch %s for %s (will retry): %v", scanID, batchID, phaseType, err)
-		}
+		plog.Info("scan %d: re-attaching %s to batch %s found by metadata", scanID, phaseType, batchID)
+		pm.recordBatch(scanID, phaseType, batchID)
 	default:
 		// "Not in the listing" proves absence only once submitGrace has
 		// passed since the last CreateBatch attempt: an accepted batch whose
@@ -805,7 +806,11 @@ func (pm *PipelineManager) phaseClaimed(scanID int, phaseType string) bool {
 // batch listing; a failed or expired batch, or one pushed off that page by
 // other traffic, is only ever seen here.
 func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, mode string, done <-chan error) error {
-	ticker := time.NewTicker(heartbeatInterval)
+	interval := heartbeatInterval
+	if pm.heartbeat > 0 {
+		interval = pm.heartbeat
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -833,8 +838,14 @@ func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, mode str
 			return ctx.Err()
 
 		case <-ticker.C:
+			// The poll runs OFF this loop: it can take minutes (a long batch
+			// listing, a download and its whole apply), and this loop must keep
+			// reporting progress — the registry watchdog cancels an op silent
+			// past ProgressTimeout, and that cancel would cancel the paid
+			// batches — and keep servicing ctx.Done and done. Single-flight:
+			// a tick that finds the previous poll still running skips it.
 			if mode == "batch" {
-				pm.pollScanBatches(ctx, scanID)
+				pm.pollAsync(ctx, scanID)
 			}
 			phases, err := pm.scanStore.GetPhases(scanID)
 			if err != nil {
@@ -849,6 +860,29 @@ func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, mode str
 			pm.report(scanID, phaseProgressPct(complete), 100, "AI scan in progress")
 		}
 	}
+}
+
+// pollAsync runs pollScanBatches for one scan in the background, at most one
+// at a time per scan.
+func (pm *PipelineManager) pollAsync(ctx context.Context, scanID int) {
+	pm.mu.Lock()
+	if pm.polling == nil {
+		pm.polling = make(map[int]bool)
+	}
+	if pm.polling[scanID] {
+		pm.mu.Unlock()
+		return
+	}
+	pm.polling[scanID] = true
+	pm.mu.Unlock()
+	go func() {
+		defer func() {
+			pm.mu.Lock()
+			delete(pm.polling, scanID)
+			pm.mu.Unlock()
+		}()
+		pm.pollScanBatches(ctx, scanID)
+	}()
 }
 
 // phaseProgressPct maps completed phase count to a percentage, capped below 100
@@ -900,6 +934,18 @@ func (pm *PipelineManager) failPhase(scanID int, phaseType string, err error) {
 	}
 	if updateErr := pm.scanStore.UpdateScanStatus(scanID, "failed"); updateErr != nil {
 		slog.Error("[AI Pipeline] Scan error updating scan status", "scanID", scanID, "updateErr", updateErr)
+	}
+
+	// Close out the sibling phases too. A sibling left "submitted" would keep
+	// a paid batch running for a scan that can never use it, and CollectBatch
+	// would report that batch "not yet collected" on every poller tick.
+	if phases, err := pm.scanStore.GetPhases(scanID); err == nil {
+		for _, p := range phases {
+			if p.PhaseType != phaseType && !isTerminalPhase(p.Status) {
+				_ = pm.scanStore.UpdatePhaseStatus(scanID, p.PhaseType, "failed", "")
+			}
+		}
+		go pm.cancelPhaseBatches(scanID, phases)
 	}
 
 	// Carry the failure to the waiting operation. finishScan drops the cancel
@@ -1268,11 +1314,63 @@ func (pm *PipelineManager) submitBatch(scanID int, phaseType string, create func
 		return
 	}
 	plog.Info("scan %d: %s batch submitted as %s", scanID, phaseType, batchID)
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
-		// The row stays "submitting"; resolveSubmitting re-attaches by metadata.
-		plog.Error("scan %d: could not record batch %s for %s: %v", scanID, batchID, phaseType, err)
-	}
+	pm.recordBatch(scanID, phaseType, batchID)
 	// The collector (heartbeat or batch poller) finishes it.
+}
+
+// recordBatch attaches batchID to a phase that is still "submitting", by a
+// compare-and-set in the store. If the phase or its scan was canceled or
+// failed meanwhile (an operator cancel landing while CreateBatch was in
+// flight), the batch is NOT attached — a live paid batch on a dead scan would
+// never be canceled or collected — and is canceled here instead. A store error
+// leaves the row "submitting" for resolveSubmitting to settle by metadata.
+func (pm *PipelineManager) recordBatch(scanID int, phaseType, batchID string) {
+	ok, err := pm.scanStore.TransitionPhase(scanID, phaseType, []string{"submitting"}, "submitted", batchID)
+	if err != nil {
+		plog.Error("scan %d: could not record batch %s for %s (a lookup will re-attach it): %v", scanID, batchID, phaseType, err)
+		return
+	}
+	if ok {
+		return
+	}
+	plog.Warn("scan %d: %s is no longer submitting (canceled or failed); canceling its batch %s", scanID, phaseType, batchID)
+	if err := pm.parser.CancelBatch(context.Background(), batchID); err != nil {
+		plog.Error("scan %d: cancel orphaned batch %s: %v", scanID, batchID, err)
+	}
+}
+
+// cancelPhaseBatches cancels every live OpenAI batch the given phase rows
+// own: a recorded batch id on a "submitted" phase, or — for a "submitting"
+// phase, whose id was never recorded — a batch found by owner metadata. A
+// batch created after this runs is caught by recordBatch's compare-and-set,
+// which sees the phase is no longer "submitting". Best effort: failures are
+// logged, never returned.
+func (pm *PipelineManager) cancelPhaseBatches(scanID int, phases []database.ScanPhase) {
+	ctx := context.Background()
+	for _, p := range phases {
+		batchID := ""
+		switch {
+		case p.Status == "submitted" && p.BatchID != "":
+			batchID = p.BatchID
+		case p.Status == "submitting":
+			id, found, err := pm.findScanBatch(ctx, scanID, p.PhaseType)
+			if err != nil {
+				plog.Warn("scan %d: cannot look up %s's batch to cancel it: %v", scanID, p.PhaseType, err)
+				continue
+			}
+			if !found {
+				continue
+			}
+			batchID = id
+		default:
+			continue
+		}
+		if err := pm.parser.CancelBatch(ctx, batchID); err != nil {
+			plog.Warn("scan %d: cancel batch %s of %s: %v", scanID, batchID, p.PhaseType, err)
+		} else {
+			plog.Info("scan %d: canceled batch %s of %s", scanID, batchID, p.PhaseType)
+		}
+	}
 }
 
 func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, authors []database.Author) {
@@ -1582,14 +1680,15 @@ func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
 // releases the operation waiting on it — the scan's only success path. A nil
 // outcome is what marks the operation completed.
 func (pm *PipelineManager) completeScan(scanID int) {
-	// Never overwrite a scan an operator canceled (or that failed) meanwhile.
-	if scan, err := pm.scanStore.GetScan(scanID); err == nil && scan != nil && isTerminalScan(scan.Status) && scan.Status != "complete" {
-		plog.Info("scan %d: finished cross-validation but the scan is %s; leaving it", scanID, scan.Status)
+	// Compare-and-set: never overwrite a scan an operator canceled (or that
+	// failed) between the last check and this write.
+	ok, err := pm.scanStore.CompleteScanIfActive(scanID)
+	if err != nil {
+		plog.Error("scan %d: could not mark scan complete: %v", scanID, err)
+	} else if !ok {
+		plog.Info("scan %d: finished cross-validation but the scan was canceled or failed; leaving it", scanID)
 		pm.finishScan(scanID, ErrScanCanceled)
 		return
-	}
-	if err := pm.scanStore.UpdateScanStatus(scanID, "complete"); err != nil {
-		plog.Error("scan %d: could not mark scan complete: %v", scanID, err)
 	}
 	pm.report(scanID, 100, 100, "AI scan complete")
 	pm.finishScan(scanID, nil)
@@ -1701,7 +1800,9 @@ func (pm *PipelineManager) CollectBatch(ctx context.Context, batchID string) err
 		}
 		for _, p := range phases {
 			if p.BatchID == batchID {
-				if isTerminalPhase(p.Status) {
+				// A scan that is finished, failed or canceled will never
+				// collect this batch: it is done with, not owed.
+				if isTerminalPhase(p.Status) || isTerminalScan(scan.Status) {
 					return nil
 				}
 				return fmt.Errorf("batch %s not yet collected (scan %d %s is %s)", batchID, scan.ID, p.PhaseType, p.Status)

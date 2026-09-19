@@ -1,5 +1,5 @@
 // file: internal/aiscan/external_results.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
 // last-edited: 2026-09-19
 
@@ -41,7 +41,9 @@ func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggest
 			break
 		}
 	}
-	if scan != nil && scan.Status == "complete" {
+	// Done already: complete, or superseded by a newer run. A replay must
+	// not rewrite a superseded scan's results or mark it complete again.
+	if scan != nil && (scan.Status == "complete" || scan.Status == "superseded") {
 		return scan.ID, nil
 	}
 	if scan == nil {
@@ -74,29 +76,16 @@ func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggest
 	// visible in the review queue meanwhile). ReplaceScanResults would drop
 	// those Applied flags and let the same merge be applied again, so the
 	// existing results stand whenever any of them was applied.
-	existing, err := store.GetScanResults(scan.ID)
-	if err != nil {
-		return 0, fmt.Errorf("read existing results: %w", err)
-	}
-	if !anyApplied(existing) {
-		if err := store.ReplaceScanResults(scan.ID, CrossValidate(scan.ID, nil, scanSuggestions)); err != nil {
-			return 0, fmt.Errorf("save results: %w", err)
-		}
+	// The applied-check and the replace are one decision under the store's
+	// apply lock, so an apply cannot land between them and be wiped.
+	if _, err := store.ReplaceScanResultsIfUnapplied(scan.ID, CrossValidate(scan.ID, nil, scanSuggestions)); err != nil {
+		return 0, fmt.Errorf("save results: %w", err)
 	}
 	if err := store.UpdateScanStatus(scan.ID, "complete"); err != nil {
 		return 0, fmt.Errorf("mark scan complete: %w", err)
 	}
 	supersedeUnreviewed(store, scans, scan.ID)
 	return scan.ID, nil
-}
-
-func anyApplied(rs []database.ScanResult) bool {
-	for _, r := range rs {
-		if r.Applied {
-			return true
-		}
-	}
-	return false
 }
 
 // supersedeUnreviewed marks earlier external (ai-dedup-batch) scans that

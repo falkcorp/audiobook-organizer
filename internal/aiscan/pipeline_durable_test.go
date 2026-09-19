@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -149,6 +149,12 @@ type fakeLLM struct {
 	// enrichGate, when set, holds the enrichment re-ask (a call carrying only
 	// author 1) until it is closed or the call's context ends.
 	enrichGate chan struct{}
+	// createGate, when set, holds CreateBatch* after OpenAI accepted the
+	// batch, until the channel is closed.
+	createGate chan struct{}
+	// checkDelay slows every CheckBatchStatus (a slow listing/API).
+	checkDelay  time.Duration
+	canceledIDs []string
 }
 
 func newFakeLLM(acct *fakeAccount) *fakeLLM {
@@ -228,6 +234,10 @@ func (f *fakeLLM) createBatch(phase string, owner map[string]string, inputs []ai
 		f.entered <- struct{}{}
 		select {} // OpenAI holds the batch; we die before recording its id
 	}
+	if f.createGate != nil {
+		f.entered <- struct{}{}
+		<-f.createGate
+	}
 	if createErr {
 		return "", fmt.Errorf("create batch: read tcp: connection reset by peer")
 	}
@@ -250,6 +260,12 @@ func (f *fakeLLM) CreateBatchAuthorDedup(_ context.Context, inputs []ai.AuthorDi
 }
 
 func (f *fakeLLM) CheckBatchStatus(_ context.Context, batchID string) (string, string, error) {
+	f.mu.Lock()
+	delay := f.checkDelay
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
 	b, ok := f.acct.batches[batchID]
@@ -262,11 +278,18 @@ func (f *fakeLLM) CheckBatchStatus(_ context.Context, batchID string) (string, s
 	return b.status, "file_" + batchID, nil
 }
 
-func (f *fakeLLM) CancelBatch(context.Context, string) error {
+func (f *fakeLLM) CancelBatch(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cancels++
+	f.canceledIDs = append(f.canceledIDs, id)
 	return nil
+}
+
+func (f *fakeLLM) canceled() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.canceledIDs...)
 }
 
 // failDownload consumes one configured download failure.
