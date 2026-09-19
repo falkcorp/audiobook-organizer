@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-09-19
 
@@ -46,6 +46,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver (no cgo)
@@ -84,6 +85,12 @@ type SQLActivityStore struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	// coveringTimeIdx is true once the covering time indexes exist (see
+	// sqliteDialect.coveringTimeIndexes). Set at open from sqlite_master and by
+	// OptimizeStatistics when it builds them; a query may name one of those
+	// indexes in a hint only while this is true.
+	coveringTimeIdx atomic.Bool
 }
 
 // sqlActReaderConns bounds the reader pool. WAL lets these run concurrently with
@@ -100,6 +107,10 @@ const sqlActCountCap = 100000
 // one enormous WAL frame; it also makes WipeAllActivity's "rows actually
 // deleted on cancel" contract real (it sums committed chunks).
 const sqlActDeleteChunk = 5000
+
+// sqlActSummarizeChunk bounds each Summarize delete the same way. A var only so
+// a test can shrink it to exercise the chunk boundary.
+var sqlActSummarizeChunk = sqlActDeleteChunk
 
 // OpenSQLiteActivityStore opens (creating if absent) a SQLite-backed activity
 // store at path. journal is always WAL; synchronous is "normal" (the right
@@ -144,6 +155,11 @@ func openSQLiteActivityStore(path string, ckptInterval time.Duration) (*SQLActiv
 		_ = writer.Close()
 		return nil, fmt.Errorf("sql_activity: schema: %w", err)
 	}
+	covering, err := sqlActEnsureTimeIndexes(writer, d)
+	if err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
 
 	readerDSN := fmt.Sprintf("file:%s?%s", path, pragmas)
 	reader, err := sql.Open(d.driverName(), readerDSN)
@@ -161,6 +177,7 @@ func openSQLiteActivityStore(path string, ckptInterval time.Duration) (*SQLActiv
 	}
 
 	s := &SQLActivityStore{writer: writer, reader: reader, ckpt: ckpt, dialect: d, path: path}
+	s.coveringTimeIdx.Store(covering)
 	// Started here, not by a separate call: with autocheckpoint off, a caller
 	// that forgot to start it would get an unbounded WAL with no symptom.
 	s.startCheckpointer(ckptInterval)
@@ -527,7 +544,14 @@ func (s *SQLActivityStore) buildFilter(f ActivityFilter) (string, []any) {
 	eq("type", f.Type)
 	eq("level", f.Level)
 	eq("source", f.Source)
-	eq("operation_id", f.OperationID)
+	if f.OperationID != "" {
+		// A Summarize row spans many operations and has no operation_id of its
+		// own; it answers for the ids in its sample through their op: tags. The
+		// two arms are each indexed (idx_act_op_ts, idx_act_source), so SQLite's
+		// OR optimisation keeps this a pair of index lookups.
+		conds = append(conds, "(operation_id = ? OR (source = ? AND "+s.dialect.jsonArrayContains("tags")+"))")
+		args = append(args, f.OperationID, summarizeSource, "op:"+f.OperationID)
+	}
 	eq("book_id", f.BookID)
 
 	if f.Since != nil {
@@ -649,19 +673,31 @@ func (s *SQLActivityStore) distinctSourcesQuery(f ActivityFilter) (string, []any
 	if where != "" {
 		whereClause = " WHERE " + where
 	}
-	// A time window with no tier or source is the Sources picker's own request
-	// (it sends only since/until). Left to itself the planner walks the whole
-	// of idx_act_source to get rows pre-sorted for the GROUP BY and then fetches
+	// A time window and NOTHING else is the Sources picker's own request (it
+	// sends only since/until). Left to itself the planner walks the whole of
+	// idx_act_source to get rows pre-sorted for the GROUP BY and then fetches
 	// every row to test ts — a full-table read for a 24-hour question. The ts
-	// range on the covering idx_act_ts_src is the right plan at any table
-	// size, so it is named rather than hoped for. The index is created by the
-	// schema DDL on open, so INDEXED BY cannot name a missing index.
+	// range on the covering idx_act_ts_src is the right plan at any table size,
+	// so it is named rather than hoped for — but only when that index exists
+	// (coveringTimeIdx), and only when no other predicate needs a column the
+	// index lacks; any other filter is left to the planner.
 	from := " FROM activity"
-	if f.Tier == "" && f.Source == "" && (f.Since != nil || f.Until != nil) {
-		from = " FROM activity INDEXED BY idx_act_ts_src"
+	if s.coveringTimeIdx.Load() && sqlSourcesFilterIsTimeOnly(f) {
+		from += s.dialect.indexHint(sqlActIdxTSSrc)
 	}
 	q := "SELECT source, COUNT(*) c" + from + whereClause + " GROUP BY source ORDER BY c DESC, source ASC"
 	return s.dialect.rebind(q), args
+}
+
+// sqlSourcesFilterIsTimeOnly reports whether f carries a time bound and no
+// other predicate. Limit/Offset are not predicates.
+func sqlSourcesFilterIsTimeOnly(f ActivityFilter) bool {
+	if f.Since == nil && f.Until == nil {
+		return false
+	}
+	return f.Tier == "" && f.Type == "" && f.Level == "" && f.Source == "" &&
+		f.OperationID == "" && f.BookID == "" && f.Search == "" &&
+		len(f.Tags) == 0 && len(f.ExcludeSources) == 0 && len(f.ExcludeTiers) == 0 && len(f.ExcludeTags) == 0
 }
 
 // Summarize groups entries older than olderThan in tier by (day, type, source),
@@ -672,27 +708,28 @@ func (s *SQLActivityStore) distinctSourcesQuery(f ActivityFilter) (string, []any
 // the summary it commits with describes — mirroring PebbleActivityStore.Summarize. Returns rows
 // deleted.
 func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {
-	s.backfillGate.Lock()
-	defer s.backfillGate.Unlock()
+	// ctx-aware, like Prune and CompactByDay: a raw Lock here pinned the nightly
+	// op behind a backfill batch with no way to cancel the wait.
+	release, err := s.acquireBackfillGateWrite(ctx, "summarize")
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	cutoff := olderThan.UnixNano()
+
+	// Only the group KEYS come from this read. Every number the summary states
+	// is recomputed inside the transaction that deletes (sqlSummarizeGroupFirst),
+	// so a row added to the group after this scan is counted iff it is deleted.
 	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(
-		`SELECT date(ts/1000000000,'unixepoch') AS d, type, source, COUNT(*), MIN(ts), MAX(ts),
-		        COUNT(DISTINCT NULLIF(operation_id, ''))
-		 FROM activity WHERE tier = ? AND ts < ? AND pruned_at IS NULL
-		 GROUP BY d, type, source`), tier, cutoff)
+		`SELECT DISTINCT date(ts/1000000000,'unixepoch') AS d, type, source
+		 FROM activity WHERE tier = ? AND ts < ? AND pruned_at IS NULL`), tier, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("sql_activity: summarize scan: %w", err)
 	}
-	type grp struct {
-		day, typ, source string
-		count            int
-		minTS, maxTS     int64
-		distinctOps      int
-	}
-	var groups []grp
+	var groups []sqlSummarizeGroup
 	for rows.Next() {
-		var g grp
-		if err := rows.Scan(&g.day, &g.typ, &g.source, &g.count, &g.minTS, &g.maxTS, &g.distinctOps); err != nil {
+		var g sqlSummarizeGroup
+		if err := rows.Scan(&g.day, &g.typ, &g.source); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -706,13 +743,11 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 	now := time.Now().UTC()
 	total := 0
 	for i, g := range groups {
-		select {
-		case <-ctx.Done():
-			return total, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return total, err
 		}
-		// Liveness for the nightly op: one group is one transaction, and on a
-		// first run over an unsummarized history there are tens of thousands.
+		// Liveness for the nightly op: on a first run over an unsummarized
+		// history there are tens of thousands of groups.
 		if i%activityMaintenanceProgressEvery == 0 {
 			ReportMaintenanceProgress(ctx, MaintenancePhaseSummarize, "sqlite", total)
 		}
@@ -720,69 +755,132 @@ func (s *SQLActivityStore) Summarize(ctx context.Context, olderThan time.Time, t
 		if perr != nil {
 			return total, fmt.Errorf("sql_activity: summarize parse day %q: %w", g.day, perr)
 		}
-		lo := dayStart.UnixNano()
-		hi := dayStart.Add(24 * time.Hour).UnixNano()
-		hi = min(hi, cutoff)
-		summaryText := fmt.Sprintf("Summary: %d %s entries (%s to %s)",
-			g.count, g.typ,
-			time.Unix(0, g.minTS).UTC().Format(time.RFC3339),
-			time.Unix(0, g.maxTS).UTC().Format(time.RFC3339))
+		g.tier = tier
+		g.lo = dayStart.UnixNano()
+		g.hi = min(dayStart.Add(24*time.Hour).UnixNano(), cutoff)
+		if h := summarizeTestHooks.beforeGroup; h != nil {
+			h()
+		}
+		n, err := s.summarizeGroup(ctx, g, now)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
 
-		tx, terr := s.writer.BeginTx(ctx, nil)
-		if terr != nil {
-			return total, terr
-		}
-		// The sample is read inside the transaction that deletes the rows, so
-		// it describes exactly what this summary replaces.
-		sample, serr := sqlSummarizeOpSample(ctx, tx, s.dialect, tier, lo, hi, g.typ, g.source)
-		if serr != nil {
-			_ = tx.Rollback()
-			return total, serr
-		}
-		summary := ActivityEntry{
-			Timestamp: now,
-			Tier:      tier,
-			Type:      g.typ,
-			Level:     "info",
-			Source:    "summarize",
-			Summary:   summaryText,
-			Details:   summarizeDetailsSorted(g.source, g.distinctOps, sample),
-			PrunedAt:  &now,
-		}
-		insArgs, aerr := rowArgs(summary, nil)
-		if aerr != nil {
-			_ = tx.Rollback()
-			return total, aerr
-		}
-		if _, eerr := tx.ExecContext(ctx, s.dialect.rebind(sqlActInsert), insArgs...); eerr != nil {
-			_ = tx.Rollback()
-			return total, eerr
-		}
+// sqlSummarizeGroup is one Summarize unit: a (day, type, source) of one tier.
+// maxID is captured inside the first transaction; every delete is bounded by
+// it, so the rows deleted are exactly the rows the summary counted.
+type sqlSummarizeGroup struct {
+	day, typ, source, tier string
+	lo, hi                 int64
+	maxID                  int64
+}
 
-		delSQL := `DELETE FROM activity WHERE tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ? AND source = ?`
-		res, derr := tx.ExecContext(ctx, s.dialect.rebind(delSQL), tier, lo, hi, g.typ, g.source)
-		if derr != nil {
+// sqlSummarizeWhere is the group predicate plus the id bound. Rows written
+// after the first transaction get larger AUTOINCREMENT ids, so they are never
+// swept into a summary that did not count them; they wait for the next run.
+const sqlSummarizeWhere = `tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ? AND source = ? AND id <= ?`
+
+func (g sqlSummarizeGroup) args() []any {
+	return []any{g.tier, g.lo, g.hi, g.typ, g.source, g.maxID}
+}
+
+// summarizeGroup writes the group's summary and deletes its originals in
+// chunks of sqlActSummarizeChunk. The summary INSERT commits in the same
+// transaction as the FIRST chunk, so no committed state ever has rows deleted
+// without a summary. A pass stopped between chunks leaves the remainder in
+// place — already counted by the summary; a later run folds them into a second
+// summary (a double count in the text, never a lost row).
+func (s *SQLActivityStore) summarizeGroup(ctx context.Context, g sqlSummarizeGroup, now time.Time) (int, error) {
+	tx, err := s.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	g.maxID = math.MaxInt64
+	var count, distinctOps int
+	var minTS, maxTS, maxID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, s.dialect.rebind(
+		`SELECT COUNT(*), MIN(ts), MAX(ts), MAX(id), COUNT(DISTINCT NULLIF(operation_id, ''))
+		 FROM activity WHERE `+sqlSummarizeWhere), g.args()...).Scan(&count, &minTS, &maxTS, &maxID, &distinctOps); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("sql_activity: summarize group stats: %w", err)
+	}
+	if count == 0 {
+		// Emptied since the scan (nothing else deletes change rows under the
+		// gate today, but a zero-row summary must never be written).
+		return 0, tx.Rollback()
+	}
+	g.maxID = maxID.Int64
+	sample, err := sqlSummarizeOpSample(ctx, tx, s.dialect, g)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	summary := ActivityEntry{
+		Timestamp: now,
+		Tier:      g.tier,
+		Type:      g.typ,
+		Level:     "info",
+		Source:    "summarize",
+		Summary: fmt.Sprintf("Summary: %d %s entries (%s to %s)", count, g.typ,
+			time.Unix(0, minTS.Int64).UTC().Format(time.RFC3339),
+			time.Unix(0, maxTS.Int64).UTC().Format(time.RFC3339)),
+		Details:  summarizeDetailsSorted(g.source, distinctOps, sample),
+		Tags:     summarizeOpTags(sample),
+		PrunedAt: &now,
+	}
+	insArgs, err := rowArgs(summary, nil)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, s.dialect.rebind(sqlActInsert), insArgs...); err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+
+	deleted := 0
+	for chunk := 0; ; chunk++ {
+		if chunk > 0 {
+			if err := ctx.Err(); err != nil {
+				return deleted, err
+			}
+			if tx, err = s.writer.BeginTx(ctx, nil); err != nil {
+				return deleted, err
+			}
+		}
+		res, err := tx.ExecContext(ctx, s.dialect.rebind(
+			`DELETE FROM activity WHERE id IN (SELECT id FROM activity WHERE `+sqlSummarizeWhere+` LIMIT ?)`),
+			append(g.args(), sqlActSummarizeChunk)...)
+		if err != nil {
 			_ = tx.Rollback()
-			return total, derr
+			return deleted, err
 		}
 		n, _ := res.RowsAffected()
 		if err := tx.Commit(); err != nil {
-			return total, err
+			return deleted, err
 		}
-		total += int(n)
+		deleted += int(n)
+		if h := summarizeTestHooks.afterChunk; h != nil {
+			h()
+		}
+		if n < int64(sqlActSummarizeChunk) {
+			return deleted, nil
+		}
 	}
-	return total, nil
 }
 
 // sqlSummarizeOpSample returns the lowest summarizeOpSampleMax distinct
 // operation ids of one Summarize group, ascending — the same sample the Pebble
 // and Nuts backends keep, so a summary reads the same whichever wrote it.
-func sqlSummarizeOpSample(ctx context.Context, tx *sql.Tx, d sqlDialect, tier string, lo, hi int64, typ, source string) ([]string, error) {
+func sqlSummarizeOpSample(ctx context.Context, tx *sql.Tx, d sqlDialect, g sqlSummarizeGroup) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, d.rebind(
 		`SELECT DISTINCT operation_id FROM activity
-		 WHERE tier = ? AND ts >= ? AND ts < ? AND pruned_at IS NULL AND type = ? AND source = ?
-		   AND operation_id IS NOT NULL AND operation_id <> ''
-		 ORDER BY operation_id LIMIT ?`), tier, lo, hi, typ, source, summarizeOpSampleMax)
+		 WHERE `+sqlSummarizeWhere+` AND operation_id IS NOT NULL AND operation_id <> ''
+		 ORDER BY operation_id LIMIT ?`), append(g.args(), summarizeOpSampleMax)...)
 	if err != nil {
 		return nil, fmt.Errorf("sql_activity: summarize op sample: %w", err)
 	}
@@ -913,10 +1011,10 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 //     Lock that could park the op silently and uncancellably behind a stalled
 //     backfill batch.
 //   - The range query is a lone MIN(ts), which SQLite answers with one seek on
-//     idx_act_ts_src. It used to be MIN(ts), MAX(ts) in one statement: two
+//     idx_act_ts. It used to be MIN(ts), MAX(ts) in one statement: two
 //     aggregates defeat SQLite's min/max optimization, so it walked EVERY row
-//     below the cutoff through idx_act_ts_src with a table lookup per row to test
-//     tier (idx_act_ts_src does not cover it). Measured 1.00s vs 0.01s on a
+//     below the cutoff through idx_act_ts with a table lookup per row to test
+//     tier (idx_act_ts does not cover it). Measured 1.00s vs 0.01s on a
 //     1.5M-row fixture; production has ~5.9M such rows in a ~20 GB file. MAX
 //     was never read. The query is also re-issued per day from the end of the
 //     previous day, so runs of empty days cost nothing instead of one write
@@ -999,7 +1097,7 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 }
 
 // nextCompactableTS returns the earliest non-digest timestamp in [from, cutoff).
-// A lone MIN over an indexed column is a single seek on idx_act_ts_src; see the
+// A lone MIN over an indexed column is a single seek on idx_act_ts; see the
 // CompactByDay comment for why it must not be paired with MAX.
 func (s *SQLActivityStore) nextCompactableTS(ctx context.Context, from, cutoff int64) (int64, bool, error) {
 	var minNS sql.NullInt64
@@ -1192,7 +1290,7 @@ func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, l
 // Each category is its own bounded LIMIT query, so the number of rows decoded is
 // capped at maxDigestItems regardless of how large the day is.
 func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, beat func()) ([]DigestItem, error) {
-	// Audit rows: idx_act_tier_ts_src serves tier = 'audit' AND ts range directly,
+	// Audit rows: idx_act_tier_ts serves tier = 'audit' AND ts range directly,
 	// so this is a bounded seek that stops after maxDigestItems rows.
 	items, err := s.digestItemsWhere(ctx,
 		`tier = 'audit' AND ts >= ? AND ts < ? ORDER BY ts ASC, id ASC LIMIT ?`, lo, hi, maxDigestItems)
@@ -1208,7 +1306,7 @@ func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, bea
 	// earliest error/warn rows of a 4.8M-row day means walking the day. That
 	// walk used to be ONE statement (`level IN ('error','warn') ORDER BY ts
 	// LIMIT n`) — unbounded when errors are rare, silent, and run inside the
-	// first chunk's write transaction. It is now a keyset walk over idx_act_ts_src
+	// first chunk's write transaction. It is now a keyset walk over idx_act_ts
 	// in windows of sqlActSampleWindow rows, reading only id/ts/tier/level,
 	// with a heartbeat after each window; it stops as soon as error/warn rows
 	// alone fill the sample. The chosen rows are identical to the old query's
@@ -1446,6 +1544,71 @@ func (s *SQLActivityStore) RepairActivityIndexes(_ context.Context) (ActivityInd
 	return ActivityIndexRepairResult{}, nil
 }
 
+// sqlActHasCoveringTimeIndexes probes sqlite_master for both covering time
+// indexes. Both, not either: a half-finished build is treated as not built.
+func sqlActHasCoveringTimeIndexes(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (bool, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN (?, ?)`,
+		sqlActIdxTierTSSrc, sqlActIdxTSSrc).Scan(&n); err != nil {
+		return false, fmt.Errorf("sql_activity: probe covering indexes: %w", err)
+	}
+	return n == 2, nil
+}
+
+// sqlActEnsureTimeIndexes runs at open and NEVER builds an index over existing
+// rows. Building the covering pair sorts the whole table: 13.2M rows on prod,
+// with SQLite's sorter spilling to TMPDIR — the root pool that filled and took
+// production down on 2026-09-09 (see OptimizeStatistics) — before the WAL
+// checkpointer has started, so the boot would also stall for minutes.
+//
+//   - Covering pair present: nothing to do.
+//   - Table empty (a new database): build the covering pair now; it is free.
+//   - Otherwise: leave the table as it is. The legacy CREATEs are IF NOT
+//     EXISTS and every pre-existing database already has them, so this is the
+//     same no-op every open before 2026-09-19 ran. OptimizeStatistics builds
+//     the covering pair later, on the maintenance schedule.
+func sqlActEnsureTimeIndexes(writer *sql.DB, d sqlDialect) (bool, error) {
+	ctx := context.Background()
+	covering, err := sqlActHasCoveringTimeIndexes(ctx, writer)
+	if err != nil || covering {
+		return covering, err
+	}
+	var populated int
+	if err := writer.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM activity)`).Scan(&populated); err != nil {
+		return false, fmt.Errorf("sql_activity: probe table: %w", err)
+	}
+	stmts := d.timeIndexes().legacy
+	if populated == 0 {
+		stmts = append(d.timeIndexes().covering, d.timeIndexes().dropLegacy...)
+	}
+	if _, err := writer.ExecContext(ctx, strings.Join(stmts, ";\n")); err != nil {
+		return false, fmt.Errorf("sql_activity: time indexes: %w", err)
+	}
+	return populated == 0, nil
+}
+
+// buildCoveringTimeIndexes replaces the legacy time indexes with the covering
+// pair: create the new ones, then drop the old, so there is never a moment
+// with neither. Caller has already pointed temp_store_directory at the
+// database's own volume. It holds the single writer connection for the whole
+// build, so activity writes queue behind it — the same trade ANALYZE makes.
+func (s *SQLActivityStore) buildCoveringTimeIndexes(ctx context.Context) error {
+	for _, q := range s.dialect.timeIndexes().covering {
+		if _, err := s.writer.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("sql_activity: build covering index: %w", err)
+		}
+	}
+	for _, q := range s.dialect.timeIndexes().dropLegacy {
+		if _, err := s.writer.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("sql_activity: drop legacy index: %w", err)
+		}
+	}
+	s.coveringTimeIdx.Store(true)
+	return nil
+}
+
 // sqlActAnalysisLimit caps how many rows ANALYZE samples per index.
 //
 // This single pragma is the difference between a schedulable job and one that
@@ -1526,6 +1689,26 @@ func (s *SQLActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOpti
 		}
 	}
 
+	// The covering time indexes are built here, never at open — see
+	// sqlActEnsureTimeIndexes. After the temp-directory pragma above (the build
+	// sorts the whole table), and before the analysis below so the new indexes
+	// get statistics in the same run.
+	justBuilt := false
+	if !s.coveringTimeIdx.Load() {
+		have, err := sqlActHasCoveringTimeIndexes(ctx, s.writer)
+		if err != nil {
+			return result, err
+		}
+		if !have {
+			if err := s.buildCoveringTimeIndexes(ctx); err != nil {
+				return result, err
+			}
+			justBuilt = true
+			result.CoveringIndexesBuilt = true
+		}
+		s.coveringTimeIdx.Store(true)
+	}
+
 	var statRows int
 	// A missing sqlite_stat1 makes this SELECT fail rather than return 0, so the
 	// existence check comes first and the two cases stay distinguishable.
@@ -1540,7 +1723,17 @@ func (s *SQLActivityStore) OptimizeStatistics(ctx context.Context) (ActivityOpti
 		}
 	}
 
-	if statRows == 0 {
+	if statRows > 0 && justBuilt {
+		// Statistics exist for every index except the two just built. Analyze
+		// those two by name rather than re-running the whole-table bootstrap
+		// (344 s on prod): PRAGMA optimize judges staleness against stored
+		// stats and could skip indexes that have none.
+		for _, idx := range []string{sqlActIdxTierTSSrc, sqlActIdxTSSrc} {
+			if _, err := s.writer.ExecContext(ctx, `ANALYZE `+idx); err != nil {
+				return result, fmt.Errorf("sql_activity: analyze %s: %w", idx, err)
+			}
+		}
+	} else if statRows == 0 {
 		// No statistics exist. PRAGMA optimize decides what to re-analyze by
 		// comparing against stored stats, so with none stored it can reach the
 		// wrong conclusion about what needs doing. Bootstrap explicitly.

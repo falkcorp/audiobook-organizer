@@ -1,5 +1,5 @@
 // file: internal/database/activity_summarize_grouping_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4544dd5-4577-4b7b-8e9c-59e9fdfba58b
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -118,6 +119,100 @@ func TestSummarize_OldFormatSummaryStillReadable(t *testing.T) {
 			require.Equal(t, 1, total)
 			assert.Equal(t, "OLDOP", rows[0].OperationID)
 			assert.Nil(t, rows[0].Details["distinct_ops"])
+		})
+	}
+}
+
+// seedSummarizeGroup records n change-tier rows of one (day, type, source)
+// group, each under its own operation id OP00000.. so the ids sort by index.
+func seedSummarizeGroup(t *testing.T, s summarizeBackend, day time.Time, n int) {
+	t.Helper()
+	for i := range n {
+		_, err := s.Record(ActivityEntry{
+			Tier: "change", Type: "library.scan", Level: "info", Source: "library",
+			OperationID: fmt.Sprintf("OP%05d", i), Summary: "progress",
+			Timestamp: day.Add(time.Duration(i) * time.Second),
+		})
+		require.NoError(t, err)
+	}
+}
+
+// TestSummarize_OperationIDFindsSummary: a sampled operation id must lead to
+// the summary that absorbed its rows, through the same ?operation_id= filter
+// the UI and the operations drill-down use. Without this the ids in
+// op_ids_sample were unreachable by any filter.
+func TestSummarize_OperationIDFindsSummary(t *testing.T) {
+	for name, mk := range summarizeBackends(t) {
+		if name == "nuts" {
+			continue // legacy backend: its op filter reads a per-op bucket only; see NutsActivityStore.Summarize
+		}
+		t.Run(name, func(t *testing.T) {
+			s := mk()
+			ctx := context.Background()
+			day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+			seedSummarizeGroup(t, s, day, 30)
+			_, err := s.Summarize(ctx, day.Add(48*time.Hour), "change")
+			require.NoError(t, err)
+
+			rows, total, err := s.Query(ctx, ActivityFilter{OperationID: "OP00003", Limit: 10})
+			require.NoError(t, err)
+			require.Equal(t, 1, total, "a sampled operation id finds its summary")
+			assert.Equal(t, "summarize", rows[0].Source)
+
+			_, total, err = s.Query(ctx, ActivityFilter{OperationID: "OP00025", Limit: 10})
+			require.NoError(t, err)
+			assert.Zero(t, total, "an id beyond the 20-id sample is not claimed")
+
+			_, total, err = s.Query(ctx, ActivityFilter{Tags: []string{"op:OP00003"}, Limit: 10})
+			require.NoError(t, err)
+			assert.Equal(t, 1, total, "the op: tag chip filter finds it too")
+		})
+	}
+}
+
+// TestSummarize_ChunkedDeleteNeverLosesRows: a group's originals are deleted
+// in bounded chunks, the summary committed atomically with the FIRST chunk. A
+// pass stopped after that first commit leaves the rest of the group in place
+// (already represented by the summary) — it never leaves rows deleted without
+// a summary, and never one unbounded delete.
+func TestSummarize_ChunkedDeleteNeverLosesRows(t *testing.T) {
+	for name, mk := range summarizeBackends(t) {
+		if name == "nuts" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			s := mk()
+			day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+			seedSummarizeGroup(t, s, day, 25)
+
+			oldP, oldS := pactSummarizeDeleteBatch, sqlActSummarizeChunk
+			pactSummarizeDeleteBatch, sqlActSummarizeChunk = 10, 10
+			ctx, cancel := context.WithCancel(context.Background())
+			chunks := 0
+			summarizeTestHooks.afterChunk = func() { chunks++; cancel() }
+			t.Cleanup(func() {
+				pactSummarizeDeleteBatch, sqlActSummarizeChunk = oldP, oldS
+				summarizeTestHooks.afterChunk = nil
+				cancel()
+			})
+
+			deleted, err := s.Summarize(ctx, day.Add(48*time.Hour), "change")
+			require.True(t, errors.Is(err, context.Canceled), "stopped after the first chunk: %v", err)
+			assert.Equal(t, 10, deleted)
+			assert.Equal(t, 1, chunks)
+
+			rows, total, err := s.Query(context.Background(), ActivityFilter{Tier: "change", Limit: 50})
+			require.NoError(t, err)
+			require.Equal(t, 16, total, "one summary + 15 originals not yet deleted")
+			var summaries int
+			for _, e := range rows {
+				if e.Source == "summarize" {
+					summaries++
+					n, _, _ := summaryDateSpan(t, e.Summary)
+					assert.Equal(t, 25, n, "the summary describes the whole group")
+				}
+			}
+			assert.Equal(t, 1, summaries)
 		})
 	}
 }

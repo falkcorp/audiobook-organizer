@@ -1,5 +1,5 @@
 // file: internal/database/activity_types.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-09-19
 
@@ -179,6 +179,11 @@ type ActivityOptimizeResult struct {
 	// Duration is how long the run took, so an operator can watch this grow with
 	// the table rather than discovering the cost when it blows a timeout.
 	Duration time.Duration `json:"duration"`
+	// CoveringIndexesBuilt is true on the run that built the SQLite activity
+	// table's covering time indexes and dropped the ones they replace. That
+	// build sorts the whole table, so it happens here, on the maintenance
+	// schedule, and never at open (see SQLActivityStore.OptimizeStatistics).
+	CoveringIndexesBuilt bool `json:"covering_indexes_built,omitempty"`
 }
 
 // RecompactResult holds the outcome of a RecompactDigests operation.
@@ -311,7 +316,9 @@ type summarizeGroupKey struct{ day, typ, source string }
 //
 // Summary rows written before 2026-09-19 have no Details and one OperationID;
 // nothing reads these keys as required, so both shapes stay readable.
-func summarizeDetails(source string, opIDs map[string]struct{}) map[string]any {
+//
+// It also returns the "op:<id>" tags for the same sample (summarizeOpTags).
+func summarizeDetails(source string, opIDs map[string]struct{}) (map[string]any, []string) {
 	ids := make([]string, 0, len(opIDs))
 	for id := range opIDs {
 		if id != "" {
@@ -319,7 +326,7 @@ func summarizeDetails(source string, opIDs map[string]struct{}) map[string]any {
 		}
 	}
 	sort.Strings(ids)
-	return summarizeDetailsSorted(source, len(ids), ids)
+	return summarizeDetailsSorted(source, len(ids), ids), summarizeOpTags(ids)
 }
 
 // summarizeDetailsSorted is summarizeDetails for a caller that already holds
@@ -336,4 +343,57 @@ func summarizeDetailsSorted(source string, distinct int, sortedIDs []string) map
 		"op_ids_sample":     append([]string{}, sample...),
 		"op_ids_truncated":  distinct > len(sample),
 	}
+}
+
+// summarizeTestHooks lets tests stop or perturb a Summarize pass at its commit
+// boundaries. Both are nil in production.
+//
+//   - beforeGroup runs after the group scan and before a group's first
+//     transaction (SQLite), where another writer could add a row to the group.
+//   - afterChunk runs after each committed delete chunk (the first one carries
+//     the summary row), so a test can cancel ctx between chunks.
+var summarizeTestHooks struct {
+	beforeGroup func()
+	afterChunk  func()
+}
+
+// summarizeOpTags renders a summary's sampled operation ids as "op:<id>" tags,
+// the same tag EnrichTags puts on every row that has an operation id. That is
+// what makes a summarized operation findable: the op: tag chip filter matches
+// it directly, and every backend's ?operation_id= filter accepts a summary row
+// carrying the tag (see entryHasOperation).
+func summarizeOpTags(sortedIDs []string) []string {
+	if len(sortedIDs) > summarizeOpSampleMax {
+		sortedIDs = sortedIDs[:summarizeOpSampleMax]
+	}
+	if len(sortedIDs) == 0 {
+		return nil
+	}
+	tags := make([]string, len(sortedIDs))
+	for i, id := range sortedIDs {
+		tags[i] = "op:" + id
+	}
+	return tags
+}
+
+// summarizeSource marks a Summarize row.
+const summarizeSource = "summarize"
+
+// entryHasOperation reports whether e answers an operation_id filter for id:
+// its own OperationID, or — for a Summarize row only, which spans many
+// operations and has none of its own — an "op:<id>" tag from its sample.
+func entryHasOperation(e ActivityEntry, id string) bool {
+	if e.OperationID == id {
+		return true
+	}
+	if e.Source != summarizeSource {
+		return false
+	}
+	want := "op:" + id
+	for _, t := range e.Tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
