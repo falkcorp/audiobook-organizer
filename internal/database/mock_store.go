@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.124.0
+// version: 1.125.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package database
 
@@ -1366,12 +1366,23 @@ func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 // ModifyBook uses ModifyBookFunc when set; otherwise it composes the mock's
 // own GetBookByID and UpdateBook, so a test that stubs those two keeps working
 // against a caller converted to ModifyBook.
+//
+// The callback runs on an independent SNAPSHOT of what GetBookByID returned,
+// as it does in PebbleStore (which unmarshals a fresh Book per read). Stubs
+// commonly return one stored pointer from GetBookByIDFunc; running fn on that
+// pointer edited the "stored row" in place, so a caller that wrote back a stale
+// copy instead of merging looked correct and lost-update tests passed
+// vacuously (found 2026-09-19).
 func (m *MockStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	if m.ModifyBookFunc != nil {
 		return m.ModifyBookFunc(id, fn)
 	}
-	book, err := m.GetBookByID(id)
-	if err != nil || book == nil {
+	stored, err := m.GetBookByID(id)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	book, err := SnapshotBook(stored)
+	if err != nil {
 		return nil, err
 	}
 	if err := fn(book); err != nil {
