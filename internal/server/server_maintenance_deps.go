@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-19
 
@@ -372,11 +372,7 @@ func (s *Server) ActivityFilterIndexBackfiller() database.ActivityFilterIndexBac
 	if s.activityService == nil {
 		return nil
 	}
-	store := s.activityService.Store()
-	if m, ok := store.(*database.MigratingActivityStore); ok {
-		store = m.Primary()
-	}
-	if p, ok := store.(*database.PebbleActivityStore); ok && p != nil {
+	if p := database.FindPebbleActivityStore(s.activityService.Store()); p != nil {
 		return p
 	}
 	return nil
