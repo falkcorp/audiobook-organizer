@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.62.0
+// version: 2.62.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -485,6 +485,10 @@ func NewServer(store database.Store) *Server {
 	// (UOS-14: /operations/active removed; SkipPaths entry removed)
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
 		SkipPaths: []string{"/api/v1/operations/events"},
+		// Masks ?token= / ?api_key= and similar values: ABS clients put the
+		// bearer credential (JWT or abk_ API key) in the URL, and gin's default
+		// line prints the path with its query string.
+		Formatter: servermiddleware.RedactingLogFormatter,
 	}))
 	router.Use(gin.Recovery())
 	router.Use(securityHeadersMiddleware())
@@ -504,7 +508,10 @@ func NewServer(store database.Store) *Server {
 	// /api/events is an SSE stream: buffering it through a compressor defeats
 	// incremental delivery, so events arrive only when the buffer flushes.
 	router.Use(compressionMiddleware())
-	// OpenTelemetry instrumentation: create per-handler spans and record metrics
+	// OpenTelemetry instrumentation: create per-handler spans and record metrics.
+	// otelgin v0.71 records url.path only (no url.query / url.full /
+	// http.target), so query-string credentials never reach a span;
+	// TestOtelginSpansCarryNoQueryCredentials pins that across upgrades.
 	router.Use(otelgin.Middleware("audiobook-organizer"))
 
 	// Register metrics (idempotent)
