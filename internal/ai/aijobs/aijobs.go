@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/aijobs.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8231e2ae-fa34-4594-80fd-f0f9dc60bc3b
 // last-edited: 2026-09-19
 
@@ -239,10 +239,13 @@ func recordApplyFailure(store database.AIJobsStore, job database.AIJob, batchID 
 	}
 	if updated.ApplyAttempts >= MaxApplyAttempts {
 		msg := fmt.Sprintf("apply failed %d times, giving up: %v", updated.ApplyAttempts, cause)
+		if updated.Applied {
+			msg = fmt.Sprintf("results were applied but the completion mark failed %d times: %v", updated.ApplyAttempts, cause)
+		}
 		if ferr := store.MarkAIJobFailed(job.ID, msg); ferr != nil {
 			return fmt.Errorf("aijobs.Dispatch: %w (and marking the job failed failed: %v)", cause, ferr)
 		}
-		log.Error("job %s (type %s, batch %s) %s — its results were NOT applied", job.ID, job.Type, batchID, msg)
+		log.Error("job %s (type %s, batch %s) %s", job.ID, job.Type, batchID, msg)
 		return fmt.Errorf("aijobs.Dispatch: job %s: %s", job.ID, msg)
 	}
 	log.Warn("job %s (type %s, batch %s) apply attempt %d/%d failed, will retry after %s: %v",
@@ -268,6 +271,9 @@ func recordApplyFailure(store database.AIJobsStore, job database.AIJob, batchID 
 func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, results []RowResult) (err error) {
 	job, err := store.GetAIJobByBatchID(batchID)
 	if err != nil {
+		// Wraps database.ErrAIJobNotFound when no row names this batch (another
+		// install sharing the OpenAI project); callers can tell that apart
+		// from a failing store with errors.Is.
 		return fmt.Errorf("aijobs.Dispatch: lookup batch %s: %w", batchID, err)
 	}
 	if IsTerminalJob(job) {
@@ -278,6 +284,12 @@ func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, r
 		if wait := job.LastApplyAt.Add(applyBackoff(job.ApplyAttempts)).Sub(now()); wait > 0 {
 			return fmt.Errorf("%w: job %s, attempt %d, %s left", ErrApplyBackoff, job.ID, job.ApplyAttempts+1, wait.Round(time.Second))
 		}
+	}
+
+	if job.Applied {
+		// The callback already applied these results; only the completion mark
+		// failed. Never run the callback again — retry just the mark.
+		return completeJob(store, job, batchID, job.SuccessCount, job.ErrorCount, decodeRowErrors(job.RowErrors))
 	}
 
 	registryMu.RLock()
@@ -309,22 +321,53 @@ func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, r
 		return recordApplyFailure(store, job, batchID, fatalErr)
 	}
 
+	// Record that the callback ran BEFORE marking completed. If this write is
+	// lost (the kill window), the next Dispatch replays the callback once —
+	// the case CompletionCallback's replay-safety contract covers. Once it
+	// lands, a failing completion mark is retried alone.
+	if err := store.MarkAIJobApplied(job.ID, successCount, errorCount, rowErrors); err != nil {
+		return recordApplyFailure(store, job, batchID, fmt.Errorf("record applied: %w", err))
+	}
+	job.Applied = true
+	return completeJob(store, job, batchID, successCount, errorCount, rowErrors)
+}
+
+// completeJob writes the terminal completed status for an applied job. A
+// failure goes through recordApplyFailure (backoff and a cap) like any other
+// apply failure; the job keeps Applied, so no retry re-runs the callback.
+func completeJob(store database.AIJobsStore, job database.AIJob, batchID string, successCount, errorCount int, rowErrors []database.AIJobRowError) error {
 	status := "completed"
 	if errorCount > 0 {
 		status = "completed_with_errors"
 	}
 	if err := store.MarkAIJobCompleted(job.ID, status, successCount, errorCount, rowErrors); err != nil {
-		return fmt.Errorf("aijobs.Dispatch: mark completed: %w", err)
+		return recordApplyFailure(store, job, batchID, fmt.Errorf("mark completed: %w", err))
 	}
 	log.Info("dispatched job %s type %s: %d succeeded, %d errors", job.ID, job.Type, successCount, errorCount)
 	return nil
 }
 
+func decodeRowErrors(s string) []database.AIJobRowError {
+	if s == "" {
+		return nil
+	}
+	var out []database.AIJobRowError
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		log.Warn("decode saved row errors: %v", err)
+		return nil
+	}
+	return out
+}
+
 // OrphanBatch is one listed OpenAI batch as ReconcileOrphans needs it.
 type OrphanBatch struct {
-	ID       string
-	Status   string // OpenAI batch status: completed, failed, expired, cancelled, ...
-	Metadata map[string]string
+	ID     string
+	Status string // OpenAI batch status: completed, failed, expired, cancelled, ...
+	// HasOutput is true when the batch has an output file. An expired or
+	// cancelled batch can still carry results for the requests that finished;
+	// those are dispatched, not discarded.
+	HasOutput bool
+	Metadata  map[string]string
 }
 
 // openAIFailedStatuses are batch statuses where OpenAI, not our apply, ended
@@ -346,8 +389,9 @@ var openAIFailedStatuses = map[string]bool{"failed": true, "expired": true, "can
 // items, and attaching the old batch would apply them twice.
 //
 // It also closes out jobs whose batch OpenAI itself failed, expired or
-// cancelled: those never reach Dispatch (the poller dispatches completed batches
-// only), so without this the job would sit "submitted" forever. That is marked
+// cancelled WITH NO OUTPUT: those never reach Dispatch, so without this the job
+// would sit "submitted" forever. (One with partial output is dispatched by the
+// poller like a completed batch.) That is marked
 // terminal "failed" immediately, unlike an apply failure, which is retried.
 //
 // Returns the number of jobs attached. Per-batch errors are logged and skipped
@@ -366,7 +410,7 @@ func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, e
 			// sharing the OpenAI project, or a deleted row) is not ours.
 			continue
 		}
-		if job.BatchID == b.ID && openAIFailedStatuses[b.Status] && job.Status == "submitted" {
+		if job.BatchID == b.ID && openAIFailedStatuses[b.Status] && !b.HasOutput && job.Status == "submitted" {
 			msg := fmt.Sprintf("openai batch %s: %s", b.ID, b.Status)
 			if err := store.MarkAIJobFailed(jobID, msg); err != nil {
 				log.Error("mark job %s failed after %s: %v", jobID, msg, err)
@@ -398,4 +442,55 @@ func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, e
 		log.Warn("re-attached orphaned batch %s to job %s (its batch id was never recorded)", b.ID, jobID)
 	}
 	return attached, firstErr
+}
+
+// Tracked is what the poller needs from the jobs store each tick.
+type Tracked struct {
+	// BatchIDs are batches whose results the store still expects: jobs
+	// "submitted" or "apply_failed". The poller fetches each by id, so a retry
+	// never depends on the batch still being in OpenAI's recent-batch listing.
+	BatchIDs []string
+	// OldestUnlinked is the CreatedAt of the oldest "pending" job (a batch may
+	// exist for it that the store never recorded), zero if none. The poller
+	// pages the listing back to this point to find such orphans.
+	OldestUnlinked time.Time
+}
+
+// TrackJobs reads the jobs the poller must follow and repairs any submitted
+// job whose batch-id index is missing (left by the pre-atomic
+// MarkAIJobSubmitted when a kill split its two writes), so Dispatch can find it.
+func TrackJobs(store database.AIJobsStore) (Tracked, error) {
+	var t Tracked
+	for _, status := range []string{"submitted", "apply_failed"} {
+		jobs, err := store.ListAIJobs("", status, 0, 0)
+		if err != nil {
+			return t, fmt.Errorf("list %s jobs: %w", status, err)
+		}
+		for _, j := range jobs {
+			if j.BatchID == "" {
+				continue
+			}
+			t.BatchIDs = append(t.BatchIDs, j.BatchID)
+			if status != "submitted" {
+				continue
+			}
+			if _, err := store.GetAIJobByBatchID(j.BatchID); errors.Is(err, database.ErrAIJobNotFound) {
+				if err := store.MarkAIJobSubmitted(j.ID, j.BatchID); err != nil {
+					log.Error("rebuild batch index for job %s (batch %s): %v", j.ID, j.BatchID, err)
+					continue
+				}
+				log.Warn("rebuilt missing batch index for job %s (batch %s)", j.ID, j.BatchID)
+			}
+		}
+	}
+	pending, err := store.ListAIJobs("", "pending", 0, 0)
+	if err != nil {
+		return t, fmt.Errorf("list pending jobs: %w", err)
+	}
+	for _, j := range pending {
+		if t.OldestUnlinked.IsZero() || j.CreatedAt.Before(t.OldestUnlinked) {
+			t.OldestUnlinked = j.CreatedAt
+		}
+	}
+	return t, nil
 }

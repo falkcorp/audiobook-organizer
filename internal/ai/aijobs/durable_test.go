@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
 // last-edited: 2026-09-19
 
@@ -17,18 +17,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// crashingStore fails the next MarkAIJobCompleted / MarkAIJobSubmitted call to
-// stand in for a process killed right before that write lands.
+// crashingStore fails chosen writes to stand in for a process killed (or a
+// store erroring) right before that write lands.
 type crashingStore struct {
 	*fakeStore
-	failNextComplete bool
-	failNextSubmit   bool
+	failNextApplied bool
+	failComplete    int // fail this many MarkAIJobCompleted calls
+	failNextSubmit  bool
+}
+
+func (c *crashingStore) MarkAIJobApplied(id string, s, e int, re []database.AIJobRowError) error {
+	if c.failNextApplied {
+		c.failNextApplied = false
+		return errors.New("killed before the applied mark")
+	}
+	return c.fakeStore.MarkAIJobApplied(id, s, e, re)
 }
 
 func (c *crashingStore) MarkAIJobCompleted(id, status string, s, e int, re []database.AIJobRowError) error {
-	if c.failNextComplete {
-		c.failNextComplete = false
-		return errors.New("killed before mark completed")
+	if c.failComplete > 0 {
+		c.failComplete--
+		return errors.New("store error on mark completed")
 	}
 	return c.fakeStore.MarkAIJobCompleted(id, status, s, e, re)
 }
@@ -48,7 +57,7 @@ func (c *crashingStore) MarkAIJobSubmitted(id, b string) error {
 type effectSink struct {
 	mu      sync.Mutex
 	calls   int
-	effects map[string]int // CustomID -> times the effect is present (must stay 1)
+	effects map[string]int // CustomID -> times applied; a duplicate apply shows as 2
 }
 
 func newEffectSink() *effectSink { return &effectSink{effects: map[string]int{}} }
@@ -58,7 +67,7 @@ func (e *effectSink) callback(_ context.Context, _ []byte, results []RowResult) 
 	defer e.mu.Unlock()
 	e.calls++
 	for _, r := range results {
-		e.effects[r.CustomID] = 1
+		e.effects[r.CustomID]++
 	}
 	return len(results), 0, nil, nil
 }
@@ -85,31 +94,65 @@ func TestDispatch_CompletedJobIsNoOp(t *testing.T) {
 	}
 }
 
-// (b) Killed after the callback applied its results but before the job row was
-// marked completed: the next Dispatch replays the callback exactly once
-// (idempotently — no duplicate effects), and every Dispatch after that is a no-op.
-func TestDispatch_CrashBetweenApplyAndMark_ReplaysOnce(t *testing.T) {
-	store := &crashingStore{fakeStore: newFakeStore(), failNextComplete: true}
+// (b) The crash window: the callback applied its results, then the process
+// died before the job recorded that (MarkAIJobApplied lost). The restarted
+// Dispatch replays the callback exactly once; after that nothing re-applies.
+func TestDispatch_CrashBeforeAppliedMark_ReplaysOnce(t *testing.T) {
+	store := &crashingStore{fakeStore: newFakeStore(), failNextApplied: true}
 	sink := newEffectSink()
 	Register("durable_replay", sink.callback)
 	require.NoError(t, store.CreateAIJob(database.AIJob{ID: "J2", Type: "durable_replay", Status: "pending"}, []byte("[]")))
 	require.NoError(t, store.MarkAIJobSubmitted("J2", "batch_crash"))
+	clock := withClock(t, time.Now())
 	results := []RowResult{{CustomID: "J2-0", Content: "{}"}, {CustomID: "J2-1", Content: "{}"}}
 
-	require.Error(t, Dispatch(context.Background(), store, "batch_crash", results), "the killed mark must surface")
+	require.Error(t, Dispatch(context.Background(), store, "batch_crash", results), "the lost mark must surface")
 	require.Equal(t, 1, sink.calls)
-	require.Equal(t, "submitted", store.jobs["J2"].Status, "job must not look applied after the kill")
+	require.False(t, store.jobs["J2"].Applied, "job must not look applied after the kill")
 
-	// "Restart": the poller re-delivers the batch.
+	*clock = clock.Add(applyBackoffMax) // past the retry backoff
+	j := store.jobs["J2"]
+	j.LastApplyAt = clock.Add(-applyBackoffMax)
+	store.jobs["J2"] = j
 	require.NoError(t, Dispatch(context.Background(), store, "batch_crash", results))
-	assert.Equal(t, 2, sink.calls, "exactly one replay after the interrupted apply")
+	assert.Equal(t, 2, sink.calls, "exactly one replay after the lost applied mark")
 	assert.Equal(t, "completed", store.jobs["J2"].Status)
 
-	// Any further delivery (poller mark lost, second restart) applies nothing.
-	require.NoError(t, Dispatch(context.Background(), store, "batch_crash", results))
 	require.NoError(t, Dispatch(context.Background(), store, "batch_crash", results))
 	assert.Equal(t, 2, sink.calls, "no re-apply once the job is completed")
-	assert.Equal(t, map[string]int{"J2-0": 1, "J2-1": 1}, sink.effects, "no duplicate effects")
+	// The sink counts every apply; the replay shows as 2 per row, which is
+	// exactly the one replay the contract allows (real callbacks must make it
+	// a no-op — see the dedup replay test).
+	assert.Equal(t, map[string]int{"J2-0": 2, "J2-1": 2}, sink.effects)
+}
+
+// FIX: a failing completion mark after a successful apply must never re-run
+// the callback; only the mark is retried, with backoff, until it lands.
+func TestDispatch_CompletionMarkFailure_CallbackRunsOnce(t *testing.T) {
+	store := &crashingStore{fakeStore: newFakeStore(), failComplete: 3}
+	sink := newEffectSink()
+	Register("durable_markfail", sink.callback)
+	seedSubmitted(t, store.fakeStore, "JM", "durable_markfail", "batch_mark")
+	clock := withClock(t, time.Now())
+	results := []RowResult{{CustomID: "JM-0", Content: "{}"}}
+
+	for i := 0; i < 3; i++ {
+		require.Error(t, Dispatch(context.Background(), store, "batch_mark", results))
+		j := store.jobs["JM"]
+		require.True(t, j.Applied)
+		require.Equal(t, "apply_failed", j.Status)
+		require.Equal(t, i+1, j.ApplyAttempts)
+		// Next tick inside the backoff: nothing happens at all.
+		j.LastApplyAt = *clock
+		store.jobs["JM"] = j
+		require.ErrorIs(t, Dispatch(context.Background(), store, "batch_mark", results), ErrApplyBackoff)
+		*clock = clock.Add(applyBackoffMax)
+	}
+	require.NoError(t, Dispatch(context.Background(), store, "batch_mark", results))
+	assert.Equal(t, "completed", store.jobs["JM"].Status)
+	assert.Equal(t, 1, store.jobs["JM"].SuccessCount)
+	assert.Equal(t, 1, sink.calls, "callback re-ran on a completion-mark retry")
+	assert.Equal(t, map[string]int{"JM-0": 1}, sink.effects)
 }
 
 // Submit must tag the batch with its job id so an orphan can be found later.

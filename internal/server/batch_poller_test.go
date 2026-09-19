@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c9d0e1f2-a3b4-5678-cdef-9876543210ab
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -19,16 +20,32 @@ import (
 )
 
 // fakeBatchClient is a BatchClient serving a fixed listing and per-file results.
+// unlisted batches are fetchable by id but missing from the listing, like a
+// batch that has scrolled out of OpenAI's recent-100 window.
 type fakeBatchClient struct {
-	mu      sync.Mutex
-	batches []ai.BatchInfo
-	outputs map[string][]ai.BatchRawResult
+	mu       sync.Mutex
+	batches  []ai.BatchInfo
+	unlisted []ai.BatchInfo
+	outputs  map[string][]ai.BatchRawResult
+	gets     int
 }
 
-func (f *fakeBatchClient) ListProjectBatches(context.Context) ([]ai.BatchInfo, error) {
+func (f *fakeBatchClient) ListProjectBatches(context.Context, time.Time) ([]ai.BatchInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]ai.BatchInfo(nil), f.batches...), nil
+}
+
+func (f *fakeBatchClient) GetBatch(_ context.Context, id string) (ai.BatchInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gets++
+	for _, b := range append(append([]ai.BatchInfo(nil), f.batches...), f.unlisted...) {
+		if b.ID == id {
+			return b, nil
+		}
+	}
+	return ai.BatchInfo{}, fmt.Errorf("no batch %s", id)
 }
 
 func (f *fakeBatchClient) DownloadBatchRaw(_ context.Context, fileID string) ([]ai.BatchRawResult, error) {

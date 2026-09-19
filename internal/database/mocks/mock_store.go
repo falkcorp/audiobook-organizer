@@ -24028,6 +24028,75 @@ func (_c *MockStore_LiveBookIDsAtPath_Call) RunAndReturn(run func(path string) (
 	return _c
 }
 
+// MarkAIJobApplied provides a mock function for the type MockStore
+func (_mock *MockStore) MarkAIJobApplied(id string, successCount int, errorCount int, rowErrors []database.AIJobRowError) error {
+	ret := _mock.Called(id, successCount, errorCount, rowErrors)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MarkAIJobApplied")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, int, int, []database.AIJobRowError) error); ok {
+		r0 = returnFunc(id, successCount, errorCount, rowErrors)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_MarkAIJobApplied_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkAIJobApplied'
+type MockStore_MarkAIJobApplied_Call struct {
+	*mock.Call
+}
+
+// MarkAIJobApplied is a helper method to define mock.On call
+//   - id string
+//   - successCount int
+//   - errorCount int
+//   - rowErrors []database.AIJobRowError
+func (_e *MockStore_Expecter) MarkAIJobApplied(id any, successCount any, errorCount any, rowErrors any) *MockStore_MarkAIJobApplied_Call {
+	return &MockStore_MarkAIJobApplied_Call{Call: _e.mock.On("MarkAIJobApplied", id, successCount, errorCount, rowErrors)}
+}
+
+func (_c *MockStore_MarkAIJobApplied_Call) Run(run func(id string, successCount int, errorCount int, rowErrors []database.AIJobRowError)) *MockStore_MarkAIJobApplied_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		var arg3 []database.AIJobRowError
+		if args[3] != nil {
+			arg3 = args[3].([]database.AIJobRowError)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_MarkAIJobApplied_Call) Return(err error) *MockStore_MarkAIJobApplied_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_MarkAIJobApplied_Call) RunAndReturn(run func(id string, successCount int, errorCount int, rowErrors []database.AIJobRowError) error) *MockStore_MarkAIJobApplied_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MarkAIJobApplyFailed provides a mock function for the type MockStore
 func (_mock *MockStore) MarkAIJobApplyFailed(id string, errMsg string) (database.AIJob, error) {
 	ret := _mock.Called(id, errMsg)

@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/logging"
 )
 
 var batchPollerLog = logger.New("batch_poller")
@@ -38,8 +37,35 @@ type BatchReconciler func(ctx context.Context, batches []ai.BatchInfo) error
 // BatchClient is the slice of *ai.OpenAIParser the poller uses. An interface so
 // tests can drive Poll without a live OpenAI client.
 type BatchClient interface {
-	ListProjectBatches(ctx context.Context) ([]ai.BatchInfo, error)
+	// ListProjectBatches lists our batches, paging back to since (one page
+	// when since is zero).
+	ListProjectBatches(ctx context.Context, since time.Time) ([]ai.BatchInfo, error)
+	GetBatch(ctx context.Context, batchID string) (ai.BatchInfo, error)
 	DownloadBatchRaw(ctx context.Context, outputFileID string) ([]ai.BatchRawResult, error)
+}
+
+// BatchTracker reports, from local state, the batch ids still owed results and
+// the creation time of the oldest local record not yet linked to its batch
+// (zero if none). Tracked batches are fetched by id every tick, so a retry
+// never depends on the batch still being in the recent listing; the listing is
+// only for discovery, paged back to the oldest unlinked record.
+type BatchTracker func(ctx context.Context) (batchIDs []string, oldestUnlinked time.Time, err error)
+
+// orphanListSlack widens the listing window below the oldest unlinked record's
+// timestamp to absorb clock skew between this host and OpenAI.
+const orphanListSlack = time.Hour
+
+// dispatchable reports whether a listed batch has results to apply: completed,
+// or ended by OpenAI (expired/cancelled/failed) with a partial output file for
+// the requests that did finish — paid results that must not be dropped.
+func dispatchable(b ai.BatchInfo) bool {
+	switch b.Status {
+	case "completed":
+		return true
+	case "expired", "cancelled", "failed":
+		return b.OutputFileID != ""
+	}
+	return false
 }
 
 // batchJournalPrefix keys the durable "handled" record per OpenAI batch id. It
@@ -68,6 +94,7 @@ type BatchPoller struct {
 
 	handlers    map[string]BatchCompletionHandler
 	reconcilers map[string]BatchReconciler
+	trackers    map[string]BatchTracker
 
 	mu sync.Mutex
 	// processed caches journal hits so a handled batch costs one KV read per
@@ -94,6 +121,7 @@ func NewBatchPoller(db database.OperationStore, client BatchClient) (*BatchPolle
 		client:      client,
 		handlers:    make(map[string]BatchCompletionHandler),
 		reconcilers: make(map[string]BatchReconciler),
+		trackers:    make(map[string]BatchTracker),
 		processed:   make(map[string]bool),
 		inFlight:    make(map[string]bool),
 	}, nil
@@ -110,6 +138,11 @@ func (bp *BatchPoller) RegisterReconciler(batchType string, r BatchReconciler) {
 	bp.reconcilers[batchType] = r
 }
 
+// RegisterTracker registers a tracker for a specific batch type.
+func (bp *BatchPoller) RegisterTracker(batchType string, t BatchTracker) {
+	bp.trackers[batchType] = t
+}
+
 // Poll queries OpenAI for all project-tagged batches, runs the reconcilers,
 // finds completed batches not yet handled, and dispatches them to registered
 // handlers. Returns the number of batches successfully processed.
@@ -119,21 +152,60 @@ func (bp *BatchPoller) RegisterReconciler(batchType string, r BatchReconciler) {
 // tick is where the poller first runs anyway. It is cheap — one job-row read per
 // listed batch carrying an owner key.
 func (bp *BatchPoller) Poll(ctx context.Context) (int, error) {
-	batches, err := bp.client.ListProjectBatches(ctx)
-	if err != nil {
-		return 0, err
+	tracked := make(map[string]string) // batch id -> type
+	var since time.Time
+	for typ, track := range bp.trackers {
+		ids, oldest, err := track(ctx)
+		if err != nil {
+			batchPollerLog.Error("track %s batches: %v", typ, err)
+			continue
+		}
+		for _, id := range ids {
+			tracked[id] = typ
+		}
+		if !oldest.IsZero() && (since.IsZero() || oldest.Before(since)) {
+			since = oldest
+		}
+	}
+	if !since.IsZero() {
+		since = since.Add(-orphanListSlack)
+	}
+
+	batches, listErr := bp.client.ListProjectBatches(ctx, since)
+	if listErr != nil {
+		// Tracked batches are still fetched by id below; the listing only
+		// feeds discovery.
+		batchPollerLog.Error("list project batches: %v", listErr)
+	}
+	listed := make(map[string]bool, len(batches))
+	for _, b := range batches {
+		listed[b.ID] = true
+	}
+	for id := range tracked {
+		if listed[id] || bp.IsProcessed(id) {
+			continue
+		}
+		b, err := bp.client.GetBatch(ctx, id)
+		if err != nil {
+			batchPollerLog.Error("get tracked batch %s: %v", id, err)
+			continue
+		}
+		batches = append(batches, b)
 	}
 
 	bp.reconcile(ctx, batches)
 
 	processed := 0
 	for _, b := range batches {
-		if b.Status != "completed" {
+		if !dispatchable(b) {
 			continue
 		}
 		if bp.dispatch(ctx, b) {
 			processed++
 		}
+	}
+	if listErr != nil && len(tracked) == 0 {
+		return processed, listErr
 	}
 	return processed, nil
 }
@@ -160,6 +232,15 @@ func (bp *BatchPoller) dispatch(ctx context.Context, b ai.BatchInfo) (handled bo
 	if err := handler(ctx, b.ID, b.OutputFileID); err != nil {
 		if errors.Is(err, aijobs.ErrApplyBackoff) {
 			batchPollerLog.Info("%s batch %s: %v", b.Type, b.ID, err)
+			return false
+		}
+		if errors.Is(err, database.ErrAIJobNotFound) {
+			// No local job names this batch: another install sharing the
+			// OpenAI project. Skip it for this process (memory only, so a
+			// restart looks once more) instead of erroring every tick.
+			batchPollerLog.Debug("%s batch %s is not ours (no job row); ignoring", b.Type, b.ID)
+			// The deferred finish(handled=false) then only drops the claim.
+			bp.release(b.ID, true)
 			return false
 		}
 		batchPollerLog.Error("handler for %s batch %s failed, will retry next poll: %v", b.Type, b.ID, err)
@@ -302,6 +383,60 @@ func aijobsBatchHandler(client BatchClient, getStore func() database.AIJobsStore
 	}
 }
 
+// embedAsyncBatchHandler stores an embed_async batch's vectors. Any failed
+// upsert fails the whole handler so the poller does not record the batch
+// handled and retries it next tick; re-upserting the rows that did land is an
+// overwrite keyed by (entity_type, entity_id), so the retry is idempotent.
+// It used to log per-row failures and return nil, which journaled the batch
+// and left those books without vectors for good.
+func embedAsyncBatchHandler(
+	download func(ctx context.Context, outputFileID string) ([]ai.EmbedBatchResult, error),
+	upsert func(database.Embedding) error,
+) BatchCompletionHandler {
+	return func(ctx context.Context, batchID, outputFileID string) error {
+		if outputFileID == "" {
+			return fmt.Errorf("embed_async: no output file for batch %s", batchID)
+		}
+		results, err := download(ctx, outputFileID)
+		if err != nil {
+			return fmt.Errorf("embed_async: download results for batch %s: %w", batchID, err)
+		}
+		var failed int
+		var firstErr error
+		for _, r := range results {
+			if err := upsert(database.Embedding{
+				EntityType: "book",
+				EntityID:   r.BookID,
+				Vector:     r.Vector,
+				Model:      "text-embedding-3-large",
+			}); err != nil {
+				failed++
+				if firstErr == nil {
+					firstErr = fmt.Errorf("book %s: %w", r.BookID, err)
+				}
+			}
+		}
+		if failed > 0 {
+			return fmt.Errorf("embed_async: batch %s: %d of %d upserts failed (first: %w)", batchID, failed, len(results), firstErr)
+		}
+		batchPollerLog.Info("embed_async stored %d embeddings from batch %s", len(results), batchID)
+		return nil
+	}
+}
+
+// aijobsTracker feeds the poller the aijobs batches still owed results and the
+// oldest job not yet linked to its batch.
+func aijobsTracker(getStore func() database.AIJobsStore) BatchTracker {
+	return func(context.Context) ([]string, time.Time, error) {
+		store := getStore()
+		if store == nil {
+			return nil, time.Time{}, fmt.Errorf("aijobs: store does not implement AIJobsStore")
+		}
+		t, err := aijobs.TrackJobs(store)
+		return t.BatchIDs, t.OldestUnlinked, err
+	}
+}
+
 // aijobsReconciler re-attaches aijobs batches whose id never reached their job
 // row (process killed between CreateBatch and MarkAIJobSubmitted).
 func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
@@ -312,7 +447,7 @@ func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
 		}
 		orphans := make([]aijobs.OrphanBatch, 0, len(batches))
 		for _, b := range batches {
-			orphans = append(orphans, aijobs.OrphanBatch{ID: b.ID, Status: b.Status, Metadata: b.Metadata})
+			orphans = append(orphans, aijobs.OrphanBatch{ID: b.ID, Status: b.Status, HasOutput: b.OutputFileID != "", Metadata: b.Metadata})
 		}
 		_, err := aijobs.ReconcileOrphans(store, orphans)
 		return err
@@ -363,34 +498,22 @@ func (s *Server) registerBatchPollerHandlers() {
 	getAIJobs := func() database.AIJobsStore { return database.GetAIJobs(s.Ops()) }
 	s.batchPoller.RegisterHandler("aijobs", aijobsBatchHandler(s.batchPoller.client, getAIJobs))
 	s.batchPoller.RegisterReconciler("aijobs", aijobsReconciler(getAIJobs))
+	s.batchPoller.RegisterTracker("aijobs", aijobsTracker(getAIJobs))
 
 	// embed_async: re-delivery re-upserts the same vectors keyed by
 	// (entity_type, entity_id), which overwrites rather than adds.
-	s.batchPoller.RegisterHandler("embed_async", func(ctx context.Context, batchID, outputFileID string) error {
-		if outputFileID == "" {
-			return fmt.Errorf("embed_async: no output file for batch %s", batchID)
-		}
-		if s.embedClient == nil || s.embeddingStore == nil {
-			return fmt.Errorf("embed_async: embedding client or store not available")
-		}
-		results, err := s.embedClient.DownloadEmbeddingBatchResults(ctx, outputFileID)
-		if err != nil {
-			return fmt.Errorf("embed_async: download results for batch %s: %w", batchID, err)
-		}
-		stored := 0
-		for _, r := range results {
-			if err := s.embeddingStore.Upsert(database.Embedding{
-				EntityType: "book",
-				EntityID:   r.BookID,
-				Vector:     r.Vector,
-				Model:      "text-embedding-3-large",
-			}); err != nil {
-				logging.Warn(ctx, "embed_async upsert book", "r", r.BookID, "err", err)
-			} else {
-				stored++
+	s.batchPoller.RegisterHandler("embed_async", embedAsyncBatchHandler(
+		func(ctx context.Context, fileID string) ([]ai.EmbedBatchResult, error) {
+			if s.embedClient == nil {
+				return nil, fmt.Errorf("embedding client not available")
 			}
-		}
-		logging.Info(ctx, "embed_async stored / embeddings from batch", "stored", stored, "results_count", len(results), "batchID", batchID)
-		return nil
-	})
+			return s.embedClient.DownloadEmbeddingBatchResults(ctx, fileID)
+		},
+		func(e database.Embedding) error {
+			if s.embeddingStore == nil {
+				return fmt.Errorf("embedding store not available")
+			}
+			return s.embeddingStore.Upsert(e)
+		},
+	))
 }

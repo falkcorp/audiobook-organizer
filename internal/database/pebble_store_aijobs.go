@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_aijobs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 702bf788-2e84-43d9-81c3-81c3146ba7c0
 // last-edited: 2026-09-19
 
@@ -9,10 +9,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
+
+// aijobWriteMu serialises every read-modify-write of an ai_jobs row. Without it
+// two mutators (e.g. MarkAIJobApplyFailed from a Dispatch and
+// MarkAIJobSubmitted from the reconciler) can read the same row and the later
+// write silently drops the other's change. ai_jobs writes are a handful per
+// poll tick, so one package-level lock costs nothing measurable.
+var aijobWriteMu sync.Mutex
 
 // CreateAIJob stores a new AIJob row and its payload blob.
 func (p *PebbleStore) CreateAIJob(job AIJob, payloadJSON []byte) error {
@@ -36,7 +44,7 @@ func (p *PebbleStore) GetAIJob(id string) (AIJob, error) {
 	jobKey := []byte(fmt.Sprintf("aijob:%s", id))
 	value, closer, err := p.db.Get(jobKey)
 	if err == pebble.ErrNotFound {
-		return AIJob{}, fmt.Errorf("ai job not found: %s", id)
+		return AIJob{}, fmt.Errorf("%w: %s", ErrAIJobNotFound, id)
 	}
 	if err != nil {
 		return AIJob{}, err
@@ -54,7 +62,7 @@ func (p *PebbleStore) GetAIJobByBatchID(batchID string) (AIJob, error) {
 	idxKey := []byte(fmt.Sprintf("aijob_batch:%s", batchID))
 	val, closer, err := p.db.Get(idxKey)
 	if err == pebble.ErrNotFound {
-		return AIJob{}, fmt.Errorf("ai job not found for batch: %s", batchID)
+		return AIJob{}, fmt.Errorf("%w for batch: %s", ErrAIJobNotFound, batchID)
 	}
 	if err != nil {
 		return AIJob{}, err
@@ -79,7 +87,14 @@ func (p *PebbleStore) GetAIJobPayload(id string) ([]byte, error) {
 }
 
 // MarkAIJobSubmitted sets the job status to "submitted" and records the batch ID.
+//
+// The row and its aijob_batch: index are written in ONE pebble batch. As two
+// separate writes, a kill between them left a submitted row with a batch id
+// but no index, and every GetAIJobByBatchID for that batch failed forever.
+// Re-calling it for a job whose index went missing rewrites both.
 func (p *PebbleStore) MarkAIJobSubmitted(id, batchID string) error {
+	aijobWriteMu.Lock()
+	defer aijobWriteMu.Unlock()
 	job, err := p.GetAIJob(id)
 	if err != nil {
 		return err
@@ -91,61 +106,27 @@ func (p *PebbleStore) MarkAIJobSubmitted(id, batchID string) error {
 	if err != nil {
 		return err
 	}
-	if err := p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync); err != nil {
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := b.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, nil); err != nil {
 		return err
 	}
-	// Write secondary index: batch_id → job_id
-	return p.db.Set([]byte(fmt.Sprintf("aijob_batch:%s", batchID)), []byte(id), pebble.Sync)
+	if err := b.Set([]byte(fmt.Sprintf("aijob_batch:%s", batchID)), []byte(id), nil); err != nil {
+		return err
+	}
+	return b.Commit(pebble.Sync)
 }
 
-// MarkAIJobCompleted sets the job status to completed/completed_with_errors and
-// records success/error counts and per-row error details.
-func (p *PebbleStore) MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error {
-	job, err := p.GetAIJob(id)
-	if err != nil {
-		return err
-	}
-	job.Status = status
-	job.SuccessCount = successCount
-	job.ErrorCount = errorCount
-	job.CompletedAt = time.Now().UTC()
-	if len(rowErrors) > 0 {
-		b, _ := json.Marshal(rowErrors)
-		job.RowErrors = string(b)
-	}
-	data, err := json.Marshal(job)
-	if err != nil {
-		return err
-	}
-	return p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync)
-}
-
-// MarkAIJobFailed sets the job status to "failed" with an error message.
-func (p *PebbleStore) MarkAIJobFailed(id, errMsg string) error {
-	job, err := p.GetAIJob(id)
-	if err != nil {
-		return err
-	}
-	job.Status = "failed"
-	job.ErrorMsg = errMsg
-	job.CompletedAt = time.Now().UTC()
-	data, err := json.Marshal(job)
-	if err != nil {
-		return err
-	}
-	return p.db.Set([]byte(fmt.Sprintf("aijob:%s", id)), data, pebble.Sync)
-}
-
-// MarkAIJobApplyFailed records one failed apply attempt and returns the row.
-func (p *PebbleStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
+// updateAIJob applies mutate to the stored row under aijobWriteMu and writes
+// it back. It returns the updated row.
+func (p *PebbleStore) updateAIJob(id string, mutate func(*AIJob)) (AIJob, error) {
+	aijobWriteMu.Lock()
+	defer aijobWriteMu.Unlock()
 	job, err := p.GetAIJob(id)
 	if err != nil {
 		return AIJob{}, err
 	}
-	job.Status = "apply_failed"
-	job.ApplyAttempts++
-	job.LastApplyError = errMsg
-	job.LastApplyAt = time.Now().UTC()
+	mutate(&job)
 	data, err := json.Marshal(job)
 	if err != nil {
 		return AIJob{}, err
@@ -154,6 +135,57 @@ func (p *PebbleStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
 		return AIJob{}, err
 	}
 	return job, nil
+}
+
+// MarkAIJobApplied records that the results were applied, with the counts
+// the completion mark will need. Status is left unchanged.
+func (p *PebbleStore) MarkAIJobApplied(id string, successCount, errorCount int, rowErrors []AIJobRowError) error {
+	_, err := p.updateAIJob(id, func(job *AIJob) {
+		job.Applied = true
+		setAIJobCounts(job, successCount, errorCount, rowErrors)
+	})
+	return err
+}
+
+func setAIJobCounts(job *AIJob, successCount, errorCount int, rowErrors []AIJobRowError) {
+	job.SuccessCount = successCount
+	job.ErrorCount = errorCount
+	job.RowErrors = ""
+	if len(rowErrors) > 0 {
+		b, _ := json.Marshal(rowErrors)
+		job.RowErrors = string(b)
+	}
+}
+
+// MarkAIJobCompleted sets the job status to completed/completed_with_errors and
+// records success/error counts and per-row error details.
+func (p *PebbleStore) MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error {
+	_, err := p.updateAIJob(id, func(job *AIJob) {
+		job.Status = status
+		setAIJobCounts(job, successCount, errorCount, rowErrors)
+		job.CompletedAt = time.Now().UTC()
+	})
+	return err
+}
+
+// MarkAIJobFailed sets the job status to "failed" with an error message.
+func (p *PebbleStore) MarkAIJobFailed(id, errMsg string) error {
+	_, err := p.updateAIJob(id, func(job *AIJob) {
+		job.Status = "failed"
+		job.ErrorMsg = errMsg
+		job.CompletedAt = time.Now().UTC()
+	})
+	return err
+}
+
+// MarkAIJobApplyFailed records one failed apply attempt and returns the row.
+func (p *PebbleStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
+	return p.updateAIJob(id, func(job *AIJob) {
+		job.Status = "apply_failed"
+		job.ApplyAttempts++
+		job.LastApplyError = errMsg
+		job.LastApplyAt = time.Now().UTC()
+	})
 }
 
 // ListAIJobs returns jobs matching optional type/status filters, with
