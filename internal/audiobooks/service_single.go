@@ -1,12 +1,13 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package audiobooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -415,6 +416,38 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 	}
 
 	for _, book := range books {
+		// Step 0: refuse a book that still owns book_file rows — BEFORE any
+		// side effect (external-ID tombstones, iTunes removes, the tombstone
+		// snapshot), because a book we will not delete must keep all of those.
+		//
+		// store.DeleteBook never deletes book_file rows, so purging such a
+		// book used to leave every one of them naming a book with no row. The
+		// commonest case is a dedup-merge loser: merge.MergeBooks soft-deletes
+		// it and deliberately leaves its files on it (they are its own version
+		// of the audio, not the survivor's), so every purged loser orphaned
+		// its rows. Repointing them onto the survivor was considered and
+		// rejected: that would hand the survivor a second copy of the book as
+		// extra tracks — the merge contract says the loser's files stay the
+		// loser's. Deleting the rows is data loss. So the book stays
+		// soft-deleted (hidden, restorable) and is reported.
+		//
+		// DeleteBook enforces the same rule (database.ErrBookOwnsFiles); this
+		// pre-check exists so the refusal happens before the side effects
+		// above, not after them. Fail closed: an unreadable file list is not
+		// proof there are no rows.
+		ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
+		if ownErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr))
+			continue
+		}
+		if len(ownedFiles) > 0 {
+			result.SkippedOwnsFiles++
+			result.Errors = append(result.Errors, fmt.Sprintf(
+				"%s: not purged: still owns %d book_file row(s); purging would orphan them (move them to the owning book first)",
+				book.ID, len(ownedFiles)))
+			continue
+		}
+
 		// Tombstone external IDs so reimport is blocked
 		if eidStore := asExternalIDStore(svc.store); eidStore != nil {
 			extIDs, _ := eidStore.GetExternalIDsForBook(book.ID)
@@ -438,50 +471,44 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 
 		// Step 2: Delete from database (book record gone, tombstone preserved)
 		if err := svc.store.DeleteBook(book.ID); err != nil {
+			if errors.Is(err, database.ErrBookOwnsFiles) {
+				// A file row landed between the pre-check and the delete.
+				result.SkippedOwnsFiles++
+			}
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to delete DB record: %v", book.ID, err))
 			// Tombstone exists but book still exists — sweeper will clean up tombstone
 			continue
 		}
 
-		// Step 3: Delete file if requested (only from organizer root, never from protected/import paths)
+		// Step 3: Delete file if requested (only from organizer root, never
+		// from protected/import paths, and never a path anything live still
+		// references).
+		//
+		// The book owned no book_file rows (step 0, enforced again by
+		// DeleteBook), so the only path it names is its own FilePath. That
+		// path is NOT necessarily its own: duplicate book rows over one file
+		// are the commonest dedup merge, and the survivor keeps the very file
+		// the loser's FilePath names. Removing it deleted the survivor's
+		// audio. So a path any book_file row or any live book still names is
+		// left alone. (A combine's absorbed shell has FilePath cleared for the
+		// same reason — merge/service.go softDeleteAbsorbed.)
 		if deleteFiles && book.FilePath != "" {
 			if isProtectedPath(svc.store, book.FilePath) {
 				slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
+			} else if refErr := svc.purgePathStillReferenced(book.FilePath); refErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, refErr))
 			} else {
 				info, statErr := os.Stat(book.FilePath)
 				if statErr == nil && info.IsDir() {
-					// Directory-based book: remove all book files then the directory
-					if bookFiles, bfErr := svc.store.GetBookFiles(book.ID); bfErr == nil {
-						for _, bf := range bookFiles {
-							if bf.FilePath != "" && !isProtectedPath(svc.store, bf.FilePath) {
-								if rmErr := os.Remove(bf.FilePath); rmErr != nil && !os.IsNotExist(rmErr) {
-									result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to delete book file %s: %v", book.ID, bf.FilePath, rmErr))
-								}
-							}
-						}
-					}
-					// Remove the directory if it is now empty
+					// Directory-based book. It owns no file rows, so there is
+					// nothing of its own inside to remove: remove the directory
+					// only if it is already empty.
 					if entries, rdErr := os.ReadDir(book.FilePath); rdErr == nil && len(entries) == 0 {
 						if rmErr := os.Remove(book.FilePath); rmErr != nil && !os.IsNotExist(rmErr) {
 							result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to remove empty dir %s: %v", book.ID, book.FilePath, rmErr))
 						} else if rmErr == nil {
 							result.FilesDeleted++
-							// Also clean up empty parent dirs up to RootDir
-							if config.AppConfig.RootDir != "" {
-								parentDir := filepath.Dir(book.FilePath)
-								for parentDir != config.AppConfig.RootDir &&
-									pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
-									parentDir != "/" {
-									pe, peErr := os.ReadDir(parentDir)
-									if peErr != nil || len(pe) > 0 {
-										break
-									}
-									if os.Remove(parentDir) != nil {
-										break
-									}
-									parentDir = filepath.Dir(parentDir)
-								}
-							}
+							removeEmptyParentsUpToRoot(book.FilePath)
 						}
 					}
 				} else if statErr == nil {
@@ -491,22 +518,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 						// DB record gone, file still exists, tombstone preserved for sweeper
 					} else if err == nil {
 						result.FilesDeleted++
-						// Clean up empty parent dirs up to RootDir
-						if config.AppConfig.RootDir != "" {
-							parentDir := filepath.Dir(book.FilePath)
-							for parentDir != config.AppConfig.RootDir &&
-								pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
-								parentDir != "/" {
-								pe, peErr := os.ReadDir(parentDir)
-								if peErr != nil || len(pe) > 0 {
-									break
-								}
-								if os.Remove(parentDir) != nil {
-									break
-								}
-								parentDir = filepath.Dir(parentDir)
-							}
-						}
+						removeEmptyParentsUpToRoot(book.FilePath)
 					}
 				}
 				// If statErr is os.IsNotExist, file is already gone — that's fine
@@ -524,6 +536,49 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 	}
 
 	return result, nil
+}
+
+// purgePathStillReferenced returns a non-nil error naming the reason when path
+// must not be removed from disk by a purge: a book_file row still names it, or
+// a live book's FilePath is it. Any lookup error is returned too — fail closed,
+// an unanswerable question is not a free path.
+func (svc *AudiobookService) purgePathStillReferenced(path string) error {
+	bf, err := svc.store.GetBookFileByPath(path)
+	if err != nil {
+		return fmt.Errorf("cannot verify %s is unreferenced: book_file lookup: %w", path, err)
+	}
+	if bf != nil {
+		return fmt.Errorf("%s is still book_file %s of book %s", path, bf.ID, bf.BookID)
+	}
+	ids, err := svc.store.LiveBookIDsAtPath(path)
+	if err != nil {
+		return fmt.Errorf("cannot verify %s is unreferenced: live-books-at-path lookup: %w", path, err)
+	}
+	if len(ids) > 0 {
+		return fmt.Errorf("%s is still the path of live book(s) %v", path, ids)
+	}
+	return nil
+}
+
+// removeEmptyParentsUpToRoot removes the now-empty parent directories of path,
+// walking up while they stay strictly inside config.AppConfig.RootDir.
+func removeEmptyParentsUpToRoot(path string) {
+	if config.AppConfig.RootDir == "" {
+		return
+	}
+	parentDir := filepath.Dir(path)
+	for parentDir != config.AppConfig.RootDir &&
+		pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
+		parentDir != "/" {
+		pe, peErr := os.ReadDir(parentDir)
+		if peErr != nil || len(pe) > 0 {
+			break
+		}
+		if os.Remove(parentDir) != nil {
+			break
+		}
+		parentDir = filepath.Dir(parentDir)
+	}
 }
 
 // RestoreAudiobook restores a soft-deleted audiobook

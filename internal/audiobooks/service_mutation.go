@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package audiobooks
 
@@ -470,6 +470,19 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	}
 
 	// Hard delete path
+	//
+	// Refuse a book that still owns book_file rows BEFORE any side effect
+	// (hash block, iTunes removes). DeleteBook never deletes those rows, so a
+	// hard delete would orphan every one of them; it refuses too
+	// (database.ErrBookOwnsFiles), but only after the hash block below had
+	// already been written. Fail closed on a read error.
+	if owned, ownErr := svc.store.GetBookFiles(id); ownErr != nil {
+		return nil, fmt.Errorf("hard delete %s: cannot read its book_file rows: %w", id, ownErr)
+	} else if len(owned) > 0 {
+		return nil, fmt.Errorf("hard delete %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
+			id, database.ErrBookOwnsFiles, len(owned))
+	}
+
 	// Optionally block the hash before deleting
 	blocked := false
 	if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {

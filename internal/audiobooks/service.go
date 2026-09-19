@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -52,6 +52,9 @@ type bookReader interface {
 	GetBookAtVersion(id string, ts time.Time) (*database.Book, error)
 	CountPrimaryBooks() (int, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	// LiveBookIDsAtPath backs the purge's "is this path still someone's"
+	// check before it removes a file from disk.
+	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
 // bookWriter is the write side of the book entity, including the soft-delete
@@ -114,6 +117,9 @@ type bookTagStore interface {
 // forwarded to isProtectedPath.
 type bookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// GetBookFileByPath backs the purge's "is this path still someone's"
+	// check before it removes a file from disk.
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetDuplicateBooks() ([][]database.Book, error)
 	GetFolderDuplicatesCore() ([][]database.BookCore, error)
 	AddBlockedHash(hash, reason string) error
