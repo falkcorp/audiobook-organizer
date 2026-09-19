@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-09-19
 
@@ -14,7 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// dispatchLog carries the per-request attribution lines.
+var dispatchLog = logger.New("aidispatch")
 
 // Protocol is how the dispatcher talks to an endpoint.
 type Protocol string
@@ -410,12 +415,13 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		d.attribution.Record(ep.ID, c.id, class, time.Now())
 		// One line per routed request, so an operation log names the endpoint
 		// that served (or failed) each piece of work.
-		logAttrs := []any{"capability", c.id, "endpoint", ep.ID, "model", model,
-			"outcome", class.String(), "elapsed", time.Since(start).Round(time.Millisecond)}
+		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
-			slog.Warn("aidispatch: routed request failed", append(logAttrs, "err", err)...)
+			dispatchLog.Warn("routed request failed: capability=%s endpoint=%s model=%s outcome=%s elapsed=%s err=%v",
+				c.id, ep.ID, model, class, elapsed, err)
 		} else {
-			slog.Info("aidispatch: routed request", logAttrs...)
+			dispatchLog.Info("routed request: capability=%s endpoint=%s model=%s outcome=%s elapsed=%s",
+				c.id, ep.ID, model, class, elapsed)
 		}
 		switch class {
 		case ClassOK:

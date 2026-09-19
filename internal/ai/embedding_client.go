@@ -1,5 +1,5 @@
 // file: internal/ai/embedding_client.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-19
 
@@ -384,6 +384,14 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 // retry loop exits immediately.
 func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([][]float32, error) {
 	return embedWithRetry(ctx, c.client, c.model, texts, c.requestTimeout, false)
+}
+
+// embedViaEndpoint sends one pool-routed embedding request to baseURL. It
+// lives here, not in pool_routing.go, so the OpenAI SDK stays confined to the
+// transport files the aidispatch guard already tracks.
+func embedViaEndpoint(ctx context.Context, baseURL, apiKey, model string, texts []string, reqTimeout time.Duration) ([][]float32, error) {
+	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
+	return embedWithRetry(ctx, &client, model, texts, reqTimeout, true)
 }
 
 // embedWithRetry is embedBatchRaw's retry loop, parameterised by client and
