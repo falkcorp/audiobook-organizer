@@ -101,6 +101,12 @@ type CombineJournal struct {
 	// survivor where the survivor's field was EMPTY (never an overwrite).
 	// Undo empties each such field again if it still holds the filled value.
 	FilledEmpty *CombineFillEmpty `json:"filled_empty,omitempty"`
+	// StepJournaled is set by writers that re-write the journal after EVERY
+	// step (dedup.MergeSplitBookClusterWithOptions). Only such a journal can
+	// be undone while still Pending: it names everything done before a crash.
+	// CombineBooks writes Pending once up front and Applied at the end, so its
+	// Pending journal does not record what ran and stays non-undoable.
+	StepJournaled bool `json:"step_journaled,omitempty"`
 
 	// ITunesRemovals is always empty for a combine and is recorded so the
 	// journal states that explicitly: CombineBooks queues NO iTunes-library
@@ -480,7 +486,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	// journal that could not be finalized). It records every step done so
 	// far, and undo replays exactly those, with the same tolerance as a retry:
 	// a step that never ran leaves its row where it already is.
-	pending := j.Status == CombineJournalPending
+	pending := j.Status == CombineJournalPending && j.StepJournaled
 	retry := j.Status == CombineJournalUndoFailed || pending
 	if j.Status != CombineJournalApplied && !retry {
 		return []string{fmt.Sprintf("journal status is %q, only %q (or %q / %q, to replay) combines can be undone", j.Status, CombineJournalApplied, CombineJournalUndoFailed, CombineJournalPending)}

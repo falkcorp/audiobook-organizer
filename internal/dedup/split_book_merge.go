@@ -233,6 +233,7 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 
 	journal := merge.NewCombineJournal(keepID)
 	journal.Origin = SplitBookMergeJournalOrigin
+	journal.StepJournaled = true
 	for _, p := range plans {
 		journal.Absorbed = append(journal.Absorbed, p.entry)
 	}
