@@ -1,9 +1,15 @@
 <!-- file: docs/architecture/2026-09-18-pluggable-media-platform-evaluation.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0fbbd3bc-b6bf-4d6f-beb1-6a09cb00ec68 -->
 <!-- last-edited: 2026-09-18 -->
 
 # Pluggable Media Platform Evaluation
+
+> **Adversarial review:** The original proposal was challenged against current
+> lifecycle, persistence, UI, data-model, security, and migration behavior.
+> Corrections from that review are incorporated below; the evidence and
+> rejected assumptions are recorded in
+> [`2026-09-18-pluggable-media-platform-adversarial-review.md`](2026-09-18-pluggable-media-platform-adversarial-review.md).
 
 ## Recommendation
 
@@ -131,7 +137,7 @@ flowchart TB
   Core --> Auth[Identity and authorization]
   Core --> Config[Typed config and encrypted secrets]
   Core --> Jobs[Durable operations and scheduler]
-  Core --> Events[Versioned event bus]
+  Core --> Events[Best-effort events and durable operations]
   Core --> Files[Storage roots and safe file operations]
   Core --> Data[Namespaced persistence and migrations]
   Core --> Observe[Health, audit, metrics, backups]
@@ -142,7 +148,7 @@ flowchart TB
   Modules --> TV[TV]
   Modules --> Movies[Movies]
 
-  Audiobooks --> Works[Shared works and editions]
+  Audiobooks --> Works[Shared works and reviewed links]
   Ebooks --> Works
   Comics --> Works
   Modules --> Integrations
@@ -213,6 +219,14 @@ starting it. A disabled module is not merely hidden: its routes and recurring
 jobs are absent, while its data remains intact until an explicit uninstall or
 data-purge action.
 
+For the first platform release, enable/disable takes effect on the next process
+restart. Hot enablement is unsafe with the current Gin route tree, service
+container, and operation registrations: routes cannot be cleanly removed,
+services are built once, and current plugin enable/disable handlers only flip
+an in-memory flag. A future hot-lifecycle design would need reversible route
+dispatch, operation draining, dependency reference counts, and explicit
+start/stop transitions. It is not part of stages 0–2.
+
 Use an explicit builtin list rather than discovery by `init()`. Go `init()`
 can remain an implementation detail inside existing packages during migration,
 but visible product composition should be auditable in one place:
@@ -254,10 +268,9 @@ table:
 
 ```mermaid
 erDiagram
-  WORK ||--o{ EDITION : has
-  EDITION ||--o{ CONTRIBUTOR_CREDIT : credits
-  EDITION ||--o{ EXTERNAL_ID : identifies
-  EDITION ||--o{ MODULE_LINK : projects_into
+  WORK ||--o{ CONTRIBUTOR_CREDIT : credits
+  WORK ||--o{ EXTERNAL_ID : identifies
+  WORK ||--o{ MODULE_LINK : projects_into
   MODULE_LINK }o--|| AUDIOBOOK : audiobook_view
   MODULE_LINK }o--|| EBOOK : ebook_view
   COMIC_SERIES ||--o{ COMIC_ISSUE : contains
@@ -266,8 +279,9 @@ erDiagram
   MOVIE ||--o{ MOVIE_FILE : has
 ```
 
-- **Core catalog** owns `Work`, `Edition`, contributors, normalized external
-  identifiers, user tags, and cross-module links.
+- **Core catalog** initially owns `Work`, contributors, normalized external
+  identifiers, user tags, and cross-module links. It does not introduce an
+  edition/expression hierarchy until cross-format evidence requires one.
 - **Audiobooks** owns narration, tracks/chapters, audio analysis,
   transcodes, listening progress, and audio-file organization.
 - **Ebooks** owns formats, reader metadata, annotations/progress, DRM policy,
@@ -277,11 +291,17 @@ erDiagram
 - **TV and movies** own their separate episodic/movie metadata, monitored
   state, release profiles, quality, wanted/search lifecycle, and video files.
 
-An audiobook and an ebook link through the same `Edition` when identifiers and
-curation support that conclusion. The UI presents one work detail page with
-available representations, then routes into the appropriate module view. It
-must never infer an association merely from title text; matching remains a
-reviewable operation with provenance and a user override.
+An audiobook and an ebook initially link through the same `Work` when
+identifiers and curation support that conclusion. They do **not** automatically
+share an edition: an audiobook can be abridged, translated, revised, or based
+on a text release that cannot be established from available metadata. The
+existing `Work` record is enough for the first cross-format milestone. Add a
+core `Edition`/`Expression` concept only after real ebook and audiobook data
+demonstrates which distinctions the product can reliably populate. The UI
+presents one work detail page with available representations, then routes into
+the appropriate module view. It must never infer an association merely from
+title text; matching remains a reviewable operation with provenance and a user
+override.
 
 In Pebble, core keys and module keys should be explicitly namespaced, for
 example `catalog:work:<id>`, `audiobooks:item:<id>`, and
@@ -293,9 +313,12 @@ one giant `database.Store` to understand every type.
 ### API and navigation
 
 At browser startup the shell calls `GET /api/v1/platform/modules`. It receives
-only enabled module descriptors and renders navigation from their server-owned
-metadata. The web build still compiles every first-party React route bundle, but
-lazy-loads only enabled module routes. This is the practical answer to
+only enabled module descriptors. The client intersects those IDs with a
+compile-time TypeScript registry of trusted route components; the server never
+names or supplies executable JavaScript. Unknown server module IDs are shown as
+an incompatibility diagnostic, not rendered. The web build still compiles every
+first-party React route bundle, but lazy-loads only enabled module routes. This
+is the practical answer to
 "enable a plugin and see it in the navigation" without remote JavaScript
 execution.
 
@@ -335,9 +358,9 @@ the existing audiobook product usable throughout.
 | Stage | Outcome | Main work | Exit criteria |
 | --- | --- | --- | --- |
 | 0. Consolidate extension vocabulary | One documented distinction between modules, integrations, and internal services | Deprecate duplicate plugin concepts; inventory registrations and global state | No new feature is added to the legacy plugin APIs. |
-| 1. Platform kernel | Module catalog, typed descriptor, enablement state, navigation manifest, namespaced settings | Extract a small host API over the service/operation/event systems | Audiobooks can register as a module without changed behaviour. |
+| 1. Platform kernel | Module catalog, typed descriptor, restart-bound enablement state, navigation manifest, namespaced settings | Extract a small host API over the service/operation systems; use events only for lossy notifications | Audiobooks can register as a module without changed behaviour; disabling removes its startup graph after restart. |
 | 2. Audiobooks as the reference module | Existing audio library is behind module routes/contracts | Move audiobook-specific route/service/config registrations; retain compatibility redirects | Full regression suite and existing data work unchanged. |
-| 3. Ebooks | First non-audio domain plus shared work/edition links | EPUB/PDF/CBZ import, ebook metadata, file rules, work-link review workflow | A single work can safely surface ebook and audiobook representations. |
+| 3. Ebooks | First non-audio domain plus shared work links | EPUB/PDF/CBZ import, ebook metadata, file rules, work-link review workflow | A single work can safely surface ebook and audiobook representations. |
 | 4. Comics | Prove serial/issue hierarchy | Comic series/issue domain, archive scanning, reader state, comic metadata integration | Comics has no audiobook-only fields or dependencies. |
 | 5. Shared automation integrations | Reusable indexer/download/history/path-mapping abstractions | Extract Deluge and future SAB/nzb/torrent adapters; integration settings and health | A module can configure an integration without app-wide conditional code. |
 | 6. TV then movies | Sonarr/Radarr replacement capability | Wanted/release/quality/profile pipeline, indexers, download handoff, import/rename, calendar | TV and movie modules run independently, sharing only platform/integration contracts. |
@@ -350,12 +373,14 @@ quality-profile problem of TV/movies.
 
 ## Scale, risk, and staffing assumptions
 
-Assuming one experienced Go/React engineer who knows the current codebase:
+Assuming one experienced Go/React engineer who knows the current codebase, and
+accounting for the current coupling (hundreds of server/database files and
+hundreds of `database.Book` call sites):
 
-- stages 0–2: roughly 8–14 focused engineering weeks;
-- stage 3 (a useful ebook module): roughly 6–10 weeks;
-- stage 4 (comics): roughly 4–8 weeks after ebooks;
-- stages 5–6: roughly 4–7 engineer-months before TV/movies approach mature
+- stages 0–2: roughly 12–20 focused engineering weeks;
+- stage 3 (a useful ebook module): roughly 8–16 weeks;
+- stage 4 (comics): roughly 6–12 weeks after ebooks;
+- stages 5–6: roughly 9–18 engineer-months before TV/movies approach mature
   Sonarr/Radarr workflows; the difficult parts are release monitoring,
   indexer/download interoperability, safety, history, and edge-case import
   semantics—not rendering a library grid;
@@ -377,6 +402,15 @@ remote path mapping, download clients, calendars, and automation rules.
   schedulers, mutate files, or expose routes.
 - **Keep migrations forward-only and per module.** Require backup validation
   before module upgrades and retain data on disable.
+- **Do not physically rewrite existing audiobook keys during extraction.** Put
+  the legacy keyspace behind an audiobook-owned adapter first. Namespace new
+  module data immediately; migrate old keys only when a measured benefit
+  exceeds the rollback risk.
+- **Do not use the current event bus for correctness.** It dispatches
+  asynchronously in memory, logs subscriber errors, and loses events on
+  restart. Cross-module state changes require a durable operation, transactional
+  outbox, or explicit synchronous call; events remain notifications until a
+  durable bus exists.
 - **Preserve filesystem safety as core.** Imports and organizers must request
   storage capabilities and emit durable audit/undo records.
 - **Test contracts, not only packages.** Add module conformance tests for
@@ -397,3 +431,8 @@ first-party modules, TypeScript/React for the bundled UI, and language-neutral
 RPC only when an external integration has earned the complexity.
 
 No Java or Python is required.
+
+The internal module interfaces should nevertheless use transport-neutral DTOs
+and explicit API versions from the start. That keeps a later out-of-process
+integration boundary possible without prematurely operating an RPC plugin
+system.
