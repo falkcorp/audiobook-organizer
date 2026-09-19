@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -165,7 +165,7 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 			return nil // one unreadable book must not abort the sweep
 		}
 
-		changedThisBook := false
+		var toWrite []*database.BookFile
 		for fi := range files {
 			f := files[fi]
 
@@ -198,33 +198,42 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 			}
 
 			f.Duration = newDur
-			if uerr := store.UpdateBookFile(f.ID, &f); uerr != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				log.Warn("purge-millisecond-durations: write failed; leaving the row as-is",
-					"book_id", bookID, "file_id", f.ID, "err", uerr)
-				continue
-			}
-			mu.Lock()
-			fixed++
-			mu.Unlock()
-			changedThisBook = true
+			toWrite = append(toWrite, &files[fi])
+			files[fi] = f
+		}
+		if len(toWrite) == 0 {
+			return nil
 		}
 
-		// Book.Duration is a sum over the rows, so it is only right once the rows are.
-		if params.Apply && changedThisBook {
-			if rerr := store.RecomputeBookAggregates(bookID); rerr != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				log.Warn("purge-millisecond-durations: RecomputeBookAggregates failed",
-					"book_id", bookID, "err", rerr)
-			} else {
-				mu.Lock()
-				recomputed++
-				mu.Unlock()
+		// ONE UpdateBookFiles call per book: the rows are written by ID and the
+		// book's aggregates (Book.Duration is a sum over the rows, so it is only
+		// right once the rows are) are recomputed once afterwards. A per-row
+		// UpdateBookFile recomputed the book after EVERY row, re-reading all of
+		// its rows each time -- O(n^2) on a large book, the defect that got
+		// duration-reextract killed as stuck on 2026-09-19. ctx is checked
+		// between rows and liveness is stamped after each one.
+		n, uerr := store.UpdateBookFiles(ctx, toWrite, func(int) {
+			registry.TouchLiveness(reporter)
+		})
+		mu.Lock()
+		fixed += n
+		switch {
+		case uerr == nil:
+			recomputed++
+		case n < len(toWrite):
+			failed += len(toWrite) - n
+		default:
+			// Every row applied, yet an error: the recompute (or an fsync)
+			// failed, so the book's totals may be stale.
+			failed++
+		}
+		mu.Unlock()
+		if uerr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			log.Warn("purge-millisecond-durations: write or recompute failed; unwritten rows left as-is",
+				"book_id", bookID, "written", n, "of", len(toWrite), "err", uerr)
 		}
 		return nil
 	}, registry.RunItemsOptions{

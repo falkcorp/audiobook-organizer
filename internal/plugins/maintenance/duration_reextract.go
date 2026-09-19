@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_reextract.go
-// version: 3.15.0
+// version: 3.16.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -20,10 +20,15 @@
 //
 // Scope (v2): handles BOTH book layouts.
 //   - Multi-file books (audio across BookFiles; Book.FilePath may be a directory):
-//     re-extract EVERY segment, correct each BookFile.Duration that drifted, then
-//     RecomputeBookAggregates to sum the corrected segments into Book.Duration.
-//     Segment writes use UpdateBookFile on pebble-direct rows, so the AcoustID
-//     fingerprint is preserved (PR #1552) and memdb is refreshed (PR #1560).
+//     re-extract EVERY segment, correct each BookFile.Duration that drifted, and
+//     sum the corrected segments into Book.Duration. The drifted segments of one
+//     book are written in ONE UpdateBookFiles call: each row is written by ID
+//     with UpdateBookFile's semantics (AcoustID fingerprint preserved, PR #1552;
+//     memdb refreshed, PR #1560), and the book aggregates are recomputed ONCE
+//     after the rows, not once per row. Per-row UpdateBookFile recomputed the
+//     book after every segment, re-reading all of its rows each time; a
+//     1,494-file book took ~25 minutes that way on 2026-09-19 and the stuck-op
+//     watchdog killed the run.
 //   - Virtual single-file books (no BookFile rows): probe Book.FilePath and write
 //     Book.Duration directly.
 // A book is corrected only when ALL present segments yield a real (non-estimated)
@@ -49,10 +54,18 @@
 // clock for the ffprobe tail proportionally. All DB writes happen on a single
 // collector goroutine — no locking required on counters or PebbleDB writes.
 //
+// Liveness and cancellation: the collector reports progress at most every ~15s
+// between books, and INSIDE a book's segment writes it stamps the watchdog's
+// liveness clock after every row (registry.TouchLiveness) and reports a
+// "segment i/n" progress line on the same ~15s cadence, so one very large book
+// is not mistaken for a stuck op. ctx is checked before every book and between
+// segment writes; on cancellation the op stops (each row already written is a
+// complete write and its book's aggregates are recomputed) and returns
+// ctx.Err(). Workers select on ctx for their result send, so a collector that
+// stops early does not leave them blocked forever.
+//
 // Idempotent: a re-run finds already-corrected rows within tolerance and skips
-// them. The ffprobe tail is slow by design — it shells out once per
-// non-fingerprinted segment — so the op heartbeats progress every ~15s and is
-// cancellable.
+// them.
 
 package maintenance
 
@@ -69,6 +82,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -286,6 +300,11 @@ func processBookForReextract(ctx context.Context, store bookFileLister, book dat
 	return res
 }
 
+// reextractSegmentProgressInterval throttles the "segment i/n" progress line
+// written while one book's segments are being written. Liveness itself is
+// stamped on every row regardless. A var so tests can set it to zero.
+var reextractSegmentProgressInterval = 15 * time.Second
+
 func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	params := durationReextractParams{DryRun: true, Workers: 4, SkipAgeDays: 90} // safe defaults
 	if len(raw) > 0 {
@@ -371,7 +390,14 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 	for i := 0; i < params.Workers; i++ {
 		wg.Go(func() {
 			for book := range jobCh {
-				resultCh <- processBookForReextract(ctx, store, book, skipBefore)
+				res := processBookForReextract(ctx, store, book, skipBefore)
+				select {
+				case resultCh <- res:
+				case <-ctx.Done():
+					// The collector stops draining on cancel; without this
+					// select every worker would block on the send forever.
+					return
+				}
 			}
 		})
 	}
@@ -407,6 +433,11 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 
 	// Collector: drain results, update counters, apply writes.
 	for res := range resultCh {
+		if err := ctx.Err(); err != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"cancelled after %d books examined, %d corrected", examined, written))
+			return err
+		}
 		examined++
 		heartbeat(false)
 
@@ -458,16 +489,44 @@ func (p *Plugin) runDurationReextract(ctx context.Context, raw json.RawMessage, 
 			continue
 		}
 
-		// Apply: write changed segments then recompute aggregates.
-		for ci := range res.changedBFs {
-			cf := res.changedBFs[ci]
-			if uErr := store.UpdateBookFile(cf.ID, &cf); uErr != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-					"book %s seg %s: UpdateBookFile failed: %v", res.book.ID, cf.ID, uErr))
-				readErr++
+		// Apply. Drifted segments go through ONE UpdateBookFiles call, which
+		// recomputes the book's aggregates once after the rows. A book whose
+		// total drifted with no segment drifting needs the recompute alone.
+		if len(res.changedBFs) > 0 {
+			rows := make([]*database.BookFile, len(res.changedBFs))
+			for ci := range res.changedBFs {
+				rows[ci] = &res.changedBFs[ci]
 			}
-		}
-		if len(res.segs) > 0 {
+			bookID, nSeg := res.book.ID, len(rows)
+			lastSegLog := time.Now()
+			_, uErr := store.UpdateBookFiles(ctx, rows, func(done int) {
+				// A row write just finished: real work, so stamp liveness.
+				registry.TouchLiveness(reporter)
+				if time.Since(lastSegLog) >= reextractSegmentProgressInterval {
+					total := totalBooks
+					if total == 0 {
+						total = examined
+					}
+					_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
+						"book %s: wrote segment %d/%d (examined=%d corrected=%d)",
+						bookID, done, nSeg, examined, written))
+					lastSegLog = time.Now()
+				}
+			})
+			if uErr != nil {
+				if ctx.Err() != nil {
+					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+						"cancelled while writing book %s's segments, after %d books examined, %d corrected",
+						bookID, examined, written))
+					return ctx.Err()
+				}
+				// Not stamped verified, so the next run retries this book.
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					"book %s: segment write or aggregate recompute failed: %v", bookID, uErr))
+				readErr++
+				continue
+			}
+		} else if len(res.segs) > 0 {
 			if rErr := store.RecomputeBookAggregates(res.book.ID); rErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: RecomputeBookAggregates failed: %v", res.book.ID, rErr))

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -620,6 +620,92 @@ func (s *PebbleStore) batchCreateBookFilesAttempt(files []*BookFile) (*stagedBoo
 // indexes when the PID or path changes.
 func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	return s.updateBookFile(id, file, true, true)
+}
+
+// UpdateBookFiles replaces each existing BookFile in files by its ID, exactly
+// as UpdateBookFile does (same merge rule, one committed write per row, same
+// memdb refresh), but recomputes the book aggregates ONCE per affected book
+// after the rows are written instead of once per row.
+//
+// WHY: UpdateBookFile recomputes its book's aggregates on every call that
+// moves Duration or FileSize, and RecomputeBookAggregates re-reads every row
+// of the book. A caller rewriting all N segments of one book therefore paid
+// N full re-reads -- O(N^2). On 2026-09-19 maintenance.duration-reextract
+// spent ~25 minutes on one 1,494-file book that way (~1 s per recompute) and
+// was killed by the stuck-op watchdog.
+//
+// Why not BatchUpsertBookFiles, which already coalesces its recompute: it
+// matches rows by iTunes PID and then by FilePath, not by ID. Two rows of one
+// book that share a path would be merged or misdirected, and a PID match can
+// retarget the row to another book. This method writes the row the caller
+// named.
+//
+// ctx is checked before each row. On cancellation the method stops, still
+// recomputes the aggregates of the books whose rows it already wrote (so the
+// book agrees with its committed rows), and returns ctx.Err() joined with any
+// row errors. Every row it wrote is a complete UpdateBookFile write; a row is
+// never half-written.
+//
+// afterRow, if non-nil, is called after each row attempt with the number of
+// rows attempted so far, so a long-running caller can report liveness from
+// inside the loop.
+//
+// Returns the number of rows applied. A row whose write failed is skipped and
+// its error (wrapped with the row ID) is joined into the returned error; the
+// remaining rows are still written. A row that was applied but whose fsync
+// failed (ErrBookFileDurabilityUnknown) counts as written, gets its book
+// recomputed, and still reports its error. Unlike the per-row notify path,
+// aggregate recompute failures are RETURNED (joined), not only logged: the
+// caller wrote these rows to change the book's totals and must be able to
+// tell that the totals did not follow.
+func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(done int)) (int, error) {
+	var (
+		written  int
+		errs     []error
+		affected []string
+		seen     = make(map[string]bool)
+	)
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if file == nil || file.ID == "" {
+			errs = append(errs, fmt.Errorf("UpdateBookFiles: row %d has no ID", i))
+			continue
+		}
+		recompute, err := s.updateBookFileNoNotify(file.ID, file)
+		if bookFileApplied(err) {
+			written++
+			if recompute && !seen[file.BookID] {
+				seen[file.BookID] = true
+				affected = append(affected, file.BookID)
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("book file %s: %w", file.ID, err))
+		}
+		if afterRow != nil {
+			afterRow(i + 1)
+		}
+	}
+	for _, bookID := range affected {
+		if err := s.RecomputeBookAggregates(bookID); err != nil {
+			slog.Warn("UpdateBookFiles: aggregate recompute failed",
+				"book_id", bookID, "error", err)
+			errs = append(errs, fmt.Errorf("recompute aggregates for book %s: %w", bookID, err))
+		}
+	}
+	return written, errors.Join(errs...)
+}
+
+// updateBookFileNoNotify is updateBookFile without the trailing aggregate
+// recompute: it reports whether one is needed and leaves it to the caller
+// (UpdateBookFiles), which coalesces it per book.
+func (s *PebbleStore) updateBookFileNoNotify(id string, file *BookFile) (bool, error) {
+	unlock := s.lockBookFile(id)
+	defer unlock()
+	return s.updateBookFileLocked(id, file, true, true)
 }
 
 // updateBookFile is UpdateBookFile's body. mergeStored=false is used only by
