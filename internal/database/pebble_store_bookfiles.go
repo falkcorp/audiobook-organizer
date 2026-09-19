@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -622,6 +622,11 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 	return s.updateBookFile(id, file, true, true)
 }
 
+// ErrBookAggregatesRecompute marks an UpdateBookFiles error from a book's
+// aggregate recompute (the rows were written; the book's totals may be stale),
+// so a caller can tell it apart from a row failure or a cancel with errors.Is.
+var ErrBookAggregatesRecompute = errors.New("book aggregate recompute failed")
+
 // UpdateBookFiles replaces each existing BookFile in files by its ID, exactly
 // as UpdateBookFile does (same merge rule, one committed write per row, same
 // memdb refresh), but recomputes the book aggregates ONCE per affected book
@@ -695,7 +700,7 @@ func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, af
 		if err := s.RecomputeBookAggregates(bookID); err != nil {
 			slog.Warn("UpdateBookFiles: aggregate recompute failed",
 				"book_id", bookID, "error", err)
-			errs = append(errs, fmt.Errorf("recompute aggregates for book %s: %w", bookID, err))
+			errs = append(errs, fmt.Errorf("%w for book %s: %w", ErrBookAggregatesRecompute, bookID, err))
 		}
 	}
 	return written, errors.Join(errs...)

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.131.1
+// version: 1.131.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-19
 
@@ -3299,6 +3299,8 @@ func (m *MockStore) UpdateBookFile(id string, file *BookFile) error {
 // UpdateBookFiles defaults to UpdateBookFile per row (through
 // UpdateBookFileFunc when set), honouring ctx between rows and calling
 // afterRow, so a test that only stubs UpdateBookFileFunc still sees its rows.
+// A row counts as applied by PebbleStore's rule (bookFileApplied): a
+// durability-unknown error is applied, so mock tests agree with prod.
 func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error) {
 	if m.UpdateBookFilesFunc != nil {
 		return m.UpdateBookFilesFunc(ctx, files, afterRow)
@@ -3311,13 +3313,15 @@ func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afte
 			break
 		}
 		err := m.UpdateBookFile(f.ID, f)
-		if err != nil {
-			errs = append(errs, err)
-		} else {
+		applied := bookFileApplied(err)
+		if applied {
 			written++
 		}
+		if err != nil {
+			errs = append(errs, err)
+		}
 		if afterRow != nil {
-			afterRow(i, err == nil)
+			afterRow(i, applied)
 		}
 	}
 	return written, errors.Join(errs...)
