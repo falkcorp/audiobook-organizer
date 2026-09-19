@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package acoustid
 
@@ -93,7 +93,8 @@ func newPagedFixture(nBooks, filesPerBook int, file func(bookID string, j int) d
 	for i := 0; i < nBooks; i++ {
 		id := fmt.Sprintf("book-%05d", i)
 		sig := "signature-present"
-		fx.books = append(fx.books, database.Book{ID: id, BookSigV1: &sig})
+		sigV := fingerprint.BookSignatureVersion // current-era: no rebuild needed
+		fx.books = append(fx.books, database.Book{ID: id, BookSigV1: &sig, BookSigVersion: &sigV})
 		for j := 0; j < filesPerBook; j++ {
 			fx.files[id] = append(fx.files[id], file(id, j))
 		}
@@ -152,6 +153,7 @@ func doneFile(bookID string, j int) database.BookFile {
 		ID: fmt.Sprintf("%s-file-%d", bookID, j), BookID: bookID,
 		FilePath:                       fmt.Sprintf("/does/not/exist/%s-%d.m4b", bookID, j),
 		AcoustIDFingerprintDurationSec: 60,
+		AcoustIDFPVersion:              fingerprint.PrintEncodingVersion,
 	}
 }
 
@@ -448,6 +450,7 @@ func TestBackfillTally_RecordsIneligibleReasons(t *testing.T) {
 			f.FilePath = "/x/a.pdf"
 		case 2:
 			f.AcoustIDFingerprintDurationSec = 1
+			f.AcoustIDFPVersion = fingerprint.PrintEncodingVersion // current-era: done
 		}
 		return f
 	})
