@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.83.1
+// version: 1.83.2
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -1921,12 +1921,18 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if de.hasKnownShortDuration(a) || de.hasKnownShortDuration(b) {
+	// Both runtime gates below read each book's file rows; one memo for this
+	// call (or the run's, inside FullScan) makes that one read per book.
+	memo := de.runtimeMemo()
+	if memo == nil {
+		memo = newBookRuntimeMemo()
+	}
+	if de.hasKnownShortDurationMemo(memo, a) || de.hasKnownShortDurationMemo(memo, b) {
 		slog.Debug("dedup exact candidate dropped by min-duration gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if de.isPartVsWholeMismatch(a, b) {
+	if de.isPartVsWholeMismatchMemo(memo, a, b) {
 		slog.Debug("dedup exact candidate dropped by part-vs-whole gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
@@ -1990,7 +1996,15 @@ func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
 	if book == nil {
 		return false
 	}
-	rt, _, _ := runtimeAndRows(de.bookStore, de.runtimeMemo(), book)
+	return de.hasKnownShortDurationMemo(de.runtimeMemo(), book)
+}
+
+// hasKnownShortDurationMemo is hasKnownShortDuration through the given memo.
+func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *database.Book) bool {
+	if book == nil {
+		return false
+	}
+	rt, _, _ := runtimeAndRows(de.bookStore, memo, book)
 	return shortRuntime(rt)
 }
 
@@ -2005,10 +2019,14 @@ func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
 // the guard — this only fires when both sides' file counts and durations are
 // known and clearly mismatched, mirroring hasPlausibleAudio's convention.
 func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
+	return de.isPartVsWholeMismatchMemo(de.runtimeMemo(), a, b)
+}
+
+// isPartVsWholeMismatchMemo is isPartVsWholeMismatch through the given memo.
+func (de *Engine) isPartVsWholeMismatchMemo(memo *bookRuntimeMemo, a, b *database.Book) bool {
 	if a == nil || b == nil || de.bookStore == nil {
 		return false
 	}
-	memo := de.runtimeMemo()
 	rtA, rowsA, okA := runtimeAndRows(de.bookStore, memo, a)
 	if !okA || rowsA == 0 {
 		return false
