@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-09-19
 
@@ -93,6 +93,20 @@ type splitSrcPlan struct {
 // still get processed so the operator doesn't end up with a half-merged
 // cluster.
 func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggestedTitle string) (*SplitBookMergeResult, error) {
+	return MergeSplitBookClusterWithOptions(store, keepID, srcIDs, suggestedTitle, SplitMergeOptions{})
+}
+
+// SplitMergeOptions tunes MergeSplitBookClusterWithOptions.
+type SplitMergeOptions struct {
+	// FileOrder, when set, is the keep's play order after the merge: every
+	// listed file is stamped DiscNumber=0, TrackNumber=1..N in this order. The
+	// previous numbers are journaled (keep's own files and absorbed files), so
+	// UndoCombine restores them.
+	FileOrder []string
+}
+
+// MergeSplitBookClusterWithOptions is MergeSplitBookCluster with options.
+func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []string, suggestedTitle string, opts SplitMergeOptions) (*SplitBookMergeResult, error) {
 	if keepID == "" {
 		return nil, fmt.Errorf("MergeSplitBookCluster: empty keepID")
 	}
@@ -143,10 +157,38 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 		}
 		plans = append(plans, plan)
 	}
+	// A src whose listening progress cannot be carried (a store without a
+	// sync follower) is left out whole: retiring it would lose that progress
+	// at the purge.
+	canFollow := database.AsSyncIdentityStore(store) != nil
+	if !canFollow {
+		carriable := plans[:0]
+		for _, p := range plans {
+			has, herr := merge.BookHasUserProgress(store, p.entry.BookID)
+			if herr != nil || has {
+				result.Errors = append(result.Errors, fmt.Sprintf("src %s has listening progress this store cannot carry (%v); left untouched", p.entry.BookID, herr))
+				continue
+			}
+			carriable = append(carriable, p)
+		}
+		plans = carriable
+	}
 	journal := merge.NewCombineJournal(keepID)
 	journal.Origin = SplitBookMergeJournalOrigin
 	for _, p := range plans {
 		journal.Absorbed = append(journal.Absorbed, p.entry)
+	}
+	// The keep's own files, with their numbers, so UndoCombine can restore a
+	// FileOrder stamp on them too.
+	if ownFiles, oerr := store.GetBookFiles(keepID); oerr != nil {
+		return nil, fmt.Errorf("split-book merge refused: read keep files: %w", oerr)
+	} else {
+		for _, f := range ownFiles {
+			journal.SurvivorOwnFiles = append(journal.SurvivorOwnFiles, merge.CombineFileMove{
+				FileID: f.ID, FromBookID: keepID, FilePath: f.FilePath,
+				DiscBefore: f.DiscNumber, TrackBefore: f.TrackNumber,
+			})
+		}
 	}
 	if err := merge.WriteCombineJournal(store, journal); err != nil {
 		return nil, fmt.Errorf("split-book merge refused: undo journal could not be written: %w", err)
@@ -177,13 +219,30 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 				continue
 			}
 		}
+		// Carry each moved file's sync_file identity, then every user's
+		// listening progress and the src's sync identity, onto the keep --
+		// what CombineBooks does per absorbed book. Journaled so UndoCombine
+		// puts progress back. A follow that cannot run leaves the src live:
+		// the pre-check above already removed srcs with progress, so this only
+		// fires on an unexpected store error.
+		merge.FollowFileMove(store, srcID, keepID, p.fileIDs)
+		entry := p.entry
+		if canFollow {
+			progress, redirected, ferr := merge.FollowAbsorbedJournaled(store, keepID, srcID)
+			entry.Progress = progress
+			entry.SyncRedirected = redirected
+			if ferr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("follow progress of %s: %v; %s left live, re-run the merge to finish it", srcID, ferr, srcID))
+				journal.Warnings = append(journal.Warnings, fmt.Sprintf("files of %s moved to %s but progress follow failed; %s left live", srcID, keepID, srcID))
+				continue
+			}
+		}
 		stamp, err := softDeleteSplitSource(store, srcID)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("soft-delete %s: %v", srcID, err))
 			splitMergeLog.Warn("split-book merge soft-delete failed src=%s err=%s", logger.SanitizeLogValue(srcID), logger.SanitizeLogValue(fmt.Sprint(err)))
 			continue
 		}
-		entry := p.entry
 		entry.MarkedForDeletionAt = stamp
 		kept = append(kept, entry)
 		result.MergedSrcCount++
@@ -201,6 +260,25 @@ func MergeSplitBookCluster(store Store, keepID string, srcIDs []string, suggeste
 		}
 		if total > 0 {
 			result.NewDuration = total
+		}
+	}
+
+	// Step 2b: stamp the play order. Only files the keep now owns are
+	// touched; their previous numbers are in the journal (SurvivorOwnFiles and
+	// Absorbed[].Files), so UndoCombine restores them.
+	if len(opts.FileOrder) > 0 {
+		for i, fid := range opts.FileOrder {
+			f, ferr := store.GetBookFileByID(keepID, fid)
+			if ferr != nil || f == nil {
+				continue // not on the keep (its src was left live)
+			}
+			if f.DiscNumber == 0 && f.TrackNumber == i+1 {
+				continue
+			}
+			f.DiscNumber, f.TrackNumber = 0, i+1
+			if uerr := store.UpdateBookFile(f.ID, f); uerr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("set track order on %s: %v", f.ID, uerr))
+			}
 		}
 	}
 
