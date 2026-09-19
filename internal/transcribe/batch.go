@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -45,6 +45,39 @@ type ProgressFunc func(done, total int)
 //
 // Local path uses torch==2.0.1+cu118 for CC 6.1 GPU support (GTX 1050 Ti).
 func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+	return TranscribeBatchOpts(ctx, jobs, BatchOptions{OnProgress: onProgress})
+}
+
+// ResultJournal is the durable result cache TranscribeBatchOpts consults
+// (implemented by *resultjournal.Journal). Declared here, narrow, so this
+// package depends on the two calls it makes rather than on the journal type.
+type ResultJournal interface {
+	// Lookup returns the journalled result for contentKey; ok=false is a miss.
+	Lookup(contentKey string) (result json.RawMessage, ok bool, err error)
+	// Complete durably journals result; it must not return before the write
+	// is persisted.
+	Complete(contentKey, endpoint, model string, result any) error
+}
+
+// BatchOptions are TranscribeBatchOpts' optional inputs.
+type BatchOptions struct {
+	// OnProgress: see ProgressFunc. May be nil.
+	OnProgress ProgressFunc
+	// Journal, when non-nil, makes the REMOTE path restart-safe: a job whose
+	// clip bytes + endpoint model already have a journalled result is served
+	// from it and never sent, and every result an endpoint returns is
+	// journalled before progress is reported for it. See endpointJournal.
+	// The local uv path ignores it (see TranscribeBatchOpts).
+	Journal ResultJournal
+}
+
+// TranscribeBatchOpts is TranscribeBatch with options. The journal applies to
+// the remote path only: the local uv subprocess is an OOM-prone last resort
+// whose model is hard-coded, returns every result in one shot at the end (so
+// there is no partial progress for a journal to save), and is not how
+// production transcribes.
+func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts BatchOptions) (map[string]BatchResult, error) {
+	onProgress := opts.OnProgress
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -54,7 +87,7 @@ func TranscribeBatch(ctx context.Context, jobs map[string]string, onProgress Pro
 	// the historical direct path); else the local uv path below.
 	snap := config.Snapshot()
 	if endpoints := poolEndpoints(snap.WhisperEndpoints, snap.WhisperRemoteURL); len(endpoints) > 0 {
-		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress)
+		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress, opts.Journal)
 		if err != nil {
 			// Do NOT fall back to the local uv path when remote endpoints are
 			// configured. The local subprocess loads the full Whisper model into

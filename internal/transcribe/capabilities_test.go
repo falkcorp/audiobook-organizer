@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8b4e2d17-5c39-4a86-b1f0-9d7e3a25c8f4
-// last-edited: 2026-08-31
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -161,6 +161,7 @@ func TestPoolRefusesLoneCPUEndpointBeforeTheFastPath(t *testing.T) {
 		[]Endpoint{{URL: srv.URL, Concurrency: 1, RequireGPU: true, Label: "windows-box"}},
 		nil,
 		map[string]string{"book-1": "/nonexistent.wav"},
+		nil,
 		nil,
 	)
 	if err == nil {
@@ -372,6 +373,7 @@ func TestUnsatisfiableRequirementFailsClosedNamingTheLabels(t *testing.T) {
 		[]Endpoint{{URL: srv.URL, Concurrency: 1, Label: "gpu-box"}},
 		[]string{"gpu", "unmeetable"},
 		map[string]string{"book-1": "/nonexistent.wav"},
+		nil,
 		nil,
 	)
 	if err == nil {

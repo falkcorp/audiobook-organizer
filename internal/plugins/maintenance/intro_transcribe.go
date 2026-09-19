@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.29.0
+// version: 3.30.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -25,6 +25,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -33,10 +34,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// transcribeBatchFn is a test seam over transcribe.TranscribeBatch so tests can
-// substitute a stub (e.g. one returning *transcribe.TransportError) without a
-// live Whisper endpoint. Production code never reassigns it.
-var transcribeBatchFn = transcribe.TranscribeBatch
+// transcribeBatchFn is a test seam over transcribe.TranscribeBatchOpts so tests
+// can substitute a stub (e.g. one returning *transcribe.TransportError) without
+// a live Whisper endpoint. Production code never reassigns it.
+var transcribeBatchFn = transcribe.TranscribeBatchOpts
+
+// whisperJournalKind is the resultjournal kind for whisper transcripts.
+const whisperJournalKind = "whisper"
 
 const (
 	introTranscribePageSize  = 200
@@ -247,6 +251,21 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// HTTP handlers do. Without this the sink stays nil and stats:transcribe is
 	// never written (the aggregate endpoint returns null even while the op runs).
 	statsSink, _ := database.AsCapability[database.TranscribeStatsStore](store)
+
+	// The whisper result journal makes a restart mid-page lossless: every
+	// transcript an endpoint returns is journalled (keyed by clip bytes + the
+	// endpoint's model) before progress is reported, and the next run serves
+	// it instead of re-sending the clip. Built per run from this run's store
+	// and passed down as a parameter -- never parked on *Plugin, where two
+	// concurrent runs would share it. The journal holds RESULTS only; whether
+	// a book already carries its transcript is read from the book row
+	// (applyOutcome), so byte-identical clips of two books both get written.
+	var journal transcribe.ResultJournal
+	if j, jerr := resultjournal.New(store, whisperJournalKind); jerr != nil {
+		log.Warn("transcribe-book-intros: result journal unavailable, running without restart protection", "err", jerr)
+	} else {
+		journal = j
+	}
 	startedAt := time.Now()
 	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
 	accum.recordSkipped(sel.skipped)
@@ -331,7 +350,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, journal)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		log.Info("transcribe-book-intros: page complete",
@@ -790,6 +809,7 @@ func (p *Plugin) processTranscribePage(
 	onBook transcribe.ProgressFunc,
 	accum *transcribeStatsAccum,
 	extractOnly bool,
+	journal transcribe.ResultJournal,
 ) (processed int) {
 	cacheDir := wavCacheDir(rootDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -943,7 +963,8 @@ func (p *Plugin) processTranscribePage(
 
 	// Step 3: one Python/Whisper process for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(batchJobs))
-	batchResults, err := transcribeBatchFn(ctx, batchJobs, onBook)
+	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: journal}
+	batchResults, err := transcribeBatchFn(ctx, batchJobs, batchOpts)
 	var te *transcribe.TransportError
 	switch {
 	case errors.As(err, &te):
@@ -1011,7 +1032,7 @@ func (p *Plugin) processTranscribePage(
 			}
 		}
 		if len(retry1Jobs) > 0 {
-			if r1, rerr := transcribeBatchFn(ctx, retry1Jobs, onBook); rerr == nil {
+			if r1, rerr := transcribeBatchFn(ctx, retry1Jobs, batchOpts); rerr == nil {
 				for id, res := range r1 {
 					if res.Text != "" {
 						batchResults[id] = res
@@ -1048,7 +1069,7 @@ func (p *Plugin) processTranscribePage(
 				}
 			}
 			if len(retry2Jobs) > 0 {
-				if r2, rerr := transcribeBatchFn(ctx, retry2Jobs, onBook); rerr == nil {
+				if r2, rerr := transcribeBatchFn(ctx, retry2Jobs, batchOpts); rerr == nil {
 					for id, res := range r2 {
 						if res.Text != "" {
 							batchResults[id] = res
@@ -1143,9 +1164,13 @@ func (p *Plugin) processTranscribePage(
 // for OK, the parsed fields). Writes are change-guarded: a repeat of the SAME
 // failure (same status + detail) skips the UpdateBook so a re-run over ~45K
 // stale-path books doesn't churn the DB. A transcript outcome (OK or Unparsed)
-// always writes — fresh transcript text is new data. Returns true when the book
-// produced a transcript this run (OK or Unparsed), which the caller counts as
-// processed.
+// writes unless the row already carries the SAME transcript text under the
+// SAME status -- the per-book idempotency guard that makes a re-run served
+// from the whisper result journal apply nothing twice. That guard reads the
+// BOOK ROW, never the journal: the journal is keyed by clip content, and two
+// books with byte-identical clips must each get their own write. Returns true
+// when this call wrote a transcript (OK or Unparsed), which the caller counts
+// as processed; an idempotent skip is not counted, like a repeated failure.
 func (p *Plugin) applyOutcome(
 	store bookModifier,
 	log interface {
@@ -1175,6 +1200,14 @@ func (p *Plugin) applyOutcome(
 		if !hasTranscript &&
 			cur.TranscribeStatus != nil && *cur.TranscribeStatus == status &&
 			eqStrPtr(cur.TranscribeError, newDetail) {
+			return database.ErrSkipBookWrite
+		}
+		// Same transcript, same status already stored: nothing new to write.
+		// Status is compared too so an unparsed->ok upgrade (parser fix) of
+		// identical text still writes.
+		if hasTranscript &&
+			cur.TranscribeStatus != nil && *cur.TranscribeStatus == status &&
+			cur.IntroTranscription != nil && *cur.IntroTranscription == text {
 			return database.ErrSkipBookWrite
 		}
 

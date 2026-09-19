@@ -1,7 +1,7 @@
 // file: internal/transcribe/perfile_drain_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a01da1c0-24b7-41ef-bbc4-8a0ed7b9025f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -64,7 +64,7 @@ func TestPerFileDrainsWorkersBeforeReturning(t *testing.T) {
 	// return under the old code.
 	jobs["missing"] = filepath.Join(dir, "does-not-exist.wav")
 
-	_, err := transcribeRemotePerFile(context.Background(), srv.URL, limit, jobs, nil)
+	_, err := transcribeRemotePerFile(context.Background(), srv.URL, limit, jobs, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from the missing-file job")
 	}

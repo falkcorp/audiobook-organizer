@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -71,7 +71,7 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 
 // swapTranscribeBatchFn substitutes the transcribeBatchFn test seam and
 // restores it on cleanup. Tests using it must not run in parallel.
-func swapTranscribeBatchFn(t *testing.T, fn func(context.Context, map[string]string, transcribe.ProgressFunc) (map[string]transcribe.BatchResult, error)) {
+func swapTranscribeBatchFn(t *testing.T, fn func(context.Context, map[string]string, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error)) {
 	t.Helper()
 	orig := transcribeBatchFn
 	transcribeBatchFn = fn
@@ -86,7 +86,7 @@ func swapTranscribeBatchFn(t *testing.T, fn func(context.Context, map[string]str
 func TestProcessTranscribePage_TransportErrorWritesNoStatus(t *testing.T) {
 	store, written, books, rootDir := transportTestFixture(t, "b-transport", "hash-transport")
 	var calls int
-	swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.ProgressFunc) (map[string]transcribe.BatchResult, error) {
+	swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 		calls++
 		if len(jobs) != 1 {
 			t.Errorf("expected 1 job to reach the batch call, got %d", len(jobs))
@@ -101,7 +101,7 @@ func TestProcessTranscribePage_TransportErrorWritesNoStatus(t *testing.T) {
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
 	processed := p.processTranscribePage(context.Background(), store, slog.Default(),
-		books, rootDir, nil, accum, false)
+		books, rootDir, nil, accum, false, nil)
 
 	if calls != 1 {
 		t.Fatalf("TranscribeBatch stub called %d times, want 1", calls)
@@ -121,7 +121,7 @@ func TestProcessTranscribePage_TransportErrorWritesNoStatus(t *testing.T) {
 // still be written as whisper_error for that book.
 func TestProcessTranscribePage_PerFileErrorStillWritesWhisperError(t *testing.T) {
 	store, written, books, rootDir := transportTestFixture(t, "b-perfile", "hash-perfile")
-	swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.ProgressFunc) (map[string]transcribe.BatchResult, error) {
+	swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 		out := make(map[string]transcribe.BatchResult, len(jobs))
 		for id := range jobs {
 			out[id] = transcribe.BatchResult{Error: "boom"}
@@ -132,7 +132,7 @@ func TestProcessTranscribePage_PerFileErrorStillWritesWhisperError(t *testing.T)
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
 	processed := p.processTranscribePage(context.Background(), store, slog.Default(),
-		books, rootDir, nil, accum, false)
+		books, rootDir, nil, accum, false, nil)
 
 	if processed != 0 {
 		t.Errorf("processed = %d, want 0 (whisper_error does not count as processed)", processed)
