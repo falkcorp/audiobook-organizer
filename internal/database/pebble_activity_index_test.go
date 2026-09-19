@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f2a91c4-6b3d-4a52-9c18-2d0e5b7a4e31
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 // Package database — regression suite for activity secondary-index deletion.
 //
@@ -19,7 +19,9 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,9 +115,28 @@ func TestPebbleActivityStore_SummarizeDeletesSecondaryIndexes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 4, summarized)
 
+	// Every original row's index entries are gone. What remains under act:op:
+	// is the summary's own index — one key per sampled operation id (since
+	// 2026-09-19, so ?operation_id= still reaches the summary) — and each of
+	// those must resolve to the live summary row, never to a deleted original.
 	opKeys, bookKeys := countIndexKeys(t, s)
-	assert.Equal(t, 0, opKeys, "Summarize must delete each summarized row's act:op: index entry")
 	assert.Equal(t, 0, bookKeys, "Summarize must delete each summarized row's act:bk: index entry")
+	assert.Equal(t, 4, opKeys, "only the summary's per-sampled-op index keys remain")
+	it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("act:op:"), UpperBound: []byte("act:op;")})
+	require.NoError(t, err)
+	defer it.Close()
+	for it.First(); it.Valid(); it.Next() {
+		pk, ok := pactPrimaryKeyFromRef(it.Value())
+		require.True(t, ok)
+		raw, closer, err := s.db.Get(pk)
+		require.NoError(t, err, "act:op: key %s must point at a live row, not a deleted original", it.Key())
+		var e ActivityEntry
+		require.NoError(t, json.Unmarshal(raw, &e))
+		_ = closer.Close()
+		assert.Equal(t, summarizeSource, e.Source)
+		opID, _, _ := strings.Cut(strings.TrimPrefix(string(it.Key()), "act:op:"), ":")
+		assert.True(t, entryHasOperation(e, opID), "the summary must answer for %s", opID)
+	}
 }
 
 func TestPebbleActivityStore_CompactByDayDeletesSecondaryIndexes(t *testing.T) {

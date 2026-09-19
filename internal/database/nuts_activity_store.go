@@ -1,5 +1,5 @@
 // file: internal/database/nuts_activity_store.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-0003-cdef-000000000003
 // last-edited: 2026-09-19
 
@@ -304,6 +304,7 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 			first.Format(time.RFC3339), last.Format(time.RFC3339),
 		)
 
+		details, tags := summarizeDetails(gk.source, g.opIDs)
 		summary := ActivityEntry{
 			ID:        s.counter.Add(1),
 			Timestamp: now,
@@ -312,7 +313,8 @@ func (s *NutsActivityStore) Summarize(ctx context.Context, olderThan time.Time, 
 			Level:     "info",
 			Source:    "summarize",
 			Summary:   summaryText,
-			Details:   summarizeDetails(gk.source, g.opIDs),
+			Details:   details,
+			Tags:      tags,
 		}
 		summaryKey := actTimeKey(now, ulid.Make().String())
 		summaryBytes, err := json.Marshal(summary)
@@ -1016,7 +1018,7 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 	if f.Source != "" && e.Source != f.Source {
 		return false
 	}
-	if f.OperationID != "" && e.OperationID != f.OperationID {
+	if f.OperationID != "" && !entryHasOperation(e, f.OperationID) {
 		return false
 	}
 	if f.BookID != "" && e.BookID != f.BookID {

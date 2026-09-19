@@ -1,5 +1,5 @@
 // file: internal/database/sql_dialect.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2f1a90-4c8b-4e23-9f61-2b7c5d0e8a44
 // last-edited: 2026-09-19
 
@@ -45,6 +45,28 @@ type sqlDialect interface {
 	// jsonArrayContains returns a "the JSON-array column col contains value ?"
 	// predicate, one '?' placeholder bound to the tag value.
 	jsonArrayContains(col string) string
+	// indexHint returns the FROM-clause suffix that pins a query to index, or
+	// "" for a dialect without one. The caller must know the index exists.
+	indexHint(index string) string
+	// timeIndexes returns the two generations of time-range index DDL and the
+	// step that retires the old one; see sqlTimeIndexDDL.
+	timeIndexes() sqlTimeIndexDDL
+}
+
+// sqlTimeIndexDDL is the time-range index DDL of one dialect.
+//
+//   - legacy: the (tier, ts) and (ts) indexes every database created before
+//     2026-09-19 has. Kept on a populated table until the covering pair
+//     replaces them, so an open never builds anything over existing rows.
+//   - covering: (tier, ts, source) and (ts, source). The trailing source makes
+//     both COVERING for GetDistinctSources, which otherwise fetched every
+//     matching row — details BLOB and all — from the table to read one short
+//     string: the Sources picker's since=24h request took 11-103 s on prod
+//     (2026-09-19). Every seek the legacy pair served, these serve too (same
+//     leading columns), so the legacy pair is dropped once these exist.
+//   - dropLegacy: retires the legacy pair.
+type sqlTimeIndexDDL struct {
+	legacy, covering, dropLegacy []string
 }
 
 // ── SQLite ────────────────────────────────────────────────────────────────────
@@ -78,21 +100,8 @@ func (sqliteDialect) ddl() []string {
 			pruned_at    INTEGER
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_act_srckey ON activity(src_key) WHERE src_key IS NOT NULL`,
-		// (tier, ts, source) and (ts, source), not (tier, ts) and (ts): the
-		// trailing source makes both COVERING for GetDistinctSources, which
-		// otherwise fetched every matching row — details BLOB and all — from
-		// the table to read one short string. The Sources picker's since=24h
-		// request took 11-103 s on prod (2026-09-19) that way; a tier-only
-		// count took 35.8 s on a 1M-row fixture. Every seek the old indexes
-		// served, these serve too (same leading columns), so the old ones are
-		// dropped rather than kept as duplicate write cost.
-		//
-		// First open after upgrade builds both indexes over the whole table,
-		// inside this schema Exec, before the store serves anything.
-		`CREATE INDEX IF NOT EXISTS idx_act_tier_ts_src ON activity(tier, ts, source)`,
-		`CREATE INDEX IF NOT EXISTS idx_act_ts_src      ON activity(ts, source)`,
-		`DROP INDEX IF EXISTS idx_act_tier_ts`,
-		`DROP INDEX IF EXISTS idx_act_ts`,
+		// The two time-range indexes are NOT here: whether an open may create
+		// them depends on whether the table is empty. See sqlActEnsureTimeIndexes.
 		`CREATE INDEX IF NOT EXISTS idx_act_op_ts    ON activity(operation_id, ts) WHERE operation_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_act_bk_ts    ON activity(book_id, ts)      WHERE book_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_act_source   ON activity(source)`,
@@ -112,6 +121,29 @@ func (sqliteDialect) substringMatch(col string) string {
 func (sqliteDialect) jsonArrayContains(col string) string {
 	return fmt.Sprintf("EXISTS (SELECT 1 FROM json_each(%s) WHERE value = ?)", col)
 }
+
+func (sqliteDialect) indexHint(index string) string { return " INDEXED BY " + index }
+
+func (sqliteDialect) timeIndexes() sqlTimeIndexDDL {
+	return sqlTimeIndexDDL{
+		legacy: []string{
+			`CREATE INDEX IF NOT EXISTS idx_act_tier_ts ON activity(tier, ts)`,
+			`CREATE INDEX IF NOT EXISTS idx_act_ts       ON activity(ts)`,
+		},
+		covering: []string{
+			`CREATE INDEX IF NOT EXISTS ` + sqlActIdxTierTSSrc + ` ON activity(tier, ts, source)`,
+			`CREATE INDEX IF NOT EXISTS ` + sqlActIdxTSSrc + ` ON activity(ts, source)`,
+		},
+		dropLegacy: []string{`DROP INDEX IF EXISTS idx_act_tier_ts`, `DROP INDEX IF EXISTS idx_act_ts`},
+	}
+}
+
+// Names of the covering time indexes, shared by the DDL, the existence probe
+// and the query hint so the three cannot drift apart.
+const (
+	sqlActIdxTierTSSrc = "idx_act_tier_ts_src"
+	sqlActIdxTSSrc     = "idx_act_ts_src"
+)
 
 // ── helpers shared by every dialect ─────────────────────────────────────────
 

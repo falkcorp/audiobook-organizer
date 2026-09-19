@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-09-19
 
@@ -495,6 +495,16 @@ func pactIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool) {
 	if e.OperationID != "" {
 		keys = append(keys, []byte("act:op:"+e.OperationID+":"+suffix))
 	}
+	// A Summarize row has no OperationID; Summarize indexes it under each
+	// sampled id instead, carried as "op:<id>" tags. Tags are decoded on every
+	// scan path (unlike Details), so a delete always finds these keys.
+	if e.Source == summarizeSource {
+		for _, t := range e.Tags {
+			if id, ok := strings.CutPrefix(t, "op:"); ok && id != "" && id != e.OperationID {
+				keys = append(keys, []byte("act:op:"+id+":"+suffix))
+			}
+		}
+	}
 	if e.BookID != "" {
 		keys = append(keys, []byte("act:bk:"+e.BookID+":"+suffix))
 	}
@@ -915,6 +925,10 @@ func (s *PebbleActivityStore) Query(ctx context.Context, f ActivityFilter) (_ []
 	return page, total, nil
 }
 
+// pactSummarizeDeleteBatch bounds how many originals one Summarize batch
+// deletes, matching Prune's 500. A var only so a test can shrink it.
+var pactSummarizeDeleteBatch = 500
+
 // Summarize groups old entries by (day, type, source), writes one summary row
 // per group, and deletes the originals. Returns count of deleted rows.
 //
@@ -988,15 +1002,17 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 		)
 
 		prunedAt := now
+		details, opTags := summarizeDetails(gk.source, g.opIDs)
 		summary := ActivityEntry{
 			ID:        s.counter.Add(1),
 			Timestamp: now,
 			Tier:      tier,
 			Type:      gk.typ,
 			Level:     "info",
-			Source:    "summarize",
+			Source:    summarizeSource,
 			Summary:   summaryText,
-			Details:   summarizeDetails(gk.source, g.opIDs),
+			Details:   details,
+			Tags:      opTags,
 			PrunedAt:  &prunedAt,
 		}
 
@@ -1007,23 +1023,50 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 			return totalDeleted, err
 		}
 
+		// Batch 1 = the summary, its act:op: index keys (one per sampled id, so
+		// ?operation_id=<id> reaches it through the index path — see
+		// pactIndexKeysFor for the matching delete), and the FIRST
+		// pactSummarizeDeleteBatch originals. Later batches delete the rest of
+		// this exact scanned list. A pass stopped between batches leaves only
+		// rows the committed summary already counts; a later run folds them
+		// into a second summary — a double count in the text, never a loss.
 		batch := s.db.NewBatch()
 		if setErr := batch.Set(summaryKey, summaryBytes, nil); setErr != nil {
 			batch.Close()
 			return totalDeleted, setErr
 		}
-		for _, kv := range g.kvs {
-			if delErr := pactDeleteEntry(batch, kv); delErr != nil {
+		idxKeys, _ := pactIndexKeysFor(summaryKey, summary)
+		ref := pactIndexRef(tier, now, summaryID)
+		for _, k := range idxKeys {
+			if setErr := batch.Set(k, ref, nil); setErr != nil {
 				batch.Close()
-				return totalDeleted, delErr
+				return totalDeleted, setErr
 			}
 		}
-		if commitErr := batch.Commit(pebble.Sync); commitErr != nil {
+		for start := 0; start < len(g.kvs); start += pactSummarizeDeleteBatch {
+			if start > 0 {
+				if err := ctx.Err(); err != nil {
+					return totalDeleted, err
+				}
+				batch = s.db.NewBatch()
+			}
+			end := min(start+pactSummarizeDeleteBatch, len(g.kvs))
+			for _, kv := range g.kvs[start:end] {
+				if delErr := pactDeleteEntry(batch, kv); delErr != nil {
+					batch.Close()
+					return totalDeleted, delErr
+				}
+			}
+			if commitErr := batch.Commit(pebble.Sync); commitErr != nil {
+				batch.Close()
+				return totalDeleted, fmt.Errorf("pebble_activity_store: summarize commit: %w", commitErr)
+			}
 			batch.Close()
-			return totalDeleted, fmt.Errorf("pebble_activity_store: summarize commit: %w", commitErr)
+			totalDeleted += end - start
+			if h := summarizeTestHooks.afterChunk; h != nil {
+				h()
+			}
 		}
-		batch.Close()
-		totalDeleted += len(g.kvs)
 	}
 	return totalDeleted, nil
 }

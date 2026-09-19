@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -71,7 +71,7 @@ func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.tombstone-cleanup",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         15 * time.Minute,
+		Timeout:         45 * time.Minute,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runTombstoneCleanup,
@@ -226,14 +226,23 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 // that overruns cannot take compaction down with it.
 //
 // NIGHTLY, not weekly: at 2 ms steady-state the schedule costs nothing, and
-// statistics that are one day stale are strictly better than seven. The 15m
-// timeout is ~2.3x the measured bootstrap, which is the only run that can
+// statistics that are one day stale are strictly better than seven. The budget
+// was 15m, ~2.3x the measured bootstrap, which is the only run that can
 // approach it; every subsequent run finishes in milliseconds.
 //
 // It is NOT done at startup. 394 s of I/O on the boot path would delay every
 // restart on a host that restarts several times a day.
 //
-// LIVENESS: NONE, WITH A 15m BUDGET. The whole run is one SQL statement that
+// 45m, NOT 15m, SINCE 2026-09-19. This run also builds the SQLite activity
+// table's covering time indexes the first time it sees a database without them
+// (SQLActivityStore.OptimizeStatistics): two whole-table index builds plus an
+// ANALYZE of just those two indexes. On a 1M-row / ~2 GB fixture that was 5.0 s
+// on an idle Mac; production is 13.2M rows / 19.5 GB on a host that has run at
+// load average ~30, and a build cancelled at the deadline rolls back and would
+// be retried — and cancelled — every night. Every later run is still ~2 ms, so
+// the wider budget only changes how long a genuinely wedged statement survives.
+//
+// LIVENESS: NONE, WITH A 45m BUDGET. The whole run is one SQL statement that
 // cannot report progress, so the only true declaration is LivenessNone. Until
 // 2026-09-11 this def declared LivenessManual and posted a reporter.Log line
 // before the call on the belief that the line kept the watchdog satisfied. It
@@ -251,7 +260,7 @@ func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.optimize-activity-db",
 		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 15 * time.Minute, // LivenessNone requires an explicit budget; see above
+		ProgressTimeout: 45 * time.Minute, // LivenessNone requires an explicit budget; see above
 		Plugin:          "maintenance",
 		DisplayName:     "Optimize activity database",
 		Description:     "Refreshes the activity store's query-planner statistics (SQLite ANALYZE / PRAGMA optimize).",
@@ -260,7 +269,7 @@ func (p *Plugin) optimizeActivityDBDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.optimize-activity-db",
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         15 * time.Minute,
+		Timeout:         45 * time.Minute,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runOptimizeActivityDB,
