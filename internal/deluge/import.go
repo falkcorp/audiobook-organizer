@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -259,7 +259,12 @@ func ImportToLibraryWith(
 		prevImportedAt := bookFile.ImportedFromDelugeAt
 		now := time.Now()
 		bookFile.ImportedFromDelugeAt = &now
-		if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
+		markErr := store.UpdateBookFile(bookFile.ID, bookFile)
+		if errors.Is(markErr, database.ErrBookFileDurabilityUnknown) {
+			importLog.Error("ImportToLibrary: marking %s imported was written but its fsync failed (%v): durability unknown; keeping it", bookFile.ID, markErr)
+			markErr = nil
+		}
+		if err := markErr; err != nil {
 			bookFile.ImportedFromDelugeAt = prevImportedAt
 			return "", fmt.Errorf("ImportToLibrary: mark book file %s imported (already at its library destination %s): %w", bookFile.ID, src, err)
 		}
@@ -324,7 +329,14 @@ func ImportToLibraryWith(
 	bookFile.FilePath = dest
 	bookFile.ImportedFromDelugeAt = &now
 
-	if err := store.UpdateBookFile(bookFile.ID, bookFile); err != nil {
+	updErr0 := store.UpdateBookFile(bookFile.ID, bookFile)
+	if errors.Is(updErr0, database.ErrBookFileDurabilityUnknown) {
+		// The row now names the copy (the write is visible; only its fsync
+		// failed). Undoing it here would delete the file the row points at.
+		importLog.Error("ImportToLibrary: repointing %s to %s was written but its fsync failed (%v): durability unknown; keeping the row and the copy", bookFile.ID, dest, updErr0)
+		updErr0 = nil
+	}
+	if err := updErr0; err != nil {
 		// The row still names the source, so nothing leads to the copy.
 		// Undo both halves: the caller's struct goes back to the source
 		// (a retry must copy from src again, not from dest), and the copy

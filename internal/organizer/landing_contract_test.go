@@ -1,5 +1,5 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
 // last-edited: 2026-09-19
 
@@ -770,4 +770,49 @@ func TestLinkUnsupported_ENOSYSAndEOPNOTSUPP(t *testing.T) {
 	wrap := func(e syscall.Errno) error { return &os.LinkError{Op: "link", Old: "a", New: "b", Err: e} }
 	require.True(t, linkUnsupported(wrap(syscall.ENOSYS)))
 	require.True(t, linkUnsupported(wrap(syscall.EOPNOTSUPP)))
+}
+
+// durabilityUnknownStore applies BatchCreateBookFiles for real and then reports
+// that its fsync failed — the write is visible, only its durability is unknown.
+type durabilityUnknownStore struct{ *database.PebbleStore }
+
+func (s durabilityUnknownStore) BatchCreateBookFiles(files []*database.BookFile) error {
+	if err := s.PebbleStore.BatchCreateBookFiles(files); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: injected fsync failure", database.ErrBookFileDurabilityUnknown)
+}
+
+// ErrBookFileDurabilityUnknown means the rows were WRITTEN. Rolling the
+// organized copy back on it cleared the new book's authors, then DeleteBook
+// refused (the rows exist), leaving a live organized copy with no authors and
+// no version group. The organize must treat the write as applied.
+func TestCreateOrganizedVersion_DurabilityUnknownIsNotRolledBack(t *testing.T) {
+	store := newLandingTestStore(t)
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{RootDir: rootDir}
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "ch01.mp3")
+	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
+	targetDir := filepath.Join(rootDir, "Author", "Title")
+	require.NoError(t, os.MkdirAll(targetDir, 0o775))
+	dst := filepath.Join(targetDir, "Title - 01.mp3")
+	require.NoError(t, os.WriteFile(dst, []byte("audio"), 0o644))
+
+	author, err := store.CreateAuthor("Some Author")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "Title", FilePath: srcDir})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{{BookID: book.ID, AuthorID: author.ID, Role: "author", Position: 0}}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: src, TrackNumber: 1}))
+
+	svc := NewService(durabilityUnknownStore{store})
+	created, err := svc.CreateOrganizedVersion(book, &Landing{Path: targetDir, Files: map[string]string{src: dst}, Created: []string{dst}}, "", &noopLogger{})
+	require.NoError(t, err, "an applied write whose fsync failed must not fail the organize")
+	require.NotNil(t, created)
+	authors, err := store.GetBookAuthors(created.ID)
+	require.NoError(t, err)
+	require.Len(t, authors, 1, "the organized copy lost its authors to a rollback of a write that was applied")
+	_, err = os.Stat(dst)
+	require.NoError(t, err, "the landed file must not be removed")
 }

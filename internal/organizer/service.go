@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-09-19
 
@@ -2145,7 +2145,15 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 		// leave rows 1..K-1 having already moved their PID to a row this rollback
 		// then deletes, stranding the PID exactly as #2872 fixed. Atomic means a
 		// failure transfers no PID at all, so there is nothing to restore.
-		if err := orgSvc.db.BatchCreateBookFiles(newFiles); err != nil {
+		bfErr := orgSvc.db.BatchCreateBookFiles(newFiles)
+		if errors.Is(bfErr, database.ErrBookFileDurabilityUnknown) {
+			// Written and visible; only the fsync failed. Rolling back would
+			// clear the new book's authors and then be refused by DeleteBook
+			// (the rows exist), leaving a half-undone copy. Keep it.
+			log.Error("organize: the %d book file row(s) of the organized copy of %s (%s) were written but their fsync failed (%v): durability unknown; keeping the write, NOT rolling back", len(newFiles), book.Title, book.ID, bfErr)
+			bfErr = nil
+		}
+		if err := bfErr; err != nil {
 			log.Error("organize: failed to copy %d book file row(s) to the organized copy of %s (%s): %v — rolling back", len(newFiles), book.Title, book.ID, err)
 			orgSvc.rollbackOrganizedVersion(newBookID, landing, log)
 			return nil, fmt.Errorf("copy book files for %s: %w", book.ID, err)

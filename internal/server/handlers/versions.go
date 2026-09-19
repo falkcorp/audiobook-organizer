@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package handlers
 
@@ -843,7 +843,14 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 
 	// DB-only: nothing is touched on disk, so the iTunes guard has nothing to
 	// guard here.
-	if err := h.store.MoveBookFilesToBook(segmentIDs, sourceBook.ID, createdBook.ID); err != nil {
+	splitErr := h.store.MoveBookFilesToBook(segmentIDs, sourceBook.ID, createdBook.ID)
+	if errors.Is(splitErr, database.ErrBookFileDurabilityUnknown) {
+		// Moved (visible); only the fsync failed. Deleting the new book now
+		// would be refused (it owns the rows) after unminting its group.
+		versionsLog.Error("split-version: move into %s was written but its fsync failed (%v): durability unknown; keeping it", createdBook.ID, splitErr)
+		splitErr = nil
+	}
+	if err := splitErr; err != nil {
 		// The move batch is atomic: no row moved and no row names the new book.
 		dErr := h.store.DeleteBook(createdBook.ID)
 		h.unmintSplitGroup(id, minted, prevPrimary)
@@ -1092,7 +1099,12 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		}
 
 		// Move the file to the new book (DB-only; nothing on disk moves).
-		if mErr := h.store.MoveBookFilesToBook([]string{fileID}, sourceBook.ID, created.ID); mErr != nil {
+		mErr := h.store.MoveBookFilesToBook([]string{fileID}, sourceBook.ID, created.ID)
+		if errors.Is(mErr, database.ErrBookFileDurabilityUnknown) {
+			versionsLog.Error("split: move of %s into %s was written but its fsync failed (%v): durability unknown; keeping it", fileID, created.ID, mErr)
+			mErr = nil
+		}
+		if mErr != nil {
 			if dErr := h.store.DeleteBook(created.ID); dErr != nil {
 				fail(fileID, fmt.Sprintf("failed to move file %s into its new book (%v); the empty new book %s could not be deleted: %v",
 					fileID, mErr, created.ID, dErr), map[string]any{"created_book_id": created.ID})
@@ -1225,7 +1237,12 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 	// batch is atomic, so no row points at it. Authors are copied only after
 	// the move, so the cleanup has nothing else to undo (DeleteBook removes
 	// book_authors anyway).
-	if err := h.store.MoveBookFilesToBook(ids, sourceBook.ID, created.ID); err != nil {
+	oneErr := h.store.MoveBookFilesToBook(ids, sourceBook.ID, created.ID)
+	if errors.Is(oneErr, database.ErrBookFileDurabilityUnknown) {
+		versionsLog.Error("split-to-one-book: move into %s was written but its fsync failed (%v): durability unknown; keeping it", created.ID, oneErr)
+		oneErr = nil
+	}
+	if err := oneErr; err != nil {
 		if dErr := h.store.DeleteBook(created.ID); dErr != nil {
 			versionsLog.Error("split-to-one-book: move into %s failed (%v) and deleting it failed: %v", created.ID, err, dErr)
 			httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
