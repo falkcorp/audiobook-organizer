@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-09-19
 
@@ -163,8 +163,14 @@ func mergeMissingFields(keeper database.BookFile, twins []database.BookFile) (da
 			keeper.Duration = t.Duration
 			changed = true
 		}
+		// The print, its encoding version and its measured duration move as
+		// ONE unit: copying only the bytes would put the twin's (possibly
+		// legacy-era) print under the keeper's version — garbage certified
+		// current — or strand a current print under version 0.
 		if len(keeper.AcoustIDFingerprint) == 0 && len(t.AcoustIDFingerprint) > 0 {
 			keeper.AcoustIDFingerprint = t.AcoustIDFingerprint
+			keeper.AcoustIDFPVersion = t.AcoustIDFPVersion
+			keeper.AcoustIDFingerprintDurationSec = t.AcoustIDFingerprintDurationSec
 			changed = true
 		}
 		if strings.TrimSpace(keeper.FileHash) == "" && strings.TrimSpace(t.FileHash) != "" {
@@ -175,10 +181,8 @@ func mergeMissingFields(keeper database.BookFile, twins []database.BookFile) (da
 			keeper.FileSize = t.FileSize
 			changed = true
 		}
-		if keeper.AcoustIDFingerprintDurationSec <= 0 && t.AcoustIDFingerprintDurationSec > 0 {
-			keeper.AcoustIDFingerprintDurationSec = t.AcoustIDFingerprintDurationSec
-			changed = true
-		}
+		// Duration alone (no print on the keeper) is the "has a print"
+		// proxy; fill it only together with a print, above.
 	}
 	return keeper, changed
 }

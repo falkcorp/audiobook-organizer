@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -367,6 +367,7 @@ func restoreRecoverableFields(
 				fresh.BookSigSegments = sigSnapBook.BookSigSegments
 				fresh.BookSigBuiltAt = sigSnapBook.BookSigBuiltAt
 				fresh.BookSigCoveragePct = sigSnapBook.BookSigCoveragePct
+				fresh.BookSigVersion = sigSnapBook.BookSigVersion // restore the era with the bytes
 				changed = true
 			}
 		}

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -121,6 +121,14 @@ func (t *backfillTally) summary() string {
 // A variable so tests can substitute a fake: the real one needs an fpcalc
 // binary, which CI does not have.
 var fingerprintFileFn = doFingerprintFile
+
+// fileFingerprintLengthFn and fileSegmentsFn are the fpcalc/ffmpeg calls in
+// doFingerprintFile, variables so tests can drive each branch without the
+// binaries.
+var (
+	fileFingerprintLengthFn = fingerprint.FileFingerprintLength
+	fileSegmentsFn          = fingerprint.FileSegments
+)
 
 // backfillBook fingerprints the eligible files of one book, each in its own
 // goroutine, and then refreshes the book signature once.
@@ -547,7 +555,7 @@ func fingerprintBookFile(store pluginStore, f database.BookFile, force bool) fin
 // deferred; until then every stored print is the 120 s default unless an
 // operator changed fingerprint_length_sec.
 func doFingerprintFile(store pluginStore, f database.BookFile, force bool) fingerprintFileOutcome {
-	wf, err := fingerprint.FileFingerprintLength(f.FilePath, fingerprintLengthSec())
+	wf, err := fileFingerprintLengthFn(f.FilePath, fingerprintLengthSec())
 	if err != nil && !errors.Is(err, fingerprint.ErrNotAvailable) {
 		slog.Warn("fingerprint", "path", f.FilePath, "err", err)
 		markFingerprintFailure(store, f, "fpcalc_error", err.Error())
@@ -574,7 +582,7 @@ func doFingerprintFile(store pluginStore, f database.BookFile, force bool) finge
 		}
 	} else {
 		// Segment fallback (ffmpeg available, fpcalc not installed).
-		segs, serr := fingerprint.FileSegments(f.FilePath, f.Duration)
+		segs, serr := fileSegmentsFn(f.FilePath, f.Duration)
 		if serr != nil {
 			slog.Warn("fingerprint segments", "path", f.FilePath, "err", serr)
 			markFingerprintFailure(store, f, "ffmpeg_error", serr.Error())
@@ -592,9 +600,13 @@ func doFingerprintFile(store pluginStore, f database.BookFile, force bool) finge
 		updated.FingerprintFailureDetail = nil
 	}
 
-	// The segment fallback writes no raw print, so stamping the version on a
-	// row that still holds a legacy raw print would certify those bytes.
-	if err == nil || (len(updated.AcoustIDFingerprint) == 0 && updated.AcoustIDFingerprintDurationSec == 0) {
+	// Stamp only when THIS run wrote the raw print (the fpcalc path). The
+	// segment fallback writes no raw print, and f may come from a projection
+	// without its blob, so "no bytes here" does not prove the stored row has
+	// none: stamping there could certify stored legacy bytes as current. The
+	// fallback's segments stay unversioned (missing evidence for fuzzy
+	// matching) until fpcalc is available.
+	if err == nil {
 		stampFreshPrint(&updated)
 	}
 	if err := store.UpdateBookFile(f.ID, &updated); err != nil {
@@ -693,6 +705,13 @@ func synthesizeBookSignatureForBook(store pluginStore, bookID string) error {
 	sig, mask, coverage, preLen, err := fingerprint.SynthesizePartialBookSignature(inputs)
 	if err != nil {
 		if err == fingerprint.ErrIncompleteFingerprint {
+			// Nothing stored, nothing to clear: skip the write. Most books
+			// without usable data never had a signature, and clearing them
+			// all nightly would be tens of thousands of pointless writes.
+			if b, gerr := store.GetBookByID(bookID); gerr != nil || b == nil ||
+				(b.BookSigV1 == nil && b.BookSigBuiltAt == nil) {
+				return nil
+			}
 			// No usable current-era data: delete any existing signature so a
 			// legacy (misdecoded) or stale one does not outlive its inputs.
 			// Setting the fields to nil would not do it — nil means "not

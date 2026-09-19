@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -245,9 +245,11 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 			// Core never carries the raw bytes; the op always hydrates via
 			// the per-book GetBookFiles map built above.
 			var fp []byte
+			fpCurrent := false
 			if hydrated != nil {
 				if hf, ok := hydrated[f.ID]; ok {
 					fp = hf.AcoustIDFingerprint
+					fpCurrent = hf.HasCurrentPrint() // era of the bytes actually read
 				}
 				if len(fp) == 0 {
 					reporter.Logger().Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
@@ -264,6 +266,12 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 				continue
 			}
 
+			// Legacy-era print (pre-2026-09-19 decoder): not indexed; the
+			// nightly acoustid.backfill replaces it and the write re-indexes.
+			if !fpCurrent {
+				localSkipped++
+				continue
+			}
 			subs, bands, fpErr := fingerprint.Subprints(fp)
 			if fpErr != nil {
 				// Misaligned fingerprint bytes — log and continue. Don't abort

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
 // last-edited: 2026-09-19
 
@@ -128,8 +128,8 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		if dur > 0 && !onlineLookupPrintUsable(f) {
 			// Legacy-era print: not a valid AcoustID submission. Sending it
 			// would return "no match" and stamping AcoustIDOnlineLookedUpAt
-			// would then skip the file forever. Count it; the acoustid
-			// backfill (force=true) re-fingerprints it and clears the stamp.
+			// would then skip the file forever. Count it; the nightly
+			// acoustid.backfill re-fingerprints it and clears the stamp.
 			needsRefingerprint++
 			continue
 		}
@@ -162,7 +162,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	if total == 0 {
 		prog = sdk.NewProgress(reporter, 0)
 		prog.Start("No book files eligible for online lookup")
-		prog.Done(fmt.Sprintf("Nothing to do — needs_refingerprint=%d (legacy-era prints; run acoustid.backfill with force=true); every other fingerprinted file already has an AcoustID result or no fingerprint exists.", needsRefingerprint))
+		prog.Done(fmt.Sprintf("Nothing to do — needs_refingerprint=%d (legacy-era prints; the nightly acoustid.backfill re-fingerprints them automatically); every other fingerprinted file already has an AcoustID result or no fingerprint exists.", needsRefingerprint))
 		return nil
 	}
 

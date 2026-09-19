@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: c1cf5590-1bc1-4f88-9031-62333bcb593f
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -178,8 +178,8 @@ func TestLSHIndexBuild_OpIndexesAllWithFingerprints(t *testing.T) {
 			"file-4": true, // already indexed — should be skipped
 		},
 		hydrateFiles: map[string][]database.BookFile{
-			"book-1": {{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: fp}},
-			"book-2": {{ID: "file-2", BookID: "book-2", AcoustIDFingerprint: fp}},
+			"book-1": {{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
+			"book-2": {{ID: "file-2", BookID: "book-2", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
 		},
 	}
 
@@ -262,7 +262,7 @@ func TestLSHIndexBuild_EnqueuesFingerRescanForNoFPBooks(t *testing.T) {
 		},
 		indexedFiles: map[string]bool{},
 		hydrateFiles: map[string][]database.BookFile{
-			"book-has-fp": {{ID: "file-1", BookID: "book-has-fp", AcoustIDFingerprint: fp}},
+			"book-has-fp": {{ID: "file-1", BookID: "book-has-fp", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
 		},
 	}
 
@@ -316,8 +316,8 @@ func TestLSHIndexBuild_NoEnqueueWhenAllHaveFingerprints(t *testing.T) {
 		},
 		indexedFiles: map[string]bool{},
 		hydrateFiles: map[string][]database.BookFile{
-			"b1": {{ID: "f1", BookID: "b1", AcoustIDFingerprint: fp}},
-			"b2": {{ID: "f2", BookID: "b2", AcoustIDFingerprint: fp}},
+			"b1": {{ID: "f1", BookID: "b1", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
+			"b2": {{ID: "f2", BookID: "b2", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
 		},
 	}
 
@@ -359,7 +359,7 @@ func TestLSHIndexBuild_SkipsPermanentlyFailedBooksFromEnqueue(t *testing.T) {
 		},
 		indexedFiles: map[string]bool{},
 		hydrateFiles: map[string][]database.BookFile{
-			"book-has-fp": {{ID: "file-1", BookID: "book-has-fp", AcoustIDFingerprint: fp}},
+			"book-has-fp": {{ID: "file-1", BookID: "book-has-fp", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion}},
 		},
 	}
 
@@ -426,7 +426,7 @@ func TestLSHIndexBuild_HydratesMemdbStrippedFingerprint(t *testing.T) {
 		indexedFiles: map[string]bool{},
 		hydrateFiles: map[string][]database.BookFile{
 			"book-1": {
-				{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: fp, AcoustIDFingerprintDurationSec: 1800},
+				{ID: "file-1", BookID: "book-1", AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion, AcoustIDFingerprintDurationSec: 1800},
 			},
 		},
 	}

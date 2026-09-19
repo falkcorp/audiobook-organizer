@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.173.0
+// version: 1.174.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
@@ -2632,6 +2632,13 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 // updateBookLocked is UpdateBook's body. The caller must hold id's write
 // stripe (lockBook).
 func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
+	return p.updateBookLockedMode(id, book, false)
+}
+
+// updateBookLockedMode is updateBookLocked; clearSig=true drops the book's
+// signature (sidecar deleted, row written without it) instead of preserving
+// it. Only ClearBookSignature passes true.
+func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool) (*Book, error) {
 	// Get old book to clean up old indexes
 	oldBook, err := p.GetBookByID(id)
 	if err != nil {
@@ -2701,6 +2708,10 @@ func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
 	if book.Series == nil {
 		book.Series = oldBook.Series
 	}
+	if clearSig {
+		book.BookSigV1, book.BookSigV1Mask, book.BookSigSegments = nil, nil, nil
+		book.BookSigBuiltAt, book.BookSigCoveragePct, book.BookSigVersion = nil, nil, nil
+	}
 
 	// The row is marshalled WITHOUT the five BookSig* fields; they go to the
 	// book_sig: sidecar below, in this same batch. See pebble_store_booksig.go.
@@ -2744,7 +2755,12 @@ func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
 	// from GetBookByID — so a memdb round-trip write re-writes the signature it
 	// read rather than dropping the key. When there is genuinely no signature,
 	// nothing is written and nothing is deleted.
-	if err := writeBookSigToBatch(batch, book); err != nil {
+	if clearSig {
+		if err := batch.Delete(bookSigKey(id), nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	} else if err := writeBookSigToBatch(batch, book); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -5200,7 +5216,9 @@ func decodeLSHMeta(v []byte) ([]fingerprint.Subprint, []byte) {
 // spec (SPEC 1 §5) so T013's probe-collector can retrieve the candidate
 // book without a secondary BookFile lookup.
 func writeFingerprintLSHIndexes(batch *pebble.Batch, f *BookFile) error {
-	if len(f.AcoustIDFingerprint) == 0 {
+	// Legacy-era prints are misdecoded bytes: never index them, so they
+	// cannot surface as candidates or crowd a probe's candidate cap.
+	if len(f.AcoustIDFingerprint) == 0 || !f.HasCurrentPrint() {
 		return nil
 	}
 	subs, bands, err := fingerprint.Subprints(f.AcoustIDFingerprint)
