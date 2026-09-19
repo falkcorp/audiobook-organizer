@@ -1,7 +1,7 @@
 // file: internal/server/signals_coverage_handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9dc1c17f-e225-48b7-a3c4-79f0246d7c9c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package server
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,4 +109,60 @@ func TestHandleGetSignalCoverage_ConcurrentDeepScanIs409(t *testing.T) {
 	store.ReleaseDeepCoverageScan()
 	w = getDeep()
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+// windows=true adds the fpwin census from the Pebble store: keys only by
+// default, currency with deep=true. The criteria come from internal/fingerprint,
+// and a server with no tool registry says currency is pipeline-only rather
+// than calling every window stale.
+func TestHandleGetSignalCoverage_WindowsCensus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	book, err := st.CreateBook(&database.Book{Title: "Win", FilePath: "/test/win"})
+	require.NoError(t, err)
+	withWin := &database.BookFile{BookID: book.ID, FilePath: "/test/win/a.m4b", Format: "m4b"}
+	bare := &database.BookFile{BookID: book.ID, FilePath: "/test/win/b.m4b", Format: "m4b"}
+	require.NoError(t, st.CreateBookFile(withWin))
+	require.NoError(t, st.CreateBookFile(bare))
+	require.NoError(t, st.PutFingerprintWindow(&database.FingerprintWindow{
+		Ref: database.FileWindowRef(withWin.ID), Kind: database.WindowKindWindow, SlotBP: 5000,
+		WindowSet: fingerprint.WindowSetWS1, Pipeline: fingerprint.WindowPipelineID,
+		Raw: []byte{1, 2, 3, 4}, FpcalcVersion: "1.6.0", FFmpegVersion: "8.0.1",
+	}))
+	st.WaitForWarmup()
+	require.True(t, st.IsMemReady())
+	srv := &Server{store: st}
+
+	get := func(query string) SignalCoverageResponse {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/signals/coverage?"+query, nil)
+		srv.handleGetSignalCoverage(c)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body struct {
+			Data SignalCoverageResponse `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		return body.Data
+	}
+
+	assert.Nil(t, get("").Windows, "the window census is opt-in")
+
+	fast := get("windows=true").Windows
+	require.NotNil(t, fast)
+	assert.False(t, fast.CurrencyEvaluated)
+	assert.EqualValues(t, 2, fast.PresentFiles)
+	assert.EqualValues(t, 1, fast.WithWindows)
+	assert.EqualValues(t, 1, fast.NoWindows)
+
+	deep := get("windows=true&deep=true").Windows
+	require.NotNil(t, deep)
+	assert.True(t, deep.CurrencyEvaluated)
+	assert.EqualValues(t, 1, deep.WithCurrentWindows)
+	require.NotNil(t, deep.Criteria)
+	assert.Equal(t, fingerprint.WindowPipelineID, deep.Criteria.Pipeline)
+	assert.Contains(t, deep.Unavailable["tool_version_currency"], "tool registry not configured")
 }
