@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
 // last-edited: 2026-09-19
 
@@ -135,7 +135,7 @@ func attachRemoteOnlyHub(t *testing.T, e *wbEnv) *hubEnv {
 	h := &hubEnv{wbEnv: e, hub: e.plugin.WorkerHub(), clock: &testClock{}, tally: &windowTally{}, items: items}
 	h.hub.now = h.clock.now
 	h.hub.attach(context.Background(), e.plugin, fingerprint.WindowTools{Versions: refPair}, h.tally, plan.calibration,
-		hubMode{remoteOnly: true, identity: plan.identity, refExists: plan.exactCurrent})
+		hubMode{remoteOnly: true, identity: plan.identity, refExists: plan.refAny})
 	t.Cleanup(h.hub.detach)
 	h.hub.beginTier(windowTierPresent, items)
 	return h
@@ -650,9 +650,16 @@ func startRemoteOnlyRun(t *testing.T, e *wbEnv, clock *testClock, p WindowBackfi
 	hub := e.plugin.WorkerHub()
 	hub.now = clock.now
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	t.Cleanup(cancel)
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	// Stop the run and wait for it before the poll interval is restored:
+	// its heartbeat reads windowDrainPoll.
+	t.Cleanup(func() {
+		cancel()
+		<-finished
+	})
 	go func() {
+		defer close(finished)
 		_, err := e.run(ctx, nil, p)
 		done <- err
 	}()
@@ -772,4 +779,208 @@ func TestWorkerHub_RemoteOnly_SlowHelloDoesNotStallResults(t *testing.T) {
 		t.Fatal("lease/results stalled behind a slow hello")
 	}
 	release.Do(func() { close(gate) })
+}
+
+// ---- review round 2 ----
+
+// TestWorkerHub_RemoteOnly_SupersededBootstrapWorkerCannotWrite is the
+// reviewer's probe: macA claims and leases, sleeps past the TTL (its items are
+// swept back), llmB takes the claim, then macA posts. macA's prints must be
+// dropped even though nobody re-leased its items; llmB's are taken; and macA,
+// which never passed parity against llmB's reference, may not lease again
+// until a hello hands it the real calibration.
+func TestWorkerHub_RemoteOnly_SupersededBootstrapWorkerCannotWrite(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	for i := range 4 {
+		e.addFileWith("", fmt.Sprintf("lib/p%d.m4b", i), fakeAudio(3600, 70<<10), 3600)
+	}
+	h := attachRemoteOnlyHub(t, e)
+	ctx := context.Background()
+
+	r, err := h.hub.Hello(ctx, refHello("macA"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap)
+	leaseA, err := h.hub.Lease(ctx, refLeaseReq("macA", 2))
+	require.NoError(t, err)
+	require.Len(t, leaseA.Jobs, 2)
+
+	h.clock.advance(workerapi.LeaseTTL + time.Second)
+	require.Equal(t, 2, h.hub.sweep(), "macA's items are swept back to pending")
+	r, err = h.hub.Hello(ctx, refHello("llmB"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap, "the lapsed claim passes to llmB")
+
+	st := h.post("macA", refResult(h, leaseA.Jobs[0], 1), refResult(h, leaseA.Jobs[1], 1))
+	for _, x := range st {
+		require.Equal(t, workerapi.StatusStale, x.Status, "a superseded claimant's result must not be stored")
+		require.Equal(t, "superseded_bootstrap", x.Reason)
+	}
+	for _, j := range leaseA.Jobs {
+		require.Empty(t, h.windows(h.fileID(j)), "macA's unchecked prints were stored")
+	}
+
+	leaseB, err := h.hub.Lease(ctx, refLeaseReq("llmB", 2))
+	require.NoError(t, err)
+	require.NotNil(t, leaseB)
+	st = h.post("llmB", refResult(h, leaseB.Jobs[0], 2))
+	require.Equal(t, workerapi.StatusAccepted, st[0].Status, st[0].Reason)
+
+	_, err = h.hub.Lease(ctx, refLeaseReq("macA", 1))
+	require.ErrorIs(t, err, ErrToolsNotAllowed, "macA bootstrapped under a claim that did not define the reference")
+	r, err = h.hub.Hello(ctx, refHello("macA"))
+	require.NoError(t, err)
+	require.False(t, r.Bootstrap)
+	require.NotEmpty(t, r.Calibration)
+	require.NotEmpty(t, r.Calibration[0].Windows, "macA must now pass parity against llmB's windows")
+	resp, err := h.hub.Lease(ctx, refLeaseReq("macA", 1))
+	require.NoError(t, err, "after the real calibration macA may lease")
+	require.NotNil(t, resp)
+}
+
+// TestWorkerHub_RemoteOnly_WrongPairLeaseDoesNotKeepTheClaim: a lease under
+// the claimant's worker_id with a pair that is not allowed is refused and
+// does not extend the claim.
+func TestWorkerHub_RemoteOnly_WrongPairLeaseDoesNotKeepTheClaim(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	e.addFileWith("", "lib/a.m4b", fakeAudio(3600, 70<<10), 3600)
+	h := attachRemoteOnlyHub(t, e)
+	ctx := context.Background()
+	r, err := h.hub.Hello(ctx, refHello("mac1"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap)
+	h.clock.advance(workerapi.LeaseTTL - time.Minute)
+	bad := refLeaseReq("mac1", 1)
+	bad.FpcalcVersion, bad.FFmpegVersion = "0.0", "0.0"
+	_, err = h.hub.Lease(ctx, bad)
+	require.ErrorIs(t, err, ErrToolsNotAllowed)
+	h.clock.advance(2 * time.Minute)
+	r, err = h.hub.Hello(ctx, refHello("llm1"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap, "a refused wrong-pair call must not have kept mac1's claim alive")
+}
+
+// TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers: a
+// worker that only ever hears reference_pending is not progress. The run
+// outlives the no-worker grace while it waits, then ends after the pending
+// grace, naming the missing pair and the waiting worker.
+func TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	e.addFile("", "lib/a.m4b", true, 3600)
+	clock := &testClock{}
+	ctx, done := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60, PendingGraceSec: 120})
+	hub := e.plugin.WorkerHub()
+	waiter := workerapi.HelloRequest{WorkerID: "mac9", FpcalcVersion: "1.6.1", FFmpegVersion: "9.0.1"}
+	hello := func() {
+		t.Helper()
+		r, err := hub.Hello(ctx, waiter)
+		require.NoError(t, err)
+		require.True(t, r.ReferencePending)
+	}
+	hello()
+	clock.advance(90 * time.Second) // past the no-worker grace, inside the pending grace
+	hello()
+	time.Sleep(60 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("run ended while the pending grace still ran: %v", err)
+	default:
+	}
+	clock.advance(60 * time.Second)
+	hello()
+	err := <-done
+	require.ErrorIs(t, err, errNoRemoteWorkers)
+	require.ErrorContains(t, err, "no worker with the reference pair "+refPair.Fpcalc+"/"+refPair.FFmpeg)
+	require.ErrorContains(t, err, "mac9 (1.6.1/9.0.1)")
+}
+
+// TestWindowBackfill_RemoteOnly_HelloIsNotProgress: a worker that took the
+// bootstrap claim but never leases does not keep the run alive past the
+// no-worker grace.
+func TestWindowBackfill_RemoteOnly_HelloIsNotProgress(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	e.addFile("", "lib/a.m4b", true, 3600)
+	clock := &testClock{}
+	ctx, done := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60})
+	hub := e.plugin.WorkerHub()
+	r, err := hub.Hello(ctx, refHello("mac1"))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap)
+	clock.advance(61 * time.Second)
+	_, _ = hub.Hello(ctx, refHello("mac1"))
+	err = <-done
+	require.ErrorIs(t, err, errNoRemoteWorkers)
+}
+
+// staleReferenceEnv stores reference-pair windows for one file and then
+// changes the file's mtime, so the store holds reference windows but none is
+// usable for calibration.
+func staleReferenceEnv(t *testing.T) *wbEnv {
+	t.Helper()
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	_, id := e.addFileWith("", "lib/ref.m4b", fakeAudio(3600, 70<<10), 3600)
+	e.addFileWith("", "lib/other.m4b", fakeAudio(3600, 70<<10), 3600)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true})
+	require.NoError(t, err)
+	ws := e.windows(id)
+	for i := range ws {
+		ws[i].FpcalcVersion, ws[i].FFmpegVersion, ws[i].Host = refPair.Fpcalc, refPair.FFmpeg, "fp-worker:mac1"
+	}
+	require.NoError(t, e.store.ReplaceFingerprintWindows(database.FileWindowRef(id), ws))
+	path := filepath.Join(e.lib, "lib/ref.m4b")
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	require.NoError(t, os.Chtimes(path, fi.ModTime(), fi.ModTime().Add(time.Hour)))
+	noLocalTools(e)
+	return e
+}
+
+// TestWorkerHub_RemoteOnly_StaleReferenceWindowsDoNotReopenBootstrap: stored
+// reference windows whose file changed since still count as "a reference
+// exists": the run answers reference_pending with the reason instead of
+// letting an unchecked worker define a new reference.
+func TestWorkerHub_RemoteOnly_StaleReferenceWindowsDoNotReopenBootstrap(t *testing.T) {
+	e := staleReferenceEnv(t)
+	plan, err := e.plugin.planWindowBackfill(context.Background(), &wbReporter{}, &refPair)
+	require.NoError(t, err)
+	require.True(t, plan.refAny)
+	require.Empty(t, plan.calibration)
+	h := attachRemoteOnlyHub(t, e)
+	r, err := h.hub.Hello(context.Background(), refHello("mac1"))
+	require.NoError(t, err)
+	require.False(t, r.Bootstrap, "a changed reference file must not re-open an unchecked bootstrap")
+	require.True(t, r.ReferencePending)
+	require.Contains(t, r.Waiting, "none usable")
+	require.Contains(t, r.Waiting, "rebootstrap_reference")
+}
+
+// TestWindowBackfill_RemoteOnly_RebootstrapReferenceIsTheDeliberateEscape:
+// only rebootstrap_reference lets a run over unusable reference windows
+// bootstrap again.
+func TestWindowBackfill_RemoteOnly_RebootstrapReferenceIsTheDeliberateEscape(t *testing.T) {
+	for _, tc := range []struct {
+		rebootstrap bool
+		wantBoot    bool
+	}{{false, false}, {true, true}} {
+		t.Run(fmt.Sprint("rebootstrap=", tc.rebootstrap), func(t *testing.T) {
+			e := staleReferenceEnv(t)
+			clock := &testClock{}
+			ctx, _ := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, RebootstrapReference: tc.rebootstrap})
+			r, err := e.plugin.WorkerHub().Hello(ctx, refHello("mac1"))
+			require.NoError(t, err)
+			require.Equal(t, tc.wantBoot, r.Bootstrap)
+			require.Equal(t, !tc.wantBoot, r.ReferencePending)
+		})
+	}
 }

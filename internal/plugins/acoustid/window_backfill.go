@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -88,7 +88,9 @@ import (
 // single heartbeat per tier reports progress on a fixed period while workers
 // run, and ends the run with an error when no worker has called the API
 // within no_worker_grace_sec (default 15 min) of the start, or for longer
-// than max(grace, lease TTL + 2 min) with nothing leased after contact.
+// than max(grace, lease TTL + 2 min) with nothing leased after contact (only
+// lease, renew and results count as contact), or after pending_grace_sec
+// (default 30 min) in which every worker was only told reference_pending.
 //
 // With fingerprint_window_reference_tools set, a live run WITHOUT
 // remote_only is refused unless allow_server_decode is passed: it would
@@ -143,6 +145,18 @@ type WindowBackfillParams struct {
 	// nothing leased is max(this, lease TTL + 2 min). The op holds the
 	// acoustid.fingerprint key while it waits, so it must not wait forever.
 	NoWorkerGraceSec int `json:"no_worker_grace_sec,omitempty"`
+	// PendingGraceSec ends a remote-only run with an error when, for this
+	// many seconds (0: 1800), every worker has only been told
+	// reference_pending and none made progress: no worker with the
+	// reference pair exists to cut (or be checked against) the reference.
+	// The error names the pair and the waiting workers.
+	PendingGraceSec int `json:"pending_grace_sec,omitempty"`
+	// RebootstrapReference is the owner's deliberate escape when reference
+	// windows exist in the store but none is usable for calibration (every
+	// reference file changed since): the run ignores them and bootstraps a
+	// new reference, trusting one worker without byte parity again. Never
+	// set by the op itself.
+	RebootstrapReference bool `json:"rebootstrap_reference,omitempty"`
 	// Resume is the checkpoint cursor; set by the op, not by callers.
 	Resume *WindowBackfillCursor `json:"resume,omitempty"`
 }
@@ -329,6 +343,11 @@ type windowPlan struct {
 	// database's answer to "do reference windows exist", which is what
 	// decides a bootstrap, not what one Hello happens to read.
 	exactCurrent bool
+	// refAny: some planned file has a stored window cut with exactly the
+	// run's pair, current or not. In a remote-only run this, not
+	// exactCurrent, decides "reference windows exist": a file that changed
+	// since its reference was cut must not re-open an unchecked bootstrap.
+	refAny bool
 }
 
 // windowRunResult is what a run did, for tests and the final census.
@@ -449,7 +468,12 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	var tally windowTally
 	run := &windowRun{p: p, wt: wt, host: host, t: &tally, reporter: reporter, probe: probe}
 	hub := p.WorkerHub()
-	hub.attach(ctx, p, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity, refExists: plan.exactCurrent})
+	refExists := plan.refAny
+	if params.RemoteOnly && params.RebootstrapReference && refExists {
+		wbLog.Warn("window-backfill REMOTE-ONLY: rebootstrap_reference set: ignoring the reference-pair windows already stored; one worker will define a NEW reference without byte parity")
+		refExists = false
+	}
+	hub.attach(ctx, p, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity, refExists: refExists})
 	defer hub.detach()
 	if params.RemoteOnly {
 		wbLog.Info("window-backfill REMOTE-ONLY: the server decodes nothing; reference pair fpcalc %s + ffmpeg %s; files no worker may have are deferred to a later run",
@@ -492,7 +516,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 			hbDone := make(chan struct{})
 			go func() {
 				defer close(hbDone)
-				run.remoteHeartbeat(tctx, stop, hub, tier, noWorkerGrace(params.NoWorkerGraceSec))
+				run.remoteHeartbeat(tctx, stop, hub, tier, noWorkerGrace(params.NoWorkerGraceSec), pendingGrace(params.PendingGraceSec))
 			}()
 			err = registry.RunItems(tctx, reporter, items, run.remoteOnlyItem(hub), opts)
 			stop(nil)
@@ -605,6 +629,7 @@ type windowPlanRow struct {
 	excluded string // non-empty: reason, not eligible
 	state    windowState
 	exact    bool // current, and every window cut with exactly the run's pair
+	anyExact bool // some stored window cut with exactly the run's pair
 	item     windowItem
 }
 
@@ -670,6 +695,9 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 		}
 		if !r.present {
 			continue
+		}
+		if r.anyExact {
+			plan.refAny = true
 		}
 		tier := windowTierPresent
 		if unmatched[r.item.BookID] {
@@ -752,11 +780,11 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 		Size:      fi.Size(),
 		MtimeUnix: fi.ModTime().Unix(),
 	}
-	state, exact, err := p.windowStateOf(it, versions)
+	state, exact, anyExact, err := p.windowStateOf(it, versions)
 	if err != nil {
 		return windowPlanRow{}, err
 	}
-	return windowPlanRow{present: true, state: state, exact: exact, item: it}, nil
+	return windowPlanRow{present: true, state: state, exact: exact, anyExact: anyExact, item: it}, nil
 }
 
 // windowStateOf decides whether a file's stored windows (or tombstone) still
@@ -770,27 +798,39 @@ func (p *Plugin) planOne(f database.BookFileCore, itunes *iTunesMatcher, version
 // set/tool rule, so a new ffmpeg retries a file the old one could not read.
 //
 // exact reports, for a current file, that every stored window was cut with
-// exactly *versions (not merely an equivalent pair).
-func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (windowState, bool, error) {
+// exactly *versions (not merely an equivalent pair); anyExact, that at least
+// one stored window was, current or not.
+func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (state windowState, exact, anyExact bool, err error) {
 	ref := database.FileWindowRef(it.FileID)
 	stored, err := p.store.GetFingerprintWindows(ref)
 	if err != nil {
-		return windowNeedsWork, false, err
+		return windowNeedsWork, false, false, err
 	}
+	anyExact = versions != nil && windowsAnyPair(stored, *versions)
 	if windowsCurrent(stored, it, versions) {
-		return windowCurrent, versions != nil && windowsExactPair(stored, *versions), nil
+		return windowCurrent, versions != nil && windowsExactPair(stored, *versions), anyExact, nil
 	}
 	fail, err := p.store.GetFingerprintWindowFailure(ref)
 	if err != nil {
-		return windowNeedsWork, false, err
+		return windowNeedsWork, false, anyExact, err
 	}
 	if fail != nil && fail.SourceSize == it.Size && fail.SourceMtimeUnix == it.MtimeUnix &&
 		fail.Pipeline == fingerprint.WindowPipelineID && fail.WindowSet == fingerprint.WindowSetWS1 &&
 		fail.PlannedDurationSec == plannedDuration(it) &&
 		(versions == nil || (fail.FpcalcVersion == versions.Fpcalc && fail.FFmpegVersion == versions.FFmpeg)) {
-		return windowTombstoned, false, nil
+		return windowTombstoned, false, anyExact, nil
 	}
-	return windowNeedsWork, false, nil
+	return windowNeedsWork, false, anyExact, nil
+}
+
+// windowsAnyPair: some stored window row was cut with exactly v.
+func windowsAnyPair(stored []database.FingerprintWindow, v fingerprint.ToolVersionInfo) bool {
+	for _, w := range stored {
+		if w.Kind == database.WindowKindWindow && w.FpcalcVersion == v.Fpcalc && w.FFmpegVersion == v.FFmpeg {
+			return true
+		}
+	}
+	return false
 }
 
 // windowsExactPair: every stored window row was cut with exactly v.
@@ -1109,6 +1149,16 @@ var errNoRemoteWorkers = errors.New("window-backfill remote-only: no fp-worker")
 // windowNoWorkerGrace is the default no-worker grace.
 const windowNoWorkerGrace = 15 * time.Minute
 
+// windowPendingGrace is the default pending grace.
+const windowPendingGrace = 30 * time.Minute
+
+func pendingGrace(sec int) time.Duration {
+	if sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	return windowPendingGrace
+}
+
 func noWorkerGrace(sec int) time.Duration {
 	if sec > 0 {
 		return time.Duration(sec) * time.Second
@@ -1121,7 +1171,7 @@ func noWorkerGrace(sec int) time.Duration {
 // progress (so the watchdog sees a live op even while every RunItems waiter
 // sits on one crashed worker's lease), and it ends the tier through stop
 // when WorkerHub.noWorkerExpired says the run has waited too long.
-func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCauseFunc, hub *WorkerHub, tier int, grace time.Duration) {
+func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCauseFunc, hub *WorkerHub, tier int, grace, pending time.Duration) {
 	t := time.NewTicker(windowDrainPoll)
 	defer t.Stop()
 	for {
@@ -1130,7 +1180,7 @@ func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCaus
 			return
 		case <-t.C:
 		}
-		if msg := hub.noWorkerExpired(grace); msg != "" {
+		if msg := hub.noWorkerExpired(grace, pending); msg != "" {
 			wbLog.Error("window-backfill remote-only: %s", msg)
 			stop(fmt.Errorf("%w: %s", errNoRemoteWorkers, msg))
 			return
