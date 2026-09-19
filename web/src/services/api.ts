@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.117.1
+// version: 2.117.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6715,8 +6715,8 @@ export interface BookRuntime {
   files_counted: number;
   files_known: number;
   all_files_missing?: boolean;
-  // Missing rows with no present copy: chapters not on disk. Any makes the
-  // runtime partial.
+  // Missing rows with no present copy: chapters not on disk. They count with
+  // their durations; only an unknown duration makes the runtime partial.
   files_missing_unmatched?: number;
   book_aggregate_sec?: number;
 }

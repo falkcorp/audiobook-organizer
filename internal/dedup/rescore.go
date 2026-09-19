@@ -1,5 +1,5 @@
 // file: internal/dedup/rescore.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b1d4f27-6a90-4c3e-9d21-0f5a7c2e8b64
 // last-edited: 2026-09-19
 
@@ -225,7 +225,7 @@ func (de *Engine) ScorePairsForBook(ctx context.Context, aID string, inputs []Re
 	allExactHashSigs, _ := CollectExactFileHash(de.bookStore, book)
 	allISBNSigs, _ := CollectISBNASIN(ctx, de.bookStore, de.isbnIndexStore, book)
 	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
-	allDurationSigs, _ := collectDuration(de.bookStore, nil, de.runtimeMemo(), book, durCfg)
+	allDurationSigs, _ := collectDuration(de.bookStore, nil, nil, book, durCfg)
 
 	var allExactAcoustSigs, allLSHAcoustSigs []unified.Signal
 	if de.acoustidBookFileStore != nil {
