@@ -1,5 +1,5 @@
 // file: internal/ai/pool_routing.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
 // last-edited: 2026-09-19
 
@@ -13,8 +13,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 )
 
 // Pool routing (design doc 2026-08-28, rollout step 2).
@@ -196,7 +194,6 @@ func (c *EmbeddingClient) embedRouted(ctx context.Context, texts []string) ([][]
 		if err != nil {
 			return nil, err
 		}
-		client := openai.NewClient(option.WithAPIKey(key), option.WithBaseURL(t.Endpoint.URL))
-		return embedWithRetry(ctx, &client, t.Model, texts, c.requestTimeout, true)
+		return embedViaEndpoint(ctx, t.Endpoint.URL, key, t.Model, texts, c.requestTimeout)
 	})
 }
