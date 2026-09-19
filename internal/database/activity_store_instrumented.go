@@ -1,7 +1,7 @@
 // file: internal/database/activity_store_instrumented.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-0002-bcde-000000000002
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 package database
 
@@ -73,6 +73,31 @@ func (i *InstrumentedActivityStorer) Query(ctx context.Context, filter ActivityF
 		attribute.Int("total_matching", total))
 	return entries, total, nil
 }
+
+// QueryWithPartial traces like Query and forwards the partial flag of the
+// wrapped store, so wrapping a store in instrumentation cannot hide it.
+func (i *InstrumentedActivityStorer) QueryWithPartial(ctx context.Context, filter ActivityFilter) (ActivityQueryResult, error) {
+	ctx, span := tracer.Start(ctx, "activity_store.query",
+		trace.WithAttributes(
+			attribute.String("tier", filter.Tier),
+			attribute.String("source", filter.Source),
+		))
+	defer span.End()
+
+	res, err := QueryWithPartialOf(ctx, i.store, filter)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.Bool("error", true))
+		return ActivityQueryResult{}, err
+	}
+	span.SetAttributes(
+		attribute.Int("entries_returned", len(res.Entries)),
+		attribute.Int("total_matching", res.Total),
+		attribute.Bool("partial", res.Partial))
+	return res, nil
+}
+
+var _ ActivityPartialQuerier = (*InstrumentedActivityStorer)(nil)
 
 // Summarize traces the Summarize operation.
 func (i *InstrumentedActivityStorer) Summarize(ctx context.Context, olderThan time.Time, tier string) (int, error) {

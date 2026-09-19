@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package handlers
 
@@ -60,6 +60,15 @@ type ActivityService interface {
 	GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)
 	ClampSummaries(ctx context.Context, max int, dryRun, vacuum bool) (database.ClampSummariesResult, error)
 }
+
+// activityPartialQuerier is the optional read ListActivity prefers: Query plus
+// the partial flag. *activity.Service implements it (asserted below); a test
+// double that only implements ActivityService gets Partial=false.
+type activityPartialQuerier interface {
+	QueryWithPartial(ctx context.Context, filter database.ActivityFilter) (database.ActivityQueryResult, error)
+}
+
+var _ activityPartialQuerier = (*activity.Service)(nil)
 
 // ActivityOpsStore is the narrow interface for op-log fallback in
 // ListOperationActivity. It may be nil when the backing store does not
@@ -185,7 +194,19 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 
-	entries, total, err := h.svc.Query(c.Request.Context(), filter)
+	var (
+		entries []database.ActivityEntry
+		total   int
+		partial bool
+		err     error
+	)
+	if pq, ok := h.svc.(activityPartialQuerier); ok {
+		var res database.ActivityQueryResult
+		res, err = pq.QueryWithPartial(c.Request.Context(), filter)
+		entries, total, partial = res.Entries, res.Total, res.Partial
+	} else {
+		entries, total, err = h.svc.Query(c.Request.Context(), filter)
+	}
 	if err != nil {
 		if abortIfClientGone(c, err, "ListActivity") {
 			return
@@ -199,10 +220,14 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		entries = []database.ActivityEntry{}
 	}
 
+	// partial: the store stopped at its scan budget before filling the page or
+	// exhausting the matches, so older matches were NOT examined and total is
+	// only a lower bound. The UI shows that instead of "no more results".
 	httputil.RespondWithOK(c, struct {
 		Entries []database.ActivityEntry `json:"entries"`
 		Total   int                      `json:"total"`
-	}{Entries: entries, Total: total})
+		Partial bool                     `json:"partial"`
+	}{Entries: entries, Total: total, Partial: partial})
 }
 
 // ListActivitySources handles GET /api/v1/activity/sources.

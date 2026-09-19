@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 // Package database — backend-migration wrapper for the activity log.
 //
@@ -174,6 +174,14 @@ func (m *MigratingActivityStore) WipeAllActivity(ctx context.Context) (int64, er
 func (m *MigratingActivityStore) Query(ctx context.Context, f ActivityFilter) ([]ActivityEntry, int, error) {
 	return m.active().Query(ctx, f)
 }
+
+// QueryWithPartial forwards to the ACTIVE backend, like Query, so the Pebble
+// store's partial flag is not hidden behind this wrapper.
+func (m *MigratingActivityStore) QueryWithPartial(ctx context.Context, f ActivityFilter) (ActivityQueryResult, error) {
+	return QueryWithPartialOf(ctx, m.active(), f)
+}
+
+var _ ActivityPartialQuerier = (*MigratingActivityStore)(nil)
 
 func (m *MigratingActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) ([]SourceCount, error) {
 	return m.active().GetDistinctSources(ctx, f)
