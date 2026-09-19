@@ -1,5 +1,5 @@
 // file: internal/fingerprint/window_exec.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 06d35c35-707c-4690-9bdb-eb99cb5f2002
 // last-edited: 2026-09-19
 
@@ -153,10 +153,11 @@ type WindowPrint struct {
 	DurationSource  DurationSource
 	Frames          int
 	// Raw is the uncompressed chromaprint (fpcalc -raw), little-endian
-	// uint32 per frame. NOTE: this is NOT the same byte space as the legacy
-	// BookFile.AcoustIDFingerprint, which is fpcalc's compressed output
-	// base64-decoded and read as uint32s; the two must never be
-	// Hamming-compared.
+	// uint32 per frame. NOTE: do not Hamming-compare it with the legacy
+	// BookFile.AcoustIDFingerprint. Rows of that field written before
+	// 2026-09-19 hold fpcalc's compressed output misread as uint32s (not
+	// frames at all), and rows written since hold real frames from a
+	// different pipeline (fpcalc reading the file directly).
 	Raw           []byte
 	Algorithm     int
 	Pipeline      string
@@ -183,9 +184,10 @@ func windowFFmpegArgs(path string, offsetSec, lengthSec float64) []string {
 	}
 }
 
-// windowFpcalcArgs is the fpcalc half of WindowPipelineID. -raw is required:
-// the default output is Chromaprint's COMPRESSED form, which decodeAnyFingerprint
-// cannot turn back into frames (it reads the compressed bytes as uint32s).
+// windowFpcalcArgs is the fpcalc half of WindowPipelineID. -raw makes fpcalc
+// print the frames as a JSON integer array, which parseRawFpcalcJSON reads
+// directly; the default output is Chromaprint's compressed form, which would
+// need decompressChromaprint first.
 func windowFpcalcArgs(lengthSec float64) []string {
 	return []string{
 		"-format", "s16le",
