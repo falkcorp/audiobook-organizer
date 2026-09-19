@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_resume_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d81b4c7-95fe-4a30-8b16-7c0e4f9a2531
-// last-edited: 2026-08-22
+// last-edited: 2026-09-19
 
 package aiscan
 
@@ -11,65 +11,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 
-// --- decideResume -----------------------------------------------------------
-
-func phases(statuses ...string) []database.ScanPhase {
-	out := make([]database.ScanPhase, 0, len(statuses))
-	for i, s := range statuses {
-		out = append(out, database.ScanPhase{PhaseType: "p" + string(rune('0'+i)), Status: s})
-	}
-	return out
-}
-
-// TestDecideResume covers the decision that a crash-restart depends on. Getting
-// resumeAttach wrong hangs the op until its 24h timeout; getting resumeLaunch
-// wrong re-runs a paid whole-library LLM pass against OpenAI.
-func TestDecideResume(t *testing.T) {
-	cases := []struct {
-		name   string
-		mode   string
-		phases []database.ScanPhase
-		want   resumeAction
-	}{
-		{"no phases at all launches", "realtime", nil, resumeLaunch},
-		{"all pending launches (realtime)", "realtime", phases("pending", "pending"), resumeLaunch},
-		{"all pending launches (batch)", "batch", phases("pending", "pending"), resumeLaunch},
-
-		// Batch: OpenAI still holds the job and PollBatchPhases will collect it.
-		{"batch submitted attaches", "batch", phases("submitted", "pending"), resumeAttach},
-		{"batch processing attaches", "batch", phases("processing", "pending"), resumeAttach},
-		{"batch complete attaches", "batch", phases("complete", "submitted"), resumeAttach},
-
-		// Realtime: the in-flight HTTP requests died with the process.
-		{"realtime processing is impossible", "realtime", phases("processing", "pending"), resumeImpossible},
-		{"realtime complete is impossible", "realtime", phases("complete", "pending"), resumeImpossible},
-
-		// An unset mode is not "batch" and must take the safe branch rather than
-		// waiting forever on a driver that does not exist.
-		{"empty mode is not batch", "", phases("processing"), resumeImpossible},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, decideResume(tc.mode, tc.phases))
-		})
-	}
-}
-
-// TestDecideResumeOnlyPendingCountsAsUnstarted is the mutation guard for the
-// status comparison: flipping `!= "pending"` to `== "complete"` (or similar)
-// would let a half-run scan be re-launched from scratch.
-func TestDecideResumeOnlyPendingCountsAsUnstarted(t *testing.T) {
-	for _, s := range []string{"processing", "submitted", "complete", "failed", "canceled"} {
-		require.NotEqual(t, resumeLaunch, decideResume("batch", phases(s)),
-			"status %q means work began; re-launching would repeat it", s)
-	}
-	require.Equal(t, resumeLaunch, decideResume("batch", phases("pending")))
-}
+// The launch-vs-attach table that lived here tested decideResume, which
+// decided per SCAN. It was replaced by drive's per-PHASE decision, exercised
+// end to end across simulated restarts in pipeline_durable_test.go.
 
 // --- finishScan -------------------------------------------------------------
 

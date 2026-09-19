@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.1.0
+// version: 4.2.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -18,7 +18,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var plog = logger.New("aiscan")
 
 // Store is the narrow slice of database.Store this service uses.
 // Store is what this package actually calls, measured by emptying the
@@ -39,6 +42,32 @@ type Store interface {
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 }
 
+// RealtimeLLM is the synchronous half of the OpenAI client the pipeline uses.
+type RealtimeLLM interface {
+	ReviewAuthorDuplicates(ctx context.Context, groups []ai.AuthorDedupInput) ([]ai.AuthorDedupSuggestion, error)
+	DiscoverAuthorDuplicates(ctx context.Context, inputs []ai.AuthorDiscoveryInput) ([]ai.AuthorDiscoverySuggestion, error)
+}
+
+// BatchLLM is the OpenAI Batch API half of the client the pipeline uses.
+type BatchLLM interface {
+	// owner is the batch metadata naming the scan phase (scanBatchOwner); it is
+	// what FindScanBatch matches on after a crash inside CreateBatch.
+	CreateBatchAuthorReview(ctx context.Context, groups []ai.AuthorDedupInput, owner map[string]string) (string, error)
+	CreateBatchAuthorDedup(ctx context.Context, inputs []ai.AuthorDiscoveryInput, owner map[string]string) (string, error)
+	CheckBatchStatus(ctx context.Context, batchID string) (status, outputFileID string, err error)
+	CancelBatch(ctx context.Context, batchID string) error
+	DownloadBatchGroupsResults(ctx context.Context, outputFileID string) ([]ai.AuthorDedupSuggestion, error)
+	DownloadBatchResults(ctx context.Context, outputFileID string) ([]ai.AuthorDiscoverySuggestion, error)
+}
+
+// LLM is everything the pipeline calls on its OpenAI client. *ai.OpenAIParser
+// satisfies it; tests substitute a fake so LLM calls can be counted across a
+// simulated restart.
+type LLM interface {
+	RealtimeLLM
+	BatchLLM
+}
+
 // ProgressSink is the narrow slice of registry.Reporter the pipeline publishes
 // progress through. Declared here rather than importing the registry so this
 // package stays free of the operations layer: the server wires the real
@@ -51,7 +80,7 @@ type ProgressSink interface {
 type PipelineManager struct {
 	scanStore *database.AIScanStore
 	mainStore Store
-	parser    *ai.OpenAIParser
+	parser    LLM
 	mu        sync.Mutex
 	// cancels tracks cancel functions for active scans, keyed by scan ID.
 	cancels map[int]context.CancelFunc
@@ -62,10 +91,13 @@ type PipelineManager struct {
 	// waiting on it, keyed by scan ID. Buffered (size 1) so finishScan never
 	// blocks on a caller that has already given up.
 	dones map[int]chan error
+	// running holds the phases a goroutine in THIS process is executing, keyed
+	// "scanID:phaseType". See beginPhase.
+	running map[string]bool
 }
 
 // NewPipelineManager creates a new pipeline manager.
-func NewPipelineManager(scanStore *database.AIScanStore, mainStore Store, parser *ai.OpenAIParser) *PipelineManager {
+func NewPipelineManager(scanStore *database.AIScanStore, mainStore Store, parser LLM) *PipelineManager {
 	return &PipelineManager{
 		scanStore: scanStore,
 		mainStore: mainStore,
@@ -73,6 +105,7 @@ func NewPipelineManager(scanStore *database.AIScanStore, mainStore Store, parser
 		cancels:   make(map[int]context.CancelFunc),
 		sinks:     make(map[int]ProgressSink),
 		dones:     make(map[int]chan error),
+		running:   make(map[string]bool),
 	}
 }
 
@@ -154,7 +187,7 @@ func (pm *PipelineManager) cleanupScan(scanID int, status string) {
 	// Mark any in-progress phases as canceled/failed
 	phases, _ := pm.scanStore.GetPhases(scanID)
 	for _, p := range phases {
-		if p.Status == "pending" || p.Status == "processing" || p.Status == "submitted" {
+		if p.Status == "pending" || p.Status == "processing" || p.Status == "submitting" || p.Status == "submitted" {
 			_ = pm.scanStore.UpdatePhaseStatus(scanID, p.PhaseType, status, "")
 		}
 	}
@@ -201,60 +234,42 @@ func (pm *PipelineManager) nextPhases(completedPhase, status string, phaseStates
 // ErrScanCanceled is the terminal outcome of a scan stopped by an operator.
 var ErrScanCanceled = errors.New("ai scan canceled")
 
-// ErrRealtimeNotResumable is the terminal outcome of a realtime scan whose
-// process died mid-flight. Unlike a batch scan — which OpenAI is still holding
-// and PollBatchPhases will still collect — a realtime scan's in-flight requests
-// died with the process, so there is nothing left to attach to.
-var ErrRealtimeNotResumable = errors.New("realtime ai scan interrupted and cannot be resumed")
+// ErrBatchSubmitUnknown is the terminal outcome of a batch phase found in
+// "submitting" after a restart with no way to look its batch up.
+var ErrBatchSubmitUnknown = errors.New("batch phase was mid-submit at restart; OpenAI may hold a batch that cannot be located")
+
+// fullScanChunkSize is how many authors one realtime full_scan LLM call
+// carries. A var only so tests can make a small library span several chunks.
+var fullScanChunkSize = 500
 
 // heartbeatInterval is how often an attached scan republishes progress while
-// waiting. The registry watchdog cancels an op that reports nothing for
-// ProgressTimeout (default 5m); a submitted batch phase can legitimately sit
-// silent for hours, so the wait loop must keep reporting on its behalf.
+// waiting, and how often it polls its own submitted batches. The registry
+// watchdog cancels an op that reports nothing for ProgressTimeout (default
+// 5m); a submitted batch phase can legitimately sit silent for hours, so the
+// wait loop must keep reporting on its behalf.
 const heartbeatInterval = 60 * time.Second
 
-// resumeAction is what RunScan should do with a scan, given the state its
-// phases were left in.
-type resumeAction int
+// BatchFinder looks up the OpenAI batch a scan phase submitted, by the
+// scan_id / scan_phase metadata written at CreateBatch time. It is what lets a
+// phase that died between CreateBatch and recording the batch id re-attach
+// instead of paying for a second batch. Optional: the client passed to
+// NewPipelineManager is checked for it, and a scan resumed without one fails
+// the ambiguous phase visibly (ErrBatchSubmitUnknown) rather than guessing.
+type BatchFinder interface {
+	FindScanBatch(ctx context.Context, scanID int, phaseType string) (batchID string, found bool, err error)
+}
 
-const (
-	// resumeLaunch: no phase has started. Launch the phase goroutines.
-	resumeLaunch resumeAction = iota
-	// resumeAttach: work is in flight and something outside this process will
-	// finish it. Wait, do not re-launch.
-	resumeAttach
-	// resumeImpossible: work started but nothing will ever finish it.
-	resumeImpossible
-)
+// sourcePhases are the two phases a scan starts with, each paired with the
+// enrichment phase that follows it.
+var sourcePhases = [...]struct{ scan, enrich string }{
+	{"groups_scan", "groups_enrich"},
+	{"full_scan", "full_enrich"},
+}
 
-// decideResume is the launch-vs-attach decision, split out from RunScan so it
-// can be tested without a store — it is the part that must be right, because
-// getting it wrong either hangs an operation forever or re-runs a paid
-// whole-library LLM pass against OpenAI.
-//
-// It reads ONLY persisted phase state. The op declares ResumePolicy=ResumeRestart,
-// so Run is re-entered after a crash with nothing in memory to consult.
-//
-// The mode split is the crux. A batch scan's work is held by OpenAI and
-// PollBatchPhases (batch_poller.go:181) will collect it whenever it completes,
-// with or without this process — so re-attaching is correct. A realtime scan's
-// work was in-flight HTTP requests issued by the process that died, so nothing
-// will ever advance its phases; attaching would wait until the op's 24h timeout.
-func decideResume(mode string, phases []database.ScanPhase) resumeAction {
-	started := false
-	for _, p := range phases {
-		if p.Status != "pending" {
-			started = true
-			break
-		}
-	}
-	if !started {
-		return resumeLaunch
-	}
-	if mode == "batch" {
-		return resumeAttach
-	}
-	return resumeImpossible
+// isTerminalPhase reports whether a phase row has reached a state nothing will
+// move it out of.
+func isTerminalPhase(status string) bool {
+	return status == "complete" || status == "failed" || status == "canceled"
 }
 
 // CreateScan creates a scan and its phase records WITHOUT starting any work.
@@ -301,13 +316,11 @@ func (pm *PipelineManager) LinkOperation(scanID int, opID string) error {
 // RunScan drives a scan created by CreateScan to a terminal state and blocks
 // until it gets there. It is the body of the ai.author-scan operation.
 //
-// It either LAUNCHES the phase goroutines or ATTACHES to work already in
-// flight, and decides which from the scan's PERSISTED phase state — never from
-// pm's in-process maps. That distinction is the whole point: the op declares
-// ResumePolicy=ResumeRestart, so on a restart Run is re-entered with the same
-// params, and a process-local guard cannot survive the very restart it exists
-// to handle. Deciding from memory would re-launch the phases and re-run a paid
-// whole-library LLM pass against OpenAI.
+// It decides what to run from the scan's PERSISTED phase state — never from
+// pm's in-process maps — because the op declares ResumePolicy=ResumeRestart:
+// on a restart Run is re-entered with the same params and nothing in memory.
+// drive does the per-phase decision; a fresh scan is just the case where every
+// phase is pending.
 func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink ProgressSink) error {
 	scan, err := pm.scanStore.GetScan(scanID)
 	if err != nil {
@@ -316,17 +329,28 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	if scan == nil {
 		return fmt.Errorf("scan %d not found", scanID)
 	}
+	// A scan already finished must not be waited on: nothing would ever
+	// deliver its outcome and the op would sit until its 24h timeout.
+	switch scan.Status {
+	case "complete":
+		return nil
+	case "failed":
+		return fmt.Errorf("scan %d already failed", scanID)
+	case "canceled":
+		return ErrScanCanceled
+	}
 
 	phases, err := pm.scanStore.GetPhases(scanID)
 	if err != nil {
 		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
 	}
-	action := decideResume(scan.Mode, phases)
-	if action == resumeImpossible {
-		pm.cleanupScan(scanID, "failed")
-		return ErrRealtimeNotResumable
+	fresh := true
+	for _, p := range phases {
+		if p.Status != "pending" {
+			fresh = false
+			break
+		}
 	}
-	started := action == resumeAttach
 
 	done := make(chan error, 1)
 	scanCtx, cancel := context.WithCancel(ctx)
@@ -342,36 +366,207 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	pm.sinks[scanID] = sink
 	pm.mu.Unlock()
 
-	if started {
-		slog.Info("[AI Pipeline] re-attaching to in-flight batch scan", "scanID", scanID)
-		pm.report(scanID, 0, 100, "Re-attached to in-flight batch scan")
-	} else {
+	if fresh {
 		if err := pm.scanStore.UpdateScanStatus(scanID, "scanning"); err != nil {
 			pm.finishScan(scanID, nil)
 			return fmt.Errorf("update scan status: %w", err)
 		}
-		authors, err := pm.mainStore.GetAllAuthors()
-		if err != nil {
-			pm.finishScan(scanID, nil)
-			return fmt.Errorf("get authors: %w", err)
-		}
 		pm.report(scanID, 0, 100, "Starting AI scan pipeline...")
-		if scan.Mode == "batch" {
-			go pm.runGroupsScanBatch(scanCtx, scanID, authors)
-			go pm.runFullScanBatch(scanCtx, scanID, authors)
-		} else {
-			go pm.runGroupsScanRealtime(scanCtx, scanID, authors)
-			go pm.runFullScanRealtime(scanCtx, scanID, authors)
+	} else {
+		plog.Info("scan %d: resuming from persisted phase state", scanID)
+		pm.report(scanID, 0, 100, "Resuming AI scan from its last persisted state")
+	}
+
+	if err := pm.drive(scanCtx, scanID, scan.Mode); err != nil {
+		pm.finishScan(scanID, nil)
+		return err
+	}
+	return pm.waitForScan(ctx, scanID, scan.Mode, done)
+}
+
+// drive launches whatever each phase of a scan still needs, judged from its
+// persisted row alone. It is the resume, and a fresh start is the case where
+// every phase is pending:
+//
+//   - pending / processing source phase: (re)run it. A realtime full_scan
+//     continues from the chunks it already persisted; nothing is re-requested.
+//   - submitting: the process died inside CreateBatch. Re-attach by metadata,
+//     or fail visibly — never blindly re-submit a batch that may exist.
+//   - submitted: OpenAI holds it; the collector (heartbeat or poller) finishes it.
+//   - complete: make sure its enrichment ran, and cross-validation after both.
+//
+// Every phase function claims its phase and re-checks the row before doing
+// work (beginPhase), so drive racing OnPhaseComplete cannot run a phase twice.
+func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string) error {
+	phases, err := pm.scanStore.GetPhases(scanID)
+	if err != nil {
+		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
+	}
+	byType := make(map[string]database.ScanPhase, len(phases))
+	for _, p := range phases {
+		byType[p.PhaseType] = p
+	}
+
+	var authors []database.Author
+	loadAuthors := func() ([]database.Author, error) {
+		if authors != nil {
+			return authors, nil
+		}
+		a, err := pm.mainStore.GetAllAuthors()
+		if err != nil {
+			return nil, fmt.Errorf("get authors: %w", err)
+		}
+		authors = a
+		return authors, nil
+	}
+
+	enrichDone := 0
+	for _, sp := range sourcePhases {
+		p, ok := byType[sp.scan]
+		if !ok {
+			continue
+		}
+		switch p.Status {
+		case "pending", "processing":
+			a, err := loadAuthors()
+			if err != nil {
+				return err
+			}
+			pm.launchSource(ctx, scanID, mode, sp.scan, a)
+		case "submitting":
+			if err := pm.reattachSubmitting(ctx, scanID, sp.scan, loadAuthors); err != nil {
+				return err
+			}
+		case "complete":
+			e, ok := byType[sp.enrich]
+			switch {
+			case ok && e.Status == "complete":
+				enrichDone++
+			case !ok || !isTerminalPhase(e.Status):
+				go pm.runEnrichment(ctx, scanID, sp.scan, sp.enrich)
+			}
 		}
 	}
 
-	return pm.waitForScan(ctx, scanID, done)
+	if enrichDone == len(sourcePhases) {
+		if cv, ok := byType["cross_validate"]; ok && cv.Status == "complete" {
+			// Died between finishing cross-validation and marking the scan.
+			pm.completeScan(scanID)
+		} else {
+			go pm.runCrossValidation(ctx, scanID)
+		}
+	}
+	return nil
+}
+
+// launchSource starts one source phase in the scan's mode.
+func (pm *PipelineManager) launchSource(ctx context.Context, scanID int, mode, phaseType string, authors []database.Author) {
+	switch {
+	case mode == "batch" && phaseType == "groups_scan":
+		go pm.runGroupsScanBatch(ctx, scanID, authors)
+	case mode == "batch":
+		go pm.runFullScanBatch(ctx, scanID, authors)
+	case phaseType == "groups_scan":
+		go pm.runGroupsScanRealtime(ctx, scanID, authors)
+	default:
+		go pm.runFullScanRealtime(ctx, scanID, authors)
+	}
+}
+
+// reattachSubmitting resolves a batch phase that a previous process left in
+// "submitting": the row was written before CreateBatch, so the batch may or
+// may not exist at OpenAI.
+//
+// Found by metadata: record its id and let the collector finish it. Confirmed
+// absent: CreateBatch never reached OpenAI, so submitting now is the first and
+// only submission. Unknown (no finder, or the lookup failed): fail the phase.
+// Guessing either way is wrong — re-submitting can pay twice, and waiting
+// hangs the op until its 24h timeout.
+func (pm *PipelineManager) reattachSubmitting(ctx context.Context, scanID int, phaseType string, loadAuthors func() ([]database.Author, error)) error {
+	batchID, found, err := pm.findScanBatch(ctx, scanID, phaseType)
+	switch {
+	case err != nil:
+		pm.failPhase(scanID, phaseType, err)
+	case found:
+		plog.Info("scan %d: re-attached %s to batch %s found by metadata", scanID, phaseType, batchID)
+		if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
+			pm.failPhase(scanID, phaseType, fmt.Errorf("record re-attached batch %s: %w", batchID, err))
+		}
+	default:
+		authors, err := loadAuthors()
+		if err != nil {
+			return err
+		}
+		plog.Info("scan %d: no batch exists for %s; submitting it now", scanID, phaseType)
+		pm.launchSource(ctx, scanID, "batch", phaseType, authors)
+	}
+	return nil
+}
+
+// findScanBatch looks up a phase's batch through the client's BatchFinder.
+func (pm *PipelineManager) findScanBatch(ctx context.Context, scanID int, phaseType string) (string, bool, error) {
+	finder, ok := pm.parser.(BatchFinder)
+	if !ok {
+		return "", false, ErrBatchSubmitUnknown
+	}
+	batchID, found, err := finder.FindScanBatch(ctx, scanID, phaseType)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: lookup failed: %w", ErrBatchSubmitUnknown, err)
+	}
+	return batchID, found, nil
+}
+
+// beginPhase claims a phase for this process and reports whether the caller
+// should run it. It returns false when another goroutine here already holds
+// the phase, or when the persisted row is already terminal — the second is what
+// makes a repeated trigger (both enrichments finishing at once, a completed
+// batch dispatched by two pollers, drive racing OnPhaseComplete) a no-op
+// instead of a second paid call and a second set of results. A true return
+// must be paired with endPhase.
+func (pm *PipelineManager) beginPhase(scanID int, phaseType string) bool {
+	key := fmt.Sprintf("%d:%s", scanID, phaseType)
+	pm.mu.Lock()
+	if pm.running == nil {
+		pm.running = make(map[string]bool)
+	}
+	if pm.running[key] {
+		pm.mu.Unlock()
+		return false
+	}
+	pm.running[key] = true
+	pm.mu.Unlock()
+
+	if p, err := pm.scanStore.GetPhase(scanID, phaseType); err == nil && p != nil && isTerminalPhase(p.Status) {
+		pm.endPhase(scanID, phaseType)
+		return false
+	}
+	return true
+}
+
+// endPhase releases a claim taken by beginPhase.
+func (pm *PipelineManager) endPhase(scanID int, phaseType string) {
+	pm.mu.Lock()
+	delete(pm.running, fmt.Sprintf("%d:%s", scanID, phaseType))
+	pm.mu.Unlock()
+}
+
+// phaseClaimed reports whether a goroutine in this process holds a phase.
+func (pm *PipelineManager) phaseClaimed(scanID int, phaseType string) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.running[fmt.Sprintf("%d:%s", scanID, phaseType)]
 }
 
 // waitForScan blocks until the scan reaches a terminal state, the operation's
 // context is canceled, and heartbeats progress in the meantime so the registry
 // watchdog does not mistake a legitimately quiet batch wait for a stuck op.
-func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, done <-chan error) error {
+//
+// For a batch scan each heartbeat also polls the scan's own batches. The
+// batch poller's author_review / author_dedup handlers collect them too, but
+// only for a batch that is "completed" AND in the first page of the project's
+// batch listing; a failed or expired batch, or one pushed off that page by
+// other traffic, is only ever seen here.
+func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, mode string, done <-chan error) error {
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 
@@ -390,6 +585,9 @@ func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, done <-c
 			return ctx.Err()
 
 		case <-ticker.C:
+			if mode == "batch" {
+				pm.pollScanBatches(ctx, scanID)
+			}
 			phases, err := pm.scanStore.GetPhases(scanID)
 			if err != nil {
 				continue
@@ -528,20 +726,16 @@ func (pm *PipelineManager) buildFullInput(authors []database.Author) []ai.Author
 }
 
 // groupsSuggestionsToScanSuggestions converts AI groups suggestions to normalized ScanSuggestions.
-func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, groups []dedup.AuthorDedupGroup) []database.ScanSuggestion {
+func groupsSuggestionsToScanSuggestions(suggestions []ai.AuthorDedupSuggestion, groupIDs [][]int) []database.ScanSuggestion {
 	var result []database.ScanSuggestion
 	for _, s := range suggestions {
 		// Normalize initials formatting
 		canonicalName := dedup.NormalizeAuthorName(s.CanonicalName)
 
-		// Build author IDs from the group
+		// Author IDs of the group the model was asked about
 		var authorIDs []int
-		if s.GroupIndex >= 0 && s.GroupIndex < len(groups) {
-			g := groups[s.GroupIndex]
-			authorIDs = append(authorIDs, g.Canonical.ID)
-			for _, v := range g.Variants {
-				authorIDs = append(authorIDs, v.ID)
-			}
+		if s.GroupIndex >= 0 && s.GroupIndex < len(groupIDs) {
+			authorIDs = append(authorIDs, groupIDs[s.GroupIndex]...)
 		}
 
 		var rolesJSON json.RawMessage
@@ -589,122 +783,224 @@ func fullSuggestionsToScanSuggestions(suggestions []ai.AuthorDiscoverySuggestion
 
 // Phase implementations
 
+// groupAuthorIDsArtifact names the persisted group -> author-id map a groups
+// phase was built from. The model answers with a group_index, so the answer
+// can only be mapped back to authors through the grouping it was ASKED about;
+// a batch that completes hours later must not be decoded against a grouping
+// rebuilt from whatever the author table holds by then.
+const groupAuthorIDsArtifact = "group_author_ids"
+
+// chunkArtifact names one finished realtime full_scan chunk.
+func chunkArtifact(i int) string { return fmt.Sprintf("chunk:%06d", i) }
+
+// groupAuthorIDs flattens heuristic groups to the author ids of each, in order.
+func groupAuthorIDs(groups []dedup.AuthorDedupGroup) [][]int {
+	out := make([][]int, len(groups))
+	for i, g := range groups {
+		ids := []int{g.Canonical.ID}
+		for _, v := range g.Variants {
+			ids = append(ids, v.ID)
+		}
+		out[i] = ids
+	}
+	return out
+}
+
+// saveGroupAuthorIDs persists the grouping a groups phase is about to ask about.
+func (pm *PipelineManager) saveGroupAuthorIDs(scanID int, groups []dedup.AuthorDedupGroup) error {
+	raw, err := json.Marshal(groupAuthorIDs(groups))
+	if err != nil {
+		return fmt.Errorf("marshal group author ids: %w", err)
+	}
+	return pm.scanStore.SavePhaseArtifact(scanID, "groups_scan", groupAuthorIDsArtifact, raw)
+}
+
+// completeEmptySource finishes a source phase that has nothing to send.
+func (pm *PipelineManager) completeEmptySource(ctx context.Context, scanID int, phaseType string) {
+	emptySuggestions, _ := json.Marshal([]database.ScanSuggestion{})
+	if err := pm.scanStore.SavePhaseData(scanID, phaseType, nil, nil, emptySuggestions); err != nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("save phase data: %w", err))
+		return
+	}
+	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "complete", ""); err != nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("mark %s complete: %w", phaseType, err))
+		return
+	}
+	pm.OnPhaseComplete(ctx, scanID, phaseType)
+}
+
+// finishSource persists a source phase's results, marks it complete and
+// triggers what follows.
+func (pm *PipelineManager) finishSource(ctx context.Context, scanID int, phaseType string, input json.RawMessage, output any, suggestions []database.ScanSuggestion) {
+	outputJSON, _ := json.Marshal(output)
+	suggestionsJSON, _ := json.Marshal(suggestions)
+	if err := pm.scanStore.SavePhaseData(scanID, phaseType, input, outputJSON, suggestionsJSON); err != nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("save phase data: %w", err))
+		return
+	}
+	plog.Info("scan %d: %s complete with %d suggestions", scanID, phaseType, len(suggestions))
+	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "complete", ""); err != nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("mark %s complete: %w", phaseType, err))
+		return
+	}
+	pm.OnPhaseComplete(ctx, scanID, phaseType)
+}
+
 func (pm *PipelineManager) runGroupsScanRealtime(ctx context.Context, scanID int, authors []database.Author) {
-	slog.Info("[AI Pipeline] Scan starting groups scan (realtime)", "scanID", scanID)
+	if !pm.beginPhase(scanID, "groups_scan") {
+		return
+	}
+	defer pm.endPhase(scanID, "groups_scan")
+	plog.Info("scan %d: starting groups scan (realtime)", scanID)
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, "groups_scan", "processing", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating groups_scan status", "scanID", scanID, "err", err)
+		pm.failPhase(scanID, "groups_scan", fmt.Errorf("mark processing: %w", err))
 		return
 	}
 
-	// Build heuristic groups using Jaro-Winkler logic
 	inputs, groups, err := pm.buildGroupsInput(authors)
 	if err != nil {
 		pm.failPhase(scanID, "groups_scan", err)
 		return
 	}
-
 	if len(inputs) == 0 {
-		slog.Info("[AI Pipeline] Scan no duplicate groups found, skipping groups scan", "scanID", scanID)
-		// Save empty results
-		emptySuggestions, _ := json.Marshal([]database.ScanSuggestion{})
-		_ = pm.scanStore.SavePhaseData(scanID, "groups_scan", nil, nil, emptySuggestions)
-		if err := pm.scanStore.UpdatePhaseStatus(scanID, "groups_scan", "complete", ""); err != nil {
-			slog.Error("[AI Pipeline] Scan error updating groups_scan status", "scanID", scanID, "err", err)
-			return
-		}
-		pm.OnPhaseComplete(ctx, scanID, "groups_scan")
+		plog.Info("scan %d: no duplicate groups found, skipping groups scan", scanID)
+		pm.completeEmptySource(ctx, scanID, "groups_scan")
 		return
 	}
 
-	// Save input data
 	inputJSON, _ := json.Marshal(inputs)
-	_ = pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, nil, nil)
+	if err := pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, nil, nil); err != nil {
+		pm.failPhase(scanID, "groups_scan", fmt.Errorf("save phase input: %w", err))
+		return
+	}
 
-	// Call AI
+	// One LLM call: a restart during it re-runs it. There is no partial result
+	// to keep.
 	suggestions, err := pm.parser.ReviewAuthorDuplicates(ctx, inputs)
 	if err != nil {
 		pm.failPhase(scanID, "groups_scan", fmt.Errorf("AI review failed: %w", err))
 		return
 	}
-
-	// Save raw output
-	outputJSON, _ := json.Marshal(suggestions)
-
-	// Convert to normalized ScanSuggestions
-	scanSuggestions := groupsSuggestionsToScanSuggestions(suggestions, groups)
-	suggestionsJSON, _ := json.Marshal(scanSuggestions)
-
-	if err := pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, outputJSON, suggestionsJSON); err != nil {
-		pm.failPhase(scanID, "groups_scan", fmt.Errorf("save phase data: %w", err))
-		return
-	}
-
-	slog.Info("[AI Pipeline] Scan groups scan complete — suggestions from groups", "scanID", scanID, "scanSuggestions_count", len(scanSuggestions), "inputs_count", len(inputs))
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, "groups_scan", "complete", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating groups_scan status", "scanID", scanID, "err", err)
-		return
-	}
-	pm.OnPhaseComplete(ctx, scanID, "groups_scan")
+	pm.finishSource(ctx, scanID, "groups_scan", inputJSON, suggestions,
+		groupsSuggestionsToScanSuggestions(suggestions, groupAuthorIDs(groups)))
 }
 
-func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, authors []database.Author) {
-	slog.Info("[AI Pipeline] Scan starting full scan (realtime)", "scanID", scanID)
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "processing", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating full_scan status", "scanID", scanID, "err", err)
-		return
+// fullScanInputs returns the inputs a full_scan run must use. A phase resumed
+// after a restart reuses the input it persisted before its first LLM call, NOT
+// a rebuild from the live author table: chunk k of a rebuilt list is a
+// different set of authors once anything was added or merged, and the chunks
+// already finished would then no longer line up with the ones still to run.
+func (pm *PipelineManager) fullScanInputs(scanID int, authors []database.Author) ([]ai.AuthorDiscoveryInput, json.RawMessage, error) {
+	if p, err := pm.scanStore.GetPhase(scanID, "full_scan"); err == nil && p != nil && len(p.InputData) > 0 {
+		var inputs []ai.AuthorDiscoveryInput
+		if err := json.Unmarshal(p.InputData, &inputs); err == nil && len(inputs) > 0 {
+			return inputs, p.InputData, nil
+		}
 	}
-
 	inputs := pm.buildFullInput(authors)
 	if len(inputs) == 0 {
-		slog.Info("[AI Pipeline] Scan no authors found, skipping full scan", "scanID", scanID)
-		emptySuggestions, _ := json.Marshal([]database.ScanSuggestion{})
-		_ = pm.scanStore.SavePhaseData(scanID, "full_scan", nil, nil, emptySuggestions)
-		if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "complete", ""); err != nil {
-			slog.Error("[AI Pipeline] Scan error updating full_scan status", "scanID", scanID, "err", err)
-			return
-		}
-		pm.OnPhaseComplete(ctx, scanID, "full_scan")
+		return nil, nil, nil
+	}
+	inputJSON, _ := json.Marshal(inputs)
+	if err := pm.scanStore.SavePhaseData(scanID, "full_scan", inputJSON, nil, nil); err != nil {
+		return nil, nil, fmt.Errorf("save phase input: %w", err)
+	}
+	return inputs, inputJSON, nil
+}
+
+// runFullScanRealtime sends the author list in chunks and persists each
+// chunk's answer the moment it returns. A run resumed after a restart skips
+// every chunk already persisted, so a crash costs at most the one chunk that
+// was in flight — before this, finished chunks lived only in memory until the
+// whole phase ended and a restart discarded all of them.
+func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, authors []database.Author) {
+	if !pm.beginPhase(scanID, "full_scan") {
+		return
+	}
+	defer pm.endPhase(scanID, "full_scan")
+	plog.Info("scan %d: starting full scan (realtime)", scanID)
+	if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "processing", ""); err != nil {
+		pm.failPhase(scanID, "full_scan", fmt.Errorf("mark processing: %w", err))
 		return
 	}
 
-	// Save input data
-	inputJSON, _ := json.Marshal(inputs)
-	_ = pm.scanStore.SavePhaseData(scanID, "full_scan", inputJSON, nil, nil)
+	inputs, inputJSON, err := pm.fullScanInputs(scanID, authors)
+	if err != nil {
+		pm.failPhase(scanID, "full_scan", err)
+		return
+	}
+	if len(inputs) == 0 {
+		plog.Info("scan %d: no authors found, skipping full scan", scanID)
+		pm.completeEmptySource(ctx, scanID, "full_scan")
+		return
+	}
 
-	// Chunk if >500 authors to manage token limits
-	const chunkSize = 500
+	finished, err := pm.scanStore.GetPhaseArtifacts(scanID, "full_scan")
+	if err != nil {
+		pm.failPhase(scanID, "full_scan", fmt.Errorf("load finished chunks: %w", err))
+		return
+	}
+
+	chunkSize := fullScanChunkSize
 	var allDiscoveries []ai.AuthorDiscoverySuggestion
-
-	for start := 0; start < len(inputs); start += chunkSize {
+	resumed := 0
+	for i, start := 0, 0; start < len(inputs); i, start = i+1, start+chunkSize {
 		end := min(start+chunkSize, len(inputs))
-		chunk := inputs[start:end]
+		name := chunkArtifact(i)
 
-		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, chunk)
+		if raw, ok := finished[name]; ok {
+			var saved []ai.AuthorDiscoverySuggestion
+			if err := json.Unmarshal(raw, &saved); err == nil {
+				allDiscoveries = append(allDiscoveries, saved...)
+				resumed++
+				continue
+			}
+			plog.Warn("scan %d: persisted %s is unreadable; requesting it again", scanID, name)
+		}
+
+		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, inputs[start:end])
 		if err != nil {
 			pm.failPhase(scanID, "full_scan", fmt.Errorf("AI discovery failed (chunk %d-%d): %w", start, end, err))
 			return
 		}
+		raw, _ := json.Marshal(discoveries)
+		if err := pm.scanStore.SavePhaseArtifact(scanID, "full_scan", name, raw); err != nil {
+			// The answer is still in hand, so this run loses nothing; only a
+			// restart before the phase ends would have to ask for it again.
+			plog.Warn("scan %d: could not persist %s, a restart would re-request it: %v", scanID, name, err)
+		}
 		allDiscoveries = append(allDiscoveries, discoveries...)
 	}
-
-	// Save raw output
-	outputJSON, _ := json.Marshal(allDiscoveries)
-
-	// Convert to normalized ScanSuggestions
-	scanSuggestions := fullSuggestionsToScanSuggestions(allDiscoveries)
-	suggestionsJSON, _ := json.Marshal(scanSuggestions)
-
-	if err := pm.scanStore.SavePhaseData(scanID, "full_scan", inputJSON, outputJSON, suggestionsJSON); err != nil {
-		pm.failPhase(scanID, "full_scan", fmt.Errorf("save phase data: %w", err))
-		return
+	if resumed > 0 {
+		plog.Info("scan %d: full scan reused %d persisted chunks", scanID, resumed)
 	}
 
-	slog.Info("[AI Pipeline] Scan full scan complete — suggestions from authors", "scanID", scanID, "scanSuggestions_count", len(scanSuggestions), "inputs_count", len(inputs))
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "complete", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating full_scan status", "scanID", scanID, "err", err)
+	pm.finishSource(ctx, scanID, "full_scan", inputJSON, allDiscoveries,
+		fullSuggestionsToScanSuggestions(allDiscoveries))
+}
+
+// submitBatch records "submitting" BEFORE CreateBatch, then the batch id
+// after. The pre-submit write is what makes a crash inside CreateBatch
+// recoverable: without it the phase still reads "pending" after a restart and
+// the resume launches — and pays for — a second batch. With it, drive knows the
+// batch may exist and re-attaches through reattachSubmitting.
+func (pm *PipelineManager) submitBatch(scanID int, phaseType string, create func() (string, error)) {
+	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitting", ""); err != nil {
+		// Never create a batch this process could not account for after a crash.
+		pm.failPhase(scanID, phaseType, fmt.Errorf("mark submitting: %w", err))
 		return
 	}
-	pm.OnPhaseComplete(ctx, scanID, "full_scan")
+	batchID, err := create()
+	if err != nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("create batch: %w", err))
+		return
+	}
+	plog.Info("scan %d: %s batch submitted as %s", scanID, phaseType, batchID)
+	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
+		// The row stays "submitting"; a restart re-attaches by metadata.
+		plog.Error("scan %d: could not record batch %s for %s: %v", scanID, batchID, phaseType, err)
+	}
+	// The collector (heartbeat or batch poller) finishes it.
 }
 
 // scanBatchOwner is the batch metadata naming the scan phase that owns a batch.
@@ -719,77 +1015,64 @@ func scanBatchOwner(scanID int, phaseType string) map[string]string {
 }
 
 func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, authors []database.Author) {
-	slog.Info("[AI Pipeline] Scan starting groups scan (batch)", "scanID", scanID)
+	if !pm.beginPhase(scanID, "groups_scan") {
+		return
+	}
+	defer pm.endPhase(scanID, "groups_scan")
+	plog.Info("scan %d: starting groups scan (batch)", scanID)
 
-	inputs, _, err := pm.buildGroupsInput(authors)
+	inputs, groups, err := pm.buildGroupsInput(authors)
 	if err != nil {
 		pm.failPhase(scanID, "groups_scan", err)
 		return
 	}
-
 	if len(inputs) == 0 {
-		slog.Info("[AI Pipeline] Scan no duplicate groups found, marking groups scan complete", "scanID", scanID)
-		emptySuggestions, _ := json.Marshal([]database.ScanSuggestion{})
-		_ = pm.scanStore.SavePhaseData(scanID, "groups_scan", nil, nil, emptySuggestions)
-		if err := pm.scanStore.UpdatePhaseStatus(scanID, "groups_scan", "complete", ""); err != nil {
-			slog.Error("[AI Pipeline] Scan error updating groups_scan status", "scanID", scanID, "err", err)
-		}
-		pm.OnPhaseComplete(ctx, scanID, "groups_scan")
+		plog.Info("scan %d: no duplicate groups found, marking groups scan complete", scanID)
+		pm.completeEmptySource(ctx, scanID, "groups_scan")
 		return
 	}
 
-	// Save input data
 	inputJSON, _ := json.Marshal(inputs)
-	_ = pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, nil, nil)
-
-	// Create the batch job
-	batchID, err := pm.parser.CreateBatchAuthorReview(ctx, inputs, scanBatchOwner(scanID, "groups_scan"))
-	if err != nil {
-		pm.failPhase(scanID, "groups_scan", fmt.Errorf("create batch: %w", err))
+	if err := pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, nil, nil); err != nil {
+		pm.failPhase(scanID, "groups_scan", fmt.Errorf("save phase input: %w", err))
 		return
 	}
-
-	slog.Info("[AI Pipeline] Scan groups batch submitted — batch_id", "scanID", scanID, "batchID", batchID)
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, "groups_scan", "submitted", batchID); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating groups_scan status", "scanID", scanID, "err", err)
+	if err := pm.saveGroupAuthorIDs(scanID, groups); err != nil {
+		pm.failPhase(scanID, "groups_scan", err)
+		return
 	}
-	// Scheduler will poll for completion
+	pm.submitBatch(scanID, "groups_scan", func() (string, error) {
+		return pm.parser.CreateBatchAuthorReview(ctx, inputs, scanBatchOwner(scanID, "groups_scan"))
+	})
 }
 
 func (pm *PipelineManager) runFullScanBatch(ctx context.Context, scanID int, authors []database.Author) {
-	slog.Info("[AI Pipeline] Scan starting full scan (batch)", "scanID", scanID)
-
-	inputs := pm.buildFullInput(authors)
-	if len(inputs) == 0 {
-		slog.Info("[AI Pipeline] Scan no authors found, marking full scan complete", "scanID", scanID)
-		emptySuggestions, _ := json.Marshal([]database.ScanSuggestion{})
-		_ = pm.scanStore.SavePhaseData(scanID, "full_scan", nil, nil, emptySuggestions)
-		if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "complete", ""); err != nil {
-			slog.Error("[AI Pipeline] Scan error updating full_scan status", "scanID", scanID, "err", err)
-		}
-		pm.OnPhaseComplete(ctx, scanID, "full_scan")
+	if !pm.beginPhase(scanID, "full_scan") {
 		return
 	}
+	defer pm.endPhase(scanID, "full_scan")
+	plog.Info("scan %d: starting full scan (batch)", scanID)
 
-	// Save input data
-	inputJSON, _ := json.Marshal(inputs)
-	_ = pm.scanStore.SavePhaseData(scanID, "full_scan", inputJSON, nil, nil)
-
-	// Create the batch job
-	batchID, err := pm.parser.CreateBatchAuthorDedup(ctx, inputs, scanBatchOwner(scanID, "full_scan"))
+	inputs, _, err := pm.fullScanInputs(scanID, authors)
 	if err != nil {
-		pm.failPhase(scanID, "full_scan", fmt.Errorf("create batch: %w", err))
+		pm.failPhase(scanID, "full_scan", err)
 		return
 	}
-
-	slog.Info("[AI Pipeline] Scan full batch submitted — batch_id", "scanID", scanID, "batchID", batchID)
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, "full_scan", "submitted", batchID); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating full_scan status", "scanID", scanID, "err", err)
+	if len(inputs) == 0 {
+		plog.Info("scan %d: no authors found, marking full scan complete", scanID)
+		pm.completeEmptySource(ctx, scanID, "full_scan")
+		return
 	}
-	// Scheduler will poll for completion
+	pm.submitBatch(scanID, "full_scan", func() (string, error) {
+		return pm.parser.CreateBatchAuthorDedup(ctx, inputs, scanBatchOwner(scanID, "full_scan"))
+	})
 }
 
 func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, sourcePhase, enrichPhase string) {
+	if !pm.beginPhase(scanID, enrichPhase) {
+		return
+	}
+	defer pm.endPhase(scanID, enrichPhase)
 	slog.Info("[AI Pipeline] Scan starting enrichment for", "scanID", scanID, "sourcePhase", sourcePhase)
 	if _, err := pm.scanStore.CreatePhase(scanID, enrichPhase, ""); err != nil {
 		slog.Error("[AI Pipeline] Scan error creating phase", "scanID", scanID, "enrichPhase", enrichPhase, "err", err)
@@ -959,8 +1242,15 @@ func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, source
 }
 
 func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
-	slog.Info("[AI Pipeline] Scan starting cross-validation", "scanID", scanID)
-	// Each of these three bailouts used to `return` bare, which left the scan
+	// Both enrichment phases trigger this, and they can finish at the same
+	// moment; drive can trigger it again after a restart. beginPhase makes all
+	// but one of those a no-op.
+	if !pm.beginPhase(scanID, "cross_validate") {
+		return
+	}
+	defer pm.endPhase(scanID, "cross_validate")
+	plog.Info("scan %d: starting cross-validation", scanID)
+	// Each of these bailouts used to `return` bare, which left the scan
 	// sitting at "scanning" forever and leaked its cancel func — so CancelScan
 	// still believed the scan was live. Routing them through failPhase marks the
 	// scan failed AND releases the waiting operation; a bare return here would
@@ -981,26 +1271,29 @@ func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
 
 	results := CrossValidate(scanID, groupsSuggestions, fullSuggestions)
 
-	// Save results
-	for i := range results {
-		if err := pm.scanStore.SaveScanResult(&results[i]); err != nil {
-			slog.Error("[AI Pipeline] Scan error saving result", "scanID", scanID, "err", err)
-		}
+	// Replace, never append: a re-run (restart mid-phase, or a duplicate
+	// trigger) must leave one set of results, not a second copy of each.
+	if err := pm.scanStore.ReplaceScanResults(scanID, results); err != nil {
+		pm.failPhase(scanID, "cross_validate", fmt.Errorf("save results: %w", err))
+		return
 	}
 
-	slog.Info("[AI Pipeline] Scan cross-validation complete — results", "scanID", scanID, "results_count", len(results))
+	plog.Info("scan %d: cross-validation complete with %d results", scanID, len(results))
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, "cross_validate", "complete", ""); err != nil {
 		pm.failPhase(scanID, "cross_validate", fmt.Errorf("mark cross_validate complete: %w", err))
 		return
 	}
+	pm.completeScan(scanID)
+}
+
+// completeScan marks a scan whose cross-validation finished as complete and
+// releases the operation waiting on it — the scan's only success path. A nil
+// outcome is what marks the operation completed.
+func (pm *PipelineManager) completeScan(scanID int) {
 	if err := pm.scanStore.UpdateScanStatus(scanID, "complete"); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating scan status", "scanID", scanID, "err", err)
+		plog.Error("scan %d: could not mark scan complete: %v", scanID, err)
 	}
-
-	pm.report(scanID, 100, 100, fmt.Sprintf("AI scan complete — %d results", len(results)))
-
-	// The scan's only success path. A nil outcome is what marks the operation
-	// completed; there is no separate "write completed status" call any more.
+	pm.report(scanID, 100, 100, "AI scan complete")
 	pm.finishScan(scanID, nil)
 }
 
@@ -1027,103 +1320,128 @@ func (pm *PipelineManager) loadBestSuggestions(scanID int, enrichPhase, original
 	return nil
 }
 
-// PollBatchPhases checks all "submitted" batch phases and completes them if the batch is done.
-// Called periodically by the scheduler.
+// PollBatchPhases advances every batch scan that is still scanning: it
+// re-attaches phases left "submitting" whose batch can be found by metadata,
+// and collects submitted batches that finished. The batch poller calls it from
+// its author_review / author_dedup handlers, and each attached RunScan calls
+// pollScanBatches for its own scan on every heartbeat. Running it more than
+// once, or concurrently, is safe: collection claims the phase and re-checks
+// the persisted row, so a batch is downloaded and applied once.
 func (pm *PipelineManager) PollBatchPhases(ctx context.Context) {
-	// Get all scans that are in "scanning" status
 	scans, err := pm.scanStore.ListScans()
 	if err != nil {
-		slog.Error("[AI Pipeline] Error listing scans for batch polling", "err", err)
+		plog.Error("listing scans for batch polling: %v", err)
 		return
 	}
-
 	for _, scan := range scans {
-		if scan.Status != "scanning" {
+		if scan.Status != "scanning" || scan.Mode != "batch" {
 			continue
 		}
-		if scan.Mode != "batch" {
-			continue
-		}
+		pm.pollScanBatches(ctx, scan.ID)
+	}
+}
 
-		phases, err := pm.scanStore.GetPhases(scan.ID)
-		if err != nil {
-			continue
-		}
-
-		for _, phase := range phases {
-			if phase.Status != "submitted" || phase.BatchID == "" {
-				continue
+// pollScanBatches advances the batch phases of one scan.
+func (pm *PipelineManager) pollScanBatches(ctx context.Context, scanID int) {
+	phases, err := pm.scanStore.GetPhases(scanID)
+	if err != nil {
+		plog.Error("scan %d: reading phases for batch polling: %v", scanID, err)
+		return
+	}
+	for _, phase := range phases {
+		switch {
+		case phase.Status == "submitting" && !pm.phaseClaimed(scanID, phase.PhaseType):
+			// Left by a process that died inside CreateBatch. Attach if the
+			// batch is findable; deciding to re-submit is drive's job, at
+			// RunScan time, never a poller's.
+			if batchID, found, err := pm.findScanBatch(ctx, scanID, phase.PhaseType); err == nil && found {
+				if err := pm.scanStore.UpdatePhaseStatus(scanID, phase.PhaseType, "submitted", batchID); err == nil {
+					plog.Info("scan %d: re-attached %s to batch %s", scanID, phase.PhaseType, batchID)
+				}
 			}
-
+		case phase.Status == "submitted" && phase.BatchID != "":
 			status, outputFileID, err := pm.parser.CheckBatchStatus(ctx, phase.BatchID)
 			if err != nil {
-				slog.Error("[AI Pipeline] Scan error polling batch", "scan", scan.ID, "phase", phase.BatchID, "err", err)
+				plog.Error("scan %d: polling batch %s: %v", scanID, phase.BatchID, err)
 				continue
 			}
-
 			switch status {
 			case "completed":
-				pm.handleBatchComplete(ctx, scan.ID, phase, outputFileID)
+				pm.handleBatchComplete(ctx, scanID, phase.PhaseType, outputFileID)
 			case "failed", "expired", "cancelled":
-				pm.failPhase(scan.ID, phase.PhaseType, fmt.Errorf("batch %s: %s", phase.BatchID, status))
+				pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("batch %s: %s", phase.BatchID, status))
 			default:
-				// Still processing — do nothing
-				slog.Info("[AI Pipeline] Scan batch status", "scan", scan.ID, "phase", phase.BatchID, "status", status)
+				plog.Debug("scan %d: batch %s status %s", scanID, phase.BatchID, status)
 			}
 		}
 	}
 }
 
-// handleBatchComplete downloads and processes results for a completed batch phase.
-func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, phase database.ScanPhase, outputFileID string) {
-	slog.Info("[AI Pipeline] Scan batch completed, downloading results", "scanID", scanID, "phase", phase.BatchID)
+// batchGroupAuthorIDs returns the grouping a groups batch was submitted with.
+// Scans submitted before that grouping was persisted fall back to rebuilding
+// it from the current author table, which is what every scan did until then.
+func (pm *PipelineManager) batchGroupAuthorIDs(scanID int) ([][]int, error) {
+	arts, err := pm.scanStore.GetPhaseArtifacts(scanID, "groups_scan")
+	if err != nil {
+		return nil, fmt.Errorf("load group author ids: %w", err)
+	}
+	if raw, ok := arts[groupAuthorIDsArtifact]; ok {
+		var ids [][]int
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			return nil, fmt.Errorf("decode group author ids: %w", err)
+		}
+		return ids, nil
+	}
+	authors, err := pm.mainStore.GetAllAuthors()
+	if err != nil {
+		return nil, fmt.Errorf("get authors for mapping: %w", err)
+	}
+	_, groups, err := pm.buildGroupsInput(authors)
+	if err != nil {
+		return nil, fmt.Errorf("build groups for mapping: %w", err)
+	}
+	return groupAuthorIDs(groups), nil
+}
 
-	switch phase.PhaseType {
+// handleBatchComplete downloads and applies a completed batch phase, exactly
+// once: it claims the phase and proceeds only while the persisted row still
+// reads "submitted", so a second poller (or the same batch dispatched again
+// after a restart) finds it complete and does nothing.
+func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, phaseType, outputFileID string) {
+	if !pm.beginPhase(scanID, phaseType) {
+		return
+	}
+	defer pm.endPhase(scanID, phaseType)
+	phase, err := pm.scanStore.GetPhase(scanID, phaseType)
+	if err != nil || phase == nil || phase.Status != "submitted" {
+		return
+	}
+	plog.Info("scan %d: batch %s completed, downloading results", scanID, phase.BatchID)
+
+	switch phaseType {
 	case "groups_scan":
 		suggestions, err := pm.parser.DownloadBatchGroupsResults(ctx, outputFileID)
 		if err != nil {
-			pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("download batch results: %w", err))
+			pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results: %w", err))
 			return
 		}
-
-		// Rebuild groups to map group_index to author IDs
-		authors, err := pm.mainStore.GetAllAuthors()
+		groupIDs, err := pm.batchGroupAuthorIDs(scanID)
 		if err != nil {
-			pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("get authors for mapping: %w", err))
+			pm.failPhase(scanID, phaseType, err)
 			return
 		}
-		_, groups, err := pm.buildGroupsInput(authors)
-		if err != nil {
-			pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("build groups for mapping: %w", err))
-			return
-		}
-
-		outputJSON, _ := json.Marshal(suggestions)
-		scanSuggestions := groupsSuggestionsToScanSuggestions(suggestions, groups)
-		suggestionsJSON, _ := json.Marshal(scanSuggestions)
-
-		_ = pm.scanStore.SavePhaseData(scanID, phase.PhaseType, phase.InputData, outputJSON, suggestionsJSON)
+		pm.finishSource(ctx, scanID, phaseType, phase.InputData, suggestions,
+			groupsSuggestionsToScanSuggestions(suggestions, groupIDs))
 
 	case "full_scan":
 		discoveries, err := pm.parser.DownloadBatchResults(ctx, outputFileID)
 		if err != nil {
-			pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("download batch results: %w", err))
+			pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results: %w", err))
 			return
 		}
-
-		outputJSON, _ := json.Marshal(discoveries)
-		scanSuggestions := fullSuggestionsToScanSuggestions(discoveries)
-		suggestionsJSON, _ := json.Marshal(scanSuggestions)
-
-		_ = pm.scanStore.SavePhaseData(scanID, phase.PhaseType, phase.InputData, outputJSON, suggestionsJSON)
+		pm.finishSource(ctx, scanID, phaseType, phase.InputData, discoveries,
+			fullSuggestionsToScanSuggestions(discoveries))
 	}
-
-	slog.Info("[AI Pipeline] Scan batch results processed", "scanID", scanID, "phase", phase.PhaseType)
-	if err := pm.scanStore.UpdatePhaseStatus(scanID, phase.PhaseType, "complete", ""); err != nil {
-		slog.Error("[AI Pipeline] Scan error updating status", "scanID", scanID, "phase", phase.PhaseType, "err", err)
-		return
-	}
-	pm.OnPhaseComplete(ctx, scanID, phase.PhaseType)
 }
 
 // idsKey creates a string key from a sorted list of IDs for map lookup.

@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.1.0
-// last-edited: 2026-09-08
+// version: 2.2.0
+// last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -32,6 +32,9 @@ import (
 //   - scan:<id>                 -> Scan JSON
 //   - scan_phase:<scanID>:<phaseType> -> ScanPhase JSON
 //   - scan_result:<scanID>:<resultID> -> ScanResult JSON
+//   - scan_artifact:<scanID>:<phaseType>:<name> -> raw JSON a phase persisted
+//     mid-flight so a restart can continue it (finished realtime chunks, the
+//     group->author-id map a batch was submitted with)
 type AIScanStore struct {
 	db     *pebble.DB
 	prefix string // "aiscan:" when shared, "" when standalone
@@ -54,7 +57,7 @@ type Scan struct {
 type ScanPhase struct {
 	ScanID      int             `json:"scan_id"`
 	PhaseType   string          `json:"phase_type"` // groups_scan, full_scan, groups_enrich, full_enrich, cross_validate
-	Status      string          `json:"status"`     // pending, submitted, processing, complete, failed
+	Status      string          `json:"status"`     // pending, submitting, submitted, processing, complete, failed, canceled
 	BatchID     string          `json:"batch_id,omitempty"`
 	Model       string          `json:"model"`
 	InputData   json.RawMessage `json:"input_data,omitempty"`
@@ -335,6 +338,92 @@ func (s *AIScanStore) DeleteScan(id int) error {
 	}
 	resultIter.Close()
 
+	// Delete all phase artifacts for this scan.
+	if err := s.deletePrefix(batch, s.k("scan_artifact:%d:", id)); err != nil {
+		return err
+	}
+
+	return batch.Commit(pebble.Sync)
+}
+
+// deletePrefix queues a delete of every key under prefix onto batch.
+func (s *AIScanStore) deletePrefix(batch *pebble.Batch, prefix []byte) error {
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: append(append([]byte{}, prefix...), 0xff),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		if err := batch.Delete(append([]byte{}, iter.Key()...), pebble.Sync); err != nil {
+			return fmt.Errorf("queue delete: %w", err)
+		}
+	}
+	return nil
+}
+
+// SavePhaseArtifact durably records one named piece of a phase's in-flight
+// work. It exists so a restart can continue a phase instead of redoing it: a
+// realtime full_scan writes each finished chunk here the moment its LLM call
+// returns, and a resumed run skips every chunk already present. Writing the
+// same name twice overwrites, so a re-run chunk cannot be counted twice.
+func (s *AIScanStore) SavePhaseArtifact(scanID int, phaseType, name string, data json.RawMessage) error {
+	if err := s.db.Set(s.k("scan_artifact:%d:%s:%s", scanID, phaseType, name), data, pebble.Sync); err != nil {
+		return fmt.Errorf("save artifact %s/%s for scan %d: %w", phaseType, name, scanID, err)
+	}
+	return nil
+}
+
+// GetPhaseArtifacts returns every artifact saved for one phase of a scan,
+// keyed by name. An empty map, not an error, when there are none.
+func (s *AIScanStore) GetPhaseArtifacts(scanID int, phaseType string) (map[string]json.RawMessage, error) {
+	prefix := s.k("scan_artifact:%d:%s:", scanID, phaseType)
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: append(append([]byte{}, prefix...), 0xff),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	out := make(map[string]json.RawMessage)
+	for iter.First(); iter.Valid(); iter.Next() {
+		name := string(iter.Key()[len(prefix):])
+		out[name] = append(json.RawMessage{}, iter.Value()...)
+	}
+	return out, nil
+}
+
+// ReplaceScanResults atomically replaces every result of a scan with results,
+// assigning fresh IDs. Cross-validation writes through this rather than one
+// SaveScanResult per row so that running it again — after a restart, or when
+// both enrichment phases finish at once and each triggers it — leaves exactly
+// one set of results instead of appending a duplicate of every suggestion.
+func (s *AIScanStore) ReplaceScanResults(scanID int, results []ScanResult) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+
+	if err := s.deletePrefix(batch, s.k("scan_result:%d:", scanID)); err != nil {
+		return err
+	}
+	for i := range results {
+		id, err := s.nextID("scan_result")
+		if err != nil {
+			return fmt.Errorf("failed to generate result ID: %w", err)
+		}
+		results[i].ID = id
+		results[i].ScanID = scanID
+		data, err := json.Marshal(&results[i])
+		if err != nil {
+			return fmt.Errorf("failed to marshal result: %w", err)
+		}
+		if err := batch.Set(s.k("scan_result:%d:%06d", scanID, id), data, pebble.Sync); err != nil {
+			return fmt.Errorf("queue result: %w", err)
+		}
+	}
 	return batch.Commit(pebble.Sync)
 }
 
@@ -379,7 +468,7 @@ func (s *AIScanStore) GetPhase(scanID int, phaseType string) (*ScanPhase, error)
 }
 
 // UpdatePhaseStatus updates the status and optionally the batch ID of a phase.
-// Sets StartedAt on "submitted" or "processing", CompletedAt on "complete" or "failed".
+// Sets StartedAt on "submitting", "submitted" or "processing", CompletedAt on "complete" or "failed".
 func (s *AIScanStore) UpdatePhaseStatus(scanID int, phaseType, status, batchID string) error {
 	phase, err := s.GetPhase(scanID, phaseType)
 	if err != nil {
@@ -395,7 +484,7 @@ func (s *AIScanStore) UpdatePhaseStatus(scanID int, phaseType, status, batchID s
 	}
 
 	now := time.Now()
-	if status == "submitted" || status == "processing" {
+	if status == "submitting" || status == "submitted" || status == "processing" {
 		if phase.StartedAt == nil {
 			phase.StartedAt = &now
 		}
