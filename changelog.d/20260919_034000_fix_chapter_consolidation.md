@@ -8,3 +8,4 @@
 - Running a merge a second time no longer picks up chapters that an earlier merge already absorbed.
 - Chapter merges can now be undone. Each merge saves an undo record before it changes anything, stays away from the iTunes library, moves iTunes IDs to the kept book, and writes a review record listing the kept book, the merged books, their old titles and the files that moved.
 - Merging still defaults to a dry run. A real merge needs a preview first and a confirmation that shows how many book records will be merged.
+- The "Run" button in the Maintenance page's Manual Fixes list no longer makes real changes for jobs that are meant to start as a dry run. It used to ask for a real run every time. Now those jobs only preview, and a real run needs a finished preview plus a confirmation that shows how many items the preview covered. The chapter merge can only be run for real from its own card.
