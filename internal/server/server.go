@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.62.1
+// version: 2.63.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -490,7 +490,9 @@ func NewServer(store database.Store) *Server {
 		// line prints the path with its query string.
 		Formatter: servermiddleware.RedactingLogFormatter,
 	}))
-	router.Use(gin.Recovery())
+	// Not gin.Recovery(): its request dump keeps the query string, which carries
+	// ABS clients' ?token= credential (see RedactingRecovery).
+	router.Use(servermiddleware.RedactingRecovery())
 	router.Use(securityHeadersMiddleware())
 	router.Use(corsMiddleware())
 	router.Use(servermiddleware.BasicAuth())
