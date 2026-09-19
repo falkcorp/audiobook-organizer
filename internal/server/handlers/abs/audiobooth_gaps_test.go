@@ -7,6 +7,7 @@ package abs_test
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -405,5 +406,52 @@ func TestSendEbookToDevice_IsAClearError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Ereader device not found") {
 		t.Fatalf("body %q does not say why", rec.Body.String())
+	}
+}
+
+// Review B2: an ABS batch add racing a native-API rename on the same playlist
+// must keep BOTH. The fake commits the rename between the ABS read and write
+// (exactly what an unlocked native PUT does); the store's version check turns
+// that into a conflict, and the ABS path re-reads and re-applies its add.
+func TestPlaylists_ConcurrentNativeRenameAndABSAddBothLand(t *testing.T) {
+	store := &absplFakeStore{lists: []database.UserPlaylist{{
+		ID: "01RACEPLAYLIST000000000000", Name: "Before", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", Version: 1,
+	}}}
+	h, seed, tok := absplHarness(t, store)
+	single := absplSyncIDFor(t, seed, seed.singleID)
+	store.beforeUpdate = func(f *absplFakeStore) {
+		f.lists[0].Name = "Renamed natively"
+		f.lists[0].Version++
+	}
+	code, body := h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/01RACEPLAYLIST000000000000/batch/add",
+		headers: bearer(tok), body: map[string]any{"items": []map[string]any{{"libraryItemId": single}}}})
+	if code != http.StatusOK {
+		t.Fatalf("batch/add = %d %v", code, body)
+	}
+	got := store.lists[0]
+	if got.Name != "Renamed natively" || !slices.Equal(got.BookIDs, []string{seed.singleID}) {
+		t.Fatalf("stored playlist = name %q books %v; want the native rename AND the ABS add", got.Name, got.BookIDs)
+	}
+}
+
+// Review W1: renaming onto a taken name (any user's — the index is global) is a
+// 409 that does not reveal whose playlist holds it.
+func TestPlaylists_RenameOntoTakenNameIsGenericConflict(t *testing.T) {
+	store := &absplFakeStore{lists: []database.UserPlaylist{
+		{ID: "01THEIRS000000000000000000", Name: "Bedtime", Type: database.UserPlaylistTypeStatic, CreatedByUserID: "other-user"},
+		{ID: "01MINE0000000000000000000", Name: "Commute", Type: database.UserPlaylistTypeStatic, CreatedByUserID: "u1"},
+	}}
+	h, _, tok := absplHarness(t, store)
+	rec, _ := h.do(t, request{method: http.MethodPatch, path: "/api/playlists/01MINE0000000000000000000",
+		headers: bearer(tok), body: map[string]any{"name": "bedtime"}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto a taken name = %d, want 409", rec.Code)
+	}
+	if b := rec.Body.String(); strings.Contains(b, "other-user") || strings.Contains(b, "01THEIRS") {
+		t.Fatalf("conflict body leaks the other playlist: %s", b)
+	}
+	if store.lists[1].Name != "Commute" {
+		t.Fatalf("rename was written: %q", store.lists[1].Name)
 	}
 }

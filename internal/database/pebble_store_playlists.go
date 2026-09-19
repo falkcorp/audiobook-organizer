@@ -1,15 +1,17 @@
 // file: internal/database/pebble_store_playlists.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b93ba897-1377-4cf7-9aea-ca57f135893e
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -139,7 +141,32 @@ func (p *PebbleStore) GetPlaylistItems(playlistID int) ([]PlaylistItem, error) {
 	return items, nil
 }
 
+// ErrUserPlaylistVersionConflict is returned by UpdateUserPlaylist when the
+// caller's Version does not match the stored row's: the playlist changed
+// between the caller's read and its write. Callers re-read, re-apply their
+// change and retry (see UpdateUserPlaylistWithRetry); a whole-record
+// last-writer-wins overwrite is what this exists to prevent.
+var ErrUserPlaylistVersionConflict = errors.New("playlist version conflict")
+
+// ErrUserPlaylistNameInUse is returned by CreateUserPlaylist and
+// UpdateUserPlaylist when another playlist already holds the name (compared
+// after util.NormalizeString). The name index is GLOBAL across users by design
+// (GetUserPlaylistByName, used by the iTunes import, resolves by name alone),
+// so the message is deliberately generic: it confirms only that the caller's
+// own requested name is taken, never whose playlist holds it.
+var ErrUserPlaylistNameInUse = errors.New("a playlist with that name already exists")
+
+// userPlaylistWriteMu serializes every user-playlist write in this process so
+// UpdateUserPlaylist's read → version compare → commit is ATOMIC. Without it two
+// writers (the native /api/v1 handlers and the ABS handlers, or the iTunes
+// dirty-clear) could both read the same Version, both pass the compare, and the
+// second commit would silently drop the first one's change. Playlist writes are
+// rare user actions, so one process-wide lock costs nothing measurable.
+var userPlaylistWriteMu sync.Mutex
+
 func (p *PebbleStore) CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error) {
+	userPlaylistWriteMu.Lock()
+	defer userPlaylistWriteMu.Unlock()
 	if pl == nil || pl.Name == "" {
 		return nil, fmt.Errorf("playlist: name required")
 	}
@@ -158,7 +185,7 @@ func (p *PebbleStore) CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error
 		existing := string(v)
 		closer.Close()
 		if existing != pl.ID {
-			return nil, fmt.Errorf("playlist name %q already in use", pl.Name)
+			return nil, ErrUserPlaylistNameInUse
 		}
 	}
 	now := time.Now()
@@ -302,6 +329,8 @@ func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
 	if pl == nil || pl.ID == "" {
 		return fmt.Errorf("playlist id required")
 	}
+	userPlaylistWriteMu.Lock()
+	defer userPlaylistWriteMu.Unlock()
 	prev, err := p.GetUserPlaylist(pl.ID)
 	if err != nil {
 		return err
@@ -309,6 +338,26 @@ func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
 	if prev == nil {
 		return fmt.Errorf("playlist %s not found", pl.ID)
 	}
+	// Compare-and-swap on Version, atomic under userPlaylistWriteMu. Plain
+	// equality, exactly like UpdateCollection: a caller that read the row has
+	// pl.Version == prev.Version by construction, and a row stored before the
+	// field existed reads back 0 on both sides.
+	if pl.Version != prev.Version {
+		return fmt.Errorf("playlist %s: %w: expected %d, got %d", pl.ID, ErrUserPlaylistVersionConflict, prev.Version, pl.Version)
+	}
+	// The name index is global; a rename onto a name another playlist holds
+	// must be refused, or the index would be silently repointed and the other
+	// playlist would become unreachable by name.
+	if lower := util.NormalizeString(pl.Name); lower != util.NormalizeString(prev.Name) {
+		if v, closer, gerr := p.db.Get([]byte("idx:upl:name:" + lower)); gerr == nil {
+			existing := string(v)
+			closer.Close()
+			if existing != pl.ID {
+				return ErrUserPlaylistNameInUse
+			}
+		}
+	}
+	pl.CreatedAt = prev.CreatedAt
 	pl.UpdatedAt = time.Now()
 	pl.Version = prev.Version + 1
 	data, err := json.Marshal(pl)
@@ -359,6 +408,8 @@ func (p *PebbleStore) UpdateUserPlaylist(pl *UserPlaylist) error {
 }
 
 func (p *PebbleStore) DeleteUserPlaylist(id string) error {
+	userPlaylistWriteMu.Lock()
+	defer userPlaylistWriteMu.Unlock()
 	pl, err := p.GetUserPlaylist(id)
 	if err != nil {
 		return err
