@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
 // last-edited: 2026-09-19
 
@@ -63,6 +63,7 @@ func TestCancelScanCancelsBatchOfSubmittingPhase(t *testing.T) {
 	_ = runAsync(pm1, scan.ID)
 	<-llm1.entered
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 
 	llm2 := newFakeLLM(acct)
 	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2})

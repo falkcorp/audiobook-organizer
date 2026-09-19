@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8a6674cc-107e-46c1-bf79-9bd8302491e2
 // last-edited: 2026-09-19
 
@@ -195,6 +195,7 @@ func TestReattachLookupErrorKeepsSubmitting(t *testing.T) {
 	_ = runAsync(pm1, scan.ID)
 	<-llm1.entered
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 
 	lookupErr := errors.New("list batches: 503")
 	var lookup atomic.Pointer[error]

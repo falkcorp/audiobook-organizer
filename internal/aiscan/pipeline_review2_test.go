@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a536e5a3-ceaa-46f0-a713-da92ab243ef1
 // last-edited: 2026-09-19
 
@@ -159,8 +159,14 @@ func TestLegacyPendingPhaseReattachesNoNonceBatch(t *testing.T) {
 	acct := newFakeAccount()
 	llm := newFakeLLM(acct)
 	pm := NewPipelineManager(store, main, finderLLM{fakeLLM: llm})
-	scan, err := pm.CreateScan("batch")
+	// Built as the pre-PR build did: phases with no submitLedgerArtifact, so a
+	// pending phase is NOT proof that no batch was ever created.
+	scan, err := store.CreateScan("batch", map[string]string{"groups": "gpt-5-mini", "full": "o4-mini"}, 3)
 	require.NoError(t, err)
+	for _, phase := range []string{"groups_scan", "full_scan"} {
+		_, err := store.CreatePhase(scan.ID, phase, "")
+		require.NoError(t, err)
+	}
 	require.NoError(t, store.UpdateScanStatus(scan.ID, "scanning"))
 	require.NoError(t, store.UpdatePhaseStatus(scan.ID, "groups_scan", "complete", ""))
 	acct.mu.Lock()

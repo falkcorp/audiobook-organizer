@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.5.0
+// version: 4.6.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -392,8 +392,39 @@ func (pm *PipelineManager) CreateScan(mode string) (*database.Scan, error) {
 	if _, err := pm.scanStore.CreatePhase(scan.ID, "full_scan", models["full"]); err != nil {
 		return nil, fmt.Errorf("create full phase: %w", err)
 	}
+	for _, sp := range sourcePhases {
+		// Not fatal: an unledgered phase is only resumed the slower, older
+		// way (looked up before any submit), never submitted twice.
+		if err := pm.scanStore.SavePhaseArtifact(scan.ID, sp.scan, submitLedgerArtifact, json.RawMessage("true")); err != nil {
+			plog.Warn("scan %d: could not mark %s submit ledger; a resume will look its batch up first: %v", scan.ID, sp.scan, err)
+		}
+	}
 
 	return scan, nil
+}
+
+// submitLedgerArtifact marks a batch source phase created by a build whose
+// submitBatch persists lastSubmitAtArtifact BEFORE every CreateBatch call. On
+// such a phase, a missing lastSubmitAtArtifact PROVES no batch was ever
+// requested, so a resume can simply submit it. Without the marker (a phase
+// from an older build, which left a phase "pending" until its batch id was
+// recorded) a pending phase may own a batch nobody recorded, and must be
+// looked up first.
+const submitLedgerArtifact = "submit_ledger"
+
+// neverSubmitted reports whether a pending batch source phase provably never
+// reached CreateBatch: it carries submitLedgerArtifact and no
+// lastSubmitAtArtifact. Any doubt — including a failed artifact read — is
+// false, which sends the phase down the lookup path that cannot pay twice.
+func (pm *PipelineManager) neverSubmitted(scanID int, phaseType string) bool {
+	arts, err := pm.scanStore.GetPhaseArtifacts(scanID, phaseType)
+	if err != nil {
+		plog.Warn("scan %d: cannot read %s artifacts; looking its batch up before any submit: %v", scanID, phaseType, err)
+		return false
+	}
+	_, ledgered := arts[submitLedgerArtifact]
+	_, attempted := arts[lastSubmitAtArtifact]
+	return ledgered && !attempted
 }
 
 // LinkOperation records which operation is running a scan.
@@ -479,7 +510,8 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 	// resumed: the scan ran before (its status left "pending"). A pending
 	// batch phase of a resumed scan may already own a batch — before this
 	// build a phase stayed "pending" until its batch id was recorded — so drive
-	// looks it up before submitting.
+	// looks it up before submitting — unless the phase carries
+	// submitLedgerArtifact and so proves it never reached CreateBatch.
 	resumed := scan.Status != "pending"
 	if err := pm.drive(scanCtx, scanID, scan.Mode, resumed); err != nil {
 		pm.finishScan(scanID, nil)
@@ -532,10 +564,17 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, r
 		}
 		switch p.Status {
 		case "pending", "processing":
-			if mode == "batch" && resumed {
+			if mode == "batch" && resumed && !pm.neverSubmitted(scanID, sp.scan) {
 				// Possibly a pre-nonce batch whose id was never recorded
 				// (F4). Settle it like any ambiguous submit: look it up,
 				// submit only on a confirmed absence past the grace.
+				//
+				// A phase that provably never reached CreateBatch skips
+				// this and is launched below. Treating it as ambiguous
+				// failed the whole scan with ErrBatchSubmitUnknown on a
+				// client without a BatchFinder, and with one it cost a
+				// listing and up to submitGrace of waiting — for a phase
+				// that may have had nothing to submit at all.
 				if err := pm.scanStore.UpdatePhaseStatus(scanID, sp.scan, "submitting", ""); err != nil {
 					return fmt.Errorf("mark %s submitting for lookup: %w", sp.scan, err)
 				}
