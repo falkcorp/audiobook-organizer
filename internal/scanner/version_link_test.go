@@ -1,5 +1,5 @@
 // file: internal/scanner/version_link_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8adc2c96-c929-436d-8dae-1fb17ee04210
 // last-edited: 2026-09-19
 
@@ -294,5 +294,36 @@ func TestSmartVersionLink_NoOrphanGroupWhenLinkFails(t *testing.T) {
 
 	if newBook.VersionGroupID != nil {
 		t.Errorf("minted orphan version group %q when no sibling link landed", *newBook.VersionGroupID)
+	}
+}
+
+// The shape the next real scan will hit most often against today's data: the
+// sibling already carries a group and that group has NO primary (one of the
+// 2,586 such groups measured on 2026-09-19). The new row must join THAT group
+// and take primacy, not add another non-primary member to it.
+func TestSmartVersionLink_JoiningZeroPrimaryGroupTakesPrimacy(t *testing.T) {
+	dir := "/lib/Author/Foundation"
+	group := "vg-deadbeefdeadbeef"
+	no := false
+	siblings := []database.Book{
+		{
+			ID: "b1", Title: "Foundation", FilePath: dir + "/Foundation.mp3", Format: "mp3",
+			Duration: intPtr(36000), VersionGroupID: &group, IsPrimaryVersion: &no,
+		},
+	}
+	store := newVLStore(&siblings[0])
+	useVLStore(t, store)
+
+	newBook := &database.Book{Title: "Foundation", FilePath: dir + "/Foundation.m4b", Format: "m4b", Duration: intPtr(36000)}
+	applySmartVersionLink(newBook, siblings, dir)
+
+	if newBook.VersionGroupID == nil || *newBook.VersionGroupID != group {
+		t.Fatalf("new row landed in group %v, want the sibling's %q", newBook.VersionGroupID, group)
+	}
+	if !vlPrimary(t, newBook) {
+		t.Error("joined a group with no primary and stayed non-primary: the group is still invisible")
+	}
+	if store.writes != 0 {
+		t.Errorf("the already-grouped sibling was rewritten %d time(s)", store.writes)
 	}
 }
