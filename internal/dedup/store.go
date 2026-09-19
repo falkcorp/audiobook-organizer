@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -132,6 +132,10 @@ type dedupDuplicateStore interface {
 // for the combine undo journal. Both are on database.Store itself.
 type dedupSplitMergeStore interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	// GetBookFileByID/UpdateBookFile stamp the play order a caller passes in
+	// SplitMergeOptions.FileOrder (numbers journaled; UndoCombine restores).
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
 	merge.CombineJournalWriter
 }
 
