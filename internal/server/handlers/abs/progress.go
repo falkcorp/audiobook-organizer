@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package abs
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -226,15 +227,29 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		state.LastSegmentID = ""
 		state.HideFromContinueListening = false
 		state.LastActivityAt = h.now()
-		// Tombstone: offline sessions that started before this reset must not
-		// replay the discarded position back (session_local_all.go).
+		// Tombstone: offline replay must not bring the discarded position back
+		// (session_local_all.go). It records WHEN (a replayed position last
+		// moved before the reset is stale) and WHERE (a re-stamped backlog
+		// that lands on the old position is stale whatever its timestamp).
 		resetAt := h.now()
 		state.ProgressResetAt = &resetAt
+		state.ProgressResetPositions = appendResetPosition(state.ProgressResetPositions, pos.PositionSeconds)
 	}); err != nil {
 		respondError(c, http.StatusInternalServerError, "could not reset progress")
 		return
 	}
 	respondPlainOK(c)
+}
+
+// appendResetPosition records a discarded position in the reset tombstone,
+// keeping the newest database.MaxProgressResetPositions. It returns a new
+// slice, never aliasing the caller's.
+func appendResetPosition(positions []float64, discarded float64) []float64 {
+	out := append(slices.Clone(positions), discarded)
+	if n := len(out) - database.MaxProgressResetPositions; n > 0 {
+		out = out[n:]
+	}
+	return out
 }
 
 // ── POST /api/me/item/:id/remove-from-continue-listening ────────────────────
