@@ -88,6 +88,13 @@ func TestRecordFullScanResultsReplayKeepsAppliedResults(t *testing.T) {
 func TestRecordFullScanResultsSupersedesUnreviewedPrevious(t *testing.T) {
 	store := newScanStore(t)
 	sugg := []ai.AuthorDiscoverySuggestion{{AuthorIDs: []int{1, 2}, Action: "merge", CanonicalName: "A", Confidence: "high"}}
+	// A pipeline scan (ai.author-scan) nobody applied from: its OperationID is
+	// the op's id, and it must never be superseded by an external run.
+	pipelineScan, err := store.CreateScan("realtime", nil, 2)
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateScanOperationID(pipelineScan.ID, "01J9ZOPERATIONULID000000000"))
+	require.NoError(t, store.UpdateScanStatus(pipelineScan.ID, "complete"))
+
 	first, err := RecordFullScanResults(store, "night-1", sugg)
 	require.NoError(t, err)
 	reviewed, err := RecordFullScanResults(store, "night-2", sugg)
@@ -106,4 +113,5 @@ func TestRecordFullScanResultsSupersedesUnreviewedPrevious(t *testing.T) {
 	require.Equal(t, "superseded", status(first), "unreviewed and replaced")
 	require.Equal(t, "complete", status(reviewed), "a scan someone applied from is never superseded")
 	require.Equal(t, "complete", status(latest))
+	require.Equal(t, "complete", status(pipelineScan.ID), "only ai-dedup-batch scans are ever superseded")
 }
