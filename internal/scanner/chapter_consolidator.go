@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -46,6 +46,11 @@ type ChapterDetectOptions struct {
 	// prefix itself or lies beneath it (directory-boundary match, so "/a/b"
 	// does not match "/a/bc").
 	PathPrefix string
+	// Exclude, when set, removes a book from detection entirely (counted in
+	// SkippedExcluded). The merge job uses it for the owner's manual-only
+	// libraries (Doctor Who / Big Finish / Torchwood) and the active iTunes
+	// library.
+	Exclude func(b *database.BookCore) bool
 }
 
 // ChapterDetection is the full detector output.
@@ -54,6 +59,12 @@ type ChapterDetection struct {
 	// SkippedUnknownDuration counts chapter-shaped groups that were NOT
 	// returned because at least one member's duration is unknown (nil or <= 0).
 	SkippedUnknownDuration int
+	// SkippedDuplicateCopies counts groups that look like several full copies
+	// of one book (identical titles, each about a full book long and nearly
+	// equal, or mixed containers such as .mp3 and .m4b). Those are dedup's job.
+	SkippedDuplicateCopies int
+	// SkippedExcluded counts books removed by ChapterDetectOptions.Exclude.
+	SkippedExcluded int
 }
 
 // stripNumPrefix removes a leading numeric chapter/track number from a filename
@@ -77,33 +88,74 @@ func normForCompare(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// chapterTitlesAreSimilar returns true when two stripped titles are considered
-// the same audiobook: identical after normalisation, one is a prefix of the
-// other, or they share ≥ 80% of words.
-func chapterTitlesAreSimilar(a, b string) bool {
-	na, nb := normForCompare(a), normForCompare(b)
-	if na == nb {
+// chapterTokenRe matches a within-book position token and its number:
+// "Chapter 3", "Part 2", "Track 07", "Disc 1", "CD2", "pt.3". These are the
+// ONLY words allowed to differ between two files of one chapter group. Series
+// and episode numbers ("Book 2", "Volume 3", "Episode 4") are deliberately
+// absent: they name different books.
+var chapterTokenRe = regexp.MustCompile(`(?i)[\s\-_.,:]*\b(chapter|chap|ch|track|trk|part|pt|disc|disk|cd|section)[\s\-_.]*\d+\b`)
+
+// chapterTitleBase strips a stripped title's within-book position tokens and
+// trailing separators, keeping the original casing (used as CommonTitle).
+func chapterTitleBase(stripped string) string {
+	return strings.Trim(chapterTokenRe.ReplaceAllString(stripped, ""), " -_.,:")
+}
+
+// minChapterKeyLen is the shortest normalised base title that may group. An
+// empty or one/two-character title ("It", "01.mp3" with nothing after the
+// number) carries no evidence that two files belong together.
+const minChapterKeyLen = 3
+
+// chapterTitleKey is the grouping key: the normalised base title. Two files
+// group only when their keys are EQUAL -- they differ by nothing but the
+// chapter-number prefix and position tokens. There is no prefix match and no
+// word-overlap score: "Dune" vs "Dune Messiah", "Book 01" vs "Book 02" and
+// "Short Trips Alpha" vs "Short Trips Beta" are all different books. Returns
+// "" for a title too short to group.
+func chapterTitleKey(stripped string) string {
+	k := normForCompare(chapterTitleBase(stripped))
+	if len(strings.ReplaceAll(k, " ", "")) < minChapterKeyLen {
+		return ""
+	}
+	return k
+}
+
+// fullBookSeconds is the per-file length above which a member reads as a
+// whole book rather than a chapter, for the duplicate-copies check.
+const fullBookSeconds = 3600
+
+// looksLikeDuplicateCopies reports whether a would-be group is several copies
+// of one book: mixed audio containers (an .mp3 and an .m4b of the same title),
+// or identical titles whose members are each a full book long and within 10%
+// of each other. Those are dedup's job; merging them would fold two copies of
+// a book into one "book" with twice the running time.
+func looksLikeDuplicateCopies(members []database.BookCore, strippedNorms []string) bool {
+	exts := map[string]bool{}
+	for _, m := range members {
+		exts[strings.ToLower(filepath.Ext(m.FilePath))] = true
+	}
+	if len(exts) > 1 {
 		return true
 	}
-	if strings.HasPrefix(na, nb) || strings.HasPrefix(nb, na) {
-		return true
-	}
-	wa, wb := strings.Fields(na), strings.Fields(nb)
-	if len(wa) == 0 || len(wb) == 0 {
-		return false
-	}
-	setB := make(map[string]struct{}, len(wb))
-	for _, w := range wb {
-		setB[w] = struct{}{}
-	}
-	common := 0
-	for _, w := range wa {
-		if _, ok := setB[w]; ok {
-			common++
+	for _, n := range strippedNorms[1:] {
+		if n != strippedNorms[0] {
+			return false
 		}
 	}
-	longer := max(len(wb), len(wa))
-	return float64(common)/float64(longer) >= 0.80
+	lo, hi := -1, 0
+	for _, m := range members {
+		d := *m.Duration
+		if d < fullBookSeconds {
+			return false
+		}
+		if lo < 0 || d < lo {
+			lo = d
+		}
+		if d > hi {
+			hi = d
+		}
+	}
+	return float64(hi) <= float64(lo)*1.10
 }
 
 // DetectChapterGroups is DetectChapterGroupsWithOptions without a path
@@ -166,7 +218,9 @@ func chapterCandidateEligible(b *database.BookCore) bool {
 // All four heuristics must be satisfied for a group to be returned:
 //  1. Files share the same parent directory.
 //  2. Filenames match a sequential chapter pattern (leading 1-3 digit prefix).
-//  3. After stripping the numeric prefix, base titles are >= 80% similar.
+//  3. After stripping the numeric prefix and within-book position tokens
+//     (chapter/part/track/disc N), the titles are EQUAL and at least
+//     minChapterKeyLen characters long (see chapterTitleKey).
 //  4. Each individual file's duration is < MaxPerFileDuration seconds OR
 //     the group has >= MinFiles files and the average per-file duration is
 //     < 1800 s (30 min).
@@ -198,6 +252,7 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 		base          string
 		chapter       int
 		strippedTitle string
+		key           string
 	}
 
 	// Group candidates by parent directory.
@@ -205,6 +260,10 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 	for i := range books {
 		b := books[i]
 		if !chapterCandidateEligible(&b) {
+			continue
+		}
+		if opts.Exclude != nil && opts.Exclude(&b) {
+			out.SkippedExcluded++
 			continue
 		}
 		if opts.PathPrefix != "" && !pathUnderPrefix(b.FilePath, opts.PathPrefix) {
@@ -216,8 +275,13 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 		if !chapterNumPrefixDetectRe.MatchString(stem) {
 			continue // not a chapter-numbered file
 		}
+		stripped := stripNumPrefix(stem)
+		key := chapterTitleKey(stripped)
+		if key == "" {
+			continue // empty or too-short title: never groups
+		}
 		byDir[dir] = append(byDir[dir], candidate{
-			book: b, base: base, chapter: chapterNumber(stem), strippedTitle: stripNumPrefix(stem),
+			book: b, base: base, chapter: chapterNumber(stem), strippedTitle: stripped, key: key,
 		})
 	}
 
@@ -247,22 +311,18 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 			return a.book.ID < b.book.ID
 		})
 
-		// Sub-group by title similarity: each new candidate either joins an
-		// existing sub-group or starts a new one.
+		// Sub-group by exact title key, in chapter order, so each sub-group's
+		// first candidate is its lowest-numbered chapter.
 		type subGroup struct{ cands []candidate }
 		var sgs []subGroup
+		byKey := map[string]int{}
 		for _, c := range cands {
-			placed := false
-			for i := range sgs {
-				if chapterTitlesAreSimilar(c.strippedTitle, sgs[i].cands[0].strippedTitle) {
-					sgs[i].cands = append(sgs[i].cands, c)
-					placed = true
-					break
-				}
+			if i, ok := byKey[c.key]; ok {
+				sgs[i].cands = append(sgs[i].cands, c)
+				continue
 			}
-			if !placed {
-				sgs = append(sgs, subGroup{cands: []candidate{c}})
-			}
+			byKey[c.key] = len(sgs)
+			sgs = append(sgs, subGroup{cands: []candidate{c}})
 		}
 
 		for _, sg := range sgs {
@@ -289,6 +349,16 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 				out.SkippedUnknownDuration++
 				continue
 			}
+			members := make([]database.BookCore, fc)
+			norms := make([]string, fc)
+			for i, c := range sg.cands {
+				members[i] = c.book
+				norms[i] = normForCompare(c.strippedTitle)
+			}
+			if looksLikeDuplicateCopies(members, norms) {
+				out.SkippedDuplicateCopies++
+				continue
+			}
 			avgSec := totalSec / fc
 
 			// Heuristic 4: all short OR (enough files AND avg short enough).
@@ -303,7 +373,7 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 			out.Groups = append(out.Groups, ChapterGroup{
 				PrimaryBookID: ids[0],
 				BookIDs:       ids,
-				CommonTitle:   sg.cands[0].strippedTitle,
+				CommonTitle:   chapterTitleBase(sg.cands[0].strippedTitle),
 				TotalDuration: float64(totalSec),
 				FileCount:     fc,
 				Directory:     dir,
