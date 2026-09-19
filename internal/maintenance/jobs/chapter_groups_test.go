@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -8,6 +8,8 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -119,22 +121,101 @@ func TestScanChapterGroups_StructuredResultAndParams(t *testing.T) {
 
 	res := chRun(t, &scanChapterGroupsJob{}, s, `{"min_files":3,"max_per_file_duration":600}`, false)
 	if res.GroupsFound != 1 || len(res.Groups) != 1 || res.TotalBooksAffected != 3 {
-		t.Fatalf("want 1 group of 3 (Saga is 900 s x2 < min_files), got %+v", res)
+		t.Fatalf("want 1 group of 3 (Saga has 2 < min_files), got %+v", res)
 	}
 	g := res.Groups[0]
-	if g.CommonTitle != "Tale" || g.FileCount != 3 || g.TotalDuration != 900 || len(g.SourceBookIDs) != 2 {
+	if g.CommonTitle != "Tale" || g.FileCount != 3 || g.TotalDuration != 900 || len(g.SourceBookIDs) != 2 ||
+		g.Confidence == "" || len(g.Reasons) == 0 || len(g.IndexLabels) != 3 {
 		t.Fatalf("group summary wrong: %+v", g)
 	}
 
-	// max_per_file_duration honoured.
-	res = chRun(t, &scanChapterGroupsJob{}, s, `{"min_files":3,"max_per_file_duration":1000}`, false)
+	// max_per_file_duration is advisory: 900 s members still group.
+	res = chRun(t, &scanChapterGroupsJob{}, s, `{"min_files":2,"max_per_file_duration":600}`, false)
 	if res.GroupsFound != 2 {
-		t.Fatalf("max 1000: want 2 groups, got %d", res.GroupsFound)
+		t.Fatalf("min 2: want 2 groups, got %d", res.GroupsFound)
 	}
 	// path_prefix honoured.
-	res = chRun(t, &scanChapterGroupsJob{}, s, `{"max_per_file_duration":1000,"path_prefix":"/lib/B"}`, false)
+	res = chRun(t, &scanChapterGroupsJob{}, s, `{"path_prefix":"/lib/B"}`, false)
 	if res.GroupsFound != 1 || res.Groups[0].CommonTitle != "Saga" {
 		t.Fatalf("prefix /lib/B: want only Saga, got %+v", res.Groups)
+	}
+}
+
+// chSeedBare creates n single-file records titled only by their position
+// ("1", "2", ...) in dir, file "<name> - N.mp3", no durations known.
+func chSeedBare(t *testing.T, s *database.PebbleStore, dir, name string, n int) []*database.Book {
+	t.Helper()
+	out := make([]*database.Book, n)
+	for i := n; i >= 1; i-- {
+		path := fmt.Sprintf("%s/%s - %d.mp3", dir, name, i)
+		b := ddMustBook(t, s, &database.Book{Title: fmt.Sprint(i), FilePath: path})
+		ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path})
+		out[i-1] = b
+	}
+	return out
+}
+
+// The owner's shape: records titled "1".."N" with no known duration. The scan
+// reports them with the folder's name as the proposed title, a non-primary
+// run is reported blocked with the reason, and a reviewed merge replaces the
+// bare "1" title and is undoable.
+func TestChapterGroups_BareNumberTitlesScanAndMerge(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedBare(t, s, "/lib/A/Eldritch", "Eldritch", 4)
+	copies := chSeedBare(t, s, "/lib/B/Wyrm", "Wyrm", 3)
+	no := false
+	for _, b := range copies {
+		if _, err := s.ModifyBook(b.ID, func(x *database.Book) error { x.IsPrimaryVersion = &no; return nil }); err != nil {
+			t.Fatalf("ModifyBook: %v", err)
+		}
+	}
+
+	scan := chRun(t, &scanChapterGroupsJob{}, s, `{}`, false)
+	if scan.GroupsFound != 1 || scan.GroupsBlocked != 1 || len(scan.Groups) != 2 {
+		t.Fatalf("want 1 mergeable + 1 blocked group, got %+v", scan)
+	}
+	if g := scan.Groups[0]; g.CommonTitle != "Eldritch" || g.PrimaryBookID != books[0].ID || g.DurationsKnown != 0 {
+		t.Fatalf("bare group wrong: %+v", g)
+	}
+	if g := scan.Groups[1]; g.Status != "blocked" || len(g.Blockers) == 0 || !strings.Contains(g.Blockers[0], "non-primary") {
+		t.Fatalf("non-primary run not reported blocked: %+v", g)
+	}
+
+	res := chPreviewThenApply(t, s)
+	if res.BooksMerged != 3 || res.GroupsFailed != 0 {
+		t.Fatalf("merge summary wrong: %+v", res)
+	}
+	primary := ddMustGet(t, s, books[0].ID)
+	if primary.Title != "Eldritch" {
+		t.Fatalf("bare primary title not replaced: %q", primary.Title)
+	}
+	var journal string
+	for _, g := range res.Groups {
+		if g.PrimaryBookID == books[0].ID {
+			journal = g.JournalID
+		}
+	}
+	if journal == "" {
+		t.Fatalf("no journal for the merged group: %+v", res.Groups)
+	}
+	if _, err := merge.NewService(s).UndoCombine(journal); err != nil {
+		t.Fatalf("UndoCombine: %v", err)
+	}
+	if got := ddMustGet(t, s, books[0].ID); got.Title != "1" {
+		t.Fatalf("undo did not restore the primary title: %q", got.Title)
+	}
+}
+
+// A member an earlier merge already made multi-file is not a single-file
+// chapter record: the preview blocks the group rather than folding a whole
+// book in as a "chapter".
+func TestMergeChapterGroups_MultiFileMemberBlocks(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
+	ddMustFile(t, s, &database.BookFile{BookID: books[1].ID, FilePath: "/lib/A/Tale/02b - Tale.mp3", Duration: 300})
+	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if len(res.Groups) != 1 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "has 2 files") {
+		t.Fatalf("multi-file member not blocked: %+v", res.Groups)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: web/src/components/system/ChapterConsolidationCard.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: dad38fac-1352-4ced-9735-5811865fa668
 // last-edited: 2026-09-19
 
@@ -32,7 +32,6 @@ function result(over: Partial<api.ChapterGroupsResult>): api.ChapterGroupsResult
     params: { dry_run: true, min_files: 2, max_per_file_duration: 600 },
     groups_found: 1,
     total_books_affected: 3,
-    groups_skipped_unknown_duration: 0,
     books_merged: 2,
     books_skipped: 0,
     groups_failed: 0,
@@ -76,6 +75,33 @@ describe('ChapterConsolidationCard', () => {
     expect(screen.getByTestId('chapter-summary')).toHaveTextContent(
       'Found 1 group(s) affecting 3 book record(s).'
     );
+  });
+
+  it('a scan lists blocked groups with their reasons, confidence and gaps', async () => {
+    mockRun(
+      result({
+        job: 'scan-chapter-groups',
+        groups_blocked: 1,
+        groups: [
+          { ...group, confidence: 'medium', gaps: ['7'] },
+          {
+            ...group,
+            primary_book_id: 'nb01',
+            book_ids: ['nb01', 'nb02'],
+            source_book_ids: ['nb02'],
+            status: 'blocked',
+            blockers: ['all 2 members are non-primary versions'],
+          },
+        ],
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scan for Chapter Groups' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    expect(screen.getByTestId('chapter-summary')).toHaveTextContent('1 more blocked');
+    fireEvent.click(screen.getByRole('button', { name: /Show 2 group/ }));
+    expect(screen.getByText(/medium confidence · missing 7/)).toBeInTheDocument();
+    expect(screen.getByText(/blocked: all 2 members are non-primary versions/)).toBeInTheDocument();
   });
 
   it('Preview Merge runs the merge job as a dry run', async () => {

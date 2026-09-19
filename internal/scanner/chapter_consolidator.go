@@ -1,16 +1,20 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 1.3.0
+// version: 2.0.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
 package scanner
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -19,52 +23,91 @@ import (
 // "01 - ", "02. ", "003:", "1 " etc. — must be at the start of the stem.
 var chapterNumPrefixDetectRe = regexp.MustCompile(`^\d{1,3}[\s\-_\.\:]+`)
 
-// ChapterGroup is a set of book IDs that belong to the same multi-part audiobook.
+// Confidence levels a detected group carries.
+const (
+	ChapterConfidenceHigh   = "high"
+	ChapterConfidenceMedium = "medium"
+	ChapterConfidenceLow    = "low"
+)
+
+// ChapterGroup is a set of single-file book records that are one multi-file
+// audiobook split into one record per chapter.
 //
-// BookIDs is ordered by chapter number (the numeric filename prefix, then the
-// file name, then the ID as a final tie-break), so the order is deterministic
-// whatever order the store listed the rows in. PrimaryBookID is BookIDs[0] --
-// the lowest-numbered chapter -- and is the book a merge folds the others into.
+// BookIDs is in chapter order -- (disc, index), then file name, then ID -- so
+// the order is deterministic whatever order the store listed the rows in.
+// PrimaryBookID is BookIDs[0], the lowest-numbered chapter: a merge folds the
+// others into it and plays its files first.
 type ChapterGroup struct {
 	PrimaryBookID string   `json:"primary_book_id"`
 	BookIDs       []string `json:"book_ids"`
-	CommonTitle   string   `json:"common_title"`   // primary's title with numeric prefix stripped
-	TotalDuration float64  `json:"total_duration"` // sum of all file durations in seconds
-	FileCount     int      `json:"file_count"`
-	Directory     string   `json:"directory"`
+	// CommonTitle is the proposed title of the merged book: the track titles'
+	// shared residual ("006_Head of the Wyrm" -> "Head of the Wyrm"), else the
+	// folder's name ("Eldritch", never "157").
+	CommonTitle   string  `json:"common_title"`
+	TotalDuration float64 `json:"total_duration"` // sum of the KNOWN durations, seconds
+	FileCount     int     `json:"file_count"`
+	Directory     string  `json:"directory"`
+
+	// IndexLabels is each member's position, parallel to BookIDs ("7", or
+	// "2-05" for disc 2 track 5).
+	IndexLabels []string `json:"index_labels"`
+	// Gaps are the positions missing from the run ("7", "40..45", "2-3").
+	Gaps []string `json:"gaps,omitempty"`
+	// DeclaredTotal is M from "N of M" titles, when present.
+	DeclaredTotal int `json:"declared_total,omitempty"`
+	// DurationsKnown counts members with a known (> 0) duration. Durations
+	// are advisory: unknown ones never keep a group out.
+	DurationsKnown int      `json:"durations_known"`
+	Confidence     string   `json:"confidence"`
+	Reasons        []string `json:"reasons"`
+	// Blockers, when present, are why the group must not be merged; such a
+	// group is returned in ChapterDetection.Blocked, never in Groups.
+	Blockers []string `json:"blockers,omitempty"`
 }
 
 // ChapterDetectOptions tunes DetectChapterGroupsWithOptions.
 type ChapterDetectOptions struct {
-	// MinFiles is the file count at which the average-duration branch of
-	// heuristic 4 applies. Defaults to 3 when <= 0.
+	// MinFiles is the smallest group reported. Defaults to 2 when <= 1.
 	MinFiles int
-	// MaxPerFileDuration is the per-file "short chapter" ceiling in seconds.
-	// Defaults to 600 when <= 0.
+	// MaxPerFileDuration (seconds) is advisory: members longer than it are
+	// noted in the group's reasons. Defaults to 600 when <= 0. It no longer
+	// keeps a group out.
 	MaxPerFileDuration int
 	// PathPrefix, when set, limits detection to books whose file path is the
 	// prefix itself or lies beneath it (directory-boundary match, so "/a/b"
 	// does not match "/a/bc").
 	PathPrefix string
 	// Exclude, when set, removes a book from detection entirely (counted in
-	// SkippedExcluded). The merge job uses it for the owner's manual-only
-	// libraries (Doctor Who / Big Finish / Torchwood) and the active iTunes
-	// library.
+	// SkippedExcluded). The chapter jobs use it for the owner's manual-only
+	// libraries (Doctor Who / Big Finish / Torchwood).
 	Exclude func(b *database.BookCore) bool
+	// Protected, when set, returns a non-empty reason for a book a merge
+	// must never touch (the active iTunes library). Its groups are still
+	// detected and reported, as Blocked with that reason.
+	Protected func(b *database.BookCore) string
 }
 
 // ChapterDetection is the full detector output.
 type ChapterDetection struct {
+	// Groups may be offered for a (reviewed) merge.
 	Groups []ChapterGroup
-	// SkippedUnknownDuration counts chapter-shaped groups that were NOT
-	// returned because at least one member's duration is unknown (nil or <= 0).
-	SkippedUnknownDuration int
-	// SkippedDuplicateCopies counts groups that look like several full copies
-	// of one book (identical titles, each about a full book long and nearly
-	// equal, or mixed containers such as .mp3 and .m4b). Those are dedup's job.
+	// Blocked are chapter-split groups found but not mergeable; each names
+	// its Blockers (duplicate indices, non-primary versions, protected
+	// library, disagreeing authors or totals, a too-sparse run...).
+	Blocked []ChapterGroup
+	// SkippedDuplicateCopies counts runs that are copies of one book, not
+	// chapters: every member at the same position (not reported), or
+	// full-length / mixed-container members (reported in Blocked).
 	SkippedDuplicateCopies int
 	// SkippedExcluded counts books removed by ChapterDetectOptions.Exclude.
 	SkippedExcluded int
+	// SkippedNotSingleFile counts sequence-titled records whose FilePath is
+	// not an audio file (a folder: a multi-file book already).
+	SkippedNotSingleFile int
+	// SkippedNotSequence counts numbered runs rejected as not chapters
+	// (bare years, a bare run that starts far from 1 with few members, a
+	// too-sparse run of fewer than minSparseReport members).
+	SkippedNotSequence int
 }
 
 // stripNumPrefix removes a leading numeric chapter/track number from a filename
@@ -95,55 +138,41 @@ func normForCompare(s string) string {
 // absent: they name different books.
 var chapterTokenRe = regexp.MustCompile(`(?i)[\s\-_.,:]*\b(chapter|chap|ch|track|trk|part|pt|disc|disk|cd|section)[\s\-_.]*\d+\b`)
 
-// chapterTitleBase strips a stripped title's within-book position tokens and
-// trailing separators, keeping the original casing (used as CommonTitle).
-func chapterTitleBase(stripped string) string {
-	return strings.Trim(chapterTokenRe.ReplaceAllString(stripped, ""), " -_.,:")
-}
-
-// minChapterKeyLen is the shortest normalised base title that may group. An
-// empty or one/two-character title ("It", "01.mp3" with nothing after the
-// number) carries no evidence that two files belong together.
+// minChapterKeyLen is the shortest non-empty normalised residual that may
+// group. A one/two-character residual ("01 - It") carries no evidence that
+// two files belong together; an EMPTY residual (a bare number) is a
+// different case, grouped by folder.
 const minChapterKeyLen = 3
-
-// chapterTitleKey is the grouping key: the normalised base title. Two files
-// group only when their keys are EQUAL -- they differ by nothing but the
-// chapter-number prefix and position tokens. There is no prefix match and no
-// word-overlap score: "Dune" vs "Dune Messiah", "Book 01" vs "Book 02" and
-// "Short Trips Alpha" vs "Short Trips Beta" are all different books. Returns
-// "" for a title too short to group.
-func chapterTitleKey(stripped string) string {
-	k := normForCompare(chapterTitleBase(stripped))
-	if len(strings.ReplaceAll(k, " ", "")) < minChapterKeyLen {
-		return ""
-	}
-	return k
-}
 
 // fullBookSeconds is the per-file length above which a member reads as a
 // whole book rather than a chapter, for the duplicate-copies check.
 const fullBookSeconds = 3600
 
-// looksLikeDuplicateCopies reports whether a would-be group is several copies
-// of one book: mixed audio containers (an .mp3 and an .m4b of the same title),
-// or identical titles whose members are each a full book long and within 10%
-// of each other. Those are dedup's job; merging them would fold two copies of
-// a book into one "book" with twice the running time.
-func looksLikeDuplicateCopies(members []database.BookCore, strippedNorms []string) bool {
-	exts := map[string]bool{}
-	for _, m := range members {
-		exts[strings.ToLower(filepath.Ext(m.FilePath))] = true
-	}
-	if len(exts) > 1 {
-		return true
-	}
-	for _, n := range strippedNorms[1:] {
-		if n != strippedNorms[0] {
-			return false
-		}
-	}
+// maxSparseFraction is the largest share of missing positions in a run's
+// span a group may have and still be offered for merge.
+const maxSparseFraction = 0.20
+
+// minSparseReport is the smallest too-sparse run still reported (as
+// Blocked); a smaller one is dropped as not a sequence.
+const minSparseReport = 5
+
+// audioExts are the single-file audio containers a chapter record can be.
+var audioExts = map[string]bool{
+	".mp3": true, ".m4b": true, ".m4a": true, ".aac": true, ".flac": true,
+	".ogg": true, ".oga": true, ".opus": true, ".wma": true, ".wav": true,
+	".aif": true, ".aiff": true, ".ape": true, ".mp4": true, ".alac": true,
+}
+
+// looksLikeDuplicateCopies reports whether members with one identical,
+// non-empty residual are several copies of a book: each a full book long and
+// within 10% of each other. It is false when any duration is unknown -- no
+// evidence either way, and the review sees the run.
+func looksLikeDuplicateCopies(members []database.BookCore) bool {
 	lo, hi := -1, 0
 	for _, m := range members {
+		if m.Duration == nil || *m.Duration <= 0 {
+			return false
+		}
 		d := *m.Duration
 		if d < fullBookSeconds {
 			return false
@@ -155,32 +184,16 @@ func looksLikeDuplicateCopies(members []database.BookCore, strippedNorms []strin
 			hi = d
 		}
 	}
-	return float64(hi) <= float64(lo)*1.10
+	return lo > 0 && float64(hi) <= float64(lo)*1.10
 }
 
 // DetectChapterGroups is DetectChapterGroupsWithOptions without a path
-// filter, returning only the groups.
+// filter, returning only the mergeable groups.
 func DetectChapterGroups(books []database.BookCore, minFiles, maxPerFileDuration int) []ChapterGroup {
 	return DetectChapterGroupsWithOptions(books, ChapterDetectOptions{
 		MinFiles:           minFiles,
 		MaxPerFileDuration: maxPerFileDuration,
 	}).Groups
-}
-
-// chapterNumber returns the numeric chapter prefix of a filename stem, or -1.
-func chapterNumber(stem string) int {
-	n, digits := 0, 0
-	for _, r := range stem {
-		if r < '0' || r > '9' {
-			break
-		}
-		n = n*10 + int(r-'0')
-		digits++
-	}
-	if digits == 0 {
-		return -1
-	}
-	return n
 }
 
 // pathUnderPrefix reports whether p is prefix or lies beneath it.
@@ -196,70 +209,157 @@ func pathUnderPrefix(p, prefix string) bool {
 	return strings.HasPrefix(p, prefix+string(filepath.Separator))
 }
 
-// chapterCandidateEligible reports whether a book may take part in chapter
-// detection at all. Books already absorbed by an earlier merge
-// (MergedIntoBookID), soft-deleted books (a chapter merge soft-deletes its
-// sources), and non-primary versions of another book are all excluded, so a
+// chapterBookLive reports whether a book may take part in detection at all.
+// Books already absorbed by an earlier merge (MergedIntoBookID) and
+// soft-deleted books (a chapter merge soft-deletes its sources) are out, so a
 // re-run can never regroup or re-merge what a previous run already merged.
-func chapterCandidateEligible(b *database.BookCore) bool {
+// Non-primary versions ARE detected, but only ever reported as Blocked.
+func chapterBookLive(b *database.BookCore) bool {
 	if b.MergedIntoBookID != nil && *b.MergedIntoBookID != "" {
 		return false
 	}
-	if b.IsSoftDeleted() {
-		return false
-	}
-	return database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion)
+	return !b.IsSoftDeleted()
 }
 
-// DetectChapterGroupsWithOptions inspects already-scanned database.BookCore
-// records and returns groups that look like sequential chapters of the same
-// audiobook.
+// seqCand is one record read as a chapter.
+type seqCand struct {
+	book  database.BookCore
+	stem  string
+	ext   string
+	shape string
+	disc  int
+	index int
+	total int
+	// key is the normalised residual the record groups by; key2 the part of
+	// it before a chapter token (the book's name when the rest is a
+	// chapter's own name), used only when key alone groups nothing.
+	key, key2 string
+	// titleDisplay is the residual from the TITLE, for the proposed title;
+	// fileDisplay the residual from the file stem.
+	titleDisplay, fileDisplay string
+}
+
+func (c seqCand) label() string {
+	if c.disc > 0 {
+		return fmt.Sprintf("%d-%02d", c.disc, c.index)
+	}
+	return fmt.Sprint(c.index)
+}
+
+// classifySeqCand reads one record. ok=false when neither its title nor its
+// file stem is a sequence marker, or its residual is too short to mean
+// anything.
+func classifySeqCand(b database.BookCore) (seqCand, bool) {
+	base := filepath.Base(b.FilePath)
+	ext := strings.ToLower(filepath.Ext(base))
+	c := seqCand{book: b, ext: ext, stem: strings.TrimSuffix(base, filepath.Ext(base))}
+	tm, tok := ParseSequenceMarker(b.Title)
+	fm, fok := ParseFilenameSequence(c.stem)
+	if !tok && !fok {
+		return c, false
+	}
+	var residual string
+	if tok {
+		c.shape, c.disc, c.index, c.total = tm.Shape, tm.Disc, tm.Index, tm.Total
+		residual = tm.Residual
+		if sequenceResidualKey(tm.Residual) != "" {
+			c.titleDisplay = sequenceResidualDisplay(tm.Residual)
+		} else if fok {
+			// A bare title ("157") takes its grouping key from the file
+			// ("Eldritch - 157.mp3"), which separates distinct works that
+			// share a folder.
+			residual = fm.Residual
+			if c.total == 0 && fm.Index == c.index {
+				c.total = fm.Total
+			}
+		}
+	} else {
+		c.shape, c.disc, c.index, c.total = fm.Shape, fm.Disc, fm.Index, fm.Total
+		residual = fm.Residual
+	}
+	if fok {
+		c.fileDisplay = sequenceResidualDisplay(fm.Residual)
+	}
+	c.key = sequenceResidualKey(residual)
+	if c.key != "" && len(strings.ReplaceAll(c.key, " ", "")) < minChapterKeyLen {
+		return c, false
+	}
+	c.key2 = c.key
+	if b, found := sequenceResidualBase(residual); found {
+		c.key2 = sequenceResidualKey(b)
+	}
+	return c, true
+}
+
+// versionIndex maps a version group to the directories of its primary
+// copies, built from every live book so a non-primary member can say where
+// its primary lives.
+type versionIndex map[string][]string
+
+func buildVersionIndex(books []database.BookCore) versionIndex {
+	vi := versionIndex{}
+	for i := range books {
+		b := &books[i]
+		if b.VersionGroupID == nil || *b.VersionGroupID == "" || !chapterBookLive(b) {
+			continue
+		}
+		if database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) {
+			vi[*b.VersionGroupID] = append(vi[*b.VersionGroupID], filepath.Dir(b.FilePath))
+		}
+	}
+	return vi
+}
+
+// dirResult is one folder's detection output.
+type dirResult struct {
+	groups, blocked                       []ChapterGroup
+	dupCopies, notSingleFile, notSequence int
+}
+
+// DetectChapterGroupsWithOptions inspects already-scanned records and
+// returns the single-file records that are one multi-file book split into a
+// record per chapter.
 //
-// All four heuristics must be satisfied for a group to be returned:
-//  1. Files share the same parent directory.
-//  2. Filenames match a sequential chapter pattern (leading 1-3 digit prefix).
-//  3. After stripping the numeric prefix and within-book position tokens
-//     (chapter/part/track/disc N), the titles are EQUAL and at least
-//     minChapterKeyLen characters long (see chapterTitleKey).
-//  4. Each individual file's duration is < MaxPerFileDuration seconds OR
-//     the group has >= MinFiles files and the average per-file duration is
-//     < 1800 s (30 min).
+// A record is a candidate when its TITLE (or, failing that, its file stem)
+// is a sequence marker (ParseSequenceMarker / ParseFilenameSequence) and its
+// FilePath is an audio file. Candidates group when they share:
 //
-// Heuristic 4 needs every member's duration. A member whose duration is
-// unknown (nil, or <= 0 -- what a failed probe leaves) makes the whole group
-// ineligible: it is neither "short" nor part of a meaningful average, and
-// treating it as 0 s is what used to make unprobed full-length books look like
-// short chapters. Such groups are counted in SkippedUnknownDuration so an
-// operator can backfill durations and re-run, instead of silently vanishing.
-// Excluding only the unknown member instead would merge the rest and strand
-// that chapter as its own book, which is worse than not merging at all.
+//  1. the parent folder, and
+//  2. the normalised residual (what is left once the position is removed).
+//     A bare title ("157") takes its residual from the file ("Eldritch -
+//     157.mp3"). Bare residuals group with the one residual that equals the
+//     folder's name. Records whose residuals differ are different books and
+//     never group, which is what keeps a folder of organized series singles
+//     ("09 - Ruins", "10 - Rise") and year-prefixed books apart.
+//
+// A group is then checked, and any failure makes it Blocked (reported with
+// the reason, never mergeable): repeated positions (two copies), "N of M"
+// totals that disagree, a run with more than maxSparseFraction missing,
+// different known authors, mixed containers, full-length copies, a
+// non-primary member (names where its primary lives), or a Protected member.
+// Durations are advisory: summed when known, outliers noted, never required.
+//
+// Folders are processed in parallel (errgroup, NumCPU workers). Each folder is
+// independent -- groups never span folders -- and each worker writes only its
+// own slot, so there is no shared mutable state; results are assembled in
+// sorted folder order, so output is deterministic.
 func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetectOptions) ChapterDetection {
 	var out ChapterDetection
 	if len(books) == 0 {
 		return out
 	}
-	minFiles := opts.MinFiles
-	if minFiles <= 0 {
-		minFiles = 3
+	if opts.MinFiles < 2 {
+		opts.MinFiles = 2
 	}
-	maxPerFileDuration := opts.MaxPerFileDuration
-	if maxPerFileDuration <= 0 {
-		maxPerFileDuration = 600
+	if opts.MaxPerFileDuration <= 0 {
+		opts.MaxPerFileDuration = 600
 	}
+	vi := buildVersionIndex(books)
 
-	type candidate struct {
-		book          database.BookCore
-		base          string
-		chapter       int
-		strippedTitle string
-		key           string
-	}
-
-	// Group candidates by parent directory.
-	byDir := make(map[string][]candidate)
+	byDir := make(map[string][]database.BookCore)
 	for i := range books {
 		b := books[i]
-		if !chapterCandidateEligible(&b) {
+		if !chapterBookLive(&b) {
 			continue
 		}
 		if opts.Exclude != nil && opts.Exclude(&b) {
@@ -269,119 +369,507 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 		if opts.PathPrefix != "" && !pathUnderPrefix(b.FilePath, opts.PathPrefix) {
 			continue
 		}
+		if b.FilePath == "" {
+			continue
+		}
 		dir := filepath.Dir(b.FilePath)
-		base := filepath.Base(b.FilePath)
-		stem := strings.TrimSuffix(base, filepath.Ext(b.FilePath))
-		if !chapterNumPrefixDetectRe.MatchString(stem) {
-			continue // not a chapter-numbered file
-		}
-		stripped := stripNumPrefix(stem)
-		key := chapterTitleKey(stripped)
-		if key == "" {
-			continue // empty or too-short title: never groups
-		}
-		byDir[dir] = append(byDir[dir], candidate{
-			book: b, base: base, chapter: chapterNumber(stem), strippedTitle: stripped, key: key,
-		})
+		byDir[dir] = append(byDir[dir], b)
 	}
-
-	// Directories in sorted order so the output does not depend on the order
-	// the store listed rows in.
 	dirs := make([]string, 0, len(byDir))
 	for d := range byDir {
 		dirs = append(dirs, d)
 	}
 	sort.Strings(dirs)
 
-	for _, dir := range dirs {
-		cands := byDir[dir]
-		if len(cands) < 2 {
+	results := make([]dirResult, len(dirs))
+	var eg errgroup.Group
+	eg.SetLimit(runtime.NumCPU())
+	for i, dir := range dirs {
+		eg.Go(func() error {
+			results[i] = detectInDir(dir, byDir[dir], opts, vi)
+			return nil
+		})
+	}
+	_ = eg.Wait() // workers never return an error
+
+	for _, r := range results {
+		out.Groups = append(out.Groups, r.groups...)
+		out.Blocked = append(out.Blocked, r.blocked...)
+		out.SkippedDuplicateCopies += r.dupCopies
+		out.SkippedNotSingleFile += r.notSingleFile
+		out.SkippedNotSequence += r.notSequence
+	}
+	return out
+}
+
+// detectInDir groups one folder's candidates.
+func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOptions, vi versionIndex) dirResult {
+	var res dirResult
+	buckets := map[string][]seqCand{}
+	for _, b := range books {
+		c, ok := classifySeqCand(b)
+		if !ok {
 			continue
 		}
-		// Chapter order first, so sub-grouping below seeds each sub-group
-		// with its lowest-numbered chapter and the primary is chapter 01.
-		sort.SliceStable(cands, func(i, j int) bool {
-			a, b := cands[i], cands[j]
-			if a.chapter != b.chapter {
-				return a.chapter < b.chapter
-			}
-			if a.base != b.base {
-				return a.base < b.base
-			}
-			return a.book.ID < b.book.ID
-		})
-
-		// Sub-group by exact title key, in chapter order, so each sub-group's
-		// first candidate is its lowest-numbered chapter.
-		type subGroup struct{ cands []candidate }
-		var sgs []subGroup
-		byKey := map[string]int{}
-		for _, c := range cands {
-			if i, ok := byKey[c.key]; ok {
-				sgs[i].cands = append(sgs[i].cands, c)
-				continue
-			}
-			byKey[c.key] = len(sgs)
-			sgs = append(sgs, subGroup{cands: []candidate{c}})
+		if !audioExts[c.ext] {
+			res.notSingleFile++
+			continue
 		}
+		buckets[c.key] = append(buckets[c.key], c)
+	}
+	if len(buckets) == 0 {
+		return res
+	}
+	// A record alone under its full residual whose residual is "book name +
+	// chapter name" regroups by the book name alone.
+	for _, k := range sortedBucketKeys(buckets) {
+		cs := buckets[k]
+		if len(cs) != 1 || cs[0].key2 == cs[0].key {
+			continue
+		}
+		delete(buckets, k)
+		buckets[cs[0].key2] = append(buckets[cs[0].key2], cs[0])
+	}
+	// Bare residuals join the one residual that IS the folder's name.
+	folderKey := chapterFolderKey(dir)
+	if bare, ok := buckets[""]; ok && folderKey != "" {
+		if named, ok := buckets[folderKey]; ok {
+			buckets[folderKey] = append(named, bare...)
+			delete(buckets, "")
+		}
+	}
+	for _, k := range sortedBucketKeys(buckets) {
+		cs := buckets[k]
+		if len(cs) < opts.MinFiles {
+			continue
+		}
+		g, verdict := evaluateSeqBucket(dir, k, folderKey, cs, opts, vi)
+		switch verdict {
+		case seqVerdictNotSequence:
+			res.notSequence++
+		case seqVerdictSamePosition:
+			res.dupCopies++
+		case seqVerdictDupCopies:
+			res.dupCopies++
+			res.blocked = append(res.blocked, g)
+		default:
+			if len(g.Blockers) > 0 {
+				res.blocked = append(res.blocked, g)
+			} else {
+				res.groups = append(res.groups, g)
+			}
+		}
+	}
+	return res
+}
 
-		for _, sg := range sgs {
-			fc := len(sg.cands)
-			if fc < 2 {
+func sortedBucketKeys(m map[string][]seqCand) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+type seqVerdict int
+
+const (
+	seqVerdictGroup seqVerdict = iota
+	seqVerdictNotSequence
+	seqVerdictDupCopies
+	seqVerdictSamePosition
+)
+
+// evaluateSeqBucket checks one same-folder, same-residual bucket and builds
+// its group.
+func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDetectOptions, vi versionIndex) (ChapterGroup, seqVerdict) {
+	sort.SliceStable(cs, func(i, j int) bool {
+		a, b := cs[i], cs[j]
+		if a.disc != b.disc {
+			return a.disc < b.disc
+		}
+		if a.index != b.index {
+			return a.index < b.index
+		}
+		if a.stem != b.stem {
+			return a.stem < b.stem
+		}
+		return a.book.ID < b.book.ID
+	})
+	n := len(cs)
+	lo, hi := cs[0].index, cs[0].index
+	allYears := true
+	for _, c := range cs {
+		lo, hi = min(lo, c.index), max(hi, c.index)
+		if c.index < 1800 || c.index > 2100 {
+			allYears = false
+		}
+	}
+	if key == "" && (allYears || (lo > 2 && n < 5)) {
+		return ChapterGroup{}, seqVerdictNotSequence
+	}
+	// Every member at ONE position ("31 - Title" twice in a series folder)
+	// is copies of one book, not chapters of it: dedup's job, not reported.
+	samePos := true
+	for _, c := range cs[1:] {
+		if c.disc != cs[0].disc || c.index != cs[0].index {
+			samePos = false
+			break
+		}
+	}
+	// Two records pointing at ONE file are duplicate records of that file,
+	// not two chapters.
+	paths := map[string]int{}
+	for _, c := range cs {
+		paths[c.book.FilePath]++
+	}
+	if samePos || len(paths) < 2 {
+		return ChapterGroup{}, seqVerdictSamePosition
+	}
+
+	g := ChapterGroup{Directory: dir, FileCount: n, Confidence: ChapterConfidenceHigh}
+	demote := func(to string) {
+		if to == ChapterConfidenceLow || g.Confidence == ChapterConfidenceHigh {
+			g.Confidence = to
+		}
+	}
+	shapes := map[string]int{}
+	for _, c := range cs {
+		g.BookIDs = append(g.BookIDs, c.book.ID)
+		g.IndexLabels = append(g.IndexLabels, c.label())
+		shapes[c.shape]++
+	}
+	g.PrimaryBookID = g.BookIDs[0]
+	g.Reasons = append(g.Reasons, fmt.Sprintf("%d single-file records in one folder titled as positions (%s)", n, seqShapeSummary(shapes)))
+
+	// Positions: duplicates, gaps, totals.
+	seen := map[[2]int]int{}
+	byDisc := map[int][]int{}
+	totals := map[int]bool{}
+	for _, c := range cs {
+		seen[[2]int{c.disc, c.index}]++
+		byDisc[c.disc] = append(byDisc[c.disc], c.index)
+		if c.total > 0 {
+			totals[c.total] = true
+		}
+	}
+	var dups []string
+	for _, c := range cs {
+		k := [2]int{c.disc, c.index}
+		if seen[k] > 1 {
+			dups = append(dups, fmt.Sprintf("%s (x%d)", c.label(), seen[k]))
+			seen[k] = 0
+		}
+	}
+	if len(dups) > 0 {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("duplicate index %s: two copies of the book in one folder?", seqJoinCapped(dups, 8)))
+	}
+	span, missing := 0, 0
+	discs := make([]int, 0, len(byDisc))
+	for d := range byDisc {
+		discs = append(discs, d)
+	}
+	sort.Ints(discs)
+	for _, d := range discs {
+		idx := byDisc[d]
+		sort.Ints(idx)
+		dlo, dhi := idx[0], idx[len(idx)-1]
+		span += dhi - dlo + 1
+		have := map[int]bool{}
+		for _, i := range idx {
+			have[i] = true
+		}
+		for _, r := range seqMissingRanges(dlo, dhi, have) {
+			missing += r[1] - r[0] + 1
+			g.Gaps = append(g.Gaps, seqRangeLabel(d, r))
+		}
+	}
+	switch {
+	case len(totals) > 1:
+		var ts []string
+		for t := range totals {
+			ts = append(ts, fmt.Sprint(t))
+		}
+		sort.Strings(ts)
+		g.Blockers = append(g.Blockers, "N of M totals disagree ("+strings.Join(ts, ", ")+"): more than one set")
+	case len(totals) == 1:
+		for t := range totals {
+			g.DeclaredTotal = t
+		}
+		g.Reasons = append(g.Reasons, fmt.Sprintf("titles declare %d parts; %d present", g.DeclaredTotal, n))
+	}
+	if span > 0 && float64(missing)/float64(span) > maxSparseFraction && n < minSparseReport {
+		// A handful of scattered positions ("23 - Title" and "29 - Title"
+		// in one series folder) is not a split book worth reporting.
+		return ChapterGroup{}, seqVerdictNotSequence
+	}
+	if shared := n - len(paths); shared > 0 {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("%d member(s) share a file path with another member: duplicate records of one file", shared))
+	}
+	if span > 0 && float64(missing)/float64(span) > maxSparseFraction {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("index run too sparse: %d of %d positions missing between %d and %d", missing, span, lo, hi))
+	} else if missing > 0 {
+		g.Reasons = append(g.Reasons, fmt.Sprintf("positions %d..%d with %d missing (see gaps)", lo, hi, missing))
+		demote(ChapterConfidenceMedium)
+	} else {
+		g.Reasons = append(g.Reasons, fmt.Sprintf("positions %d..%d contiguous", lo, hi))
+	}
+	if lo > 1 && len(discs) == 1 {
+		g.Reasons = append(g.Reasons, fmt.Sprintf("run starts at %d: earlier parts may be titled differently", lo))
+	}
+
+	// Authors: unknown is fine, two different known authors is not.
+	authors := map[int]bool{}
+	for _, c := range cs {
+		if c.book.AuthorID != nil {
+			authors[*c.book.AuthorID] = true
+		}
+	}
+	if len(authors) > 1 {
+		g.Blockers = append(g.Blockers, fmt.Sprintf("members have %d different authors", len(authors)))
+	}
+
+	// Containers and full-length copies.
+	exts := map[string]bool{}
+	members := make([]database.BookCore, n)
+	for i, c := range cs {
+		exts[c.ext] = true
+		members[i] = c.book
+	}
+	verdict := seqVerdictGroup
+	if len(exts) > 1 {
+		g.Blockers = append(g.Blockers, "mixed audio containers ("+strings.Join(sortedSetKeys(exts), ", ")+"): probably two copies")
+		verdict = seqVerdictDupCopies
+	} else if key != "" && looksLikeDuplicateCopies(members) {
+		g.Blockers = append(g.Blockers, "members are each a full book long and nearly equal: copies of one book (dedup's job)")
+		verdict = seqVerdictDupCopies
+	}
+
+	// Versions: a non-primary member's primary lives elsewhere.
+	var nonPrimary []seqCand
+	inGroup := map[string]bool{}
+	for _, c := range cs {
+		inGroup[filepath.Dir(c.book.FilePath)] = true
+		if !database.EffectiveIsPrimaryVersion(c.book.IsPrimaryVersion) {
+			nonPrimary = append(nonPrimary, c)
+		}
+	}
+	if len(nonPrimary) > 0 {
+		where := map[string]int{}
+		orphans := 0
+		for _, c := range nonPrimary {
+			vg := ""
+			if c.book.VersionGroupID != nil {
+				vg = *c.book.VersionGroupID
+			}
+			dirs := vi[vg]
+			if vg == "" || len(dirs) == 0 {
+				orphans++
 				continue
 			}
-
-			totalSec := 0
-			allKnown := true
-			allShort := true
-			for _, c := range sg.cands {
-				if c.book.Duration == nil || *c.book.Duration <= 0 {
-					allKnown = false
-					break
-				}
-				d := *c.book.Duration
-				totalSec += d
-				if d >= maxPerFileDuration {
-					allShort = false
-				}
+			for _, d := range dirs {
+				where[d]++
 			}
-			if !allKnown {
-				out.SkippedUnknownDuration++
-				continue
+		}
+		msg := fmt.Sprintf("%d of %d members are non-primary versions", len(nonPrimary), n)
+		if len(nonPrimary) == n {
+			msg = fmt.Sprintf("all %d members are non-primary versions: review the primary copies instead", n)
+		}
+		if len(where) > 0 {
+			msg += "; primaries live in " + seqTopDirs(where, 3)
+		}
+		if orphans > 0 {
+			msg += fmt.Sprintf("; %d have no primary in their version group", orphans)
+		}
+		g.Blockers = append(g.Blockers, msg)
+	}
+	if opts.Protected != nil {
+		for _, c := range cs {
+			b := c.book
+			if why := opts.Protected(&b); why != "" {
+				g.Blockers = append(g.Blockers, why+": the merge refuses to touch these records")
+				break
 			}
-			members := make([]database.BookCore, fc)
-			norms := make([]string, fc)
-			for i, c := range sg.cands {
-				members[i] = c.book
-				norms[i] = normForCompare(c.strippedTitle)
-			}
-			if looksLikeDuplicateCopies(members, norms) {
-				out.SkippedDuplicateCopies++
-				continue
-			}
-			avgSec := totalSec / fc
-
-			// Heuristic 4: all short OR (enough files AND avg short enough).
-			if !allShort && !(fc >= minFiles && avgSec < 1800) {
-				continue
-			}
-
-			ids := make([]string, fc)
-			for i, c := range sg.cands {
-				ids[i] = c.book.ID
-			}
-			out.Groups = append(out.Groups, ChapterGroup{
-				PrimaryBookID: ids[0],
-				BookIDs:       ids,
-				CommonTitle:   chapterTitleBase(sg.cands[0].strippedTitle),
-				TotalDuration: float64(totalSec),
-				FileCount:     fc,
-				Directory:     dir,
-			})
 		}
 	}
 
+	// Durations: advisory.
+	var known []int
+	long := 0
+	for _, c := range cs {
+		if c.book.Duration != nil && *c.book.Duration > 0 {
+			d := *c.book.Duration
+			known = append(known, d)
+			g.TotalDuration += float64(d)
+			if d >= opts.MaxPerFileDuration {
+				long++
+			}
+		}
+	}
+	g.DurationsKnown = len(known)
+	g.Reasons = append(g.Reasons, fmt.Sprintf("durations known for %d of %d", len(known), n))
+	if long > 0 {
+		g.Reasons = append(g.Reasons, fmt.Sprintf("%d member(s) at least %d s long", long, opts.MaxPerFileDuration))
+	}
+	if len(known) >= 3 {
+		sorted := append([]int(nil), known...)
+		sort.Ints(sorted)
+		med := sorted[len(sorted)/2]
+		var outliers []string
+		for _, c := range cs {
+			if c.book.Duration == nil || *c.book.Duration <= 0 {
+				continue
+			}
+			if d := *c.book.Duration; d > 4*med || d*4 < med {
+				outliers = append(outliers, fmt.Sprintf("%s (%ds)", c.label(), d))
+			}
+		}
+		if len(outliers) > 0 {
+			g.Reasons = append(g.Reasons, fmt.Sprintf("duration outliers vs median %ds: %s", med, seqJoinCapped(outliers, 6)))
+			demote(ChapterConfidenceMedium)
+		}
+	}
+
+	// Proposed title.
+	g.CommonTitle = seqProposeTitle(dir, key, folderKey, cs, &g, demote)
+	return g, verdict
+}
+
+// seqProposeTitle picks the merged book's title: the track titles' shared
+// residual; else the file stems' residual when it agrees with the folder;
+// else the folder's name.
+func seqProposeTitle(dir, key, folderKey string, cs []seqCand, g *ChapterGroup, demote func(string)) string {
+	var fromTitles, fromFiles []string
+	for _, c := range cs {
+		if c.titleDisplay != "" && sequenceResidualKey(c.titleDisplay) == key {
+			fromTitles = append(fromTitles, c.titleDisplay)
+		}
+		// Only file residuals that ARE the group's key: a chapter-named
+		// file ("01 Chapter 1 - The Hunter") grouped by its book-name part
+		// says nothing about the book's title.
+		if key != "" && c.fileDisplay != "" && sequenceResidualKey(c.fileDisplay) == key {
+			fromFiles = append(fromFiles, c.fileDisplay)
+		}
+	}
+	if t := seqMostCommon(fromTitles); t != "" && key != "" {
+		if key == folderKey {
+			g.Reasons = append(g.Reasons, "track titles' residual matches the folder name")
+		} else {
+			g.Reasons = append(g.Reasons, "title from the track titles' shared residual")
+		}
+		return t
+	}
+	folder := chapterFolderDisplay(dir)
+	file := seqMostCommon(fromFiles)
+	fileKey := sequenceResidualKey(file)
+	switch {
+	case file != "" && (folderKey == "" || fileKey == folderKey):
+		g.Reasons = append(g.Reasons, "title from the file names (bare track titles)")
+		return file
+	case folder != "":
+		if file != "" && fileKey != "" {
+			if strings.Contains(fileKey, folderKey) {
+				g.Reasons = append(g.Reasons, fmt.Sprintf("file names say %q; proposed the folder name it contains", file))
+				demote(ChapterConfidenceMedium)
+			} else {
+				g.Reasons = append(g.Reasons, fmt.Sprintf("file names say %q but the folder says %q: check the title", file, folder))
+				demote(ChapterConfidenceLow)
+			}
+		} else {
+			g.Reasons = append(g.Reasons, "bare track titles: title from the folder name")
+			demote(ChapterConfidenceMedium)
+		}
+		return folder
+	default:
+		demote(ChapterConfidenceLow)
+		return file
+	}
+}
+
+func seqShapeSummary(shapes map[string]int) string {
+	keys := sortedSetKeys(shapes)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s %d", k, shapes[k])
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sortedSetKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// seqMissingRanges returns the [from, to] runs in lo..hi absent from have.
+func seqMissingRanges(lo, hi int, have map[int]bool) [][2]int {
+	var out [][2]int
+	for i := lo; i <= hi; i++ {
+		if have[i] {
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1][1] == i-1 {
+			out[len(out)-1][1] = i
+		} else {
+			out = append(out, [2]int{i, i})
+		}
+	}
 	return out
+}
+
+func seqRangeLabel(disc int, r [2]int) string {
+	pre := ""
+	if disc > 0 {
+		pre = fmt.Sprintf("%d-", disc)
+	}
+	if r[0] == r[1] {
+		return fmt.Sprintf("%s%d", pre, r[0])
+	}
+	return fmt.Sprintf("%s%d..%s%d", pre, r[0], pre, r[1])
+}
+
+func seqJoinCapped(ss []string, limit int) string {
+	if len(ss) <= limit {
+		return strings.Join(ss, ", ")
+	}
+	return strings.Join(ss[:limit], ", ") + fmt.Sprintf(" and %d more", len(ss)-limit)
+}
+
+// seqTopDirs names up to limit directories by count, most first.
+func seqTopDirs(where map[string]int, limit int) string {
+	dirs := sortedSetKeys(where)
+	sort.SliceStable(dirs, func(i, j int) bool { return where[dirs[i]] > where[dirs[j]] })
+	parts := make([]string, 0, limit)
+	for i, d := range dirs {
+		if i == limit {
+			parts = append(parts, fmt.Sprintf("%d more", len(dirs)-limit))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s (%d)", d, where[d]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// seqMostCommon returns the most frequent non-empty string, ties broken
+// lexically.
+func seqMostCommon(ss []string) string {
+	counts := map[string]int{}
+	for _, s := range ss {
+		if s != "" {
+			counts[s]++
+		}
+	}
+	best, bestN := "", 0
+	for _, s := range sortedSetKeys(counts) {
+		if counts[s] > bestN {
+			best, bestN = s, counts[s]
+		}
+	}
+	return best
 }
 
 // ChapterTitleIsFilenameDerived reports whether title is still the
@@ -397,4 +885,16 @@ func ChapterTitleIsFilenameDerived(title, filePath string) bool {
 	}
 	stem := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	return nt == normForCompare(stem) || nt == normForCompare(stripNumPrefix(stem))
+}
+
+// ChapterTitleIsReplaceable reports whether a chapter merge may replace the
+// primary's title with the group's proposed title: the title is still
+// filename-derived, or it is nothing but a position ("157", "108 of 310",
+// "Part 3", "02.Prologue") -- a title no one curated.
+func ChapterTitleIsReplaceable(title, filePath string) bool {
+	if ChapterTitleIsFilenameDerived(title, filePath) {
+		return true
+	}
+	m, ok := ParseSequenceMarker(title)
+	return ok && sequenceResidualKey(m.Residual) == ""
 }

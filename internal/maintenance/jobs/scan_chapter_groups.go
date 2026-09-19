@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_chapter_groups.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1000019-0000-0000-0000-000000000019
 // last-edited: 2026-09-19
 
@@ -29,7 +29,7 @@ func (j *scanChapterGroupsJob) DefaultParams() any {
 	}{MinFiles: chapterDefaultMinFiles, MaxPerFileDuration: chapterDefaultMaxPerFileDuration}
 }
 func (j *scanChapterGroupsJob) Description() string {
-	return "Report books that look like multi-chapter parts of the same audiobook"
+	return "Report single-file books that are chapters of one audiobook (titles like \"157\", \"108 of 310\", \"006_Title\"); blocked groups say why"
 }
 func (j *scanChapterGroupsJob) CanResume() bool { return false }
 
@@ -46,23 +46,26 @@ func (j *scanChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSto
 		return err
 	}
 	res := chapterGroupsResult{
-		Job:                          j.ID(),
-		DryRun:                       true,
-		Params:                       p,
-		GroupsFound:                  len(det.Groups),
-		GroupsSkippedUnknownDuration: det.SkippedUnknownDuration,
-		GroupsSkippedDuplicateCopies: det.SkippedDuplicateCopies,
-		BooksExcluded:                det.SkippedExcluded,
-		Groups:                       make([]chapterGroupOutcome, 0, len(det.Groups)),
+		Job:    j.ID(),
+		DryRun: true,
+		Params: p,
+		Groups: make([]chapterGroupOutcome, 0, len(det.Groups)+len(det.Blocked)),
 	}
-	reporter.SetTotal(len(det.Groups))
+	res.applyDetectionCounts(det)
+	reporter.SetTotal(len(det.Groups) + len(det.Blocked))
+	// Mergeable groups first, then the blocked ones with their reasons.
 	for _, g := range det.Groups {
 		reporter.Increment()
 		res.TotalBooksAffected += len(g.BookIDs)
 		res.Groups = append(res.Groups, newChapterGroupOutcome(g))
 	}
-	chapterLog.Info("scan-chapter-groups complete: groups=%d books=%d skipped_unknown_duration=%d",
-		res.GroupsFound, res.TotalBooksAffected, res.GroupsSkippedUnknownDuration)
+	for _, g := range det.Blocked {
+		reporter.Increment()
+		res.Groups = append(res.Groups, newChapterGroupOutcome(g))
+	}
+	chapterLog.Info("scan-chapter-groups complete: groups=%d books=%d blocked=%d not_single_file=%d not_sequence=%d duplicate_copies=%d",
+		res.GroupsFound, res.TotalBooksAffected, res.GroupsBlocked, res.BooksSkippedNotSingleFile,
+		res.GroupsSkippedNotSequence, res.GroupsSkippedDuplicateCopies)
 	return maintenance.SetResult(ctx, res)
 }
 
