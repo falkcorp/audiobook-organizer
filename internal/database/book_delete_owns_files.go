@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-09-19
 
@@ -206,14 +206,42 @@ type BookFileRowsRefusedError struct {
 	Committed      int
 	RefusedFileIDs []string
 	MissingBookIDs []string
+	// Reasons says why each refused row (by file ID) was refused.
+	Reasons map[string]string
 }
 
 func (e *BookFileRowsRefusedError) Error() string {
-	return fmt.Sprintf("%d book_file row(s) refused (owner book(s) %v no longer exist); %d committed",
-		len(e.RefusedFileIDs), e.MissingBookIDs, e.Committed)
+	return fmt.Sprintf("%d book_file row(s) refused (missing owner book(s) %v; reasons by row %v); %d committed",
+		len(e.RefusedFileIDs), e.MissingBookIDs, e.Reasons, e.Committed)
 }
 
-func (e *BookFileRowsRefusedError) Unwrap() error { return ErrBookFileOwnerMissing }
+// Unwrap names what caused the refusals: ErrBookFileOwnerMissing when an owner
+// book was gone, errBookFileRowVanished when a row kept changing.
+func (e *BookFileRowsRefusedError) Unwrap() []error {
+	var errs []error
+	if len(e.MissingBookIDs) > 0 {
+		errs = append(errs, ErrBookFileOwnerMissing)
+	}
+	if len(e.RefusedFileIDs) > 0 && len(e.MissingBookIDs) == 0 || e.churned() {
+		errs = append(errs, errBookFileRowVanished)
+	}
+	return errs
+}
+
+func (e *BookFileRowsRefusedError) churned() bool {
+	for _, r := range e.Reasons {
+		if strings.HasPrefix(r, "the row it rewrites kept changing") {
+			return true
+		}
+	}
+	return false
+}
+
+// ErrBookFileDurabilityUnknown means a book_file write was APPLIED — its rows
+// are visible to every reader and were published to memdb — but the WAL fsync
+// that makes it durable failed. It is not "nothing was written": a caller must
+// not roll back or retry the write as if it were lost.
+var ErrBookFileDurabilityUnknown = errors.New("book_file write applied, but its fsync failed: durability unknown")
 
 // maxStageRetries bounds re-staging when rewritten rows keep vanishing under
 // a writer. Missing owners never trigger it: each such round refuses rows, so
@@ -231,6 +259,9 @@ const maxStageRetries = 5
 // and a *staleStageError says why. The fsync runs after the stripes are
 // released (see WHAT RUNS UNDER THEM above).
 func (p *PebbleStore) commitBookFileBatch(batch *pebble.Batch, lockIDs, newOwners []string, rewriteKeys [][]byte) error {
+	if bookFileBeforeCommitHook != nil {
+		bookFileBeforeCommitHook()
+	}
 	owners := slices.Compact(slices.Sorted(slices.Values(newOwners)))
 	all := append(append([]string(nil), lockIDs...), owners...)
 	for _, k := range rewriteKeys {
@@ -278,16 +309,35 @@ func (p *PebbleStore) commitBookFileBatch(batch *pebble.Batch, lockIDs, newOwner
 
 // bookFileWALSyncHook, when non-nil, runs after a book_file writer released
 // its owner stripes and before its WAL fsync. Test-only.
-var bookFileWALSyncHook func()
+var bookFileWALSyncHook func() error
+
+// bookFileBeforeCommitHook, when non-nil, runs at the start of every
+// commitBookFileBatch, before any owner stripe is taken. Test-only.
+var bookFileBeforeCommitHook func()
 
 // syncBookFileWAL makes every record applied so far durable: an fsync'd
 // empty WAL record, which the sequential WAL cannot persist before the
 // NoSync records ahead of it.
 func (p *PebbleStore) syncBookFileWAL() error {
+	var err error
 	if bookFileWALSyncHook != nil {
-		bookFileWALSyncHook()
+		err = bookFileWALSyncHook()
 	}
-	return p.db.LogData(nil, pebble.Sync)
+	if err == nil {
+		err = p.db.LogData(nil, pebble.Sync)
+	}
+	if err != nil {
+		// Called only after an apply: the rows are already visible.
+		return fmt.Errorf("%w: %w", ErrBookFileDurabilityUnknown, err)
+	}
+	return nil
+}
+
+// bookFileApplied reports whether a book_file write's error still means its
+// batch was applied (nil, or only its fsync failed): the caller must then do
+// its post-commit work (memdb, aggregates, copy-back) and still return err.
+func bookFileApplied(err error) bool {
+	return err == nil || errors.Is(err, ErrBookFileDurabilityUnknown)
 }
 
 // bookIDOfBookFileKey returns <bookID> from a book_file:<bookID>:<fileID> key.
@@ -347,10 +397,12 @@ func bookFileKey(bookID, fileID string) []byte {
 // were refused (the rest are committed), or the attempt's own error (nothing
 // from that pass committed).
 func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool,
-	attempt func([]*BookFile, []bool) (map[string][]*BookFile, error),
+	attempt func([]*BookFile, []bool) (*stagedBookFileRows, error),
 ) error {
 	refused := map[*BookFile]bool{}
 	var missing []string
+	var durErr error
+	reasons := map[*BookFile]string{}
 	idleRounds := 0
 	total := 0
 	for _, f := range files {
@@ -376,51 +428,85 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 		if len(clones) == 0 {
 			break
 		}
-		byOwner, err := attempt(clones, pres)
+		staged, err := attempt(clones, pres)
 		var stale *staleStageError
 		if errors.As(err, &stale) {
 			newlyRefused := 0
+			refuse := func(c *BookFile, reason string) {
+				if o := origOf[c]; o != nil && !refused[o] {
+					refused[o] = true
+					if o.ID == "" {
+						// Give the refused row the ID it was staged
+						// under, so the refusal names it.
+						o.ID = c.ID
+					}
+					reasons[o] = reason
+					newlyRefused++
+				}
+			}
 			for _, b := range stale.missingOwners {
 				missing = append(missing, b)
-				for _, c := range byOwner[b] {
-					if o := origOf[c]; o != nil && !refused[o] {
-						refused[o] = true
-						if o.ID == "" {
-							// Give the refused row the ID it was staged
-							// under, so the refusal names it.
-							o.ID = c.ID
-						}
-						newlyRefused++
+				if staged != nil {
+					for _, c := range staged.byOwner[b] {
+						refuse(c, "owner book "+b+" no longer exists")
 					}
 				}
 			}
 			if newlyRefused == 0 {
 				idleRounds++
 				if idleRounds >= maxStageRetries {
-					return fmt.Errorf("book_file batch: rows kept changing under the write: %w", err)
+					// Sustained churn: the rows whose re-checked keys keep
+					// vanishing are refused on their own, with a reason, and
+					// the rest of the batch goes ahead on the next pass.
+					for _, k := range stale.vanishedKeys {
+						if staged != nil && staged.byRewriteKey[string(k)] != nil {
+							refuse(staged.byRewriteKey[string(k)], "the row it rewrites kept changing under the write ("+string(k)+")")
+						}
+					}
+					if newlyRefused == 0 {
+						return fmt.Errorf("book_file batch: rows kept changing under the write: %w", err)
+					}
+					idleRounds = 0
 				}
 			}
 			continue
 		}
-		if err != nil {
+		if !bookFileApplied(err) {
 			return err
 		}
+		// Applied (possibly with an fsync failure): the rows are visible, so
+		// the caller's structs get their final state either way.
 		for c, o := range origOf {
 			*o = *c
 		}
+		durErr = err
 		break
 	}
 	if len(refused) == 0 {
-		return nil
+		return durErr
 	}
 	e := &BookFileRowsRefusedError{
 		Committed:      total - len(refused),
 		MissingBookIDs: slices.Compact(slices.Sorted(slices.Values(missing))),
+		Reasons:        map[string]string{},
 	}
 	for _, f := range files {
 		if f != nil && refused[f] {
 			e.RefusedFileIDs = append(e.RefusedFileIDs, f.ID)
+			e.Reasons[f.ID] = reasons[f]
 		}
 	}
+	if durErr != nil {
+		return errors.Join(e, durErr)
+	}
 	return e
+}
+
+// stagedBookFileRows is what one staging pass of a batch writer reports back
+// to partitionedBookFileWrite: its NEW rows grouped by owner book, and the row
+// behind each key it rewrites, so a refusal can be pinned on exactly the rows
+// it concerns.
+type stagedBookFileRows struct {
+	byOwner      map[string][]*BookFile
+	byRewriteKey map[string]*BookFile
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
 // last-edited: 2026-09-19
 
@@ -318,13 +318,16 @@ func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*Book
 	// (book_delete_owns_files.go); a row that went away is the same non-fatal
 	// case as the nil read above.
 	wrote, err := p.setBookFileRowIfPresent(old.BookID, key, data)
-	if err != nil {
+	if !bookFileApplied(err) {
 		return err
 	}
 	if !wrote {
 		return nil
 	}
 	p.UpsertBookFileToMemDB(old)
+	if err != nil {
+		return err // applied, durability unknown
+	}
 	return nil
 }
 

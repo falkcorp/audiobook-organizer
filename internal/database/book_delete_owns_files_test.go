@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
 // last-edited: 2026-09-19
 
@@ -404,11 +404,12 @@ func TestBatchWrite_DoesNotHoldOwnerStripesAcrossFsync(t *testing.T) {
 	// Parks ONLY the first caller (the batch). Not sync.Once: Once blocks
 	// every concurrent caller until the first returns, which would park the
 	// single-book writer too and prove nothing.
-	bookFileWALSyncHook = func() {
+	bookFileWALSyncHook = func() error {
 		if first.CompareAndSwap(false, true) {
 			close(parked)
 			<-release
 		}
+		return nil
 	}
 	t.Cleanup(func() { bookFileWALSyncHook = nil })
 
@@ -438,4 +439,122 @@ func TestBatchWrite_DoesNotHoldOwnerStripesAcrossFsync(t *testing.T) {
 		t.Fatal(err)
 	}
 	batchDone <- nil // let the deferred drain return
+}
+
+// A read error while re-resolving a row during DeleteBookFile's retry must be
+// reported, not taken as "someone else deleted it".
+func TestDeleteBookFile_ReadErrorDuringRetryIsNotSuccess(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	ps := store.(*PebbleStore)
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/rerr/b"})
+	f := &BookFile{BookID: b.ID, FilePath: "/lib/rerr/b/a.mp3"}
+	if err := store.CreateBookFile(f); err != nil {
+		t.Fatal(err)
+	}
+	// A stale location (as a concurrent move leaves it): the first delete
+	// finds nothing at it and must re-resolve the row by id.
+	stale := *f
+	stale.BookID = "moved-away"
+	boom := errors.New("injected read failure")
+	bookFileIDGetHook = func([]byte) error { return boom }
+	t.Cleanup(func() { bookFileIDGetHook = nil })
+
+	err := ps.deleteBookFileFrom(f.ID, &stale)
+	if !errors.Is(err, boom) {
+		t.Fatalf("deleteBookFileFrom = %v, want the read error surfaced", err)
+	}
+	bookFileIDGetHook = nil
+	if rows, _ := store.GetBookFiles(b.ID); len(rows) != 1 {
+		t.Fatalf("rows = %d, want the row still present", len(rows))
+	}
+}
+
+// When the WAL fsync fails the batch was still APPLIED: its rows are visible.
+// The writer must say so (ErrBookFileDurabilityUnknown), give the caller's
+// structs their IDs, and refresh memdb — not report "nothing committed".
+func TestBatchUpsert_SyncFailureIsAppliedDurabilityUnknown(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	ps := store.(*PebbleStore)
+	ps.WaitForWarmup()
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/sync/b"})
+	rows := []*BookFile{{BookID: b.ID, FilePath: "/lib/sync/b/1.mp3"}, {BookID: b.ID, FilePath: "/lib/sync/b/2.mp3"}}
+	bookFileWALSyncHook = func() error { return errors.New("injected fsync failure") }
+	t.Cleanup(func() { bookFileWALSyncHook = nil })
+
+	err := store.BatchUpsertBookFiles(rows)
+	bookFileWALSyncHook = nil
+	if !errors.Is(err, ErrBookFileDurabilityUnknown) {
+		t.Fatalf("err = %v, want ErrBookFileDurabilityUnknown", err)
+	}
+	for _, r := range rows {
+		if r.ID == "" {
+			t.Fatal("an applied row's struct was not given its ID")
+		}
+	}
+	got, _ := store.GetBookFiles(b.ID)
+	if len(got) != 2 {
+		t.Fatalf("visible rows = %d, want 2", len(got))
+	}
+	core, err := store.GetAllBookFilesCore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, c := range core {
+		if c.BookID == b.ID {
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("memdb holds %d of the 2 applied rows", seen)
+	}
+}
+
+// Sustained churn on ONE matched row (deleted and recreated before every
+// commit) must refuse that row alone; the other rows of the batch commit.
+func TestBatchUpsert_ChurningRowRefusedOthersCommit(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	b, _ := store.CreateBook(&Book{Title: "b", FilePath: "/lib/churn/b"})
+	const hot = "/lib/churn/b/hot.mp3"
+	if err := store.CreateBookFile(&BookFile{BookID: b.ID, FilePath: hot}); err != nil {
+		t.Fatal(err)
+	}
+	inHook := false
+	bookFileBeforeCommitHook = func() {
+		if inHook {
+			return
+		}
+		inHook = true
+		defer func() { inHook = false }()
+		if cur, _ := store.GetBookFileByPath(hot); cur != nil {
+			_ = store.DeleteBookFile(cur.ID)
+		}
+		_ = store.CreateBookFile(&BookFile{BookID: b.ID, FilePath: hot})
+	}
+	t.Cleanup(func() { bookFileBeforeCommitHook = nil })
+
+	rows := []*BookFile{{BookID: b.ID, FilePath: hot}}
+	for i := range 10 {
+		rows = append(rows, &BookFile{BookID: b.ID, FilePath: fmt.Sprintf("/lib/churn/b/%02d.mp3", i)})
+	}
+	err := store.BatchUpsertBookFiles(rows)
+	bookFileBeforeCommitHook = nil
+	var refused *BookFileRowsRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("err = %v, want *BookFileRowsRefusedError", err)
+	}
+	if refused.Committed != 10 || len(refused.RefusedFileIDs) != 1 {
+		t.Fatalf("refusal = %+v, want 10 committed and the churning row refused", refused)
+	}
+	if refused.Reasons[refused.RefusedFileIDs[0]] == "" {
+		t.Errorf("refused row has no reason: %+v", refused)
+	}
+	for i := range 10 {
+		if r, _ := store.GetBookFileByPath(fmt.Sprintf("/lib/churn/b/%02d.mp3", i)); r == nil {
+			t.Fatalf("row %d was not committed", i)
+		}
+	}
 }
