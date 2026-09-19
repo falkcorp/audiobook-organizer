@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,6 +146,9 @@ type fakeLLM struct {
 	// downloadFails makes that many downloads fail before one succeeds.
 	downloadFails int
 	cancels       int
+	// enrichGate, when set, holds the enrichment re-ask (a call carrying only
+	// author 1) until it is closed or the call's context ends.
+	enrichGate chan struct{}
 }
 
 func newFakeLLM(acct *fakeAccount) *fakeLLM {
@@ -185,6 +189,14 @@ func (f *fakeLLM) DiscoverAuthorDuplicates(ctx context.Context, inputs []ai.Auth
 		f.entered <- struct{}{}
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	if f.enrichGate != nil && len(inputs) == 1 && inputs[0].ID == 1 {
+		f.entered <- struct{}{}
+		select {
+		case <-f.enrichGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	out := suggestionsFor(inputs)
 	if f.uncertainFirst {
@@ -288,14 +300,25 @@ func (f *fakeLLM) DownloadBatchGroupsResults(_ context.Context, outputFileID str
 	return out, nil
 }
 
-func (f *fakeLLM) DownloadBatchResults(_ context.Context, outputFileID string) ([]ai.AuthorDiscoverySuggestion, error) {
+func (f *fakeLLM) DownloadBatchResults(ctx context.Context, outputFileID string) ([]ai.AuthorDiscoverySuggestion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := f.failDownload(); err != nil {
 		return nil, err
 	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
 	b := f.acct.batches[outputFileID[len("file_"):]]
-	return suggestionsFor(b.inputs), nil
+	out := suggestionsFor(b.inputs)
+	if f.uncertainFirst {
+		for i := range out {
+			if out[i].AuthorIDs[0] == 1 {
+				out[i].Confidence = "medium"
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeLLM) counts() (discover, create, downloads int) {
@@ -311,11 +334,31 @@ func (f *fakeLLM) counts() (discover, create, downloads int) {
 type finderLLM struct {
 	*fakeLLM
 	err *error
+	// hide, while true, makes every batch invisible (a listing that has not
+	// caught up with a batch OpenAI just accepted).
+	hide *atomic.Bool
+	// staleFirst, when set, makes the FIRST lookup see an empty listing and
+	// then wait until the channel is closed before returning it: a resolver
+	// holding a stale view while another one acts.
+	staleFirst chan struct{}
+	lookups    *atomic.Int32
 }
 
 func (f finderLLM) FindBatchByMetadata(_ context.Context, match map[string]string, _ time.Time) (string, bool, error) {
 	if f.err != nil && *f.err != nil {
 		return "", false, *f.err
+	}
+	n := int32(0)
+	if f.lookups != nil {
+		n = f.lookups.Add(1)
+	}
+	if f.staleFirst != nil && n == 1 {
+		f.entered <- struct{}{}
+		<-f.staleFirst
+		return "", false, nil
+	}
+	if f.hide != nil && f.hide.Load() {
+		return "", false, nil
 	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
@@ -636,6 +679,8 @@ func TestBatchSubmittingWithNoBatchSubmitsOnce(t *testing.T) {
 
 	llm := newFakeLLM(acct)
 	pm := NewPipelineManager(store, main, finderLLM{fakeLLM: llm})
+	// The pre-seeded "submitting" row is past the resubmit grace.
+	pm.now = func() time.Time { return time.Now().Add(2 * submitGrace) }
 	run := runAsync(pm, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
 	_, creates, _ := llm.counts()

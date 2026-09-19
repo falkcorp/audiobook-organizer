@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.3.0
+// version: 4.4.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -95,6 +95,51 @@ type PipelineManager struct {
 	// running holds the phases a goroutine in THIS process is executing, keyed
 	// "scanID:phaseType". See beginPhase.
 	running map[string]bool
+	// now is the clock; tests replace it to step past submitGrace.
+	now func() time.Time
+	// scanCtxs is the per-scan context every phase of a scan runs under,
+	// whoever started it (RunScan, or the batch poller collecting a batch).
+	// CancelScan cancels it through cancels. Guarded by mu.
+	scanCtxs map[int]context.Context
+}
+
+// clock returns the current time from pm.now (time.Now when unset).
+func (pm *PipelineManager) clock() time.Time {
+	if pm.now != nil {
+		return pm.now()
+	}
+	return time.Now()
+}
+
+// scanContext returns the context a scan's phases must run under. Work the
+// batch poller starts arrives on the poller's context; running it there would
+// make it deaf to CancelScan, and a canceled scan could later be overwritten
+// "complete" by enrichment that kept going. So it runs under the scan's own
+// context: RunScan's when one is attached, else one derived here from parent
+// and registered so CancelScan reaches it.
+func (pm *PipelineManager) scanContext(parent context.Context, scanID int) context.Context {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if c, ok := pm.scanCtxs[scanID]; ok && c.Err() == nil {
+		return c
+	}
+	c, cancel := context.WithCancel(parent)
+	if pm.scanCtxs == nil {
+		pm.scanCtxs = make(map[int]context.Context)
+	}
+	pm.scanCtxs[scanID] = c
+	pm.addCancelLocked(scanID, cancel)
+	return c
+}
+
+// addCancelLocked chains cancel onto the scan's registered cancel func, so a
+// CancelScan stops every context the scan's work runs under. Caller holds mu.
+func (pm *PipelineManager) addCancelLocked(scanID int, cancel context.CancelFunc) {
+	if prev, ok := pm.cancels[scanID]; ok {
+		pm.cancels[scanID] = func() { prev(); cancel() }
+		return
+	}
+	pm.cancels[scanID] = cancel
 }
 
 // NewPipelineManager creates a new pipeline manager.
@@ -139,7 +184,11 @@ func (pm *PipelineManager) report(scanID, current, total int, message string) {
 // channel twice would panic the process.
 func (pm *PipelineManager) finishScan(scanID int, err error) {
 	pm.mu.Lock()
+	if c, ok := pm.cancels[scanID]; ok {
+		c() // stop any poller-started work still running for the scan
+	}
 	delete(pm.cancels, scanID)
+	delete(pm.scanCtxs, scanID)
 	delete(pm.sinks, scanID)
 	done, attached := pm.dones[scanID]
 	if attached {
@@ -159,6 +208,7 @@ func (pm *PipelineManager) finishScan(scanID int, err error) {
 func (pm *PipelineManager) detachScan(scanID int) {
 	pm.mu.Lock()
 	delete(pm.cancels, scanID)
+	delete(pm.scanCtxs, scanID)
 	delete(pm.sinks, scanID)
 	delete(pm.dones, scanID)
 	pm.mu.Unlock()
@@ -253,6 +303,12 @@ var ErrBatchSubmitUnknown = errors.New("batch phase was mid-submit at restart; O
 // window: not a verdict. The phase stays "submitting" and is looked up again.
 var errBatchLookup = errors.New("batch lookup inconclusive")
 
+// submitGrace is how long after a CreateBatch attempt a listing that does not
+// show its batch still proves nothing: OpenAI may have accepted a request whose
+// response was lost, and the listing may not show it yet. It mirrors aijobs'
+// UnlinkedWriteOffGrace. A var so tests can shorten it.
+var submitGrace = time.Hour
+
 // maxSubmitAttempts bounds how many times a phase whose CreateBatch failed
 // (confirmed: no batch exists) is submitted again before it fails.
 const maxSubmitAttempts = 3
@@ -294,6 +350,12 @@ var _ BatchFinder = (*ai.OpenAIParser)(nil)
 var sourcePhases = [...]struct{ scan, enrich string }{
 	{"groups_scan", "groups_enrich"},
 	{"full_scan", "full_enrich"},
+}
+
+// isTerminalScan reports whether a scan has reached a state no phase may
+// move it out of.
+func isTerminalScan(status string) bool {
+	return status == "complete" || status == "failed" || status == "canceled" || status == "superseded"
 }
 
 // isTerminalPhase reports whether a phase row has reached a state nothing will
@@ -392,7 +454,11 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 		return fmt.Errorf("scan %d is already attached to a running operation", scanID)
 	}
 	pm.dones[scanID] = done
-	pm.cancels[scanID] = cancel
+	pm.addCancelLocked(scanID, cancel)
+	if pm.scanCtxs == nil {
+		pm.scanCtxs = make(map[int]context.Context)
+	}
+	pm.scanCtxs[scanID] = scanCtx
 	pm.sinks[scanID] = sink
 	pm.mu.Unlock()
 
@@ -407,7 +473,12 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 		pm.report(scanID, 0, 100, "Resuming AI scan from its last persisted state")
 	}
 
-	if err := pm.drive(scanCtx, scanID, scan.Mode); err != nil {
+	// resumed: the scan ran before (its status left "pending"). A pending
+	// batch phase of a resumed scan may already own a batch — before this
+	// build a phase stayed "pending" until its batch id was recorded — so drive
+	// looks it up before submitting.
+	resumed := scan.Status != "pending"
+	if err := pm.drive(scanCtx, scanID, scan.Mode, resumed); err != nil {
 		pm.finishScan(scanID, nil)
 		return err
 	}
@@ -427,7 +498,7 @@ func (pm *PipelineManager) RunScan(ctx context.Context, scanID int, sink Progres
 //
 // Every phase function claims its phase and re-checks the row before doing
 // work (beginPhase), so drive racing OnPhaseComplete cannot run a phase twice.
-func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string) error {
+func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string, resumed bool) error {
 	phases, err := pm.scanStore.GetPhases(scanID)
 	if err != nil {
 		return fmt.Errorf("get phases for scan %d: %w", scanID, err)
@@ -458,6 +529,16 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string) e
 		}
 		switch p.Status {
 		case "pending", "processing":
+			if mode == "batch" && resumed {
+				// Possibly a pre-nonce batch whose id was never recorded
+				// (F4). Settle it like any ambiguous submit: look it up,
+				// submit only on a confirmed absence past the grace.
+				if err := pm.scanStore.UpdatePhaseStatus(scanID, sp.scan, "submitting", ""); err != nil {
+					return fmt.Errorf("mark %s submitting for lookup: %w", sp.scan, err)
+				}
+				pm.resolveSubmitting(ctx, scanID, sp.scan)
+				continue
+			}
 			a, err := loadAuthors()
 			if err != nil {
 				return err
@@ -513,6 +594,22 @@ func (pm *PipelineManager) launchSource(ctx context.Context, scanID int, mode, p
 //   - no finder at all: fail visibly (ErrBatchSubmitUnknown) — nothing could
 //     ever settle it, and guessing either way pays twice or hangs.
 func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, phaseType string) {
+	// Hold the phase claim across the lookup AND the resubmit. Two resolvers
+	// (the heartbeat and the poller's CollectBatch) otherwise both read
+	// "absent" — one from a stale listing — and both pay for a batch.
+	if !pm.beginPhase(scanID, phaseType) {
+		return
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			pm.endPhase(scanID, phaseType)
+		}
+	}()
+	if p, err := pm.scanStore.GetPhase(scanID, phaseType); err != nil || p == nil || p.Status != "submitting" {
+		return // settled meanwhile
+	}
+
 	batchID, found, err := pm.findScanBatch(ctx, scanID, phaseType)
 	switch {
 	case errors.Is(err, ErrBatchSubmitUnknown):
@@ -525,6 +622,13 @@ func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, ph
 			plog.Error("scan %d: record re-attached batch %s for %s (will retry): %v", scanID, batchID, phaseType, err)
 		}
 	default:
+		// "Not in the listing" proves absence only once submitGrace has
+		// passed since the last CreateBatch attempt: an accepted batch whose
+		// response was lost may not be listed yet.
+		if since := pm.clock().Sub(pm.lastSubmitAt(scanID, phaseType)); since < submitGrace {
+			plog.Info("scan %d: %s batch not listed %s after the last submit; waiting out the %s grace", scanID, phaseType, since.Round(time.Second), submitGrace)
+			return
+		}
 		if n := pm.attempts(scanID, phaseType, "submit_attempts"); n >= maxSubmitAttempts {
 			pm.failPhase(scanID, phaseType, fmt.Errorf("batch create failed %d times with no batch reaching OpenAI", n))
 			return
@@ -535,8 +639,34 @@ func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, ph
 			return
 		}
 		plog.Info("scan %d: confirmed no batch exists for %s; submitting it now", scanID, phaseType)
-		pm.launchSource(ctx, scanID, "batch", phaseType, authors)
+		handedOff = true // the submit goroutine now owns the claim
+		go func() {
+			defer pm.endPhase(scanID, phaseType)
+			pm.submitSourceClaimed(ctx, scanID, phaseType, authors)
+		}()
 	}
+}
+
+// lastSubmitAtArtifact records when a phase last called CreateBatch.
+const lastSubmitAtArtifact = "last_submit_at"
+
+// lastSubmitAt is when the phase last attempted CreateBatch: the persisted
+// artifact, else the phase's start, else the scan's creation (a pre-PR phase
+// that never recorded either).
+func (pm *PipelineManager) lastSubmitAt(scanID int, phaseType string) time.Time {
+	if arts, err := pm.scanStore.GetPhaseArtifacts(scanID, phaseType); err == nil {
+		var t time.Time
+		if raw, ok := arts[lastSubmitAtArtifact]; ok && json.Unmarshal(raw, &t) == nil && !t.IsZero() {
+			return t
+		}
+	}
+	if p, err := pm.scanStore.GetPhase(scanID, phaseType); err == nil && p != nil && p.StartedAt != nil {
+		return *p.StartedAt
+	}
+	if scan, err := pm.scanStore.GetScan(scanID); err == nil && scan != nil {
+		return scan.CreatedAt
+	}
+	return pm.clock() // unknown: assume just now, i.e. wait the grace
 }
 
 // scanBatchOwner is the batch metadata naming the scan phase that owns a
@@ -567,6 +697,18 @@ func (pm *PipelineManager) findScanBatch(ctx context.Context, scanID int, phaseT
 	// this host and OpenAI; the batch cannot predate its scan.
 	since := scan.CreatedAt.Add(-time.Hour)
 	batchID, found, err := finder.FindBatchByMetadata(ctx, scanBatchOwner(scan, phaseType), since)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %w", errBatchLookup, err)
+	}
+	if found {
+		return batchID, true, nil
+	}
+	// A batch created before the nonce existed carries scan_id and
+	// scan_phase only. An empty nonce matches only a batch WITHOUT the key,
+	// so a newer scan that reused the id (and has a nonce) still never matches.
+	legacy := scanBatchOwner(scan, phaseType)
+	legacy[ai.BatchMetaScanNonce] = ""
+	batchID, found, err = finder.FindBatchByMetadata(ctx, legacy, since)
 	if err != nil {
 		return "", false, fmt.Errorf("%w: %w", errBatchLookup, err)
 	}
@@ -627,6 +769,12 @@ func (pm *PipelineManager) beginPhase(scanID int, phaseType string) bool {
 	pm.mu.Unlock()
 
 	if p, err := pm.scanStore.GetPhase(scanID, phaseType); err == nil && p != nil && isTerminalPhase(p.Status) {
+		pm.endPhase(scanID, phaseType)
+		return false
+	}
+	// A scan an operator canceled (or that failed or finished) takes no more
+	// phase work, from any caller — including work the batch poller starts.
+	if scan, err := pm.scanStore.GetScan(scanID); err == nil && scan != nil && isTerminalScan(scan.Status) {
 		pm.endPhase(scanID, phaseType)
 		return false
 	}
@@ -1105,6 +1253,14 @@ func (pm *PipelineManager) submitBatch(scanID int, phaseType string, create func
 		pm.failPhase(scanID, phaseType, fmt.Errorf("mark submitting: %w", err))
 		return
 	}
+	// When this attempt happened is what resolveSubmitting measures its grace
+	// from. Without it a failed create is indistinguishable from an old one,
+	// so no create is made unless it is recorded.
+	stamp, _ := json.Marshal(pm.clock())
+	if err := pm.scanStore.SavePhaseArtifact(scanID, phaseType, lastSubmitAtArtifact, stamp); err != nil {
+		plog.Warn("scan %d: could not record the submit time for %s; not submitting yet: %v", scanID, phaseType, err)
+		return
+	}
 	pm.bumpAttempts(scanID, phaseType, "submit_attempts")
 	batchID, err := create(scanBatchOwner(scan, phaseType))
 	if err != nil {
@@ -1124,6 +1280,27 @@ func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, a
 		return
 	}
 	defer pm.endPhase(scanID, "groups_scan")
+	pm.submitSourceClaimed(ctx, scanID, "groups_scan", authors)
+}
+
+// submitSourceClaimed submits one batch source phase. The caller holds the
+// phase claim. It submits only while the row is still unsubmitted — pending,
+// or submitting with no batch id — because a claim alone does not stop a
+// second submit: another resolver may have attached or submitted the batch
+// between this caller deciding to submit and taking the claim.
+func (pm *PipelineManager) submitSourceClaimed(ctx context.Context, scanID int, phaseType string, authors []database.Author) {
+	p, err := pm.scanStore.GetPhase(scanID, phaseType)
+	if err != nil || p == nil || p.BatchID != "" || (p.Status != "pending" && p.Status != "submitting") {
+		return
+	}
+	if phaseType == "groups_scan" {
+		pm.submitGroupsBatch(ctx, scanID, authors)
+	} else {
+		pm.submitFullBatch(ctx, scanID, authors)
+	}
+}
+
+func (pm *PipelineManager) submitGroupsBatch(ctx context.Context, scanID int, authors []database.Author) {
 	plog.Info("scan %d: starting groups scan (batch)", scanID)
 
 	inputs, groups, err := pm.buildGroupsInput(authors)
@@ -1156,6 +1333,10 @@ func (pm *PipelineManager) runFullScanBatch(ctx context.Context, scanID int, aut
 		return
 	}
 	defer pm.endPhase(scanID, "full_scan")
+	pm.submitSourceClaimed(ctx, scanID, "full_scan", authors)
+}
+
+func (pm *PipelineManager) submitFullBatch(ctx context.Context, scanID int, authors []database.Author) {
 	plog.Info("scan %d: starting full scan (batch)", scanID)
 
 	inputs, _, err := pm.fullScanInputs(scanID, authors)
@@ -1290,9 +1471,10 @@ func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, source
 		// Re-submit to AI with enriched context
 		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, deduped)
 		if err != nil {
-			// A shutdown is not an enrichment failure: completing with the
-			// un-enriched suggestions would lose the enrichment for good.
-			if abandonedForShutdown(ctx, scanID, enrichPhase) {
+			// A shutdown or cancel is not an enrichment failure: completing
+			// with the un-enriched suggestions would lose the enrichment for
+			// good, and a canceled scan must not advance at all.
+			if abandonedForShutdown(ctx, scanID, enrichPhase) || ctx.Err() != nil {
 				return
 			}
 			// Enrichment failure is non-fatal — use original suggestions
@@ -1400,6 +1582,12 @@ func (pm *PipelineManager) runCrossValidation(ctx context.Context, scanID int) {
 // releases the operation waiting on it — the scan's only success path. A nil
 // outcome is what marks the operation completed.
 func (pm *PipelineManager) completeScan(scanID int) {
+	// Never overwrite a scan an operator canceled (or that failed) meanwhile.
+	if scan, err := pm.scanStore.GetScan(scanID); err == nil && scan != nil && isTerminalScan(scan.Status) && scan.Status != "complete" {
+		plog.Info("scan %d: finished cross-validation but the scan is %s; leaving it", scanID, scan.Status)
+		pm.finishScan(scanID, ErrScanCanceled)
+		return
+	}
 	if err := pm.scanStore.UpdateScanStatus(scanID, "complete"); err != nil {
 		plog.Error("scan %d: could not mark scan complete: %v", scanID, err)
 	}
@@ -1451,8 +1639,13 @@ func (pm *PipelineManager) PollBatchPhases(ctx context.Context) {
 	}
 }
 
-// pollScanBatches advances the batch phases of one scan.
+// pollScanBatches advances the batch phases of one scan. Everything it starts
+// runs under the scan's own context (scanContext), not the caller's.
 func (pm *PipelineManager) pollScanBatches(ctx context.Context, scanID int) {
+	if ctx.Err() != nil {
+		return
+	}
+	ctx = pm.scanContext(ctx, scanID)
 	phases, err := pm.scanStore.GetPhases(scanID)
 	if err != nil {
 		plog.Error("scan %d: reading phases for batch polling: %v", scanID, err)
@@ -1575,7 +1768,7 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 	case "groups_scan":
 		suggestions, err := pm.parser.DownloadBatchGroupsResults(ctx, outputFileID)
 		if err != nil {
-			pm.downloadFailed(scanID, phaseType, err)
+			pm.downloadFailed(ctx, scanID, phaseType, err)
 			return
 		}
 		groupIDs, err := pm.batchGroupAuthorIDs(scanID)
@@ -1589,7 +1782,7 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 	case "full_scan":
 		discoveries, err := pm.parser.DownloadBatchResults(ctx, outputFileID)
 		if err != nil {
-			pm.downloadFailed(scanID, phaseType, err)
+			pm.downloadFailed(ctx, scanID, phaseType, err)
 			return
 		}
 		pm.finishSource(ctx, scanID, phaseType, phase.InputData, discoveries,
@@ -1601,7 +1794,12 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 // is usually transient (a 5xx, a reset connection), so the phase stays
 // "submitted" and the next poll downloads again; only maxDownloadAttempts
 // consecutive failures fail the phase.
-func (pm *PipelineManager) downloadFailed(scanID int, phaseType string, err error) {
+func (pm *PipelineManager) downloadFailed(ctx context.Context, scanID int, phaseType string, err error) {
+	if ctx.Err() != nil {
+		// Canceled or shutting down: not a failed download, not an attempt.
+		plog.Info("scan %d: %s download interrupted (%v); not counted", scanID, phaseType, context.Cause(ctx))
+		return
+	}
 	n := pm.bumpAttempts(scanID, phaseType, "download_attempts")
 	if n >= maxDownloadAttempts {
 		pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results failed %d times: %w", n, err))

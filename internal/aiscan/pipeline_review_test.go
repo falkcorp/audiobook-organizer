@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a6674cc-107e-46c1-bf79-9bd8302491e2
 // last-edited: 2026-09-19
 
@@ -158,10 +158,14 @@ func TestCreateErrorConfirmedAbsentResubmits(t *testing.T) {
 	llm := newFakeLLM(acct)
 	llm.createErr = true
 	pm := NewPipelineManager(store, main, finderLLM{fakeLLM: llm})
+	clock := &fakeClock{t: time.Now()}
+	pm.now = clock.now
 	scan, err := pm.CreateScan("batch")
 	require.NoError(t, err)
 	run := runAsync(pm, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	require.Eventually(t, func() bool { return !pm.phaseClaimed(scan.ID, "full_scan") }, 5*time.Second, 5*time.Millisecond)
+	clock.advance(submitGrace + time.Minute) // past the grace: absence is now confirmed
 	// Poll as the heartbeat does until the confirmed-absent resubmit lands. A
 	// poll during the first (still running) submit is a no-op.
 	require.Eventually(t, func() bool {
