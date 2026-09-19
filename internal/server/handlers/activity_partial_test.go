@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_partial_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 768e4939-c876-45fc-9357-b2d6303dfa42
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package handlers_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,10 +27,11 @@ import (
 type partialService struct {
 	*handlersmocks.MockActivityService
 	res database.ActivityQueryResult
+	err error
 }
 
 func (p *partialService) QueryWithPartial(context.Context, database.ActivityFilter) (database.ActivityQueryResult, error) {
-	return p.res, nil
+	return p.res, p.err
 }
 
 // TestListActivity_ReportsPartial: a budget-truncated store answer reaches the
@@ -62,4 +64,21 @@ func TestListActivity_ReportsPartial(t *testing.T) {
 		assert.Equal(t, partial, body.Data.Partial)
 		assert.Equal(t, 1, body.Data.Total)
 	}
+}
+
+// TestListActivity_TooDeepOffsetIs400: the store refuses an offset past its
+// cap; that is the caller's request, not a server fault.
+func TestListActivity_TooDeepOffsetIs400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &partialService{
+		MockActivityService: handlersmocks.NewMockActivityService(t),
+		err:                 fmt.Errorf("query: %w", database.ErrActivityOffsetTooDeep),
+	}
+	h := handlers.NewActivityHandler(svc, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/activity?source=x&offset=200000", nil)
+	h.ListActivity(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "offset")
 }

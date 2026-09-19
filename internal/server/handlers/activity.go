@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-09-19
 
@@ -209,6 +209,10 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	}
 	if err != nil {
 		if abortIfClientGone(c, err, "ListActivity") {
+			return
+		}
+		if errors.Is(err, database.ErrActivityOffsetTooDeep) {
+			httputil.RespondWithBadRequest(c, err.Error())
 			return
 		}
 		httputil.InternalError(c, "failed to query activity log", err)

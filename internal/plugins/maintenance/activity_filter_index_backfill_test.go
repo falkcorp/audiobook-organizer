@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
 // last-edited: 2026-09-19
 
@@ -163,6 +163,38 @@ func TestActivityFilterIndexBackfill_AlreadyDoneIsANoOp(t *testing.T) {
 	assert.True(t, res.AlreadyDone)
 }
 
+// afibGateSpy records whether the planner gate was open when each window ran.
+type afibGateSpy struct {
+	database.ActivityFilterIndexBackfiller
+	mu       sync.Mutex
+	gateSeen []bool
+}
+
+func (g *afibGateSpy) BackfillFilterIndexWindow(ctx context.Context, from, to int64, open bool) (int, error) {
+	g.mu.Lock()
+	g.gateSeen = append(g.gateSeen, g.ActivityFilterIndexBackfiller.FilterIndexBackfillDone())
+	g.mu.Unlock()
+	return g.ActivityFilterIndexBackfiller.BackfillFilterIndexWindow(ctx, from, to, open)
+}
+
+// TestActivityFilterIndexBackfill_ForceClosesGateBeforeFirstWindow: a forced
+// rebuild must stop the planner trusting the index BEFORE it starts writing,
+// or queries during the rebuild return short pages with partial=false.
+func TestActivityFilterIndexBackfill_ForceClosesGateBeforeFirstWindow(t *testing.T) {
+	s, _ := newAfibStore(t, 5)
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+	spy := &afibGateSpy{ActivityFilterIndexBackfiller: s}
+	require.NoError(t, New(&afibDeps{store: spy}).runActivityFilterIndexBackfill(
+		context.Background(), json.RawMessage(`{"force":true}`), &afibSpy{}))
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	require.NotEmpty(t, spy.gateSeen)
+	for i, open := range spy.gateSeen {
+		assert.False(t, open, "window %d ran with the planner gate open", i)
+	}
+	assert.True(t, s.FilterIndexBackfillDone(), "re-opened when the forced run completes")
+}
+
 func TestActivityFilterIndexBackfill_RefusesWithoutPebbleStore(t *testing.T) {
 	err := New(&afibDeps{}).runActivityFilterIndexBackfill(context.Background(), nil, &afibSpy{})
 	require.Error(t, err)
@@ -173,6 +205,8 @@ func TestActivityFilterIndexBackfill_DefSharesCompactionKey(t *testing.T) {
 	def := p.activityFilterIndexBackfillDef()
 	assert.Equal(t, p.nightlyCompactActivityLogDef().ConcurrencyKey, def.ConcurrencyKey,
 		"must never run while compaction deletes rows")
+	assert.Equal(t, p.activityReclaimDef().ConcurrencyKey, def.ConcurrencyKey,
+		"reclaim prunes Pebble rows too, so it must share the key")
 	assert.Equal(t, "maintenance.activity-filter-index-backfill", def.ID)
 }
 

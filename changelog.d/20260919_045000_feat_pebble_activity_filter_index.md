@@ -26,3 +26,15 @@ then filters behave as before. Run it once after deploying, before switching
 A search that hits the scan budget (for example a text search) now returns
 `"partial": true`, and the Activity page says older matches were not searched
 instead of presenting a short or empty page as the whole answer.
+
+#### Filter-index safety: forced rebuilds, rollbacks, deep offsets
+
+A forced backfill (`{"force": true}`) now turns indexed filtering off before
+it writes anything. Each write also records the newest row timestamp the
+indexing build has written. At boot, rows newer than that mark are checked:
+rows written without index keys by a rolled-back build turn indexed filtering
+off, get indexed, and then turn it back on. Filtered `/activity` requests with
+an offset above 100,000 return 400 instead of reading that many rows. The
+backfill now closes its iterator before each commit, and
+`maintenance.activity-reclaim` shares the activity-maintenance concurrency key
+with it.

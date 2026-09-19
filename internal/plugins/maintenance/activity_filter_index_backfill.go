@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
 // last-edited: 2026-09-19
 
@@ -68,13 +68,18 @@ type ActivityFilterIndexBackfillResult struct {
 // Record itself, so the plan only has to reach "now" at plan time: its last
 // window is open-ended anyway.
 //
-// CONCURRENCY. It shares maintenance.cleanup-activity-log's ConcurrencyKey on
-// purpose: compaction, summarize and prune delete rows, and a delete racing a
-// window that already read the row would re-create that row's index keys after
-// the delete removed them — orphans. Serializing against every op that deletes
-// activity rows closes that race; RepairActivityIndexes and the planner's
-// existence check cover anything older. Within the op, windows are disjoint key
-// ranges (by timestamp), so the RunItems workers never write the same key.
+// CONCURRENCY. A delete racing a window that has already read the row would
+// re-create that row's index keys after the delete removed them: a GHOST key.
+// Ghost keys never change an answer — the planner Gets every candidate's
+// primary row and skips a missing one, and RepairActivityIndexes deletes them
+// nightly — they only cost space until then. To keep them rare the op shares
+// maintenance.cleanup-activity-log's ConcurrencyKey with every OP that deletes
+// activity rows: cleanup, compact, nightly compact, recompact and
+// maintenance.activity-reclaim (moved onto this key for that reason). The one
+// deleter that is not an op, the wipe fixup (WipeAllActivity), is not
+// serialized; a wipe during a backfill can leave ghost keys, handled as above.
+// Within the op, windows are disjoint timestamp ranges, so the RunItems
+// workers never write the same key.
 //
 // RESUME. ResumeRestart with a contiguous-completion watermark. Each window is
 // idempotent (its writes are Sets of the exact bytes Record writes) and its last
@@ -140,6 +145,17 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 		_ = reporter.UpdateProgress(0, 0, msg)
 		result.AlreadyDone = true
 		return opsregistry.ReporterSetResult(reporter, result)
+	}
+
+	// A forced rebuild exists because the indexes are NOT trusted (a rollback,
+	// a suspected defect). Withdraw the sentinel before the first write so the
+	// planner falls back to the budgeted scan — which says partial — for the
+	// whole rebuild instead of answering from a half-rebuilt index. A resumed
+	// forced run clears it again, which is harmless.
+	if params.Force {
+		if err := store.ClearFilterIndexBackfillDone(); err != nil {
+			return fmt.Errorf("activity-filter-index-backfill: clear sentinel: %w", err)
+		}
 	}
 
 	if params.PlanWindows <= 0 {

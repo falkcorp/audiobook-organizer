@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cb551e14-7788-4c73-830d-3e0a46bfe67c
 // last-edited: 2026-09-19
 
@@ -179,6 +179,14 @@ func TestFilterIndex_DifferentialAgainstUnboundedScan(t *testing.T) {
 	}
 	_, err := s.RecordBatch(batch)
 	require.NoError(t, err)
+	// Poisoned rows: every scalar decodes, but Details is a JSON string where
+	// a map is expected, so the FULL decode fails. The reference path drops
+	// them from page and total alike; the planner must too, wherever they fall
+	// relative to the offset.
+	for i := 0; i < 40; i++ {
+		seedPoisonedRow(t, s, base.Add(time.Duration(rng.IntN(600))*time.Second),
+			actTiers[rng.IntN(len(actTiers)-1)], sources[rng.IntN(len(sources))], levels[rng.IntN(len(levels))])
+	}
 
 	old := activityQueryScanBudget
 	activityQueryScanBudget = 1 << 30
@@ -217,6 +225,26 @@ func TestFilterIndex_DifferentialAgainstUnboundedScan(t *testing.T) {
 			assert.Equal(t, entryIDs(want.Entries), entryIDs(got.Entries), name)
 		}
 	}
+}
+
+// seedPoisonedRow writes a row (with every index key Record would write) whose
+// details value is a JSON string: it decodes without Details and fails with them.
+func seedPoisonedRow(t *testing.T, s *PebbleActivityStore, ts time.Time, tier, source, level string) {
+	t.Helper()
+	id := fmt.Sprintf("01POISON%018d", ts.UnixNano()%1_000_000_000_000_000)
+	pk := pactPrimaryKey(tier, ts, id)
+	val := fmt.Sprintf(`{"id":%d,"timestamp":%q,"tier":%q,"type":"scan","level":%q,"source":%q,"summary":"poison alpha","tags":["x"],"details":"not-a-map"}`,
+		ts.UnixNano(), ts.Format(time.RFC3339Nano), tier, level, source)
+	e := ActivityEntry{Tier: tier, Type: "scan", Level: level, Source: source}
+	keys, ok := pactIndexKeysFor(pk, e)
+	require.True(t, ok)
+	b := s.db.NewBatch()
+	require.NoError(t, b.Set(pk, []byte(val), nil))
+	for _, k := range keys {
+		require.NoError(t, b.Set(k, pk[len("act:"):], nil))
+	}
+	require.NoError(t, b.Commit(pebble.Sync))
+	require.NoError(t, b.Close())
 }
 
 func entryIDs(es []ActivityEntry) []int64 {
@@ -398,6 +426,110 @@ func TestFindPebbleActivityStore_PeelsWrappers(t *testing.T) {
 	mig := NewMigratingActivityStore(s, nil, false)
 	assert.Same(t, s, FindPebbleActivityStore(NewInstrumentedActivityStorer(mig)))
 	assert.Nil(t, FindPebbleActivityStore(nil))
+}
+
+// TestFilterIndex_OffsetBeyondCapIsRejected: a deep offset is refused with a
+// typed error rather than walking up to offset rows per request.
+func TestFilterIndex_OffsetBeyondCapIsRejected(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	setFilterIndexReady(t, s, true)
+	_, err := s.QueryWithPartial(context.Background(), ActivityFilter{Source: "x", Limit: 10, Offset: activityQueryMaxOffset + 1})
+	require.ErrorIs(t, err, ErrActivityOffsetTooDeep)
+	_, err = s.QueryWithPartial(context.Background(), ActivityFilter{Level: "info", Limit: 10, Offset: activityQueryMaxOffset})
+	require.NoError(t, err, "the cap itself is allowed")
+}
+
+// writeLegacyRow is what a build without the filter indexes writes: the
+// primary row and op/book keys only.
+func writeLegacyRow(t *testing.T, s *PebbleActivityStore, ts time.Time, source string) {
+	t.Helper()
+	e := ActivityEntry{Timestamp: ts, Tier: "change", Type: "legacy", Level: "info", Source: source, Summary: "old build"}
+	pk := pactPrimaryKey("change", ts, fmt.Sprintf("01LEGACY%018d", ts.UnixNano()%1_000_000_000_000_000))
+	val, err := json.Marshal(e)
+	require.NoError(t, err)
+	require.NoError(t, s.db.Set(pk, val, pebble.Sync))
+}
+
+// TestFilterIndex_RollbackGapIsDetectedAndReindexed: an indexing build ran and
+// completed the backfill; a rollback to an older build then wrote rows with no
+// filter keys; the indexing build boots again. Without reconciliation the
+// sentinel still says "complete" and a filter on those rows returns nothing
+// with partial=false.
+func TestFilterIndex_RollbackGapIsDetectedAndReindexed(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	now := time.Now().UTC()
+	seedBulk(t, s, 50, now.Add(-2*time.Hour), time.Second, func(int) ActivityEntry {
+		return ActivityEntry{Tier: "change", Type: "t", Source: "new-build", Summary: "n"}
+	})
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+
+	// Rolled back: the old build writes 30 rows, newer than anything above.
+	for i := 0; i < 30; i++ {
+		writeLegacyRow(t, s, now.Add(-time.Hour+time.Duration(i)*time.Second), "old-build")
+	}
+
+	// Rolled forward: a fresh store over the same DB, as at boot.
+	booted := NewPebbleActivityStore(s.db)
+	require.True(t, booted.FilterIndexBackfillDone(), "the sentinel survived the rollback — the hazard")
+	res, err := booted.ReconcileFilterIndexCoverage(context.Background())
+	require.NoError(t, err)
+	assert.True(t, res.GapFound)
+	assert.Equal(t, 30, res.Reindexed)
+	assert.True(t, booted.FilterIndexBackfillDone(), "re-set once the gap is indexed")
+	assertFilterIndexConsistent(t, booted)
+
+	got, err := booted.QueryWithPartial(context.Background(), ActivityFilter{Source: "old-build", Limit: 100})
+	require.NoError(t, err)
+	assert.Len(t, got.Entries, 30)
+	assert.False(t, got.Partial)
+
+	// A normal restart (every row written by an indexing build) finds no gap
+	// and touches nothing.
+	_, err = booted.Record(ActivityEntry{Tier: "change", Source: "new-build", Summary: "after"})
+	require.NoError(t, err)
+	again := NewPebbleActivityStore(s.db)
+	res, err = again.ReconcileFilterIndexCoverage(context.Background())
+	require.NoError(t, err)
+	assert.False(t, res.GapFound)
+	assert.True(t, again.FilterIndexBackfillDone())
+}
+
+// TestFilterIndex_ClearSentinelIsNotUndoneByAConcurrentRead: a read that
+// fetched the sentinel before a clear must not re-cache "done" after it.
+func TestFilterIndex_ClearSentinel(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	require.NoError(t, s.MarkFilterIndexBackfillDone())
+	require.True(t, s.FilterIndexBackfillDone())
+	require.NoError(t, s.ClearFilterIndexBackfillDone())
+	assert.False(t, s.FilterIndexBackfillDone())
+	assert.False(t, NewPebbleActivityStore(s.db).FilterIndexBackfillDone(), "cleared persistently")
+}
+
+// TestFilterIndex_BackfillHoldsNoIteratorAcrossCommits: the backfill closes its
+// iterator before every commit, so a long window never pins sstables.
+func TestFilterIndex_BackfillHoldsNoIteratorAcrossCommits(t *testing.T) {
+	s := newTestPebbleActivityStore(t)
+	seedBulk(t, s, 500, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC), time.Minute, func(int) ActivityEntry {
+		return ActivityEntry{Tier: "change", Type: "t", Source: "s", Summary: "b"}
+	})
+	dropFilterIndexes(t, s)
+	require.NoError(t, s.db.Flush())
+	oldEvery := activityFilterBackfillCommitEvery
+	activityFilterBackfillCommitEvery = 50
+	t.Cleanup(func() { activityFilterBackfillCommitEvery = oldEvery; pactFilterBackfillBeforeCommit = nil })
+	var commits, pinned int
+	pactFilterBackfillBeforeCommit = func() {
+		commits++
+		if s.db.Metrics().TableIters > 0 {
+			pinned++
+		}
+	}
+	n, err := s.BackfillFilterIndexWindow(context.Background(), 0, 0, true)
+	require.NoError(t, err)
+	assert.Equal(t, 500, n)
+	assert.GreaterOrEqual(t, commits, 10)
+	assert.Zero(t, pinned, "an sstable iterator was open across a commit")
+	assertFilterIndexConsistent(t, s)
 }
 
 func TestPactFilterFamiliesAreNotTiers(t *testing.T) {

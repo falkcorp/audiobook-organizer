@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.8.1
-// last-edited: 2026-09-13
+// version: 1.9.0
+// last-edited: 2026-09-19
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -15,6 +15,7 @@
 package activity
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -50,6 +51,13 @@ func init() {
 				return (*database.PebbleActivityStore)(nil), nil
 			}
 			slog.Info("[activity] Pebble activity store initialised")
+			// Rollback guard for the source/type/level filter indexes: rows a
+			// rolled-back build wrote without filter keys are found and indexed
+			// here, with the planner falling back to the budgeted scan (which
+			// reports partial) until they are. Normally there is nothing above
+			// the seen-through mark and this returns at once. Background, so a
+			// real gap never delays boot.
+			go reconcileFilterIndexAtBoot(s)
 			return s, nil
 		},
 	})
@@ -181,4 +189,18 @@ func init() {
 			return NewWriter(activitySvc.Store(), 10000), nil
 		},
 	})
+}
+
+// reconcileFilterIndexAtBoot runs PebbleActivityStore.ReconcileFilterIndexCoverage
+// once per process and logs the outcome.
+func reconcileFilterIndexAtBoot(s *database.PebbleActivityStore) {
+	res, err := s.ReconcileFilterIndexCoverage(context.Background())
+	switch {
+	case err != nil:
+		serviceLog.Error("filter-index boot reconcile failed (seen-through=%d, reindexed=%d): %v — run maintenance.activity-filter-index-backfill to re-enable indexed filtering",
+			res.SeenThrough, res.Reindexed, err)
+	case res.GapFound:
+		serviceLog.Warn("filter-index boot reconcile indexed %d row(s) written without filter keys after seen-through=%d",
+			res.Reindexed, res.SeenThrough)
+	}
 }

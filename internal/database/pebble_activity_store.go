@@ -144,8 +144,13 @@ type PebbleActivityStore struct {
 	sourcesMu    sync.Mutex
 	sourcesCache map[string]pactSourcesCacheEntry
 
-	// filterIndexReady caches a positive FilterIndexBackfillDone answer.
+	// filterIndexReady caches a positive FilterIndexBackfillDone answer;
+	// filterIndexMu orders that cache against ClearFilterIndexBackfillDone.
 	filterIndexReady atomic.Bool
+	filterIndexMu    sync.Mutex
+	// seenThrough is the in-memory filter-index high-water mark (see
+	// ActivityFilterIndexSeenThroughKey).
+	seenThrough atomic.Int64
 }
 
 // pactSourcesCacheEntry is one memoized GetDistinctSources result.
@@ -160,6 +165,7 @@ func NewPebbleActivityStore(db *pebble.DB) *PebbleActivityStore {
 	s := &PebbleActivityStore{db: db, sourcesCache: make(map[string]pactSourcesCacheEntry)}
 	// Seed counter from current time so IDs don't collide across restarts.
 	s.counter.Store(time.Now().UnixNano())
+	s.loadSeenThrough()
 	return s
 }
 
@@ -706,6 +712,9 @@ func (s *PebbleActivityStore) Record(e ActivityEntry) (_ int64, err error) {
 	if err := pactStagePrepared(batch, p); err != nil {
 		return 0, err
 	}
+	if err := s.stageSeenThroughForKeys(batch, p.primary); err != nil {
+		return 0, err
+	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return 0, fmt.Errorf("pebble_activity_store: commit: %w", err)
 	}
@@ -811,6 +820,9 @@ func (s *PebbleActivityStore) RecordBatch(entries []ActivityEntry) (written int,
 				if err := pactStagePrepared(batch, p); err != nil {
 					return staged, err, nil
 				}
+				if err := s.stageSeenThroughForKeys(batch, p.primary); err != nil {
+					return staged, err, nil
+				}
 				staged++
 			}
 			if staged == 0 {
@@ -885,6 +897,9 @@ func (s *PebbleActivityStore) query(ctx context.Context, f ActivityFilter) (_ []
 	if f.BookID != "" {
 		entries, total, err := s.queryByIndexPrefix(ctx, fmt.Sprintf("act:bk:%s:", f.BookID), f)
 		return entries, total, false, err
+	}
+	if f.Offset > activityQueryMaxOffset {
+		return nil, 0, false, ErrActivityOffsetTooDeep
 	}
 	if fams := pactFilterIndexFamilies(f); len(fams) > 0 && f.Limit > 0 && f.Offset >= 0 && s.FilterIndexBackfillDone() {
 		return s.queryByFilterIndex(ctx, f, fams)
