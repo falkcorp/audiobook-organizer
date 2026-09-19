@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/config.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d37f87-961c-4851-b773-40558ec854f9
 // last-edited: 2026-09-19
 
@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // KeyEnvVar is the environment variable the API key may be read from when no
@@ -115,6 +116,8 @@ type Config struct {
 	flushEvery   time.Duration
 	recheckEvery time.Duration
 	retryDelay   time.Duration
+	joinRoot     func(root, rel string) (string, error)
+	openFile     func(string) (*os.File, error)
 }
 
 // maxWorkerIDLen matches the server's bound.
@@ -279,6 +282,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.recheckEvery <= 0 {
 		c.recheckEvery = 15 * time.Minute
+	}
+	if c.joinRoot == nil {
+		c.joinRoot = pathutil.JoinRoot
+	}
+	if c.openFile == nil {
+		c.openFile = os.Open
 	}
 	if c.retryDelay <= 0 {
 		c.retryDelay = 2 * time.Second

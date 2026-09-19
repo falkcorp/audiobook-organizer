@@ -1,5 +1,5 @@
 // file: internal/fingerprint/window_exec.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 06d35c35-707c-4690-9bdb-eb99cb5f2002
 // last-edited: 2026-09-19
 
@@ -20,6 +20,23 @@ import (
 	"strings"
 	"time"
 )
+
+// toolEnvKeys are the only environment variables ffmpeg and fpcalc receive.
+// The tools need nothing else, and a child's environment is readable by any
+// local user (`ps eww`): fp-worker holds a bearer API key, and the server
+// process may carry other secrets in its environment.
+var toolEnvKeys = []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}
+
+// toolEnv returns the minimal environment for a tool child process.
+func toolEnv() []string {
+	env := make([]string, 0, len(toolEnvKeys))
+	for _, k := range toolEnvKeys {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
 
 // DefaultWindowTimeout bounds one window's ffmpeg+fpcalc run.
 const DefaultWindowTimeout = 60 * time.Second
@@ -149,7 +166,9 @@ func ToolVersions(ctx context.Context, fpcalcPath, ffmpegPath string) (ToolVersi
 func toolVersion(ctx context.Context, bin, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "-version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, "-version")
+	cmd.Env = toolEnv()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s -version: %w", name, err)
 	}
@@ -316,12 +335,15 @@ func runWindowPipe(ctx context.Context, ffmpegPath, fpcalcPath string, ffArgs, f
 	var ffErr, fpErr, fpOut cappedBuffer
 	ffErr.limit, fpErr.limit, fpOut.limit = windowStderrCap, windowStderrCap, windowStdoutCap
 
+	env := toolEnv()
 	ff := exec.CommandContext(ctx, ffmpegPath, ffArgs...)
+	ff.Env = env
 	ff.Stdout = pw
 	ff.Stderr = &ffErr
 	ff.WaitDelay = 2 * time.Second
 
 	fp := exec.CommandContext(ctx, fpcalcPath, fpArgs...)
+	fp.Env = env
 	fp.Stdout = &fpOut
 	fp.Stderr = &fpErr
 	fp.WaitDelay = 2 * time.Second
