@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package scheduler
 
@@ -178,6 +178,7 @@ var taskV2DefIDs = map[string]string{
 	"cleanup_activity_log":        "maintenance.cleanup-activity-log",
 	"optimize_activity_db":        "maintenance.optimize-activity-db",
 	"nightly_activity_compaction": "maintenance.nightly-compact-activity-log",
+	"ai_journal_prune":            "maintenance.prune-ai-journal",
 }
 
 // taskConcurrencySiblings lists defs that share a task's ConcurrencyKey. While

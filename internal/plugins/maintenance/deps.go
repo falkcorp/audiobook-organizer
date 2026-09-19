@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -539,6 +539,9 @@ type RuntimeConfig interface {
 	LogRetentionDays() int
 	PurgeSoftDeletedAfterDays() int
 	BackupRetentionDays() int
+	// AIJournalRetentionDays is how many days a whisper result stays in the
+	// AI result journal before prune-ai-journal deletes it; 0 keeps forever.
+	AIJournalRetentionDays() int
 	ActivityRetentionConfig
 }
 

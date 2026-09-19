@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package scheduler — task registrations.
 // All 22 registered tasks are defined here. Each task's TriggerFn and
@@ -1049,6 +1049,30 @@ func (ts *TaskScheduler) registerAllTasks() {
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
 		DailyAt:                "00:10",
+	})
+
+	// AI result journal prune — delete whisper results journalled more than
+	// ai_journal_retention_days ago (internal/ai/resultjournal). The journal
+	// gains one entry per distinct transcribed clip and only has to carry a
+	// result across a restart or re-run; the transcript lives on the book row.
+	// Cheap (paged, batched deletes over one keyspace), so it rides the
+	// maintenance window with the other cleanups; retention 0 keeps entries
+	// forever and disables the task.
+	ts.registerTask(TaskDefinition{
+		Name:        "ai_journal_prune",
+		Description: "Delete AI result-journal (whisper) entries older than the retention window",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.prune-ai-journal", nil)
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue prune-ai-journal: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "ai_journal_prune"), nil
+		},
+		IsEnabled:              func() bool { return config.AppConfig.AIJournalRetentionDays > 0 },
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return true },
 	})
 
 	// Activity DB Optimize — refresh the activity store's query-planner statistics.

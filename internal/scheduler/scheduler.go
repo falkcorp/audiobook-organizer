@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -191,6 +191,7 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"purge_old_logs",
 		"cleanup_activity_log",
 		"optimize_activity_db",
+		"ai_journal_prune",
 		"cleanup_old_backups",
 		// These three declare RunInMaintenanceWindow: true unconditionally but
 		// were absent from this list, so the window op never iterated them and
