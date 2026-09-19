@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
 // last-edited: 2026-09-19
 
@@ -53,6 +53,15 @@ const maxPostAttempts = 5
 // errDrained: a drain arrived during the startup gate; Run returns nil.
 var errDrained = errors.New("fp-worker: drained")
 
+// ErrRunChurn: the server reported a run change maxRunChanges times in a row
+// with no successful lease in between (a server restarting in a loop, or one
+// that refuses every run ID it hands out).
+var ErrRunChurn = errors.New("fp-worker: the server keeps changing its window backfill run")
+
+// maxRunChanges is how many run changes in a row, with no successful lease
+// between them, end the worker with ErrRunChurn.
+const maxRunChanges = 10
+
 // maxErrorLen bounds a result's error text.
 const maxErrorLen = 512
 
@@ -68,6 +77,9 @@ type worker struct {
 	// runID is the server run this worker passed its gate for (hello).
 	// Written by admit only while no lease goroutine runs; read by them.
 	runID string
+	// leasedOK: a lease succeeded since the last run change (resets the
+	// run-change streak).
+	leasedOK atomic.Bool
 
 	maxBatchBytes int
 	renewEvery    time.Duration
@@ -160,11 +172,25 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 	}
 
 	go w.recheckLoop(ctx)
+	changes := 0
 	for w.loop(ctx) {
 		// The server's run changed (a restart, a resumed or new run): the
 		// gate this worker passed belongs to the old run. Hello again and
-		// pass the new run's gate before leasing anything.
-		log.Warn("the window backfill run changed on the server; saying hello again and re-running the startup gate")
+		// pass the new run's gate before leasing anything; back off first,
+		// and give up when runs keep changing with no lease in between.
+		if w.leasedOK.Swap(false) {
+			changes = 0
+		}
+		changes++
+		if changes >= maxRunChanges {
+			return fmt.Errorf("%w: %d run changes in a row with no successful lease in between", ErrRunChurn, changes)
+		}
+		d := w.backoff(changes - 1)
+		log.Warn("the window backfill run changed on the server (%d in a row); saying hello again and re-running the startup gate in %s",
+			changes, d.Round(time.Millisecond))
+		if !w.sleep(ctx, d) {
+			break
+		}
 		hello, err := w.helloWithRetry(ctx)
 		if err != nil {
 			return err
@@ -434,6 +460,7 @@ func (w *worker) loop(ctx context.Context) (runChanged bool) {
 		})
 		if err == nil && resp != nil && len(resp.Jobs) > 0 {
 			attempt = 0
+			w.leasedOK.Store(true)
 			held++
 			w.queued.Add(int64(len(resp.Jobs)))
 			log.Info("lease %s: %d jobs, expires %s", resp.LeaseID, len(resp.Jobs), resp.ExpiresAt.Format(time.RFC3339))
@@ -664,7 +691,8 @@ func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.Job
 			return
 		}
 		if isRunChanged(st, err) {
-			log.Warn("lease %s: the server run changed; %d results from the earlier run dropped (the server re-plans them)", ls.id, len(batch))
+			log.Warn("lease %s: the server run changed; %d results from the earlier run dropped (the server re-plans them), starting no more jobs from it", ls.id, len(batch))
+			ls.gone.Store(true)
 			return
 		}
 		if fatal := fatalStatus(st, err); fatal != nil {

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-09-19
 
@@ -853,4 +853,23 @@ func TestWindowBackfill_CheckpointAdvancesPastServerRequeuedItem(t *testing.T) {
 		}
 	}
 	require.True(t, passed, "no in-tier checkpoint ever passed the handed-back file %s: %+v", fileID, rep.checkpoints)
+}
+
+// TestWorkerHub_ResultForAnEarlierRunIsRunChanged: a results batch was checked
+// against run 1, and the run detached and re-attached before one of its
+// results was applied. That result must be stale, never applied to run 1's
+// (now detached) queue or written.
+func TestWorkerHub_ResultForAnEarlierRunIsRunChanged(t *testing.T) {
+	h := newHubEnv(t, 2)
+	resp := h.lease("w1", 2)
+	h.hub.mu.Lock()
+	r1 := h.hub.run
+	h.hub.mu.Unlock()
+	res := h.okResult(resp.Jobs[0], 160, 1)
+	h.hub.detach()
+	attachHub(t, h.wbEnv)
+	st, reason := h.hub.applyResult(r1, "w1", res)
+	require.Equal(t, workerapi.StatusStale, st)
+	require.Equal(t, workerapi.RunChangedMarker, reason)
+	require.Empty(t, h.windows(h.fileID(resp.Jobs[0])), "a result of a detached run was written")
 }

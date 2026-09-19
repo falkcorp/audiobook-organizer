@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1cf62cc0-1b49-43dd-a9f1-317ac56e7aa0
 // last-edited: 2026-09-19
 
@@ -129,6 +129,7 @@ func TestRoutes_StatusMapping(t *testing.T) {
 		{fmt.Errorf("%w: fpcalc=1.0", workerapi.ErrToolsNotAllowed), http.StatusConflict},
 		{workerapi.ErrTooManyLeases, http.StatusTooManyRequests},
 		{fmt.Errorf("%w: worker_id", workerapi.ErrBadRequest), http.StatusBadRequest},
+		{fmt.Errorf("x: %w", workerapi.ErrRunChanged), http.StatusConflict},
 	}
 	for _, c := range cases {
 		r := router(&fakeHub{err: c.err}, true)
@@ -238,4 +239,26 @@ func TestRoutes_FlagIsCheckedBeforeAuth(t *testing.T) {
 	buf.WriteString("{}")
 	r = router(&fakeHub{}, true, deny)
 	require.Equal(t, http.StatusUnauthorized, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease", buf.String()).Code)
+}
+
+// TestRoutes_RunChangedIs409WithMarker: every run-scoped route answers
+// ErrRunChanged as 409, code RUN_CHANGED, with the marker opening the error
+// text (what fp-worker matches; see workerclient's contract test).
+func TestRoutes_RunChangedIs409WithMarker(t *testing.T) {
+	r := router(&fakeHub{err: fmt.Errorf("x: %w", workerapi.ErrRunChanged)}, true)
+	for _, rt := range []struct{ path, body string }{
+		{"/api/v1/fingerprint/worker/lease", `{"worker_id":"w1","run_id":"old"}`},
+		{"/api/v1/fingerprint/worker/lease/L1/renew", `{"worker_id":"w1","run_id":"old"}`},
+		{"/api/v1/fingerprint/worker/results", `{"worker_id":"w1","run_id":"old","results":[]}`},
+	} {
+		w := do(r, http.MethodPost, rt.path, rt.body)
+		require.Equal(t, http.StatusConflict, w.Code, rt.path)
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), rt.path)
+		require.Equal(t, "RUN_CHANGED", body.Code, rt.path)
+		require.True(t, strings.HasPrefix(body.Error, workerapi.RunChangedMarker), "%s: %q", rt.path, body.Error)
+	}
 }

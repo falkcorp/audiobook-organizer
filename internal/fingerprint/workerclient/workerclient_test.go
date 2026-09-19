@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -71,6 +71,9 @@ type fakeServer struct {
 	helloScript  []workerapi.HelloResponse // answered, in order, before hello
 	helloQueries []url.Values
 	runID        string // the live run; lease and results must echo it
+	churn        bool   // every lease answers run_changed, whatever its run ID
+	flipAfterOne bool   // the first accepted results post moves the run to run-2
+	helloAt      []time.Time
 	pending      []workerapi.Job
 	leaseScript  []int // statuses answered to lease before any job is served
 	nLease       int
@@ -108,6 +111,7 @@ func (s *fakeServer) handler() http.Handler {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.helloQueries = append(s.helloQueries, r.URL.Query())
+		s.helloAt = append(s.helloAt, time.Now())
 		if len(s.helloScript) > 0 {
 			h := s.helloScript[0]
 			s.helloScript = s.helloScript[1:]
@@ -128,7 +132,7 @@ func (s *fakeServer) handler() http.Handler {
 		defer s.mu.Unlock()
 		s.leaseCalls++
 		s.leaseReqs = append(s.leaseReqs, req)
-		if req.RunID != s.runID {
+		if req.RunID != s.runID || s.churn {
 			writeRunChanged(w)
 			return
 		}
@@ -185,6 +189,10 @@ func (s *fakeServer) handler() http.Handler {
 		}
 		s.resultPosts++
 		s.results = append(s.results, req.Results...)
+		if s.flipAfterOne {
+			s.flipAfterOne = false
+			s.runID = "run-2"
+		}
 		resp := workerapi.ResultsResponse{}
 		for _, res := range req.Results {
 			resp.Statuses = append(resp.Statuses, workerapi.JobStatus{JobID: res.JobID, Status: workerapi.StatusAccepted})
@@ -1171,5 +1179,81 @@ func TestRun_RunChangedHellosAgainAndReGates(t *testing.T) {
 	}
 	if last := e.srv.leaseReqs[len(e.srv.leaseReqs)-1]; last.RunID != "run-2" {
 		t.Errorf("last lease under run %q, want run-2", last.RunID)
+	}
+}
+
+// TestRun_RunChurnBacksOffThenFails: a server that answers run_changed to
+// every run ID it hands out must not make the worker spin: each re-hello is
+// preceded by a backoff, and after maxRunChanges in a row with no lease the
+// worker stops with ErrRunChurn.
+func TestRun_RunChurnBacksOffThenFails(t *testing.T) {
+	e := newTestEnv(t)
+	e.cfg.backoffMin, e.cfg.backoffMax = 20*time.Millisecond, 40*time.Millisecond
+	e.srv.churn = true
+	e.addJob("A/x.mp3", []byte("x"))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err := Run(ctx, make(chan struct{}), e.cfg)
+	if !errors.Is(err, ErrRunChurn) {
+		t.Fatalf("Run = %v, want ErrRunChurn", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if n := len(e.srv.helloAt); n != maxRunChanges {
+		t.Errorf("%d hellos, want %d (one per run before the streak ends the worker)", n, maxRunChanges)
+	}
+	for i := 1; i < len(e.srv.helloAt); i++ {
+		if gap := e.srv.helloAt[i].Sub(e.srv.helloAt[i-1]); gap < 10*time.Millisecond {
+			t.Errorf("hello %d came %s after the previous one: no backoff", i, gap)
+		}
+	}
+}
+
+// TestRun_RunChangedOnPostStopsTheLease: when posting results answers
+// run_changed, the lease belongs to a dead run: no further job of it is
+// started (it would be cut for nothing and its results refused).
+func TestRun_RunChangedOnPostStopsTheLease(t *testing.T) {
+	e := newTestEnv(t)
+	e.cfg.Concurrency = 1
+	var mu sync.Mutex
+	started := map[string]bool{}
+	e.cfg.Cut = func(ctx context.Context, path string, spec fingerprint.WindowSpec) (*fingerprint.WindowPrint, error) {
+		if strings.Contains(path, "Jobs") {
+			mu.Lock()
+			started[path] = true
+			mu.Unlock()
+			time.Sleep(30 * time.Millisecond)
+		}
+		return fakeCut(ctx, path, spec)
+	}
+	e.srv.flipAfterOne = true
+	for i := range 5 {
+		e.addJob(fmt.Sprintf("Jobs/j%d.mp3", i), []byte(fmt.Sprintf("job %d", i)))
+	}
+	drain, done := e.start()
+	deadline := time.After(10 * time.Second)
+	for {
+		e.srv.mu.Lock()
+		n := len(e.srv.helloQueries)
+		e.srv.mu.Unlock()
+		if n >= 2 {
+			break // the lease loop saw the run change and re-admitted
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("Run returned early: %v", r.err)
+		case <-deadline:
+			t.Fatal("the worker never re-admitted after the run change")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(started) > 3 {
+		t.Errorf("%d of 5 jobs were cut after the run changed under the lease; want at most 3", len(started))
 	}
 }

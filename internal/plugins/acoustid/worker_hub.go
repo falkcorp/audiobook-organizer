@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-09-19
 
@@ -1336,7 +1336,9 @@ func (h *WorkerHub) Results(_ context.Context, req workerapi.ResultsRequest) (*w
 	h.touch(r)
 	resp := &workerapi.ResultsResponse{Statuses: make([]workerapi.JobStatus, 0, len(req.Results))}
 	for _, res := range req.Results {
-		status, reason := h.applyResult(req.WorkerID, res)
+		// r is the run whose ID this request carried; a result is never
+		// applied to a run that attached since.
+		status, reason := h.applyResult(r, req.WorkerID, res)
 		resp.Statuses = append(resp.Statuses, workerapi.JobStatus{JobID: res.JobID, Status: status, Reason: reason})
 	}
 	return resp, nil
@@ -1375,7 +1377,10 @@ func (r *hubRun) noteReferenceWrite(it windowItem, j *workerJob) {
 // server's stat and the store write happen outside it with the item in
 // qWriting, so no other lane can touch the file meanwhile and a slow stat never
 // stalls the hub.
-func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string, string) {
+//
+// r is the run the request was checked against: if another run has attached
+// since (a detach and re-attach mid-batch), the result is stale.
+func (h *WorkerHub) applyResult(r *hubRun, worker string, res workerapi.JobResult) (string, string) {
 	switch res.Outcome {
 	case workerapi.OutcomeOK, workerapi.OutcomeNotFound, workerapi.OutcomeDecodeError,
 		workerapi.OutcomeTimeout, workerapi.OutcomeStale, workerapi.OutcomeRejected:
@@ -1383,10 +1388,13 @@ func (h *WorkerHub) applyResult(worker string, res workerapi.JobResult) (string,
 		return workerapi.StatusRejected, "bad_outcome"
 	}
 	h.mu.Lock()
-	r := h.run
-	if r == nil {
+	if h.run == nil {
 		h.mu.Unlock()
 		return workerapi.StatusStale, "no_run"
+	}
+	if h.run != r {
+		h.mu.Unlock()
+		return workerapi.StatusStale, workerapi.RunChangedMarker
 	}
 	j := r.jobs[res.JobID]
 	if j == nil {
