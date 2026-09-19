@@ -1,7 +1,7 @@
 // file: internal/database/migrations.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
@@ -1106,9 +1106,9 @@ func migration055Up(store migrationStore) error {
 }
 
 // migration056Up adds merged_into_book_id to books for chapter consolidation (MATCH-2).
-// When MergeChapterBooks() absorbs a chapter file into a consolidated book, the
-// source book row has is_primary_version set to 0 and merged_into_book_id set to
-// the primary book's ID so the merge is auditable.
+// merged_into_book_id marks a book absorbed into another (FlagMetadataHashDuplicate
+// sets it). The chapter merge that first wrote it (MergeChapterBooks) was removed
+// 2026-09-19; chapter merges now soft-delete sources through the combine journal.
 func migration056Up(store migrationStore) error {
 	slog.Info("- Added merged_into_book_id to books, created index idx_books_merged_into")
 	// SQLite-only migration; no-op for PebbleStore.

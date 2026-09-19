@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -330,20 +330,26 @@ func TestBookLock_SameStripeDifferentBooksDoNotDeadlock(t *testing.T) {
 	})
 }
 
-// TestBookLock_MergeChapterBooksSameStripeDoesNotDeadlock: MergeChapterBooks
-// writes the source (FlagMetadataHashDuplicate) and then the primary. With
-// both books on ONE stripe it must release the source's hold before taking the
-// primary's, or it re-enters the non-re-entrant mutex and hangs. Concurrent
-// writers on both books run alongside to catch an ordering cycle as well.
-func TestBookLock_MergeChapterBooksSameStripeDoesNotDeadlock(t *testing.T) {
+// TestBookLock_MoveBookFilesSameStripeDoesNotDeadlock: a chapter merge moves a
+// source's files onto the primary (MoveBookFilesToBook recomputes BOTH books'
+// aggregates) and then flags the source. With both books on ONE stripe each
+// write must release its hold before the next takes it, or it re-enters the
+// non-re-entrant mutex and hangs. Concurrent writers on both books run
+// alongside to catch an ordering cycle as well. (This pinned
+// MergeChapterBooks until that method was removed 2026-09-19.)
+func TestBookLock_MoveBookFilesSameStripeDoesNotDeadlock(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()
 	primary, src := sameStripePair(t, s)
 	if stripeFor(primary) != stripeFor(src) {
 		t.Fatalf("precondition: %s and %s are on different stripes", primary, src)
 	}
+	f := &BookFile{BookID: src, FilePath: "/lib/stripe/02 - Book.mp3", Format: "mp3"}
+	if err := s.CreateBookFile(f); err != nil {
+		t.Fatal(err)
+	}
 
-	withDeadline(t, 60*time.Second, "MergeChapterBooks with primary and source on one stripe", func() {
+	withDeadline(t, 60*time.Second, "chapter re-parent with primary and source on one stripe", func() {
 		var wg sync.WaitGroup
 		for _, id := range []string{primary, src} {
 			wg.Add(1)
@@ -361,19 +367,23 @@ func TestBookLock_MergeChapterBooksSameStripeDoesNotDeadlock(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.MergeChapterBooks(primary, []string{src}, "merged title", 3600); err != nil {
+			if err := s.MoveBookFilesToBook([]string{f.ID}, src, primary); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := s.FlagMetadataHashDuplicate(primary, src); err != nil {
 				t.Error(err)
 			}
 		}()
 		wg.Wait()
 	})
 
-	row, err := s.GetBookByID(primary)
+	files, err := s.GetBookFiles(primary)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Title != "merged title" || row.Duration == nil || *row.Duration != 3600 {
-		t.Fatalf("primary not updated: title=%q duration=%v", row.Title, row.Duration)
+	if len(files) != 1 || files[0].ID != f.ID {
+		t.Fatalf("file not re-parented onto the primary: %+v", files)
 	}
 }
 

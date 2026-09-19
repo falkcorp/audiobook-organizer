@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-19
 
@@ -30,7 +30,7 @@ const bookLockStripes = 256
 //   - No code path holds two book stripes at once. That is what makes a stripe
 //     collision between two different IDs safe: the second writer waits, it
 //     never deadlocks. A helper that writes several books (MarkITunesSynced,
-//     MergeChapterBooks) takes and releases one stripe per book, in sequence.
+//     MoveBookFilesToBookBulk) takes and releases one stripe per book, in sequence.
 //   - Nothing slow runs under a stripe: no network, no file I/O, no ffprobe.
 //     Only Pebble reads and the one batch commit.
 //   - A ModifyBook callback must not call any book write (UpdateBook,

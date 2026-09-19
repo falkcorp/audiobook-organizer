@@ -1,7 +1,7 @@
 // file: internal/database/extra_coverage_test.go
-// version: 2.0.2
+// version: 2.1.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0102030405
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package database — extra tests to lift coverage of 0%-covered functions.
 // Covers: APIKeyToken helpers, PebbleStore book/tag/user/activity/metadata
@@ -270,33 +270,6 @@ func TestSQLiteStore_QuarantinedBooks(t *testing.T) {
 	count, err := s.CountQuarantinedBooks()
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
-}
-
-// ---- MergeChapterBooks ----
-
-func TestSQLiteStore_MergeChapterBooks(t *testing.T) {
-	store := setupCoverageDB(t)
-	s := store.(*PebbleStore)
-
-	primary := createTestBook(t, store, "Primary Chapter Book", "/tmp/primary.m4b", nil, nil)
-	src1 := createTestBook(t, store, "Chapter 1", "/tmp/ch1.m4b", nil, nil)
-	src2 := createTestBook(t, store, "Chapter 2", "/tmp/ch2.m4b", nil, nil)
-
-	// Add book files to source books
-	require.NoError(t, store.CreateBookFile(&BookFile{BookID: src1, FilePath: "/tmp/ch1.m4b", Format: "m4b"}))
-	require.NoError(t, store.CreateBookFile(&BookFile{BookID: src2, FilePath: "/tmp/ch2.m4b", Format: "m4b"}))
-
-	err := s.MergeChapterBooks(primary, []string{src1, src2}, "The Complete Book", 7200.0)
-	require.NoError(t, err)
-
-	// Verify files moved to primary
-	files, err := store.GetBookFiles(primary)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(files), 2)
-
-	// Empty src IDs is a no-op
-	err = s.MergeChapterBooks(primary, []string{}, "Anything", 0)
-	require.NoError(t, err)
 }
 
 // ---- FlagMetadataHashDuplicate ----
