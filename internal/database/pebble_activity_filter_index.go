@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
 // last-edited: 2026-09-19
 
@@ -60,6 +60,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -223,16 +225,34 @@ func (s *PebbleActivityStore) stageDeleteFilterIndexesForKey(batch *pebble.Batch
 	return nil
 }
 
-// ── Sentinel ─────────────────────────────────────────────────────────────────
+// ── Sentinel and seen-through mark ──────────────────────────────────────────
+
+// ActivityFilterIndexSeenThroughKey persists a unix-nano high-water mark: every
+// primary row with a key timestamp at or below it was written by an indexing
+// build (or indexed by a backfill). Record and RecordBatch advance it in the
+// same batch as the rows; ReconcileFilterIndexCoverage reads it at boot to find
+// rows a ROLLED-BACK build wrote without filter keys.
+//
+// It may lag (two concurrent commits can land in either order, so the stored
+// value can go backwards by one batch); a lagging mark only widens the boot
+// check, which confirms a gap by looking for missing keys before acting on it.
+const ActivityFilterIndexSeenThroughKey = "system:activity_filter_index_seen_through"
 
 // FilterIndexBackfillDone reports whether the source/type/level indexes cover
 // every stored row, i.e. whether the planner may use them. A positive answer is
 // cached; a negative one is re-read (one point Get) so a backfill finishing in
 // another goroutine takes effect on the next query without a restart.
+//
+// The read-then-cache runs under filterIndexMu, the same lock
+// ClearFilterIndexBackfillDone takes: otherwise a reader that fetched the
+// sentinel just before a clear could cache "done" just after it, and the
+// planner would trust an index that is being rebuilt.
 func (s *PebbleActivityStore) FilterIndexBackfillDone() bool {
 	if s.filterIndexReady.Load() {
 		return true
 	}
+	s.filterIndexMu.Lock()
+	defer s.filterIndexMu.Unlock()
 	val, closer, err := s.db.Get([]byte(ActivityFilterIndexBackfillKey))
 	if err != nil {
 		return false
@@ -245,14 +265,210 @@ func (s *PebbleActivityStore) FilterIndexBackfillDone() bool {
 	return done
 }
 
-// MarkFilterIndexBackfillDone persists the sentinel. Only the backfill op calls
-// it, and only after every window it planned has committed.
+// MarkFilterIndexBackfillDone persists the sentinel and advances the
+// seen-through mark to the newest stored row. Called only once every row
+// present has been indexed (the backfill op's open-ended last window, or the
+// boot reconcile), so every row at or below that mark is covered.
 func (s *PebbleActivityStore) MarkFilterIndexBackfillDone() error {
-	if err := s.db.Set([]byte(ActivityFilterIndexBackfillKey), []byte("1"), pebble.Sync); err != nil {
+	s.filterIndexMu.Lock()
+	defer s.filterIndexMu.Unlock()
+	newest, ok, err := s.newestPrimaryNanos()
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if ok {
+		if err := s.stageSeenThrough(batch, newest); err != nil {
+			return err
+		}
+	}
+	if err := batch.Set([]byte(ActivityFilterIndexBackfillKey), []byte("1"), nil); err != nil {
+		return err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("pebble_activity_store: set filter index sentinel: %w", err)
 	}
 	s.filterIndexReady.Store(true)
 	return nil
+}
+
+// ClearFilterIndexBackfillDone withdraws the sentinel, persistently and from
+// the cache, so the planner falls back to the budgeted scan (which reports
+// partial) until the indexes are complete again. A forced rebuild and the boot
+// reconcile call it BEFORE writing anything.
+func (s *PebbleActivityStore) ClearFilterIndexBackfillDone() error {
+	s.filterIndexMu.Lock()
+	defer s.filterIndexMu.Unlock()
+	s.filterIndexReady.Store(false)
+	if err := s.db.Delete([]byte(ActivityFilterIndexBackfillKey), pebble.Sync); err != nil {
+		return fmt.Errorf("pebble_activity_store: clear filter index sentinel: %w", err)
+	}
+	return nil
+}
+
+// loadSeenThrough reads the persisted mark into memory (0 when absent).
+func (s *PebbleActivityStore) loadSeenThrough() {
+	val, closer, err := s.db.Get([]byte(ActivityFilterIndexSeenThroughKey))
+	if err != nil {
+		return
+	}
+	n, perr := strconv.ParseInt(string(val), 10, 64)
+	closer.Close()
+	if perr == nil {
+		s.seenThrough.Store(n)
+	}
+}
+
+// stageSeenThrough stages the mark at nanos into batch when it advances the
+// in-memory mark. Monotonic in memory; see ActivityFilterIndexSeenThroughKey
+// for why the stored value may lag.
+func (s *PebbleActivityStore) stageSeenThrough(batch *pebble.Batch, nanos int64) error {
+	for {
+		cur := s.seenThrough.Load()
+		if nanos <= cur {
+			return nil
+		}
+		if s.seenThrough.CompareAndSwap(cur, nanos) {
+			break
+		}
+	}
+	return batch.Set([]byte(ActivityFilterIndexSeenThroughKey), []byte(strconv.FormatInt(nanos, 10)), nil)
+}
+
+// stageSeenThroughForKeys advances the mark to the newest of primary keys.
+func (s *PebbleActivityStore) stageSeenThroughForKeys(batch *pebble.Batch, primaries ...[]byte) error {
+	var newest int64
+	for _, k := range primaries {
+		if ns, ok := pactPrimaryKeyNanos(k); ok && ns > newest {
+			newest = ns
+		}
+	}
+	if newest == 0 {
+		return nil
+	}
+	return s.stageSeenThrough(batch, newest)
+}
+
+// newestPrimaryNanos returns the largest primary-key timestamp in any tier.
+func (s *PebbleActivityStore) newestPrimaryNanos() (int64, bool, error) {
+	var best int64
+	found := false
+	for _, tier := range actTiers {
+		it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: pactPrimaryPrefix(tier), UpperBound: pactPrimaryUpperBound(tier)})
+		if err != nil {
+			return 0, false, err
+		}
+		for ok := it.Last(); ok; ok = it.Prev() {
+			if ns, parsed := pactPrimaryKeyNanos(it.Key()); parsed {
+				if !found || ns > best {
+					best, found = ns, true
+				}
+				break
+			}
+		}
+		if err := it.Close(); err != nil {
+			return 0, false, err
+		}
+	}
+	return best, found, nil
+}
+
+// FilterIndexReconcileResult reports what ReconcileFilterIndexCoverage did.
+type FilterIndexReconcileResult struct {
+	SeenThrough int64 // the mark the check started from
+	GapFound    bool  // some row newer than the mark had no filter keys
+	Reindexed   int   // rows indexed to close the gap
+}
+
+// ReconcileFilterIndexCoverage closes the rollback hole: an indexing build
+// completes the backfill, the service is rolled back to an older build that
+// writes rows WITHOUT filter keys, then rolled forward. The sentinel still
+// says "complete", so a filter on those rows would come back short with
+// partial=false.
+//
+// At boot it looks only at rows newer than the seen-through mark (normally
+// none: the mark advances with every write). If any of them lacks its filter
+// keys it withdraws the sentinel FIRST — so queries fall back to the budgeted
+// scan and say partial — then indexes every row above the mark, then re-sets
+// the sentinel (which advances the mark). Nothing happens when the sentinel is
+// not set: the backfill op has not finished and will cover those rows.
+//
+// If it fails or is cancelled after withdrawing the sentinel, the sentinel
+// stays withdrawn (safe: queries are partial, never silently short) and
+// maintenance.activity-filter-index-backfill must be run to restore it.
+func (s *PebbleActivityStore) ReconcileFilterIndexCoverage(ctx context.Context) (res FilterIndexReconcileResult, err error) {
+	defer recoverPebbleClosed("pebble_activity_store.ReconcileFilterIndexCoverage", &err)
+	if !s.FilterIndexBackfillDone() {
+		return res, nil
+	}
+	mark := s.seenThrough.Load()
+	res.SeenThrough = mark
+	gap, err := s.filterIndexGapAbove(ctx, mark)
+	if err != nil || !gap {
+		return res, err
+	}
+	res.GapFound = true
+	filterIndexLog.Warn("activity rows newer than the filter-index mark (%d) have no filter keys — a rollback to an older build wrote them; filtering falls back to the budgeted scan until they are indexed", mark)
+	if err := s.ClearFilterIndexBackfillDone(); err != nil {
+		return res, err
+	}
+	n, err := s.BackfillFilterIndexWindow(ctx, mark+1, 0, true)
+	res.Reindexed = n
+	if err != nil {
+		return res, fmt.Errorf("pebble_activity_store: reindex rollback gap: %w", err)
+	}
+	if err := s.MarkFilterIndexBackfillDone(); err != nil {
+		return res, err
+	}
+	filterIndexLog.Info("indexed %d activity row(s) written without filter keys; indexed filtering re-enabled", n)
+	return res, nil
+}
+
+// filterIndexGapAbove reports whether any decodable row with a key timestamp
+// above mark lacks one of its filter-index keys.
+func (s *PebbleActivityStore) filterIndexGapAbove(ctx context.Context, mark int64) (bool, error) {
+	for _, tier := range actTiers {
+		it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: pactNanosKey(tier, mark+1), UpperBound: pactPrimaryUpperBound(tier)})
+		if err != nil {
+			return false, err
+		}
+		gap, err := func() (bool, error) {
+			defer it.Close()
+			seen := 0
+			for it.First(); it.Valid(); it.Next() {
+				if seen%activityCtxCheckInterval == 0 {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return false, ctxErr
+					}
+				}
+				seen++
+				var p pactEntryNoDetails
+				if json.Unmarshal(it.Value(), &p) != nil {
+					continue // never indexed by any path; not a gap
+				}
+				keys, ok := pactFilterIndexKeysFor(it.Key(), p.entry())
+				if !ok {
+					continue
+				}
+				for _, k := range keys {
+					_, closer, gerr := s.db.Get(k)
+					if errors.Is(gerr, pebble.ErrNotFound) {
+						return true, nil
+					}
+					if gerr != nil {
+						return false, gerr
+					}
+					closer.Close()
+				}
+			}
+			return false, it.Error()
+		}()
+		if err != nil || gap {
+			return gap, err
+		}
+	}
+	return false, nil
 }
 
 // ── Backfill ─────────────────────────────────────────────────────────────────
@@ -263,6 +479,9 @@ func (s *PebbleActivityStore) MarkFilterIndexBackfillDone() error {
 type ActivityFilterIndexBackfiller interface {
 	FilterIndexBackfillDone() bool
 	MarkFilterIndexBackfillDone() error
+	// ClearFilterIndexBackfillDone withdraws the sentinel so the planner stops
+	// trusting the indexes (a forced rebuild calls it before its first window).
+	ClearFilterIndexBackfillDone() error
 	// FilterIndexEarliestNanos returns the oldest primary-key timestamp across
 	// every tier, or ok=false for an empty store.
 	FilterIndexEarliestNanos(ctx context.Context) (nanos int64, ok bool, err error)
@@ -343,70 +562,86 @@ func (s *PebbleActivityStore) BackfillFilterIndexWindow(ctx context.Context, fro
 	return indexed, nil
 }
 
+// pactFilterBackfillBeforeCommit is a test hook run after a chunk's iterator
+// is closed and before its batch commits.
+var pactFilterBackfillBeforeCommit func()
+
+// backfillFilterIndexRange indexes [lower, upper) in chunks of
+// activityFilterBackfillCommitEvery rows. Each chunk opens its OWN iterator,
+// seeks past the previous chunk's last key, and closes it before committing —
+// the same shape as claimDayChunk/streamTierEntries. One iterator held across
+// every commit of a window would pin the memtables and sstables it opened on
+// for as long as the window runs, times NumCPU concurrent windows.
 func (s *PebbleActivityStore) backfillFilterIndexRange(ctx context.Context, lower, upper []byte, tally *pactDecodeTally) (indexed int, err error) {
+	next := lower
+	for {
+		batch := s.db.NewBatch()
+		staged, last, done, err := s.stageFilterBackfillChunk(ctx, batch, next, upper, tally)
+		if err == nil && staged > 0 {
+			if pactFilterBackfillBeforeCommit != nil {
+				pactFilterBackfillBeforeCommit()
+			}
+			// The window's final commit is synced: the op checkpoints after the
+			// item returns, and a checkpoint must never name a window whose
+			// index writes could still be lost to a crash.
+			opts := pebble.NoSync
+			if done {
+				opts = pebble.Sync
+			}
+			err = batch.Commit(opts)
+		}
+		batch.Close()
+		if err != nil {
+			return indexed, err
+		}
+		indexed += staged
+		if done {
+			return indexed, nil
+		}
+		// Resume strictly after the last key read: append 0x00, the smallest
+		// byte, to form the immediate successor.
+		next = append(last, 0)
+	}
+}
+
+// stageFilterBackfillChunk stages up to activityFilterBackfillCommitEvery rows
+// from [lower, upper) into batch and closes its iterator before returning.
+// done reports that the range is exhausted.
+func (s *PebbleActivityStore) stageFilterBackfillChunk(ctx context.Context, batch *pebble.Batch, lower, upper []byte, tally *pactDecodeTally) (staged int, last []byte, done bool, err error) {
 	it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
-		return 0, err
+		return 0, nil, false, err
 	}
 	defer func() {
 		if cerr := it.Close(); cerr != nil && err == nil {
 			err = cerr
 		}
 	}()
-
-	batch := s.db.NewBatch()
-	defer func() { batch.Close() }()
-	staged := 0
-	commit := func(opts *pebble.WriteOptions) error {
-		if staged == 0 {
-			return nil
-		}
-		if err := batch.Commit(opts); err != nil {
-			return err
-		}
-		batch.Close()
-		batch = s.db.NewBatch()
-		indexed += staged
-		staged = 0
-		return nil
-	}
-
-	seen := 0
+	read := 0
 	for it.First(); it.Valid(); it.Next() {
-		if seen%activityCtxCheckInterval == 0 {
+		if read%activityCtxCheckInterval == 0 {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return indexed, ctxErr
+				return 0, nil, false, ctxErr
 			}
 		}
-		seen++
+		read++
+		last = append(last[:0], it.Key()...)
 		var p pactEntryNoDetails
 		s.entriesDecoded.Add(1)
 		if jsonErr := json.Unmarshal(it.Value(), &p); jsonErr != nil {
 			s.decodeFailures.Add(1)
 			tally.record(it.Key(), jsonErr)
-			continue
-		}
-		key := append([]byte(nil), it.Key()...)
-		if err := pactStageFilterIndexes(batch, key, p.entry()); err != nil {
-			return indexed, err
-		}
-		staged++
-		if staged >= activityFilterBackfillCommitEvery {
-			if err := commit(pebble.NoSync); err != nil {
-				return indexed, err
+		} else {
+			if err := pactStageFilterIndexes(batch, slices.Clone(it.Key()), p.entry()); err != nil {
+				return 0, nil, false, err
 			}
+			staged++
+		}
+		if read >= activityFilterBackfillCommitEvery {
+			return staged, last, false, it.Error()
 		}
 	}
-	if err := it.Error(); err != nil {
-		return indexed, err
-	}
-	// The window's last commit is synced: the op checkpoints after the item
-	// returns, and a checkpoint must never name a window whose index writes
-	// could still be lost to a crash.
-	if err := commit(pebble.Sync); err != nil {
-		return indexed, err
-	}
-	return indexed, nil
+	return staged, last, true, it.Error()
 }
 
 // ── Planner ──────────────────────────────────────────────────────────────────
@@ -515,38 +750,21 @@ func (s *PebbleActivityStore) queryByFilterIndex(ctx context.Context, f Activity
 	chosen, others := s.pickFilterFamily(fams, f, all)
 
 	probe := f.Offset + f.Limit + 1
-	page := make([]ActivityEntry, 0, max(f.Limit, 0))
-	matched := 0
-
 	w := &pactFilterWalk{
 		s: s, f: f, chosen: chosen, others: others,
+		probeAt:      probe,
+		page:         make([]ActivityEntry, 0, max(f.Limit, 0)),
 		decodeBudget: activityQueryScanBudget + probe,
 		keyBudget:    activityFilterIndexKeyBudget,
 	}
 	defer w.close()
-
-	w.visit = func(full func() (ActivityEntry, bool)) bool {
-		matched++
-		if matched > f.Offset && len(page) < f.Limit {
-			fe, ok := full()
-			if !ok {
-				// The row decodes without Details but not with them (a
-				// wrong-typed Details value). The unindexed path drops such a
-				// row from both the page and the count, so this does too.
-				matched--
-				return true
-			}
-			page = append(page, fe)
-		}
-		return matched < probe
-	}
 
 	exhausted := true
 	for _, phase := range [][]string{nonDigest, digestTiers} {
 		if len(phase) == 0 {
 			continue
 		}
-		if matched >= probe {
+		if w.matched >= probe {
 			exhausted = false
 			break
 		}
@@ -560,13 +778,44 @@ func (s *PebbleActivityStore) queryByFilterIndex(ctx context.Context, f Activity
 		}
 	}
 
-	partial := !exhausted && matched < probe
+	partial := !exhausted && w.matched < probe
 	if partial {
 		filterIndexLog.Warn("indexed query hit its budget; total is a lower bound and older matches were not examined "+
 			"(index=%s decoded=%d keys=%d matched=%d limit=%d offset=%d search=%q)",
-			chosen.name, w.decoded, w.keys, matched, f.Limit, f.Offset, f.Search)
+			chosen.name, w.decoded, w.keys, w.matched, f.Limit, f.Offset, f.Search)
 	}
-	return page, matched, partial, nil
+	return w.page, w.matched, partial, nil
+}
+
+// activityQueryMaxOffset caps how deep a filtered query may page. Reaching
+// offset N means reading and checking N matching rows, so without a cap a
+// request with offset=2,000,000 was ~2M Gets and decodes. 100,000 is 4,000
+// pages of the UI's 25 rows; anything deeper should narrow the filter or the
+// time range instead.
+const activityQueryMaxOffset = 100_000
+
+// ErrActivityOffsetTooDeep is returned for an offset above
+// activityQueryMaxOffset. GET /activity maps it to 400.
+var ErrActivityOffsetTooDeep = fmt.Errorf("activity query offset exceeds %d; narrow the filter or the time range", activityQueryMaxOffset)
+
+// pactEntryCheck decodes everything matchesFilter reads plus Details as RAW
+// bytes, so the walk can tell — without materializing a Details map that may
+// be a multi-megabyte iTunes dump — whether the FULL decode would succeed.
+// encoding/json accepts an object or null for a map[string]any and rejects
+// every other JSON kind, and every other field has the same type here as in
+// ActivityEntry, so "this decodes and Details is absent, null or an object"
+// is exactly "json.Unmarshal into ActivityEntry succeeds". That is what lets
+// a row be COUNTED toward the offset without a full decode and still be
+// counted exactly as the unindexed path counts it (a wrong-typed Details row
+// is dropped there, so it must not consume an offset slot here).
+type pactEntryCheck struct {
+	pactEntryNoDetails
+	Details json.RawMessage `json:"details,omitempty"`
+}
+
+func (c *pactEntryCheck) fullDecodeOK() bool {
+	d := bytes.TrimSpace(c.Details)
+	return len(d) == 0 || d[0] == '{' || bytes.Equal(d, []byte("null"))
 }
 
 // activityFilterIndexKeyBudget caps the key-only steps one indexed query may
@@ -581,7 +830,10 @@ type pactFilterWalk struct {
 	f      ActivityFilter
 	chosen pactFilterFamily
 	others []pactFilterFamily
-	visit  func(full func() (ActivityEntry, bool)) bool
+
+	probeAt int             // offset+limit+1: stop once this many rows matched
+	matched int             // rows matched so far (the returned total)
+	page    []ActivityEntry // the requested window
 
 	decodeBudget, keyBudget int
 	decoded, keys           int
@@ -752,24 +1004,34 @@ func (w *pactFilterWalk) candidate(c *pactFilterCursor, key []byte) (bool, error
 
 	w.decoded++
 	w.s.entriesDecoded.Add(1)
-	var p pactEntryNoDetails
+	var p pactEntryCheck
 	if jsonErr := json.Unmarshal(val, &p); jsonErr != nil {
 		w.s.decodeFailures.Add(1)
 		w.tally.record(primary, jsonErr)
 		return true, nil
 	}
+	if !p.fullDecodeOK() {
+		// Exactly the rows a full decode rejects: the unindexed path drops
+		// them from page AND total, so they are neither counted nor paged.
+		w.s.decodeFailures.Add(1)
+		w.tally.record(primary, fmt.Errorf("details is not an object"))
+		return true, nil
+	}
 	if !matchesFilter(p.entry(), w.f) {
 		return true, nil
 	}
-	full := func() (ActivityEntry, bool) {
+	// Counted only now, after the row is known to decode in full: nothing is
+	// ever counted and then un-counted, so an offset cannot drift.
+	w.matched++
+	if w.matched > w.f.Offset && len(w.page) < w.f.Limit {
 		var fe ActivityEntry
 		w.s.entriesDecoded.Add(1)
 		if jsonErr := json.Unmarshal(val, &fe); jsonErr != nil {
-			w.s.decodeFailures.Add(1)
-			w.tally.record(primary, jsonErr)
-			return ActivityEntry{}, false
+			// Unreachable while fullDecodeOK is exact; fail loudly rather
+			// than return a page that silently disagrees with total.
+			return false, fmt.Errorf("pebble_activity_store: page row %q passed the decode check but failed: %w", primary, jsonErr)
 		}
-		return fe, true
+		w.page = append(w.page, fe)
 	}
-	return w.visit(full), nil
+	return w.matched < w.probeAt, nil
 }

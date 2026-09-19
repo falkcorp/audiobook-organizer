@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_reclaim.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2e7c41-6b83-4d09-9f27-c1a840b6e35d
-// last-edited: 2026-09-08
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -51,7 +51,11 @@ func (p *Plugin) activityReclaimDef() sdk.OperationDef {
 			"Dry-run unless dry_run=false.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.activity-reclaim",
+		// Shares the activity-maintenance key: it prunes Pebble activity rows,
+		// so it must not run under maintenance.activity-filter-index-backfill
+		// (which would re-create index keys for rows it deletes) nor under
+		// compaction, which deletes from the same tiers.
+		ConcurrencyKey: "maintenance.cleanup-activity-log",
 		// Cancellable: the census and the prune loop both check ctx between
 		// tiers, and a partial prune is safe — the op is idempotent and a rerun
 		// simply continues from whatever is left.
