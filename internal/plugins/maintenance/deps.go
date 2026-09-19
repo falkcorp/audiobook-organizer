@@ -436,6 +436,12 @@ type ActivityLogOps interface {
 	// It backs the maintenance.recompact-activity-digests op, which replaced
 	// the synchronous POST /admin/recompact-digests handler.
 	RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error)
+	// ActivityFilterIndexBackfiller returns the Pebble activity store's
+	// filter-index backfill surface, or nil when no Pebble activity store is
+	// wired. In the SQLite-migration wrapper it is the Pebble side, which
+	// receives every write, so the indexes can be built before the primary
+	// backend switches to Pebble.
+	ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller
 	// ReclaimMigratedActivity deletes Pebble-side activity rows that the SQLite
 	// cutover has made redundant, freeing space in the main database.
 	//

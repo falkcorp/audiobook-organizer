@@ -149,6 +149,10 @@ func (d fakeDeps) OptimizeActivityStatistics(_ context.Context) (database.Activi
 	return database.ActivityOptimizeResult{}, nil
 }
 
+func (d fakeDeps) ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller {
+	return nil
+}
+
 func (d fakeDeps) RecompactActivityDigests(_ context.Context) (database.RecompactResult, error) {
 	return database.RecompactResult{}, nil
 }

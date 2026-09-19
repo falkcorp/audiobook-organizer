@@ -39,6 +39,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.compactActivityLogDef(),
 		p.nightlyCompactActivityLogDef(),
 		p.recompactActivityDigestsDef(),
+		p.activityFilterIndexBackfillDef(),
 		p.optimizeActivityDBDef(),
 		p.purgeOldLogsDef(),
 		p.pruneAIJournalDef(),

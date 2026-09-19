@@ -432,9 +432,9 @@ func BenchmarkActivityListFilter(b *testing.B) {
 		}
 	})
 	filters := map[string]ActivityFilter{
-		"source": {Source: "src7", Limit: 50},
-		"level":  {Level: "error", Limit: 50},
-		"type":   {Type: "type42", Limit: 50},
+		"source":             {Source: "src7", Limit: 50},
+		"level":              {Level: "error", Limit: 50},
+		"type":               {Type: "type42", Limit: 50},
 		"source_level_page3": {Source: "src0", Level: "error", Limit: 50, Offset: 100},
 	}
 	names := make([]string, 0, len(filters))
