@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -208,7 +209,11 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 		return err
 	}
 	opID := maintenance.OperationIDFromCtx(ctx)
-	opts.PathPrefix = "" // the reviewed members ARE the scope; re-verify them as they are
+	opts.PathPrefix = "" // the members' folders ARE the scope; re-verify them as they are
+	siblings, err := chapterSiblingIndex(store)
+	if err != nil {
+		return err
+	}
 	claimed := map[string]bool{}
 	res.GroupsFound = len(res.Params.Groups)
 	res.Groups = make([]chapterGroupOutcome, 0, len(res.Params.Groups))
@@ -223,7 +228,7 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 			out.SourceBookIDs = append([]string(nil), sel.BookIDs[1:]...)
 		}
 		res.TotalBooksAffected += len(sel.BookIDs)
-		j.applyOne(store, ds, cc, opID, opts, claimed, sel, &out)
+		j.applyOne(store, ds, cc, opID, opts, siblings, claimed, sel, &out)
 		switch out.Status {
 		case "failed":
 			res.GroupsFailed++
@@ -231,6 +236,8 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 			res.GroupsBlocked++
 		case "drifted":
 			res.GroupsDrifted++
+		case "selection_mismatch":
+			res.GroupsSelectionMismatch++
 		}
 		res.BooksMerged += out.BooksMerged
 		res.BooksSkipped += len(out.SourceBookIDs) - out.BooksMerged
@@ -239,42 +246,94 @@ func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.Job
 	return nil
 }
 
+// chapterSiblingIndex maps each directory to the ids of the live books whose
+// FilePath lies directly in it, read once per real run. Groups never span
+// folders, so a group's whole context is its members' folder(s).
+func chapterSiblingIndex(store maintenance.JobStore) (map[string][]string, error) {
+	all, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("load books for chapter re-verification: %w", err)
+	}
+	out := map[string][]string{}
+	for i := range all {
+		b := &all[i]
+		if b.FilePath == "" || b.IsSoftDeleted() || (b.MergedIntoBookID != nil && *b.MergedIntoBookID != "") {
+			continue
+		}
+		dir := filepath.Dir(b.FilePath)
+		out[dir] = append(out[dir], b.ID)
+	}
+	return out, nil
+}
+
 // verifyChapterSelection checks a reviewed group against the library now.
 // Returns the re-detected group and "" when it may be merged, else why not
-// and the outcome status ("drifted", or "blocked" for a group the detector
-// blocks or a low-confidence group sent without an acknowledgement).
+// and the outcome status.
 //
-// Low confidence is refused HERE, not only in the card: a low group (e.g.
-// positions from trailing file numbers only, several book-length members,
-// gaps plus unknown durations) merges only when its selection carries
-// allow_low_confidence -- the card sets it only for a group the operator
-// ticked one by one, never through "Select all".
-func verifyChapterSelection(sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions) (scanner.ChapterGroup, string, string) {
+// Detection runs over the members AND every live sibling book in their
+// folder(s), freshly re-read (verify also runs under the merge lock), and the
+// selection must EQUAL one detected group exactly. Detecting over the
+// selection alone would drop every whole-set blocker -- mixed containers,
+// repeated positions, two authors, full-length copies -- the moment the
+// other members are left out, and let a SUBSET of a blocked group merge,
+// orphaning the rest. The fingerprint is not a secret (any client can hash
+// the members), so it proves only that the members did not change.
+//
+// Statuses: "drifted" (members changed), "selection_mismatch" (not exactly
+// one detected group of the folder), "blocked" (the detector blocks that
+// group, or it is LOW confidence and the selection carries no
+// allow_low_confidence acknowledgement -- the card sets it only for a group
+// the operator ticked one by one, never through "Select all").
+//
+// A book imported into the folder after the sibling index was read is not
+// seen by this check (siblings are re-read by id, not re-listed): a narrow
+// window, and the fingerprint still pins the members.
+func verifyChapterSelection(store maintenance.JobStore, sel chapterGroupSelection, st *chapterGroupState, opts scanner.ChapterDetectOptions, siblings map[string][]string) (scanner.ChapterGroup, string, string) {
 	if chapterFingerprint(st.members) != sel.Fingerprint {
 		return scanner.ChapterGroup{}, "members changed since the preview (fingerprint mismatch)", "drifted"
 	}
-	cores := make([]database.BookCore, len(st.books))
-	for i, b := range st.books {
-		cores[i] = b.Core()
+	inSel := make(map[string]bool, len(st.books))
+	dirs := map[string]bool{}
+	cores := make([]database.BookCore, 0, len(st.books))
+	for _, b := range st.books {
+		inSel[b.ID] = true
+		dirs[filepath.Dir(b.FilePath)] = true
+		cores = append(cores, b.Core())
+	}
+	for dir := range dirs {
+		for _, id := range siblings[dir] {
+			if inSel[id] {
+				continue
+			}
+			b, err := store.GetBookByID(id)
+			if err != nil {
+				return scanner.ChapterGroup{}, fmt.Sprintf("folder sibling %s not readable: %v", id, err), "drifted"
+			}
+			if b == nil {
+				continue // deleted since the index was read
+			}
+			cores = append(cores, b.Core())
+		}
 	}
 	det := scanner.DetectChapterGroupsWithOptions(cores, opts)
-	if len(det.Groups) == 0 && len(det.Blocked) == 1 {
-		return scanner.ChapterGroup{}, "group is blocked: " + strings.Join(det.Blocked[0].Blockers, "; "), "blocked"
+	for _, g := range det.Blocked {
+		if slices.Equal(g.BookIDs, sel.BookIDs) {
+			return scanner.ChapterGroup{}, "group is blocked: " + strings.Join(g.Blockers, "; "), "blocked"
+		}
 	}
-	if len(det.Groups) != 1 {
-		return scanner.ChapterGroup{}, fmt.Sprintf("members no longer form one chapter group (detected %d)", len(det.Groups)), "drifted"
+	for _, g := range det.Groups {
+		if !slices.Equal(g.BookIDs, sel.BookIDs) || g.PrimaryBookID != sel.PrimaryBookID {
+			continue
+		}
+		if g.Confidence == scanner.ChapterConfidenceLow && !sel.AllowLowConfidence {
+			return scanner.ChapterGroup{}, "low-confidence group: a merge needs an explicit allow_low_confidence acknowledgement for it", "blocked"
+		}
+		return g, "", ""
 	}
-	g := det.Groups[0]
-	if g.PrimaryBookID != sel.PrimaryBookID || !slices.Equal(g.BookIDs, sel.BookIDs) {
-		return scanner.ChapterGroup{}, "members no longer form this exact group in this chapter order", "drifted"
-	}
-	if g.Confidence == scanner.ChapterConfidenceLow && !sel.AllowLowConfidence {
-		return scanner.ChapterGroup{}, "low-confidence group: a merge needs an explicit allow_low_confidence acknowledgement for it", "blocked"
-	}
-	return g, "", ""
+	return scanner.ChapterGroup{}, fmt.Sprintf("selection_mismatch: the selected books are not exactly one detected group of their folder (the folder now has %d mergeable and %d blocked group(s)); preview again", len(det.Groups), len(det.Blocked)), "selection_mismatch"
 }
 
-func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
+func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, siblings map[string][]string, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
 	if len(sel.BookIDs) < 2 || sel.PrimaryBookID == "" || sel.BookIDs[0] != sel.PrimaryBookID || sel.Fingerprint == "" {
 		out.Status = "failed"
 		out.Errors = append(out.Errors, "malformed group: needs primary_book_id == book_ids[0], at least 2 books, and the preview fingerprint")
@@ -298,10 +357,10 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	}
 	out.Members = st.members
 	out.PrimaryTitle = st.books[0].Title
-	g, why, status := verifyChapterSelection(sel, st, opts)
+	g, why, status := verifyChapterSelection(store, sel, st, opts, siblings)
 	if why != "" {
 		out.Status = status
-		if status == "blocked" {
+		if status == "blocked" || status == "selection_mismatch" {
 			out.Blockers = append(out.Blockers, why)
 		} else {
 			out.Errors = append(out.Errors, why)
@@ -351,8 +410,8 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		if err != nil {
 			return &chapterStepError{status: "failed", msg: err.Error()}
 		}
-		if _, why, status := verifyChapterSelection(sel, cur, opts); why != "" {
-			if status == "blocked" {
+		if _, why, status := verifyChapterSelection(store, sel, cur, opts, siblings); why != "" {
+			if status == "blocked" || status == "selection_mismatch" {
 				return &chapterStepError{status: status, msg: why, blockers: []string{why}}
 			}
 			return &chapterStepError{status: status, msg: why}

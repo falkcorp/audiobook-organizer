@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -356,6 +356,8 @@ func TestMergeChapterGroups_RealMergeWithoutGroupsIsRefused(t *testing.T) {
 // since the preview is skipped as drifted, and a chapter imported after the
 // preview is not folded in.
 func TestMergeChapterGroups_MergesExactlyTheReviewedSet(t *testing.T) {
+	// Nothing outside the reviewed set is merged, and a reviewed set that no
+	// longer matches its folder is not merged at all.
 	s := ddRealStore(t)
 	tale := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 2, 300)
 	saga := chSeedGroup(t, s, "/lib/B/Saga", "Saga", 2, 300)
@@ -372,12 +374,15 @@ func TestMergeChapterGroups_MergesExactlyTheReviewedSet(t *testing.T) {
 		t.Fatalf("ModifyBook: %v", err)
 	}
 
+	// Tale's folder now forms a 3-chapter group, so the reviewed 2-chapter
+	// selection is no longer a detected group: merging it would orphan
+	// chapter 03. It is refused (selection_mismatch) until previewed again.
 	res := chRun(t, &mergeChapterGroupsJob{}, s, params, false)
-	if res.BooksMerged != 1 || res.GroupsDrifted != 1 {
-		t.Fatalf("want Tale merged (1 source) and Saga drifted, got %+v", res)
+	if res.BooksMerged != 0 || res.GroupsDrifted != 1 || res.GroupsSelectionMismatch != 1 {
+		t.Fatalf("want Tale selection_mismatch and Saga drifted, nothing merged, got %+v", res)
 	}
-	if !ddMustGet(t, s, tale[1].ID).IsSoftDeleted() {
-		t.Fatal("reviewed Tale chapter 02 was not merged")
+	if ddMustGet(t, s, tale[1].ID).IsSoftDeleted() {
+		t.Fatal("a reviewed group whose folder changed was merged without a new preview")
 	}
 	if ddMustGet(t, s, late.ID).IsSoftDeleted() {
 		t.Fatal("a chapter imported after the preview was merged unreviewed")
@@ -538,5 +543,61 @@ func TestMergeChapterGroups_ApplyRefusesLowAndBlockedSelections(t *testing.T) {
 	res = chApply(t, s, bsel)
 	if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "non-primary") {
 		t.Fatalf("blocked group merged: %+v", res.Groups)
+	}
+}
+
+// A SUBSET of a group the detector blocks must never merge: every whole-set
+// blocker (mixed containers, duplicate copies, different authors) vanishes
+// when the other members are left out of the selection. The merge verifies
+// the selection against detection over the members' whole folder and
+// refuses anything that is not exactly one detected group.
+func TestMergeChapterGroups_SubsetOfBlockedGroupIsRefused(t *testing.T) {
+	seed := func(t *testing.T, s *database.PebbleStore, dir string, names []string, exts []string, authors []int) []string {
+		var ids []string
+		for i, n := range names {
+			path := fmt.Sprintf("%s/%s%s", dir, n, exts[i])
+			a := authors[i]
+			b := ddMustBook(t, s, &database.Book{Title: n, FilePath: path, Duration: chIntP(1500), AuthorID: &a})
+			ddMustFile(t, s, &database.BookFile{BookID: b.ID, FilePath: path, Duration: 1500})
+			ids = append(ids, b.ID)
+		}
+		return ids
+	}
+	cases := map[string]func(t *testing.T, s *database.PebbleStore) []string{
+		"mixed containers": func(t *testing.T, s *database.PebbleStore) []string {
+			ids := seed(t, s, "/lib/C/Tale", []string{"01 - Tale", "02 - Tale", "03 - Tale", "04 - Tale", "05 - Tale"},
+				[]string{".mp3", ".mp3", ".mp3", ".m4a", ".m4a"}, []int{1, 1, 1, 1, 1})
+			return ids[:3]
+		},
+		"two copies (duplicate positions)": func(t *testing.T, s *database.PebbleStore) []string {
+			ids := seed(t, s, "/lib/C/Dup", []string{"Chapter 1", "Chapter 2", "Chapter 3"}, []string{".mp3", ".mp3", ".mp3"}, []int{1, 1, 1})
+			seed(t, s, "/lib/C/Dup", []string{"01 - Chapter 1", "02 - Chapter 2", "03 - Chapter 3"}, []string{".mp3", ".mp3", ".mp3"}, []int{1, 1, 1})
+			return ids
+		},
+		"two authors": func(t *testing.T, s *database.PebbleStore) []string {
+			ids := seed(t, s, "/lib/C/Stories", []string{"Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4"},
+				[]string{".mp3", ".mp3", ".mp3", ".mp3"}, []int{1, 1, 2, 2})
+			return ids[:2]
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := ddRealStore(t)
+			sub := mk(t, s)
+			sel := chSelectionFor(t, s, sub)
+			sel.AllowLowConfidence = true
+			res := chApply(t, s, sel)
+			if res.BooksMerged != 0 || res.Groups[0].Status == "merged" || res.Groups[0].Status == "partial" {
+				t.Fatalf("subset of a blocked folder merged: %+v", res.Groups)
+			}
+			if st := res.Groups[0].Status; st != "selection_mismatch" && st != "blocked" {
+				t.Fatalf("want selection_mismatch/blocked, got %q (%+v)", st, res.Groups[0])
+			}
+			for _, id := range sub[1:] {
+				if ddMustGet(t, s, id).IsSoftDeleted() {
+					t.Fatalf("refused subset still soft-deleted %s", id)
+				}
+			}
+		})
 	}
 }

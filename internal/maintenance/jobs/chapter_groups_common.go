@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -129,7 +129,8 @@ type chapterGroupOutcome struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 
 	// Status is would_merge / would_skip / blocked (dry run) or merged /
-	// partial / failed / drifted / blocked (real run). Empty on a scan.
+	// partial / failed / drifted / blocked / selection_mismatch (real run).
+	// Empty on a scan (or "blocked" for a detector-blocked group).
 	Status string `json:"status,omitempty"`
 	// Blockers name why the group is never merged: a detection blocker
 	// (non-primary versions, iTunes library, duplicate or sparse positions,
@@ -167,6 +168,7 @@ type chapterGroupsResult struct {
 	GroupsFailed                 int                   `json:"groups_failed"`
 	GroupsBlocked                int                   `json:"groups_blocked"`
 	GroupsDrifted                int                   `json:"groups_drifted"`
+	GroupsSelectionMismatch      int                   `json:"groups_selection_mismatch"`
 	Groups                       []chapterGroupOutcome `json:"groups"`
 }
 
