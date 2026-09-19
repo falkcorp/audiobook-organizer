@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.3.1
-// last-edited: 2026-09-14
+// version: 1.4.0
+// last-edited: 2026-09-19
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -249,9 +249,6 @@ func (m *MockBookStore) DeleteBookTombstone(id string) error                    
 func (m *MockBookStore) GetScanFailCount(pathHash string) (int, error)            { return 0, nil }
 func (m *MockBookStore) IncrScanFailCount(pathHash string) (int, error)           { return 1, nil }
 func (m *MockBookStore) ResetScanFailCount(pathHash string) error                 { return nil }
-func (m *MockBookStore) MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error {
-	return nil
-}
 func (m *MockBookStore) GetMergeResultSummary(primaryID string) (*database.Book, error) {
 	return nil, nil
 }

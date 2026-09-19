@@ -263,7 +263,6 @@ type jobBookWriter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
 	RecomputeBookAggregates(bookID string) error
-	MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
 	PruneBookSnapshots(id string, keepCount int) (int, error)
 }
 

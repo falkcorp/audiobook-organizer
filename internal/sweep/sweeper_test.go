@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-07-16
+// last-edited: 2026-09-19
 
 package sweep
 
@@ -176,14 +176,11 @@ func (m *MockBookStore) GetAllBookSummaries(limit, offset int) ([]database.BookS
 func (m *MockBookStore) RevertBookToVersion(id string, ts time.Time) (*database.Book, error) {
 	return nil, nil
 }
-func (m *MockBookStore) PruneBookSnapshots(id string, keepCount int) (int, error) { return 0, nil }
-func (m *MockBookStore) CreateBookTombstone(book *database.Book) error            { return nil }
-func (m *MockBookStore) GetScanFailCount(pathHash string) (int, error)            { return 0, nil }
-func (m *MockBookStore) IncrScanFailCount(pathHash string) (int, error)           { return 0, nil }
-func (m *MockBookStore) ResetScanFailCount(pathHash string) error                 { return nil }
-func (m *MockBookStore) MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error {
-	return nil
-}
+func (m *MockBookStore) PruneBookSnapshots(id string, keepCount int) (int, error)      { return 0, nil }
+func (m *MockBookStore) CreateBookTombstone(book *database.Book) error                 { return nil }
+func (m *MockBookStore) GetScanFailCount(pathHash string) (int, error)                 { return 0, nil }
+func (m *MockBookStore) IncrScanFailCount(pathHash string) (int, error)                { return 0, nil }
+func (m *MockBookStore) ResetScanFailCount(pathHash string) error                      { return nil }
 func (m *MockBookStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error { return nil }
 func (m *MockBookStore) RecomputeBookAggregates(_ string) error                        { return nil }
 func (m *MockBookStore) ListBookIDs() ([]string, error)                                { return nil, nil }

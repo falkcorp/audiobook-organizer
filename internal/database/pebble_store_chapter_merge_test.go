@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_chapter_merge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8f5d21-7c4e-4a96-8e0b-2d6f1a9c7e53
 // last-edited: 2026-09-19
 
@@ -14,19 +14,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMergeChapterBooks_FileRowIsNeverAbsentFromBothBooks pins the atomicity of
-// the chapter-merge re-parent. MergeChapterBooks used to delete each
-// book_file:<src>:<id> key in its own Sync commit and only then call
-// CreateBookFile for book_file:<primary>:<id>. Between the two the row existed
-// under neither book, so a crash or a CreateBookFile error in that gap lost the
-// row outright, and the maintenance job logged and moved on to the next group.
+// TestChapterMergeReparent_FileRowIsNeverAbsentFromBothBooks pins the
+// atomicity of the re-parent a chapter merge performs. The merge-chapter-groups
+// job used PebbleStore.MergeChapterBooks, which once deleted each
+// book_file:<src>:<id> key in its own Sync commit and only then created
+// book_file:<primary>:<id>; between the two the row existed under neither book.
+// #3446 made that path one batch. MergeChapterBooks is gone (2026-09-19): the
+// job now merges through dedup.MergeSplitBookCluster, which re-parents each
+// source with MoveBookFilesToBook (a one-move MoveBookFilesToBookBulk), so that
+// is the call this pins.
 //
-// The observer reads every source first and the primary second. With a single
-// atomic batch a file can only move from "under the source" to "under the
-// primary" between those reads, never vanish, so every observation must account
-// for every file. With the old delete-then-create loop the observer catches the
-// gap.
-func TestMergeChapterBooks_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
+// The observer reads every source first and the primary second. With an atomic
+// move a file can only go from "under the source" to "under the primary"
+// between those reads, never vanish, so every observation must account for
+// every file.
+func TestChapterMergeReparent_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 	store := setupCoverageDB(t)
 	s := store.(*PebbleStore)
 
@@ -82,7 +84,18 @@ func TestMergeChapterBooks_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 		}
 	}()
 
-	err := s.MergeChapterBooks(primary, srcIDs, "Book", 3600)
+	var err error
+	for _, src := range srcIDs {
+		files, gerr := s.GetBookFiles(src)
+		require.NoError(t, gerr)
+		ids := make([]string, 0, len(files))
+		for _, f := range files {
+			ids = append(ids, f.ID)
+		}
+		if err = s.MoveBookFilesToBook(ids, src, primary); err != nil {
+			break
+		}
+	}
 	done.Store(true)
 	wg.Wait()
 	require.NoError(t, err)
@@ -99,9 +112,5 @@ func TestMergeChapterBooks_FileRowIsNeverAbsentFromBothBooks(t *testing.T) {
 		left, err := s.GetBookFiles(src)
 		require.NoError(t, err)
 		require.Empty(t, left, "source %s must be drained", src)
-		b, err := s.GetBookByID(src)
-		require.NoError(t, err)
-		require.NotNil(t, b.MergedIntoBookID, "source %s must be flagged as merged", src)
-		require.Equal(t, primary, *b.MergedIntoBookID)
 	}
 }

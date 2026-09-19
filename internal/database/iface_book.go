@@ -305,11 +305,6 @@ type BookScanFailStore interface {
 
 // BookAggregateWriter performs merges and aggregate recomputation.
 type BookAggregateWriter interface {
-	// MergeChapterBooks absorbs srcIDs into primaryID: moves all book_files to
-	// primaryID, marks source books as non-primary (is_primary_version=0,
-	// merged_into_book_id=primaryID), and updates the primary book's duration
-	// (rounded to nearest second) and title. Runs in a single transaction.
-	MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
 	// FlagMetadataHashDuplicate marks duplicateID as absorbed into primaryID by
 	// setting merged_into_book_id=primaryID and is_primary_version=0 on the
 	// duplicate. Used by MATCH-4 auto-dedup at metadata-apply time.

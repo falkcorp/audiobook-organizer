@@ -5348,60 +5348,6 @@ func deleteFingerprintLSHIndexesByID(_ *pebble.Batch, _ string) error {
 	return nil
 }
 
-// MergeChapterBooks moves all BookFiles from srcIDs onto primaryID, then
-// updates the primary book's title and duration. Source books are marked
-// with merged_into_book_id set to primaryID.
-func (p *PebbleStore) MergeChapterBooks(primaryID string, srcIDs []string, newTitle string, duration float64) error {
-	if len(srcIDs) == 0 {
-		return nil
-	}
-	// Re-parent every source's files in ONE atomic batch. This used to delete
-	// each book_file:<src>:<id> key in its own Sync commit and then call
-	// CreateBookFile separately, so between the two the row existed under
-	// neither book: a crash or a CreateBookFile error there lost the row, and
-	// the maintenance job logged the error and went on to the next group.
-	// MoveBookFilesToBookBulk writes the delete and the re-create together (any
-	// miss fails the whole batch with nothing written) and also refreshes memdb
-	// and recomputes each touched book's aggregates, which the old loop skipped.
-	moves := make([]BookFileMove, 0, len(srcIDs))
-	for _, srcID := range srcIDs {
-		files, err := p.GetBookFiles(srcID)
-		if err != nil {
-			return fmt.Errorf("MergeChapterBooks: get files for %s: %w", srcID, err)
-		}
-		ids := make([]string, 0, len(files))
-		for i := range files {
-			ids = append(ids, files[i].ID)
-		}
-		moves = append(moves, BookFileMove{FileIDs: ids, SourceBookID: srcID})
-	}
-	if err := p.MoveBookFilesToBookBulk(moves, primaryID); err != nil {
-		return fmt.Errorf("MergeChapterBooks: move files to %s: %w", primaryID, err)
-	}
-	// Flag the drained sources only after the move landed. A crash between the
-	// move and a flag leaves an empty, unflagged source book, which loses no
-	// data: a re-run moves zero files for it and then flags it.
-	for _, srcID := range srcIDs {
-		if err := p.FlagMetadataHashDuplicate(primaryID, srcID); err != nil {
-			return fmt.Errorf("MergeChapterBooks: flag duplicate: %w", err)
-		}
-	}
-	// Update primary book's title and duration. FlagMetadataHashDuplicate above
-	// released each source book's stripe before this takes the primary's, so
-	// no two stripes are ever held together.
-	_, err := p.ModifyBook(primaryID, func(primary *Book) error {
-		if newTitle != "" {
-			primary.Title = newTitle
-		}
-		if duration > 0 {
-			d := int(duration)
-			primary.Duration = &d
-		}
-		return nil
-	})
-	return err
-}
-
 // --- AIJobsStore (PebbleDB key-value implementation) ---
 //
 // Key scheme:

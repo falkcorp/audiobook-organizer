@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_override_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a8e0840-e3e1-4dd5-9e0f-38b2181b5090
-// last-edited: 2026-08-22
+// last-edited: 2026-09-19
 
 package database
 
@@ -151,24 +151,22 @@ func TestMockStore_NewOverridesAreHonored(t *testing.T) {
 	})
 
 	t.Run("renamed blank params are forwarded", func(t *testing.T) {
-		var gotPrimary, gotTitle string
-		var gotSrcs []string
-		var gotDuration float64
+		var gotFiles []string
+		var gotSrc, gotTarget string
 		m := &MockStore{
-			MergeChapterBooksFunc: func(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error {
-				gotPrimary, gotSrcs, gotTitle, gotDuration = primaryID, srcIDs, commonTitle, totalDuration
+			MoveBookFilesToBookFunc: func(fileIDs []string, sourceBookID, targetBookID string) error {
+				gotFiles, gotSrc, gotTarget = fileIDs, sourceBookID, targetBookID
 				return nil
 			},
 		}
-		if err := m.MergeChapterBooks("book-1", []string{"book-2"}, "Some Title", 42.5); err != nil {
+		if err := m.MoveBookFilesToBook([]string{"file-1"}, "book-2", "book-1"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		// Renaming `_` to a real name is what makes forwarding possible at all; if
 		// any argument were dropped or transposed in that edit, it shows up here.
-		if gotPrimary != "book-1" || gotTitle != "Some Title" || gotDuration != 42.5 ||
-			len(gotSrcs) != 1 || gotSrcs[0] != "book-2" {
-			t.Errorf("arguments not forwarded intact: primary=%q srcs=%v title=%q duration=%v",
-				gotPrimary, gotSrcs, gotTitle, gotDuration)
+		// (This used MergeChapterBooks until that method was removed 2026-09-19.)
+		if gotSrc != "book-2" || gotTarget != "book-1" || len(gotFiles) != 1 || gotFiles[0] != "file-1" {
+			t.Errorf("arguments not forwarded intact: files=%v src=%q target=%q", gotFiles, gotSrc, gotTarget)
 		}
 	})
 }

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -55,8 +55,8 @@ func (j *mergeChapterGroupsJob) CanResume() bool { return false }
 // into its primary (chapter 01).
 //
 // The merge goes through dedup.MergeSplitBookCluster -- the split-book merge
-// the dedup review UI uses -- rather than store.MergeChapterBooks, because that
-// path is the one with the safety net: it refuses groups touching the active
+// the dedup review UI uses. It replaced store.MergeChapterBooks (since removed)
+// because this path is the one with the safety net: it refuses groups touching the active
 // iTunes library, writes a combine undo journal before the first write (and
 // refuses the merge if it cannot), reassigns the sources' external IDs before
 // soft-deleting them, withholds a title change on a user field lock, and is

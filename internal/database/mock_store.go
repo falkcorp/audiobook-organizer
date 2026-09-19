@@ -87,7 +87,6 @@ type MockStore struct {
 	GetScanFailCountFunc                 func(pathHash string) (int, error)
 	IncrScanFailCountFunc                func(pathHash string) (int, error)
 	ResetScanFailCountFunc               func(pathHash string) error
-	MergeChapterBooksFunc                func(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error
 	FlagMetadataHashDuplicateFunc        func(primaryID, duplicateID string) error
 	RecomputeBookAggregatesFunc          func(bookID string) error
 	OptimizeFunc                         func() error
@@ -2635,13 +2634,6 @@ func (m *MockStore) ResetScanFailCount(pathHash string) error {
 	}
 	return nil
 }
-func (m *MockStore) MergeChapterBooks(primaryID string, srcIDs []string, commonTitle string, totalDuration float64) error {
-	if m.MergeChapterBooksFunc != nil {
-		return m.MergeChapterBooksFunc(primaryID, srcIDs, commonTitle, totalDuration)
-	}
-	return nil
-}
-
 func (m *MockStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
 	if m.FlagMetadataHashDuplicateFunc != nil {
 		return m.FlagMetadataHashDuplicateFunc(primaryID, duplicateID)
