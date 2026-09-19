@@ -1,5 +1,5 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
 // last-edited: 2026-09-19
 
@@ -391,5 +391,98 @@ func TestElectPrimaryFor_DeterministicOrder(t *testing.T) {
 				t.Errorf("winner = %q, want %q", got.ID, tc.want)
 			}
 		})
+	}
+}
+
+// markElectMerged sets MergedIntoBookID on id in every projection the pass
+// reads (group listing and point read).
+func (f *electFakeStore) markElectMerged(id, into string) {
+	f.lock()
+	defer f.unlock()
+	v := into
+	f.byID[id].MergedIntoBookID = &v
+	for gid, ms := range f.byGroup {
+		for i := range ms {
+			if ms[i].ID == id {
+				f.byGroup[gid][i].MergedIntoBookID = &v
+			}
+		}
+	}
+}
+
+// A merge loser is usually the OLDEST record in its group. The pass used to
+// elect by age alone, so a group that lost its primary re-crowned the book a
+// merge had absorbed (09-19 census: 302 merged books primary, 218 also
+// organized and listed by ABS beside their survivor).
+func TestElectMissingPrimaries_NeverCrownsAMergeLoser(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore()
+	store.addElectBook("loser", "Old", "vg-m", false, base)
+	store.addElectBook("keeper", "New", "vg-m", false, base.Add(time.Hour))
+	store.markElectMerged("loser", "survivor-elsewhere")
+
+	res, err := ElectMissingPrimaries(store, false)
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if w, ok := store.updated["loser"]; ok && w.IsPrimaryVersion != nil && *w.IsPrimaryVersion {
+		t.Fatalf("merge loser was elected primary")
+	}
+	w, ok := store.updated["keeper"]
+	if !ok || w.IsPrimaryVersion == nil || !*w.IsPrimaryVersion {
+		t.Fatalf("live member not elected; result %+v", res)
+	}
+	if res.Elected != 1 {
+		t.Errorf("Elected = %d, want 1", res.Elected)
+	}
+}
+
+// A group whose every member is a merge loser or soft-deleted keeps no
+// primary: its work is represented by the survivor.
+func TestElectMissingPrimaries_AllMergedOrDeletedGroupStaysWithoutPrimary(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore()
+	store.addElectBook("m1", "A", "vg-all", false, base)
+	store.addElectBook("d1", "B", "vg-all", false, base.Add(time.Minute))
+	store.markElectMerged("m1", "s")
+	yes := true
+	store.byID["d1"].MarkedForDeletion = &yes
+	store.byGroup["vg-all"][1].MarkedForDeletion = &yes
+
+	res, err := ElectMissingPrimaries(store, false)
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if len(store.updated) != 0 {
+		t.Fatalf("wrote %d books, want 0", len(store.updated))
+	}
+	if res.SkippedNoEligible != 1 || res.Elected != 0 {
+		t.Errorf("SkippedNoEligible=%d Elected=%d, want 1 and 0", res.SkippedNoEligible, res.Elected)
+	}
+}
+
+// The winner is re-checked on the locked re-read: a merge that absorbed it
+// after the group was listed must not be undone by crowning it.
+func TestElectMissingPrimaries_WinnerMergedAfterGroupReadIsNotCrowned(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	store := newElectFakeStore()
+	store.addElectBook("w", "W", "vg-race", false, base)
+	store.onGroupRead = func(gid string, members []database.Book) []database.Book {
+		v := "s"
+		store.lock()
+		store.byID["w"].MergedIntoBookID = &v
+		store.unlock()
+		return members // the listing still shows w unmerged
+	}
+
+	res, err := ElectMissingPrimaries(store, false)
+	if err != nil {
+		t.Fatalf("ElectMissingPrimaries: %v", err)
+	}
+	if w, ok := store.updated["w"]; ok && w.IsPrimaryVersion != nil && *w.IsPrimaryVersion {
+		t.Fatalf("book merged after the group read was crowned")
+	}
+	if res.Elected != 0 || res.Errors != 0 {
+		t.Errorf("Elected=%d Errors=%d, want 0 and 0", res.Elected, res.Errors)
 	}
 }
