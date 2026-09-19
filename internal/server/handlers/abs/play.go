@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-09-19
 
@@ -212,6 +212,7 @@ func (h *Handler) Play(c *gin.Context) {
 		if perr != nil {
 			// Fail closed: an unreadable position is not "no position yet",
 			// and answering currentTime 0 rewinds the client. Transient: 503.
+			logProgressUnavailable("play: read position", user.ID, book.ID, perr)
 			respondError(c, http.StatusServiceUnavailable, "could not load progress")
 			return
 		}
@@ -437,10 +438,12 @@ func (h *Handler) SessionLocal(c *gin.Context) {
 // 4xx WEDGES THE REPLAY QUEUE PERMANENTLY. So this endpoint ignores what it cannot
 // place and reports success.
 //
-// The ONE exception is a stored position that cannot be read: merging against it
-// as if empty would rewind the listener, so nothing is written and it answers a
-// non-empty 503 (a 5xx, which clients retry — not the 4xx that wedges them), and
-// returns "" so /close keeps the session for the retry.
+// The ONE exception is a stored position or book state that cannot be read
+// (readStoredProgress, done BEFORE the in-memory session is touched): merging
+// against it as if empty would rewind the listener or wipe the state, so nothing
+// is written or changed, it is logged, and it answers a non-empty 503 (a 5xx,
+// which clients retry — not the 4xx that wedges them). It returns "" so /close
+// keeps the session for the retry, and the retry is not double-counted.
 func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 	// Answered before anything else can fail, so no error path can produce an empty
 	// 200 — fatal for these decoders (§1.8.6).
@@ -471,6 +474,19 @@ func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 		return ""
 	}
 
+	// Read the stored position and state BEFORE touching the in-memory
+	// session: a 503 must leave the session exactly as it was, or the client's
+	// retry of the same sync adds timeListened twice.
+	var stored storedProgress
+	if h.progress != nil {
+		var err error
+		if stored, err = h.readStoredProgress(session.UserID, session.BookID); err != nil {
+			logProgressUnavailable("session sync", session.UserID, session.BookID, err)
+			unavailable = true
+			return ""
+		}
+	}
+
 	session.mu.Lock()
 	if req.CurrentTime != nil && *req.CurrentTime >= 0 {
 		session.CurrentTime = *req.CurrentTime
@@ -488,10 +504,7 @@ func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 	newPosition := session.CurrentTime
 	session.mu.Unlock()
 
-	if err := h.persistProgress(session, newPosition, req.Duration); errors.Is(err, errProgressPositionUnreadable) {
-		unavailable = true
-		return ""
-	}
+	h.persistProgress(session, newPosition, req.Duration, stored)
 	return sessionID
 }
 
@@ -503,23 +516,16 @@ func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 // while offline still advances the position. That specific clobber is what would cost
 // the owner their place in a book, which is the whole reason this project exists.
 //
-// Write failures are not surfaced: a client that treats a sync failure as fatal
-// would stop syncing altogether. The one error returned is an unreadable stored
-// position (errProgressPositionUnreadable): nothing is written, because merging
-// against it as if empty would rewind the listener, and the caller answers 503.
-func (h *Handler) persistProgress(s *playSession, position float64, clientDuration *float64) error {
+// Write failures are not surfaced to the client (one that treats a sync failure
+// as fatal would stop syncing altogether) but are logged. An unreadable stored
+// position or state never reaches here: the caller reads both first
+// (readStoredProgress) and answers 503 without writing anything.
+func (h *Handler) persistProgress(s *playSession, position float64, clientDuration *float64, snap storedProgress) {
 	if h.progress == nil || position <= 0 {
-		return nil
+		return
 	}
 
-	stored := 0.0
-	pos, err := h.progress.GetUserPosition(s.UserID, s.BookID)
-	if err != nil {
-		return fmt.Errorf("%w: %s/%s: %w", errProgressPositionUnreadable, s.UserID, s.BookID, err)
-	}
-	if pos != nil {
-		stored = pos.PositionSeconds
-	}
+	stored := snap.position
 
 	// Pick ONE authoritative duration and use it consistently (§5b / requirement 18):
 	// the session's sum-of-tracks. A client-reported duration is only a fallback for a
@@ -543,11 +549,13 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	}
 	merged, accepted := progress.MergeIncoming(serverProgress, incoming)
 	if !accepted {
-		return nil
+		return
 	}
 
 	if err := h.progress.SetUserPosition(s.UserID, s.BookID, absProgressSegmentID, merged.CurrentTime); err != nil {
-		return nil
+		progressLog.Error("abs: session sync: user_id=%s book_id=%s: write position: %v",
+			logger.SanitizeLogValue(s.UserID), logger.SanitizeLogValue(s.BookID), err)
+		return
 	}
 
 	status := database.UserBookStatusInProgress
@@ -571,14 +579,42 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	// silently replaced a status the user pinned by hand (the contract on
 	// UserBookStatus, store.go, and readstatus.go both say a manual status is
 	// left alone). setDerivedStatus is what honours it.
-	_ = h.updateUserBookState(s.UserID, s.BookID, func(state *database.UserBookState) {
+	//
+	// The state was read readable just before (readStoredProgress); a failure
+	// here is a race with a concurrent writer or a write error, and is logged.
+	if err := h.updateUserBookState(s.UserID, s.BookID, func(state *database.UserBookState) {
 		setDerivedStatus(state, status)
 		state.LastActivityAt = now
 		state.LastSegmentID = absProgressSegmentID
 		state.TotalListenedSeconds = timeListening
 		state.ProgressPct = pct
-	})
-	return nil
+	}); err != nil {
+		progressLog.Warn("abs: session sync: user_id=%s book_id=%s: position stored, book state not updated: %v",
+			logger.SanitizeLogValue(s.UserID), logger.SanitizeLogValue(s.BookID), err)
+	}
+}
+
+// storedProgress is what a write path must read, readably, before it writes.
+type storedProgress struct {
+	position float64 // 0 when there is no position yet
+}
+
+// readStoredProgress reads the stored position AND state for (user, book),
+// failing closed: a missing row is "none yet", any read error is returned
+// wrapped in errProgressPositionUnreadable / errProgressStateUnreadable.
+func (h *Handler) readStoredProgress(userID, bookID string) (storedProgress, error) {
+	var out storedProgress
+	pos, err := h.progress.GetUserPosition(userID, bookID)
+	if err != nil {
+		return out, fmt.Errorf("%w: %s/%s: %w", errProgressPositionUnreadable, userID, bookID, err)
+	}
+	if pos != nil {
+		out.position = pos.PositionSeconds
+	}
+	if _, err := h.progress.GetUserBookState(userID, bookID); err != nil {
+		return out, fmt.Errorf("%w: %s/%s: %w", errProgressStateUnreadable, userID, bookID, err)
+	}
+	return out, nil
 }
 
 // setDerivedStatus writes a status the server COMPUTED from a position, unless

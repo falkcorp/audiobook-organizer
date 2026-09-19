@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 package server
 
@@ -78,6 +78,7 @@ func (s *Server) wireLibraryRoutes(
 	protected.GET("/books/:id/state", readingH.GetBookState)
 	protected.PATCH("/books/:id/status", readingH.SetBookStatus)
 	protected.DELETE("/books/:id/status", readingH.ClearBookStatus)
+	protected.POST("/books/:id/status/repair", readingH.RepairBookStatus)
 	protected.GET("/me/:status", readingH.ListByStatus)
 
 	// Playlists

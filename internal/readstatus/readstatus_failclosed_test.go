@@ -1,5 +1,5 @@
 // file: internal/readstatus/readstatus_failclosed_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b5d17-6a2c-4f91-8d40-c2a7e9f5b6d1
 // last-edited: 2026-09-19
 
@@ -7,8 +7,11 @@ package readstatus
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -88,4 +91,79 @@ func TestClearManualStatus_UnreadablePositionsKeepsTheFlag(t *testing.T) {
 		t.Fatalf("clear over unreadable positions: err = %v, want ErrPositionsUnreadable", err)
 	}
 	assertStateIntact(t, store)
+}
+
+// countingStore counts state writes.
+type countingStore struct {
+	Store
+	writes int
+}
+
+func (c *countingStore) SetUserBookState(s *database.UserBookState) error {
+	c.writes++
+	return c.Store.SetUserBookState(s)
+}
+
+// L1: clearing a manual status computes the new state in memory and writes it
+// ONCE, so no reader ever sees the flag cleared with the old status.
+func TestClearManualStatus_WritesOnce(t *testing.T) {
+	store := seedTombstoned(t)
+	cs := &countingStore{Store: store}
+	st, err := SetManualStatus(cs, "u1", "b1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cs.writes != 1 {
+		t.Fatalf("clear wrote the state %d times, want 1", cs.writes)
+	}
+	if st.StatusManual || st.Status != database.UserBookStatusInProgress {
+		t.Fatalf("cleared state = %+v, want auto in_progress", st)
+	}
+}
+
+type unreadableFilesStore struct{ Store }
+
+func (unreadableFilesStore) GetBookFiles(string) ([]database.BookFile, error) {
+	return nil, errors.New("transient read failure")
+}
+
+// Without the files the total duration is 0, which derived "in progress" for
+// a finished book and a 0 percent: fail closed instead.
+func TestRecompute_UnreadableBookFilesFailClosed(t *testing.T) {
+	store := seedTombstoned(t)
+	if _, err := RecomputeUserBookState(unreadableFilesStore{store}, "u1", "b1"); !errors.Is(err, ErrBookFilesUnreadable) {
+		t.Fatalf("recompute over unreadable files: err = %v, want ErrBookFilesUnreadable", err)
+	}
+	assertStateIntact(t, store)
+}
+
+// H1 end to end on a real Pebble store: a corrupt upos: row fails recompute
+// closed instead of being skipped.
+func TestRecompute_CorruptPositionRowFailsClosed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "db")
+	store, err := database.NewPebbleStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "B", FilePath: "/tmp/b1"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SetUserPosition("u1", "b1", "s1", 300)
+	store.Close()
+	db, err := pebble.Open(dir, &pebble.Options{FormatMajorVersion: pebble.FormatNewest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("upos:u1:b1:zz"), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	store, err = database.NewPebbleStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if _, err := RecomputeUserBookState(store, "u1", "b1"); !errors.Is(err, ErrPositionsUnreadable) || !errors.Is(err, database.ErrUserPositionUndecodable) {
+		t.Fatalf("recompute over a corrupt position row: err = %v, want ErrPositionsUnreadable wrapping ErrUserPositionUndecodable", err)
+	}
 }

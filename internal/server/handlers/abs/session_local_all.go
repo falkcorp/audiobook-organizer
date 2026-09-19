@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -215,6 +215,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	if err != nil {
 		// Unknown stored position: writing blind could rewind the listener,
 		// which is the one outcome this endpoint must never produce.
+		logProgressUnavailable("session/local: read position", userID, bookID, err)
 		res.Error = "could not read stored progress"
 		res.transient = true
 		return res
@@ -223,6 +224,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	if err != nil {
 		// Unreadable state: the reset tombstone cannot be checked, and
 		// applying blind could undo a reset. Transient: retry (503).
+		logProgressUnavailable("session/local: read state", userID, bookID, err)
 		res.Error = "could not read book state"
 		res.transient = true
 		return res
@@ -331,9 +333,15 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	//     beyond that is refused as impossible.
 	// Before this, a 60-file 36,000 s book summed to ~35,970 s and a finish at
 	// 35,999 s was refused, so the finish never synced.
-	duration, known := h.durationBoundsForBook(bookID, s.Duration)
+	duration, known, files, derr := h.durationBoundsForBook(bookID, s.Duration)
+	if derr != nil {
+		logProgressUnavailable("session/local: read duration", userID, bookID, derr)
+		res.Error = "could not read the item's duration"
+		res.transient = true
+		return res
+	}
 	if known && duration > 0 {
-		slack := max(absLocalSessionOverrunSec, float64(h.fileCount(bookID))+0.005*duration)
+		slack := max(absLocalSessionOverrunSec, float64(files)+0.005*duration)
 		if ct > duration*(1+absEndOfBookMargin)+slack {
 			res.Error = "currentTime is beyond the item's duration"
 			res.refused = true
