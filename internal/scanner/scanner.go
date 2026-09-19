@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.99.0
+// version: 1.100.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -3090,20 +3090,33 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					existingPrimary := existingInRoot || !newInRoot
 					newPrimary := newInRoot && !existingInRoot
 
-					existing.VersionGroupID = &groupID
-					existing.IsPrimaryVersion = &existingPrimary
-					if _, uerr := getStore().UpdateBook(existing.ID, existing); uerr != nil {
-						defaultLog.Warn("Failed to set version group on existing book %s: %v", existing.ID, uerr)
+					// ModifyBook, not UpdateBook: `existing` came from the hash
+					// lookup above and writing it back whole reverts whatever
+					// another writer committed in the meantime. Only the two
+					// version columns are ours to set.
+					linkedGroup, ok := linkVersionGroup(existing.ID, groupID, existingPrimary)
+					if !ok {
+						// The link did not land, so there is no group to join.
+						// Minting one anyway would leave this new row carrying a
+						// group ID no other row belongs to -- an orphan version
+						// group, which reads downstream as "this book has other
+						// versions" and lists none.
+						defaultLog.Warn("Not linking %s as a version of %s: the group write did not land",
+							book.FilePath, existing.FilePath)
+					} else {
+						// linkedGroup is normally groupID. When another writer
+						// linked this row first, the write is skipped and their
+						// group comes back instead, so the new row joins THAT
+						// group rather than orphaning itself in a fresh one.
+						dbBook.VersionGroupID = &linkedGroup
+						dbBook.IsPrimaryVersion = &newPrimary
+						defaultLog.Info("Auto-linked hash-duplicate as version group %s (primary=%s): %s <-> %s",
+							linkedGroup, existing.FilePath, existing.FilePath, book.FilePath)
+						// A new ULID is about to be minted for this path; remember
+						// the row it supersedes so the sync identity can follow if
+						// this turns out to be a move rather than a second copy.
+						supersededBookID, supersededBookPath = existing.ID, existing.FilePath
 					}
-
-					dbBook.VersionGroupID = &groupID
-					dbBook.IsPrimaryVersion = &newPrimary
-					defaultLog.Info("Auto-linked hash-duplicate as version group %s (primary=%s): %s <-> %s",
-						groupID, existing.FilePath, existing.FilePath, book.FilePath)
-					// A new ULID is about to be minted for this path; remember
-					// the row it supersedes so the sync identity can follow if
-					// this turns out to be a move rather than a second copy.
-					supersededBookID, supersededBookPath = existing.ID, existing.FilePath
 					// Fall through to create the new (non-primary) record below
 					existing = nil
 				}
@@ -3169,17 +3182,21 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					newInRoot := rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir)
 					matchedPrimary := existingInRoot || !newInRoot
 					newPrimary := newInRoot && !existingInRoot
-					matchedBook.VersionGroupID = &groupID
-					matchedBook.IsPrimaryVersion = &matchedPrimary
-					if _, uerr := getStore().UpdateBook(matchedBook.ID, matchedBook); uerr != nil {
-						defaultLog.Warn("Multi-file dedup: failed to set version group on %s: %v", matchedBook.ID, uerr)
+					// Same ModifyBook link as the single-hash branch above, and
+					// the same rule when it does not land: no group on the new
+					// row either, rather than an orphan group of one.
+					linkedGroup, ok := linkVersionGroup(matchedBook.ID, groupID, matchedPrimary)
+					if !ok {
+						defaultLog.Warn("Multi-file dedup: not linking %s as a version of %s: the group write did not land",
+							book.FilePath, matchedBook.FilePath)
+					} else {
+						dbBook.VersionGroupID = &linkedGroup
+						dbBook.IsPrimaryVersion = &newPrimary
+						defaultLog.Info("Multi-file dedup: linked %q as version group %s (%d/%d files matched)",
+							matchedBook.Title, linkedGroup, bestCount, len(book.SegmentFiles))
+						// Same untagged-move follow as the single-hash branch above.
+						supersededBookID, supersededBookPath = matchedBook.ID, matchedBook.FilePath
 					}
-					dbBook.VersionGroupID = &groupID
-					dbBook.IsPrimaryVersion = &newPrimary
-					defaultLog.Info("Multi-file dedup: linked %q as version group %s (%d/%d files matched)",
-						matchedBook.Title, groupID, bestCount, len(book.SegmentFiles))
-					// Same untagged-move follow as the single-hash branch above.
-					supersededBookID, supersededBookPath = matchedBook.ID, matchedBook.FilePath
 					// Leave existing == nil so CreateBook runs below with the version fields set.
 				} else {
 					defaultLog.Debug("Multi-file dedup: best match %d/%d files (threshold %d) — treating as new book: %s",
@@ -3211,15 +3228,30 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					isPrimary := isM4B
 					dbBook.IsPrimaryVersion = &isPrimary
 
-					// Update siblings to share the version group
+					// Update siblings to share the version group. Each sibling
+					// is written through ModifyBook so this loop cannot revert a
+					// concurrent write to a sibling row, and so a sibling that
+					// another writer linked first keeps its own group.
+					//
+					// groupID was chosen from the siblings as they were read, so
+					// a sibling that lands in a DIFFERENT group splits what was
+					// meant to be one group. Nothing here can repair that -- the
+					// new row's group is already fixed above -- so say so plainly
+					// rather than leaving a silently split group behind.
 					for _, sib := range siblings {
-						if sib.VersionGroupID == nil || *sib.VersionGroupID == "" {
-							sibIsM4B := strings.EqualFold(sib.Format, "m4b")
-							sib.VersionGroupID = &groupID
-							sib.IsPrimaryVersion = &sibIsM4B
-							if _, uerr := getStore().UpdateBook(sib.ID, &sib); uerr != nil {
-								defaultLog.Warn("Failed to update sibling version group for %s: %v", sib.FilePath, uerr)
-							}
+						if sib.VersionGroupID != nil && *sib.VersionGroupID != "" {
+							continue
+						}
+						sibIsM4B := strings.EqualFold(sib.Format, "m4b")
+						sibGroup, ok := linkVersionGroup(sib.ID, groupID, sibIsM4B)
+						if !ok {
+							defaultLog.Warn("Sibling %s left out of version group %s: the group write did not land",
+								sib.FilePath, groupID)
+							continue
+						}
+						if sibGroup != groupID {
+							defaultLog.Warn("Sibling %s is in version group %s, not %s: the group for %q in %s is split",
+								sib.FilePath, sibGroup, groupID, dbBook.Title, parentDir)
 						}
 					}
 					defaultLog.Info("Auto-linked version group %s for %q in %s", groupID, dbBook.Title, parentDir)
@@ -3688,6 +3720,41 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 // overwrote unconditionally (Title/AuthorID/SeriesID/Format/hashes/Duration) —
 // which is precisely the wipe this fixes (an untagged file yields nil
 // AuthorID/SeriesID), applied consistently.
+// linkVersionGroup puts a book into a version group under the book's write
+// stripe, setting ONLY the two version columns so no other writer's concurrent
+// commit is reverted.
+//
+// It returns the group the row ends up in and whether the link can be relied on.
+// A row another writer already linked keeps ITS group: the scanner has no claim
+// on a group someone else established, and the returned group is what the caller
+// should join so both copies land in one group instead of two. (false, "") means
+// the row could not be linked at all -- the write failed, or the row is gone --
+// and the caller must not mint a group for its own row either, or that row
+// becomes an orphan advertising versions that do not exist.
+func linkVersionGroup(bookID, groupID string, primary bool) (string, bool) {
+	written, err := getStore().ModifyBook(bookID, func(cur *database.Book) error {
+		if cur.VersionGroupID != nil && *cur.VersionGroupID != "" {
+			return database.ErrSkipBookWrite
+		}
+		cur.VersionGroupID = &groupID
+		cur.IsPrimaryVersion = &primary
+		return nil
+	})
+	if err != nil {
+		defaultLog.Warn("Failed to set version group on book %s: %v", bookID, err)
+		return "", false
+	}
+	if written == nil {
+		defaultLog.Warn("Book %s disappeared before it could be version-linked", bookID)
+		return "", false
+	}
+	if written.VersionGroupID == nil || *written.VersionGroupID == "" {
+		defaultLog.Warn("Book %s carries no version group after the link write", bookID)
+		return "", false
+	}
+	return *written.VersionGroupID, true
+}
+
 func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[string]bool) {
 	// Identity / file-derived fields (freshly read from the file this scan).
 	if scanned.FilePath != "" {

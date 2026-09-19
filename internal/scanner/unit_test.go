@@ -1,5 +1,5 @@
 // file: internal/scanner/unit_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
 // last-edited: 2026-09-19
 
@@ -1471,7 +1471,15 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 	// preference row), so a lock set before the rows existed still holds.
 	store.EXPECT().GetMetadataFieldStates("existing-id").Return(nil, nil)
 	store.EXPECT().GetUserPreference(metastate.Key("existing-id")).Return(nil, nil)
-	store.EXPECT().UpdateBook("existing-id", mock.Anything).Return(existingBook, nil)
+	// The overlay now runs inside a ModifyBook callback against the STORED row,
+	// so the fake runs the real callback rather than matching an outgoing row.
+	store.EXPECT().ModifyBook("existing-id", mock.Anything).
+		RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			if err := fn(existingBook); err != nil {
+				return nil, err
+			}
+			return existingBook, nil
+		})
 
 	book := &Book{Title: "Test Book", Author: "Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
 	err := saveBookToDatabase(context.Background(), book)
