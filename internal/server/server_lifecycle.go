@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.10.0
+// version: 4.11.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-09-19
 
@@ -848,18 +848,7 @@ func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
 				httpsPort = "443" // Don't redirect 80->80
 			}
 
-			redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Build HTTPS URL
-				target := "https://" + r.Host
-				// Add port if not default HTTPS port
-				if httpsPort != "443" {
-					target = fmt.Sprintf("https://%s:%s", cfg.Host, httpsPort)
-				}
-				target += r.URL.RequestURI()
-
-				slog.Debug("HTTP->HTTPS redirect", "url", logger.SanitizeLogValue(r.URL.String()), "target", logger.SanitizeLogValue(target))
-				http.Redirect(w, r, target, http.StatusMovedPermanently)
-			})
+			redirectHandler := newHTTPSRedirectHandler(cfg.Host, httpsPort)
 
 			slog.Info("Starting HTTP->HTTPS redirect server on (redirects to )", "redirectAddr", redirectAddr, "httpsPort", httpsPort)
 			httpRedirectServer := &http.Server{
@@ -1724,5 +1713,25 @@ func pruneExpiredSessions(ops expiredSessionPruner, sessionLog *logger.StandardL
 		sessionLog.Warn("failed to clean up expired ABS sessions: %v", err)
 	} else if deletedABS > 0 {
 		sessionLog.Info("cleaned up %d expired/revoked ABS sessions", deletedABS)
+	}
+}
+
+// newHTTPSRedirectHandler answers plain-HTTP requests with a 301 to HTTPS.
+//
+// The debug log line goes through RedactQueryCredentials: the redirected URL
+// keeps its query string, and ABS clients put their bearer credential in
+// ?token=, so logging r.URL.String() verbatim wrote it to the journal.
+func newHTTPSRedirectHandler(cfgHost, httpsPort string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target := "https://" + r.Host
+		if httpsPort != "443" {
+			target = fmt.Sprintf("https://%s:%s", cfgHost, httpsPort)
+		}
+		target += r.URL.RequestURI()
+
+		slog.Debug("HTTP->HTTPS redirect",
+			"url", logger.SanitizeLogValue(servermiddleware.RedactQueryCredentials(r.URL.RequestURI())),
+			"target", logger.SanitizeLogValue(servermiddleware.RedactQueryCredentials(target)))
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	}
 }
