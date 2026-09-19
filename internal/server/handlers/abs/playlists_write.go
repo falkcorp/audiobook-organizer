@@ -1,0 +1,356 @@
+// file: internal/server/handlers/abs/playlists_write.go
+// version: 1.0.0
+// guid: 6ddbf78d-bfe3-47a7-946a-c677d6f16821
+// last-edited: 2026-09-19
+
+package abs
+
+import (
+	"net/http"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/gin-gonic/gin"
+)
+
+// ── Playlist mutations ──────────────────────────────────────────────────────
+//
+// 🔴 WHAT WAS BROKEN, MEASURED (item-6 decode matrix, 2026-09-19). Every one of
+// these six app actions answered 301 → /api/v1/playlists… on production. The
+// client follows a 301 by re-issuing the request as a GET, so a create, rename,
+// delete or add-to-playlist silently became a read of the app-API twin and
+// nothing was written:
+//
+//	POST   /api/playlists                      create
+//	PATCH  /api/playlists/:id                  rename / edit / reorder
+//	DELETE /api/playlists/:id                  delete
+//	POST   /api/playlists/:id/batch/add        add books
+//	POST   /api/playlists/:id/batch/remove     remove books
+//	DELETE /api/playlists/:id/item/:itemId     remove one book
+//
+// ROUTING. /api/playlists has a live /api/v1 twin, so each route is claimed
+// individually in absCollisionDetailRoutes (wire_abs_routes.go), and only while
+// the ABS surface is enabled. POST /api/playlists and DELETE /api/playlists/:id
+// are the two shapes BOTH APIs serve; with ABS on, the unversioned form belongs to
+// ABS. The web UI is unaffected because it only ever calls /api/v1/playlists
+// (web/src/services/playlistApi.ts), which never passes through the redirect.
+//
+// STORAGE. Same UserPlaylist store and same write methods as the native routes
+// (handlers/playlists.go), so a playlist made in the app shows up in the web UI
+// and vice versa. Every write marks the playlist Dirty exactly as the native
+// routes do, so the two surfaces feed the iTunes sync identically.
+//
+// OWNERSHIP. Playlists belong to a person — the opposite of collections. Every
+// route resolves the playlist through ownedPlaylist, which answers 404 (never
+// 403) for another user's playlist, the same rule PlaylistDetail applies.
+//
+// IDS. The client sends libraryItemIds (36-char sync ids). They are translated to
+// book ULIDs through resolveSyncIDs; storing them raw would produce a playlist
+// whose members never match a book — a 200 followed by a permanently empty list.
+
+// absPlaylistItemRef is one entry of an ABS playlist `items` array.
+type absPlaylistItemRef struct {
+	LibraryItemID string  `json:"libraryItemId"`
+	EpisodeID     *string `json:"episodeId"`
+}
+
+// absPlaylistCreateReq is the ABS create payload.
+type absPlaylistCreateReq struct {
+	LibraryID   string               `json:"libraryId"`
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Items       []absPlaylistItemRef `json:"items"`
+}
+
+// absPlaylistUpdateReq uses pointers so an absent key leaves a field alone; a
+// value-typed struct would blank every field the client did not send.
+type absPlaylistUpdateReq struct {
+	Name        *string               `json:"name"`
+	Description *string               `json:"description"`
+	Items       *[]absPlaylistItemRef `json:"items"`
+}
+
+// absPlaylistBatchReq is the batch add/remove payload.
+type absPlaylistBatchReq struct {
+	Items []absPlaylistItemRef `json:"items"`
+}
+
+// playlistItemSyncIDs extracts the libraryItemIds from an items array. Podcast
+// episode entries are skipped: this library holds no podcasts, so an entry that
+// names an episode cannot refer to anything here.
+func playlistItemSyncIDs(items []absPlaylistItemRef) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.EpisodeID != nil && strings.TrimSpace(*it.EpisodeID) != "" {
+			continue
+		}
+		out = append(out, it.LibraryItemID)
+	}
+	return out
+}
+
+// playlistNameConflict reports whether a store error is the duplicate-name
+// rejection. The store enforces names globally (idx:upl:name), and the message is
+// the only signal it gives; a duplicate name is the user's to fix, so it is a 409
+// rather than a 500.
+func playlistNameConflict(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "already in use") || strings.Contains(msg, "already exists")
+}
+
+// CreatePlaylist handles POST /api/playlists.
+func (h *Handler) CreatePlaylist(c *gin.Context) {
+	u, ok := h.playlistWriter(c)
+	if !ok {
+		return
+	}
+	var req absPlaylistCreateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid playlist payload")
+		return
+	}
+	if lib := strings.TrimSpace(req.LibraryID); lib != "" && lib != h.libraryID() {
+		respondError(c, http.StatusBadRequest, "unknown library")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		respondError(c, http.StatusBadRequest, "playlist name is required")
+		return
+	}
+
+	pl := &database.UserPlaylist{
+		Name:            name,
+		Description:     strings.TrimSpace(req.Description),
+		Type:            database.UserPlaylistTypeStatic,
+		BookIDs:         h.resolveSyncIDs(playlistItemSyncIDs(req.Items)),
+		CreatedByUserID: u.ID,
+		Dirty:           true, // same as the native create: new playlists need iTunes sync
+	}
+	created, err := h.playlists.CreateUserPlaylist(pl)
+	if err != nil {
+		if playlistNameConflict(err) {
+			respondError(c, http.StatusConflict, err.Error())
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "could not create playlist")
+		return
+	}
+	respondJSON(c, http.StatusOK, h.playlistDTO(c, created))
+}
+
+// UpdatePlaylist handles PATCH /api/playlists/:id.
+//
+// A present `items` array REPLACES the membership in the given order, which is
+// how the app reorders a playlist.
+func (h *Handler) UpdatePlaylist(c *gin.Context) {
+	var req absPlaylistUpdateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid playlist payload")
+		return
+	}
+	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
+		if req.Name != nil {
+			name := strings.TrimSpace(*req.Name)
+			if name == "" {
+				return http.StatusBadRequest, "playlist name cannot be empty"
+			}
+			pl.Name = name
+		}
+		if req.Description != nil {
+			pl.Description = strings.TrimSpace(*req.Description)
+		}
+		if req.Items != nil {
+			if pl.Type != database.UserPlaylistTypeStatic {
+				return http.StatusConflict, "this is a smart playlist; its members come from its query"
+			}
+			pl.BookIDs = h.resolveSyncIDs(playlistItemSyncIDs(*req.Items))
+		}
+		return 0, ""
+	})
+}
+
+// DeletePlaylist handles DELETE /api/playlists/:id.
+func (h *Handler) DeletePlaylist(c *gin.Context) {
+	if _, ok := h.playlistWriter(c); !ok {
+		return
+	}
+	pl, ok := h.ownedPlaylist(c)
+	if !ok {
+		return
+	}
+	mu := h.lockPlaylist(pl.ID)
+	defer mu.Unlock()
+	if err := h.playlists.DeleteUserPlaylist(pl.ID); err != nil {
+		respondError(c, http.StatusInternalServerError, "could not delete playlist")
+		return
+	}
+	// The app types this response as Data, so any non-empty 2xx body is success.
+	respondJSON(c, http.StatusOK, gin.H{"id": pl.ID})
+}
+
+// BatchAddToPlaylist handles POST /api/playlists/:id/batch/add.
+//
+// Books already in the playlist are skipped rather than duplicated, and the new
+// ones are appended in request order.
+func (h *Handler) BatchAddToPlaylist(c *gin.Context) {
+	var req absPlaylistBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
+		respondError(c, http.StatusBadRequest, "items are required")
+		return
+	}
+	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return http.StatusConflict, "this is a smart playlist; its members come from its query"
+		}
+		for _, id := range h.resolveSyncIDs(playlistItemSyncIDs(req.Items)) {
+			if !slices.Contains(pl.BookIDs, id) {
+				pl.BookIDs = append(pl.BookIDs, id)
+			}
+		}
+		return 0, ""
+	})
+}
+
+// BatchRemoveFromPlaylist handles POST /api/playlists/:id/batch/remove.
+//
+// Unlike upstream ABS, an emptied playlist is KEPT rather than deleted: deleting
+// a user's playlist as a side effect of removing its last book is data loss the
+// user did not ask for, and the app renders an empty playlist without trouble.
+func (h *Handler) BatchRemoveFromPlaylist(c *gin.Context) {
+	var req absPlaylistBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
+		respondError(c, http.StatusBadRequest, "items are required")
+		return
+	}
+	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return http.StatusConflict, "this is a smart playlist; its members come from its query"
+		}
+		pl.BookIDs = withoutIDs(pl.BookIDs, h.resolveSyncIDs(playlistItemSyncIDs(req.Items)))
+		return 0, ""
+	})
+}
+
+// RemovePlaylistItem handles DELETE /api/playlists/:id/item/:libraryItemId.
+//
+// A libraryItemId that does not resolve cannot be in the playlist, so the
+// requested end state already holds and the playlist is returned unchanged.
+func (h *Handler) RemovePlaylistItem(c *gin.Context) {
+	target := h.resolveSyncIDs([]string{c.Param("libraryItemId")})
+	h.mutateOwnedPlaylist(c, func(pl *database.UserPlaylist) (int, string) {
+		if pl.Type != database.UserPlaylistTypeStatic {
+			return http.StatusConflict, "this is a smart playlist; its members come from its query"
+		}
+		pl.BookIDs = withoutIDs(pl.BookIDs, target)
+		return 0, ""
+	})
+}
+
+// withoutIDs returns ids minus every element of drop, preserving order. It
+// allocates a new slice so the stored record's backing array is never aliased.
+func withoutIDs(ids, drop []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !slices.Contains(drop, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ── shared plumbing ─────────────────────────────────────────────────────────
+
+// playlistWriter checks the store is wired and the caller is authenticated,
+// writing the error response itself.
+func (h *Handler) playlistWriter(c *gin.Context) (*database.User, bool) {
+	if h.playlists == nil {
+		respondError(c, http.StatusServiceUnavailable, "playlists are not available")
+		return nil, false
+	}
+	u, found := servermiddleware.CurrentUser(c)
+	if !found || u == nil {
+		respondError(c, http.StatusUnauthorized, "authentication required")
+		return nil, false
+	}
+	return u, true
+}
+
+// ownedPlaylist resolves :id to a playlist the caller owns, writing the error
+// response itself. Another user's playlist is a 404, never a 403: a 403 would
+// confirm the id exists (same rule as PlaylistDetail).
+func (h *Handler) ownedPlaylist(c *gin.Context) (*database.UserPlaylist, bool) {
+	u, ok := h.playlistWriter(c)
+	if !ok {
+		return nil, false
+	}
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		respondError(c, http.StatusNotFound, "playlist not found")
+		return nil, false
+	}
+	pl, err := h.playlists.GetUserPlaylist(id)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not read playlist")
+		return nil, false
+	}
+	if pl == nil || pl.CreatedByUserID != u.ID {
+		respondError(c, http.StatusNotFound, "playlist not found")
+		return nil, false
+	}
+	return pl, true
+}
+
+// lockPlaylist takes the per-playlist write lock and returns it held.
+func (h *Handler) lockPlaylist(id string) *sync.Mutex {
+	v, _ := h.playlistLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu
+}
+
+// mutateOwnedPlaylist is the read-modify-write behind every membership/metadata
+// mutation: resolve + ownership check, lock, RE-READ under the lock (so two
+// concurrent batch adds cannot both start from the same membership), apply,
+// persist, and answer with the full ABS playlist.
+//
+// mutate returns a non-zero status to reject the request without writing.
+func (h *Handler) mutateOwnedPlaylist(c *gin.Context, mutate func(pl *database.UserPlaylist) (int, string)) {
+	owned, ok := h.ownedPlaylist(c)
+	if !ok {
+		return
+	}
+	mu := h.lockPlaylist(owned.ID)
+	defer mu.Unlock()
+
+	pl, err := h.playlists.GetUserPlaylist(owned.ID)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "could not read playlist")
+		return
+	}
+	if pl == nil {
+		respondError(c, http.StatusNotFound, "playlist not found")
+		return
+	}
+	// Work on a copy whose slices are not shared with whatever the store handed
+	// back, so a rejected mutation can never leak into a cached record.
+	next := *pl
+	next.BookIDs = append([]string(nil), pl.BookIDs...)
+	if status, msg := mutate(&next); status != 0 {
+		respondError(c, status, msg)
+		return
+	}
+	next.Dirty = true // same as every native playlist write: pending iTunes sync
+	if err := h.playlists.UpdateUserPlaylist(&next); err != nil {
+		if playlistNameConflict(err) {
+			respondError(c, http.StatusConflict, err.Error())
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "could not update playlist")
+		return
+	}
+	respondJSON(c, http.StatusOK, h.playlistDTO(c, &next))
+}

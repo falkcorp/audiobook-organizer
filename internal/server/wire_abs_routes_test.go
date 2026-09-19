@@ -1,18 +1,20 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package server
 
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +65,9 @@ func TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute(t *testing.T) {
 		":time": "100",
 		// The year-stats path parameter. Any 4-digit year; the handler ignores it.
 		":year": "2026",
+		// Collection and playlist member routes (2026-09-19).
+		":bookId":        "68929fc9-e296-4d25-b3aa-1c2930efd00e",
+		":libraryItemId": "68929fc9-e296-4d25-b3aa-1c2930efd00f",
 	}
 
 	checked := 0
@@ -518,9 +523,18 @@ func TestPlaylistReservationDoesNotSwallowAppSubRoutes(t *testing.T) {
 
 	// Every app-API playlist route that lives under the reserved prefix. ABS serves
 	// none of these, so all must keep redirecting even with ABS ON.
+	//
+	// DELETE /api/playlists/:id WAS in this list until 2026-09-19. It moved to
+	// TestPlaylistMutationsReservedExactlyWhenABSEnabled when the ABS playlist
+	// mutations shipped: AudioBooth's delete is that exact shape, and while it
+	// redirected the app's DELETE became a GET and never deleted anything. With ABS
+	// on, the UNVERSIONED DELETE now belongs to ABS — the same trade already made
+	// for DELETE /api/collections/:id. The app route is /api/v1/playlists/:id and
+	// is untouched; nothing in this repo sends the unversioned form (see
+	// TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths). PUT stays here so the
+	// METHOD rule is still proven alive on the same path.
 	appRoutes := []struct{ method, path string }{
 		{http.MethodPut, "/api/playlists/" + id},
-		{http.MethodDelete, "/api/playlists/" + id},
 		{http.MethodPost, "/api/playlists/" + id + "/books"},
 		{http.MethodDelete, "/api/playlists/" + id + "/books/01BOOK00000000000000000000"},
 		{http.MethodPost, "/api/playlists/" + id + "/reorder"},
@@ -748,4 +762,136 @@ func TestWireABSRoutes_LogsStateEvenWhenDisabled(t *testing.T) {
 	if !found {
 		t.Error("wireABSRoutes logged nothing when ABS is disabled; the whole point is that the line is unconditional")
 	}
+}
+
+// TestPlaylistMutationsReservedExactlyWhenABSEnabled pins the item-6 F1/F2/F5
+// routes by NAME (not derived from the lists under test, which is how the
+// collections seam slipped through once).
+//
+// Every ABS-served route must be reserved exactly when the ABS surface is on:
+// on, a 301 re-issues the client's POST/PATCH/DELETE as a GET and nothing is
+// written (measured on prod 2026-09-19 for all of these); off, nothing on the ABS
+// side answers and the redirect is the only way to the /api/v1 twin.
+func TestPlaylistMutationsReservedExactlyWhenABSEnabled(t *testing.T) {
+	const id = "01PLAYLIST0000000000000000"
+	absServed := []struct{ method, path string }{
+		{http.MethodPost, "/api/playlists"},
+		{http.MethodPatch, "/api/playlists/" + id},
+		{http.MethodDelete, "/api/playlists/" + id},
+		{http.MethodPost, "/api/playlists/" + id + "/batch/add"},
+		{http.MethodPost, "/api/playlists/" + id + "/batch/remove"},
+		{http.MethodDelete, "/api/playlists/" + id + "/item/00000001-0000-4000-8000-000000000001"},
+		{http.MethodPost, "/api/collections/c1/batch/add"},
+		{http.MethodPost, "/api/collections/c1/batch/remove"},
+		{http.MethodGet, "/api/narrators/147924/image"},
+		{http.MethodHead, "/api/narrators/147924/image"},
+	}
+	// App-API shapes in the same namespaces that ABS does NOT serve. They must
+	// keep redirecting to their /api/v1 twin whatever the flag says.
+	appOnly := []struct{ method, path string }{
+		{http.MethodGet, "/api/playlists"},
+		{http.MethodPut, "/api/playlists/" + id},
+		{http.MethodPost, "/api/playlists/" + id + "/books"},
+		{http.MethodDelete, "/api/playlists/" + id + "/books/01BOOK00000000000000000000"},
+		{http.MethodPost, "/api/playlists/" + id + "/reorder"},
+		{http.MethodPost, "/api/playlists/" + id + "/materialize"},
+		{http.MethodGet, "/api/playlists/" + id + "/export.m3u"},
+		{http.MethodGet, "/api/narrators"},
+		{http.MethodGet, "/api/narrators/count"},
+	}
+	reserved := func(method, path string, absOn bool) bool {
+		return absReservedPath(path) || (absOn && absCollisionDetailReserved(method, path))
+	}
+	for _, absOn := range []bool{false, true} {
+		for _, r := range absServed {
+			require.Equal(t, absOn, reserved(r.method, r.path, absOn),
+				"%s %s must be reserved exactly when ABS is enabled (enabled=%v)", r.method, r.path, absOn)
+		}
+		for _, r := range appOnly {
+			require.False(t, reserved(r.method, r.path, absOn),
+				"%s %s is an APP route ABS does not serve (enabled=%v); reserving it turns a working "+
+					"redirect into a 404", r.method, r.path, absOn)
+		}
+	}
+	// send-ebook-to-device has no /api/v1 twin, so it is reserved unconditionally.
+	require.True(t, absReservedPath("/api/emails/send-ebook-to-device"))
+	require.False(t, absReservedPath("/api/emails/other"),
+		"only the one path ABS answers is claimed, not the namespace")
+}
+
+// TestPlaylistMutationsReachABSNotTheRedirect drives the real router: with ABS
+// enabled the unversioned mutation must not 301, and the web UI's /api/v1 routes
+// must still reach the native handler (never the redirect, never ABS).
+func TestPlaylistMutationsReachABSNotTheRedirect(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	config.AppConfig.ABSAPIEnabled = true
+
+	for _, r := range []struct{ method, path string }{
+		{http.MethodPost, "/api/playlists"},
+		{http.MethodDelete, "/api/playlists/01PLAYLIST0000000000000000"},
+		{http.MethodPost, "/api/collections/c1/batch/add"},
+		{http.MethodGet, "/api/narrators/147924/image"},
+	} {
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(r.method, r.path, nil))
+		require.NotEqual(t, http.StatusMovedPermanently, w.Code,
+			"%s %s still 301s with ABS enabled: the client re-issues it as a GET and nothing is written",
+			r.method, r.path)
+	}
+
+	// The web UI's own calls are versioned and never touch the redirect or ABS.
+	for _, r := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/playlists"},
+		{http.MethodDelete, "/api/v1/playlists/01PLAYLIST0000000000000000"},
+	} {
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, httptest.NewRequest(r.method, r.path, strings.NewReader("{}")))
+		require.NotEqual(t, http.StatusMovedPermanently, w.Code, "%s %s", r.method, r.path)
+		// The native handler answers (a 400 for the empty create, a JSON "playlist
+		// not found" for the unknown id). A router-level miss would carry neither.
+		require.Contains(t, strings.ToLower(w.Body.String()), "playlist",
+			"%s %s must still reach the native playlist handler; got %d %s",
+			r.method, r.path, w.Code, w.Body.String())
+	}
+}
+
+// TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths is what makes claiming
+// the unversioned POST /api/playlists and DELETE /api/playlists/:id for ABS safe
+// for our own UI: the web app must only ever call /api/v1/… for these
+// namespaces. An unversioned call added later would, with ABS on, reach the ABS
+// handler and get the ABS shape.
+func TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths(t *testing.T) {
+	root := filepath.Join("..", "..", "web", "src")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("web sources not present: %v", err)
+	}
+	unversioned := regexp.MustCompile(`/api/(playlists|collections|narrators)\b`)
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if ext := filepath.Ext(path); ext != ".ts" && ext != ".tsx" {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		scanned++
+		if loc := unversioned.FindIndex(data); loc != nil {
+			t.Errorf("%s calls an UNVERSIONED %s; with ABS enabled that path belongs to the ABS "+
+				"surface. Use the /api/v1 form.", path, data[loc[0]:loc[1]])
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Positive(t, scanned, "no web sources scanned — the path above is wrong")
 }

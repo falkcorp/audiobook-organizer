@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/basicauth_exempt_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a51d292-2d49-43bb-b5d1-afc53fd96f5b
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package abs_test
 
@@ -96,6 +96,7 @@ func TestBasicAuth_ExemptsExactlyTheTokenGatedABSRoutes(t *testing.T) {
 		":time", "100",
 		":year", "2026",
 		":bookId", "68929fc9-e296-4d25-b3aa-1c2930efd00d",
+		":libraryItemId", "68929fc9-e296-4d25-b3aa-1c2930efd00d",
 	)
 
 	challenged := map[string]bool{}

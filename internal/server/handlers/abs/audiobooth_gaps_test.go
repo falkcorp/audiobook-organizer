@@ -1,0 +1,409 @@
+// file: internal/server/handlers/abs/audiobooth_gaps_test.go
+// version: 1.0.0
+// guid: 7c9e5b89-8301-444c-bb5d-386530b87351
+// last-edited: 2026-09-19
+
+package abs_test
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
+
+// Regression tests for the item-6 AudioBooth decode matrix (2026-09-19): app
+// actions that had NO ABS route and therefore 301'd into /api/v1 (a POST/PATCH/
+// DELETE the client then re-issued as a GET) or 404'd. Each test drives the real
+// handler through the harness router, so a route that is not registered fails
+// here with a 404 exactly as it did on production.
+
+func obj(t *testing.T, body any) map[string]any {
+	t.Helper()
+	m, ok := body.(map[string]any)
+	if !ok {
+		t.Fatalf("body is %T, want a JSON object", body)
+	}
+	return m
+}
+
+func itemIDs(t *testing.T, m map[string]any, key string) []string {
+	t.Helper()
+	raw, ok := m[key].([]any)
+	if !ok {
+		t.Fatalf("%q is %T, want an array: %v", key, m[key], m)
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		row := obj(t, r)
+		if id, ok := row["libraryItemId"].(string); ok {
+			out = append(out, id)
+		} else if id, ok := row["id"].(string); ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ── F2: playlist mutations ──────────────────────────────────────────────────
+
+func TestPlaylists_MutationsPersistThroughTheStore(t *testing.T) {
+	store := &absplFakeStore{}
+	h, seed, tok := absplHarness(t, store)
+	single := absplSyncIDFor(t, seed, seed.singleID)
+	multi := absplSyncIDFor(t, seed, seed.multiID)
+
+	// create
+	code, body := h.doAny(t, request{method: http.MethodPost, path: "/api/playlists", headers: bearer(tok),
+		body: map[string]any{"libraryId": h.libraryID(), "name": "Road trip",
+			"items": []map[string]any{{"libraryItemId": single}}}})
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/playlists = %d %v", code, body)
+	}
+	created := obj(t, body)
+	plID, _ := created["id"].(string)
+	if plID == "" || created["name"] != "Road trip" {
+		t.Fatalf("create answered %v", created)
+	}
+	if got := itemIDs(t, created, "items"); len(got) != 1 || got[0] != single {
+		t.Fatalf("created items = %v, want [%s]", got, single)
+	}
+	if len(store.lists) != 1 {
+		t.Fatalf("store holds %d playlists, want 1", len(store.lists))
+	}
+	stored := store.lists[0]
+	if stored.CreatedByUserID != "u1" || !stored.Dirty || stored.Type != database.UserPlaylistTypeStatic {
+		t.Fatalf("stored playlist = %+v; want owner u1, Dirty, static", stored)
+	}
+	// Sync ids MUST be translated: storing the client's id would make a playlist
+	// whose members match no book.
+	if len(stored.BookIDs) != 1 || stored.BookIDs[0] != seed.singleID {
+		t.Fatalf("stored BookIDs = %v, want the book ULID %s", stored.BookIDs, seed.singleID)
+	}
+
+	// batch add: a duplicate is skipped, the new book appended
+	code, body = h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/" + plID + "/batch/add", headers: bearer(tok),
+		body: map[string]any{"items": []map[string]any{{"libraryItemId": single}, {"libraryItemId": multi}}}})
+	if code != http.StatusOK {
+		t.Fatalf("batch/add = %d %v", code, body)
+	}
+	if got := itemIDs(t, obj(t, body), "items"); len(got) != 2 || got[0] != single || got[1] != multi {
+		t.Fatalf("after batch/add items = %v, want [%s %s]", got, single, multi)
+	}
+
+	// patch: rename and reorder via items
+	code, body = h.doAny(t, request{method: http.MethodPatch, path: "/api/playlists/" + plID, headers: bearer(tok),
+		body: map[string]any{"name": "Commute", "items": []map[string]any{{"libraryItemId": multi}, {"libraryItemId": single}}}})
+	if code != http.StatusOK {
+		t.Fatalf("PATCH = %d %v", code, body)
+	}
+	patched := obj(t, body)
+	if patched["name"] != "Commute" {
+		t.Fatalf("rename not applied: %v", patched["name"])
+	}
+	if got := itemIDs(t, patched, "items"); len(got) != 2 || got[0] != multi {
+		t.Fatalf("reorder not applied: %v", got)
+	}
+	if store.lists[0].Name != "Commute" || store.lists[0].BookIDs[0] != seed.multiID {
+		t.Fatalf("PATCH did not persist: %+v", store.lists[0])
+	}
+
+	// batch remove
+	code, body = h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/" + plID + "/batch/remove", headers: bearer(tok),
+		body: map[string]any{"items": []map[string]any{{"libraryItemId": multi}}}})
+	if code != http.StatusOK {
+		t.Fatalf("batch/remove = %d %v", code, body)
+	}
+	if got := itemIDs(t, obj(t, body), "items"); len(got) != 1 || got[0] != single {
+		t.Fatalf("after batch/remove items = %v", got)
+	}
+
+	// item delete — the playlist is kept even when emptied
+	code, body = h.doAny(t, request{method: http.MethodDelete, path: "/api/playlists/" + plID + "/item/" + single, headers: bearer(tok)})
+	if code != http.StatusOK {
+		t.Fatalf("DELETE item = %d %v", code, body)
+	}
+	if got := itemIDs(t, obj(t, body), "items"); len(got) != 0 {
+		t.Fatalf("after item delete items = %v, want []", got)
+	}
+	if len(store.lists) != 1 || len(store.lists[0].BookIDs) != 0 {
+		t.Fatalf("item delete did not persist or deleted the playlist: %+v", store.lists)
+	}
+
+	// delete
+	code, body = h.doAny(t, request{method: http.MethodDelete, path: "/api/playlists/" + plID, headers: bearer(tok)})
+	if code != http.StatusOK {
+		t.Fatalf("DELETE = %d %v", code, body)
+	}
+	if len(store.lists) != 0 {
+		t.Fatalf("DELETE did not remove the playlist: %+v", store.lists)
+	}
+	if code, _ := absplDetail(t, h, tok, plID); code != http.StatusNotFound {
+		t.Fatalf("detail after delete = %d, want 404", code)
+	}
+}
+
+// Playlists belong to a person. Every mutation of another user's playlist must
+// answer 404 (not 403: that would confirm the id exists) and write NOTHING.
+func TestPlaylists_MutationsOfAnotherUsersPlaylistAreNotFound(t *testing.T) {
+	store := &absplFakeStore{lists: []database.UserPlaylist{{
+		ID: "01OTHERSPLAYLIST0000000000", Name: "Theirs", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "someone-else",
+	}}}
+	h, seed, tok := absplHarness(t, store)
+	single := absplSyncIDFor(t, seed, seed.singleID)
+	id := store.lists[0].ID
+	item := []map[string]any{{"libraryItemId": single}}
+
+	for _, r := range []request{
+		{method: http.MethodPatch, path: "/api/playlists/" + id, body: map[string]any{"name": "Mine now"}},
+		{method: http.MethodDelete, path: "/api/playlists/" + id},
+		{method: http.MethodPost, path: "/api/playlists/" + id + "/batch/add", body: map[string]any{"items": item}},
+		{method: http.MethodPost, path: "/api/playlists/" + id + "/batch/remove", body: map[string]any{"items": item}},
+		{method: http.MethodDelete, path: "/api/playlists/" + id + "/item/" + single},
+	} {
+		r.headers = bearer(tok)
+		if code, body := h.doAny(t, r); code != http.StatusNotFound {
+			t.Errorf("%s %s on another user's playlist = %d %v, want 404", r.method, r.path, code, body)
+		}
+	}
+	if len(store.lists) != 1 || store.lists[0].Name != "Theirs" || len(store.lists[0].BookIDs) != 0 || store.lists[0].Dirty {
+		t.Fatalf("another user's playlist was modified: %+v", store.lists)
+	}
+}
+
+func TestPlaylists_SmartPlaylistMembershipIsNotEditable(t *testing.T) {
+	store := &absplFakeStore{lists: []database.UserPlaylist{{
+		ID: "01SMARTPLAYLIST00000000000", Name: "Smart", Type: database.UserPlaylistTypeSmart,
+		Query: "author:x", CreatedByUserID: "u1",
+	}}}
+	h, seed, tok := absplHarness(t, store)
+	single := absplSyncIDFor(t, seed, seed.singleID)
+	code, _ := h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/" + store.lists[0].ID + "/batch/add",
+		headers: bearer(tok), body: map[string]any{"items": []map[string]any{{"libraryItemId": single}}}})
+	if code != http.StatusConflict {
+		t.Fatalf("batch/add on a smart playlist = %d, want 409", code)
+	}
+	if len(store.lists[0].BookIDs) != 0 {
+		t.Fatalf("smart playlist membership was written: %v", store.lists[0].BookIDs)
+	}
+}
+
+func TestPlaylists_CreateDuplicateNameIsConflict(t *testing.T) {
+	store := &absplFakeStore{}
+	h, _, tok := absplHarness(t, store)
+	for i, want := range []int{http.StatusOK, http.StatusConflict} {
+		code, body := h.doAny(t, request{method: http.MethodPost, path: "/api/playlists", headers: bearer(tok),
+			body: map[string]any{"name": "Same"}})
+		if code != want {
+			t.Fatalf("create #%d = %d %v, want %d", i+1, code, body, want)
+		}
+	}
+}
+
+// ── F1: collection batch add/remove ─────────────────────────────────────────
+
+func TestCollections_BatchAddAndRemove(t *testing.T) {
+	store := &abscolFakeStore{}
+	h, seed, tok := abscolHarness(t, store)
+	single := absplSyncIDFor(t, seed, seed.singleID)
+	multi := absplSyncIDFor(t, seed, seed.multiID)
+
+	code, body := h.doAny(t, request{method: http.MethodPost, path: "/api/collections", headers: bearer(tok),
+		body: map[string]any{"libraryId": h.libraryID(), "name": "Shelf"}})
+	if code != http.StatusOK {
+		t.Fatalf("create = %d %v", code, body)
+	}
+	colID, _ := obj(t, body)["id"].(string)
+
+	code, body = h.doAny(t, request{method: http.MethodPost, path: "/api/collections/" + colID + "/batch/add",
+		headers: bearer(tok), body: map[string]any{"books": []string{single, multi, single}}})
+	if code != http.StatusOK {
+		t.Fatalf("batch/add = %d %v", code, body)
+	}
+	added := obj(t, body)
+	if n, _ := added["numBooks"].(float64); n != 2 {
+		t.Fatalf("after batch/add numBooks = %v, want 2 (duplicates collapse)", added["numBooks"])
+	}
+	col, _ := store.GetCollection(colID)
+	if col == nil || len(col.BookIDs) != 2 || col.BookIDs[0] != seed.singleID || col.BookIDs[1] != seed.multiID {
+		t.Fatalf("batch/add did not persist book ULIDs in order: %+v", col)
+	}
+
+	code, body = h.doAny(t, request{method: http.MethodPost, path: "/api/collections/" + colID + "/batch/remove",
+		headers: bearer(tok), body: map[string]any{"books": []string{single}}})
+	if code != http.StatusOK {
+		t.Fatalf("batch/remove = %d %v", code, body)
+	}
+	if got := itemIDs(t, obj(t, body), "books"); len(got) != 1 || got[0] != multi {
+		t.Fatalf("after batch/remove books = %v, want [%s]", got, multi)
+	}
+	col, _ = store.GetCollection(colID)
+	if len(col.BookIDs) != 1 || col.BookIDs[0] != seed.multiID {
+		t.Fatalf("batch/remove did not persist: %v", col.BookIDs)
+	}
+}
+
+// Writes are gated on PermCollectionsManage exactly like the single-book routes.
+func TestCollections_BatchRequiresPermission(t *testing.T) {
+	store := &abscolFakeStore{}
+	h, seed, tok := abscolHarness(t, store)
+	code, body := h.doAny(t, request{method: http.MethodPost, path: "/api/collections", headers: bearer(tok),
+		body: map[string]any{"name": "Shelf"}})
+	if code != http.StatusOK {
+		t.Fatalf("create = %d %v", code, body)
+	}
+	colID, _ := obj(t, body)["id"].(string)
+
+	h.seedUser(t, "u2", "viewer", "", "pw-pw-pw-pw")
+	viewer := str(t, userObj(t, h.login(t, "viewer", "pw-pw-pw-pw")), "accessToken")
+	code, _ = h.doAny(t, request{method: http.MethodPost, path: "/api/collections/" + colID + "/batch/add",
+		headers: bearer(viewer), body: map[string]any{"books": []string{absplSyncIDFor(t, seed, seed.singleID)}}})
+	if code != http.StatusForbidden {
+		t.Fatalf("batch/add without PermCollectionsManage = %d, want 403", code)
+	}
+	if col, _ := store.GetCollection(colID); len(col.BookIDs) != 0 {
+		t.Fatalf("an unauthorised batch/add wrote: %v", col.BookIDs)
+	}
+}
+
+// ── F3: offline sessions bulk upload ────────────────────────────────────────
+
+func localAll(t *testing.T, w *writeHarness, sessions ...map[string]any) []map[string]any {
+	t.Helper()
+	code, body, raw := w.req(t, http.MethodPost, "/api/session/local-all", map[string]any{"sessions": sessions})
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/session/local-all = %d %s", code, raw)
+	}
+	rows, ok := body["results"].([]any)
+	if !ok {
+		t.Fatalf("results missing: %s", raw)
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, obj(t, r))
+	}
+	return out
+}
+
+func storedPosition(t *testing.T, w *writeHarness) float64 {
+	t.Helper()
+	pos, err := w.seed.lib.GetUserPosition(w.userID, w.bookID)
+	if err != nil {
+		t.Fatalf("GetUserPosition: %v", err)
+	}
+	if pos == nil {
+		return 0
+	}
+	return pos.PositionSeconds
+}
+
+func TestSessionLocalAll_AppliesOfflineProgress(t *testing.T) {
+	w := newWriteHarness(t)
+	rows := localAll(t, w, map[string]any{
+		"id": "offline-1", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 321.5, "timeListening": 300,
+	})
+	if len(rows) != 1 || rows[0]["success"] != true || rows[0]["progressSynced"] != true {
+		t.Fatalf("results = %v, want one successful synced row", rows)
+	}
+	if got := storedPosition(t, w); got != 321.5 {
+		t.Fatalf("stored position = %v, want 321.5", got)
+	}
+	state, _ := w.seed.lib.GetUserBookState(w.userID, w.bookID)
+	if state == nil || state.Status != database.UserBookStatusInProgress {
+		t.Fatalf("book state = %+v, want in_progress", state)
+	}
+}
+
+// 🔴 The rule this endpoint exists to honour: an offline session that is BEHIND
+// the server must never rewind the listener, even though offline clients stamp
+// replayed sessions with updatedAt=now (which a timestamp comparison would let
+// win).
+func TestSessionLocalAll_NeverRegressesNewerProgress(t *testing.T) {
+	w := newWriteHarness(t)
+	if err := w.seed.lib.SetUserPosition(w.userID, w.bookID, "abs", 500); err != nil {
+		t.Fatal(err)
+	}
+	rows := localAll(t, w, map[string]any{
+		"id": "stale-1", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 100.0,
+		"updatedAt": int64(9999999999999), // a far-future stamp must not buy a rewind
+	})
+	if len(rows) != 1 || rows[0]["success"] != true || rows[0]["progressSynced"] != false {
+		t.Fatalf("results = %v, want success without a progress change", rows)
+	}
+	if got := storedPosition(t, w); got != 500 {
+		t.Fatalf("stale offline session rewound the listener: position %v, want 500", got)
+	}
+}
+
+func TestSessionLocalAll_IdempotentOnSessionID(t *testing.T) {
+	w := newWriteHarness(t)
+	s := map[string]any{"id": "dup-1", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 200.0}
+	rows := localAll(t, w, s, s)
+	if len(rows) != 1 {
+		t.Fatalf("a session id sent twice in one upload produced %d result rows, want 1: %v", len(rows), rows)
+	}
+	first := storedPosition(t, w)
+	again := localAll(t, w, s)
+	if len(again) != 1 || again[0]["success"] != true || again[0]["progressSynced"] != false {
+		t.Fatalf("replay results = %v, want success with no change", again)
+	}
+	if got := storedPosition(t, w); got != first || got != 200 {
+		t.Fatalf("replay changed the position: %v -> %v", first, got)
+	}
+}
+
+func TestSessionLocalAll_RejectsForeignAndUnknownSessionsWithoutFailingTheBatch(t *testing.T) {
+	w := newWriteHarness(t)
+	rows := localAll(t, w,
+		map[string]any{"id": "theirs", "userId": "someone-else", "libraryItemId": w.syncID, "currentTime": 999.0},
+		map[string]any{"id": "ghost", "userId": w.userID, "libraryItemId": "00000000-0000-4000-8000-00000000dead", "currentTime": 50.0},
+		map[string]any{"id": "mine", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 42.0},
+	)
+	if len(rows) != 3 {
+		t.Fatalf("results = %v, want 3 rows", rows)
+	}
+	if rows[0]["success"] != false || rows[1]["success"] != false || rows[2]["success"] != true {
+		t.Fatalf("results = %v; want foreign+unknown rejected, own accepted", rows)
+	}
+	if got := storedPosition(t, w); got != 42 {
+		t.Fatalf("stored position = %v, want 42 (the foreign 999 must not land)", got)
+	}
+}
+
+// A malformed body is still a 2xx: a 4xx wedges the client's replay queue.
+func TestSessionLocalAll_MalformedBodyIsStill200(t *testing.T) {
+	w := newWriteHarness(t)
+	code, _, raw := w.req(t, http.MethodPost, "/api/session/local-all", "not an object")
+	if code != http.StatusOK || !strings.Contains(raw, "results") {
+		t.Fatalf("malformed body = %d %s, want 200 with results", code, raw)
+	}
+}
+
+// ── F5 / F6 ─────────────────────────────────────────────────────────────────
+
+func TestNarratorImage_IsAPlain404(t *testing.T) {
+	h, _, tok := absplHarness(t, &absplFakeStore{})
+	for _, m := range []string{http.MethodGet, http.MethodHead} {
+		rec, _ := h.do(t, request{method: m, path: "/api/narrators/SmFuZSBEb2U=/image", headers: bearer(tok)})
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s narrator image = %d, want 404", m, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "" {
+			t.Fatalf("%s narrator image redirected to %q", m, loc)
+		}
+	}
+}
+
+func TestSendEbookToDevice_IsAClearError(t *testing.T) {
+	h, _, tok := absplHarness(t, &absplFakeStore{})
+	rec, _ := h.do(t, request{method: http.MethodPost, path: "/api/emails/send-ebook-to-device", headers: bearer(tok),
+		body: map[string]any{"libraryItemId": "x", "deviceName": "kindle"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("send-ebook-to-device = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Ereader device not found") {
+		t.Fatalf("body %q does not say why", rec.Body.String())
+	}
+}
