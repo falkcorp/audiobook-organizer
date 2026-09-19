@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
 // last-edited: 2026-09-19
 
@@ -328,6 +328,7 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 		v = judgeBookFileContent(incoming, stored, presence)
 	}
 	frozen := originalHashFrozen(stored)
+	incomingHadPrint := len(incoming.AcoustIDFingerprint) > 0
 	in := reflect.ValueOf(incoming).Elem()
 	st := reflect.ValueOf(stored).Elem()
 	for i, rule := range bookFileRulesByIndex {
@@ -355,6 +356,15 @@ func mergeBookFileFromStored(incoming, stored *BookFile, mode bookFileWriteMode,
 		if f := in.Field(i); f.IsZero() {
 			f.Set(st.Field(i))
 		}
+	}
+	// The whole-file print and its encoding version are ONE unit: the version
+	// must describe the bytes actually written. Per-field preservation could
+	// pair restored stored bytes with the caller's version (or the caller's
+	// bytes with the stored version) — e.g. legacy bytes under version 1,
+	// garbage certified as current. Take the version from whichever side the
+	// bytes came from; with no bytes on either side, keep what the merge chose.
+	if !incomingHadPrint && len(incoming.AcoustIDFingerprint) > 0 {
+		incoming.AcoustIDFPVersion = stored.AcoustIDFPVersion
 	}
 	if upsert && presence == presenceSeen {
 		incoming.Missing = false

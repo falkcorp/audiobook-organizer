@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
 // last-edited: 2026-09-19
 
@@ -281,7 +281,7 @@ func TestFingerprintEligibility_SkipsWhenDurationProxySet(t *testing.T) {
 	// AcoustIDFingerprintDurationSec > 0 means the file has a whole-file fp
 	// in Pebble even if AcoustIDFingerprint is nil (stripped from memdb rows).
 	f := makeBookFile(func(bf *database.BookFile) {
-		bf.AcoustIDFingerprintDurationSec = 3600.0             // 1 hour, fingerprint present
+		bf.AcoustIDFingerprintDurationSec = 3600.0              // 1 hour, fingerprint present
 		bf.AcoustIDFPVersion = fingerprint.PrintEncodingVersion // current-era: done
 	})
 	got, _, stop := fingerprintEligibility(f, false)

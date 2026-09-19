@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-09-19
 
@@ -13,8 +13,6 @@ import (
 	"hash/fnv"
 	"reflect"
 	"sync"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // bookLockStripes is the number of per-book write locks. A fixed array, not a
@@ -88,14 +86,6 @@ var ErrSkipBookWrite = errors.New("skip book write")
 // ErrSkipBookWrite, which returns the unmodified row and a nil error.
 //
 // fn runs while the stripe is held: see the LOCK RULES on bookLocks.
-// ClearBookSignature implements Store: delete the book_sig: sidecar under the
-// book's write lock.
-func (p *PebbleStore) ClearBookSignature(id string) error {
-	unlock := p.lockBook(id)
-	defer unlock()
-	return p.db.Delete(bookSigKey(id), pebble.Sync)
-}
-
 func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	unlock := p.lockBook(id)
 	defer unlock()
@@ -216,4 +206,25 @@ func emptyCollections(a, b reflect.Value) bool {
 		return a.Len() == 0 && b.Len() == 0
 	}
 	return false
+}
+
+// ClearBookSignature implements Store. Under the book's write lock it runs a
+// normal book write (same book_ver: snapshot and indexes as UpdateBook) that
+// deletes the book_sig: sidecar AND rewrites the row without any inline
+// signature, all in one batch. Deleting only the sidecar is not enough: a row
+// written before the sidecar migration still carries BookSigV1 inline, and
+// hydrateBookSig falls back to it, so the signature would survive the clear.
+// A book with no signature at all is left untouched (no write).
+func (p *PebbleStore) ClearBookSignature(id string) error {
+	unlock := p.lockBook(id)
+	defer unlock()
+	fresh, err := p.GetBookByID(id)
+	if err != nil || fresh == nil {
+		return err
+	}
+	if _, has := bookSigOf(fresh); !has {
+		return nil
+	}
+	_, err = p.updateBookLockedMode(id, fresh, true)
+	return err
 }

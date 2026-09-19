@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b6d19a7-4e52-4c08-b7f1-90a5e2c4d738
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 package maintenance
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"testing"
 	"time"
 
@@ -224,5 +225,27 @@ func TestDedupeBookFileRowsDef_DependsOnLibraryScan(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("DependsOn = %v, must contain \"library.scan\"", def.DependsOn)
+	}
+}
+
+// The print, its encoding version and its duration are salvaged as ONE unit.
+// A keeper whose version says "current" but whose print is absent must not
+// receive a twin's legacy bytes under that current version.
+func TestMergeMissingFields_PrintVersionDurationMoveAsUnit(t *testing.T) {
+	keeper := database.BookFile{ID: "keeper", AcoustIDFPVersion: fingerprint.PrintEncodingVersion}
+	legacyTwin := database.BookFile{ID: "twin", AcoustIDFingerprint: []byte{1, 2, 3, 4}, AcoustIDFingerprintDurationSec: 90}
+	got, changed := mergeMissingFields(keeper, []database.BookFile{legacyTwin})
+	if !changed || len(got.AcoustIDFingerprint) != 4 {
+		t.Fatalf("print not salvaged: %+v", got)
+	}
+	if got.AcoustIDFPVersion != 0 || got.AcoustIDFingerprintDurationSec != 90 {
+		t.Fatalf("legacy twin print landed as version %d duration %v; want 0 / 90", got.AcoustIDFPVersion, got.AcoustIDFingerprintDurationSec)
+	}
+
+	currentTwin := legacyTwin
+	currentTwin.AcoustIDFPVersion = fingerprint.PrintEncodingVersion
+	got, _ = mergeMissingFields(database.BookFile{ID: "keeper"}, []database.BookFile{currentTwin})
+	if got.AcoustIDFPVersion != fingerprint.PrintEncodingVersion {
+		t.Fatalf("current twin print lost its version: %d", got.AcoustIDFPVersion)
 	}
 }

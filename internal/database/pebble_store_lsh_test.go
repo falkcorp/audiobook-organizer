@@ -1,13 +1,14 @@
 // file: internal/database/pebble_store_lsh_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4c5d6e7f-8091-a2b3-c4d5-e6f708192a3b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package database
 
 import (
 	"context"
 	"encoding/binary"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"math/rand"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,7 @@ func mustInsertBookFile(t *testing.T, store *PebbleStore, id string, fp []byte) 
 		BookID:              "book-" + id,
 		FilePath:            "/tmp/" + id + ".mp3",
 		AcoustIDFingerprint: fp,
+		AcoustIDFPVersion:   fingerprint.PrintEncodingVersion,
 	}
 	if err := store.CreateBookFile(bf); err != nil {
 		t.Fatalf("CreateBookFile %s: %v", id, err)
@@ -111,6 +113,7 @@ func TestPebbleStoreLSH_UpdateBookFileSwapsIndex(t *testing.T) {
 		BookID:              "book-x",
 		FilePath:            "/tmp/x.mp3",
 		AcoustIDFingerprint: fpNew,
+		AcoustIDFPVersion:   fingerprint.PrintEncodingVersion,
 	}
 	if err := store.UpdateBookFile("x", updated); err != nil {
 		t.Fatalf("Update: %v", err)

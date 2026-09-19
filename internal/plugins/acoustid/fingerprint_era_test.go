@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/fingerprint_era_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c1f3e76-4a2b-4d9e-9f05-b7e2a6c4d830
 // last-edited: 2026-09-19
 
@@ -176,5 +176,51 @@ func TestBackfill_ReFingerprintsLegacyRowsOnly(t *testing.T) {
 				t.Fatal("legacy-era book signature was not rebuilt or cleared")
 			}
 		})
+	}
+}
+
+// TestSynthesize_NoStoredSignatureMeansNoClearWrite: a book with no usable
+// data and no signature on record must not be "cleared" — nightly, that is
+// tens of thousands of pointless writes.
+func TestSynthesize_NoStoredSignatureMeansNoClearWrite(t *testing.T) {
+	var clears int
+	m := &database.MockStore{}
+	m.GetBookByIDFunc = func(string) (*database.Book, error) { return &database.Book{ID: "b"}, nil }
+	m.GetBookFilesFunc = func(string) ([]database.BookFile, error) {
+		return []database.BookFile{{ID: "f", BookID: "b", AcoustIDSeg0: makeEraSegment()}}, nil // legacy-era
+	}
+	m.ClearBookSignatureFunc = func(string) error { clears++; return nil }
+	if err := synthesizeBookSignatureForBook(m, "b"); err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	if clears != 0 {
+		t.Fatalf("issued %d clear write(s) for a book with no signature", clears)
+	}
+}
+
+// TestDoFingerprintFile_SegmentFallbackNeverStampsVersion: the ffmpeg segment
+// fallback writes no raw print, and the row it gets may be a projection
+// without its blob — so it must not stamp the current version (which would
+// certify whatever legacy print the stored row holds).
+func TestDoFingerprintFile_SegmentFallbackNeverStampsVersion(t *testing.T) {
+	origLen, origSegs := fileFingerprintLengthFn, fileSegmentsFn
+	t.Cleanup(func() { fileFingerprintLengthFn, fileSegmentsFn = origLen, origSegs })
+	fileFingerprintLengthFn = func(string, int) (*fingerprint.WholeFile, error) { return nil, fingerprint.ErrNotAvailable }
+	fileSegmentsFn = func(string, int) (*fingerprint.Segments, error) {
+		var s fingerprint.Segments
+		s[0] = makeEraSegment()
+		return &s, nil
+	}
+	var written *database.BookFile
+	m := &database.MockStore{}
+	m.UpdateBookFileFunc = func(_ string, f *database.BookFile) error { cp := *f; written = &cp; return nil }
+	// Projection-shaped row: no blob, no duration, although the stored row
+	// may hold a legacy print.
+	row := database.BookFile{ID: "f", BookID: "b", FilePath: "/x.mp3"}
+	if out := doFingerprintFile(m, row, false); out != fingerprintOutcomeFingerprinted {
+		t.Fatalf("outcome %v", out)
+	}
+	if written == nil || written.AcoustIDFPVersion != 0 {
+		t.Fatalf("segment fallback stamped version %v", written)
 	}
 }

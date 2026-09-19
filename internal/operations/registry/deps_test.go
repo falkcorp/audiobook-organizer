@@ -1,12 +1,13 @@
 // file: internal/operations/registry/deps_test.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package registry
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"maps"
 	"testing"
 
@@ -211,7 +212,7 @@ func TestReqFieldSet_FieldSet_Satisfied(t *testing.T) {
 	st := newFakeDepStore()
 	sub := Subject{Type: "book", ID: "b3"}
 	sig := "dGVzdA==" // non-empty base64
-	st.books["b3"] = &database.Book{ID: "b3", BookSigV1: &sig}
+	st.books["b3"] = &database.Book{ID: "b3", BookSigV1: &sig, BookSigVersion: curSigVersion()}
 	req := Requirement{Kind: ReqFieldSet, Field: "book_sig_v1"}
 
 	ok, reason, err := Satisfied(st, req, sub)
@@ -312,6 +313,7 @@ func TestReqFieldSet_AllAllowedFields(t *testing.T) {
 			populate: func(b *database.Book) {
 				v := "sig"
 				b.BookSigV1 = &v
+				b.BookSigVersion = curSigVersion()
 			},
 		},
 		{
@@ -545,3 +547,6 @@ func TestSubjectsFromParams(t *testing.T) {
 		})
 	}
 }
+
+// curSigVersion returns a pointer to the current BookSignatureVersion.
+func curSigVersion() *int { v := fingerprint.BookSignatureVersion; return &v }

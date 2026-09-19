@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_fieldset_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // batch_fieldset_test.go is the TDD regression test for C1 (C1 = "give the
 // registry a real book-aware store for dep evaluation").
@@ -26,6 +26,7 @@ package registry_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"log/slog"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func (f *fakeBookStore) BookFiles(_ string) ([]string, error) {
 
 // bookWithSig builds a minimal *database.Book whose book_sig_v1 is set.
 func bookWithSig(id, sig string) *database.Book {
-	return &database.Book{ID: id, BookSigV1: &sig}
+	return &database.Book{ID: id, BookSigV1: &sig, BookSigVersion: curSigVersion()}
 }
 
 // bookWithoutSig builds a minimal *database.Book with book_sig_v1 == nil.
@@ -183,3 +184,6 @@ func TestBatch_FieldSet_ReadySubjectDispatched(t *testing.T) {
 		t.Errorf("expected exactly 1 dispatched op row, got %d", total)
 	}
 }
+
+// curSigVersion returns a pointer to the current BookSignatureVersion.
+func curSigVersion() *int { v := fingerprint.BookSignatureVersion; return &v }

@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-19
 
@@ -43,6 +43,7 @@ import (
 type resolverFailureCounters struct {
 	fpcalcFailed         atomic.Int64 // FileWholeFingerprint error/nil result
 	acoustidLookupFailed atomic.Int64 // ac.Lookup error or empty title
+	acoustidBelowFloor   atomic.Int64 // match scored under acoustIDHealMinScore, ignored
 	whisperFailed        atomic.Int64 // TranscribeFirst30s error/empty text
 }
 
@@ -478,6 +479,11 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 		// match would pick a winner on noise: require the same floor as the
 		// online-lookup op (AcoustIDOnlineMinScore, 0.85).
 		if err == nil && result.Title != "" && result.Score < acoustIDHealMinScore {
+			if failures != nil {
+				n := failures.acoustidBelowFloor.Add(1)
+				warnRateLimited(n, "itunes-heal: AcoustID match below score floor ignored",
+					"path", path, "score", result.Score, "floor", acoustIDHealMinScore)
+			}
 			continue
 		}
 		if err != nil || result.Title == "" {
@@ -944,6 +950,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	log.Info("itunes-heal: complete", "result", string(resultJSON),
 		"resolver_fpcalc_failed", resolverFailures.fpcalcFailed.Load(),
 		"resolver_acoustid_failed", resolverFailures.acoustidLookupFailed.Load(),
+		"resolver_acoustid_below_floor", resolverFailures.acoustidBelowFloor.Load(),
 		"resolver_whisper_failed", resolverFailures.whisperFailed.Load(),
 	)
 	_ = reporter.UpdateProgress(len(missing), len(missing), fmt.Sprintf(

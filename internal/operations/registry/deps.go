@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: f2a3b4c5-d6e7-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-06-13
+// last-edited: 2026-09-19
 
 // deps.go implements the UOS M1/M2 requirement evaluator, AllSatisfied aggregator,
 // and cycle-detection guard for OperationDef.Requires graphs.
@@ -103,7 +103,9 @@ type bookFieldPredicate func(*database.Book) (string, bool)
 // use the AllFiles completion requirement instead.
 var allowedBookFields = map[string]bookFieldPredicate{
 	"book_sig_v1": func(b *database.Book) (string, bool) {
-		if b.BookSigV1 == nil || *b.BookSigV1 == "" {
+		// A legacy-era signature (pre-2026-09-19 decoder) is not a usable
+		// signature: report it absent so dependents rebuild it.
+		if !b.HasCurrentBookSig() {
 			return "", false
 		}
 		return *b.BookSigV1, true
