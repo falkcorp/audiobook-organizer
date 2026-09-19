@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.3.0
+// version: 2.4.0
 // last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -44,7 +44,7 @@ type AIScanStore struct {
 // Scan represents a full pipeline run.
 type Scan struct {
 	ID          int               `json:"id"`
-	Status      string            `json:"status"` // pending, scanning, enriching, cross_validating, complete, failed, canceled
+	Status      string            `json:"status"` // pending, scanning, enriching, cross_validating, complete, failed, canceled, superseded (an unreviewed ai-dedup-batch scan replaced by a newer run)
 	Mode        string            `json:"mode"`   // batch, realtime
 	Models      map[string]string `json:"models"` // {groups: "gpt-5-mini", full: "o4-mini"}
 	AuthorCount int               `json:"author_count"`
@@ -187,6 +187,15 @@ func (s *AIScanStore) nextID(counter string) (int, error) {
 
 // CreateScan creates a new Scan with pending status.
 func (s *AIScanStore) CreateScan(mode string, models map[string]string, authorCount int) (*Scan, error) {
+	return s.CreateScanTagged(mode, models, authorCount, "")
+}
+
+// CreateScanTagged is CreateScan with OperationID set in the SAME write as the
+// scan row. A caller that finds its scan again by that tag (a replayed batch
+// apply) must never see the scan exist untagged: a crash between a create and
+// a separate tag write leaves a scan no replay can find, and each replay then
+// creates another.
+func (s *AIScanStore) CreateScanTagged(mode string, models map[string]string, authorCount int, operationID string) (*Scan, error) {
 	id, err := s.nextID("scan")
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate scan ID: %w", err)
@@ -198,6 +207,7 @@ func (s *AIScanStore) CreateScan(mode string, models map[string]string, authorCo
 		Mode:        mode,
 		Models:      models,
 		AuthorCount: authorCount,
+		OperationID: operationID,
 		CreatedAt:   time.Now(),
 	}
 

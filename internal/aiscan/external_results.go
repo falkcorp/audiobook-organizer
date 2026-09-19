@@ -1,5 +1,5 @@
 // file: internal/aiscan/external_results.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
 // last-edited: 2026-09-19
 
@@ -8,6 +8,7 @@ package aiscan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -44,12 +45,10 @@ func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggest
 		return scan.ID, nil
 	}
 	if scan == nil {
-		scan, err = store.CreateScan("batch", map[string]string{"full": "batch"}, 0)
+		// Tag and row in one write (see CreateScanTagged).
+		scan, err = store.CreateScanTagged("batch", map[string]string{"full": "batch"}, 0, key)
 		if err != nil {
 			return 0, fmt.Errorf("create scan: %w", err)
-		}
-		if err := store.UpdateScanOperationID(scan.ID, key); err != nil {
-			return 0, fmt.Errorf("tag scan %d with its source: %w", scan.ID, err)
 		}
 	}
 
@@ -69,11 +68,59 @@ func RecordFullScanResults(store *database.AIScanStore, sourceID string, suggest
 	if err := store.UpdatePhaseStatus(scan.ID, "full_scan", "complete", ""); err != nil {
 		return 0, fmt.Errorf("mark phase complete: %w", err)
 	}
-	if err := store.ReplaceScanResults(scan.ID, CrossValidate(scan.ID, nil, scanSuggestions)); err != nil {
-		return 0, fmt.Errorf("save results: %w", err)
+
+	// A replay after a crash between writing the results and marking the scan
+	// complete may find results a user has ALREADY applied (the scan is
+	// visible in the review queue meanwhile). ReplaceScanResults would drop
+	// those Applied flags and let the same merge be applied again, so the
+	// existing results stand whenever any of them was applied.
+	existing, err := store.GetScanResults(scan.ID)
+	if err != nil {
+		return 0, fmt.Errorf("read existing results: %w", err)
+	}
+	if !anyApplied(existing) {
+		if err := store.ReplaceScanResults(scan.ID, CrossValidate(scan.ID, nil, scanSuggestions)); err != nil {
+			return 0, fmt.Errorf("save results: %w", err)
+		}
 	}
 	if err := store.UpdateScanStatus(scan.ID, "complete"); err != nil {
 		return 0, fmt.Errorf("mark scan complete: %w", err)
 	}
+	supersedeUnreviewed(store, scans, scan.ID)
 	return scan.ID, nil
+}
+
+func anyApplied(rs []database.ScanResult) bool {
+	for _, r := range rs {
+		if r.Applied {
+			return true
+		}
+	}
+	return false
+}
+
+// supersedeUnreviewed marks earlier external (ai-dedup-batch) scans that
+// nobody applied anything from as "superseded", keeping the one just recorded.
+//
+// The nightly op submits the whole author list every run, so each run records
+// a near-identical list. Left alone they pile up in the review queue, and a
+// reviewer works through last week's copy of tonight's list. Superseding
+// rather than deleting keeps them readable; a scan with ANY applied result is
+// a reviewer's work in progress and is never touched. Only "complete" scans
+// are considered, so a scan still being recorded by a concurrent replay is
+// left alone. Best effort: a failure here leaves an extra scan in the queue,
+// never a lost one.
+func supersedeUnreviewed(store *database.AIScanStore, scans []database.Scan, keepID int) {
+	for _, sc := range scans {
+		if sc.ID == keepID || sc.Status != "complete" || !strings.HasPrefix(sc.OperationID, externalSourcePrefix) {
+			continue
+		}
+		rs, err := store.GetScanResults(sc.ID)
+		if err != nil || anyApplied(rs) {
+			continue
+		}
+		if err := store.UpdateScanStatus(sc.ID, "superseded"); err != nil {
+			plog.Warn("supersede external scan %d: %v", sc.ID, err)
+		}
+	}
 }

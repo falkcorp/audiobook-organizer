@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_ops_batch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d3a390db-7a5a-41df-ba14-226aeb15655c
 // last-edited: 2026-09-19
 
@@ -55,14 +55,14 @@ func TestAIDedupBatchSubmitsOnceAndCheckpointsTheJob(t *testing.T) {
 	sub := &countingSubmit{store: store}
 	cp := &recordingCheckpoint{}
 
-	jobID, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp.checkpoint, time.Now())
+	jobID, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp.checkpoint)
 	require.NoError(t, err)
 	require.True(t, submitted)
 	require.Equal(t, 1, sub.calls)
 	require.Equal(t, jobID, cp.states[len(cp.states)-1].JobID, "the job id is checkpointed so a resumed run does not submit again")
 
 	// The next midnight run while that batch is still in flight: no new batch.
-	again, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp.checkpoint, time.Now())
+	again, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp.checkpoint)
 	require.NoError(t, err)
 	require.False(t, submitted)
 	require.Equal(t, jobID, again)
@@ -72,31 +72,35 @@ func TestAIDedupBatchSubmitsOnceAndCheckpointsTheJob(t *testing.T) {
 func TestAIDedupBatchResumeWithCheckpointDoesNotSubmit(t *testing.T) {
 	store := newJobsStore(t)
 	sub := &countingSubmit{store: store}
-	got, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{JobID: "job-x"}, oneAuthor, sub.submit, (&recordingCheckpoint{}).checkpoint, time.Now())
+	got, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{JobID: "job-x"}, oneAuthor, sub.submit, (&recordingCheckpoint{}).checkpoint)
 	require.NoError(t, err)
 	require.False(t, submitted)
 	require.Equal(t, "job-x", got)
 	require.Equal(t, 0, sub.calls)
 }
 
-// A job left pending (killed between writing the row and recording its batch)
-// is in flight while the reconciler may still attach its batch; once that
-// window is long past, it is written off and a fresh batch is submitted.
-func TestAIDedupBatchPendingJobGatesUntilStale(t *testing.T) {
+// A pending job (CreateBatch errored, or the process died inside it) blocks a
+// new submission however old it is: this op never writes it off. aijobs does,
+// and only on a confirmed absence (see aijobs.WriteOffUnlinked); once it has,
+// the next run submits.
+func TestAIDedupBatchPendingJobGatesUntilAijobsResolvesIt(t *testing.T) {
 	store := newJobsStore(t)
-	created := time.Now().Add(-time.Hour)
+	created := time.Now().Add(-30 * 24 * time.Hour)
 	require.NoError(t, store.CreateAIJob(database.AIJob{ID: "old", Type: ai.AuthorDedupJobType, Status: "pending", ItemCount: 1, CreatedAt: created}, []byte("{}")))
 	sub := &countingSubmit{store: store}
 	cp := (&recordingCheckpoint{}).checkpoint
 
-	_, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp, created.Add(time.Hour))
+	got, submitted, err := submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp)
 	require.NoError(t, err)
-	require.False(t, submitted, "a recent pending job may still own a batch")
-
-	_, submitted, err = submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp, created.Add(pendingJobStaleAfter+time.Minute))
-	require.NoError(t, err)
-	require.True(t, submitted)
+	require.False(t, submitted, "a pending job may still own a billed batch")
+	require.Equal(t, "old", got)
 	old, err := store.GetAIJob("old")
 	require.NoError(t, err)
-	require.Equal(t, "failed", old.Status)
+	require.Equal(t, "pending", old.Status, "the op must not write it off itself")
+
+	require.NoError(t, store.MarkAIJobFailed("old", "confirmed absent"))
+	_, submitted, err = submitAuthorDedupOnce(context.Background(), store, aiDedupBatchParams{}, oneAuthor, sub.submit, cp)
+	require.NoError(t, err)
+	require.True(t, submitted)
+	require.Equal(t, 1, sub.calls)
 }
