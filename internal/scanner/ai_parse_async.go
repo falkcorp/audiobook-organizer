@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package scanner
 
@@ -595,7 +595,21 @@ func newAIParser(scanLog logger.Logger) (aiBatchParser, bool) {
 		return nil, false
 	}
 	cfg := &config.AppConfig
-	switch cfg.EffectiveLLMMode() {
+	mode := cfg.EffectiveLLMMode()
+
+	// ai_endpoints_routing (design rollout step 2): in the modes that use a
+	// local backend, the ai_endpoints pool replaces both the single local
+	// parser and the openai-fallback-local chain. The migrated rows reproduce
+	// the chain's order (the openai row at priority 5 ahead of local-llm at
+	// 10), and the dispatcher adds per-endpoint concurrency, failover on a
+	// transport error and per-endpoint attribution. Explicit openai mode is
+	// never routed; disabled stays disabled. Off, nothing below changes.
+	if cfg.AIEndpointsRouting && (mode == config.AIBackendModeLocal || mode == config.AIBackendModeOpenAIFallbackLocal) {
+		scanLog.Info("AI parsing routed through the ai_endpoints pool (capability llm.filename_parse, llm_mode=%s)", mode)
+		return ai.NewRoutedFilenameParser(ai.ConfigPool()), true
+	}
+
+	switch mode {
 	case config.AIBackendModeDisabled:
 		scanLog.Info("AI parsing skipped: llm_mode is disabled")
 	case config.AIBackendModeLocal:
