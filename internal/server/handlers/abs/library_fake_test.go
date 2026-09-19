@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -950,6 +951,9 @@ func (f *fakeLibrary) SetUserBookState(s *database.UserBookState) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cp := *s
+	// Deep-copy slice fields: the real store round-trips the row through
+	// JSON, so a caller must never share a backing array with the stored row.
+	cp.ProgressResetPositions = slices.Clone(s.ProgressResetPositions)
 	f.states[s.UserID+"|"+s.BookID] = &cp
 	return nil
 }
