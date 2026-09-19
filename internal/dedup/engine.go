@@ -2016,11 +2016,13 @@ func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
 	}
 
 	// Canonical runtimes (database.ComputeBookRuntime). The part must be a
-	// COMPLETE runtime. The whole may be partial: its known-file sum is a
-	// lower bound, and part < ratio × lower bound implies part < ratio ×
-	// whole, so the inequality stays sound. The old raw sum also counted a
-	// repointed book's missing rows beside their present copies, inflating the
-	// whole; ComputeBookRuntime counts present rows only.
+	// COMPLETE runtime. The whole's Seconds is never MORE than its true
+	// runtime: a partial runtime is a known-file lower bound, and counting
+	// present rows only drops either duplicate content (a repoint's missing
+	// row beside its present copy, which the old raw sum counted twice) or
+	// content not on disk. So part < ratio × whole.Seconds implies
+	// part < ratio × true whole: the gate can only fire less often than an
+	// exact measurement would, never drop a pair it should keep.
 	partRT := database.ComputeBookRuntime(nil, partFiles)
 	wholeRT := database.ComputeBookRuntime(nil, wholeFiles)
 	partDuration, partKnown := partRT.KnownSeconds()
