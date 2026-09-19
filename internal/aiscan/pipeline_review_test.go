@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a6674cc-107e-46c1-bf79-9bd8302491e2
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,13 +197,15 @@ func TestReattachLookupErrorKeepsSubmitting(t *testing.T) {
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
 
 	lookupErr := errors.New("list batches: 503")
+	var lookup atomic.Pointer[error]
+	lookup.Store(&lookupErr)
 	llm2 := newFakeLLM(acct)
-	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2, err: &lookupErr})
+	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2, err: &lookup})
 	run := runAsync(pm2, scan.ID)
 	time.Sleep(50 * time.Millisecond)
 	require.Equal(t, "submitting", phaseStatus(t, pm2, scan.ID, "full_scan"))
 
-	lookupErr = nil
+	lookup.Store(nil)
 	acct.setAllStatus("completed")
 	require.NoError(t, pollUntilDone(t, pm2, run))
 	_, creates, _ := llm2.counts()
