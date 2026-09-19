@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-09-19
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -256,7 +257,13 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 			respondResolveError(c)
 			return
 		}
-		// No-loss merge, never a replace: see database.MergeMemberListNoLoss.
+		// Omitting a stored member is refused (409), never silently kept or
+		// blindly removed; see database.MemberListOmitted.
+		if omitted := database.MemberListOmitted(col.BookIDs, ids, h.canonicalBookID); len(omitted) > 0 {
+			respondError(c, http.StatusConflict,
+				"books omits books currently in this collection (it may have changed since you loaded it); reload and retry, and use batch/remove or DELETE /api/collections/:id/book/:bookId to remove books")
+			return
+		}
 		col.BookIDs = database.MergeMemberListNoLoss(col.BookIDs, ids)
 	}
 
@@ -741,6 +748,16 @@ var errResolveSyncID = errors.New("could not resolve library item ids")
 // turn that into a hung request instead of a dropped book.
 func (h *Handler) bookIDForSyncID(syncID string) (string, error) {
 	item, err := h.identity.ResolveSyncItem(syncID)
+	if errors.Is(err, database.ErrSyncRedirectChainBroken) {
+		// PERMANENT, not transient: a stale merge-loser id whose chain is
+		// dangling or cyclic names no book, and treating it as retryable would
+		// 503 every request that carries it, forever. Skip it like an unknown
+		// id (the ABS playlist/collection bodies have no per-id error field),
+		// and log it so the broken chain can be repaired at the source.
+		playlistsLog.Warn("abs: skipping a sync id with a broken redirect chain: sync_id=%s err=%v",
+			logger.SanitizeLogValue(syncID), err)
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, syncID, err)
 	}
@@ -754,6 +771,9 @@ func (h *Handler) bookIDForSyncID(syncID string) (string, error) {
 		return "", nil
 	}
 	next, err := h.identity.ResolveSyncItem(item.RedirectTo)
+	if errors.Is(err, database.ErrSyncRedirectChainBroken) {
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %v", errResolveSyncID, item.RedirectTo, err)
 	}

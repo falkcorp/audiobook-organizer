@@ -6,7 +6,6 @@
 package abs_test
 
 import (
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -546,7 +545,12 @@ func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
 	if got := storedPosition(t, w); got != 0 {
 		t.Fatalf("the reset position was resurrected: %v", got)
 	}
-	after := time.Now().Add(-30 * time.Second).UnixMilli() // a device clock slightly behind
+	// Age the tombstone so a session can provably start after reset+tolerance.
+	w.seed.lib.mu.Lock()
+	old := time.Now().Add(-10 * time.Minute)
+	w.seed.lib.states[w.userID+"|"+w.bookID].ProgressResetAt = &old
+	w.seed.lib.mu.Unlock()
+	after := time.Now().Add(-time.Minute).UnixMilli()
 	localAll(t, w, map[string]any{"id": "post-reset", "userId": w.userID, "libraryItemId": w.syncID,
 		"currentTime": 30.0, "startedAt": after})
 	if got := storedPosition(t, w); got != 30 {
@@ -594,23 +598,35 @@ func TestSessionLocal_AppliesTheSession(t *testing.T) {
 
 // Re-review MEDIUM #3: fail-safe offline replay around resets and clock skew.
 
-// A session with no startedAt after a reset is NOT refused forever: it is
-// applied forward-only.
-func TestSessionLocalAll_NoStartedAtAfterResetFallsBackToForwardOnly(t *testing.T) {
+// Re-review MEDIUM #1: while a reset tombstone exists, a session must PROVE
+// it started after the reset. Inside the tolerance window, with no startedAt,
+// or with a clock too far ahead to trust, it is refused — the stored position
+// is 0 after a reset, so forward-only would bring the discarded position back.
+// With no tombstone, a missing startedAt still falls back to forward-only.
+func TestSessionLocalAll_ResetRefusesSessionsNotProvablyAfterIt(t *testing.T) {
 	w := newWriteHarness(t)
-	w.patch(t, map[string]any{"currentTime": 300.0})
+	w.patch(t, map[string]any{"currentTime": 3600.0})
 	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
 		t.Fatalf("reset = %d %s", code, raw)
 	}
-	for i, ct := range []float64{40, 90} {
-		rows := localAll(t, w, map[string]any{"id": fmt.Sprintf("nostart-%d", i), "userId": w.userID,
-			"libraryItemId": w.syncID, "currentTime": ct})
-		if rows[0]["success"] != true {
-			t.Fatalf("session without startedAt refused after a reset: %v", rows)
+	for name, sess := range map[string]map[string]any{
+		"inside tolerance": {"startedAt": time.Now().Add(-90 * time.Second).UnixMilli()},
+		"no startedAt":     {},
+		"clock far ahead":  {"startedAt": time.Now().Add(time.Hour).UnixMilli()},
+	} {
+		sess["id"], sess["userId"], sess["libraryItemId"], sess["currentTime"] = "s-"+name, w.userID, w.syncID, 3600.0
+		if rows := localAll(t, w, sess); rows[0]["success"] != false {
+			t.Errorf("%s: accepted after a reset: %v", name, rows)
 		}
 	}
-	if got := storedPosition(t, w); got != 90 {
-		t.Fatalf("position = %v, want 90 (forward-only applies)", got)
+	if got := storedPosition(t, w); got != 0 {
+		t.Fatalf("the reset position was resurrected: %v", got)
+	}
+
+	fresh := newWriteHarness(t) // no reset, no tombstone
+	localAll(t, fresh, map[string]any{"id": "nostart", "userId": fresh.userID, "libraryItemId": fresh.syncID, "currentTime": 90.0})
+	if got := storedPosition(t, fresh); got != 90 {
+		t.Fatalf("without a tombstone a missing startedAt must apply forward-only; position %v", got)
 	}
 }
 

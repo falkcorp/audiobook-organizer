@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists_write.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6ddbf78d-bfe3-47a7-946a-c677d6f16821
 // last-edited: 2026-09-19
 
@@ -180,6 +180,13 @@ func (h *Handler) UpdatePlaylist(c *gin.Context) {
 			// last read; a replace (re-applied by the retry to the fresh row)
 			// would drop anything added since. Reorder what it names, add what
 			// is new, keep the rest; removal is batch/remove or item delete.
+			// A list that omits a stored member is ambiguous (removed, or never
+			// seen?) and is refused rather than silently kept; upstream ABS
+			// treats this PATCH as a replace, so a client relying on that must
+			// learn it did not happen. AudioBooth removes via batch/remove.
+			if omitted := database.MemberListOmitted(pl.BookIDs, incoming, h.canonicalBookID); len(omitted) > 0 {
+				return http.StatusConflict, "items omits books currently in this playlist (it may have changed since you loaded it); reload and retry, and use batch/remove or DELETE /api/playlists/:id/item/:libraryItemId to remove books"
+			}
 			pl.BookIDs = database.MergeMemberListNoLoss(pl.BookIDs, incoming)
 		}
 		return 0, ""

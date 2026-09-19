@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
 // last-edited: 2026-09-19
 
@@ -260,6 +260,11 @@ func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
 			// FRESH row, and a list the client built from an older read would
 			// silently drop members added since. See MergeMemberListNoLoss;
 			// removal goes through DELETE /playlists/:id/books/:bookID.
+			// A list that omits a stored member is refused, not silently
+			// kept (see database.MemberListOmitted).
+			if omitted := database.MemberListOmitted(pl.BookIDs, *req.BookIDs, nil); len(omitted) > 0 {
+				return &playlistConflictError{msg: "book_ids omits books currently in this playlist (it may have changed since you loaded it); reload and retry, and use DELETE /playlists/:id/books/:bookID to remove books"}
+			}
 			pl.BookIDs = database.MergeMemberListNoLoss(pl.BookIDs, *req.BookIDs)
 		}
 		if req.Query != nil {
@@ -375,6 +380,11 @@ func (e *playlistRequestError) Error() string { return e.msg }
 
 func playlistBadRequest(msg string) error { return &playlistRequestError{msg: msg} }
 
+// playlistConflictError aborts a mutation with 409.
+type playlistConflictError struct{ msg string }
+
+func (e *playlistConflictError) Error() string { return e.msg }
+
 // errPlaylistNotOwned makes another user's playlist indistinguishable from a
 // missing one (404, never 403), as ownedByCaller's doc requires.
 var errPlaylistNotOwned = errors.New("playlist not owned by caller")
@@ -401,11 +411,14 @@ func (h *PlaylistHandler) mutatePlaylist(c *gin.Context, failMsg string, mutate 
 		return nil
 	})
 	var reqErr *playlistRequestError
+	var conflictErr *playlistConflictError
 	switch {
 	case err == nil:
 		httputil.RespondWithOK(c, updated)
 	case errors.As(err, &reqErr):
 		httputil.RespondWithBadRequest(c, reqErr.msg)
+	case errors.As(err, &conflictErr):
+		httputil.RespondWithConflict(c, conflictErr.msg)
 	case errors.Is(err, database.ErrUserPlaylistNotFound), errors.Is(err, errPlaylistNotOwned):
 		httputil.RespondWithNotFound(c, "playlist", id)
 	case errors.Is(err, database.ErrUserPlaylistNameInUse), errors.Is(err, database.ErrUserPlaylistVersionConflict):

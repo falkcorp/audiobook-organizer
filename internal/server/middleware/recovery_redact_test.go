@@ -1,5 +1,5 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -40,7 +41,11 @@ func TestRedactingRecovery_LogsNoQueryCredential(t *testing.T) {
 	}{
 		"broken pipe": {&net.OpError{Op: "write", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}, http.StatusOK},
 		"abort":       {http.ErrAbortHandler, http.StatusOK},
-		"panic":       {"boom", http.StatusInternalServerError},
+		// Wrapped without an OpError/SyscallError chain: only errors.Is on the
+		// errno recognises these (re-review LOW #4).
+		"wrapped epipe":      {fmt.Errorf("write body: %w", syscall.EPIPE), http.StatusOK},
+		"wrapped econnreset": {fmt.Errorf("read: %w", syscall.ECONNRESET), http.StatusOK},
+		"panic":              {"boom", http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {
 			buf := captureSlog(t)
