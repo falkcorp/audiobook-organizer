@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.46.0
+// version: 1.47.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-19
 
@@ -85,6 +85,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// automatic "these two look like the same person" classifier would.
 		p.authorDuplicateMergeDef(),
 		p.authorIDRepairDef(),
+		// author-path-link fills the NIL scalars author-id-repair counts and
+		// deliberately leaves alone, from the path the book is already filed under.
+		p.authorPathLinkDef(),
 		p.purgeEmptyAuthorsDef(),
 		// purge-empty-narrators is the narrator twin, but with two guards the
 		// author op lacks: a per-narrator link re-check immediately before each

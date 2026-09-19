@@ -1,6 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
+// last-edited: 2026-09-19
 
 package metadata
 
@@ -466,3 +467,25 @@ func isLeadingNumberOnly(base string) bool {
 	}
 	return true
 }
+
+// SplitPathSegments exposes splitPathSegments to other packages.
+//
+// maintenance.author-path-link derives an author from a book's stored path by
+// walking the same segments this parser walks. It must see EXACTLY the segments
+// the scanner's parser sees -- a second copy of the skip map would drift the
+// moment either side gained a root -- so the op calls this rather than
+// reimplementing the split. The op adds its own extra container roots on top of
+// the result; they are deliberately NOT added to skipSegments here, because this
+// map also feeds the scanner's import path and widening it would silently change
+// how every future scan parses a path.
+func SplitPathSegments(path string) []string { return splitPathSegments(path) }
+
+// LooksLikeAuthorSegment exposes looksLikeAuthorSegment to other packages.
+//
+// This is the person-shape gate maintenance.author-path-link applies BEFORE any
+// author-name lookup. Measured on 2026-09-19 over the whole library: without the
+// gate, title and series directories match title-fragment author rows and 1,245
+// books land in a bogus "ambiguous" bucket ("The Saga of Recluce" and "Of Fire
+// and Night" both exist as author rows). Exported rather than copied for the same
+// single-implementation reason as SplitPathSegments.
+func LooksLikeAuthorSegment(s string) bool { return looksLikeAuthorSegment(s) }

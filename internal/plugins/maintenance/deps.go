@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.46.1
+// version: 1.47.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -159,10 +159,9 @@ type opsSeriesStore interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
 
-// opsLinkStore reads and writes the joins hanging off a book: its authors and
-// its external-ID mappings. Grouped together because both live on the join row
-// rather than on either entity, so a regroup has to rewrite them as a pair.
-type opsLinkStore interface {
+// opsAuthorLinkStore reads and writes a book's author credits -- the
+// book_authors join row and the reverse lookups that walk it.
+type opsAuthorLinkStore interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 	// GetBooksByAuthorIDForRelinkCore includes the trash; relink-then-delete
@@ -171,10 +170,30 @@ type opsLinkStore interface {
 	// GetBookIDsCreditingAuthorDurable is the Pebble-only twin: the second half
 	// of a delete-when-empty check (author-id-repair).
 	GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	// ModifyBookAuthors is the atomic read-check-write twin of SetBookAuthors,
+	// held under the book_authors stripe. author-path-link uses it so the
+	// "this book has no credits yet" check and the write of its first credit
+	// cannot be split by a concurrent writer.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+}
+
+// opsExternalIDLinkStore reads and repoints the external-ID mappings hanging
+// off a book.
+type opsExternalIDLinkStore interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 	ReassignExternalID(source string, externalID string, newBookID string) error
 	ReassignExternalIDs(oldBookID string, newBookID string) error
-	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+}
+
+// opsLinkStore reads and writes the joins hanging off a book: its authors and
+// its external-ID mappings. Kept as the composition of the two halves so the
+// method set OpsStore exposes is byte-identical and no consumer moves; the
+// split exists because the author half outgrew the interfacebloat bar on its
+// own when ModifyBookAuthors was added (2026-09-19).
+type opsLinkStore interface {
+	opsAuthorLinkStore
+	opsExternalIDLinkStore
 }
 
 // opsHousekeeping is the remainder that belongs to no single entity: the review
