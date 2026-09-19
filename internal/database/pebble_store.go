@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.171.0
+// version: 1.172.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
@@ -124,7 +124,8 @@ type PebbleStore struct {
 	nameIdx                  nameIndexLocks // per-family writer locks for the name indexes; lock order in pebble_store_name_index.go
 	apiKeyMu                 sync.Mutex     // serializes the API-key last-used read-modify-write so concurrent requests on one key can't lose UseCount increments (pebble_store_auth.go)
 	fileProvMu               sync.Mutex     // serializes provenance appends so the store-wide seq and the per-chain hash link cannot fork (pebble_file_provenance.go)
-	fpwinMu                  sync.Mutex     // serializes fingerprint-window writes against book_file deletes so a window can never outlive its row (pebble_store_fpwin.go)
+	fpwinLocks               bookLocks      // per-window-ref stripes: a window write and the delete cascade of the same file serialize, different files do not (pebble_store_fpwin.go)
+	bookFileIDScans          atomic.Int64   // count of scanForBookFileByID full scans; instrumentation so tests can prove a path never falls back to the O(N) walk
 	bookLocks                bookLocks      // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks      // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookAuthorLocks          bookLocks      // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit (pebble_store_authors.go)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_fpwin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9578f32b-f95b-4ff6-a7bf-4ceead8fea41
 // last-edited: 2026-09-19
 
@@ -88,5 +88,45 @@ func TestDedupeBookFileRows_CarriesDonorWindowsToTheKeeper(t *testing.T) {
 				t.Fatalf("book %s: deleted donor %s still has %d windows (err %v)", bookID, id, len(left), lerr)
 			}
 		}
+	}
+}
+
+// Every production group has no windows today. A group whose row IDs the
+// window key scheme cannot represent (';' in the ID) holds no windows either,
+// so the carry-over must not turn it into a failure that leaves the duplicates
+// in place: it must collapse exactly as it did before windows existed.
+func TestDedupeBookFileRows_ZeroWindowGroupWithUnrepresentableIDsStillCollapses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	s, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	defer s.Close()
+	s.WaitForWarmup()
+
+	bk, err := s.CreateBook(&database.Book{Title: "Odd IDs"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	for _, id := range []string{"legacy;a", "legacy;b", "legacy;c"} {
+		f := &database.BookFile{ID: id, BookID: bk.ID, FilePath: "/lib/odd/track.m4b", Duration: 3600, FileSize: 58000000}
+		if err := s.CreateBookFile(f); err != nil {
+			t.Fatalf("CreateBookFile(%s): %v", id, err)
+		}
+	}
+
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: t.TempDir()}}
+	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true})
+	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
+		t.Fatalf("runDedupeBookFileRows: %v", err)
+	}
+	files, err := s.GetBookFiles(bk.ID)
+	if err != nil {
+		t.Fatalf("GetBookFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("%d rows survived, want 1: a zero-window group was skipped by the window carry-over", len(files))
 	}
 }

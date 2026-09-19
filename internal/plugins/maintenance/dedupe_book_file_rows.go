@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-09-19
 
@@ -452,26 +452,28 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 			}
 
-			// Move each donor's fingerprint windows onto the keeper BEFORE the
-			// donor is queued: DeleteBookFilesByIDs cascades a row's windows, so
-			// a donor deleted first takes its windows with it. The rows are the
-			// same file, so the windows describe the keeper too; the keeper's own
-			// window wins on a slot collision. A failed carry-over leaves the
-			// whole group intact, like a failed salvage — the next run retries.
-			carried := true
+			// Move the donors' fingerprint windows onto the keeper BEFORE the
+			// donors are queued: DeleteBookFilesByIDs cascades a row's windows,
+			// so a donor deleted first takes its windows with it. The rows are
+			// the same file, so the windows describe the keeper too; the
+			// keeper's own window wins on a slot collision.
+			//
+			// ONE call per group, so the keeper is resolved at most once. A
+			// group whose donors hold no windows (every group until windows are
+			// computed) is a strict no-op in the store — no keeper lookup, no
+			// error — so this can only skip a group that actually has windows to
+			// lose. Such a failure leaves the whole group intact, like a failed
+			// salvage; the next run retries.
+			donorRefs := make([]database.FingerprintWindowRef, 0, len(redundant))
 			for ri := range redundant {
-				if _, cerr := store.CarryOverFingerprintWindows(
-					database.FileWindowRef(redundant[ri].ID), database.FileWindowRef(keeper.ID)); cerr != nil {
-					mu.Lock()
-					failed++
-					mu.Unlock()
-					log.Warn("dedupe-book-file-rows: could not carry fingerprint windows to the keeper; leaving this group intact",
-						"book_id", bookID, "keeper", keeper.ID, "donor", redundant[ri].ID, "err", cerr)
-					carried = false
-					break
-				}
+				donorRefs = append(donorRefs, database.FileWindowRef(redundant[ri].ID))
 			}
-			if !carried {
+			if _, cerr := store.CarryOverFingerprintWindows(donorRefs, database.FileWindowRef(keeper.ID)); cerr != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				log.Warn("dedupe-book-file-rows: could not carry fingerprint windows to the keeper; leaving this group intact",
+					"book_id", bookID, "keeper", keeper.ID, "donors", len(redundant), "err", cerr)
 				continue
 			}
 

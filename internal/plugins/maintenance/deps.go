@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -93,10 +93,11 @@ type opsBookFileMutator interface {
 type opsBookFileDeleter interface {
 	DeleteBookFile(id string) error
 	DeleteBookFilesByIDs(ids []string) error
-	// CarryOverFingerprintWindows moves a row's fingerprint windows onto
-	// another row. Deleting a book_file row deletes its windows, so a row
-	// merge calls this for each donor BEFORE deleting it.
-	CarryOverFingerprintWindows(from, to database.FingerprintWindowRef) (int, error)
+	// CarryOverFingerprintWindows moves the donors' fingerprint windows onto
+	// the keeper. Deleting a book_file row deletes its windows, so a row merge
+	// calls this once per group BEFORE deleting the donors. A group with no
+	// windows is a strict no-op.
+	CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)
 }
 
 // opsBookFileMover reassigns book_file rows between books.
