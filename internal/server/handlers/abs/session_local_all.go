@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -68,6 +69,10 @@ type localSessionReq struct {
 // absLocalSessionOverrunSec is how far past the item's duration a reported
 // position may run before it is treated as garbage rather than "at the end".
 const absLocalSessionOverrunSec = 5.0
+
+// absClockSkewTolerance bounds how far a device clock may disagree with the
+// server before its startedAt stops being trusted in either direction.
+const absClockSkewTolerance = 2 * time.Minute
 
 type localAllReq struct {
 	Sessions []localSessionReq `json:"sessions"`
@@ -163,14 +168,27 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	}
 	state, _ := h.progress.GetUserBookState(userID, bookID)
 
-	// (b) Reset tombstone: a session that started before the user's last
-	// "reset progress" belongs to a listen the user discarded. No startedAt
-	// means we cannot prove it came after, so it is refused too.
-	if state != nil && state.ProgressResetAt != nil {
-		if s.StartedAt == nil || *s.StartedAt <= state.ProgressResetAt.UnixMilli() {
-			res.Error = "session predates a progress reset"
-			return res
-		}
+	now := h.now()
+	tol := absClockSkewTolerance.Milliseconds()
+	// startedAt is trusted only when present and not implausibly in the future
+	// (a device clock far ahead). An untrusted start is treated as absent.
+	var startedAt *int64
+	if s.StartedAt != nil && *s.StartedAt > 0 && *s.StartedAt <= now.UnixMilli()+tol {
+		startedAt = s.StartedAt
+	}
+
+	// (b) Reset tombstone. Refuses ONLY a session KNOWN to have started before
+	// the user's last "reset progress" — by more than the skew tolerance, so a
+	// device clock slightly behind cannot turn a real post-reset listen into a
+	// refusal. A session with no (trusted) startedAt is NOT refused: it falls
+	// through to the forward-only rule below, because refusing it would refuse
+	// that device's uploads for this book forever (the tombstone is never
+	// cleared: a known pre-reset session must stay refused even after new
+	// listening lands, or the discarded position could be replayed forward).
+	if state != nil && state.ProgressResetAt != nil && startedAt != nil &&
+		*startedAt+tol < state.ProgressResetAt.UnixMilli() {
+		res.Error = "session predates a progress reset"
+		return res
 	}
 
 	duration := h.durationForBook(bookID, s.Duration)
@@ -196,19 +214,20 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		}
 	}
 
-	now := h.now()
 	var (
 		merged   progress.Progress
 		accepted bool
 	)
-	if s.StartedAt != nil && *s.StartedAt > stored.UpdatedAtMs {
-		// (a) The listen BEGAN after the server's newest known position, so it
-		// is genuinely newer and may move the position either way (the user
-		// re-listened to an earlier chapter while offline). startedAt is not
-		// re-stamped on replay, which is what makes this safe where updatedAt
-		// is not. Finished stays sticky, exactly as on /sync.
+	if startedAt != nil && *startedAt > stored.UpdatedAtMs+tol {
+		// (a) The listen BEGAN after the server's newest known position — by
+		// more than the skew tolerance, so a device clock running ahead cannot
+		// make an older listen look newer and rewind a position written after
+		// it. Then it may move the position either way (the user re-listened to
+		// an earlier chapter while offline). startedAt is not re-stamped on
+		// replay, which is what makes this safe where updatedAt is not.
+		// Finished stays sticky, exactly as on /sync.
 		merged, accepted = progress.MergeIncoming(stored, progress.Progress{
-			CurrentTime: ct, Duration: duration, UpdatedAtMs: *s.StartedAt,
+			CurrentTime: ct, Duration: duration, UpdatedAtMs: *startedAt,
 		})
 	} else {
 		// Otherwise forward-only: a backlog entry can never rewind the server.
