@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
 // last-edited: 2026-09-19
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"golang.org/x/sync/errgroup"
 )
@@ -36,10 +37,14 @@ import (
 //
 // Each orphan row is put in exactly one class, strongest evidence first:
 //
-//   - duplicate_of_owned_row: the book_file path index names a DIFFERENT row
-//     for the same path, and that row's book exists. The orphan is a second
+//   - duplicate_of_owned_row: some OTHER row at the same path belongs to a
+//     book that exists (BookFilesAtPath: every row at the path, not the one
+//     the single-valued crc32 index happens to hold). The orphan is a second
 //     reference to a file some book already owns; repointing it would give
 //     that book the same file twice. Planned action: none (owner decides).
+//   - duplicate_of_orphan: another orphan row with the same path was already
+//     planned onto the same target book. Planned action: none, for the same
+//     reason.
 //   - repoint_to_path_owner: exactly one live book's FilePath is the file
 //     itself or its directory. Planned action: repoint to that book.
 //   - repoint_to_merge_survivor: the deleted book left a tombstone naming a
@@ -51,6 +56,15 @@ import (
 //     directory. Planned action: none.
 //   - unresolved: no evidence. Planned action: none.
 //
+// Path-owner evidence needs the book_atpath index: LiveBookIDsAtPath scans
+// every book row per call until its backfill sentinel exists, which per
+// orphan is an outage. When it is unbuilt the path-owner step is skipped for
+// every row (PathOwnerSkipped, logged), not silently degraded.
+//
+// Output: the whole plan (every row, bucketed) is stored as the op's result
+// payload — GET /api/v1/operations/<op id>/result — and the log says so. The
+// log itself carries only the counts and a sample.
+//
 // Coverage caveat: the orphan list comes from findOrphanBookFiles, which reads
 // book_files through memdb. DeleteBookFromMemDB drops a deleted book's file
 // rows from memdb while Pebble keeps them, so orphans created since the last
@@ -60,6 +74,7 @@ import (
 // Orphan repoint classes.
 const (
 	orphanClassDuplicate      = "duplicate_of_owned_row"
+	orphanClassDupOrphan      = "duplicate_of_orphan"
 	orphanClassPathOwner      = "repoint_to_path_owner"
 	orphanClassMergeSurvivor  = "repoint_to_merge_survivor"
 	orphanClassAmbiguousOwner = "ambiguous_path_owner"
@@ -67,11 +82,12 @@ const (
 )
 
 // orphanRepointPlanStore is what the planner reads beyond the orphan scan. All
-// four are on database.Store, so the production indexedStore satisfies it.
+// of it is on database.Store, so the production indexedStore satisfies it.
 type orphanRepointPlanStore interface {
 	GetBookByID(id string) (*database.Book, error)
-	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
+	BookAtPathIndexBuilt() (bool, error)
 	GetBookTombstone(id string) (*database.Book, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
@@ -88,13 +104,16 @@ type OrphanRepointPlanItem struct {
 
 // OrphanRepointPlan is the census result.
 type OrphanRepointPlan struct {
-	TotalBookFiles  int                     `json:"total_book_files"`
-	OwningBooks     int                     `json:"owning_books"`
-	Orphans         int                     `json:"orphans"`
-	OrphanBookIDs   int                     `json:"orphan_book_ids"`
-	ByClass         map[string]int          `json:"by_class"`
-	PlannedRepoints int                     `json:"planned_repoints"`
-	Items           []OrphanRepointPlanItem `json:"items"`
+	TotalBookFiles  int            `json:"total_book_files"`
+	OwningBooks     int            `json:"owning_books"`
+	Orphans         int            `json:"orphans"`
+	OrphanBookIDs   int            `json:"orphan_book_ids"`
+	ByClass         map[string]int `json:"by_class"`
+	PlannedRepoints int            `json:"planned_repoints"`
+	// PathOwnerSkipped is set when the book_atpath index is not built, so no
+	// row was checked for a live book at its path or directory.
+	PathOwnerSkipped string                  `json:"path_owner_skipped,omitempty"`
+	Items            []OrphanRepointPlanItem `json:"items"`
 }
 
 func (p *Plugin) orphanBookFilesRepointPlanDef() sdk.OperationDef {
@@ -137,6 +156,20 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 	}
 	plan.TotalBookFiles = totalFiles
 	plan.OwningBooks = owners
+	if plan.PathOwnerSkipped != "" {
+		_ = reporter.Log(slog.LevelWarn, plan.PathOwnerSkipped)
+	}
+	// The full plan is the op's result payload, readable afterwards with
+	// GET /api/v1/operations/<op id>/result. Fail the op if it cannot be
+	// stored: a review artifact that silently is not there is worse than none.
+	if err := opsregistry.ReporterSetResult(reporter, plan); err != nil {
+		return fmt.Errorf("store the plan as the op result: %w", err)
+	}
+	where := "GET /api/v1/operations/<this op id>/result"
+	if id := opsregistry.ReporterOpID(reporter); id != "" {
+		where = "GET /api/v1/operations/" + id + "/result"
+	}
+	_ = reporter.Log(slog.LevelInfo, "Full plan (every row, bucketed) stored as this op's result: "+where)
 
 	_ = reporter.Log(slog.LevelInfo, "Orphan repoint plan (dry run, nothing written)",
 		slog.Int("orphans", plan.Orphans),
@@ -189,6 +222,14 @@ func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, orpha
 		ByClass:       map[string]int{},
 		Items:         make([]OrphanRepointPlanItem, 0, len(orphans)),
 	}
+	built, err := store.BookAtPathIndexBuilt()
+	if err != nil {
+		return nil, fmt.Errorf("book_atpath index status: %w", err)
+	}
+	checkPathOwner := built
+	if !built {
+		plan.PathOwnerSkipped = "book_atpath index is not built (run its backfill first): the live-book-at-path check was skipped for every row, so no repoint_to_path_owner or ambiguous_path_owner is planned"
+	}
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
@@ -204,7 +245,7 @@ func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, orpha
 			}
 			items := make([]OrphanRepointPlanItem, 0, len(rows))
 			for _, f := range rows {
-				it, err := classifyOrphanRow(store, f, survivor, survivorWhy)
+				it, err := classifyOrphanRow(store, f, survivor, survivorWhy, checkPathOwner)
 				if err != nil {
 					return err
 				}
@@ -231,6 +272,27 @@ func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, orpha
 		}
 		return plan.Items[i].BookFileID < plan.Items[j].BookFileID
 	})
+	// Two orphan rows for the same file planned onto the same book would give
+	// it that file twice. Workers are partitioned by orphan book, so this is
+	// resolved here, in the deterministic order above: the first keeps the
+	// plan, the rest are duplicate_of_orphan.
+	planned := map[[2]string]string{}
+	for i := range plan.Items {
+		it := &plan.Items[i]
+		if it.TargetBookID == "" || it.FilePath == "" {
+			continue
+		}
+		k := [2]string{it.TargetBookID, it.FilePath}
+		if first, dup := planned[k]; dup {
+			plan.ByClass[it.Class]--
+			plan.PlannedRepoints--
+			it.Class, it.TargetBookID = orphanClassDupOrphan, ""
+			it.Detail = "orphan row " + first + " for the same file is already planned onto that book"
+			plan.ByClass[it.Class]++
+			continue
+		}
+		planned[k] = it.BookFileID
+	}
 	return plan, nil
 }
 
@@ -279,14 +341,21 @@ func orphanMergeSurvivor(store orphanRepointPlanStore, bookID string) (string, s
 	return "", "", nil
 }
 
-func classifyOrphanRow(store orphanRepointPlanStore, f database.BookFileCore, survivor, survivorWhy string) (OrphanRepointPlanItem, error) {
+func classifyOrphanRow(store orphanRepointPlanStore, f database.BookFileCore, survivor, survivorWhy string, checkPathOwner bool) (OrphanRepointPlanItem, error) {
 	it := OrphanRepointPlanItem{BookFileID: f.ID, OrphanBookID: f.BookID, FilePath: f.FilePath}
 	if f.FilePath != "" {
-		other, err := store.GetBookFileByPath(f.FilePath)
+		// Every row at the path, not the single-valued index's one: the index
+		// may name this orphan itself while a live book's row for the same
+		// file exists. Fail closed — an incomplete answer here could plan a
+		// second row for a file its owner already has.
+		rows, err := store.BookFilesAtPath(f.FilePath)
 		if err != nil {
-			return it, fmt.Errorf("book_file by path %s: %w", f.FilePath, err)
+			return it, fmt.Errorf("rows at %s: %w", f.FilePath, err)
 		}
-		if other != nil && other.ID != f.ID && other.BookID != f.BookID {
+		for _, other := range rows {
+			if other.ID == f.ID || other.BookID == f.BookID {
+				continue
+			}
 			owner, err := store.GetBookByID(other.BookID)
 			if err != nil {
 				return it, fmt.Errorf("book %s: %w", other.BookID, err)
@@ -297,27 +366,29 @@ func classifyOrphanRow(store orphanRepointPlanStore, f database.BookFileCore, su
 				return it, nil
 			}
 		}
-		owners := map[string]struct{}{}
-		for _, p := range []string{f.FilePath, filepath.Dir(f.FilePath)} {
-			ids, err := store.LiveBookIDsAtPath(p)
-			if err != nil {
-				return it, fmt.Errorf("live books at %s: %w", p, err)
+		if checkPathOwner {
+			owners := map[string]struct{}{}
+			for _, p := range []string{f.FilePath, filepath.Dir(f.FilePath)} {
+				ids, err := store.LiveBookIDsAtPath(p)
+				if err != nil {
+					return it, fmt.Errorf("live books at %s: %w", p, err)
+				}
+				for _, id := range ids {
+					owners[id] = struct{}{}
+				}
 			}
-			for _, id := range ids {
-				owners[id] = struct{}{}
+			switch {
+			case len(owners) == 1:
+				for id := range owners {
+					it.Class, it.TargetBookID = orphanClassPathOwner, id
+				}
+				it.Detail = "the only live book at the file or its directory"
+				return it, nil
+			case len(owners) > 1:
+				it.Class = orphanClassAmbiguousOwner
+				it.Detail = fmt.Sprintf("%d live books at the file or its directory", len(owners))
+				return it, nil
 			}
-		}
-		switch {
-		case len(owners) == 1:
-			for id := range owners {
-				it.Class, it.TargetBookID = orphanClassPathOwner, id
-			}
-			it.Detail = "the only live book at the file or its directory"
-			return it, nil
-		case len(owners) > 1:
-			it.Class = orphanClassAmbiguousOwner
-			it.Detail = fmt.Sprintf("%d live books at the file or its directory", len(owners))
-			return it, nil
 		}
 	}
 	if survivor != "" {

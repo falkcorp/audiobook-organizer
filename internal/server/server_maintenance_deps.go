@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-09-19
 
@@ -180,10 +180,6 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 
 func (s *Server) CleanupTrashedVersions() int {
 	return CleanupTrashedVersions(s.storeForWiring())
-}
-
-func (s *Server) SweepArchivedBooks() int {
-	return sweep.SweepArchivedBooks(s.Ops())
 }
 
 // ---- optional component accessors ----

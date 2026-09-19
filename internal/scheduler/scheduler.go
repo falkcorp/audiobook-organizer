@@ -1,5 +1,5 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
 // last-edited: 2026-09-19
 
@@ -197,17 +197,17 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"optimize_activity_db",
 		"ai_journal_prune",
 		"cleanup_old_backups",
-		// These three declare RunInMaintenanceWindow: true unconditionally but
-		// were absent from this list, so the window op never iterated them and
-		// they had never run. They are cheap and they reclaim disk, so they sit
-		// with the other cleanups rather than behind the expensive walks:
+		// These declare RunInMaintenanceWindow: true unconditionally but were
+		// absent from this list, so the window op never iterated them and they
+		// had never run. They are cheap and they reclaim disk, so they sit with
+		// the other cleanups rather than behind the expensive walks:
 		//   temp_file_cleanup — orphaned *.tmp.m4b/*.tmp.m4a from crashed ffmpeg
 		//   trash_cleanup     — trashed versions past their 14-day TTL
-		//   archive_sweep     — soft-deleted books past the 30-day retention
-		// Every one of those is an unbounded on-disk leak while it never runs.
+		// (archive_sweep sat here too until it was RETIRED on 2026-09-19: it
+		// hard-deleted soft-deleted books and their files on a hardcoded
+		// 30-day clock, duplicating the purge without its guards.)
 		"temp_file_cleanup",
 		"trash_cleanup",
-		"archive_sweep",
 		"library_size_refresh",
 		"db_optimize",
 		// library_organize was the fourth task declaring a maintenance-window

@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.29.1
+// version: 1.30.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package merge
 
@@ -295,9 +295,12 @@ func preferOnTie(a, b *database.Book) bool {
 //  4. Loser DB rows are soft-deleted (MarkedForDeletion=true).
 //     They stay recoverable via the existing soft-delete
 //     restore flow for at least the retention window.
-//  5. Loser files on disk are NOT touched — they remain
-//     playable until an archive sweep (not yet implemented)
-//     cleans them up.
+//  5. Loser files on disk are NOT touched, and neither are
+//     the loser's book_file rows: they stay the loser's (its
+//     own version). Nothing later removes them — the purge
+//     refuses a book that still owns file rows
+//     (database.ErrBookOwnsFiles), and the archive sweep that
+//     once deleted them was retired on 2026-09-19.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
 // (a book with an audio route beats one without; then BookIsBetter:
@@ -687,8 +690,8 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	//      iTunes no longer shows duplicate tracks for this
 	//      version group,
 	//  (d) soft-delete the loser so it drops off the default
-	//      library view. Files on disk are left alone for the
-	//      archive sweep to handle later.
+	//      library view. Its files on disk and its book_file
+	//      rows are left alone (see item 5 on MergeBooks).
 	//
 	// Ordering is the repair path: a loser is soft-deleted (d) ONLY after
 	// (a)-(c) succeeded for it. If (a) or (b) fails the loser is left LIVE

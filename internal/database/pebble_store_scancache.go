@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -314,8 +314,15 @@ func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*Book
 	// Primary row only. No index churn: every indexed field is untouched above, so
 	// the existing index entries still point at this row and still hold true.
 	key := []byte(fmt.Sprintf("book_file:%s:%s", old.BookID, old.ID))
-	if err := p.db.Set(key, data, pebble.Sync); err != nil {
+	// Under the book's owner stripe and only while the row is still committed
+	// (book_delete_owns_files.go); a row that went away is the same non-fatal
+	// case as the nil read above.
+	wrote, err := p.setBookFileRowIfPresent(old.BookID, key, data)
+	if err != nil {
 		return err
+	}
+	if !wrote {
+		return nil
 	}
 	p.UpsertBookFileToMemDB(old)
 	return nil

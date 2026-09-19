@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.91.0
+// version: 1.92.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -55,6 +55,7 @@ import type {
   OrganizeErrorState,
 } from './libraryTypes';
 import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
+import { describeDeleteBookError } from '../utils/deleteBookError';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -1250,7 +1251,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to delete audiobook:', error);
-      toast('Failed to delete audiobook. Please try again.', 'error');
+      toast(describeDeleteBookError(error, 'Failed to delete audiobook. Please try again.'), 'error');
     } finally {
       setDeleteInProgress(false);
     }
@@ -1393,7 +1394,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to purge audiobook', error);
-      toast('Failed to purge audiobook.', 'error');
+      toast(describeDeleteBookError(error, 'Failed to purge audiobook.'), 'error');
     } finally {
       setPurgingBookId(null);
     }

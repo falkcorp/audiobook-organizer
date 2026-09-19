@@ -1,5 +1,5 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
 // last-edited: 2026-09-19
 
@@ -26,6 +26,9 @@ type BookFileReader interface {
 	GetAllBookFilesCore() ([]BookFileCore, error)
 	GetBookFileByID(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPath(filePath string) (*BookFile, error)
+	// BookFilesAtPath returns EVERY row at a path (GetBookFileByPath's index
+	// holds one); ErrBookFilesAtPathUnavailable when it cannot be complete.
+	BookFilesAtPath(path string) ([]BookFile, error)
 }
 
 // BookFileCreator creates new book_file rows.

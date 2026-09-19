@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -391,7 +391,6 @@ type CleanupRunners interface {
 	RunAutoPurgeSoftDeleted(opID string)
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
 	CleanupTrashedVersions() int
-	SweepArchivedBooks() int
 	// PruneOldLogs prunes operation logs older than retentionDays.
 	PruneOldLogs(retentionDays int) error
 }

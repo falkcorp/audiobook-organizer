@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_orphans_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f6b1d8e-2a47-4c95-8e0b-7d4a9c2e51f6
 // last-edited: 2026-09-19
 
@@ -133,8 +133,11 @@ func TestPurge_MergeLoserNeverOrphansBookFiles(t *testing.T) {
 	if b, _ := store.GetBookByID(loserID); b == nil {
 		t.Errorf("loser %s was hard-deleted while it still owned book_file rows", loserID)
 	}
-	if !containsSubstr(res.Errors, loserID) {
-		t.Errorf("refusal for %s not reported in PurgeResult.Errors: %v", loserID, res.Errors)
+	if res.SkippedOwnsFiles != 1 || !containsSubstr(res.SkippedOwnsFilesIDs, loserID) {
+		t.Errorf("refusal for %s not reported: skipped=%d ids=%v", loserID, res.SkippedOwnsFiles, res.SkippedOwnsFilesIDs)
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("a refusal is not an error; Errors = %v", res.Errors)
 	}
 }
 
@@ -221,4 +224,54 @@ func containsSubstr(ss []string, sub string) bool {
 		}
 	}
 	return false
+}
+
+// The purge's "is this file still someone's" check must see EVERY row at the
+// path. GetBookFileByPath's crc32 index holds one row reference, last writer
+// wins, and DeleteBookFile of that row removes the key — so a surviving row
+// for the same path becomes invisible to it, and the purge removed that
+// row's file. Built so the single-valued index is empty while a live row
+// still names the file.
+func TestPurge_DeleteFilesSeesEveryRowAtPath(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	store.WaitForWarmup()
+	lib := setupRoot(t)
+	shared := filepath.Join(lib, "Shared", "a.m4b")
+	if err := os.MkdirAll(filepath.Dir(shared), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := store.CreateBook(&database.Book{Title: "Owner", FilePath: filepath.Join(lib, "Owner")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateBook(&database.Book{Title: "Other", FilePath: filepath.Join(lib, "Other")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{BookID: owner.ID, FilePath: shared}); err != nil {
+		t.Fatal(err)
+	}
+	second := &database.BookFile{BookID: other.ID, FilePath: shared}
+	if err := store.CreateBookFile(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBookFile(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if hit, _ := store.GetBookFileByPath(shared); hit != nil {
+		t.Fatalf("fixture is vacuous: the single-valued index still names %s", hit.ID)
+	}
+
+	// A soft-deleted, fileless book whose FilePath is the shared file.
+	softDeleted(t, store, "loser", shared)
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("purge removed %s, which book %s still owns: %v (result %+v)", shared, owner.ID, err, res)
+	}
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // The book_atpath: multi-valued path index.
 //
@@ -136,6 +136,10 @@ func splitBookAtPathKey(key []byte) (path, id string, ok bool) {
 	}
 	return string(rest[:i]), string(rest[i+1:]), true
 }
+
+// BookAtPathIndexBuilt is the exported form of bookAtPathIndexBuilt (see
+// BookPathSetReader).
+func (p *PebbleStore) BookAtPathIndexBuilt() (bool, error) { return p.bookAtPathIndexBuilt() }
 
 // bookAtPathIndexBuilt reports whether the backfill sentinel exists. Only true
 // is cached, so a long-lived process picks up a completion without a restart.

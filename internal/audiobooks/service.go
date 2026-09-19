@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-09-19
 
@@ -117,9 +117,10 @@ type bookTagStore interface {
 // forwarded to isProtectedPath.
 type bookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	// GetBookFileByPath backs the purge's "is this path still someone's"
-	// check before it removes a file from disk.
-	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	// BookFilesAtPath backs the purge's "is this path still someone's" check
+	// before it removes a file from disk: EVERY row at the path, not the one
+	// the single-valued GetBookFileByPath index happens to hold.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	GetDuplicateBooks() ([][]database.Book, error)
 	GetFolderDuplicatesCore() ([][]database.BookCore, error)
 	AddBlockedHash(hash, reason string) error

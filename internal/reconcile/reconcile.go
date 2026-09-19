@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-19
 
@@ -836,8 +836,6 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 				continue
 			}
 
-			slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
-
 			// Never remove a duplicate that still owns book_file rows, and
 			// decide that BEFORE touching the disk. DeleteBook refuses such a
 			// book (database.ErrBookOwnsFiles) because it never deletes the
@@ -853,6 +851,10 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 				result.SkippedOwnsFiles++
 				continue
 			}
+
+			// Logged only past the guard, so the log never says a duplicate
+			// is being removed when it is about to be kept.
+			slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
 
 			if !dryRun {
 				// Delete the file if it exists and is in the library

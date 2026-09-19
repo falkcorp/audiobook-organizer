@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_patch.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c4e71a93-5b28-4f0d-8e6a-2d9f7b1c3a54
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package database
 
@@ -140,8 +140,14 @@ func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileF
 	if err != nil {
 		return nil, nil, fmt.Errorf("PatchBookFileFields: encode %s: %w", fileID, err)
 	}
-	if err := s.db.Set(key, data, pebble.Sync); err != nil {
+	// Under the book's owner stripe and only while the row is still
+	// committed (book_delete_owns_files.go).
+	wrote, err := s.setBookFileRowIfPresent(bookID, key, data)
+	if err != nil {
 		return nil, nil, fmt.Errorf("PatchBookFileFields: write %s: %w", fileID, err)
+	}
+	if !wrote {
+		return nil, nil, fmt.Errorf("PatchBookFileFields: %s was deleted while being patched", fileID)
 	}
 	s.UpsertBookFileToMemDB(&row)
 	// Same post-commit notification as UpdateBookFile, so every listener that

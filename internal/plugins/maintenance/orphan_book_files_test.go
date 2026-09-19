@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -349,13 +349,14 @@ func TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath(t *testing.T) {
 		}
 	}
 	// Non-vacuity: a file whose owner does not exist must still be an orphan.
-	if err := store.CreateBookFile(&database.BookFile{
-		ID: "f-ghost", BookID: "Ghost", FilePath: "/lib/orphan-range/ghost.mp3",
-	}); err != nil {
-		t.Fatalf("CreateBookFile(ghost): %v", err)
-	}
+	// The store refuses to write such a row (ErrBookFileOwnerMissing), so it
+	// is added to the file listing the scan reads; the owner set — the thing
+	// under test — still comes from the real Pebble path.
+	scanner := withExtraFileCores{PebbleStore: store, extra: []database.BookFileCore{
+		{ID: "f-ghost", BookID: "Ghost", FilePath: "/lib/orphan-range/ghost.mp3"},
+	}}
 
-	orphans, totalFiles, _, err := findOrphanBookFiles(context.Background(), store)
+	orphans, totalFiles, _, err := findOrphanBookFiles(context.Background(), scanner)
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles: %v", err)
 	}
@@ -369,4 +370,16 @@ func TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath(t *testing.T) {
 	if len(got) != 1 || got[0] != "f-ghost" {
 		t.Errorf("orphans = %v, want only [f-ghost]: every other file belongs to a book that exists", got)
 	}
+}
+
+// withExtraFileCores appends rows to GetAllBookFilesCore, for rows the store
+// will not write (orphans).
+type withExtraFileCores struct {
+	*database.PebbleStore
+	extra []database.BookFileCore
+}
+
+func (w withExtraFileCores) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	rows, err := w.PebbleStore.GetAllBookFilesCore()
+	return append(rows, w.extra...), err
 }

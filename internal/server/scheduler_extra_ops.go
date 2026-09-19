@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_extra_ops.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: f1e2d3c4-b5a6-7890-fedc-ba9876543210
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 // scheduler_extra_ops is a thin shim that wires the 13 ExtraOpsRegistrar
 // methods (now living in internal/scheduler/extra_ops.go) into the server
@@ -29,9 +29,6 @@ func init() {
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterTrashCleanupOp(reg)
-	})
-	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
-		return s.extraOpsRegistrar.RegisterArchiveSweepOp(reg)
 	})
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error {
 		return s.extraOpsRegistrar.RegisterMetadataUpgradeOp(reg)

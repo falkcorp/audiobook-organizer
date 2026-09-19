@@ -5709,6 +5709,121 @@ func (_c *MockStore_BatchUpsertScannedBookFiles_Call) RunAndReturn(run func(rows
 	return _c
 }
 
+// BookAtPathIndexBuilt provides a mock function for the type MockStore
+func (_mock *MockStore) BookAtPathIndexBuilt() (bool, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for BookAtPathIndexBuilt")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (bool, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() bool); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_BookAtPathIndexBuilt_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BookAtPathIndexBuilt'
+type MockStore_BookAtPathIndexBuilt_Call struct {
+	*mock.Call
+}
+
+// BookAtPathIndexBuilt is a helper method to define mock.On call
+func (_e *MockStore_Expecter) BookAtPathIndexBuilt() *MockStore_BookAtPathIndexBuilt_Call {
+	return &MockStore_BookAtPathIndexBuilt_Call{Call: _e.mock.On("BookAtPathIndexBuilt")}
+}
+
+func (_c *MockStore_BookAtPathIndexBuilt_Call) Run(run func()) *MockStore_BookAtPathIndexBuilt_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_BookAtPathIndexBuilt_Call) Return(b bool, err error) *MockStore_BookAtPathIndexBuilt_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_BookAtPathIndexBuilt_Call) RunAndReturn(run func() (bool, error)) *MockStore_BookAtPathIndexBuilt_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// BookFilesAtPath provides a mock function for the type MockStore
+func (_mock *MockStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	ret := _mock.Called(path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BookFilesAtPath")
+	}
+
+	var r0 []database.BookFile
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookFile, error)); ok {
+		return returnFunc(path)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.BookFile); ok {
+		r0 = returnFunc(path)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(path)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_BookFilesAtPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BookFilesAtPath'
+type MockStore_BookFilesAtPath_Call struct {
+	*mock.Call
+}
+
+// BookFilesAtPath is a helper method to define mock.On call
+//   - path string
+func (_e *MockStore_Expecter) BookFilesAtPath(path any) *MockStore_BookFilesAtPath_Call {
+	return &MockStore_BookFilesAtPath_Call{Call: _e.mock.On("BookFilesAtPath", path)}
+}
+
+func (_c *MockStore_BookFilesAtPath_Call) Run(run func(path string)) *MockStore_BookFilesAtPath_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BookFilesAtPath_Call) Return(bookFiles []database.BookFile, err error) *MockStore_BookFilesAtPath_Call {
+	_c.Call.Return(bookFiles, err)
+	return _c
+}
+
+func (_c *MockStore_BookFilesAtPath_Call) RunAndReturn(run func(path string) ([]database.BookFile, error)) *MockStore_BookFilesAtPath_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BulkCreateExternalIDMappings provides a mock function for the type MockStore
 func (_mock *MockStore) BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error {
 	ret := _mock.Called(mappings)

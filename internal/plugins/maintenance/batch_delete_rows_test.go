@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -199,200 +199,38 @@ func TestDedupeBookFileRows_BatchedDeleteStillCollapses(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// orphan-book-files-cleanup: must route through the notifying batch method
+// orphan-book-files-cleanup: report-only; the delete mode was removed
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ⚠️ THIS PATH HAS NO TRAILING RecomputeBookAggregates OF ITS OWN, unlike
-// dedupe-book-file-rows. Its aggregate freshness comes entirely from
-// DeleteBookFilesByIDs notifying once per affected book, so the thing worth
-// asserting at this layer is that the op goes through that method and not through
-// some non-notifying shortcut. (That the method itself recomputes is asserted
-// directly in internal/database/delete_book_files_by_ids_test.go.)
-//
-// For a GENUINE orphan the owning book is gone by definition, so the recompute
-// finds nothing and returns early — but the notification still has to be issued,
-// because orphanhood is decided from a snapshot and a book that turns out to
-// exist after all must have its totals corrected rather than left counting rows
-// that no longer exist.
-func TestOrphanBookFilesCleanup_DeletesViaNotifyingBatchMethod(t *testing.T) {
-	books := []database.Book{{ID: "book-alive", Title: "Alive"}}
+// The op's {"delete": true} mode deleted book_file rows, which the standing
+// rule forbids (repoint, never delete). It must now refuse loudly — an old
+// caller must not get a silent report it mistakes for a cleanup — and must not
+// touch a single row either way.
+func TestOrphanBookFilesCleanup_DeleteModeIsRefusedAndDeletesNothing(t *testing.T) {
 	files := []database.BookFileCore{
 		{ID: "f1", BookID: "book-alive", FilePath: "/lib/keep.m4b"},
 		{ID: "f2", BookID: "book-ghost", FilePath: "/lib/orphan-1.m4b"},
-		{ID: "f3", BookID: "book-ghost", FilePath: "/lib/orphan-2.m4b"},
 	}
-
-	var batchCalls [][]string
-	var perRowCalls []string
-	store := &database.MockStore{
-		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
-			cores := make([]database.BookCore, len(books))
-			for i := range books {
-				cores[i] = books[i].Core()
-			}
-			return cores, nil
-		},
-		DeleteBookFilesByIDsFunc: func(ids []string) error {
-			batchCalls = append(batchCalls, append([]string(nil), ids...))
-			return nil
-		},
-		DeleteBookFileFunc: func(id string) error {
-			perRowCalls = append(perRowCalls, id)
-			return nil
-		},
-	}
-
-	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
-	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
-		t.Fatalf("runOrphanBookFilesCleanup: %v", err)
-	}
-
-	if len(perRowCalls) != 0 {
-		t.Fatalf("the per-row DeleteBookFile was called %d times (%v) — the op is still paying "+
-			"~1.35s of fixed overhead per row", len(perRowCalls), perRowCalls)
-	}
-	if len(batchCalls) != 1 {
-		t.Fatalf("DeleteBookFilesByIDs called %d times for 2 orphans, want 1", len(batchCalls))
-	}
-	got := map[string]bool{}
-	for _, id := range batchCalls[0] {
-		got[id] = true
-	}
-	if len(got) != 2 || !got["f2"] || !got["f3"] {
-		t.Fatalf("batched ids = %v, want exactly f2 and f3", batchCalls[0])
-	}
-}
-
-// Chunking exists so that one unresolvable ID defers only its own chunk rather
-// than the whole sweep — and so the per-row cancellation check and progress tick
-// the old loop gave us for free survive. Both depend on the list actually being
-// split, so assert the split rather than trusting the constant.
-func TestOrphanBookFilesCleanup_ChunksLargeOrphanSets(t *testing.T) {
-	const orphanCount = 1200 // > 2 chunks at 500
-
-	books := []database.Book{{ID: "book-alive", Title: "Alive"}}
-	files := make([]database.BookFileCore, 0, orphanCount)
-	for i := range orphanCount {
-		files = append(files, database.BookFileCore{
-			ID:       fmt.Sprintf("orphan-%04d", i),
-			BookID:   "book-ghost",
-			FilePath: fmt.Sprintf("/lib/orphan-%04d.m4b", i),
-		})
-	}
-
-	var chunkSizes []int
-	seen := map[string]int{}
-	store := &database.MockStore{
-		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
-			return []database.BookCore{books[0].Core()}, nil
-		},
-		DeleteBookFilesByIDsFunc: func(ids []string) error {
-			chunkSizes = append(chunkSizes, len(ids))
-			for _, id := range ids {
-				seen[id]++
-			}
-			return nil
-		},
-	}
-
-	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
-	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
-		t.Fatalf("runOrphanBookFilesCleanup: %v", err)
-	}
-
-	if len(chunkSizes) != 3 {
-		t.Fatalf("chunk count = %d (sizes %v), want 3 for %d orphans at 500/chunk — "+
-			"an unchunked call would make one stale id abort the entire sweep",
-			len(chunkSizes), chunkSizes, orphanCount)
-	}
-	if len(seen) != orphanCount {
-		t.Fatalf("%d distinct ids deleted, want %d — chunking dropped or duplicated rows",
-			len(seen), orphanCount)
-	}
-	for id, n := range seen {
-		if n != 1 {
-			t.Fatalf("id %s was submitted %d times, want exactly 1", id, n)
-		}
-	}
-}
-
-// ⚠️ THE REGRESSION THIS GUARDS AGAINST IS SUBTLE AND WAS ALMOST SHIPPED.
-//
-// Fail-closed is self-healing for dedupe-book-file-rows, which re-reads its rows
-// from Pebble every run. It is NOT self-healing here: findOrphanBookFiles gets its
-// list from GetAllBookFilesCore, which is served from MEMDB in production. memdb
-// can hold a row Pebble no longer has, and that phantom yields an ID that will
-// never resolve — so a naive fail-closed chunk would abort the SAME 500 rows on
-// every nightly 02:15 run until the process restarts and memdb rebuilds. The
-// per-row loop this replaced skipped the phantom and deleted the other 499.
-//
-// Hence the degraded path: a rejected chunk is retried one row at a time through
-// DeleteBookFile, which tolerates "already gone". Assert that the survivors of a
-// failed chunk actually get deleted — not merely that the run continues.
-func TestOrphanBookFilesCleanup_RejectedChunkFallsBackToPerRowDeletes(t *testing.T) {
-	const orphanCount = 1200
-
-	files := make([]database.BookFileCore, 0, orphanCount)
-	for i := range orphanCount {
-		files = append(files, database.BookFileCore{
-			ID:       fmt.Sprintf("orphan-%04d", i),
-			BookID:   "book-ghost",
-			FilePath: fmt.Sprintf("/lib/orphan-%04d.m4b", i),
-		})
-	}
-
-	batchCalls := 0
-	var perRow []string
+	var deletes int
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			return []database.BookCore{{ID: "book-alive"}}, nil
 		},
-		DeleteBookFilesByIDsFunc: func(ids []string) error {
-			batchCalls++
-			if batchCalls == 1 {
-				// Exactly the shape DeleteBookFilesByIDs produces for a phantom row.
-				return fmt.Errorf("DeleteBookFilesByIDs: 1 of %d book_file id(s) did not "+
-					"resolve, nothing deleted: orphan-0007", len(ids))
-			}
-			return nil
-		},
-		DeleteBookFileFunc: func(id string) error {
-			perRow = append(perRow, id)
-			if id == "orphan-0007" {
-				return fmt.Errorf("simulated: phantom row, not in pebble")
-			}
-			return nil
-		},
+		DeleteBookFilesByIDsFunc: func(ids []string) error { deletes += len(ids); return nil },
+		DeleteBookFileFunc:       func(id string) error { deletes++; return nil },
 	}
-
 	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}
-	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
-	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err != nil {
-		t.Fatalf("runOrphanBookFilesCleanup returned %v; a failing chunk is recovered and "+
-			"logged, not propagated", err)
-	}
 
-	if batchCalls != 3 {
-		t.Fatalf("DeleteBookFilesByIDs called %d times, want 3 — a failing chunk aborted "+
-			"the chunks after it", batchCalls)
+	raw, _ := json.Marshal(OrphanBookFilesCleanupParams{Delete: true})
+	if err := p.runOrphanBookFilesCleanup(context.Background(), raw, &fakeReporter{}); err == nil {
+		t.Fatal("delete mode was accepted; it must be refused")
 	}
-	// THE ASSERTION: the rejected chunk's 500 rows were retried individually, so
-	// the 499 real orphans still got deleted rather than being stuck forever.
-	if len(perRow) != 500 {
-		t.Fatalf("per-row fallback attempted %d rows, want 500 — the rejected chunk's "+
-			"rows would be abandoned on every run until memdb rebuilds", len(perRow))
+	if err := p.runOrphanBookFilesCleanup(context.Background(), nil, &fakeReporter{}); err != nil {
+		t.Fatalf("report-only run: %v", err)
 	}
-	if perRow[0] != "orphan-0000" || perRow[499] != "orphan-0499" {
-		t.Fatalf("fallback covered the wrong rows: first=%s last=%s", perRow[0], perRow[499])
-	}
-	// Only the phantom is left behind; the other 499 in that chunk succeeded.
-	if !containsID(perRow, "orphan-0007") {
-		t.Fatal("the phantom row was never retried individually")
+	if deletes != 0 {
+		t.Fatalf("%d book_file row(s) deleted", deletes)
 	}
 }
 

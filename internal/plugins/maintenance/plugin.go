@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-09-19
 
@@ -45,7 +45,6 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.pruneAIJournalDef(),
 		p.cleanupOldBackupsDef(),
 		p.trashCleanupDef(),
-		p.archiveSweepDef(),
 		p.orphanBookFilesCleanupDef(),
 		p.orphanBookFilesRepointPlanDef(),
 		p.dedupeBookFileRowsDef(),

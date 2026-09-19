@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_lsh_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c5d6e7f-8091-a2b3-c4d5-e6f708192a3b
 // last-edited: 2026-09-19
 
@@ -56,6 +56,12 @@ func mustInsertBookFile(t *testing.T, store *PebbleStore, id string, fp []byte) 
 		FilePath:            "/tmp/" + id + ".mp3",
 		AcoustIDFingerprint: fp,
 		AcoustIDFPVersion:   fingerprint.PrintEncodingVersion,
+	}
+	// A book_file must name an existing book (ErrBookFileOwnerMissing).
+	if b, _ := store.GetBookByID(bf.BookID); b == nil {
+		if _, err := store.CreateBook(&Book{ID: bf.BookID, Title: bf.BookID, FilePath: bf.FilePath}); err != nil {
+			t.Fatalf("CreateBook %s: %v", bf.BookID, err)
+		}
 	}
 	if err := store.CreateBookFile(bf); err != nil {
 		t.Fatalf("CreateBookFile %s: %v", id, err)

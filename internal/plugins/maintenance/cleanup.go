@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-09-19
 
@@ -437,35 +437,6 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	purged := p.deps.CleanupTrashedVersions()
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: purged %d versions", purged))
-	return nil
-}
-
-// --- archive-sweep ---
-
-func (p *Plugin) archiveSweepDef() sdk.OperationDef {
-	sched := "0 7 * * *" // 07:00 daily
-	return sdk.OperationDef{
-		ID:              "maintenance.archive-sweep",
-		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
-		Plugin:          "maintenance",
-		DisplayName:     "Archive sweep",
-		Description:     "Removes soft-deleted books past the 30-day retention window.",
-		ResumePolicy:    sdk.ResumeDrop,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.archive-sweep",
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         20 * time.Minute,
-		Schedule:        &sched,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runArchiveSweep,
-	}
-}
-
-func (p *Plugin) runArchiveSweep(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	cleaned := p.deps.SweepArchivedBooks()
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Archive sweep: cleaned %d books", cleaned))
 	return nil
 }
 

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -442,9 +442,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		}
 		if len(ownedFiles) > 0 {
 			result.SkippedOwnsFiles++
-			result.Errors = append(result.Errors, fmt.Sprintf(
-				"%s: not purged: still owns %d book_file row(s); purging would orphan them (move them to the owning book first)",
-				book.ID, len(ownedFiles)))
+			result.SkippedOwnsFilesIDs = append(result.SkippedOwnsFilesIDs, book.ID)
 			continue
 		}
 
@@ -474,6 +472,8 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 			if errors.Is(err, database.ErrBookOwnsFiles) {
 				// A file row landed between the pre-check and the delete.
 				result.SkippedOwnsFiles++
+				result.SkippedOwnsFilesIDs = append(result.SkippedOwnsFilesIDs, book.ID)
+				continue
 			}
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to delete DB record: %v", book.ID, err))
 			// Tombstone exists but book still exists — sweeper will clean up tombstone
@@ -543,12 +543,12 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 // a live book's FilePath is it. Any lookup error is returned too — fail closed,
 // an unanswerable question is not a free path.
 func (svc *AudiobookService) purgePathStillReferenced(path string) error {
-	bf, err := svc.store.GetBookFileByPath(path)
+	rows, err := svc.store.BookFilesAtPath(path)
 	if err != nil {
 		return fmt.Errorf("cannot verify %s is unreferenced: book_file lookup: %w", path, err)
 	}
-	if bf != nil {
-		return fmt.Errorf("%s is still book_file %s of book %s", path, bf.ID, bf.BookID)
+	if len(rows) > 0 {
+		return fmt.Errorf("%s is still book_file %s of book %s (%d row(s) at this path)", path, rows[0].ID, rows[0].BookID, len(rows))
 	}
 	ids, err := svc.store.LiveBookIDsAtPath(path)
 	if err != nil {
