@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -287,7 +287,8 @@ func chapterFolderSiblings(lister chapterDirLister, dirs map[string]bool) ([]str
 }
 
 // chapterDirLister re-lists a folder from the book_atpath index. It is on
-// database.Store (BookPathSetReader), so the prod indexedStore forwards it.
+// database.Store (BookDirLister via BookStore), so the prod indexedStore
+// forwards it.
 type chapterDirLister interface {
 	LiveBookPathsUnderDir(dir string) (map[string]string, error)
 }
