@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -31,11 +31,14 @@ import (
 )
 
 // embedScanConcurrency bounds the number of concurrent EmbedBook calls made
-// by the dedup.embed-scan synchronous path (CONC-5). This loop is
-// network-bound against a rate-limited embedding backend (OpenAI or a local
-// Ollama server), not CPU-bound, so concurrency is a small FIXED knob here —
-// deliberately NOT runtime.NumCPU() — to avoid tripping the backend's own
-// rate limiting or overwhelming a single-GPU local server.
+// by the dedup.embed-scan synchronous path (CONC-5) when embeddings are NOT
+// pool-routed. This loop is network-bound against a rate-limited embedding
+// backend (OpenAI or a local Ollama server), not CPU-bound, so concurrency is
+// a small FIXED knob here — deliberately NOT runtime.NumCPU() — to avoid
+// tripping the backend's own rate limiting or overwhelming a single-GPU local
+// server. With ai_endpoints_routing on, the scan instead uses the pool's
+// routed capacity (Engine.EmbedConcurrency): the sum of the embed endpoints'
+// own concurrency caps, so every host gets work and none is overloaded.
 const embedScanConcurrency = 4
 
 // EmbedScanParams are the JSON parameters accepted by dedup.embed-scan.
@@ -133,10 +136,16 @@ func (p *Plugin) runEmbedScanMode(ctx context.Context, async bool, reporter sdk.
 	prog := sdk.NewProgress(reporter, total)
 	prog.Start(fmt.Sprintf("Embedding books: 0 / %d", total))
 
-	// Counters are mutated from up to embedScanConcurrency worker goroutines
+	// Counters are mutated from up to `workers` worker goroutines
 	// (registry.RunItems fans the per-book closure out over a bounded pool),
 	// so they must be atomic rather than plain ints.
 	var embedded, cached, skipped, errs atomic.Int64
+
+	// Sized once at start from the routed pool (or the legacy knob); a pool
+	// edit mid-scan applies to the next run, while the dispatcher still
+	// enforces each endpoint's live cap on every call.
+	workers := p.engine.EmbedConcurrency(embedScanConcurrency)
+	reporter.Logger().Info("embed-scan workers", "workers", workers)
 
 	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, book database.BookCore) error {
 		status, embedErr := p.engine.EmbedBook(ctx, book.ID)
@@ -155,7 +164,7 @@ func (p *Plugin) runEmbedScanMode(ctx context.Context, async bool, reporter sdk.
 		}
 		return nil
 	}, registry.RunItemsOptions{
-		Concurrency: embedScanConcurrency,
+		Concurrency: workers,
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Embedding books: %d / %d (new=%d cached=%d skipped=%d errors=%d)",
 				i+1, t, embedded.Load(), cached.Load(), skipped.Load(), errs.Load())
