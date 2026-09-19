@@ -1072,9 +1072,10 @@ func (s *PebbleActivityStore) Summarize(ctx context.Context, olderThan time.Time
 			return totalDeleted, err
 		}
 
-		// Batch 1 = the summary, its act:op: index keys (one per sampled id, so
-		// ?operation_id=<id> reaches it through the index path — see
-		// pactIndexKeysFor for the matching delete), and the FIRST
+		// Batch 1 = the summary, every index key pactIndexKeysFor derives for
+		// it — act:op: (one per sampled id, so ?operation_id=<id> reaches it
+		// through the index path) and the act:src:/act:typ:/act:lvl: filter
+		// families, the same derivation the matching delete uses — and the FIRST
 		// pactSummarizeDeleteBatch originals. Later batches delete the rest of
 		// this exact scanned list. A pass stopped between batches leaves only
 		// rows the committed summary already counts; a later run folds them
