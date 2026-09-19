@@ -274,3 +274,20 @@ func TestItemsFilter_AttributeIndexIsCachedAcrossRequestsAndPages(t *testing.T) 
 		t.Fatalf("GetAllBooksCore ran %d times across 4 filter requests, want %d (the first build only)", got, first)
 	}
 }
+
+// Re-review LOW #4: a book write (which bumps the library generation) must
+// invalidate the cached filter index immediately, not after its TTL.
+func TestItemsFilter_BookWriteInvalidatesTheAttributeIndex(t *testing.T) {
+	f := newBrowseGapsFixture(t)
+	if got, _ := f.items(t, "filter=genres."+b64("Horror")); len(got) != 0 {
+		t.Fatalf("precondition: no Horror books, got %v", got)
+	}
+	horror := "Horror"
+	f.lib.mu.Lock()
+	f.lib.books["small"].Genre = &horror
+	f.lib.mu.Unlock()
+	f.lib.gen.Bump() // what UpdateBook does on the real store
+	if got, _ := f.items(t, "filter=genres."+b64("Horror")); !slices.Equal(got, []string{"small"}) {
+		t.Fatalf("after a book write the Horror filter returned %v, want [small]: the index was served stale", got)
+	}
+}
