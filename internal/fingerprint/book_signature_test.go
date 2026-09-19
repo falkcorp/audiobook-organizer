@@ -1,19 +1,28 @@
 // file: internal/fingerprint/book_signature_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package fingerprint
 
 import (
+	"encoding/binary"
 	"math/rand"
 	"strings"
 	"testing"
 )
 
-// makeTestSegment creates a valid fingerprint segment from uint32 values.
+// makeTestSegment creates a stored fingerprint segment from uint32 frames in
+// the uncompressed form production writes (EncodeWholeFingerprint: header
+// {algorithm 1, frame count 0} then little-endian frames). Before 2026-09-19
+// this helper emitted headerless frames, a form no production writer
+// produces; decodeAnyFingerprint now rejects it.
 func makeTestSegment(values ...uint32) string {
-	return encodeUint32SliceToBase64(values)
+	raw := make([]byte, len(values)*4)
+	for i, v := range values {
+		binary.LittleEndian.PutUint32(raw[i*4:], v)
+	}
+	return EncodeWholeFingerprint(raw)
 }
 
 func TestSynthesizeBookSignature_Deterministic(t *testing.T) {
@@ -140,7 +149,7 @@ func TestSynthesizeBookSignature_UnrelatedBooks(t *testing.T) {
 		for i := range vals {
 			vals[i] = rng.Uint32()
 		}
-		return encodeUint32SliceToBase64(vals)
+		return makeTestSegment(vals...)
 	}
 
 	bookA := []FileSegmentData{
@@ -369,7 +378,7 @@ func makeFileInput(seed int64, count int) FileSegmentInput {
 		for i := range vals {
 			vals[i] = rng.Uint32()
 		}
-		return encodeUint32SliceToBase64(vals)
+		return makeTestSegment(vals...)
 	}
 	return FileSegmentInput{
 		Segments: FileSegmentData{

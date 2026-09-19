@@ -1,5 +1,5 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -374,21 +374,30 @@ func HammingSimilarity(a, b string) (float64, error) {
 	return float64(matching) / float64(total), nil
 }
 
-// decodeAnyFingerprint decodes a fingerprint string into its uint32 array.
+// decodeAnyFingerprint decodes a stored fingerprint string into its frames.
 //
-// Production data accumulated multiple ffmpeg/chromaprint output dialects:
-// standard alphabet, URL-safe alphabet (`-`/`_`), with-padding, without-
-// padding, and — critically — *wrong-length* padding. The previous
-// implementation looped four base64 variants but each one is strict about
-// padding length, so a URL-safe string with a single trailing `=` (when two
-// were needed) failed all four and fell to `decodeBase62Fingerprint`, which
-// rejects `-`/`_`. That produced the
-// `invalid character '-' in fingerprint` warn-spam in prod.
+// Two chromaprint encodings reach this function, both base64 of a payload
+// that starts with Chromaprint's 4-byte header (algorithm byte, then a
+// big-endian 24-bit frame count):
 //
-// We now do a single tolerant pass: strip whitespace and any existing `=`
-// padding, translate URL-safe chars to the standard alphabet, re-pad to a
-// multiple of 4, and decode with `StdEncoding`. The base62 decoder is kept
-// as a last-resort for legacy/external AcoustID fingerprints.
+//   - Compressed (frame count > 0): what `fpcalc -json` without -raw and the
+//     ffmpeg chromaprint muxer print, and so what every stored head print
+//     (AcoustIDSeg0) holds. Decoded by decompressChromaprint.
+//   - Uncompressed (frame count == 0, then little-endian uint32 frames): the
+//     app's own form, written by EncodeWholeFingerprint (DeriveSeg0, and
+//     segments fingerprinted from `fpcalc -raw` frames). Chromaprint never
+//     writes a zero count with a body, so the two cannot be confused.
+//
+// Until 2026-09-19 compressed payloads were read as if they were the
+// uncompressed form, so every comparison built on them compared bitstream
+// bytes instead of frames; a misaligned payload was also silently truncated.
+// Both are gone: a payload that is not exactly one of the two forms is an
+// error, never a partial result.
+//
+// Production data holds several base64 dialects (standard or URL-safe
+// alphabet, with, without, or with wrong-length padding), so the string is
+// normalized before decoding. The base62 decoder is kept as a last resort for
+// alphanumeric strings that are not a chromaprint payload.
 func decodeAnyFingerprint(fp string) ([]uint32, error) {
 	// Strip whitespace + existing padding, normalize URL-safe alphabet.
 	canonical := strings.Map(func(r rune) rune {
@@ -406,45 +415,38 @@ func decodeAnyFingerprint(fp string) ([]uint32, error) {
 		canonical += strings.Repeat("=", 4-pad)
 	}
 
-	if b, err := base64.StdEncoding.DecodeString(canonical); err == nil {
-		// Chromaprint format: 4-byte header + uint32 little-endian values.
-		if len(b) >= 8 && (len(b)-4)%4 == 0 {
-			payload := b[4:]
-			ints := make([]uint32, len(payload)/4)
+	if b, err := base64.StdEncoding.DecodeString(canonical); err == nil &&
+		len(b) >= compressedHeaderLen && b[0] <= compressedMaxAlgorithm {
+		numFrames := int(b[1])<<16 | int(b[2])<<8 | int(b[3])
+		body := b[compressedHeaderLen:]
+		if numFrames == 0 && len(body) > 0 {
+			if len(body)%4 != 0 {
+				return nil, fmt.Errorf("decode fingerprint: uncompressed payload of %d bytes is not whole uint32 frames", len(body))
+			}
+			ints := make([]uint32, len(body)/4)
 			for i := range ints {
-				ints[i] = binary.LittleEndian.Uint32(payload[i*4:])
+				ints[i] = binary.LittleEndian.Uint32(body[i*4:])
 			}
 			return ints, nil
 		}
-		// Raw base64 without the 4-byte header (some ffmpeg versions).
-		if len(b) > 0 && len(b)%4 == 0 {
-			ints := make([]uint32, len(b)/4)
-			for i := range ints {
-				ints[i] = binary.LittleEndian.Uint32(b[i*4:])
-			}
-			return ints, nil
+		frames, err := decompressChromaprint(b)
+		if err != nil {
+			return nil, fmt.Errorf("decode fingerprint: %w", err)
 		}
-		// Decoded fine but length is not aligned to a chromaprint payload.
-		// Truncate the trailing 1–3 bytes that prevent alignment so we can
-		// still produce a usable signature instead of failing the whole
-		// book. (Most occurrences are off-by-one bytes from a write that
-		// pre-dates the canonical-on-write change.)
-		if len(b) >= 8 {
-			cut := (len(b) - 4) & ^3 // largest multiple of 4 ≤ len-4
-			payload := b[4 : 4+cut]
-			ints := make([]uint32, len(payload)/4)
-			for i := range ints {
-				ints[i] = binary.LittleEndian.Uint32(payload[i*4:])
-			}
-			return ints, nil
-		}
+		return frames, nil
 	}
-	// Real decode failure — only call base62 if the input looks like base62
-	// (alphanumeric only). Inputs containing '+', '/', '-', or '_' are
-	// definitely base64; falling through to base62 produces misleading
-	// "invalid character" errors.
+	// Not a chromaprint payload. Only try base62 if the input looks like
+	// base62 (alphanumeric only): inputs containing '+', '/', '-', '_' or '='
+	// are base64, and base62 would report a misleading "invalid character".
 	if !strings.ContainsAny(fp, "+/-_=") {
-		return decodeBase62Fingerprint(fp)
+		ints, err := decodeBase62Fingerprint(fp)
+		if err != nil {
+			return nil, err
+		}
+		if len(ints) == 0 {
+			return nil, fmt.Errorf("decode fingerprint: %q is too short to hold a frame", fp)
+		}
+		return ints, nil
 	}
 	return nil, fmt.Errorf("decode fingerprint: not a valid base64 chromaprint payload (len=%d)", len(fp))
 }
