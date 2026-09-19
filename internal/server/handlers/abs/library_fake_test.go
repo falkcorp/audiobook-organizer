@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
 // last-edited: 2026-09-19
 
@@ -41,6 +41,8 @@ type fakeLibrary struct {
 	// stateErr, when set, makes GetUserBookState fail: a transient read error
 	// (I/O, decode) as opposed to "no row yet" (nil, nil).
 	stateErr error
+	// posErr, when set, makes GetUserPosition fail the same way.
+	posErr error
 
 	// order preserves seed order, which is what the list endpoints iterate.
 	order    []string
@@ -916,6 +918,9 @@ func (f *fakeLibrary) GetChaptersForBook(bookID string) ([]database.Chapter, err
 func (f *fakeLibrary) GetUserPosition(userID, bookID string) (*database.UserPosition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.posErr != nil {
+		return nil, f.posErr
+	}
 	return f.positions[userID+"|"+bookID], nil
 }
 
