@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 971eb805-72d8-4757-83dd-d7e9da270afb
 // last-edited: 2026-09-19
 
@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // mapJournal is an in-memory ResultJournal that records every Complete.
@@ -173,9 +175,163 @@ func TestJournal_KeyIncludesModel(t *testing.T) {
 
 // Per-file whisper errors are not journalled (they would be served forever).
 func TestJournal_PerFileErrorNotJournalled(t *testing.T) {
-	ej := &endpointJournal{journal: newMapJournal(), endpoint: "e", model: "m", keys: map[string]string{"a": "ka", "b": "kb"}}
-	ej.complete(map[string]BatchResult{"a": {Error: "decode failed"}, "b": {Text: "ok"}})
+	ej := &endpointJournal{journal: newMapJournal(), endpoint: "e", model: "m"}
+	ej.complete(map[string]BatchResult{"a": {Error: "decode failed"}, "b": {Text: "ok"}},
+		map[string]string{"a": "ha", "b": "hb"})
 	if n := ej.journal.(*mapJournal).len(); n != 1 {
 		t.Fatalf("journalled %d, want 1 (only the success)", n)
+	}
+}
+
+// Empty text is never journalled: a silent result is exactly what decoder or
+// VAD tuning changes, and a journalled "" would be served to retry_silence
+// forever without the server ever hearing the clip again.
+func TestJournal_EmptyTextNotJournalled(t *testing.T) {
+	j := newMapJournal()
+	ej := &endpointJournal{journal: j, endpoint: "e", model: "m"}
+	ej.completeOne("a", "hash-a", BatchResult{Text: ""})
+	if j.len() != 0 {
+		t.Fatalf("journalled %d empty results, want 0", j.len())
+	}
+}
+
+// Same model, different decode_fingerprint: the second server must be asked,
+// not served the first configuration's transcript.
+func TestJournal_KeyIncludesDecodeFingerprint(t *testing.T) {
+	jobs := writeClips(t, 1)
+	j := newMapJournal()
+	srvA, callsA := perFileServer(t, map[string]any{"status": "ok", "model": "M", "decode_fingerprint": "fp-a"})
+	hA, okA := probeRemoteHealth(context.Background(), srvA.URL)
+	if _, err := transcribeRemoteWithHealth(context.Background(), srvA.URL, hA, okA, 1, jobs, nil, j); err != nil {
+		t.Fatal(err)
+	}
+	srvB, callsB := perFileServer(t, map[string]any{"status": "ok", "model": "M", "decode_fingerprint": "fp-b"})
+	hB, okB := probeRemoteHealth(context.Background(), srvB.URL)
+	if _, err := transcribeRemoteWithHealth(context.Background(), srvB.URL, hB, okB, 1, jobs, nil, j); err != nil {
+		t.Fatal(err)
+	}
+	if callsA() != 1 || callsB() != 1 {
+		t.Fatalf("calls A=%d B=%d, want 1/1 (a retuned decoder must not be served the old transcript)", callsA(), callsB())
+	}
+}
+
+// hookJournal runs hook on the first Lookup -- i.e. after plan hashed the
+// clip and before it is uploaded.
+type hookJournal struct {
+	*mapJournal
+	once sync.Once
+	hook func()
+}
+
+func (h *hookJournal) Lookup(k string) (json.RawMessage, bool, error) {
+	h.once.Do(h.hook)
+	return h.mapJournal.Lookup(k)
+}
+
+// The journal key must describe the bytes whisper actually heard. Here the
+// clip changes between plan's hash and the upload (a concurrent writer
+// replacing the cache file); the result must be keyed by the UPLOADED bytes,
+// so a later run over the new bytes is served from the journal.
+func TestJournal_KeyIsFromUploadedBytes(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
+			health := map[string]any{"status": "ok", "model": "M"}
+			var srv *httptest.Server
+			var calls func() int
+			if batch {
+				srv, calls = batchServer(t, health)
+			} else {
+				srv, calls = perFileServer(t, health)
+			}
+			h, ok := probeRemoteHealth(context.Background(), srv.URL)
+			jobs := writeClips(t, 1)
+			path := jobs["book-0"]
+			j := &hookJournal{mapJournal: newMapJournal(), hook: func() {
+				if err := os.WriteFile(path, []byte("the-full-clip"), 0o644); err != nil {
+					t.Error(err)
+				}
+			}}
+			if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, jobs, nil, j); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, jobs, nil, j.mapJournal); err != nil {
+				t.Fatal(err)
+			}
+			if calls() != 1 {
+				t.Fatalf("server calls=%d, want 1: the result was keyed by the bytes hashed before upload, not the bytes uploaded", calls())
+			}
+		})
+	}
+}
+
+// batchServer speaks /transcribe-batch; health must set batch_pipeline.
+func batchServer(t *testing.T, health map[string]any) (*httptest.Server, func() int) {
+	t.Helper()
+	health["batch_pipeline"] = true
+	var mu sync.Mutex
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(health)
+	})
+	mux.HandleFunc("POST /transcribe-batch", func(w http.ResponseWriter, r *http.Request) {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		out := map[string]map[string]any{}
+		for {
+			part, perr := mr.NextPart()
+			if perr != nil {
+				break
+			}
+			b, _ := io.ReadAll(part)
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			out[part.FileName()] = map[string]any{"text": "T:" + string(b)}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": out})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+}
+
+// RefreshJournal skips every journal LOOKUP (retry_silence) but still
+// journals the fresh results.
+func TestTranscribeBatchOpts_RefreshJournalBypassesLookup(t *testing.T) {
+	srv, calls := perFileServer(t, map[string]any{"status": "ok", "model": "M"})
+	orig := config.Snapshot()
+	config.Mutate(func(c *config.Config) {
+		c.WhisperRemoteURL = srv.URL
+		c.WhisperEndpoints = nil
+		c.WhisperRequires = nil
+	})
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) {
+			c.WhisperRemoteURL = orig.WhisperRemoteURL
+			c.WhisperEndpoints = orig.WhisperEndpoints
+			c.WhisperRequires = orig.WhisperRequires
+		})
+	})
+	jobs := writeClips(t, 2)
+	j := newMapJournal()
+	if _, err := TranscribeBatchOpts(context.Background(), jobs, BatchOptions{Journal: j}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TranscribeBatchOpts(context.Background(), jobs, BatchOptions{Journal: j, RefreshJournal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if calls() != 4 {
+		t.Fatalf("server calls=%d, want 4 (refresh must reach the server)", calls())
+	}
+	if j.len() != 2 {
+		t.Fatalf("journalled %d, want 2 (refresh still journals)", j.len())
 	}
 }

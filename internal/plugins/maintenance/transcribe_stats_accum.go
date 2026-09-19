@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-09-05
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -112,6 +112,14 @@ func (a *transcribeStatsAccum) recordUnreadable(n int) {
 }
 
 // recordCacheHits counts WAV clips served from the on-disk cache (no ffmpeg).
+// recordJournalWriteFailure counts one transcript the result journal failed
+// to persist. Safe for concurrent use (called from transcription goroutines).
+func (a *transcribeStatsAccum) recordJournalWriteFailure() {
+	a.mu.Lock()
+	a.stats.JournalWriteFailures++
+	a.mu.Unlock()
+}
+
 func (a *transcribeStatsAccum) recordCacheHits(n int) {
 	if n == 0 {
 		return
