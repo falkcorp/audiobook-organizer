@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.59.0
+// version: 2.60.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -58,7 +58,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
@@ -832,6 +832,11 @@ func NewServer(store database.Store) *Server {
 		// Wire dedup plugin tool registry so Ollama-gated ops check availability.
 		if dedupPlug, ok := serviceregistry.TryGet[*dedupplugin.Plugin](regContainer, "dedupplugin"); ok && dedupPlug != nil {
 			dedupPlug.SetToolRegistry(server.toolRegistry)
+		}
+		// Wire the acoustid plugin's tool registry so acoustid.window-backfill
+		// resolves fpcalc and ffmpeg (and stamps their versions) through it.
+		if acoustidPlug, ok := serviceregistry.TryGet[*acoustidplugin.Plugin](regContainer, "acoustidplugin"); ok && acoustidPlug != nil {
+			acoustidPlug.SetToolRegistry(server.toolRegistry)
 		}
 	}
 
