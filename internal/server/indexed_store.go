@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5d2e4f3a-7b5a-4a70-b8c5-3d7e0f1b9a79
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 //
 // indexedStore decorates a database.Store so that every successful
 // book mutation (create / update / delete) schedules an async
@@ -56,6 +56,14 @@ type indexedStore struct {
 // it wraps. If Unwrap is ever dropped or renamed, the build fails here instead of
 // the failure reappearing at runtime as a silent nil in an unrelated package.
 var _ database.StoreUnwrapper = (*indexedStore)(nil)
+
+// Compile-time proof that the fingerprint-window methods reach callers through
+// the decorator. They are part of database.Store (via BookFileFingerprintStore)
+// and are promoted by the embedded Store; no override is needed because windows
+// live in the fpwin: keyspace, which Bleve does not index. If they ever move to
+// a capability interface outside Store, this line fails the build instead of a
+// type assertion failing silently in production.
+var _ database.FingerprintWindowStore = (*indexedStore)(nil)
 
 // CreateBook writes to the inner store and schedules an index
 // refresh for the newly-assigned book ID on success.
