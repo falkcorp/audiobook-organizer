@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_filters.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bb2cd357-d7f1-4d95-a61d-676c82fdc680
 // last-edited: 2026-09-19
 
@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -177,20 +178,32 @@ const absAttrIndexTTL = absSeriesBooksCacheTTL
 // summaries AND the whole BookCore projection of the library. The index is
 // built from one such pass and then serves every group and every page from
 // memory until it expires.
+//
+// Keyed on the library-generation counter as well as the TTL: CreateBook,
+// UpdateBook and DeleteBook bump it, so a book edit (a genre fixed, a book
+// organized or deleted) invalidates the index on the next request instead of
+// serving a stale drill-down for up to the TTL. The TTL remains as the bound
+// for writes that do not bump the counter.
 func (h *Handler) visibleAttrs() (*visibleAttrIndex, error) {
+	gen, _ := database.LibraryGenerationOf(h.library)
+	genNow := gen.Value()
 	h.attrIndexMu.Lock()
-	idx, at := h.attrIndex, h.attrIndexAt
+	idx, at, builtGen := h.attrIndex, h.attrIndexAt, h.attrIndexGen
 	h.attrIndexMu.Unlock()
-	if idx != nil && h.now().Sub(at) < absAttrIndexTTL {
+	if idx != nil && builtGen == genNow && h.now().Sub(at) < absAttrIndexTTL {
 		return idx, nil
 	}
 	v, err, _ := h.attrIndexSF.Do("attr-index", func() (any, error) {
+		// Read the generation BEFORE building: a write racing the build then
+		// leaves the published index keyed to the older value, so the next
+		// request rebuilds rather than trusting a possibly-stale index.
+		startGen := gen.Value()
 		built, err := h.buildVisibleAttrs()
 		if err != nil {
 			return nil, err
 		}
 		h.attrIndexMu.Lock()
-		h.attrIndex, h.attrIndexAt = built, h.now()
+		h.attrIndex, h.attrIndexAt, h.attrIndexGen = built, h.now(), startGen
 		h.attrIndexMu.Unlock()
 		return built, nil
 	})

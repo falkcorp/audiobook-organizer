@@ -404,7 +404,9 @@ type Handler struct {
 	attrIndexMu sync.Mutex
 	attrIndex   *visibleAttrIndex
 	attrIndexAt time.Time
-	attrIndexSF singleflight.Group
+	// attrIndexGen is the library generation the index was built at.
+	attrIndexGen uint64
+	attrIndexSF  singleflight.Group
 
 	// One background refresher per cache: an expired build is served while its
 	// refresher rebuilds it (cache_refresh.go).
