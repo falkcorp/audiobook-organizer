@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
 // last-edited: 2026-09-19
 //
@@ -141,12 +141,24 @@ type RejectedMetadataStore interface {
 	DeleteMetadataRejections(bookID string) error
 }
 
-// AIJobsStore is the subset of Store used by internal/ai/aijobs.
+// AIJobsStore is the subset of Store used by internal/ai/aijobs. It is
+// composed from a reader and a writer to stay under the interfacebloat limit.
 type AIJobsStore interface {
-	CreateAIJob(job AIJob, payloadJSON []byte) error
+	AIJobReader
+	AIJobWriter
+}
+
+// AIJobReader reads ai_jobs rows and their payloads.
+type AIJobReader interface {
 	GetAIJob(id string) (AIJob, error)
 	GetAIJobByBatchID(batchID string) (AIJob, error)
 	GetAIJobPayload(id string) ([]byte, error)
+	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
+}
+
+// AIJobWriter creates ai_jobs rows and moves them through their lifecycle.
+type AIJobWriter interface {
+	CreateAIJob(job AIJob, payloadJSON []byte) error
 	MarkAIJobSubmitted(id, batchID string) error
 	MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
 	MarkAIJobFailed(id, errMsg string) error
@@ -158,5 +170,4 @@ type AIJobsStore interface {
 	// outcome counts, without changing status. Written before MarkAIJobCompleted
 	// so a failed completion mark never re-runs the callback.
 	MarkAIJobApplied(id string, successCount, errorCount int, rowErrors []AIJobRowError) error
-	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 }
