@@ -1,7 +1,7 @@
 // file: internal/tools/registry_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-08-20
+// last-edited: 2026-09-19
 
 package tools_test
 
@@ -66,4 +66,24 @@ func TestRegistry_UnknownTool(t *testing.T) {
 	r := tools.NewToolRegistry(cfg)
 	_, err := r.Resolve("nonexistent")
 	assert.ErrorIs(t, err, tools.ErrToolNotAvailable)
+}
+
+// A config blob persisted before the tools block existed loads Mode "" over
+// InitConfig's default. That must resolve as system mode, not "unknown mode"
+// (prod ran with fpcalc unresolvable through the registry for over a week).
+func TestRegistry_EmptyModeResolvesAsSystem(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fpcalc")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	r := tools.NewToolRegistry(&tools.ToolsConfig{})
+	rel, ok := tools.LatestRelease("fpcalc")
+	require.True(t, ok)
+	r.Register(tools.ToolDef{Name: "fpcalc", Release: rel})
+
+	path, err := r.Resolve("fpcalc")
+	require.NoError(t, err)
+	assert.Equal(t, bin, path)
+	assert.Equal(t, tools.ToolModeSystem, r.Status("fpcalc").Mode)
 }
