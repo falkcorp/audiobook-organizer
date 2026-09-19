@@ -1462,7 +1462,13 @@ func (pm *PipelineManager) submitSourceClaimed(ctx context.Context, scanID int, 
 	if err != nil || p == nil || p.BatchID != "" || (p.Status != "pending" && p.Status != "submitting") {
 		return
 	}
-	if unattemptedOnly && (p.Status != "pending" || pm.submitAttempted(scanID, phaseType)) {
+	// The recorded attempt is the whole test: a phase left "submitting" whose
+	// lastSubmitAtArtifact write never landed made no CreateBatch call either
+	// (submitBatch returns when that write fails), so launching it is safe.
+	// Status is deliberately NOT part of this — drive's launch case also
+	// admits "processing", which a legacy batch phase can carry, and a status
+	// test would turn that into a scan that silently runs nothing.
+	if unattemptedOnly && pm.submitAttempted(scanID, phaseType) {
 		plog.Info("scan %d: not launching %s: it is %s and has already attempted a submit", scanID, phaseType, p.Status)
 		return
 	}
