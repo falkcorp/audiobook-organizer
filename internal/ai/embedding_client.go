@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 package ai
 
@@ -94,6 +94,11 @@ type EmbeddingClient struct {
 	// baseURL is non-empty, EmbedBatch re-probes once and, if still
 	// unavailable, returns ErrOllamaNotAvailable without embedding.
 	localOllamaOK atomic.Bool
+
+	// pool, when set, routes this client's API calls through the
+	// ai_endpoints pool while its switch is on (see WithPoolRouting). Nil
+	// means legacy only.
+	pool *PoolSource
 }
 
 // defaultRequestTimeout is the per-attempt timeout applied to each
@@ -283,7 +288,11 @@ func (c *EmbeddingClient) Model() string {
 // API errors. Cache I/O errors are logged but never fail the
 // call — the cache is an optimization, not a correctness layer.
 func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	if c.baseURL != "" && !c.localOllamaOK.Load() {
+	// The legacy local-Ollama availability gate describes ONE base URL. When
+	// the ai_endpoints pool routes this call, that URL is not necessarily an
+	// endpoint at all, and the dispatcher does its own endpoint selection, so
+	// the gate is skipped.
+	if c.baseURL != "" && !c.poolRoutingActive() && !c.localOllamaOK.Load() {
 		// Cheap TTL-style recheck: the daemon may have come up since the
 		// last probe (e.g. the on-demand OllamaDaemon started it). Re-probe
 		// once inline before failing the batch.
@@ -374,16 +383,26 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 // The parent ctx is still respected — if it is cancelled between attempts the
 // retry loop exits immediately.
 func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([][]float32, error) {
+	return embedWithRetry(ctx, c.client, c.model, texts, c.requestTimeout, false)
+}
+
+// embedWithRetry is embedBatchRaw's retry loop, parameterised by client and
+// model so the pool-routed path (pool_routing.go) sends the exact same request
+// to whichever endpoint the dispatcher chose.
+//
+// stopOnUnreachable returns a never-connected error (refused, DNS, no route)
+// immediately instead of retrying it: on the routed path the dispatcher, not
+// this loop, decides what happens next, and it fails over to a peer. The
+// legacy path passes false and keeps its historical three attempts.
+func embedWithRetry(ctx context.Context, client *openai.Client, model string, texts []string, reqTimeout time.Duration, stopOnUnreachable bool) ([][]float32, error) {
 	var lastErr error
 	delays := []time.Duration{1 * time.Second, 4 * time.Second}
 
 	// Resolve the per-attempt timeout, guarding against a zero value that
 	// would produce an already-expired context.
-	reqTimeout := c.requestTimeout
 	if reqTimeout <= 0 {
 		reqTimeout = defaultRequestTimeout
 	}
-
 	for attempt := 0; attempt <= 2; attempt++ {
 		if attempt > 0 {
 			delay := delays[attempt-1]
@@ -398,11 +417,11 @@ func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([]
 		// network call times out in reqTimeout rather than waiting for the
 		// (potentially very long) parent op context.
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, reqTimeout)
-		resp, err := c.client.Embeddings.New(attemptCtx, openai.EmbeddingNewParams{
+		resp, err := client.Embeddings.New(attemptCtx, openai.EmbeddingNewParams{
 			Input: openai.EmbeddingNewParamsInputUnion{
 				OfArrayOfStrings: texts,
 			},
-			Model: openai.EmbeddingModel(c.model),
+			Model: openai.EmbeddingModel(model),
 			User:  openai.String("ao-embeddings"),
 			// WithMaxRetries(0): the SDK's own built-in retry logic would
 			// otherwise silently retry 429/5xx responses before this loop
@@ -417,6 +436,9 @@ func (c *EmbeddingClient) embedBatchRaw(ctx context.Context, texts []string) ([]
 			// DoWithRetry to eliminate this duplicated per-attempt loop.
 			if isPermanentAIError(err) {
 				return nil, &PermanentError{Err: fmt.Errorf("embedding attempt %d: %w", attempt+1, err)}
+			}
+			if stopOnUnreachable && isUnreachableError(err) {
+				return nil, &UnreachableError{Err: fmt.Errorf("embedding attempt %d: %w", attempt+1, err)}
 			}
 			lastErr = fmt.Errorf("embedding attempt %d: %w", attempt+1, err)
 			continue

@@ -1,7 +1,7 @@
 // file: internal/ai/register.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f6c1e2a-8b4d-4c7e-9a1f-2d5b6e7c8f90
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -59,6 +59,11 @@ func init() {
 				// Dummy key "ollama" — a local OpenAI-compatible backend ignores
 				// the Authorization header.
 				client = NewEmbeddingClientWithOptions("ollama", model, baseURL)
+				// With ai_endpoints_routing on, embed.text is served by the
+				// pool instead of baseURL, pinned to this model. The switch is
+				// read per call, so this is inert while it is off. Local mode
+				// only: explicit openai embedding modes keep their legacy path.
+				client = client.WithPoolRouting(ConfigPool())
 			default: // openai, openai-fallback-local
 				if cfg.OpenAIAPIKey == "" {
 					slog.Warn("embedclient: openai embedding mode but no OpenAIAPIKey — skipping", "mode", mode)
