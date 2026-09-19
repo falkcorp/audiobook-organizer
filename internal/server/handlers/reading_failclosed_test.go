@@ -1,5 +1,5 @@
 // file: internal/server/handlers/reading_failclosed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0a6d2e4f-8b13-4c7e-95f2-d3b8a1c6e470
 // last-edited: 2026-09-19
 
@@ -51,5 +51,31 @@ func TestReadingStatusWrites_UnreadableStateIs503(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s status with unreadable state = %d %s, want 503", tc.name, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+type unreadablePositionsReadingStore struct{ ReadingStore }
+
+func (unreadablePositionsReadingStore) ListUserPositionsForBook(string, string) ([]database.UserPosition, error) {
+	return nil, errors.New("transient read failure")
+}
+
+// Clearing a manual status recomputes from positions; an unreadable positions
+// read is transient (503), not a 500.
+func TestReadingClearStatus_UnreadablePositionsIs503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	h := NewReadingHandler(unreadablePositionsReadingStore{store})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v1/books/b1/status", nil)
+	c.Params = gin.Params{{Key: "id", Value: "b1"}}
+	h.ClearBookStatus(c)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("clear status with unreadable positions = %d %s, want 503", rec.Code, rec.Body.String())
 	}
 }

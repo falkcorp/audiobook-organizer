@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-19
 
@@ -208,7 +208,8 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 	// delete so the answer describes what actually happened.
 	pos, err := h.progress.GetUserPosition(user.ID, bookID)
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "could not load progress")
+		// Transient: nothing was changed, a retry can succeed.
+		respondError(c, http.StatusServiceUnavailable, "could not load progress")
 		return
 	}
 	if pos == nil {
@@ -323,7 +324,14 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	}
 
 	stored := progress.Progress{}
-	if pos, err := h.progress.GetUserPosition(userID, bookID); err == nil && pos != nil {
+	pos, err := h.progress.GetUserPosition(userID, bookID)
+	if err != nil {
+		// Fail closed: an unreadable position is not "no position yet".
+		// Merging against an empty stored value lets a stale PATCH rewind
+		// the listener.
+		return fmt.Errorf("%w: %s/%s: %w", errProgressPositionUnreadable, userID, bookID, err)
+	}
+	if pos != nil {
 		stored.CurrentTime = pos.PositionSeconds
 		stored.UpdatedAtMs = msEpoch(pos.UpdatedAt)
 	}
@@ -543,10 +551,15 @@ var errNoProgressStore = errors.New("abs: no listening-progress store is wired")
 // (I/O or decode). Nothing was written; the handler answers 503 (retryable).
 var errProgressStateUnreadable = errors.New("abs: stored book state is unreadable")
 
+// errProgressPositionUnreadable: the stored listening position could not be
+// read. Not "no position yet" (that is nil, nil); nothing was written and the
+// handler answers 503, exactly as for errProgressStateUnreadable.
+var errProgressPositionUnreadable = errors.New("abs: stored listening position is unreadable")
+
 // progressWriteStatus maps a progress write error to its HTTP status: 503 for
 // an unreadable state row (transient, nothing written), 500 otherwise.
 func progressWriteStatus(err error) int {
-	if errors.Is(err, errProgressStateUnreadable) {
+	if errors.Is(err, errProgressStateUnreadable) || errors.Is(err, errProgressPositionUnreadable) {
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError

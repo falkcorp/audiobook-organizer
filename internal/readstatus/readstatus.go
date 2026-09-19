@@ -1,5 +1,5 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
 // last-edited: 2026-09-19
 //
@@ -64,6 +64,12 @@ type Store interface {
 // nothing is written. Handlers map it to 503.
 var ErrStateUnreadable = errors.New("readstatus: stored book state is unreadable")
 
+// ErrPositionsUnreadable is returned when the user's stored positions could
+// not be read. Not "no positions yet": deriving a status from an empty list
+// would reset a listened book to unstarted. Nothing is written; handlers map
+// it to 503.
+var ErrPositionsUnreadable = errors.New("readstatus: stored positions are unreadable")
+
 // RecomputeUserBookState reads positions + segment durations and
 // updates user_book_state with fresh auto-computed fields. Returns
 // the new state (or a no-op unchanged state if there's nothing to
@@ -74,7 +80,7 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	}
 	positions, err := store.ListUserPositionsForBook(userID, bookID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s/%s: %w", ErrPositionsUnreadable, userID, bookID, err)
 	}
 	existing, err := store.GetUserBookState(userID, bookID)
 	if err != nil {
@@ -174,6 +180,11 @@ func SetManualStatus(store Store, userID, bookID, status string) (*database.User
 		state = &database.UserBookState{UserID: userID, BookID: bookID}
 	}
 	if status == "" {
+		// Read the positions BEFORE clearing the flag: if they are unreadable
+		// the recompute below fails, and the flag must not already be gone.
+		if _, err := store.ListUserPositionsForBook(userID, bookID); err != nil {
+			return nil, fmt.Errorf("%w: %s/%s: %w", ErrPositionsUnreadable, userID, bookID, err)
+		}
 		state.StatusManual = false
 		// Recompute to refresh status from positions.
 		if err := store.SetUserBookState(state); err != nil {

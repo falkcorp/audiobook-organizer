@@ -1,5 +1,5 @@
 // file: internal/server/handlers/reading.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
 // last-edited: 2026-09-19
 
@@ -178,10 +178,10 @@ func (h *ReadingHandler) ClearBookStatus(c *gin.Context) {
 	httputil.RespondWithOK(c, state)
 }
 
-// respondReadStatusError answers 503 when the stored state row could not be
-// read (readstatus wrote nothing; a retry can succeed) and 500 otherwise.
+// respondReadStatusError answers 503 when the stored state row or the
+// positions could not be read (readstatus wrote nothing; a retry can succeed) and 500 otherwise.
 func respondReadStatusError(c *gin.Context, msg string, err error) {
-	if errors.Is(err, readstatus.ErrStateUnreadable) {
+	if errors.Is(err, readstatus.ErrStateUnreadable) || errors.Is(err, readstatus.ErrPositionsUnreadable) {
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, msg, "STATE_UNREADABLE")
 		return
 	}
