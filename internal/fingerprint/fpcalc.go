@@ -1,5 +1,5 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -77,6 +77,8 @@ const NumSegments = 7
 // while rejecting different recordings of the same title.
 const FuzzyMinSimilarity = 0.80
 
+// Unit: REAL decoded frames (since 2026-09-19; before, it counted misread
+// compressed bytes), about 7.9 per second (948 frames for 120 s), so 80 ≈ 10 s.
 // MinUsefulFingerprintFrames is the minimum number of decoded chromaprint
 // frames (≈8 frames/sec) we accept before treating a fingerprint as real.
 // fpcalc emits a header-only "AQAAAA" string when it's handed too little PCM
