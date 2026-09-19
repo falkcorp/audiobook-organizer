@@ -158,11 +158,35 @@ func TestHandleGetSignalCoverage_WindowsCensus(t *testing.T) {
 	assert.EqualValues(t, 1, fast.WithWindows)
 	assert.EqualValues(t, 1, fast.NoWindows)
 
-	deep := get("windows=true&deep=true").Windows
+	deepResp := get("windows=true&deep=true")
+	deep := deepResp.Windows
 	require.NotNil(t, deep)
+	// One report, one denominator: both sections count the same rows.
+	assert.Equal(t, deepResp.Files.Source, deep.Source)
+	assert.Equal(t, deepResp.Files.PresentOnDiskRows, deep.PresentFiles)
 	assert.True(t, deep.CurrencyEvaluated)
 	assert.EqualValues(t, 1, deep.WithCurrentWindows)
 	require.NotNil(t, deep.Criteria)
 	assert.Equal(t, fingerprint.WindowPipelineID, deep.Criteria.Pipeline)
 	assert.Contains(t, deep.Unavailable["tool_version_currency"], "tool registry not configured")
+}
+
+func TestHandleGetSignalCoverage_WindowsNeedPebble(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return nil, nil },
+		CountPrimaryBooksFunc:   func() (int, error) { return 0, nil },
+	}
+	srv := &Server{store: store}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/signals/coverage?windows=true", nil)
+	srv.handleGetSignalCoverage(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body struct {
+		Data SignalCoverageResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Nil(t, body.Data.Windows)
+	assert.Contains(t, body.Data.WindowsError, "Pebble")
 }
