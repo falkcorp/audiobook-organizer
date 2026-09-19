@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.10 -->
+<!-- version: 10.73.11 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-18 -->
+<!-- last-edited: 2026-09-19 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,39 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AISCAN-BATCH-COLLECT** Batch-mode `ai.author-scan` results are never
+      collected. Its batches are tagged `author_review` / `author_dedup`, but
+      nothing creates a `type:"pipeline"` batch, so the poller's `pipeline`
+      handler — the only caller of `PipelineManager.PollBatchPhases` — never
+      runs. `decideResume`'s attach path and the comment at
+      `internal/aiscan/pipeline.go` (~line 238, "PollBatchPhases will collect
+      it") both assume it does, so a resumed batch scan waits on a collector
+      that never fires. Fix, in order: (1) register `author_review` and
+      `author_dedup` poller handlers that call `PollBatchPhases`; (2) add a
+      poller reconciler that reads the `scan_id` / `scan_phase` batch metadata
+      (now emitted at both CreateBatch sites) and attaches a listed batch to a
+      phase with no batch id via `UpdatePhaseStatus(scanID, phase,
+      "submitted", batchID)`; (3) give batch phases a pre-submit state written
+      before `CreateBatch` — they stay `pending` until submitted today, so a
+      kill after CreateBatch makes `decideResume` return `resumeLaunch` and pay
+      for a second batch. `internal/plugins/maintenance/dedup_ops.go` has the
+      same orphan shape (batch id recorded only after completion) and needs the
+      same metadata + reconcile treatment.
+
+- [ ] **`dedup.embed-scan` should fail closed when routing is on and no endpoint can embed.** With `ai_endpoints_routing` on and zero usable `embed.text` candidates (none ticked, or none serving the pinned model), `Engine.EmbedConcurrency` falls back to 4 workers and every book fails with `NoCapableEndpointError`, one by one across the whole library. Check `EmbeddingClient.RoutedCapacity()` (or the dispatcher's candidates) at op start and fail the op with the dispatcher's refusal reasons instead. Same check belongs in the other embed fan-outs (`reembed_embeddings.go` uses `runtime.NumCPU()` workers). Found in the #3464 review, 2026-09-19.
+
+- [ ] **FLAKE-WRITEBACK-RESUME** `TestBulkWriteBack_ResumeSkipsCheckpointedBooks`
+      (`internal/server/library_writeback_resume_test.go:76`) is flaky: it
+      cancels the context when the nth callback reaches `n/2`, but the bulk
+      write-back runs concurrent workers that can finish all 60 books before
+      the cancel is observed, so the resume assertion fails with
+      "checkpoint owes 0 of 60". Failed CI on PR #3449 at 2026-09-19T06:20Z;
+      passed 8/8 locally. Fix: make the cancel point deterministic (block the
+      remaining workers until the cancel lands, or run the first pass with
+      concurrency 1) instead of racing the pool.
+
+- [ ] **Flaky: `TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle`** (`internal/database`) failed 4 of 5 isolated `-race` runs on a Mac on 2026-09-19, on clean `origin/main` as well as on a branch, so it is not caused by a change. Find the timing assumption (idle detection vs. checkpoint interval under `-race`) and make the test wait on the condition rather than on wall time. It can block unrelated PRs if CI hits it.
 
 - [ ] **Normalize path keys to NFC before use as Pebble keys.** `book_file_path:`
       and book path keys are built from the raw string
