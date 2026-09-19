@@ -1,7 +1,7 @@
 // file: internal/applygate/partial_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a2d8f31-0b9e-4c74-8e15-c3f7a9d02b86
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -157,10 +157,10 @@ func TestEvaluateInBatch_SiblingPart(t *testing.T) {
 	if claims.Len() != 2 {
 		t.Fatalf("Len = %d, want 2", claims.Len())
 	}
-	if v := EvaluateInBatch(book, &cand, nil, claims); v.Allowed || v.Evidence.Reason != ReasonPartialBook {
+	if v := EvaluateInBatch(book, database.ComputeBookRuntime(book, nil), &cand, nil, claims); v.Allowed || v.Evidence.Reason != ReasonPartialBook {
 		t.Fatalf("with claims: allowed=%v evidence reason %q (%s)", v.Allowed, v.Evidence.Reason, v.Evidence.Detail)
 	}
-	if v := Evaluate(book, &cand, nil); v.Evidence.Reason == ReasonPartialBook {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &cand, nil); v.Evidence.Reason == ReasonPartialBook {
 		t.Fatalf("without claims the sibling test must be skipped: %+v", v.Evidence)
 	}
 }

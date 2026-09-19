@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package metafetch
 
@@ -667,10 +667,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// file duration — this suggests a wrong Audible match or an abridged copy.
 	const durationMismatchThresholdSec = 600
 	if candidate.DurationDeltaSec > durationMismatchThresholdSec {
-		bookDurSec := 0
-		if book.Duration != nil {
-			bookDurSec = *book.Duration
-		}
+		bookDurSec := mfs.bookRuntimeSec(book)
 		slog.Warn("duration-mismatch apply book title candidate deltas (books audibles) wrong match or abridged version", "bookID", logger.SanitizeLogValue(id), "bookTitle", book.Title, "candidateTitle", logger.SanitizeLogValue(candidate.Title), "durationDeltaSec", logger.SanitizeLogValue(strconv.Itoa(candidate.DurationDeltaSec)), "bookDurationSec", bookDurSec, "candidateDurationSec", logger.SanitizeLogValue(strconv.Itoa(candidate.DurationSec)))
 	}
 

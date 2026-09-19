@@ -331,16 +331,18 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		persist()
 	}
 
-	// Step 2: recompute keep duration as sum of all bookfile durations.
+	// Step 2: recompute keep duration from its file rows.
 	total := 0
 	allFiles, err := store.GetBookFiles(keepID)
 	if err != nil {
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("recount files on keep: %v", err))
 	} else {
-		for _, f := range allFiles {
-			total += int(f.Duration)
-		}
+		// Canonical runtime rows (database.ComputeBookRuntime), stored as
+		// RecomputeBookAggregates stores it: the same number the
+		// BookFile-chokepoint recompute would write, never a raw sum that
+		// counts missing rows beside their present copies.
+		total, _ = database.ComputeBookRuntime(nil, allFiles).StoredAggregateSec()
 		if total > 0 {
 			result.NewDuration = total
 		}

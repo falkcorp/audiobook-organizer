@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.116.0
+// version: 2.117.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -4009,7 +4009,14 @@ export interface CandidateBookInfo {
   itunes_path?: string;
   cover_url?: string;
   format?: string;
+  // Canonical runtime when complete (sum over the book's files); absent when
+  // partial or unknown. runtime_status says which.
   duration_seconds?: number;
+  runtime_status?: 'complete' | 'book_aggregate' | 'partial' | 'unknown';
+  runtime_files_known?: number;
+  runtime_files_counted?: number;
+  // Known-file sum of a PARTIAL runtime: a lower bound, not the book's length.
+  runtime_lower_bound_seconds?: number;
   file_size_bytes?: number;
   // Book's current language (ISO code or full name). Used by
   // the review dialog's language filter to hide candidates
@@ -6694,6 +6701,21 @@ export interface DedupBookDetail {
     file_size?: number;
     duration?: number;
   }>;
+  // Canonical runtime (database.BookRuntime): the sum over the book's files,
+  // with how many of them carried a duration.
+  runtime?: BookRuntime;
+}
+
+// BookRuntime mirrors database.BookRuntime. `seconds` is the full runtime only
+// when every counted file had a duration (or source is book_aggregate); for a
+// partial runtime it is a lower bound.
+export interface BookRuntime {
+  seconds: number;
+  source: 'files' | 'book_aggregate' | 'none';
+  files_counted: number;
+  files_known: number;
+  all_files_missing?: boolean;
+  book_aggregate_sec?: number;
 }
 
 // Response shape for GET /api/v1/dedup/candidates/:id/breakdown.

@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.82.0
+// version: 1.83.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -1727,10 +1727,12 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	if book.AuthorID == nil {
 		return nil
 	}
-	if book.Duration == nil || *book.Duration <= 0 {
+	if !hasUsableTitle(book.Title) {
 		return nil
 	}
-	if !hasUsableTitle(book.Title) {
+	// Canonical runtime, complete only (see knownRuntimeSec).
+	bookDur, known := knownRuntimeSec(de.bookStore, book)
+	if !known {
 		return nil
 	}
 
@@ -1746,16 +1748,12 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	// once per book instead of failing silently.
 	tagErrs := 0
 
-	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)
 	bookForms := de.allNormalizedTitleForms(book)
 
 	for i := range others {
 		other := &others[i]
 		if other.ID == book.ID {
-			continue
-		}
-		if other.Duration == nil || *other.Duration <= 0 {
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
@@ -1767,17 +1765,15 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 			continue
 		}
 
-		otherDur := float64(*other.Duration)
+		if !prefilterOtherDuration(bookDur, other, durationAbridgedThreshold) {
+			continue
+		}
+		otherDur, otherKnown := knownRuntimeSec(de.bookStore, other)
+		if !otherKnown {
+			continue
+		}
 		// Symmetric percent difference so order doesn't matter.
-		diff := bookDur - otherDur
-		if diff < 0 {
-			diff = -diff
-		}
-		base := bookDur
-		if otherDur > base {
-			base = otherDur
-		}
-		pct := diff / base
+		pct := durationPct(bookDur, otherDur)
 
 		// Short-circuit: completely unrelated durations. 20% is a
 		// generous upper bound — anything past that can't be the
@@ -1913,7 +1909,7 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if hasKnownShortDuration(a) || hasKnownShortDuration(b) {
+	if de.hasKnownShortDuration(a) || de.hasKnownShortDuration(b) {
 		slog.Debug("dedup exact candidate dropped by min-duration gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
@@ -1971,15 +1967,19 @@ func normalizeASIN(v string) string {
 	return strings.ToUpper(strings.TrimSpace(v))
 }
 
-// hasKnownShortDuration reports whether book has a known, positive Duration
-// strictly under minFingerprintMatchSeconds. Unknown or non-positive durations
-// (nil or <= 0) are conservative and never treated as "short" — matches the
-// hasPlausibleAudio convention of not disqualifying on missing data.
-func hasKnownShortDuration(book *database.Book) bool {
-	if book == nil || book.Duration == nil || *book.Duration <= 0 {
+// hasKnownShortDuration reports whether book has a known, COMPLETE canonical
+// runtime (knownRuntimeSec) strictly under minFingerprintMatchSeconds.
+// Unknown runtimes are conservative and never treated as "short" — matches the
+// hasPlausibleAudio convention of not disqualifying on missing data. A PARTIAL
+// runtime is unknown too: it used to read Book.Duration, so a multi-file book
+// with one probed 45-second intro file was "short" and every exact candidate
+// for it was dropped — and drain_stale deleted the ones already stored.
+func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
+	if book == nil {
 		return false
 	}
-	return *book.Duration < minFingerprintMatchSeconds
+	sec, known := knownRuntimeSec(de.bookStore, book)
+	return known && sec < minFingerprintMatchSeconds
 }
 
 // isPartVsWholeMismatch reports whether a and b look like a single-file part
@@ -2015,12 +2015,19 @@ func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
 		return false
 	}
 
-	partDuration := sumBookFileDurations(partFiles)
-	wholeDuration := sumBookFileDurations(wholeFiles)
-	if partDuration <= 0 || wholeDuration <= 0 {
+	// Canonical runtimes (database.ComputeBookRuntime). The part must be a
+	// COMPLETE runtime. The whole may be partial: its known-file sum is a
+	// lower bound, and part < ratio × lower bound implies part < ratio ×
+	// whole, so the inequality stays sound. The old raw sum also counted a
+	// repointed book's missing rows beside their present copies, inflating the
+	// whole; ComputeBookRuntime counts present rows only.
+	partRT := database.ComputeBookRuntime(nil, partFiles)
+	wholeRT := database.ComputeBookRuntime(nil, wholeFiles)
+	partDuration, partKnown := partRT.KnownSeconds()
+	if !partKnown || wholeRT.Seconds <= 0 || wholeRT.Source != database.RuntimeSourceFiles {
 		return false
 	}
-	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeDuration)
+	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeRT.Seconds)
 }
 
 const (
@@ -2216,19 +2223,6 @@ func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) 
 		}
 	}
 	return res, nil
-}
-
-// sumBookFileDurations totals the Duration (seconds) of the given BookFiles.
-// Non-positive durations contribute 0, consistent with the "unknown" convention
-// used elsewhere in the dedup guards.
-func sumBookFileDurations(files []database.BookFile) int {
-	total := 0
-	for _, f := range files {
-		if f.Duration > 0 {
-			total += f.Duration
-		}
-	}
-	return total
 }
 
 func hasPlausibleAudio(book *database.Book) bool {

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -98,28 +98,28 @@ func TestEvaluate(t *testing.T) {
 	book := &database.Book{Title: "Big Cats 1", Duration: intp(36000)}
 	good := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
 
-	if v := Evaluate(book, &good, nil); !v.Allowed {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &good, nil); !v.Allowed {
 		t.Fatalf("matching 0.95 candidate refused: %+v", v)
 	}
 
 	// The owner's failure: a near-perfect score on the wrong volume.
 	wrong := metafetch.MetadataCandidate{Title: "Big Cats 3", SeriesPosition: "3", Score: 0.99}
-	if v := Evaluate(book, &wrong, nil); v.Allowed || v.Reason != ReasonSequenceMismatch {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &wrong, nil); v.Allowed || v.Reason != ReasonSequenceMismatch {
 		t.Fatalf("0.99 wrong-volume candidate: allowed=%v reason=%q, want blocked %q", v.Allowed, v.Reason, ReasonSequenceMismatch)
 	}
 
 	low := good
 	low.Score = 0.89
-	if v := Evaluate(book, &low, nil); v.Allowed || v.Reason != ReasonScoreBelowFloor {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &low, nil); v.Allowed || v.Reason != ReasonScoreBelowFloor {
 		t.Fatalf("0.89 candidate: allowed=%v reason=%q, want %q", v.Allowed, v.Reason, ReasonScoreBelowFloor)
 	}
 	atFloor := good
 	atFloor.Score = MinScore
-	if v := Evaluate(book, &atFloor, nil); !v.Allowed {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &atFloor, nil); !v.Allowed {
 		t.Fatalf("candidate exactly at the floor refused: %+v", v)
 	}
 
-	if v := Evaluate(book, &good, errors.New("hash drift")); v.Allowed || v.Reason != ReasonIdentityStale {
+	if v := Evaluate(book, database.ComputeBookRuntime(book, nil), &good, errors.New("hash drift")); v.Allowed || v.Reason != ReasonIdentityStale {
 		t.Fatalf("stale identity: allowed=%v reason=%q", v.Allowed, v.Reason)
 	}
 
@@ -127,12 +127,12 @@ func TestEvaluate(t *testing.T) {
 	heard := &database.Book{Title: "Big Cats 1", TranscribedTitle: strp("Big Cats 1")}
 	relaxed := good
 	relaxed.Score = 0.86
-	if v := Evaluate(heard, &relaxed, nil); !v.Allowed || !v.AudioConfirmed {
+	if v := Evaluate(heard, database.ComputeBookRuntime(heard, nil), &relaxed, nil); !v.Allowed || !v.AudioConfirmed {
 		t.Fatalf("audio-confirmed 0.86 refused: %+v", v)
 	}
 	// ... and a transcribed title the candidate does not match refuses outright.
 	other := metafetch.MetadataCandidate{Title: "Small Dogs 1", SeriesPosition: "1", Score: 0.99}
-	if v := Evaluate(heard, &other, nil); v.Allowed || v.Reason != ReasonTranscriptionMismatch {
+	if v := Evaluate(heard, database.ComputeBookRuntime(heard, nil), &other, nil); v.Allowed || v.Reason != ReasonTranscriptionMismatch {
 		t.Fatalf("transcription mismatch: allowed=%v reason=%q", v.Allowed, v.Reason)
 	}
 }
@@ -197,7 +197,7 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 			// The floor follows the UNREVIEWED rule only: a pair the matcher
 			// alone agrees on must keep MinScore, never earn 0.85.
 			c.Score = 0.86
-			v := Evaluate(book, c, nil)
+			v := Evaluate(book, database.ComputeBookRuntime(book, nil), c, nil)
 			if v.TranscriptionAgreesOnReview != tc.reviewed {
 				t.Errorf("verdict annotation = %v, want %v", v.TranscriptionAgreesOnReview, tc.reviewed)
 			}
@@ -257,7 +257,7 @@ func TestUnreviewedPathsRefuseEveryPairMainRefused(t *testing.T) {
 						if TranscriptionConfirms(book, c) {
 							t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
 						}
-						for _, v := range []Verdict{Evaluate(book, c, nil), EvaluateInBatch(book, c, nil, nil)} {
+						for _, v := range []Verdict{Evaluate(book, database.ComputeBookRuntime(book, nil), c, nil), EvaluateInBatch(book, database.ComputeBookRuntime(book, nil), c, nil, nil)} {
 							if v.Allowed || v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
 								t.Fatalf("gate on %q/%q (pos %q) ~ heard %q/%q: allowed=%v audio=%v floor=%v score_reason=%q; origin/main refused it",
 									ct, ca, pos, ht, ha, v.Allowed, v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)

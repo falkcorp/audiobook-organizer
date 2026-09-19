@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -90,13 +90,16 @@ var titleStop = map[string]bool{
 
 // CheckEvidence runs every evidence check. audioConfirmed is the score leg's
 // transcription result, counted as one agreement.
-func CheckEvidence(book *database.Book, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
-	return CheckEvidenceInBatch(book, c, audioConfirmed, nil)
+//
+// rt is the book's canonical runtime (database.LoadBookRuntime); the runtime
+// check compares only a Complete one and reads anything else as unknown.
+func CheckEvidence(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool) EvidenceVerdict {
+	return CheckEvidenceInBatch(book, rt, c, audioConfirmed, nil)
 }
 
 // CheckEvidenceInBatch is CheckEvidence with the batch's ClaimIndex, which
 // the partial_book check reads to see sibling parts. nil skips that test.
-func CheckEvidenceInBatch(book *database.Book, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
+func CheckEvidenceInBatch(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, audioConfirmed bool, claims *ClaimIndex) EvidenceVerdict {
 	var v EvidenceVerdict
 	if book == nil || c == nil {
 		v.Reason, v.Detail = ReasonInsufficientEvidence, "no book or candidate"
@@ -104,7 +107,7 @@ func CheckEvidenceInBatch(book *database.Book, c *metafetch.MetadataCandidate, a
 	}
 	v.Overwrites = overwrites(book, c)
 
-	runtime := checkRuntime(book, c, len(v.Overwrites) > 0)
+	runtime := checkRuntime(rt, c, len(v.Overwrites) > 0)
 	v.Checks = append(v.Checks,
 		runtime,
 		checkAuthorRole(c),
@@ -185,15 +188,16 @@ func set(xs []string) map[string]bool {
 	return out
 }
 
-func checkRuntime(book *database.Book, c *metafetch.MetadataCandidate, overwriting bool) CheckResult {
+func checkRuntime(rt database.BookRuntime, c *metafetch.MetadataCandidate, overwriting bool) CheckResult {
 	r := CheckResult{Name: "runtime"}
-	bookSec := 0
-	if book.Duration != nil {
-		bookSec = *book.Duration
-	}
-	if bookSec <= 0 || c.DurationSec <= 0 {
+	// Only a COMPLETE runtime is compared. A partial one (some files' durations
+	// never probed) is a lower bound: comparing it made a 10 h book with two
+	// known 20-minute chapters a "40 min vs 10 h" runtime_mismatch and vetoed
+	// the right candidate. It is missing evidence, exactly like no runtime.
+	bookSec, known := rt.KnownSeconds()
+	if !known || c.DurationSec <= 0 {
 		r.Outcome = OutcomeUnknown
-		r.Detail = "files " + mins(bookSec) + ", candidate " + mins(c.DurationSec)
+		r.Detail = "files " + runtimeDesc(rt) + ", candidate " + mins(c.DurationSec)
 		if overwriting {
 			r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeUnknownOverwrite
 			r.Detail += "; would replace existing fields without a runtime to confirm the match"
@@ -205,7 +209,7 @@ func checkRuntime(book *database.Book, c *metafetch.MetadataCandidate, overwriti
 		delta = -delta
 	}
 	ratio := float64(delta) / float64(bookSec)
-	r.Detail = "files " + mins(bookSec) + ", candidate " + mins(c.DurationSec) + " (" + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
+	r.Detail = "files " + runtimeDesc(rt) + ", candidate " + mins(c.DurationSec) + " (" + strconv.Itoa(int(ratio*100+0.5)) + "% off)"
 	switch {
 	case ratio > RuntimeBlockRatio:
 		r.Outcome, r.Reason = OutcomeBlock, ReasonRuntimeMismatch
@@ -570,4 +574,17 @@ func mins(sec int) string {
 		return "unknown"
 	}
 	return strconv.Itoa((sec+30)/60) + " min"
+}
+
+// runtimeDesc renders a book runtime for a check detail, saying when it is not
+// the whole book: "600 min", "40 min from 2 of 30 files (partial)", "unknown".
+func runtimeDesc(rt database.BookRuntime) string {
+	switch {
+	case rt.Complete():
+		return mins(rt.Seconds)
+	case rt.Partial():
+		return mins(rt.Seconds) + " from " + strconv.Itoa(rt.FilesKnown) + " of " + strconv.Itoa(rt.FilesCounted) + " files (partial)"
+	default:
+		return mins(0)
+	}
 }

@@ -1,7 +1,7 @@
 // file: internal/metabatch/store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
-// last-edited: 2026-08-22
+// last-edited: 2026-09-19
 
 package metabatch
 
@@ -33,5 +33,6 @@ type Store interface {
 	operationResultReader
 
 	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBooksByTag(tag string) ([]string, error)
 }
