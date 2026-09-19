@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -142,6 +142,10 @@ type VersionGroupCleanupResult struct {
 	// WriteErrors counts is_primary_version writes that failed or found the
 	// row gone. Until 2026-09-15 those writes discarded their error.
 	WriteErrors int `json:"write_errors"`
+	// SkippedOwnsFiles counts duplicates left in place because they still own
+	// book_file rows: removing them would orphan those rows
+	// (database.ErrBookOwnsFiles), and their files are not deleted either.
+	SkippedOwnsFiles int `json:"skipped_owns_files"`
 }
 
 // BrokenSegmentResult describes books with missing segment files.
@@ -833,6 +837,22 @@ func CleanupDuplicateVersionGroups(store Store, rootDir string, dryRun bool) (*V
 			}
 
 			slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
+
+			// Never remove a duplicate that still owns book_file rows, and
+			// decide that BEFORE touching the disk. DeleteBook refuses such a
+			// book (database.ErrBookOwnsFiles) because it never deletes the
+			// rows, so the old order — os.Remove the file, then DeleteBook —
+			// would now delete the audio and keep a book whose rows name a
+			// file that is gone. Before the guard it deleted both and orphaned
+			// the rows. Fail closed on a read error. Checked in dry runs too,
+			// so the preview counts what an apply would really remove.
+			owned, ownErr := store.GetBookFiles(dup.ID)
+			if ownErr != nil || len(owned) > 0 {
+				slog.Warn("version-group cleanup keeping duplicate: it still owns book_file rows (or they could not be read)",
+					"dupID", dup.ID, "rows", len(owned), "err", ownErr, "groupID", groupID)
+				result.SkippedOwnsFiles++
+				continue
+			}
 
 			if !dryRun {
 				// Delete the file if it exists and is in the library

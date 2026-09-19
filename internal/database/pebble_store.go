@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.175.0
+// version: 1.176.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
@@ -3258,6 +3258,14 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	}
 	if book == nil {
 		return nil
+	}
+
+	// Refuse to delete a book that still owns book_file rows: this function
+	// never tears those rows down, so deleting the book would orphan them
+	// (book_delete_owns_files.go). Checked under the book's stripe, after the
+	// existence read, so a missing book stays the no-op it always was.
+	if err := p.refuseDeleteIfBookOwnsFiles(id); err != nil {
+		return err
 	}
 
 	batch := p.db.NewBatch()

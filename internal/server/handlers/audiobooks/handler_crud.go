@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -12,6 +12,7 @@ package audiobookshandler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -227,6 +228,12 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 	result, err := h.audiobookService.DeleteAudiobook(c.Request.Context(), id, opts)
 	if err != nil {
 		if strings.Contains(err.Error(), "already soft deleted") {
+			httputil.RespondWithConflict(c, err.Error())
+			return
+		}
+		// A hard delete refused because the book still owns file rows is a
+		// conflict with the book's state, not a missing book.
+		if errors.Is(err, database.ErrBookOwnsFiles) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}

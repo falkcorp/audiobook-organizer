@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-25
+// last-edited: 2026-09-19
 
 package audiobooks
 
@@ -44,10 +44,14 @@ type SoftDeletedBooksResponse struct {
 
 // PurgeResult represents the result of purging soft-deleted books
 type PurgeResult struct {
-	Attempted    int      `json:"attempted"`
-	Purged       int      `json:"purged"`
-	FilesDeleted int      `json:"files_deleted"`
-	Errors       []string `json:"errors"`
+	Attempted    int `json:"attempted"`
+	Purged       int `json:"purged"`
+	FilesDeleted int `json:"files_deleted"`
+	// SkippedOwnsFiles counts books left soft-deleted because they still own
+	// book_file rows: hard-deleting them would orphan those rows
+	// (database.ErrBookOwnsFiles). Each is also named in Errors.
+	SkippedOwnsFiles int      `json:"skipped_owns_files"`
+	Errors           []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package audiobooks
 
@@ -35,19 +35,39 @@ func TestAudiobookService_DeleteAudiobook_HardDelete_EnqueuesITunesRemoves(t *te
 	enq := &fakeITunesEnqueuer{}
 	svc.SetITunesEnqueuer(enq)
 
-	pidA, pidB := "deadbeefdeadbeef", "feedfacefeedface"
-	book := &database.Book{ID: "del-itl", Title: "Has iTunes Tracks"}
+	// A hard delete is only possible for a book that owns no book_file rows
+	// (database.ErrBookOwnsFiles), so the PID it can still carry is the
+	// book-level one.
+	pid := "deadbeefdeadbeef"
+	book := &database.Book{ID: "del-itl", Title: "Has an iTunes Track", ITunesPersistentID: &pid}
 	mockStore.EXPECT().GetBookByID("del-itl").Return(book, nil)
-	mockStore.EXPECT().GetBookFiles("del-itl").Return([]database.BookFile{
-		{ID: "f1", ITunesPersistentID: pidA},
-		{ID: "f2", ITunesPersistentID: pidB},
-		{ID: "f3", ITunesPersistentID: ""}, // no PID, ignored
-	}, nil)
+	mockStore.EXPECT().GetBookFiles("del-itl").Return(nil, nil)
 	mockStore.EXPECT().DeleteBook("del-itl").Return(nil)
 
 	_, err := svc.DeleteAudiobook(context.Background(), "del-itl", &DeleteAudiobookOptions{})
 	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{pidA, pidB}, enq.pids)
+	assert.ElementsMatch(t, []string{pid}, enq.pids)
+}
+
+// A book whose file rows carry iTunes PIDs cannot be hard-deleted, and the
+// refusal comes before the iTunes removes are enqueued: a book that stays must
+// keep its tracks.
+func TestAudiobookService_DeleteAudiobook_HardDeleteRefused_EnqueuesNothing(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	svc := NewAudiobookService(mockStore)
+	enq := &fakeITunesEnqueuer{}
+	svc.SetITunesEnqueuer(enq)
+
+	book := &database.Book{ID: "del-itl2", Title: "Has iTunes Tracks"}
+	mockStore.EXPECT().GetBookByID("del-itl2").Return(book, nil)
+	mockStore.EXPECT().GetBookFiles("del-itl2").Return([]database.BookFile{
+		{ID: "f1", ITunesPersistentID: "deadbeefdeadbeef"},
+		{ID: "f2", ITunesPersistentID: "feedfacefeedface"},
+	}, nil)
+
+	_, err := svc.DeleteAudiobook(context.Background(), "del-itl2", &DeleteAudiobookOptions{})
+	assert.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	assert.Empty(t, enq.pids)
 }
 
 func TestAudiobookService_DeleteAudiobook_SoftDelete_EnqueuesITunesRemoves(t *testing.T) {
@@ -345,6 +365,7 @@ func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 
 	book := &database.Book{ID: "del-1", Title: "To Delete"}
 	mockStore.EXPECT().GetBookByID("del-1").Return(book, nil)
+	mockStore.EXPECT().GetBookFiles("del-1").Return(nil, nil)
 	mockStore.EXPECT().DeleteBook("del-1").Return(nil)
 
 	result, err := svc.DeleteAudiobook(context.Background(), "del-1", &DeleteAudiobookOptions{})
@@ -352,6 +373,23 @@ func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, "audiobook deleted", result["message"])
 	assert.Equal(t, false, result["blocked"])
+}
+
+// A hard delete of a book that still owns book_file rows is refused before any
+// side effect: no hash block, no DeleteBook call (the mock fails the test on
+// either unexpected call), and the error wraps database.ErrBookOwnsFiles so
+// the handler answers 409 rather than 404.
+func TestAudiobookService_DeleteAudiobook_HardDeleteRefusedWhenBookOwnsFiles(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	svc := NewAudiobookService(mockStore)
+
+	hash := "h1"
+	book := &database.Book{ID: "del-2", Title: "Has Files", FileHash: &hash}
+	mockStore.EXPECT().GetBookByID("del-2").Return(book, nil)
+	mockStore.EXPECT().GetBookFiles("del-2").Return([]database.BookFile{{ID: "f1", BookID: "del-2", FilePath: "/lib/x.m4b"}}, nil)
+
+	_, err := svc.DeleteAudiobook(context.Background(), "del-2", &DeleteAudiobookOptions{BlockHash: true})
+	assert.ErrorIs(t, err, database.ErrBookOwnsFiles)
 }
 
 func TestAudiobookService_DeleteAudiobook_SoftDeleteAlreadyDeleted(t *testing.T) {
