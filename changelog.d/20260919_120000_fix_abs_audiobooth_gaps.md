@@ -19,10 +19,10 @@
   an edit in the app and one in the web UI at the same time. Both land, where
   before the later write silently discarded the earlier one. Renaming a playlist
   to a name that is already taken now returns a conflict. It used to break the
-  other playlist's lookup by name. Sending a playlist's full book list, for
-  example to reorder it, no longer drops a book someone else just added: the
-  books it names are reordered and any others are kept. Removing a book takes
-  an explicit remove.
+  other playlist's lookup by name. Sending a playlist's or collection's full book list can reorder it or add to
+  it. A list that leaves out a book the playlist or collection currently holds is
+  refused with a conflict, because it may have been built before someone else
+  added that book. Removing a book takes an explicit remove.
 - **Credentials in URLs are masked in the request log.** This covers values such
   as `?token=`.
 - **API keys passed in a download or ebook URL (`?token=`) are accepted.** They
