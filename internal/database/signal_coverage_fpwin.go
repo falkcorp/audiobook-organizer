@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage_fpwin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5ab03e39-dbc3-43e9-8008-dd58c0f20f7d
 // last-edited: 2026-09-19
 
@@ -491,7 +491,6 @@ func (p *PebbleStore) GetFingerprintWindowCoverage(ctx context.Context, deep boo
 	}
 	out.Source = source
 	out.Unavailable = map[string]string{
-		"legacy_print_era": "BookFile.AcoustIDFPVersion (#3453) is not in this build, so legacy head prints cannot be split into current-era and legacy-era",
 		"tier_t0":          "T0 (recover-missing-files ambiguous/size-collision candidates) needs that op's report, which this endpoint does not read",
 		"source_staleness": "a window is also stale when the file's size or mtime changed; that needs a live stat and this endpoint never stats files",
 	}

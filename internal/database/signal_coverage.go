@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -115,8 +116,30 @@ type BookFileSignalCoverage struct {
 	FingerprintFailures         int64            `json:"fingerprint_failures"`
 	FingerprintFailuresByReason map[string]int64 `json:"fingerprint_failures_by_reason,omitempty"`
 
+	// HeadPrintEra splits present rows that carry a head print by the
+	// encoding they were written under. It is the progress meter for the
+	// nightly re-fingerprint.
+	HeadPrintEra *HeadPrintEraCoverage `json:"head_print_era"`
+
 	// Unavailable names signals this response could not count and why.
 	Unavailable map[string]string `json:"unavailable,omitempty"`
+}
+
+// HeadPrintEraCoverage counts PRESENT rows (Missing=false) that carry a head
+// print, split by BookFile.HasCurrentPrint (AcoustIDFPVersion >=
+// fingerprint.PrintEncodingVersion). CurrentEra + LegacyEra ==
+// PresentWithPrint.
+//
+// Basis names how "carries a print" was decided: raw_fingerprint (deep scan,
+// exact) or fingerprint_duration_proxy (memdb, where the raw bytes are
+// stripped; it misses raw prints written before the duration field existed,
+// all of which are legacy-era).
+type HeadPrintEraCoverage struct {
+	Basis            string `json:"basis"`
+	EncodingVersion  int    `json:"encoding_version"`
+	PresentWithPrint int64  `json:"present_with_print"`
+	CurrentEra       int64  `json:"current_era"`
+	LegacyEra        int64  `json:"legacy_era"`
 }
 
 // signalAcc is one worker's private tally. Workers never share one, so the hot
@@ -128,6 +151,8 @@ type signalAcc struct {
 	skipScan    int64
 	failed      int64
 	reasons     map[string]int64
+	eraCurrent  int64
+	eraLegacy   int64
 }
 
 func (a *signalAcc) mark(idx int, have, fileMissing bool) {
@@ -177,10 +202,21 @@ func (a *signalAcc) add(f *BookFile, exact bool) {
 			a.reasons[reason]++
 		}
 	}
+	hasRaw := len(f.AcoustIDFingerprint) > 0
+	hasPrint := hasRaw
+	if !exact {
+		hasPrint = f.AcoustIDFingerprintDurationSec > 0
+	}
+	if hasPrint && !fm {
+		if f.HasCurrentPrint() {
+			a.eraCurrent++
+		} else {
+			a.eraLegacy++
+		}
+	}
 	if !exact {
 		return
 	}
-	hasRaw := len(f.AcoustIDFingerprint) > 0
 	a.mark(sigRawFP, hasRaw, fm)
 	a.mark(sigSegOnly, !hasRaw && f.AcoustIDSeg0 != "", fm)
 	segs := [7]string{f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2, f.AcoustIDSeg3,
@@ -203,6 +239,8 @@ func (a *signalAcc) merge(b *signalAcc) {
 	a.missingRows += b.missingRows
 	a.skipScan += b.skipScan
 	a.failed += b.failed
+	a.eraCurrent += b.eraCurrent
+	a.eraLegacy += b.eraLegacy
 	for k, v := range b.reasons {
 		if a.reasons == nil {
 			a.reasons = make(map[string]int64)
@@ -221,10 +259,20 @@ func (a *signalAcc) result(source string, exact bool) *BookFileSignalCoverage {
 		SkipScanRows:           a.skipScan,
 		Signals:                make(map[string]SignalCount, numSignals),
 		FingerprintFailures:    a.failed,
+		HeadPrintEra: &HeadPrintEraCoverage{
+			Basis:            SignalFingerprintDuration,
+			EncodingVersion:  fingerprint.PrintEncodingVersion,
+			PresentWithPrint: a.eraCurrent + a.eraLegacy,
+			CurrentEra:       a.eraCurrent,
+			LegacyEra:        a.eraLegacy,
+		},
 		Unavailable: map[string]string{
 			"cover_hash":      "no cover content or perceptual hash exists in the codebase yet",
 			"file_hash_error": "hash failures are not recorded on book_file rows",
 		},
+	}
+	if exact {
+		out.HeadPrintEra.Basis = SignalRawFingerprint
 	}
 	limit := numSignals
 	if !exact {
@@ -305,6 +353,7 @@ func CountBookFileSignalsFromCores(ctx context.Context, cores []BookFileCore, wo
 			Missing:                        c.Missing,
 			SkipScan:                       c.SkipScan,
 			FingerprintFailedAt:            c.FingerprintFailedAt,
+			AcoustIDFPVersion:              c.AcoustIDFPVersion,
 		}
 	}, false, workers, "core")
 }
@@ -400,6 +449,7 @@ type bookFileSignalRow struct {
 	RawTags          presence `json:"raw_tags"`
 	RawFP            presence `json:"acoustid_fingerprint"`
 	FPDuration       float64  `json:"acoustid_fingerprint_duration_sec"`
+	FPVersion        int      `json:"acoustid_fp_version"`
 	Seg0             presence `json:"acoustid_seg0"`
 	Seg1             presence `json:"acoustid_seg1"`
 	Seg2             presence `json:"acoustid_seg2"`
@@ -504,6 +554,7 @@ func (r *bookFileSignalRow) asBookFile() *BookFile {
 		OriginalFileHash:               r.OriginalFileHash,
 		Duration:                       r.Duration,
 		AcoustIDFingerprintDurationSec: r.FPDuration,
+		AcoustIDFPVersion:              r.FPVersion,
 		AcoustIDSeg0:                   mark(r.Seg0),
 		AcoustIDSeg1:                   mark(r.Seg1),
 		AcoustIDSeg2:                   mark(r.Seg2),
