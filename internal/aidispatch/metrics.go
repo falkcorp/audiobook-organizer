@@ -1,7 +1,7 @@
 // file: internal/aidispatch/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a8bcb9cf-e760-4b64-b4b9-35d8b18de82d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package aidispatch
 
@@ -12,9 +12,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics are registered lazily, on the first Call. Nothing in production
-// calls Call until a later PR moves a call site onto the dispatcher, so this
-// PR adds no series to /metrics.
+// Metrics are registered lazily, on the first Call. Production calls Call
+// only from the routed sites (internal/ai pool_routing.go) while
+// ai_endpoints_routing is on, so with the switch off /metrics gains no series.
 var (
 	metricsOnce sync.Once
 
