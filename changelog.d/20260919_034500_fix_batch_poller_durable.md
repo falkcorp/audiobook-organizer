@@ -9,5 +9,9 @@
 - A paid OpenAI batch is no longer lost when the server is stopped just after
   submitting it. Each batch now carries its job id, and the poller re-attaches
   any job that never recorded its batch so the results are still collected.
-- AI jobs whose results failed to apply are now left marked failed instead of
-  being silently retried every five minutes.
+- When applying an AI job's results fails (the database is busy, the server
+  is shutting down), the job is retried later with growing waits instead of
+  being retried blindly every five minutes forever. After five failed tries
+  it is marked failed with the reason, visible in the AI jobs list. A batch
+  that OpenAI itself failed or let expire now marks its job failed instead of
+  leaving it waiting forever.

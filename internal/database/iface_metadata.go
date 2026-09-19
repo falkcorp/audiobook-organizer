@@ -1,5 +1,7 @@
 // file: internal/database/iface_metadata.go
-// version: 1.2.0
+// version: 1.3.0
+// guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
+// last-edited: 2026-09-19
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -148,5 +150,9 @@ type AIJobsStore interface {
 	MarkAIJobSubmitted(id, batchID string) error
 	MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
 	MarkAIJobFailed(id, errMsg string) error
+	// MarkAIJobApplyFailed records a failed attempt to apply a job's results:
+	// status "apply_failed", ApplyAttempts+1, LastApplyError, LastApplyAt. It
+	// returns the updated row so the caller can decide whether to give up.
+	MarkAIJobApplyFailed(id, errMsg string) (AIJob, error)
 	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 }
