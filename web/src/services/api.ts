@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.110.0
+// version: 2.111.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6554,8 +6554,13 @@ export async function backfillMetadataHashes(dryRun = false): Promise<{ operatio
 
 export interface MaintenanceJobDef {
   id: string;
+  name?: string;
   description: string;
+  category?: string;
   can_resume: boolean;
+  /** The job's DefaultParams(); dry_run here is what an omitted dry_run means. */
+  default_params?: Record<string, unknown> | null;
+  permission?: string;
 }
 
 export interface MaintenanceJobsResult {
@@ -6573,15 +6578,23 @@ export async function listMaintenanceJobs(): Promise<MaintenanceJobDef[]> {
 
 // params carries a job's custom keys (e.g. min_files); dry_run always comes
 // from the dryRun argument so a stray params.dry_run cannot override it.
+//
+// An omitted dryRun OMITS the key, and the server then applies the job's
+// advertised default -- a dry run for every job that advertises one. This used
+// to default to false, so every caller that did not choose (the Manual Fixes
+// "Run" button among them) asked for a real mutation.
 export async function runMaintenanceJob(
   jobId: string,
-  dryRun = false,
+  dryRun?: boolean,
   params: Record<string, unknown> = {}
 ): Promise<{ operation_id: string }> {
+  const payload: Record<string, unknown> = { ...params };
+  delete payload.dry_run;
+  if (dryRun !== undefined) payload.dry_run = dryRun;
   const response = await apiFetch(`${API_BASE}/maintenance/jobs/${encodeURIComponent(jobId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...params, dry_run: dryRun }),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     throw await buildApiError(response, `Failed to run maintenance job "${jobId}"`);
