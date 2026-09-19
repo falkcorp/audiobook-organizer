@@ -1,5 +1,5 @@
 // file: internal/deluge/import.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-09-19
 //
@@ -330,7 +330,9 @@ func ImportToLibraryWith(
 	bookFile.ImportedFromDelugeAt = &now
 
 	updErr0 := store.UpdateBookFile(bookFile.ID, bookFile)
+	repointDurable := true
 	if errors.Is(updErr0, database.ErrBookFileDurabilityUnknown) {
+		repointDurable = false
 		// The row now names the copy (the write is visible; only its fsync
 		// failed). Undoing it here would delete the file the row points at.
 		importLog.Error("ImportToLibrary: repointing %s to %s was written but its fsync failed (%v): durability unknown; keeping the row and the copy", bookFile.ID, dest, updErr0)
@@ -360,7 +362,14 @@ func ImportToLibraryWith(
 
 	// Best-effort: tell Deluge to move the torrent storage. Never for an
 	// import the write guard triggered (opts.NoMoveStorage).
-	if !opts.NoMoveStorage && cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
+	//
+	// Skipped when the repoint's durability is unknown: were its WAL record
+	// lost, the row would revert to src — and Deluge would already have moved
+	// the torrent away from src. The copy at dest serves either way.
+	if !repointDurable && !opts.NoMoveStorage && cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
+		importLog.Error("ImportToLibrary: skipping MoveStorage for hash %s: the repoint of %s is not known to be durable", bookFile.DelugeHash, bookFile.ID)
+	}
+	if repointDurable && !opts.NoMoveStorage && cfg.DelugeMoveEnabled && bookFile.DelugeHash != "" && delugeClient != nil {
 		moveErr := delugeClient.MoveStorage([]string{bookFile.DelugeHash}, filepath.Dir(dest))
 		if moveErr != nil {
 			importLog.Warn("ImportToLibrary MoveStorage for hash %s failed (non-fatal): %v", bookFile.DelugeHash, moveErr)

@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package quarantine
 
@@ -816,11 +816,24 @@ func (qs *QuarantineService) relocate(sp relocateSpec) (*relocation, error) {
 // repointRow rewrites one row's FilePath. row is the FULL record from
 // GetBookFiles, because UpdateBookFile replaces the whole record. The history
 // entry for the move was written before the move.
+// quarantineLog routes new messages through internal/logger (the
+// log-injection barrier) rather than bare log/slog.
+var quarantineLog = logger.New("quarantine")
+
 func (qs *QuarantineService) repointRow(rl *relocation, row database.BookFile, newPath string) error {
 	updated := row
 	updated.FilePath = newPath
 	if err := qs.store.UpdateBookFile(row.ID, &updated); err != nil {
-		return err
+		if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+			return err
+		}
+		// Applied and visible; only its fsync failed. The row now names
+		// newPath, so it is a repoint that happened: record the prior (the
+		// rollback must be able to restore it) and let the file stay moved.
+		// Treating it as a failure moved the file back under a row that
+		// already named the new path.
+		quarantineLog.Error("quarantine: repoint of row %s to %s was written but its fsync failed (%v); durability unknown, treating it as applied",
+			logger.SanitizeLogValue(row.ID), logger.SanitizeLogValue(newPath), err)
 	}
 	rl.priors = append(rl.priors, row)
 	rl.repointed++
