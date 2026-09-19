@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -406,14 +406,24 @@ func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
 	type bookDetail struct {
 		*database.Book
 		Files []database.BookFile `json:"files"`
+		// Runtime is the canonical runtime (database.ComputeBookRuntime) the
+		// dedup duration signals compare, with its coverage, so the drawer
+		// shows "at least 40m (2 of 30 files)" instead of Book.Duration's
+		// partial sum as the book's length.
+		Runtime *database.BookRuntime `json:"runtime,omitempty"`
 	}
 	fetchBook := func(bookID string) *bookDetail {
 		book, err := store.GetBookByID(bookID)
 		if err != nil || book == nil {
 			return nil
 		}
-		files, _ := store.GetBookFiles(bookID)
-		return &bookDetail{Book: book, Files: files}
+		files, ferr := store.GetBookFiles(bookID)
+		d := &bookDetail{Book: book, Files: files}
+		if ferr == nil {
+			rt := database.ComputeBookRuntime(book, files)
+			d.Runtime = &rt
+		}
+		return d
 	}
 
 	bookA := fetchBook(candidate.EntityAID)

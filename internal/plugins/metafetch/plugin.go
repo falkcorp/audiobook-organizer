@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -69,4 +69,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 type pluginStore interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	// GetBookFiles feeds the calibration replay's book runtime
+	// (database.LoadBookRuntime), the same runtime production scoring uses.
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 }

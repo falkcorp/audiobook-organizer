@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b3e6a1c8-9d24-4f57-8a06-1c2d3e4f5a61
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package metafetch
 
@@ -86,7 +86,7 @@ func TestEvaluateBook_AppliedRanksFirst(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "The Way of Kings", Duration: new(1000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 3)
-	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
 	if skip != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
@@ -111,7 +111,7 @@ func TestEvaluateBook_DurationDemotesApplied(t *testing.T) {
 	book := &database.Book{ID: "b2", Title: "Elantris", Duration: new(2000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
-	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{applied, distractor}, "manual", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{applied, distractor}, "manual", defaultSweepKnobs(), grid)
 	if skip != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
@@ -127,7 +127,7 @@ func TestEvaluateBook_Unmatchable(t *testing.T) {
 	book := &database.Book{ID: "b3", Title: "A", MetadataSourceHash: new("deadbeefdeadbeef")}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 2)
-	ev, skip := evaluateBook(book, []metafetch.MetadataCandidate{c1, c2}, "auto", defaultSweepKnobs(), grid)
+	ev, skip := evaluateBook(book, bookSec(book), []metafetch.MetadataCandidate{c1, c2}, "auto", defaultSweepKnobs(), grid)
 	if skip != "unmatchable" {
 		t.Fatalf("skip = %q, want unmatchable", skip)
 	}
@@ -317,4 +317,11 @@ func TestRunCalibrateScoring_Race(t *testing.T) {
 	if err := p.runCalibrateScoring(context.Background(), nil, stubReporter{}); err != nil {
 		t.Fatalf("runCalibrateScoring: %v", err)
 	}
+}
+
+// bookSec is the runtime a test book with no file rows gets from the
+// canonical function (its Book.Duration via the single-file fallback).
+func bookSec(b *database.Book) int {
+	sec, _ := database.ComputeBookRuntime(b, nil).KnownSeconds()
+	return sec
 }

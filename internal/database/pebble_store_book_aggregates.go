@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_aggregates.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package database — book aggregate recomputation from BookFiles.
 //
@@ -50,16 +50,19 @@ func (p *PebbleStore) RecomputeBookAggregates(bookID string) error {
 		return fmt.Errorf("RecomputeBookAggregates GetBookFiles %s: %w", bookID, err)
 	}
 
-	var sumDuration int
 	var sumFileSize int64
-	filesWithDuration := 0
 	filesWithFileSize := 0
 
+	// Duration comes from the canonical runtime (ComputeBookRuntime) so the
+	// stored aggregate and every runtime comparison count the same rows: the
+	// present ones (a repoint leaves the old missing row beside its present
+	// copy, and the raw sum counted that content twice), with historical
+	// millisecond rows normalized.
+	rt := ComputeBookRuntime(nil, files)
+	sumDuration, _ := rt.StoredAggregateSec()
+	filesWithDuration := rt.FilesKnown
+
 	for _, f := range files {
-		if f.Duration > 0 {
-			sumDuration += f.Duration
-			filesWithDuration++
-		}
 		if f.FileSize > 0 {
 			sumFileSize += f.FileSize
 			filesWithFileSize++

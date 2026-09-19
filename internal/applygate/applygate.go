@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -178,21 +178,22 @@ func ScoreGate(book *database.Book, c *metafetch.MetadataCandidate) (ok bool, fl
 // Evaluate runs all three legs. identityErr is the caller's staleness check
 // result (nil = passed). Every leg is computed even after one fails, so a
 // dry-run report shows the sequence evidence for a book blocked on score.
-func Evaluate(book *database.Book, c *metafetch.MetadataCandidate, identityErr error) Verdict {
-	return EvaluateInBatch(book, c, identityErr, nil)
+// rt is the book's canonical runtime (database.LoadBookRuntime).
+func Evaluate(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error) Verdict {
+	return EvaluateInBatch(book, rt, c, identityErr, nil)
 }
 
 // EvaluateInBatch is Evaluate for a bulk apply that knows its whole batch:
 // claims (built from every book of the batch before any is applied) lets the
 // evidence leg see a sibling folder holding another part of the same book.
 // nil is the single-book case and skips only that sibling test.
-func EvaluateInBatch(book *database.Book, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex) Verdict {
+func EvaluateInBatch(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex) Verdict {
 	v := Verdict{Score: c.Score}
 	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
 	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
 	v.TranscriptionAgreesOnReview = ReviewedTranscriptionAgrees(book, c)
 	v.Sequence = CheckSequence(book, c)
-	v.Evidence = CheckEvidenceInBatch(book, c, audio, claims)
+	v.Evidence = CheckEvidenceInBatch(book, rt, c, audio, claims)
 
 	switch {
 	case identityErr != nil:

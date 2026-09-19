@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-07-12
+// last-edited: 2026-09-19
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -319,7 +319,7 @@ func (de *Engine) classifyStaleCandidate(a, b drainBookMeta) (string, bool) {
 	if isBoilerplateTitle(a.stub.Title) || isBoilerplateTitle(b.stub.Title) {
 		return drainReasonBoilerplateTitle, true
 	}
-	if hasKnownShortDuration(a.stub) || hasKnownShortDuration(b.stub) {
+	if de.hasKnownShortDuration(a.stub) || de.hasKnownShortDuration(b.stub) {
 		return drainReasonShortDuration, true
 	}
 	if de.isPartVsWholeMismatch(a.stub, b.stub) {

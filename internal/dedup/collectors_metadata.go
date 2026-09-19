@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -54,6 +54,8 @@ import (
 type DurationCollectorStore interface {
 	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
+	// GetBookFiles feeds the canonical runtime (knownRuntimeSec).
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
 // MetaFuzzyStore is the subset of Store required by CollectMetaFuzzy.
@@ -153,10 +155,13 @@ func CollectDuration(
 	if book.AuthorID == nil {
 		return nil, nil
 	}
-	if book.Duration == nil || *book.Duration <= 0 {
+	if !hasUsableTitle(book.Title) {
 		return nil, nil
 	}
-	if !hasUsableTitle(book.Title) {
+	// Canonical runtime, complete only: a partial or unknown runtime is no
+	// duration evidence at all.
+	bookDur, known := knownRuntimeSec(store, book)
+	if !known {
 		return nil, nil
 	}
 
@@ -166,7 +171,6 @@ func CollectDuration(
 	}
 	others := booksFromCore(othersCore)
 
-	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)
 	bookForms := allNormalizedTitleFormsForStore(store, book)
 	bookSeriesNum := seriesNumberOf(book)
@@ -183,23 +187,17 @@ func CollectDuration(
 		if other.ID == book.ID {
 			continue
 		}
-		if other.Duration == nil || *other.Duration <= 0 {
-			continue
-		}
 		if !hasUsableTitle(other.Title) {
 			continue
 		}
-
-		otherDur := float64(*other.Duration)
-		diff := bookDur - otherDur
-		if diff < 0 {
-			diff = -diff
+		if !prefilterOtherDuration(bookDur, other, cfg.AbridgedThreshold) {
+			continue
 		}
-		base := bookDur
-		if otherDur > base {
-			base = otherDur
+		otherDur, otherKnown := knownRuntimeSec(store, other)
+		if !otherKnown {
+			continue
 		}
-		pct := diff / base
+		pct := durationPct(bookDur, otherDur)
 
 		// Short-circuit: completely unrelated durations (> 20% diff).
 		if pct >= cfg.AbridgedThreshold {

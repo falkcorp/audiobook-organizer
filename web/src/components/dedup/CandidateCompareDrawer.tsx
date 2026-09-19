@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-09-01
+// last-edited: 2026-09-19
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -83,8 +83,22 @@ function totalFileSize(book: DedupBookDetail): number | undefined {
   return fileTotal > 0 ? fileTotal : book.file_size;
 }
 
-function totalDuration(book: DedupBookDetail): number | undefined {
-  return book.duration ?? book.files?.reduce((sum, file) => sum + (file.duration ?? 0), 0);
+// describeRuntime renders the book's canonical runtime (server-computed sum
+// over its files). A partial runtime is a lower bound and says so; it used to
+// show Book.Duration, which for a multi-file book with unprobed chapters is
+// the length of only the first file or two.
+function describeRuntime(book: DedupBookDetail): string {
+  const rt = book.runtime;
+  if (!rt) return formatDuration(book.duration);
+  const complete =
+    rt.seconds > 0 &&
+    (rt.source === 'book_aggregate' ||
+      (rt.source === 'files' && rt.files_known === rt.files_counted));
+  if (complete) return formatDuration(rt.seconds);
+  if (rt.source === 'files' && rt.files_known > 0) {
+    return `at least ${formatDuration(rt.seconds)} (${rt.files_known} of ${rt.files_counted} files)`;
+  }
+  return 'Unknown';
 }
 
 interface MetadataCompareRowProps {
@@ -173,8 +187,8 @@ function MetadataComparePanel({ bookA, bookB, signals }: MetadataComparePanelPro
     {
       id: 'duration',
       label: 'Duration',
-      left: formatDuration(totalDuration(bookA)),
-      right: formatDuration(totalDuration(bookB)),
+      left: describeRuntime(bookA),
+      right: describeRuntime(bookB),
     },
     {
       id: 'file-size',

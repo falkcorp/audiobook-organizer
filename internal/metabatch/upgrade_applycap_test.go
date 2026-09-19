@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_applycap_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 2c9d5e71-8f4b-4a3e-b6d0-7e1c3a5f9d24
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package metabatch
 
@@ -32,6 +32,9 @@ func (s *capStubStore) GetOperationResults(string) ([]database.OperationResult, 
 	return nil, nil
 }
 func (s *capStubStore) GetBookByID(string) (*database.Book, error) {
+	return nil, errors.New("must not be reached")
+}
+func (s *capStubStore) GetBookFiles(string) ([]database.BookFile, error) {
 	return nil, errors.New("must not be reached")
 }
 func (s *capStubStore) GetBooksByTag(string) ([]string, error) {
