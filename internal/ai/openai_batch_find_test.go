@@ -1,5 +1,5 @@
 // file: internal/ai/openai_batch_find_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1f418a4-6d9e-4311-aa14-db3c3a38b350
 // last-edited: 2026-09-19
 
@@ -21,7 +21,7 @@ import (
 // of other types and scans; page 2 holds the one owned by scan 7 / full_scan.
 func batchesServer(t *testing.T, pages *atomic.Int32) *httptest.Server {
 	t.Helper()
-	now := time.Now().Unix()
+	now := time.Now().Unix() // every batch is newer than since, so paging continues
 	b := func(id, typ, scan, phase string) map[string]any {
 		md := map[string]string{"project": "audiobook-organizer", "type": typ}
 		if scan != "" {
@@ -48,19 +48,48 @@ func batchesServer(t *testing.T, pages *atomic.Int32) *httptest.Server {
 	}))
 }
 
-func TestFindScanBatchMatchesOwnerMetadataAcrossPages(t *testing.T) {
+func TestFindBatchByMetadataMatchesAllKeysAcrossPages(t *testing.T) {
 	var pages atomic.Int32
 	srv := batchesServer(t, &pages)
 	defer srv.Close()
 	p := NewOpenAIParserWithBaseURL(nil, "sk-test", srv.URL, "m", true)
+	since := time.Now().Add(-time.Hour)
 
-	id, found, err := p.FindScanBatch(context.Background(), 7, "full_scan")
+	id, found, err := p.FindBatchByMetadata(context.Background(), map[string]string{BatchMetaScanID: "7", BatchMetaScanPhase: "full_scan"}, since)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "b4", id)
 	require.Equal(t, int32(2), pages.Load(), "the owner batch was on page 2")
 
-	_, found, err = p.FindScanBatch(context.Background(), 9, "full_scan")
+	_, found, err = p.FindBatchByMetadata(context.Background(), map[string]string{BatchMetaScanID: "9", BatchMetaScanPhase: "full_scan"}, since)
 	require.NoError(t, err)
 	require.False(t, found, "no batch carries scan 9's metadata")
+
+	// Same scan id and phase but a different nonce is another scan that reused
+	// the id (a rebuilt store, or a second install on the same OpenAI project).
+	_, found, err = p.FindBatchByMetadata(context.Background(), map[string]string{BatchMetaScanID: "7", BatchMetaScanPhase: "full_scan", BatchMetaScanNonce: "other"}, since)
+	require.NoError(t, err)
+	require.False(t, found)
+}
+
+// TestFindBatchByMetadataTruncatedListingIsUnknown: when the page cap stops the
+// walk before reaching since, "not found" would be a guess — and a caller that
+// trusts it pays for a second batch. It must be an error instead.
+func TestFindBatchByMetadataTruncatedListingIsUnknown(t *testing.T) {
+	old := maxBatchListPages
+	maxBatchListPages = 1
+	t.Cleanup(func() { maxBatchListPages = old })
+
+	var pages atomic.Int32
+	srv := batchesServer(t, &pages)
+	defer srv.Close()
+	p := NewOpenAIParserWithBaseURL(nil, "sk-test", srv.URL, "m", true)
+
+	_, found, err := p.FindBatchByMetadata(context.Background(), map[string]string{BatchMetaScanID: "7", BatchMetaScanPhase: "full_scan"}, time.Now().Add(-time.Hour))
+	require.ErrorIs(t, err, ErrBatchListTruncated)
+	require.False(t, found)
+
+	batches, err := p.ListProjectBatches(context.Background(), time.Now().Add(-time.Hour))
+	require.ErrorIs(t, err, ErrBatchListTruncated, "a truncated listing must say so")
+	require.Len(t, batches, 2, "partial results are still returned")
 }

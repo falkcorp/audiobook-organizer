@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -153,6 +154,16 @@ func (pm *PipelineManager) finishScan(scanID int, err error) {
 	close(done)
 }
 
+// detachScan drops a scan's in-process state without delivering an outcome or
+// touching its persisted state — for a scan left to resume after a restart.
+func (pm *PipelineManager) detachScan(scanID int) {
+	pm.mu.Lock()
+	delete(pm.cancels, scanID)
+	delete(pm.sinks, scanID)
+	delete(pm.dones, scanID)
+	pm.mu.Unlock()
+}
+
 // CancelScan cancels a running scan by its ID, including any in-flight batch jobs.
 func (pm *PipelineManager) CancelScan(scanID int) error {
 	pm.mu.Lock()
@@ -238,6 +249,18 @@ var ErrScanCanceled = errors.New("ai scan canceled")
 // "submitting" after a restart with no way to look its batch up.
 var ErrBatchSubmitUnknown = errors.New("batch phase was mid-submit at restart; OpenAI may hold a batch that cannot be located")
 
+// errBatchLookup marks a batch lookup that failed or could not see the whole
+// window: not a verdict. The phase stays "submitting" and is looked up again.
+var errBatchLookup = errors.New("batch lookup inconclusive")
+
+// maxSubmitAttempts bounds how many times a phase whose CreateBatch failed
+// (confirmed: no batch exists) is submitted again before it fails.
+const maxSubmitAttempts = 3
+
+// maxDownloadAttempts bounds how many failed downloads of a completed batch's
+// output are retried before the phase fails.
+const maxDownloadAttempts = 5
+
 // fullScanChunkSize is how many authors one realtime full_scan LLM call
 // carries. A var only so tests can make a small library span several chunks.
 var fullScanChunkSize = 500
@@ -249,15 +272,16 @@ var fullScanChunkSize = 500
 // wait loop must keep reporting on its behalf.
 const heartbeatInterval = 60 * time.Second
 
-// BatchFinder looks up the OpenAI batch a scan phase submitted, by the
-// scan_id / scan_phase metadata written at CreateBatch time. It is what lets a
-// phase that died between CreateBatch and recording the batch id re-attach
-// instead of paying for a second batch. *ai.OpenAIParser implements it; the
-// client passed to NewPipelineManager is checked for it (test fakes may omit
-// it), and a scan resumed without one fails
-// the ambiguous phase visibly (ErrBatchSubmitUnknown) rather than guessing.
+// BatchFinder looks up an OpenAI batch by the owner metadata written at
+// CreateBatch time (scan id, phase and a per-scan nonce). It is what lets a
+// phase that died between CreateBatch and recording the batch id — or whose
+// CreateBatch call errored after OpenAI may have accepted it — re-attach
+// instead of paying for a second batch. found=false must mean a CONFIRMED
+// absence; a lookup that could not see the whole window returns an error.
+// *ai.OpenAIParser implements it; the client passed to NewPipelineManager is
+// checked for it (test fakes may omit it).
 type BatchFinder interface {
-	FindScanBatch(ctx context.Context, scanID int, phaseType string) (batchID string, found bool, err error)
+	FindBatchByMetadata(ctx context.Context, match map[string]string, since time.Time) (batchID string, found bool, err error)
 }
 
 // The production client must implement BatchFinder. It is checked by type
@@ -440,9 +464,7 @@ func (pm *PipelineManager) drive(ctx context.Context, scanID int, mode string) e
 			}
 			pm.launchSource(ctx, scanID, mode, sp.scan, a)
 		case "submitting":
-			if err := pm.reattachSubmitting(ctx, scanID, sp.scan, loadAuthors); err != nil {
-				return err
-			}
+			pm.resolveSubmitting(ctx, scanID, sp.scan)
 		case "complete":
 			e, ok := byType[sp.enrich]
 			switch {
@@ -479,47 +501,109 @@ func (pm *PipelineManager) launchSource(ctx context.Context, scanID int, mode, p
 	}
 }
 
-// reattachSubmitting resolves a batch phase that a previous process left in
-// "submitting": the row was written before CreateBatch, so the batch may or
-// may not exist at OpenAI.
+// resolveSubmitting settles a batch phase left "submitting": its row was
+// written before CreateBatch, and CreateBatch either never returned (the
+// process died) or returned an error that does not prove OpenAI rejected it.
 //
-// Found by metadata: record its id and let the collector finish it. Confirmed
-// absent: CreateBatch never reached OpenAI, so submitting now is the first and
-// only submission. Unknown (no finder, or the lookup failed): fail the phase.
-// Guessing either way is wrong — re-submitting can pay twice, and waiting
-// hangs the op until its 24h timeout.
-func (pm *PipelineManager) reattachSubmitting(ctx context.Context, scanID int, phaseType string, loadAuthors func() ([]database.Author, error)) error {
+//   - found by metadata: record its id; the collector finishes it.
+//   - confirmed absent: no batch reached OpenAI, so submitting now is the only
+//     submission (bounded by maxSubmitAttempts).
+//   - inconclusive lookup: leave it "submitting"; the next heartbeat or poll
+//     looks again. Failing here would orphan a batch OpenAI may be billing.
+//   - no finder at all: fail visibly (ErrBatchSubmitUnknown) — nothing could
+//     ever settle it, and guessing either way pays twice or hangs.
+func (pm *PipelineManager) resolveSubmitting(ctx context.Context, scanID int, phaseType string) {
 	batchID, found, err := pm.findScanBatch(ctx, scanID, phaseType)
 	switch {
-	case err != nil:
+	case errors.Is(err, ErrBatchSubmitUnknown):
 		pm.failPhase(scanID, phaseType, err)
+	case err != nil:
+		plog.Warn("scan %d: %s is mid-submit and its batch lookup was inconclusive; will look again: %v", scanID, phaseType, err)
 	case found:
 		plog.Info("scan %d: re-attached %s to batch %s found by metadata", scanID, phaseType, batchID)
 		if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
-			pm.failPhase(scanID, phaseType, fmt.Errorf("record re-attached batch %s: %w", batchID, err))
+			plog.Error("scan %d: record re-attached batch %s for %s (will retry): %v", scanID, batchID, phaseType, err)
 		}
 	default:
-		authors, err := loadAuthors()
-		if err != nil {
-			return err
+		if n := pm.attempts(scanID, phaseType, "submit_attempts"); n >= maxSubmitAttempts {
+			pm.failPhase(scanID, phaseType, fmt.Errorf("batch create failed %d times with no batch reaching OpenAI", n))
+			return
 		}
-		plog.Info("scan %d: no batch exists for %s; submitting it now", scanID, phaseType)
+		authors, err := pm.mainStore.GetAllAuthors()
+		if err != nil {
+			plog.Warn("scan %d: cannot resubmit %s yet: %v", scanID, phaseType, err)
+			return
+		}
+		plog.Info("scan %d: confirmed no batch exists for %s; submitting it now", scanID, phaseType)
 		pm.launchSource(ctx, scanID, "batch", phaseType, authors)
 	}
-	return nil
+}
+
+// scanBatchOwner is the batch metadata naming the scan phase that owns a
+// batch. The phase row learns its batch id only after CreateBatch returns; if
+// the process dies in between, or CreateBatch errors ambiguously, these keys
+// are the only link from the paid OpenAI batch back to its phase. The nonce
+// (the scan's creation time) keeps a reused scan id from matching.
+func scanBatchOwner(scan *database.Scan, phaseType string) map[string]string {
+	return map[string]string{
+		ai.BatchMetaScanID:    strconv.Itoa(scan.ID),
+		ai.BatchMetaScanPhase: phaseType,
+		ai.BatchMetaScanNonce: strconv.FormatInt(scan.CreatedAt.UnixNano(), 10),
+	}
 }
 
 // findScanBatch looks up a phase's batch through the client's BatchFinder.
+// ErrBatchSubmitUnknown: no finder. errBatchLookup: inconclusive.
 func (pm *PipelineManager) findScanBatch(ctx context.Context, scanID int, phaseType string) (string, bool, error) {
 	finder, ok := pm.parser.(BatchFinder)
 	if !ok {
 		return "", false, ErrBatchSubmitUnknown
 	}
-	batchID, found, err := finder.FindScanBatch(ctx, scanID, phaseType)
+	scan, err := pm.scanStore.GetScan(scanID)
+	if err != nil || scan == nil {
+		return "", false, fmt.Errorf("%w: read scan %d: %v", errBatchLookup, scanID, err)
+	}
+	// An hour of slack under the scan's creation absorbs clock skew between
+	// this host and OpenAI; the batch cannot predate its scan.
+	since := scan.CreatedAt.Add(-time.Hour)
+	batchID, found, err := finder.FindBatchByMetadata(ctx, scanBatchOwner(scan, phaseType), since)
 	if err != nil {
-		return "", false, fmt.Errorf("%w: lookup failed: %w", ErrBatchSubmitUnknown, err)
+		return "", false, fmt.Errorf("%w: %w", errBatchLookup, err)
 	}
 	return batchID, found, nil
+}
+
+// attempts reads a phase's persisted attempt counter.
+func (pm *PipelineManager) attempts(scanID int, phaseType, name string) int {
+	arts, err := pm.scanStore.GetPhaseArtifacts(scanID, phaseType)
+	if err != nil {
+		return 0
+	}
+	var n int
+	_ = json.Unmarshal(arts[name], &n)
+	return n
+}
+
+// bumpAttempts increments and persists a phase's attempt counter.
+func (pm *PipelineManager) bumpAttempts(scanID int, phaseType, name string) int {
+	n := pm.attempts(scanID, phaseType, name) + 1
+	raw, _ := json.Marshal(n)
+	if err := pm.scanStore.SavePhaseArtifact(scanID, phaseType, name, raw); err != nil {
+		plog.Warn("scan %d: persist %s for %s: %v", scanID, name, phaseType, err)
+	}
+	return n
+}
+
+// abandonedForShutdown reports whether ctx ended because the server is
+// shutting down. A phase that sees it must return WITHOUT writing a terminal
+// state: the op resumes after the restart and drive continues the phase from
+// what is persisted. Failing it would throw that work away.
+func abandonedForShutdown(ctx context.Context, scanID int, phaseType string) bool {
+	if !lifecycle.IsShutdown(ctx) {
+		return false
+	}
+	plog.Info("scan %d: %s interrupted by server shutdown; it resumes after the restart", scanID, phaseType)
+	return true
 }
 
 // beginPhase claims a phase for this process and reports whether the caller
@@ -582,9 +666,19 @@ func (pm *PipelineManager) waitForScan(ctx context.Context, scanID int, mode str
 			return err
 
 		case <-ctx.Done():
-			// Route through CancelScan, not a bare context cancel: a submitted
-			// batch is held by OpenAI and keeps costing money until the batch
-			// job itself is canceled, which only CancelScan does.
+			// A server restart is not a cancel. The registry cancels every
+			// running op on shutdown with lifecycle.ErrShutdown as the cause;
+			// this op is ResumeRestart, so leave the batches running and the
+			// phases where they are for the resumed run to pick up.
+			if lifecycle.IsShutdown(ctx) {
+				plog.Info("scan %d: server shutting down; leaving the scan to resume after the restart", scanID)
+				pm.detachScan(scanID)
+				return ctx.Err()
+			}
+			// Operator cancel or timeout: route through CancelScan, not a bare
+			// context cancel. A submitted batch is held by OpenAI and keeps
+			// costing money until the batch job itself is canceled, which only
+			// CancelScan does.
 			if cerr := pm.CancelScan(scanID); cerr != nil {
 				slog.Warn("[AI Pipeline] cancel on context done failed", "scanID", scanID, "err", cerr)
 			}
@@ -884,6 +978,9 @@ func (pm *PipelineManager) runGroupsScanRealtime(ctx context.Context, scanID int
 	// to keep.
 	suggestions, err := pm.parser.ReviewAuthorDuplicates(ctx, inputs)
 	if err != nil {
+		if abandonedForShutdown(ctx, scanID, "groups_scan") {
+			return
+		}
 		pm.failPhase(scanID, "groups_scan", fmt.Errorf("AI review failed: %w", err))
 		return
 	}
@@ -966,6 +1063,9 @@ func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, 
 
 		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, inputs[start:end])
 		if err != nil {
+			if abandonedForShutdown(ctx, scanID, "full_scan") {
+				return
+			}
 			pm.failPhase(scanID, "full_scan", fmt.Errorf("AI discovery failed (chunk %d-%d): %w", start, end, err))
 			return
 		}
@@ -988,36 +1088,35 @@ func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, 
 // submitBatch records "submitting" BEFORE CreateBatch, then the batch id
 // after. The pre-submit write is what makes a crash inside CreateBatch
 // recoverable: without it the phase still reads "pending" after a restart and
-// the resume launches — and pays for — a second batch. With it, drive knows the
-// batch may exist and re-attaches through reattachSubmitting.
-func (pm *PipelineManager) submitBatch(scanID int, phaseType string, create func() (string, error)) {
+// the resume launches — and pays for — a second batch. With it, the phase is
+// settled by resolveSubmitting, which looks the batch up by its owner metadata.
+//
+// A CreateBatch ERROR is handled the same way, not as a failure: a timeout or
+// reset connection does not prove OpenAI rejected the request, and failing the
+// phase there would orphan a batch it may already be billing.
+func (pm *PipelineManager) submitBatch(scanID int, phaseType string, create func(owner map[string]string) (string, error)) {
+	scan, err := pm.scanStore.GetScan(scanID)
+	if err != nil || scan == nil {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("read scan for batch owner: %v", err))
+		return
+	}
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitting", ""); err != nil {
 		// Never create a batch this process could not account for after a crash.
 		pm.failPhase(scanID, phaseType, fmt.Errorf("mark submitting: %w", err))
 		return
 	}
-	batchID, err := create()
+	pm.bumpAttempts(scanID, phaseType, "submit_attempts")
+	batchID, err := create(scanBatchOwner(scan, phaseType))
 	if err != nil {
-		pm.failPhase(scanID, phaseType, fmt.Errorf("create batch: %w", err))
+		plog.Warn("scan %d: %s CreateBatch errored; left submitting for a metadata lookup to settle: %v", scanID, phaseType, err)
 		return
 	}
 	plog.Info("scan %d: %s batch submitted as %s", scanID, phaseType, batchID)
 	if err := pm.scanStore.UpdatePhaseStatus(scanID, phaseType, "submitted", batchID); err != nil {
-		// The row stays "submitting"; a restart re-attaches by metadata.
+		// The row stays "submitting"; resolveSubmitting re-attaches by metadata.
 		plog.Error("scan %d: could not record batch %s for %s: %v", scanID, batchID, phaseType, err)
 	}
 	// The collector (heartbeat or batch poller) finishes it.
-}
-
-// scanBatchOwner is the batch metadata naming the scan phase that owns a batch.
-// The phase row learns its batch id only after CreateBatch returns; if the
-// process dies in between, these keys are the only link from the paid OpenAI
-// batch back to the phase that submitted it.
-func scanBatchOwner(scanID int, phaseType string) map[string]string {
-	return map[string]string{
-		ai.BatchMetaScanID:    strconv.Itoa(scanID),
-		ai.BatchMetaScanPhase: phaseType,
-	}
 }
 
 func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, authors []database.Author) {
@@ -1047,8 +1146,8 @@ func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, a
 		pm.failPhase(scanID, "groups_scan", err)
 		return
 	}
-	pm.submitBatch(scanID, "groups_scan", func() (string, error) {
-		return pm.parser.CreateBatchAuthorReview(ctx, inputs, scanBatchOwner(scanID, "groups_scan"))
+	pm.submitBatch(scanID, "groups_scan", func(owner map[string]string) (string, error) {
+		return pm.parser.CreateBatchAuthorReview(ctx, inputs, owner)
 	})
 }
 
@@ -1069,8 +1168,8 @@ func (pm *PipelineManager) runFullScanBatch(ctx context.Context, scanID int, aut
 		pm.completeEmptySource(ctx, scanID, "full_scan")
 		return
 	}
-	pm.submitBatch(scanID, "full_scan", func() (string, error) {
-		return pm.parser.CreateBatchAuthorDedup(ctx, inputs, scanBatchOwner(scanID, "full_scan"))
+	pm.submitBatch(scanID, "full_scan", func(owner map[string]string) (string, error) {
+		return pm.parser.CreateBatchAuthorDedup(ctx, inputs, owner)
 	})
 }
 
@@ -1191,6 +1290,11 @@ func (pm *PipelineManager) runEnrichment(ctx context.Context, scanID int, source
 		// Re-submit to AI with enriched context
 		discoveries, err := pm.parser.DiscoverAuthorDuplicates(ctx, deduped)
 		if err != nil {
+			// A shutdown is not an enrichment failure: completing with the
+			// un-enriched suggestions would lose the enrichment for good.
+			if abandonedForShutdown(ctx, scanID, enrichPhase) {
+				return
+			}
 			// Enrichment failure is non-fatal — use original suggestions
 			slog.Info("[AI Pipeline] Scan enrichment AI call failed for — using original suggestions", "scanID", scanID, "enrichPhase", enrichPhase, "err", err)
 			suggestionsJSON, _ := json.Marshal(suggestions)
@@ -1357,30 +1461,67 @@ func (pm *PipelineManager) pollScanBatches(ctx context.Context, scanID int) {
 	for _, phase := range phases {
 		switch {
 		case phase.Status == "submitting" && !pm.phaseClaimed(scanID, phase.PhaseType):
-			// Left by a process that died inside CreateBatch. Attach if the
-			// batch is findable; deciding to re-submit is drive's job, at
-			// RunScan time, never a poller's.
-			if batchID, found, err := pm.findScanBatch(ctx, scanID, phase.PhaseType); err == nil && found {
-				if err := pm.scanStore.UpdatePhaseStatus(scanID, phase.PhaseType, "submitted", batchID); err == nil {
-					plog.Info("scan %d: re-attached %s to batch %s", scanID, phase.PhaseType, batchID)
-				}
-			}
+			// Left by a process that died inside CreateBatch, or by a
+			// CreateBatch that errored. Claimed means a submit is running in
+			// this process right now, and its outcome is not known yet.
+			pm.resolveSubmitting(ctx, scanID, phase.PhaseType)
 		case phase.Status == "submitted" && phase.BatchID != "":
 			status, outputFileID, err := pm.parser.CheckBatchStatus(ctx, phase.BatchID)
 			if err != nil {
 				plog.Error("scan %d: polling batch %s: %v", scanID, phase.BatchID, err)
 				continue
 			}
-			switch status {
-			case "completed":
+			switch {
+			case status == "completed":
 				pm.handleBatchComplete(ctx, scanID, phase.PhaseType, outputFileID)
-			case "failed", "expired", "cancelled":
-				pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("batch %s: %s", phase.BatchID, status))
+			case (status == "expired" || status == "cancelled" || status == "failed") && outputFileID != "":
+				// OpenAI ended the batch, but the requests that finished have
+				// output. Collect it: those answers are paid for.
+				plog.Warn("scan %d: batch %s %s with partial output; collecting it", scanID, phase.BatchID, status)
+				pm.handleBatchComplete(ctx, scanID, phase.PhaseType, outputFileID)
+			case status == "expired" || status == "cancelled" || status == "failed":
+				pm.failPhase(scanID, phase.PhaseType, fmt.Errorf("batch %s: %s with no output", phase.BatchID, status))
 			default:
 				plog.Debug("scan %d: batch %s status %s", scanID, phase.BatchID, status)
 			}
 		}
 	}
+}
+
+// CollectBatch is the batch poller's handler body for one listed batch. It
+// polls, then reports whether that batch is DONE with: nil when the phase
+// owning it is terminal, or when no scan could own it (not ours); an error
+// while it is still owed, so the poller does not journal it as handled and
+// dispatches it again. Journaling a batch nothing collected would drop it
+// from the poller's view for good.
+func (pm *PipelineManager) CollectBatch(ctx context.Context, batchID string) error {
+	pm.PollBatchPhases(ctx)
+	scans, err := pm.scanStore.ListScans()
+	if err != nil {
+		return fmt.Errorf("list scans: %w", err)
+	}
+	awaitingAttach := false
+	for _, scan := range scans {
+		phases, err := pm.scanStore.GetPhases(scan.ID)
+		if err != nil {
+			return fmt.Errorf("read phases of scan %d: %w", scan.ID, err)
+		}
+		for _, p := range phases {
+			if p.BatchID == batchID {
+				if isTerminalPhase(p.Status) {
+					return nil
+				}
+				return fmt.Errorf("batch %s not yet collected (scan %d %s is %s)", batchID, scan.ID, p.PhaseType, p.Status)
+			}
+			if p.Status == "submitting" && scan.Status == "scanning" {
+				awaitingAttach = true
+			}
+		}
+	}
+	if awaitingAttach {
+		return fmt.Errorf("batch %s may belong to a scan phase still awaiting re-attachment", batchID)
+	}
+	return nil
 }
 
 // batchGroupAuthorIDs returns the grouping a groups batch was submitted with.
@@ -1428,7 +1569,7 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 	case "groups_scan":
 		suggestions, err := pm.parser.DownloadBatchGroupsResults(ctx, outputFileID)
 		if err != nil {
-			pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results: %w", err))
+			pm.downloadFailed(scanID, phaseType, err)
 			return
 		}
 		groupIDs, err := pm.batchGroupAuthorIDs(scanID)
@@ -1442,12 +1583,25 @@ func (pm *PipelineManager) handleBatchComplete(ctx context.Context, scanID int, 
 	case "full_scan":
 		discoveries, err := pm.parser.DownloadBatchResults(ctx, outputFileID)
 		if err != nil {
-			pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results: %w", err))
+			pm.downloadFailed(scanID, phaseType, err)
 			return
 		}
 		pm.finishSource(ctx, scanID, phaseType, phase.InputData, discoveries,
 			fullSuggestionsToScanSuggestions(discoveries))
 	}
+}
+
+// downloadFailed handles a failed download of a finished batch's output. It
+// is usually transient (a 5xx, a reset connection), so the phase stays
+// "submitted" and the next poll downloads again; only maxDownloadAttempts
+// consecutive failures fail the phase.
+func (pm *PipelineManager) downloadFailed(scanID int, phaseType string, err error) {
+	n := pm.bumpAttempts(scanID, phaseType, "download_attempts")
+	if n >= maxDownloadAttempts {
+		pm.failPhase(scanID, phaseType, fmt.Errorf("download batch results failed %d times: %w", n, err))
+		return
+	}
+	plog.Warn("scan %d: download of %s results failed (attempt %d/%d), will retry: %v", scanID, phaseType, n, maxDownloadAttempts, err)
 }
 
 // idsKey creates a string key from a sorted list of IDs for map lookup.

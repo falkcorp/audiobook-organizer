@@ -1,5 +1,5 @@
 // file: internal/server/aiscan_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f7a2c91-8d63-4e05-b1a7-9c3e5d80f624
 // last-edited: 2026-09-19
 
@@ -60,10 +60,18 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 		// reads the phase rows — pending phases launch; a realtime full_scan
 		// continues from its persisted chunks and re-requests none of them; a
 		// submitted batch re-attaches to the job OpenAI holds; a batch phase that
-		// died mid-submit ("submitting") re-attaches by batch metadata or fails
-		// visibly rather than paying for a second batch; finished phases feed
+		// died mid-submit or whose CreateBatch errored ("submitting") re-attaches
+		// by batch metadata, resubmits only on a confirmed absence, and stays
+		// "submitting" while the lookup is inconclusive; finished phases feed
 		// enrichment and cross-validation, which replace rather than append
 		// their results. The only param, scan_id, never changes.
+		//
+		// A restart must not look like a cancel. The registry cancels running
+		// ops on shutdown with registry.ErrShutdown as the context cause, and
+		// RunScan then returns WITHOUT CancelScan: the batches keep running at
+		// OpenAI and the phases keep their state for the resumed run. Only an
+		// operator cancel or the op timeout (a cause other than ErrShutdown)
+		// cancels the batches and marks the scan canceled.
 		ResumePolicy: opsregistry.ResumeRestart,
 
 		// Serializes scans. Two could previously run at once; a second now
