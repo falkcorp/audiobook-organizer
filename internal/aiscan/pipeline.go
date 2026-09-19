@@ -1519,6 +1519,12 @@ func (pm *PipelineManager) CollectBatch(ctx context.Context, batchID string) err
 		}
 	}
 	if awaitingAttach {
+		// Not journaled yet: this may be the batch that phase is waiting to
+		// re-attach. The cost is that every unowned author_* batch is
+		// re-dispatched each tick meanwhile. That is bounded: a "submitting"
+		// phase is settled by the next lookup that succeeds, fails after
+		// maxSubmitAttempts, or is canceled with its scan when the
+		// ai.author-scan op times out (24h).
 		return fmt.Errorf("batch %s may belong to a scan phase still awaiting re-attachment", batchID)
 	}
 	return nil

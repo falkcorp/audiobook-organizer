@@ -1,8 +1,14 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 import { useState, useEffect } from 'react';
+
+// A scan in one of these states will not change again, so it is not polled
+// and does not block starting a new scan. "superseded" is an unreviewed
+// nightly ai-dedup-batch list replaced by a newer run.
+const TERMINAL_SCAN_STATUSES = new Set(['complete', 'failed', 'canceled', 'superseded']);
+const isTerminalScan = (status: string) => TERMINAL_SCAN_STATUSES.has(status);
 import { useSearchParams } from 'react-router-dom';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {
@@ -68,7 +74,7 @@ function AIAuthorPipelinePage() {
 
   // Poll active scan status
   useEffect(() => {
-    if (!scan || scan.status === 'complete' || scan.status === 'failed') return;
+    if (!scan || isTerminalScan(scan.status)) return;
     let mounted = true;
     const interval = setInterval(async () => {
       try {
@@ -139,9 +145,7 @@ function AIAuthorPipelinePage() {
         <Button
           variant="contained"
           onClick={startScan}
-          disabled={
-            loading || (scan != null && scan.status !== 'complete' && scan.status !== 'failed')
-          }
+          disabled={loading || (scan != null && !isTerminalScan(scan.status))}
           startIcon={<AutoAwesomeIcon />}
         >
           Run Scan
@@ -163,63 +167,68 @@ function AIAuthorPipelinePage() {
       )}
 
       {/* Active Scan Status */}
-      {scan &&
-        scan.status !== 'complete' &&
-        scan.status !== 'failed' &&
-        scan.status !== 'canceled' && (
-          <Paper
-            elevation={3}
-            sx={{
-              position: 'sticky',
-              top: 0,
-              zIndex: 10,
-              mx: 2,
-              mb: 2,
-              p: 2,
-              borderRadius: 2,
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Typography variant="subtitle2">
-                Scan #{scan.id} — {scan.status}
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                {(scan.phases || []).map((phase) => (
-                  <Chip
-                    key={phase.phase_type}
-                    label={`${phase.phase_type.replace('_', ' ')}: ${phase.status}`}
-                    color={
-                      phase.status === 'complete'
-                        ? 'success'
-                        : phase.status === 'failed'
-                          ? 'error'
-                          : 'default'
-                    }
-                    size="small"
-                  />
-                ))}
-              </Box>
-              <Box sx={{ flex: 1 }} />
-              <Button
-                variant="outlined"
-                color="error"
-                size="small"
-                onClick={async () => {
-                  try {
-                    await api.cancelAIScan(scan.id);
-                    const updated = await api.getAIScan(scan.id);
-                    setScan(updated);
-                  } catch (e: unknown) {
-                    setError(e instanceof Error ? e.message : 'Failed to cancel scan');
+      {scan && !isTerminalScan(scan.status) && (
+        <Paper
+          elevation={3}
+          sx={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            mx: 2,
+            mb: 2,
+            p: 2,
+            borderRadius: 2,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="subtitle2">
+              Scan #{scan.id} — {scan.status}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {(scan.phases || []).map((phase) => (
+                <Chip
+                  key={phase.phase_type}
+                  label={`${phase.phase_type.replace('_', ' ')}: ${phase.status}`}
+                  color={
+                    phase.status === 'complete'
+                      ? 'success'
+                      : phase.status === 'failed'
+                        ? 'error'
+                        : 'default'
                   }
-                }}
-              >
-                Cancel Scan
-              </Button>
+                  size="small"
+                />
+              ))}
             </Box>
-            <LinearProgress sx={{ mt: 1 }} />
-          </Paper>
-        )}
+            <Box sx={{ flex: 1 }} />
+            <Button
+              variant="outlined"
+              color="error"
+              size="small"
+              onClick={async () => {
+                try {
+                  await api.cancelAIScan(scan.id);
+                  const updated = await api.getAIScan(scan.id);
+                  setScan(updated);
+                } catch (e: unknown) {
+                  setError(e instanceof Error ? e.message : 'Failed to cancel scan');
+                }
+              }}
+            >
+              Cancel Scan
+            </Button>
+          </Box>
+          <LinearProgress sx={{ mt: 1 }} />
+        </Paper>
+      )}
+
+      {/* Superseded scan message */}
+      {scan && scan.status === 'superseded' && (
+        <Alert severity="info" sx={{ mx: 2, mb: 2 }}>
+          Scan #{scan.id} was replaced by a newer nightly run before anything was applied from it.
+          Review the newest scan instead.
+        </Alert>
+      )}
 
       {/* Canceled scan message */}
       {scan && scan.status === 'canceled' && (
