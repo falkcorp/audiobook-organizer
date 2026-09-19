@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package aibackendshandler provides HTTP handlers for the AI backend-mode
 // toggle (TASK-10's AIBackendConfig): a status probe that reports the
@@ -252,6 +252,10 @@ type EndpointStatus struct {
 	InCooldown           bool       `json:"in_cooldown"`
 	CooldownUntil        *time.Time `json:"cooldown_until,omitempty"`
 	Probe                ProbeState `json:"probe"`
+	// Attribution is what this endpoint has actually served since process
+	// start (requests, failures, last_used, per-capability counts), from the
+	// dispatcher's process-wide ledger.
+	Attribution aidispatch.EndpointAttribution `json:"attribution"`
 }
 
 // CapabilityCoverage is what selection over the rows would pick for one
@@ -264,17 +268,24 @@ type CapabilityCoverage struct {
 
 // EndpointsStatusResponse is the body of GET /api/v1/ai/endpoints/status.
 type EndpointsStatusResponse struct {
-	// RoutingActive is false until call sites move onto the dispatcher; the
-	// rows are informational and every site still uses the legacy fields.
+	// RoutingActive is the ai_endpoints_routing switch. When false the rows
+	// are informational and every site uses the legacy fields; when true the
+	// routed capabilities named in endpointsStatusNoteOn are served by the rows.
 	RoutingActive bool                 `json:"routing_active"`
 	Note          string               `json:"note"`
 	Endpoints     []EndpointStatus     `json:"endpoints"`
 	Coverage      []CapabilityCoverage `json:"coverage"`
 }
 
-const endpointsStatusNote = "ai_endpoints is stored and validated but not yet used for routing; " +
-	"every AI call still resolves its backend from the legacy settings. Endpoints are not probed yet, " +
-	"so coverage ignores whisper_requires (the gpu label is measured by the probe, not declared)."
+const (
+	endpointsStatusNoteOff = "ai_endpoints is stored and validated but not yet used for routing " +
+		"(ai_endpoints_routing is off); every AI call still resolves its backend from the legacy settings. " +
+		"Endpoints are not probed yet, so coverage ignores whisper_requires (the gpu label is measured by the probe, not declared)."
+	endpointsStatusNoteOn = "ai_endpoints_routing is on: llm.filename_parse (scan / ai-parse, llm_mode local or " +
+		"openai-fallback-local) and embed.text (embedding_mode local) are served by these rows; every other " +
+		"capability still resolves its backend from the legacy settings. Endpoints are not probed yet, so coverage " +
+		"ignores whisper_requires (the gpu label is measured by the probe, not declared)."
+)
 
 // EndpointsStatus reports each ai_endpoints row with the process-wide
 // in-flight and failure-cooldown state from the dispatcher, plus per-capability
@@ -286,6 +297,7 @@ func (h *Handler) EndpointsStatus(c *gin.Context) {
 	rows := snap.AIEndpoints
 	health := aidispatch.DefaultHealth()
 	slots := aidispatch.DefaultSlots()
+	attribution := aidispatch.DefaultAttribution()
 
 	masked := config.MaskAIEndpoints(rows)
 	eps := make([]EndpointStatus, 0, len(rows))
@@ -297,6 +309,7 @@ func (h *Handler) EndpointsStatus(c *gin.Context) {
 			EffectiveConcurrency: aidispatch.EffectiveConcurrency(r.Concurrency),
 			InCooldown:           health.InCooldown(r.ID),
 			Probe:                ProbeState{Status: "not_probed", Detail: "endpoint probing is not implemented yet"},
+			Attribution:          attribution.Snapshot(r.ID),
 		}
 		if st.InCooldown {
 			until := health.CooldownUntil(r.ID)
@@ -323,9 +336,13 @@ func (h *Handler) EndpointsStatus(c *gin.Context) {
 		coverage = append(coverage, cc)
 	}
 
+	note := endpointsStatusNoteOff
+	if snap.AIEndpointsRouting {
+		note = endpointsStatusNoteOn
+	}
 	httputil.RespondWithOK(c, EndpointsStatusResponse{
-		RoutingActive: false,
-		Note:          endpointsStatusNote,
+		RoutingActive: snap.AIEndpointsRouting,
+		Note:          note,
 		Endpoints:     eps,
 		Coverage:      coverage,
 	})
