@@ -1,5 +1,5 @@
 // file: internal/fingerprint/window_similarity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4b8f8ce-efbc-42c4-bb0a-87ade27a87f5
 // last-edited: 2026-09-19
 
@@ -203,5 +203,35 @@ func TestMedian(t *testing.T) {
 	}
 	if m := median([]float64{0.9, 0.1, 0.5, 0.7}); m != 0.6 {
 		t.Errorf("even median = %v", m)
+	}
+}
+
+// TestWindowSetSimilarity_EquivalentToolPairs: a set cut by a worker with an
+// allowlisted tool pair compares with a server-cut set (the same rule that
+// makes the worker's windows "current"); a pair outside the class is refused.
+func TestWindowSetSimilarity_EquivalentToolPairs(t *testing.T) {
+	prev := EquivalentToolPairs()
+	t.Cleanup(func() { SetToolEquivalence(ToolVersionInfo{}, prev) })
+	const dur = 3600.0
+	content := frameStream(7, frames(dur)+100)
+	server := bookSet(content, dur) // 1.6.1 / 8.0.1
+	worker := bookSet(content, dur)
+	for i := range worker {
+		worker[i].FpcalcVersion, worker[i].FFmpegVersion = "1.6.0", "8.0.2"
+	}
+	serverPair := ToolVersionInfo{Fpcalc: "1.6.1", FFmpeg: "8.0.1"}
+
+	SetToolEquivalence(serverPair, ParseToolPairs([]string{"1.6.0/8.0.2"}))
+	res, err := WindowSetSimilarity(server, worker)
+	if err != nil {
+		t.Fatalf("allowlisted worker pair refused: %v", err)
+	}
+	if res.Score < 0.99 {
+		t.Errorf("identical content scored %.3f", res.Score)
+	}
+
+	SetToolEquivalence(serverPair, nil)
+	if _, err := WindowSetSimilarity(server, worker); !errors.Is(err, ErrIncompatibleWindows) {
+		t.Fatalf("non-allowlisted pair: err = %v, want ErrIncompatibleWindows", err)
 	}
 }

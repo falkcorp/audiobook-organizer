@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1cf62cc0-1b49-43dd-a9f1-317ac56e7aa0
 // last-edited: 2026-09-19
 
@@ -43,7 +43,7 @@ func (f *fakeHub) Hello(context.Context) (*workerapi.HelloResponse, error) {
 func (f *fakeHub) Lease(context.Context, workerapi.LeaseRequest) (*workerapi.LeaseResponse, error) {
 	return f.lease, f.err
 }
-func (f *fakeHub) Renew(id string) (*workerapi.RenewResponse, error) {
+func (f *fakeHub) Renew(id string, _ workerapi.RenewRequest) (*workerapi.RenewResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -97,7 +97,7 @@ func do(r http.Handler, method, path, body string, hdr ...string) *httptest.Resp
 var allRoutes = []struct{ method, path, body string }{
 	{http.MethodGet, "/api/v1/fingerprint/worker/hello", ""},
 	{http.MethodPost, "/api/v1/fingerprint/worker/lease", `{"worker_id":"w1"}`},
-	{http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/renew", ""},
+	{http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/renew", `{"worker_id":"w1"}`},
 	{http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/release", ""},
 	{http.MethodPost, "/api/v1/fingerprint/worker/results", `{"worker_id":"w1","results":[]}`},
 }
@@ -136,7 +136,7 @@ func TestRoutes_StatusMapping(t *testing.T) {
 		require.Equal(t, c.want, w.Code, "%v", c.err)
 	}
 	r := router(&fakeHub{err: workerapi.ErrLeaseGone}, true)
-	require.Equal(t, http.StatusGone, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/renew", "").Code)
+	require.Equal(t, http.StatusGone, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/renew", `{"worker_id":"w1"}`).Code)
 }
 
 func TestLease_204WhenNothingLeaseable(t *testing.T) {
@@ -157,6 +157,8 @@ func TestRoutes_BadBodies(t *testing.T) {
 	r := router(&fakeHub{}, true)
 	require.Equal(t, http.StatusBadRequest, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease", "").Code)
 	require.Equal(t, http.StatusBadRequest, do(r, http.MethodPost, "/api/v1/fingerprint/worker/results", "{nope").Code)
+	require.Equal(t, http.StatusBadRequest, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/renew", "").Code,
+		"renew must name the worker that holds the lease")
 	require.Equal(t, http.StatusOK, do(r, http.MethodPost, "/api/v1/fingerprint/worker/lease/L1/release", "").Code,
 		"an empty release body hands back the whole lease")
 }

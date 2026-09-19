@@ -1,5 +1,5 @@
 // file: internal/fingerprint/window_similarity.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8ab73d65-1fc9-4267-b61c-1be25fcee612
 // last-edited: 2026-09-19
 
@@ -178,9 +178,13 @@ func splitHead(set []WindowPrint) (*WindowPrint, []WindowPrint) {
 	return head, rest
 }
 
+// sameProvenance: same pipeline, window set and algorithm, and tool pairs
+// that are equal or in one equivalence class (ToolsEquivalent, the rule the
+// window op's "current" check also uses).
 func sameProvenance(a, b WindowPrint) bool {
 	return a.Pipeline == b.Pipeline && a.WindowSet == b.WindowSet && a.Algorithm == b.Algorithm &&
-		a.FpcalcVersion == b.FpcalcVersion && a.FFmpegVersion == b.FFmpegVersion
+		ToolsEquivalent(ToolVersionInfo{Fpcalc: a.FpcalcVersion, FFmpeg: a.FFmpegVersion},
+			ToolVersionInfo{Fpcalc: b.FpcalcVersion, FFmpeg: b.FFmpegVersion})
 }
 
 func provenanceDiff(a, b WindowPrint) string {

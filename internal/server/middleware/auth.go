@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 package middleware
 
@@ -137,6 +137,9 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		// An earlier stage (e.g. CloudflareAccessAuth) may have already resolved and
 		// bound the user for this request; if so, don't require a session token.
 		if u, ok := c.Get(contextUserKey); ok && u != nil {
+			if abortWorkerOnlyOutsideWorkerAPI(c) {
+				return
+			}
 			c.Next()
 			return
 		}
@@ -188,8 +191,44 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		ctx = auth.WithPermissions(ctx, perms)
 		c.Request = c.Request.WithContext(ctx)
 
+		if abortWorkerOnlyOutsideWorkerAPI(c) {
+			return
+		}
 		c.Next()
 	}
+}
+
+// fingerprintWorkerAPIPrefix is the only path a worker-only credential may use.
+const fingerprintWorkerAPIPrefix = "/api/v1/fingerprint/worker/"
+
+// workerOnly reports whether a permission set is exactly the remote
+// fingerprint worker's: fingerprint.worker and nothing else.
+func workerOnly(perms map[auth.Permission]struct{}) bool {
+	if len(perms) == 0 {
+		return false
+	}
+	for p := range perms {
+		if p != auth.PermFingerprintWorker {
+			return false
+		}
+	}
+	return true
+}
+
+// abortWorkerOnlyOutsideWorkerAPI confines a worker-only credential (an API
+// key scoped to fingerprint.worker, or a user holding only the fp-worker
+// role) to /api/v1/fingerprint/worker/. Without it such a credential would
+// still pass every protected route that checks no permission at all (reading
+// progress, playlists). Called after the permissions are bound; true means
+// the request was aborted with 403.
+func abortWorkerOnlyOutsideWorkerAPI(c *gin.Context) bool {
+	if !workerOnly(auth.PermissionsFromContext(c.Request.Context())) ||
+		strings.HasPrefix(c.Request.URL.Path, fingerprintWorkerAPIPrefix) {
+		return false
+	}
+	httputil.RespondWithForbidden(c, "this credential is limited to the fingerprint worker API")
+	c.Abort()
+	return true
 }
 
 // handleAPIKeyAuth validates an "abk_" prefixed token and, on success, binds
@@ -266,6 +305,9 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	ctx = auth.WithPermissions(ctx, effectivePerms)
 	c.Request = c.Request.WithContext(ctx)
 
+	if abortWorkerOnlyOutsideWorkerAPI(c) {
+		return
+	}
 	c.Next()
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-08-02
+// last-edited: 2026-09-19
 
 package middleware
 
@@ -472,6 +472,10 @@ func ABSRequireAuth(r *ABSIdentityResolver) gin.HandlerFunc {
 			return
 		}
 		r.Bind(c, id)
+		// A worker-only credential never reaches the ABS surface either.
+		if abortWorkerOnlyOutsideWorkerAPI(c) {
+			return
+		}
 		noteServiceTokenPairing(ABSServiceToken(c), id)
 		c.Next()
 	}
