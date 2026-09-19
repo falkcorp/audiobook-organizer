@@ -1,5 +1,5 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
 // last-edited: 2026-09-19
 
@@ -158,7 +158,6 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 			f.FileSizeBytes = *bk.FileSize
 		}
 	}
-	var total float64
 	for i := range files {
 		fl := &files[i]
 		if f.PrimaryPath == "" && fl.FilePath != "" {
@@ -169,16 +168,6 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 		if fl.FileSize > f.FileSizeBytes {
 			f.FileSizeBytes = fl.FileSize
 		}
-		// Prefer fpcalc-measured duration; fall back to container duration (int seconds).
-		if fl.AcoustIDFingerprintDurationSec > 0 {
-			total += fl.AcoustIDFingerprintDurationSec
-		} else if fl.Duration > 0 {
-			// Normalize per file BEFORE summing: historical rows written before the
-			// CONS-18 write chokepoint may hold ms-scale durations. The bitrate test
-			// is a per-file contract (this file's size vs its duration), so an
-			// aggregate-level check would miss one corrupt file among clean ones.
-			total += float64(database.NormalizeDurationSec(fl.FileSize, fl.Duration))
-		}
 		if fl.AcoustIDOnlineRecordingID != "" {
 			f.RecordingIDs = append(f.RecordingIDs, fl.AcoustIDOnlineRecordingID)
 		}
@@ -186,7 +175,14 @@ func buildFeatures(bk *database.Book, files []database.BookFile) database.BookFe
 			f.ITunesPIDPresent = true
 		}
 	}
-	f.TotalDurationSec = total
+	// TotalDurationSec is the canonical runtime (database.ComputeBookRuntime),
+	// and only when COMPLETE; 0 means unknown, which the label rules already
+	// read as "cannot judge". The old per-file sum silently skipped files with
+	// no duration, so a multi-file book with two probed chapters got a
+	// 40-minute total and a DurationRatio that looked like a different book.
+	if sec, ok := database.ComputeBookRuntime(bk, files).KnownSeconds(); ok {
+		f.TotalDurationSec = float64(sec)
+	}
 	return f
 }
 

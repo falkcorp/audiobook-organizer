@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.7.0
+// version: 1.8.2
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -73,6 +73,18 @@ import {
   isRowActionable,
   type RowState,
 } from './rowState';
+
+// bookRuntimeLabel is the book's runtime as the server computed it from its
+// files. A partial runtime (some chapters never probed) is shown as a lower
+// bound with its coverage, never as the book's length: showing it bare is how
+// a 10 h book read as "40m" next to a 10 h candidate.
+function bookRuntimeLabel(book: CandidateResult['book']): string | undefined {
+  if (book.duration_seconds) return formatDuration(book.duration_seconds);
+  if (book.runtime_status === 'partial' && book.runtime_lower_bound_seconds) {
+    return `at least ${formatDuration(book.runtime_lower_bound_seconds)} (${book.runtime_files_known} of ${book.runtime_files_counted} files measured)`;
+  }
+  return undefined;
+}
 
 /**
  * "Why did it score that?" -- the recorded derivation for one candidate.
@@ -263,10 +275,8 @@ function GroupedCard({
                     }}
                   >
                     {r.book.format && <Chip label={r.book.format} size="small" />}
-                    {r.book.duration_seconds && (
-                      <Typography variant="caption">
-                        {formatDuration(r.book.duration_seconds)}
-                      </Typography>
+                    {bookRuntimeLabel(r.book) && (
+                      <Typography variant="caption">{bookRuntimeLabel(r.book)}</Typography>
                     )}
                     {r.book.file_size_bytes && (
                       <Typography variant="caption">
@@ -580,9 +590,7 @@ const CompactRow = memo(function CompactRow({
             sx={{ cursor: 'pointer' }}
           />
         )}
-        {rowState === 'applied' && (
-          <Chip label="Applied" size="small" color="success" />
-        )}
+        {rowState === 'applied' && <Chip label="Applied" size="small" color="success" />}
         {rowState === 'rejected' && (
           <Chip
             label="Rejected — click to undo"
@@ -629,14 +637,14 @@ const CompactRow = memo(function CompactRow({
                   </Typography>
                   <Typography variant="body2">{r.book.author}</Typography>
                   {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
-                  {r.book.duration_seconds && (
+                  {bookRuntimeLabel(r.book) && (
                     <Typography
                       variant="caption"
                       sx={{
                         display: 'block',
                       }}
                     >
-                      {formatDuration(r.book.duration_seconds)}
+                      {bookRuntimeLabel(r.book)}
                     </Typography>
                   )}
                   {r.book.file_size_bytes && (
@@ -841,14 +849,14 @@ const TwoColumnCard = memo(function TwoColumnCard({
               </Typography>
               <Typography variant="body2">{r.book.author}</Typography>
               {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
-              {r.book.duration_seconds && (
+              {bookRuntimeLabel(r.book) && (
                 <Typography
                   variant="caption"
                   sx={{
                     display: 'block',
                   }}
                 >
-                  {formatDuration(r.book.duration_seconds)}
+                  {bookRuntimeLabel(r.book)}
                 </Typography>
               )}
               {r.book.file_size_bytes && (
@@ -896,7 +904,9 @@ const TwoColumnCard = memo(function TwoColumnCard({
                   height: 80,
                   cursor: r.candidate?.cover_url ? 'pointer' : 'default',
                 }}
-                onClick={() => r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)}
+                onClick={() =>
+                  r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)
+                }
               />
               <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Typography
@@ -1009,7 +1019,9 @@ const TwoColumnCard = memo(function TwoColumnCard({
                       size="small"
                       variant="contained"
                       color="success"
-                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'apply', id: bookId })}
+                      onClick={() =>
+                        handlers.onAction({ lane: 'metadata', type: 'apply', id: bookId })
+                      }
                     >
                       Apply
                     </Button>
@@ -1017,14 +1029,18 @@ const TwoColumnCard = memo(function TwoColumnCard({
                       size="small"
                       variant="outlined"
                       color="error"
-                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'reject', id: bookId })}
+                      onClick={() =>
+                        handlers.onAction({ lane: 'metadata', type: 'reject', id: bookId })
+                      }
                     >
                       Reject
                     </Button>
                     <Button
                       size="small"
                       variant="text"
-                      onClick={() => handlers.onAction({ lane: 'metadata', type: 'skip', id: bookId })}
+                      onClick={() =>
+                        handlers.onAction({ lane: 'metadata', type: 'skip', id: bookId })
+                      }
                     >
                       Skip
                     </Button>
@@ -1034,7 +1050,9 @@ const TwoColumnCard = memo(function TwoColumnCard({
                   <Chip
                     label="Skipped — click to undo"
                     size="small"
-                    onClick={() => handlers.onAction({ lane: 'metadata', type: 'unskip', id: bookId })}
+                    onClick={() =>
+                      handlers.onAction({ lane: 'metadata', type: 'unskip', id: bookId })
+                    }
                     sx={{ cursor: 'pointer', mt: 1 }}
                   />
                 )}
@@ -1043,7 +1061,9 @@ const TwoColumnCard = memo(function TwoColumnCard({
                     label="Rejected — click to undo"
                     size="small"
                     color="error"
-                    onClick={() => handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId })}
+                    onClick={() =>
+                      handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId })
+                    }
                     sx={{ cursor: 'pointer', mt: 1 }}
                   />
                 )}
@@ -1153,10 +1173,7 @@ export function CompareSpine({
     return (
       <Box sx={{ p: 3 }} data-testid="spine-loading">
         <LinearProgress />
-        <Typography
-          variant="body2"
-          sx={{ color: 'text.secondary', fontStyle: 'italic', mt: 2 }}
-        >
+        <Typography variant="body2" sx={{ color: 'text.secondary', fontStyle: 'italic', mt: 2 }}>
           Loading the review queue…
         </Typography>
       </Box>

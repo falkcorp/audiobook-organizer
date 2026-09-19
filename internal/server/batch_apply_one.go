@@ -1,12 +1,13 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package server
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -52,9 +54,12 @@ type cachedApplyService interface {
 	RenamePreflightWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) error
 }
 
-// bookReader reads the book the gate judges the candidate against.
+// bookReader reads the book the gate judges the candidate against, and its
+// file rows: the gate's runtime check compares the canonical runtime
+// (database.LoadBookRuntime, the sum over the files), never Book.Duration.
 type bookReader interface {
 	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
@@ -242,7 +247,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
 			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
 	}
-	v := applygate.EvaluateInBatch(book, &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
+	v := applygate.EvaluateInBatch(book, gateRuntime(books, book), &cand, svc.ValidateCachedIdentityForBook(entry, book), claims)
 	// A matching pin from a review row is the owner's approval of this row:
 	// its apply overwrites whether or not the gate needed lifting. A stale
 	// pin never gets here (stale_candidate above, nothing written).
@@ -285,7 +290,7 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipMarkedNoMatch,
 			Err: fmt.Errorf("book %s: %w", id, metafetch.ErrMarkedNoMatch)}
 	}
-	v := applygate.EvaluateInBatch(book, &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book), claims)
+	v := applygate.EvaluateInBatch(book, gateRuntime(books, book), &cand, fetchTimeIdentity(cr.Book.Title, cr.Book.Author, book), claims)
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {
 		plan.Reason = applySkipGateBlocked
@@ -465,4 +470,16 @@ func applyCachedCandidateForBookTimed(
 		failWriteBack(err)
 	}
 	return out
+}
+
+// gateRuntime is the book's canonical runtime for the certainty gate. A failed
+// file read is logged and yields an UNKNOWN runtime (the gate then treats the
+// runtime as missing evidence), never Book.Duration promoted to a total.
+func gateRuntime(books bookReader, book *database.Book) database.BookRuntime {
+	rt, err := database.LoadBookRuntime(books, book)
+	if err != nil {
+		logging.Warn(context.Background(), "apply gate: book files unreadable; runtime treated as unknown",
+			"book_id", book.ID, "err", err)
+	}
+	return rt
 }

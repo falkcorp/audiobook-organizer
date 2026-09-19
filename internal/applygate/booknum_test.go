@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e8a0b17-4c3d-4f92-a6e1-2d9c7b0f8e35
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -131,7 +131,7 @@ func TestCheckEvidence_FillOnlyTitleIsNotChecked(t *testing.T) {
 	book := database.Book{Title: "Pixel Dust Book 1", Duration: intp(30000),
 		Author: &database.Author{Name: "Ann Author"}, FilePath: "/lib/Ann Author/Pixel Dust/Pixel Dust Book 1.m4b"}
 	cand := metafetch.MetadataCandidate{Title: "Pixel Dust 1 Party Hard", Author: "Ann Author", DurationSec: 30000}
-	v := CheckEvidence(&book, &cand, false)
+	v := CheckEvidence(&book, database.ComputeBookRuntime(&book, nil), &cand, false)
 	if contains(v.Overwrites, "title") {
 		t.Fatalf("overwrites = %v; the pair was meant to be fill-only", v.Overwrites)
 	}

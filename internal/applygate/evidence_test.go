@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package applygate
 
@@ -177,7 +177,7 @@ func TestCheckEvidence_OwnerExamples(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			v := CheckEvidence(&c.book, &c.cand, false)
+			v := CheckEvidence(&c.book, database.ComputeBookRuntime(&c.book, nil), &c.cand, false)
 			if c.want == "" {
 				if !v.Pass {
 					t.Fatalf("refused: %s (%s); checks %+v", v.Reason, v.Detail, v.Checks)
@@ -209,7 +209,7 @@ func TestCheckRuntime_Bands(t *testing.T) {
 		cand int
 		want string
 	}{{10500, OutcomeAgree}, {10501, OutcomeNeutral}, {11000, OutcomeNeutral}, {11001, OutcomeBlock}, {900, OutcomeBlock}, {0, OutcomeUnknown}} {
-		if got := checkRuntime(book, &metafetch.MetadataCandidate{DurationSec: c.cand}, false).Outcome; got != c.want {
+		if got := checkRuntime(database.ComputeBookRuntime(book, nil), &metafetch.MetadataCandidate{DurationSec: c.cand}, false).Outcome; got != c.want {
 			t.Errorf("candidate %ds vs 10000s: %s, want %s", c.cand, got, c.want)
 		}
 	}

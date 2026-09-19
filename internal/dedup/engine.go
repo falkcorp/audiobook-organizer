@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.82.0
+// version: 1.83.3
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -953,7 +953,7 @@ func (de *Engine) runUnifiedScoringForBook(ctx context.Context, book *database.B
 	// otherwise. Passing ctx makes the scan cancellable mid-flight (#19).
 	allISBNSigs, _ := CollectISBNASIN(ctx, de.bookStore, de.isbnIndexStore, book)
 	allMetaSrcSigs, _ := CollectMetaSrcHash(de.bookStore, book)
-	allDurationSigs, _ := CollectDuration(de.bookStore, de.bookStore, book, durCfg)
+	allDurationSigs, _ := collectDuration(de.bookStore, de.bookStore, nil, book, durCfg)
 
 	// AcoustID: collect across all bookFiles once (same hoist rationale).
 	var allExactAcoustSigs, allLSHAcoustSigs []unified.Signal
@@ -1727,10 +1727,15 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	if book.AuthorID == nil {
 		return nil
 	}
-	if book.Duration == nil || *book.Duration <= 0 {
+	if !hasUsableTitle(book.Title) {
 		return nil
 	}
-	if !hasUsableTitle(book.Title) {
+	// Canonical runtime, complete only (see knownRuntimeSec). The memo lives
+	// for this call only: every book's rows are read at most once here, and
+	// never served stale to a later call.
+	memo := newBookRuntimeMemo()
+	bookDur, known := knownRuntimeSec(de.bookStore, memo, book)
+	if !known {
 		return nil
 	}
 
@@ -1746,16 +1751,12 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 	// once per book instead of failing silently.
 	tagErrs := 0
 
-	bookDur := float64(*book.Duration)
 	bookNorm := normalizeTitle(book.Title)
 	bookForms := de.allNormalizedTitleForms(book)
 
 	for i := range others {
 		other := &others[i]
 		if other.ID == book.ID {
-			continue
-		}
-		if other.Duration == nil || *other.Duration <= 0 {
 			continue
 		}
 		if !hasUsableTitle(other.Title) {
@@ -1767,29 +1768,15 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 			continue
 		}
 
-		otherDur := float64(*other.Duration)
-		// Symmetric percent difference so order doesn't matter.
-		diff := bookDur - otherDur
-		if diff < 0 {
-			diff = -diff
-		}
-		base := bookDur
-		if otherDur > base {
-			base = otherDur
-		}
-		pct := diff / base
-
-		// Short-circuit: completely unrelated durations. 20% is a
-		// generous upper bound — anything past that can't be the
-		// same book content even in abridged form.
-		if pct >= durationAbridgedThreshold {
+		if !prefilterOtherDuration(bookDur, other, durationAbridgedThreshold) {
 			continue
 		}
 
-		otherForms := de.allNormalizedTitleForms(other)
-		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
-		otherNorm := normalizeTitle(other.Title)
-
+		// Every guard that needs no file read runs BEFORE the runtime read
+		// (a Pebble range scan per book). Both actions below require
+		// titleDist <= durationLevenshteinMax, so a pair that fails it, or a
+		// series/digit guard, can never act and is dropped here.
+		//
 		// Series-volume guard: same rejection as checkExactTitle.
 		// If both books identify as distinct series volumes, don't
 		// emit a candidate even when duration matches (a reread of
@@ -1799,7 +1786,27 @@ func (de *Engine) checkDurationMatch(book *database.Book) error {
 		if bookSeriesNum != "" && otherSeriesNum != "" && bookSeriesNum != otherSeriesNum {
 			continue
 		}
+		otherNorm := normalizeTitle(other.Title)
 		if titlesDifferOnlyInDigits(bookNorm, otherNorm) {
+			continue
+		}
+		otherForms := de.allNormalizedTitleForms(other)
+		titleDist := minLevenshteinBetweenForms(bookForms, otherForms)
+		if titleDist > durationLevenshteinMax {
+			continue
+		}
+
+		otherDur, otherKnown := knownRuntimeSec(de.bookStore, memo, other)
+		if !otherKnown {
+			continue
+		}
+		// Symmetric percent difference so order doesn't matter.
+		pct := durationPct(bookDur, otherDur)
+
+		// Short-circuit: completely unrelated durations. 20% is a
+		// generous upper bound — anything past that can't be the
+		// same book content even in abridged form.
+		if pct >= durationAbridgedThreshold {
 			continue
 		}
 
@@ -1913,12 +1920,18 @@ func (de *Engine) upsertExactCandidate(a, b *database.Book, layer string, sim fl
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if hasKnownShortDuration(a) || hasKnownShortDuration(b) {
+	// Both runtime gates below read each book's file rows; one memo for this
+	// call makes that one read per book. Call-scoped on purpose: a memo that
+	// outlived the call could serve a runtime whose rows changed without the
+	// book's UpdatedAt moving (a missing flag flipping, a row added with no
+	// duration — RecomputeBookAggregates only writes when a sum changes).
+	memo := newBookRuntimeMemo()
+	if de.hasKnownShortDurationMemo(memo, a) || de.hasKnownShortDurationMemo(memo, b) {
 		slog.Debug("dedup exact candidate dropped by min-duration gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
 	}
-	if de.isPartVsWholeMismatch(a, b) {
+	if de.isPartVsWholeMismatchMemo(memo, a, b) {
 		slog.Debug("dedup exact candidate dropped by part-vs-whole gate",
 			"book_a", a.ID, "book_b", b.ID, "layer", layer)
 		return nil
@@ -1971,15 +1984,27 @@ func normalizeASIN(v string) string {
 	return strings.ToUpper(strings.TrimSpace(v))
 }
 
-// hasKnownShortDuration reports whether book has a known, positive Duration
-// strictly under minFingerprintMatchSeconds. Unknown or non-positive durations
-// (nil or <= 0) are conservative and never treated as "short" — matches the
-// hasPlausibleAudio convention of not disqualifying on missing data.
-func hasKnownShortDuration(book *database.Book) bool {
-	if book == nil || book.Duration == nil || *book.Duration <= 0 {
+// hasKnownShortDuration reports whether book has a known, COMPLETE canonical
+// runtime (knownRuntimeSec) strictly under minFingerprintMatchSeconds.
+// Unknown runtimes are conservative and never treated as "short" — matches the
+// hasPlausibleAudio convention of not disqualifying on missing data. A PARTIAL
+// runtime is unknown too: it used to read Book.Duration, so a multi-file book
+// with one probed 45-second intro file was "short" and every exact candidate
+// for it was dropped — and drain_stale deleted the ones already stored.
+func (de *Engine) hasKnownShortDuration(book *database.Book) bool {
+	if book == nil {
 		return false
 	}
-	return *book.Duration < minFingerprintMatchSeconds
+	return de.hasKnownShortDurationMemo(nil, book)
+}
+
+// hasKnownShortDurationMemo is hasKnownShortDuration through the given memo.
+func (de *Engine) hasKnownShortDurationMemo(memo *bookRuntimeMemo, book *database.Book) bool {
+	if book == nil {
+		return false
+	}
+	rt, _, _ := runtimeAndRows(de.bookStore, memo, book)
+	return shortRuntime(rt)
 }
 
 // isPartVsWholeMismatch reports whether a and b look like a single-file part
@@ -1993,34 +2018,23 @@ func hasKnownShortDuration(book *database.Book) bool {
 // the guard — this only fires when both sides' file counts and durations are
 // known and clearly mismatched, mirroring hasPlausibleAudio's convention.
 func (de *Engine) isPartVsWholeMismatch(a, b *database.Book) bool {
+	return de.isPartVsWholeMismatchMemo(nil, a, b)
+}
+
+// isPartVsWholeMismatchMemo is isPartVsWholeMismatch through the given memo.
+func (de *Engine) isPartVsWholeMismatchMemo(memo *bookRuntimeMemo, a, b *database.Book) bool {
 	if a == nil || b == nil || de.bookStore == nil {
 		return false
 	}
-	filesA, err := de.bookStore.GetBookFiles(a.ID)
-	if err != nil || len(filesA) == 0 {
+	rtA, rowsA, okA := runtimeAndRows(de.bookStore, memo, a)
+	if !okA || rowsA == 0 {
 		return false
 	}
-	filesB, err := de.bookStore.GetBookFiles(b.ID)
-	if err != nil || len(filesB) == 0 {
+	rtB, rowsB, okB := runtimeAndRows(de.bookStore, memo, b)
+	if !okB || rowsB == 0 {
 		return false
 	}
-
-	var partFiles, wholeFiles []database.BookFile
-	switch {
-	case len(filesA) == 1 && len(filesB) >= 2:
-		partFiles, wholeFiles = filesA, filesB
-	case len(filesB) == 1 && len(filesA) >= 2:
-		partFiles, wholeFiles = filesB, filesA
-	default:
-		return false
-	}
-
-	partDuration := sumBookFileDurations(partFiles)
-	wholeDuration := sumBookFileDurations(wholeFiles)
-	if partDuration <= 0 || wholeDuration <= 0 {
-		return false
-	}
-	return float64(partDuration) < partVsWholeDurationRatioMax*float64(wholeDuration)
+	return partVsWholeRuntime(rtA, rowsA, rtB, rowsB)
 }
 
 const (
@@ -2216,19 +2230,6 @@ func (de *Engine) ReevaluateAcoustIDConflicts(ctx context.Context, dryRun bool) 
 		}
 	}
 	return res, nil
-}
-
-// sumBookFileDurations totals the Duration (seconds) of the given BookFiles.
-// Non-positive durations contribute 0, consistent with the "unknown" convention
-// used elsewhere in the dedup guards.
-func sumBookFileDurations(files []database.BookFile) int {
-	total := 0
-	for _, f := range files {
-		if f.Duration > 0 {
-			total += f.Duration
-		}
-	}
-	return total
 }
 
 func hasPlausibleAudio(book *database.Book) bool {
