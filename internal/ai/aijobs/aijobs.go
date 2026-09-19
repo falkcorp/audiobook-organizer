@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/aijobs.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8231e2ae-fa34-4594-80fd-f0f9dc60bc3b
 // last-edited: 2026-09-19
 
@@ -100,8 +100,9 @@ func ClearRegistryForTest() {
 }
 
 // Submit persists a new ai_jobs row, uploads a JSONL batch file, and creates an
-// OpenAI batch. Returns the job ID. On upload/create failure the job row is
-// marked "failed" and the original error is returned.
+// OpenAI batch. Returns the job ID. On an upload failure the job row is marked
+// "failed"; on a CreateBatch failure it is left "pending" (see below). Either
+// way the original error is returned.
 func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 	if req.ItemCount == 0 {
 		return "", fmt.Errorf("aijobs.Submit: no items")
@@ -148,7 +149,8 @@ func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 		return "", fmt.Errorf("aijobs.Submit: store.CreateAIJob: %w", err)
 	}
 
-	// 3. Upload + create batch. On any failure, mark the row failed and return.
+	// 3. Upload + create batch. An upload failure is terminal (no batch can
+	//    exist without the file); a create failure is ambiguous (see below).
 	fileID, err := deps.Client.UploadBatchFile(ctx, buf.Bytes())
 	if err != nil {
 		_ = deps.Store.MarkAIJobFailed(jobID, fmt.Sprintf("upload: %v", err))
@@ -160,7 +162,13 @@ func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 	// batch listing. Without it the paid batch's results are never applied.
 	batchID, err := deps.Client.CreateBatchWithMetadata(ctx, fileID, "aijobs", map[string]string{MetadataJobIDKey: jobID})
 	if err != nil {
-		_ = deps.Store.MarkAIJobFailed(jobID, fmt.Sprintf("create batch: %v", err))
+		// NOT marked failed. A CreateBatch error (timeout, reset connection)
+		// does not prove OpenAI rejected the batch, and ReconcileOrphans never
+		// attaches a failed row, so failing it here would orphan a batch that
+		// may already be billing. Pending, it is attached by the reconciler if
+		// the batch exists, or closed by WriteOffUnlinked once a complete
+		// listing confirms it does not.
+		log.Warn("job %s: create batch errored; left pending for reconcile: %v", jobID, err)
 		return jobID, err
 	}
 
@@ -442,6 +450,43 @@ func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, e
 		log.Warn("re-attached orphaned batch %s to job %s (its batch id was never recorded)", b.ID, jobID)
 	}
 	return attached, firstErr
+}
+
+// UnlinkedWriteOffGrace is how old a pending job must be before a complete
+// listing that does not show its batch may close it. Submit writes the row
+// before CreateBatch, so a young pending row may simply be mid-submit.
+const UnlinkedWriteOffGrace = time.Hour
+
+// WriteOffUnlinked marks failed every pending job with no batch id that is
+// older than UnlinkedWriteOffGrace and named by none of the listed batches.
+//
+// Call it ONLY with a complete listing — one that reached back past the oldest
+// pending job (the poller pages back to Tracked.OldestUnlinked). On a partial
+// listing an absent batch proves nothing, and a failed row is never attached
+// again, so writing one off there would orphan a billed batch.
+func WriteOffUnlinked(store database.AIJobsStore, listed []OrphanBatch, now time.Time) (int, error) {
+	named := make(map[string]bool, len(listed))
+	for _, b := range listed {
+		if id := b.Metadata[MetadataJobIDKey]; id != "" {
+			named[id] = true
+		}
+	}
+	pending, err := store.ListAIJobs("", "pending", 0, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list pending jobs: %w", err)
+	}
+	n := 0
+	for _, j := range pending {
+		if j.BatchID != "" || named[j.ID] || now.Sub(j.CreatedAt) < UnlinkedWriteOffGrace {
+			continue
+		}
+		if err := store.MarkAIJobFailed(j.ID, "no batch exists at OpenAI for this job (confirmed by a complete listing)"); err != nil {
+			return n, fmt.Errorf("write off job %s: %w", j.ID, err)
+		}
+		log.Warn("job %s (%s): no batch exists at OpenAI; written off", j.ID, j.Type)
+		n++
+	}
+	return n, nil
 }
 
 // Tracked is what the poller needs from the jobs store each tick.

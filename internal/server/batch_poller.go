@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.12.0
+// version: 1.14.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -33,7 +33,11 @@ type BatchCompletionHandler func(ctx context.Context, batchID string, outputFile
 // BatchReconciler is shown every listed project batch of its type, in any
 // status, before completed batches are dispatched. It repairs local records
 // that lost their link to a batch (see aijobs.ReconcileOrphans).
-type BatchReconciler func(ctx context.Context, batches []ai.BatchInfo) error
+//
+// complete is true only when the listing reached back past every local record
+// still awaiting its batch (no error, not truncated). Only then does a batch's
+// ABSENCE from batches prove it does not exist.
+type BatchReconciler func(ctx context.Context, batches []ai.BatchInfo, complete bool) error
 
 // BatchClient is the slice of *ai.OpenAIParser the poller uses. An interface so
 // tests can drive Poll without a live OpenAI client.
@@ -194,7 +198,7 @@ func (bp *BatchPoller) Poll(ctx context.Context) (int, error) {
 		batches = append(batches, b)
 	}
 
-	bp.reconcile(ctx, batches)
+	bp.reconcile(ctx, batches, listErr == nil)
 
 	processed := 0
 	for _, b := range batches {
@@ -253,22 +257,23 @@ func (bp *BatchPoller) dispatch(ctx context.Context, b ai.BatchInfo) (handled bo
 
 // reconcile hands each registered reconciler the listed batches of its type
 // that are not yet handled. Errors are logged; they never block dispatch.
-func (bp *BatchPoller) reconcile(ctx context.Context, batches []ai.BatchInfo) {
+func (bp *BatchPoller) reconcile(ctx context.Context, batches []ai.BatchInfo, complete bool) {
 	if len(bp.reconcilers) == 0 {
 		return
 	}
-	byType := make(map[string][]ai.BatchInfo)
+	// Every registered reconciler runs, even with no listed batches of its
+	// type: with a complete listing, "none listed" is itself the evidence a
+	// reconciler needs to close records whose batch never existed. Handled
+	// batches are included for the same reason — they are still evidence
+	// that a record's batch exists.
+	byType := make(map[string][]ai.BatchInfo, len(bp.reconcilers))
 	for _, b := range batches {
-		if _, ok := bp.reconcilers[b.Type]; !ok {
-			continue
+		if _, ok := bp.reconcilers[b.Type]; ok {
+			byType[b.Type] = append(byType[b.Type], b)
 		}
-		if bp.IsProcessed(b.ID) {
-			continue
-		}
-		byType[b.Type] = append(byType[b.Type], b)
 	}
-	for typ, list := range byType {
-		if err := bp.reconcilers[typ](ctx, list); err != nil {
+	for typ, r := range bp.reconcilers {
+		if err := r(ctx, byType[typ], complete); err != nil {
 			batchPollerLog.Error("reconcile %s batches: %v", typ, err)
 		}
 	}
@@ -441,7 +446,7 @@ func aijobsTracker(getStore func() database.AIJobsStore) BatchTracker {
 // aijobsReconciler re-attaches aijobs batches whose id never reached their job
 // row (process killed between CreateBatch and MarkAIJobSubmitted).
 func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
-	return func(_ context.Context, batches []ai.BatchInfo) error {
+	return func(_ context.Context, batches []ai.BatchInfo, complete bool) error {
 		store := getStore()
 		if store == nil {
 			return fmt.Errorf("aijobs: store does not implement AIJobsStore")
@@ -450,7 +455,14 @@ func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
 		for _, b := range batches {
 			orphans = append(orphans, aijobs.OrphanBatch{ID: b.ID, Status: b.Status, HasOutput: b.OutputFileID != "", Metadata: b.Metadata})
 		}
-		_, err := aijobs.ReconcileOrphans(store, orphans)
+		if _, err := aijobs.ReconcileOrphans(store, orphans); err != nil {
+			return err
+		}
+		if !complete {
+			// A partial listing proves no absence; write nothing off.
+			return nil
+		}
+		_, err := aijobs.WriteOffUnlinked(store, orphans, time.Now())
 		return err
 	}
 }
@@ -488,12 +500,17 @@ func (s *Server) registerBatchPollerHandlers() {
 	// scanning batch scan and is idempotent per phase, so it is safe to run for
 	// any completed batch of these types, including one that matches no scan
 	// phase (it is left alone).
-	pollScans := func(ctx context.Context, batchID, outputFileID string) error {
+	//
+	// The handler returns nil only when the batch is DONE with (its phase is
+	// terminal, or no scan can own it). Returning nil after a poll that did
+	// not collect it — the phase was just re-attached, another goroutine held
+	// it, the scan was not "scanning" — would journal the batch as handled and
+	// the poller would never dispatch it again.
+	pollScans := func(ctx context.Context, batchID, _ string) error {
 		if s.pipelineManager == nil {
 			return fmt.Errorf("pipeline manager not initialized")
 		}
-		s.pipelineManager.PollBatchPhases(ctx)
-		return nil
+		return s.pipelineManager.CollectBatch(ctx, batchID)
 	}
 	s.batchPoller.RegisterHandler("author_review", pollScans)
 	s.batchPoller.RegisterHandler("author_dedup", pollScans)

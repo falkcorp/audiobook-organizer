@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: c9d0e1f2-a3b4-5678-cdef-9876543210ab
 // last-edited: 2026-09-19
 
@@ -28,12 +28,14 @@ type fakeBatchClient struct {
 	unlisted []ai.BatchInfo
 	outputs  map[string][]ai.BatchRawResult
 	gets     int
+	// listErr is returned alongside the listed batches (e.g. a truncated walk).
+	listErr error
 }
 
 func (f *fakeBatchClient) ListProjectBatches(context.Context, time.Time) ([]ai.BatchInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]ai.BatchInfo(nil), f.batches...), nil
+	return append([]ai.BatchInfo(nil), f.batches...), f.listErr
 }
 
 func (f *fakeBatchClient) GetBatch(_ context.Context, id string) (ai.BatchInfo, error) {
