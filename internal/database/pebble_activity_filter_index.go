@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
 // last-edited: 2026-09-19
 
@@ -170,12 +170,11 @@ func pactFilterIndexKeysFor(primaryKey []byte, e ActivityEntry) ([][]byte, bool)
 	return keys, true
 }
 
-// pactStageFilterIndexes writes the filter-index keys for a row that is staged
-// WITHOUT going through prepareEntry — Summarize's summary rows and
-// CompactByDay's digests. Those writers deliberately do not add op/book index
-// keys (that is their pre-existing contract and out of this file's scope), but
-// they must add these, or a source=summarize / type=daily_digest query would
-// miss every such row once the planner trusts the index.
+// pactStageFilterIndexes writes ONLY the filter-index keys for a row staged
+// without prepareEntry: CompactByDay's digests (which carry no op or book id,
+// so these are all their index keys) and the filter-index backfill (whose rows
+// already have their op/book keys). Summarize does not use it: its summary
+// row stages every family, op tags included, through pactIndexKeysFor.
 func pactStageFilterIndexes(batch *pebble.Batch, primaryKey []byte, e ActivityEntry) error {
 	keys, ok := pactFilterIndexKeysFor(primaryKey, e)
 	if !ok {
