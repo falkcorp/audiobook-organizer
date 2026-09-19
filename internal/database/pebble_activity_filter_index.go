@@ -60,11 +60,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var filterIndexLog = logger.New("activity.filter-index")
 
 // ActivityFilterIndexBackfillKey is the persistent sentinel the backfill op
 // writes once every row that existed before the filter indexes did has been
@@ -204,8 +207,8 @@ func (s *PebbleActivityStore) stageDeleteFilterIndexesForKey(batch *pebble.Batch
 	jsonErr := json.Unmarshal(val, &p)
 	closer.Close()
 	if jsonErr != nil {
-		slog.Warn("[activity] undecodable row: its filter index keys (if any) are left for index repair",
-			"key", string(primaryKey), "error", jsonErr)
+		filterIndexLog.Warn("undecodable row %s: its filter index keys (if any) are left for index repair: %v",
+			string(primaryKey), jsonErr)
 		return nil
 	}
 	keys, ok := pactFilterIndexKeysFor(primaryKey, p.entry())
@@ -559,9 +562,9 @@ func (s *PebbleActivityStore) queryByFilterIndex(ctx context.Context, f Activity
 
 	partial := !exhausted && matched < probe
 	if partial {
-		slog.Warn("[activity] indexed query hit its budget; total is a lower bound and older matches were not examined",
-			"index", chosen.name, "decoded", w.decoded, "keys", w.keys,
-			"matched", matched, "limit", f.Limit, "offset", f.Offset, "search", f.Search)
+		filterIndexLog.Warn("indexed query hit its budget; total is a lower bound and older matches were not examined "+
+			"(index=%s decoded=%d keys=%d matched=%d limit=%d offset=%d search=%q)",
+			chosen.name, w.decoded, w.keys, matched, f.Limit, f.Offset, f.Search)
 	}
 	return page, matched, partial, nil
 }
