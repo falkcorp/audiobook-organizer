@@ -1,5 +1,5 @@
 // file: internal/database/book_files_at_path.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 69f97b8f-0d70-497f-867c-a8be4011ceb8
 // last-edited: 2026-09-19
 
@@ -8,8 +8,6 @@ package database
 import (
 	"errors"
 	"fmt"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // ErrBookFilesAtPathUnavailable is returned by BookFilesAtPath when it cannot
@@ -63,11 +61,9 @@ func (p *PebbleStore) BookFilesAtPath(path string) ([]BookFile, error) {
 			continue
 		}
 		seen[key] = struct{}{}
+		// getBookFileByID answers (nil, nil) for a row that is gone.
 		f, err := p.getBookFileByID(r[0], r[1])
 		if err != nil {
-			if errors.Is(err, pebble.ErrNotFound) {
-				continue
-			}
 			return nil, fmt.Errorf("verify book_file %s: %w", r[1], err)
 		}
 		if f != nil && f.FilePath == path {

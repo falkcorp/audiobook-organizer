@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7e4b2a90-3c61-4d58-8f29-6a1c0e5b9d83
-// last-edited: 2026-08-24
+// last-edited: 2026-09-19
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -226,12 +227,23 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// there produces only a warning. Deleting 2b would trade a reported failure for
 	// a silent one, which is the bug class this whole change exists to close.
 	pending := make([]*database.BookFile, 0, writeBatchSize)
+	refusedRows := 0
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
 		}
 		if err := store.BatchUpsertBookFiles(pending); err != nil {
-			return err
+			// A row whose book was deleted mid-run is refused on its own and
+			// the rest of the batch is written; report it and keep going
+			// rather than abort the whole op on one deleted book.
+			var refused *database.BookFileRowsRefusedError
+			if !errors.As(err, &refused) {
+				return err
+			}
+			refusedRows += len(refused.RefusedFileIDs)
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				"%d file row(s) not written: their book was deleted during the run (books %v, rows %v); %d rows of the batch written",
+				len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.RefusedFileIDs, refused.Committed))
 		}
 		pending = pending[:0]
 		return nil
@@ -256,6 +268,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	}
 	if err := flush(); err != nil {
 		return fmt.Errorf("final batch write: %w", err)
+	}
+	if refusedRows > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%d file row(s) in total were not written because their book was deleted during the run", refusedRows))
 	}
 	heartbeat(true, "Phase 2a writing durations", fixedFiles, totalFiles, nil)
 

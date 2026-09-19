@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.23.0
+// version: 2.24.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-19
 
@@ -108,6 +108,18 @@ type BookPathSetReader interface {
 	// every decorator that embeds Store (server.indexedStore in production)
 	// forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// BookPathIndexStatus reports on the book_atpath index behind
+// LiveBookIDsAtPath.
+//
+// Its own interface, embedded in BookStore rather than in BookReader, because
+// only a caller that asks LiveBookIDsAtPath once PER ITEM needs it (the orphan
+// repoint plan). BookReader is embedded by narrow consumer interfaces across
+// the tree (itunes.RebuildStore among them) whose code never asks, and every
+// one of their test doubles would have had to grow a method nothing calls.
+// It is still on Store, so the production indexedStore forwards it.
+type BookPathIndexStatus interface {
 	// BookAtPathIndexBuilt reports whether the book_atpath backfill sentinel
 	// exists. Until it does, LiveBookIDsAtPath answers from a scan of EVERY
 	// book row, so a caller that asks per item should check this first.
@@ -368,4 +380,5 @@ type BookStore interface {
 	BookReader
 	BookWriter
 	BookCompletenessReader
+	BookPathIndexStatus
 }

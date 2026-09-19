@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
 // last-edited: 2026-09-19
 
@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // DeleteBook never deletes book_file rows, so deleting a book that owns any
@@ -207,4 +209,233 @@ func TestBookFilesAtPath_FindsRowsTheSingleIndexLost(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != keep.ID {
 		t.Fatalf("rows = %+v, want exactly %s", rows, keep.ID)
 	}
+}
+
+// One missing owner in a 500-row batch must refuse only its own row: the
+// other 499 commit, and the refusal names the row and the book.
+func TestBatchWriters_MissingOwnerRefusesOnlyItsRows(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(Store, []*BookFile) error
+	}{
+		{"BatchUpsertBookFiles", func(s Store, f []*BookFile) error { return s.BatchUpsertBookFiles(f) }},
+		{"BatchCreateBookFiles", func(s Store, f []*BookFile) error { return s.BatchCreateBookFiles(f) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, cleanup := setupTestDB(t)
+			defer cleanup()
+			var books []string
+			for i := range 299 {
+				b, err := store.CreateBook(&Book{Title: "b", FilePath: fmt.Sprintf("/lib/part/%d", i)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				books = append(books, b.ID)
+			}
+			var rows []*BookFile
+			for i := range 499 {
+				rows = append(rows, &BookFile{BookID: books[i%len(books)], FilePath: fmt.Sprintf("/lib/part/f%d.mp3", i)})
+			}
+			ghostRow := &BookFile{BookID: "ghost-book", FilePath: "/lib/part/ghost.mp3"}
+			rows = append(rows[:250], append([]*BookFile{ghostRow}, rows[250:]...)...)
+
+			err := tc.write(store, rows)
+			var refused *BookFileRowsRefusedError
+			if !errors.As(err, &refused) {
+				t.Fatalf("err = %v, want *BookFileRowsRefusedError", err)
+			}
+			if !errors.Is(err, ErrBookFileOwnerMissing) {
+				t.Errorf("refusal does not wrap ErrBookFileOwnerMissing")
+			}
+			if refused.Committed != 499 || len(refused.RefusedFileIDs) != 1 || refused.RefusedFileIDs[0] != ghostRow.ID || ghostRow.ID == "" {
+				t.Fatalf("refusal = %+v (ghost row id %q), want 499 committed and exactly the ghost row refused", refused, ghostRow.ID)
+			}
+			if len(refused.MissingBookIDs) != 1 || refused.MissingBookIDs[0] != "ghost-book" {
+				t.Errorf("MissingBookIDs = %v", refused.MissingBookIDs)
+			}
+			total := 0
+			for _, id := range books {
+				fs, err := store.GetBookFiles(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				total += len(fs)
+			}
+			if total != 499 {
+				t.Errorf("committed rows = %d, want 499", total)
+			}
+			if fs, _ := store.GetBookFiles("ghost-book"); len(fs) != 0 {
+				t.Errorf("%d orphan row(s) written for the missing book", len(fs))
+			}
+			for _, r := range rows {
+				if r.ID == "" {
+					t.Fatalf("a committed row's struct was not given its ID")
+				}
+			}
+		})
+	}
+}
+
+// CreateBookFile's PID transfer rewrites the PRIOR owner's row (clearing the
+// PID). If that row is deleted and its book deleted meanwhile, the rewrite
+// must not resurrect the row under the deleted book — and the create itself
+// must still succeed, re-staged without the transfer.
+func TestCreateBookFile_PIDTransferRacingDeleteNeverResurrects(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	for i := range 60 {
+		x, _ := store.CreateBook(&Book{Title: "x", FilePath: fmt.Sprintf("/lib/pid/x%d", i)})
+		y, _ := store.CreateBook(&Book{Title: "y", FilePath: fmt.Sprintf("/lib/pid/y%d", i)})
+		pid := fmt.Sprintf("PID%04d", i)
+		prior := &BookFile{BookID: x.ID, FilePath: fmt.Sprintf("/lib/pid/x%d/a.mp3", i), ITunesPersistentID: pid}
+		if err := store.CreateBookFile(prior); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		var createErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			createErr = store.CreateBookFile(&BookFile{BookID: y.ID, FilePath: fmt.Sprintf("/lib/pid/y%d/a.mp3", i), ITunesPersistentID: pid})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := store.DeleteBookFile(prior.ID); err == nil {
+				_ = store.DeleteBook(x.ID)
+			}
+		}()
+		close(start)
+		wg.Wait()
+		if createErr != nil {
+			t.Fatalf("round %d: create failed: %v", i, createErr)
+		}
+		assertRowsHaveOwner(t, store, x.ID)
+	}
+}
+
+// A move racing the deletion of the row it moves must not recreate the row
+// under the target: DeleteBookFile wins whichever commits first.
+func TestMoveBookFiles_RacingDeleteBookFileNeverResurrects(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	for i := range 60 {
+		src, _ := store.CreateBook(&Book{Title: "s", FilePath: fmt.Sprintf("/lib/mvd/s%d", i)})
+		dst, _ := store.CreateBook(&Book{Title: "d", FilePath: fmt.Sprintf("/lib/mvd/d%d", i)})
+		f := &BookFile{BookID: src.ID, FilePath: fmt.Sprintf("/lib/mvd/s%d/a.mp3", i)}
+		if err := store.CreateBookFile(f); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		var delErr error
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _ = store.MoveBookFilesToBook([]string{f.ID}, src.ID, dst.ID) }()
+		go func() { defer wg.Done(); <-start; delErr = store.DeleteBookFile(f.ID) }()
+		close(start)
+		wg.Wait()
+		if delErr != nil {
+			continue // the delete did not happen; nothing to assert
+		}
+		for _, b := range []string{src.ID, dst.ID} {
+			if rows, _ := store.GetBookFiles(b); len(rows) != 0 {
+				t.Fatalf("round %d: deleted row %s resurrected under %s", i, f.ID, b)
+			}
+		}
+	}
+}
+
+// Two concurrent moves of one row to different books must leave it under
+// exactly one of them, never both.
+func TestMoveBookFiles_ConcurrentMovesNeverDuplicateARow(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	for i := range 60 {
+		src, _ := store.CreateBook(&Book{Title: "s", FilePath: fmt.Sprintf("/lib/mv2/s%d", i)})
+		t1, _ := store.CreateBook(&Book{Title: "t1", FilePath: fmt.Sprintf("/lib/mv2/t1-%d", i)})
+		t2, _ := store.CreateBook(&Book{Title: "t2", FilePath: fmt.Sprintf("/lib/mv2/t2-%d", i)})
+		f := &BookFile{BookID: src.ID, FilePath: fmt.Sprintf("/lib/mv2/s%d/a.mp3", i)}
+		if err := store.CreateBookFile(f); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		for _, tgt := range []string{t1.ID, t2.ID} {
+			go func() { defer wg.Done(); <-start; _ = store.MoveBookFilesToBook([]string{f.ID}, src.ID, tgt) }()
+		}
+		close(start)
+		wg.Wait()
+		n := 0
+		for _, b := range []string{src.ID, t1.ID, t2.ID} {
+			rows, _ := store.GetBookFiles(b)
+			n += len(rows)
+		}
+		if n != 1 {
+			t.Fatalf("round %d: row %s exists %d times after two concurrent moves", i, f.ID, n)
+		}
+	}
+}
+
+// The owner stripes are released before the WAL fsync. With a 500-row batch
+// over 300 books parked in its fsync, a single-book writer on one of those
+// books must still complete — it used to wait for the whole fsync.
+func TestBatchWrite_DoesNotHoldOwnerStripesAcrossFsync(t *testing.T) {
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	var books []string
+	for i := range 300 {
+		b, err := store.CreateBook(&Book{Title: "b", FilePath: fmt.Sprintf("/lib/fs/%d", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		books = append(books, b.ID)
+	}
+	var rows []*BookFile
+	for i := range 500 {
+		rows = append(rows, &BookFile{BookID: books[i%300], FilePath: fmt.Sprintf("/lib/fs/f%d.mp3", i)})
+	}
+
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	var first atomic.Bool
+	// Parks ONLY the first caller (the batch). Not sync.Once: Once blocks
+	// every concurrent caller until the first returns, which would park the
+	// single-book writer too and prove nothing.
+	bookFileWALSyncHook = func() {
+		if first.CompareAndSwap(false, true) {
+			close(parked)
+			<-release
+		}
+	}
+	t.Cleanup(func() { bookFileWALSyncHook = nil })
+
+	batchDone := make(chan error, 1)
+	go func() { batchDone <- store.BatchUpsertBookFiles(rows) }()
+	<-parked // the batch has applied and is now in its fsync
+	var released sync.Once
+	defer func() {
+		released.Do(func() { close(release) })
+		<-batchDone
+	}()
+
+	single := make(chan error, 1)
+	go func() {
+		single <- store.CreateBookFile(&BookFile{BookID: books[7], FilePath: "/lib/fs/single.mp3"})
+	}()
+	select {
+	case err := <-single:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a single-book writer was blocked by a batch sitting in its fsync")
+	}
+	released.Do(func() { close(release) })
+	if err := <-batchDone; err != nil {
+		t.Fatal(err)
+	}
+	batchDone <- nil // let the deferred drain return
 }

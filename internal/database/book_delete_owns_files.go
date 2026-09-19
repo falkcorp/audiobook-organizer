@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-09-19
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -84,13 +85,18 @@ func (p *PebbleStore) refuseDeleteIfBookOwnsFiles(bookID string) error {
 //   - DeleteBook holds it across the count and its commit.
 //   - A writer that CREATES or MOVES a row under a book (CreateBookFile,
 //     BatchCreateBookFiles, batch upserts, MoveBookFilesToBookBulk) holds the
-//     stripes of every book its batch names across a committed existence
-//     check of each of those books and the commit, and refuses
-//     (ErrBookFileOwnerMissing) when one is gone.
-//   - A writer that REWRITES an existing row in place (UpdateBookFile and
-//     friends, PatchBookFileFields, the scan-cache stamp) holds the stripe
-//     across its read of the row and its write. While it holds it the row is
-//     visible to DeleteBook's count, so the delete cannot slip between.
+//     stripes of every book its batch names across one existence Get per
+//     distinct owner and the apply. A row whose owner is gone is refused ON
+//     ITS OWN: the batch writers re-stage without it and commit everything
+//     else (partitionedBookFileWrite, *BookFileRowsRefusedError).
+//   - Every row a writer rewrites or moves away was read before the stripes
+//     were taken, so its key is re-checked under them (rewriteKeys): the PID
+//     transfer's prior owner, batch-upsert matches, move sources, and the
+//     single-row rewriters (UpdateBookFile and friends, PatchBookFileFields,
+//     the scan-cache stamp). A key that vanished means "re-read and re-stage"
+//     (errBookFileRowVanished), never "write it back".
+//   - DeleteBookFile commits under the row's stripe after re-checking its key
+//     too, and chases a row a concurrent move took elsewhere.
 //
 // Whichever commits first wins, and the other sees it: a delete that commits
 // first makes the writer's existence check fail; a writer that commits first
@@ -98,10 +104,21 @@ func (p *PebbleStore) refuseDeleteIfBookOwnsFiles(bookID string) error {
 //
 // LOCK ORDER: owner stripes are always the INNERMOST lock. They may be taken
 // while a book stripe (DeleteBook) or a book_file stripe (UpdateBookFile) is
-// held, but nothing takes a book or book_file stripe while holding one, and
-// nothing slow runs under one. A writer holding several takes them in
-// ascending stripe order, de-duplicated, so two multi-book writers cannot
-// deadlock and DeleteBook, which holds one, cannot either.
+// held, but nothing takes a book or book_file stripe while holding one. A
+// writer holding several takes them in ascending stripe order, de-duplicated,
+// so two multi-book writers cannot deadlock and DeleteBook, which holds one,
+// cannot either.
+//
+// WHAT RUNS UNDER THEM: one point Get per distinct owner book and per
+// rewritten key, then the batch's apply WITHOUT an fsync (pebble.NoSync). The
+// WAL fsync that makes the write durable runs AFTER the stripes are released
+// (syncBookFileWAL). That is still correct: the apply makes the rows visible
+// to DeleteBook's count the moment it returns, and the WAL is sequential, so
+// any later commit that is durable — a DeleteBook that commits after us, say —
+// is only durable once our earlier record is too. A 500-row batch naming 300
+// books therefore holds those stripes for its reads and a memtable apply, not
+// for a disk flush; a single-book writer behind it waits microseconds, not an
+// fsync.
 
 // ErrBookFileOwnerMissing is returned by a book_file writer asked to create or
 // move a row under a book that has no row: committing it would create an
@@ -150,50 +167,260 @@ func (p *PebbleStore) requireBookRowsExist(ids ...string) error {
 	return nil
 }
 
-// commitBookFileBatch commits a book_file writer's batch under the owner
-// stripes of lockIDs, after verifying — with the stripes held — that every
-// book in newOwners has a row (rows are being created or moved under them)
-// and that every key in rewriteKeys is still committed (rows being rewritten
-// in place were read before the stripes were taken; if one vanished since, a
-// concurrent delete may have let its book go, and rewriting it would recreate
-// an orphan). On refusal the batch is closed and nothing is written.
+// errBookFileRowVanished marks a staged batch that rewrote (or moved) a row
+// which was deleted after it was read. The batch was not applied; re-reading
+// and re-staging gives the right answer (the row is simply gone now).
+var errBookFileRowVanished = errors.New("book_file row changed while being written")
+
+// staleStageError is commitBookFileBatch's refusal: the batch was staged from
+// reads that no longer hold, so it was closed without applying. It names the
+// owner books that are gone (rows for them must be refused) and the rewritten
+// keys that vanished (the writer should re-read and re-stage).
+type staleStageError struct {
+	missingOwners []string
+	vanishedKeys  [][]byte
+}
+
+func (e *staleStageError) Error() string {
+	return fmt.Sprintf("book_file batch refused: %d owner book(s) missing %v, %d rewritten row(s) vanished",
+		len(e.missingOwners), e.missingOwners, len(e.vanishedKeys))
+}
+
+// Unwrap lets a single-owner caller test errors.Is(err, ErrBookFileOwnerMissing)
+// and a retry loop test errors.Is(err, errBookFileRowVanished).
+func (e *staleStageError) Unwrap() error {
+	if len(e.missingOwners) > 0 {
+		return ErrBookFileOwnerMissing
+	}
+	return errBookFileRowVanished
+}
+
+// BookFileRowsRefusedError is returned by the batch book_file writers
+// (BatchCreateBookFiles, BatchUpsertBookFiles, BatchUpsertScannedBookFiles)
+// when some rows were refused because their owner book no longer exists.
+// EVERY OTHER ROW WAS COMMITTED: one deleted book must not cost a batch its
+// 499 unrelated rows. Callers must surface RefusedFileIDs (count and ids), not
+// treat the batch as wholly failed, and never retry the committed rows as if
+// they were lost.
+type BookFileRowsRefusedError struct {
+	Committed      int
+	RefusedFileIDs []string
+	MissingBookIDs []string
+}
+
+func (e *BookFileRowsRefusedError) Error() string {
+	return fmt.Sprintf("%d book_file row(s) refused (owner book(s) %v no longer exist); %d committed",
+		len(e.RefusedFileIDs), e.MissingBookIDs, e.Committed)
+}
+
+func (e *BookFileRowsRefusedError) Unwrap() error { return ErrBookFileOwnerMissing }
+
+// maxStageRetries bounds re-staging when rewritten rows keep vanishing under
+// a writer. Missing owners never trigger it: each such round refuses rows, so
+// the set shrinks.
+const maxStageRetries = 5
+
+// commitBookFileBatch applies a book_file writer's batch under the owner
+// stripes of lockIDs, newOwners and the owners named by rewriteKeys, after
+// verifying — with the stripes held — that every book in newOwners has a row
+// (rows are being created or moved under them) and that every key in
+// rewriteKeys is still committed (rows rewritten or moved away were read
+// before the stripes were taken; if one vanished, a concurrent delete may
+// have let its book go, and writing it would recreate an orphan or put one
+// row under two books). On refusal the batch is closed, nothing is applied,
+// and a *staleStageError says why. The fsync runs after the stripes are
+// released (see WHAT RUNS UNDER THEM above).
 func (p *PebbleStore) commitBookFileBatch(batch *pebble.Batch, lockIDs, newOwners []string, rewriteKeys [][]byte) error {
-	unlock := p.lockBookOwners(append(append([]string(nil), lockIDs...), newOwners...)...)
-	defer unlock()
-	if err := p.requireBookRowsExist(newOwners...); err != nil {
-		_ = batch.Close()
-		return err
+	owners := slices.Compact(slices.Sorted(slices.Values(newOwners)))
+	all := append(append([]string(nil), lockIDs...), owners...)
+	for _, k := range rewriteKeys {
+		if b := bookIDOfBookFileKey(k); b != "" {
+			all = append(all, b)
+		}
+	}
+	unlock := p.lockBookOwners(all...)
+	stale := &staleStageError{}
+	for _, id := range owners {
+		if err := p.requireBookRowsExist(id); err != nil {
+			if !errors.Is(err, ErrBookFileOwnerMissing) {
+				unlock()
+				_ = batch.Close()
+				return err
+			}
+			stale.missingOwners = append(stale.missingOwners, id)
+		}
 	}
 	for _, k := range rewriteKeys {
 		_, closer, err := p.db.Get(k)
 		if errors.Is(err, pebble.ErrNotFound) {
-			_ = batch.Close()
-			return fmt.Errorf("%w: row %s was deleted while being rewritten", ErrBookFileOwnerMissing, k)
+			stale.vanishedKeys = append(stale.vanishedKeys, k)
+			continue
 		}
 		if err != nil {
+			unlock()
 			_ = batch.Close()
 			return fmt.Errorf("re-check %s: %w", k, err)
 		}
 		_ = closer.Close()
 	}
-	return batch.Commit(pebble.Sync)
+	if len(stale.missingOwners) > 0 || len(stale.vanishedKeys) > 0 {
+		unlock()
+		_ = batch.Close()
+		return stale
+	}
+	err := batch.Commit(pebble.NoSync)
+	unlock()
+	if err != nil {
+		return err
+	}
+	return p.syncBookFileWAL()
+}
+
+// bookFileWALSyncHook, when non-nil, runs after a book_file writer released
+// its owner stripes and before its WAL fsync. Test-only.
+var bookFileWALSyncHook func()
+
+// syncBookFileWAL makes every record applied so far durable: an fsync'd
+// empty WAL record, which the sequential WAL cannot persist before the
+// NoSync records ahead of it.
+func (p *PebbleStore) syncBookFileWAL() error {
+	if bookFileWALSyncHook != nil {
+		bookFileWALSyncHook()
+	}
+	return p.db.LogData(nil, pebble.Sync)
+}
+
+// bookIDOfBookFileKey returns <bookID> from a book_file:<bookID>:<fileID> key.
+func bookIDOfBookFileKey(k []byte) string {
+	rest, ok := strings.CutPrefix(string(k), "book_file:")
+	if !ok {
+		return ""
+	}
+	if i := strings.LastIndex(rest, ":"); i > 0 {
+		return rest[:i]
+	}
+	return ""
 }
 
 // setBookFileRowIfPresent writes data at a book_file row key only if that key
-// is still committed, under the owning book's owner stripe. It is the
-// in-place rewrite form of commitBookFileBatch for the paths that write a
-// single primary key with db.Set. Returns false (and writes nothing) when the
-// row is gone.
+// is still committed, under the owning book's owner stripe. It is the in-place
+// rewrite form of commitBookFileBatch for the paths that write a single
+// primary key. Returns false (and writes nothing) when the row is gone.
 func (p *PebbleStore) setBookFileRowIfPresent(bookID string, key, data []byte) (bool, error) {
 	unlock := p.lockBookOwners(bookID)
-	defer unlock()
 	_, closer, err := p.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
+		unlock()
 		return false, nil
 	}
 	if err != nil {
+		unlock()
 		return false, err
 	}
 	_ = closer.Close()
-	return true, p.db.Set(key, data, pebble.Sync)
+	err = p.db.Set(key, data, pebble.NoSync)
+	unlock()
+	if err != nil {
+		return false, err
+	}
+	return true, p.syncBookFileWAL()
+}
+
+// bookFileKey is the primary key of a book_file row.
+func bookFileKey(bookID, fileID string) []byte {
+	return []byte("book_file:" + bookID + ":" + fileID)
+}
+
+// partitionedBookFileWrite runs a batch book_file writer so that rows whose
+// owner book is missing are refused INDIVIDUALLY and every other row commits.
+//
+// attempt stages and commits one pass over the rows it is given and returns
+// the rows it staged as NEW grouped by owner book. When the commit is refused
+// (*staleStageError) nothing was applied; the rows of each missing owner are
+// refused and the pass is re-run over the rest. Rows are re-staged from
+// copies each pass, so a pass that read something now stale (a matched row
+// that vanished, a retargeted BookID) leaves no trace on the caller's structs;
+// after the pass that commits, each committed row's final state (assigned ID,
+// timestamps, retargeted BookID) is copied back to the caller's struct.
+//
+// Returns nil when every row committed, *BookFileRowsRefusedError when some
+// were refused (the rest are committed), or the attempt's own error (nothing
+// from that pass committed).
+func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool,
+	attempt func([]*BookFile, []bool) (map[string][]*BookFile, error),
+) error {
+	refused := map[*BookFile]bool{}
+	var missing []string
+	idleRounds := 0
+	total := 0
+	for _, f := range files {
+		if f != nil {
+			total++
+		}
+	}
+	for {
+		var clones []*BookFile
+		var pres []bool
+		origOf := map[*BookFile]*BookFile{}
+		for i, f := range files {
+			if f == nil || refused[f] {
+				continue
+			}
+			c := *f
+			clones = append(clones, &c)
+			origOf[&c] = f
+			if present != nil {
+				pres = append(pres, present[i])
+			}
+		}
+		if len(clones) == 0 {
+			break
+		}
+		byOwner, err := attempt(clones, pres)
+		var stale *staleStageError
+		if errors.As(err, &stale) {
+			newlyRefused := 0
+			for _, b := range stale.missingOwners {
+				missing = append(missing, b)
+				for _, c := range byOwner[b] {
+					if o := origOf[c]; o != nil && !refused[o] {
+						refused[o] = true
+						if o.ID == "" {
+							// Give the refused row the ID it was staged
+							// under, so the refusal names it.
+							o.ID = c.ID
+						}
+						newlyRefused++
+					}
+				}
+			}
+			if newlyRefused == 0 {
+				idleRounds++
+				if idleRounds >= maxStageRetries {
+					return fmt.Errorf("book_file batch: rows kept changing under the write: %w", err)
+				}
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for c, o := range origOf {
+			*o = *c
+		}
+		break
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	e := &BookFileRowsRefusedError{
+		Committed:      total - len(refused),
+		MissingBookIDs: slices.Compact(slices.Sorted(slices.Values(missing))),
+	}
+	for _, f := range files {
+		if f != nil && refused[f] {
+			e.RefusedFileIDs = append(e.RefusedFileIDs, f.ID)
+		}
+	}
+	return e
 }

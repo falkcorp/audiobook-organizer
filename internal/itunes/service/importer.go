@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package itunesservice
 
@@ -975,13 +975,25 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 
 	const batchFlushSize = 500
 	var pendingFiles []*database.BookFile
+	refusedFileRows := 0
 
 	flushPendingFiles := func() {
 		if len(pendingFiles) == 0 {
 			return
 		}
 		if err := imp.store.BatchUpsertBookFiles(pendingFiles); err != nil {
-			log.Error("BatchUpsertBookFiles failed (continuing): %v", err)
+			// Rows whose book was deleted during the sync are refused one by
+			// one; every other row in the batch IS written. Count and name the
+			// refused ones here and in the summary: they are not retried
+			// (their book is gone) and must not vanish unreported.
+			var refused *database.BookFileRowsRefusedError
+			if errors.As(err, &refused) {
+				refusedFileRows += len(refused.RefusedFileIDs)
+				log.Warn("iTunes sync: %d file row(s) not written because their book was deleted during the sync (books %v; rows %v); the other %d rows of the batch were written",
+					len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.RefusedFileIDs, refused.Committed)
+			} else {
+				log.Error("BatchUpsertBookFiles failed (continuing): %v", err)
+			}
 		}
 		pendingFiles = pendingFiles[:0]
 	}
@@ -1221,8 +1233,8 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 		_ = imp.store.SaveLibraryFingerprint(fp.Path, fp.Size, fp.ModTime, fp.CRC32)
 	}
 
-	summary := fmt.Sprintf("Sync completed: %d updated, %d new, %d unchanged, %d skipped (matches several books), %d skipped (belongs to a book marked for deletion), %d skipped (lookup failed) (from %d tracks, %d groups)",
-		updated, newBooks, unchanged, skippedAmbiguous, skippedDeleted, skippedLookup, trackCount, totalGroups)
+	summary := fmt.Sprintf("Sync completed: %d updated, %d new, %d unchanged, %d skipped (matches several books), %d skipped (belongs to a book marked for deletion), %d skipped (lookup failed), %d file rows refused (book deleted during sync) (from %d tracks, %d groups)",
+		updated, newBooks, unchanged, skippedAmbiguous, skippedDeleted, skippedLookup, refusedFileRows, trackCount, totalGroups)
 	log.UpdateProgress(totalGroups, totalGroups, summary)
 	log.Info("%s", summary)
 	_ = ctx
