@@ -17,4 +17,5 @@
   - A refused wrong-pair lease no longer extends the claim.
   - `worker_id` is not tied to the API key: any key holder can use any ID.
 - Only lease, renew and results calls count as worker contact; a `hello` does not. A new `pending_grace_sec` (default 1800) ends a run in which every worker has only been told `reference_pending`. The error names the missing reference pair and the waiting workers.
+- Every live run has a random `run_id`, returned by `hello`. Lease, renew and results calls must echo it, or they get a 409 `run_changed`. The bootstrap claim and every "this worker passed its gate" fact belong to one run, so a worker cleared in an earlier run can no longer lease in a resumed or new one without a new `hello`. `fp-worker` answers `run_changed` by saying `hello` again and re-running its startup gate. A worker built before this change treats the 409 as fatal and exits.
 - Building calibration files (stats and head reads over NFS) no longer holds any hub lock, so a slow `hello` cannot stall leases or results.

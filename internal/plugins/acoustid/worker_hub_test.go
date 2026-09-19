@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-09-19
 
@@ -39,6 +39,33 @@ type hubEnv struct {
 	clock *testClock
 	tally *windowTally
 	items []windowItem
+}
+
+// liveRunID is the hub's current run ID ("" when detached).
+func liveRunID(h *WorkerHub) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.run == nil {
+		return ""
+	}
+	return h.run.runID
+}
+
+// withRunL/R/S stamp a request with the live run's ID, as an fp-worker does
+// after its hello.
+func withRunL(h *WorkerHub, r workerapi.LeaseRequest) workerapi.LeaseRequest {
+	r.RunID = liveRunID(h)
+	return r
+}
+
+func withRunR(h *WorkerHub, r workerapi.RenewRequest) workerapi.RenewRequest {
+	r.RunID = liveRunID(h)
+	return r
+}
+
+func withRunS(h *WorkerHub, r workerapi.ResultsRequest) workerapi.ResultsRequest {
+	r.RunID = liveRunID(h)
+	return r
 }
 
 func withRootDir(t *testing.T, dir string) {
@@ -81,7 +108,7 @@ func (h *hubEnv) leaseReq(worker string, n int) workerapi.LeaseRequest {
 
 func (h *hubEnv) lease(worker string, n int) *workerapi.LeaseResponse {
 	h.t.Helper()
-	resp, err := h.hub.Lease(context.Background(), h.leaseReq(worker, n))
+	resp, err := h.hub.Lease(context.Background(), withRunL(h.hub, h.leaseReq(worker, n)))
 	require.NoError(h.t, err)
 	return resp
 }
@@ -104,7 +131,7 @@ func (h *hubEnv) okResult(job workerapi.Job, frames int, seed uint32) workerapi.
 
 func (h *hubEnv) post(worker string, rs ...workerapi.JobResult) []workerapi.JobStatus {
 	h.t.Helper()
-	resp, err := h.hub.Results(context.Background(), workerapi.ResultsRequest{WorkerID: worker, Results: rs})
+	resp, err := h.hub.Results(context.Background(), withRunS(h.hub, workerapi.ResultsRequest{WorkerID: worker, Results: rs}))
 	require.NoError(h.t, err)
 	return resp.Statuses
 }
@@ -131,13 +158,13 @@ func jobIdx(h *hubEnv, job workerapi.Job) int {
 
 func TestWorkerHub_NoRunIsUnavailable(t *testing.T) {
 	h := newWorkerHub()
-	_, err := h.Lease(context.Background(), workerapi.LeaseRequest{WorkerID: "w1"})
+	_, err := h.Lease(context.Background(), withRunL(h, workerapi.LeaseRequest{WorkerID: "w1"}))
 	require.ErrorIs(t, err, ErrNoWindowRun)
 	_, err = h.Hello(context.Background(), workerapi.HelloRequest{})
 	require.ErrorIs(t, err, ErrNoWindowRun)
-	_, err = h.Renew("x", workerapi.RenewRequest{WorkerID: "w1"})
+	_, err = h.Renew("x", withRunR(h, workerapi.RenewRequest{WorkerID: "w1"}))
 	require.ErrorIs(t, err, ErrNoWindowRun)
-	_, err = h.Results(context.Background(), workerapi.ResultsRequest{WorkerID: "w1"})
+	_, err = h.Results(context.Background(), withRunS(h, workerapi.ResultsRequest{WorkerID: "w1"}))
 	require.ErrorIs(t, err, ErrNoWindowRun)
 	require.True(t, h.claimServer(0), "a detached hub never blocks the server lane")
 }
@@ -166,12 +193,12 @@ func TestWorkerHub_ToolsMustBeAllowlisted(t *testing.T) {
 	h := newHubEnv(t, 1)
 	req := h.leaseReq("w1", 1)
 	req.Pipeline = "fpcalc-direct/v0"
-	_, err := h.hub.Lease(context.Background(), req)
+	_, err := h.hub.Lease(context.Background(), withRunL(h.hub, req))
 	require.ErrorIs(t, err, ErrToolsNotAllowed)
 
 	req = h.leaseReq("w1", 1)
 	req.FpcalcVersion = "1.6.1"
-	_, err = h.hub.Lease(context.Background(), req)
+	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, req))
 	require.ErrorIs(t, err, ErrToolsNotAllowed)
 
 	prev := config.AppConfig.FingerprintWorkerToolVersions
@@ -179,7 +206,7 @@ func TestWorkerHub_ToolsMustBeAllowlisted(t *testing.T) {
 	config.AppConfig.FingerprintWorkerToolVersions = []string{"1.6.1/" + h.tools.Versions.FFmpeg}
 	h.hub.detach()
 	h2 := attachHub(t, h.wbEnv)
-	resp, err := h2.hub.Lease(context.Background(), req)
+	resp, err := h2.hub.Lease(context.Background(), withRunL(h2.hub, req))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 }
@@ -188,7 +215,7 @@ func TestWorkerHub_AtMostTwoLeasesPerWorker(t *testing.T) {
 	h := newHubEnv(t, 5)
 	require.NotNil(t, h.lease("w1", 1))
 	require.NotNil(t, h.lease("w1", 1))
-	_, err := h.hub.Lease(context.Background(), h.leaseReq("w1", 1))
+	_, err := h.hub.Lease(context.Background(), withRunL(h.hub, h.leaseReq("w1", 1)))
 	require.ErrorIs(t, err, ErrTooManyLeases)
 	require.NotNil(t, h.lease("w2", 1), "the cap is per worker")
 }
@@ -200,14 +227,14 @@ func TestWorkerHub_RenewExpiryReclaim(t *testing.T) {
 	first := resp.Jobs[0]
 
 	h.clock.advance(workerapi.RenewEvery)
-	rn, err := h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w1"})
+	rn, err := h.hub.Renew(resp.LeaseID, withRunR(h.hub, workerapi.RenewRequest{WorkerID: "w1"}))
 	require.NoError(t, err)
 	require.True(t, rn.ExpiresAt.After(resp.ExpiresAt), "renew extends the lease")
 
 	require.Zero(t, h.hub.sweep(), "a live lease is not reclaimed")
 	h.clock.advance(workerapi.LeaseTTL + time.Second)
 	require.Equal(t, 1, h.hub.sweep())
-	_, err = h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w1"})
+	_, err = h.hub.Renew(resp.LeaseID, withRunR(h.hub, workerapi.RenewRequest{WorkerID: "w1"}))
 	require.ErrorIs(t, err, ErrLeaseGone, "renewing a reclaimed lease is 410")
 	_, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrLeaseGone)
@@ -494,7 +521,7 @@ func TestWorkerHub_ConcurrentLeaseResultsSweepAndServerLane(t *testing.T) {
 			defer wg.Done()
 			id := "w" + string(rune('0'+w))
 			for ctx.Err() == nil {
-				resp, err := h.hub.Lease(ctx, h.leaseReq(id, 3))
+				resp, err := h.hub.Lease(ctx, withRunL(h.hub, h.leaseReq(id, 3)))
 				if err != nil {
 					time.Sleep(time.Millisecond)
 					continue
@@ -510,7 +537,7 @@ func TestWorkerHub_ConcurrentLeaseResultsSweepAndServerLane(t *testing.T) {
 						h.post(id, workerapi.JobResult{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeTimeout})
 					}
 				}
-				_, _ = h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: id})
+				_, _ = h.hub.Renew(resp.LeaseID, withRunR(h.hub, workerapi.RenewRequest{WorkerID: id}))
 				_, _ = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: id})
 			}
 		}(w)
@@ -563,7 +590,7 @@ func TestWindowBackfill_RemoteWorkerSharesTheQueue(t *testing.T) {
 		h := &hubEnv{wbEnv: e, hub: hub, clock: clock}
 		abandoned := false
 		for ctx.Err() == nil {
-			resp, err := hub.Lease(ctx, h.leaseReq("mac1", 2))
+			resp, err := hub.Lease(ctx, withRunL(hub, h.leaseReq("mac1", 2)))
 			if err != nil || resp == nil {
 				time.Sleep(2 * time.Millisecond)
 				if err == nil && remoteAccepted.Load() > 0 {
@@ -581,7 +608,7 @@ func TestWindowBackfill_RemoteWorkerSharesTheQueue(t *testing.T) {
 			for _, j := range resp.Jobs {
 				rs = append(rs, h.okResult(j, 160, 3))
 			}
-			st, err := hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: rs})
+			st, err := hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "mac1", Results: rs}))
 			if err == nil {
 				for _, s := range st.Statuses {
 					if s.Status == workerapi.StatusAccepted {
@@ -675,7 +702,7 @@ func TestWorkerHub_SlowStatPastTTLDoesNotStrandItems(t *testing.T) {
 
 	got := make(chan *workerapi.LeaseResponse, 1)
 	go func() {
-		resp, _ := h.hub.Lease(context.Background(), h.leaseReq("w1", 2))
+		resp, _ := h.hub.Lease(context.Background(), withRunL(h.hub, h.leaseReq("w1", 2)))
 		got <- resp
 	}()
 	select {
@@ -728,7 +755,7 @@ func TestWorkerHub_CalibrationUsesOnlyServerMadeWindows(t *testing.T) {
 func TestWorkerHub_OnlyTheLeaseholderMayRenewReleaseOrPost(t *testing.T) {
 	h := newHubEnv(t, 1)
 	resp := h.lease("w1", 1)
-	_, err := h.hub.Renew(resp.LeaseID, workerapi.RenewRequest{WorkerID: "w2"})
+	_, err := h.hub.Renew(resp.LeaseID, withRunR(h.hub, workerapi.RenewRequest{WorkerID: "w2"}))
 	require.ErrorIs(t, err, ErrLeaseGone)
 	_, err = h.hub.Release(resp.LeaseID, workerapi.ReleaseRequest{WorkerID: "w2"})
 	require.ErrorIs(t, err, ErrLeaseGone)
@@ -792,8 +819,8 @@ func TestWindowBackfill_CheckpointAdvancesPastServerRequeuedItem(t *testing.T) {
 	handed := make(chan string, 1)
 	go func() {
 		for ctx.Err() == nil {
-			resp, err := hub.Lease(ctx, workerapi.LeaseRequest{WorkerID: "mac1", MaxJobs: 1, Pipeline: fingerprint.WindowPipelineID,
-				FpcalcVersion: e.tools.Versions.Fpcalc, FFmpegVersion: e.tools.Versions.FFmpeg})
+			resp, err := hub.Lease(ctx, withRunL(hub, workerapi.LeaseRequest{WorkerID: "mac1", MaxJobs: 1, Pipeline: fingerprint.WindowPipelineID,
+				FpcalcVersion: e.tools.Versions.Fpcalc, FFmpegVersion: e.tools.Versions.FFmpeg}))
 			if err != nil || resp == nil {
 				time.Sleep(time.Millisecond)
 				continue
@@ -807,8 +834,8 @@ func TestWindowBackfill_CheckpointAdvancesPastServerRequeuedItem(t *testing.T) {
 			for ctx.Err() == nil && !slices.Contains(e.invoked(), later) {
 				time.Sleep(5 * time.Millisecond)
 			}
-			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{
-				{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeDecodeError}}})
+			_, _ = hub.Results(ctx, withRunS(hub, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{
+				{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeDecodeError}}}))
 			handed <- j.Ref[2:]
 			return
 		}
