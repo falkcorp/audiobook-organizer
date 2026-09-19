@@ -989,8 +989,8 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 			var refused *database.BookFileRowsRefusedError
 			if errors.As(err, &refused) {
 				refusedFileRows += len(refused.RefusedFileIDs)
-				log.Warn("iTunes sync: %d file row(s) not written because their book was deleted during the sync (books %v; rows %v); the other %d rows of the batch were written",
-					len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.RefusedFileIDs, refused.Committed)
+				log.Warn("iTunes sync: %d file row(s) not written because their book or the row itself was deleted during the sync (missing books %v; reason by row %v); the other %d rows of the batch were written",
+					len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.Reasons, refused.Committed)
 			} else {
 				log.Error("BatchUpsertBookFiles failed (continuing): %v", err)
 			}

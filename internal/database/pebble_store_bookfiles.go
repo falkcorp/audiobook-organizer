@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -1645,6 +1645,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 	var rewriteKeys [][]byte
 	newRowsByOwner := map[string][]*BookFile{}
 	rewriteFor := map[string]*BookFile{}
+	refusals := map[*BookFile]string{}
 
 	// Rows already staged in THIS batch, indexed the same two ways the committed
 	// lookups below index them. Both lookups read s.db.Get, i.e. COMMITTED state,
@@ -1718,6 +1719,38 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 				if lookupErr != nil {
 					batch.Close()
 					return nil, lookupErr
+				}
+			}
+
+			// A row that names an ID is an UPDATE of exactly that row, never
+			// an insert and never a merge into another row. Callers that hold
+			// rows across a long run (tag/duration backfill) can be handed a
+			// row that a dedupe or DeleteBookFile removed meanwhile; without
+			// this, the upsert found no match and wrote the deleted row back
+			// under the same ID, or matched the survivor at the same path and
+			// merged the stale struct onto it. Rows with no ID (the scanner's
+			// and the iTunes sync's bare rows) still insert.
+			//
+			// Chosen over row versions: IDs are ULIDs and never reused, so
+			// "does this ID still exist, and is it the row I matched?" answers
+			// the only hazard (a deleted row) without a version field that
+			// every writer would have to stamp. A stale-but-live row is the
+			// existing merge rules' business, as before.
+			if file.ID != "" {
+				byID, idErr := s.resolveBookFileByIDStrict(file.ID)
+				if idErr != nil {
+					batch.Close()
+					return nil, idErr
+				}
+				switch {
+				case byID == nil:
+					refusals[file] = "row " + file.ID + " no longer exists (deleted after it was read); an upsert that names a row ID only updates that row"
+					continue
+				case existing != nil && existing.ID != file.ID:
+					refusals[file] = "row " + file.ID + " no longer holds this path/PID (row " + existing.ID + " does); an upsert that names a row ID only updates that row"
+					continue
+				case existing == nil:
+					existing = byID
 				}
 			}
 		}
@@ -1842,7 +1875,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 
 	durErr := s.commitBookFileBatch(batch, affectedBooks, newOwners, rewriteKeys)
 	if !bookFileApplied(durErr) {
-		return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor}, durErr
+		return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, durErr
 	}
 	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
 	// BatchUpsertBookFiles historically did not, so after a batch write the memdb
@@ -1880,7 +1913,7 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 	// Best-effort, like every other caller: the rows are committed, and a failure
 	// to refresh a derived aggregate must not be reported as a failed write.
 	s.notifyBookFileChanges(affectedBooks)
-	return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor}, durErr
+	return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, durErr
 }
 
 // GetBookFileByID returns a single BookFile by bookID and fileID.

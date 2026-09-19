@@ -1,0 +1,3 @@
+### Fixed
+
+- A batch upsert of a `book_file` row that names a row ID is now an update of exactly that row. If that row has been deleted since it was read, or its path or iTunes ID now belongs to a different row, the row is refused with a reason (`BookFileRowsRefusedError.Reasons`) and the rest of the batch commits. Before this, the tag and duration backfills, which hold rows across a long run, could write a row that dedupe had just deleted back under the same ID, or merge the stale copy onto the surviving row. Rows with no ID, which is how the scanner and the iTunes sync hand in new files, still insert.

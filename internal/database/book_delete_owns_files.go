@@ -492,6 +492,16 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 		if !bookFileApplied(err) {
 			return err
 		}
+		// Rows the pass declined outright are refused with its reason.
+		if staged != nil {
+			for c, reason := range staged.refusals {
+				if o := origOf[c]; o != nil && !refused[o] {
+					refused[o] = true
+					reasons[o] = reason
+					delete(origOf, c)
+				}
+			}
+		}
 		// Applied (possibly with an fsync failure): the rows are visible, so
 		// the caller's structs get their final state either way.
 		for c, o := range origOf {
@@ -527,4 +537,8 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 type stagedBookFileRows struct {
 	byOwner      map[string][]*BookFile
 	byRewriteKey map[string]*BookFile
+	// refusals are rows the pass declined to stage at all, with the reason
+	// (an upsert naming a row ID that no longer exists, say). The rest of
+	// the pass committed without them.
+	refusals map[*BookFile]string
 }
