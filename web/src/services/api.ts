@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.116.0
+// version: 2.117.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6380,12 +6380,24 @@ export interface ChapterGroup {
   total_duration: number;
   file_count: number;
   directory: string;
+  /** Each member's position, parallel to book_ids ("7", or "2-05" for disc 2 track 5). */
+  index_labels?: string[];
+  /** Positions missing from the run ("7", "40..45"). */
+  gaps?: string[];
+  /** M from "N of M" track titles, when present. */
+  declared_total?: number;
+  /** Members with a known duration; durations are advisory, never required. */
+  durations_known?: number;
+  confidence?: 'high' | 'medium' | 'low';
+  /** Why the detector grouped these records. */
+  reasons?: string[];
   members?: ChapterMemberSnapshot[];
   /** What the preview saw; a real merge sends it back and drifted groups are skipped. */
   fingerprint?: string;
   /** would_merge / would_skip / blocked (dry run) or merged / partial / failed / drifted / blocked. */
   status?: 'would_merge' | 'would_skip' | 'blocked' | 'drifted' | 'merged' | 'partial' | 'failed';
-  /** Data a merge cannot carry; a group with any is never merged. */
+  /** Why the group is never merged: a detection blocker (non-primary versions, iTunes library,
+   * duplicate or sparse positions) or data a merge cannot carry. */
   blockers?: string[];
   /** Fields copied from the sources onto the primary's EMPTY fields (asin, narrator, series, author). */
   metadata_fills?: string[];
@@ -6406,8 +6418,11 @@ export interface ChapterGroupsResult {
   params: ChapterGroupsParams & { dry_run: boolean };
   groups_found: number;
   total_books_affected: number;
-  groups_skipped_unknown_duration: number;
   groups_skipped_duplicate_copies?: number;
+  /** Numbered runs rejected as not chapters (bare years, a few scattered positions). */
+  groups_skipped_not_sequence?: number;
+  /** Position-titled records whose path is a folder (already multi-file). */
+  books_skipped_not_single_file?: number;
   books_excluded?: number;
   books_merged: number;
   books_skipped: number;

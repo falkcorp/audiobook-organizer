@@ -1,5 +1,5 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -490,6 +490,12 @@ export function ChapterConsolidationCard() {
           <Typography variant="body2" sx={{ mb: 1 }} data-testid="chapter-summary">
             Found <strong>{result.groups_found}</strong> group(s) affecting{' '}
             <strong>{result.total_books_affected}</strong> book record(s).
+            {(result.groups_blocked ?? 0) > 0 && (
+              <>
+                {' '}
+                <strong>{result.groups_blocked}</strong> more blocked (reasons listed).
+              </>
+            )}
           </Typography>
         )}
 
@@ -513,13 +519,6 @@ export function ChapterConsolidationCard() {
           </Typography>
         )}
 
-        {result && result.groups_skipped_unknown_duration > 0 && (
-          <Alert severity="info" sx={{ mb: 1 }}>
-            {result.groups_skipped_unknown_duration} chapter-shaped group(s) were left out because
-            at least one file has no known duration. Backfill durations and scan again.
-          </Alert>
-        )}
-
         {groups.length > 0 && (
           <>
             <Button size="small" onClick={() => setExpanded((v) => !v)} sx={{ mb: 1 }}>
@@ -541,6 +540,8 @@ export function ChapterConsolidationCard() {
                       primary={g.common_title || '(unknown title)'}
                       secondary={
                         `${g.file_count} files · ${Math.round(g.total_duration / 60)} min total · ${g.directory}` +
+                        (g.confidence ? ` · ${g.confidence} confidence` : '') +
+                        (g.gaps && g.gaps.length > 0 ? ` · missing ${g.gaps.join(', ')}` : '') +
                         (g.title_action === 'kept' && g.primary_title
                           ? ` · keeps title "${g.primary_title}"`
                           : '') +

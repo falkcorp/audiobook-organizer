@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -98,14 +98,23 @@ type chapterMemberSnapshot struct {
 // chapterGroupOutcome is one group as the Maintenance card renders it. The
 // merge-only fields are empty on a scan.
 type chapterGroupOutcome struct {
-	PrimaryBookID string                  `json:"primary_book_id"`
-	BookIDs       []string                `json:"book_ids"`
-	SourceBookIDs []string                `json:"source_book_ids"`
-	CommonTitle   string                  `json:"common_title"`
-	TotalDuration float64                 `json:"total_duration"`
-	FileCount     int                     `json:"file_count"`
-	Directory     string                  `json:"directory"`
-	Members       []chapterMemberSnapshot `json:"members,omitempty"`
+	PrimaryBookID string   `json:"primary_book_id"`
+	BookIDs       []string `json:"book_ids"`
+	SourceBookIDs []string `json:"source_book_ids"`
+	CommonTitle   string   `json:"common_title"`
+	TotalDuration float64  `json:"total_duration"`
+	FileCount     int      `json:"file_count"`
+	Directory     string   `json:"directory"`
+	// Detection detail (scanner.ChapterGroup): each member's position in
+	// BookIDs order, the missing positions, the "N of M" total, how many
+	// durations are known, and why the detector grouped it.
+	IndexLabels    []string                `json:"index_labels,omitempty"`
+	Gaps           []string                `json:"gaps,omitempty"`
+	DeclaredTotal  int                     `json:"declared_total,omitempty"`
+	DurationsKnown int                     `json:"durations_known"`
+	Confidence     string                  `json:"confidence,omitempty"`
+	Reasons        []string                `json:"reasons,omitempty"`
+	Members        []chapterMemberSnapshot `json:"members,omitempty"`
 	// Fingerprint identifies exactly what the preview saw; a real merge of
 	// this group must send it back and is refused if the members changed.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -113,8 +122,10 @@ type chapterGroupOutcome struct {
 	// Status is would_merge / would_skip / blocked (dry run) or merged /
 	// partial / failed / drifted / blocked (real run). Empty on a scan.
 	Status string `json:"status,omitempty"`
-	// Blockers name user data or metadata on a source that the merge cannot
-	// carry onto the primary; a group with any is never merged.
+	// Blockers name why the group is never merged: a detection blocker
+	// (non-primary versions, iTunes library, duplicate or sparse positions,
+	// disagreeing authors or totals), or user data or metadata on a source
+	// that the merge cannot carry onto the primary.
 	Blockers []string `json:"blockers,omitempty"`
 	// MetadataFills names the fields (asin, narrator, series, author) the
 	// merge copies from the sources onto the primary's EMPTY fields.
@@ -138,8 +149,9 @@ type chapterGroupsResult struct {
 	Params                       chapterGroupParams    `json:"params"`
 	GroupsFound                  int                   `json:"groups_found"`
 	TotalBooksAffected           int                   `json:"total_books_affected"`
-	GroupsSkippedUnknownDuration int                   `json:"groups_skipped_unknown_duration"`
 	GroupsSkippedDuplicateCopies int                   `json:"groups_skipped_duplicate_copies"`
+	GroupsSkippedNotSequence     int                   `json:"groups_skipped_not_sequence"`
+	BooksSkippedNotSingleFile    int                   `json:"books_skipped_not_single_file"`
 	BooksExcluded                int                   `json:"books_excluded"`
 	BooksMerged                  int                   `json:"books_merged"`
 	BooksSkipped                 int                   `json:"books_skipped"`
@@ -150,42 +162,53 @@ type chapterGroupsResult struct {
 }
 
 // chapterExcluder returns the detection Exclude hook: the owner's manual-only
-// libraries (Doctor Who / Big Finish / Torchwood, never bulk-applied) and the
-// active iTunes library (never mutated). An unreadable iTunes config is an
-// error: excluding nothing would be the unsafe direction.
-func chapterExcluder() (func(*database.BookCore) bool, error) {
+// libraries (Doctor Who / Big Finish / Torchwood), never bulk-applied and so
+// not even reported.
+func chapterExcluder() func(*database.BookCore) bool {
+	return func(b *database.BookCore) bool { return applygate.IsOwnerManualOnly(b.FilePath, "") }
+}
+
+// chapterProtector returns the detection Protected hook: the active iTunes
+// library. Its chapter splits are detected and REPORTED (blocked), but
+// merge.GuardITunesProtected refuses any merge touching it, so they are never
+// offered. An unreadable iTunes config is an error: protecting nothing would
+// be the unsafe direction.
+func chapterProtector() (func(*database.BookCore) string, error) {
 	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
 	if err != nil {
 		return nil, fmt.Errorf("resolve iTunes library roots: %w", err)
 	}
-	return func(b *database.BookCore) bool {
-		if applygate.IsOwnerManualOnly(b.FilePath, "") {
-			return true
-		}
+	return func(b *database.BookCore) string {
 		p := filepath.Clean(b.FilePath)
 		for _, r := range roots {
 			if p == r || strings.HasPrefix(p, r+string(filepath.Separator)) {
-				return true
+				return "in the active iTunes library"
 			}
 		}
-		return false
+		return ""
 	}, nil
 }
 
-func chapterDetectOptions(p chapterGroupParams, exclude func(*database.BookCore) bool) scanner.ChapterDetectOptions {
+// chapterDetectOptionsForRun builds the detector options with both hooks.
+func chapterDetectOptionsForRun(p chapterGroupParams) (scanner.ChapterDetectOptions, error) {
+	protect, err := chapterProtector()
+	if err != nil {
+		return scanner.ChapterDetectOptions{}, err
+	}
 	return scanner.ChapterDetectOptions{
 		MinFiles:           p.MinFiles,
 		MaxPerFileDuration: p.MaxPerFileDuration,
 		PathPrefix:         p.PathPrefix,
-		Exclude:            exclude,
-	}
+		Exclude:            chapterExcluder(),
+		Protected:          protect,
+	}, nil
 }
 
 // detectChapterGroupsForRun loads every book and runs the detector with the
 // run's params and exclusions. Used by the scan and the dry-run preview only:
 // a real merge never detects to decide what to merge.
 func detectChapterGroupsForRun(ctx context.Context, store maintenance.JobStore, p chapterGroupParams) (scanner.ChapterDetection, error) {
-	exclude, err := chapterExcluder()
+	opts, err := chapterDetectOptionsForRun(p)
 	if err != nil {
 		return scanner.ChapterDetection{}, err
 	}
@@ -196,19 +219,43 @@ func detectChapterGroupsForRun(ctx context.Context, store maintenance.JobStore, 
 	if err := ctx.Err(); err != nil {
 		return scanner.ChapterDetection{}, err
 	}
-	return scanner.DetectChapterGroupsWithOptions(books, chapterDetectOptions(p, exclude)), nil
+	return scanner.DetectChapterGroupsWithOptions(books, opts), nil
 }
 
+// newChapterGroupOutcome is a detected group as the card renders it. A group
+// the detector blocked carries Status "blocked" and its Blockers, and no
+// fingerprint, so it can never be sent back for a merge.
 func newChapterGroupOutcome(g scanner.ChapterGroup) chapterGroupOutcome {
-	return chapterGroupOutcome{
-		PrimaryBookID: g.PrimaryBookID,
-		BookIDs:       g.BookIDs,
-		SourceBookIDs: append([]string(nil), g.BookIDs[1:]...),
-		CommonTitle:   g.CommonTitle,
-		TotalDuration: g.TotalDuration,
-		FileCount:     g.FileCount,
-		Directory:     g.Directory,
+	out := chapterGroupOutcome{
+		PrimaryBookID:  g.PrimaryBookID,
+		BookIDs:        g.BookIDs,
+		SourceBookIDs:  append([]string(nil), g.BookIDs[1:]...),
+		CommonTitle:    g.CommonTitle,
+		TotalDuration:  g.TotalDuration,
+		FileCount:      g.FileCount,
+		Directory:      g.Directory,
+		IndexLabels:    g.IndexLabels,
+		Gaps:           g.Gaps,
+		DeclaredTotal:  g.DeclaredTotal,
+		DurationsKnown: g.DurationsKnown,
+		Confidence:     g.Confidence,
+		Reasons:        g.Reasons,
 	}
+	if len(g.Blockers) > 0 {
+		out.Status = "blocked"
+		out.Blockers = g.Blockers
+	}
+	return out
+}
+
+// applyDetectionCounts copies the detector's counters onto a result.
+func (r *chapterGroupsResult) applyDetectionCounts(det scanner.ChapterDetection) {
+	r.GroupsFound = len(det.Groups)
+	r.GroupsBlocked = len(det.Blocked)
+	r.GroupsSkippedDuplicateCopies = det.SkippedDuplicateCopies
+	r.GroupsSkippedNotSequence = det.SkippedNotSequence
+	r.BooksSkippedNotSingleFile = det.SkippedNotSingleFile
+	r.BooksExcluded = det.SkippedExcluded
 }
 
 // chapterGroupState is a fresh read of one group's members.
@@ -304,4 +351,18 @@ type chapterMergeAudit struct {
 	FilesMoved         int                 `json:"files_moved"`
 	JournalID          string              `json:"journal_id,omitempty"`
 	Errors             []string            `json:"errors,omitempty"`
+}
+
+// chapterFileCountBlockers refuses a group with a member that is not a
+// single-file record: the detector reads that off FilePath, and this checks
+// it against the real book_file rows (a book an earlier merge already made
+// multi-file keeps an audio-file FilePath).
+func chapterFileCountBlockers(st *chapterGroupState) []string {
+	var out []string
+	for _, b := range st.books {
+		if n := len(st.files[b.ID]); n != 1 {
+			out = append(out, fmt.Sprintf("%s: has %d files, not one (not a single-file chapter record)", b.ID, n))
+		}
+	}
+	return out
 }

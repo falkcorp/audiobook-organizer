@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -145,12 +146,9 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 	if err != nil {
 		return err
 	}
-	res.GroupsFound = len(det.Groups)
-	res.GroupsSkippedUnknownDuration = det.SkippedUnknownDuration
-	res.GroupsSkippedDuplicateCopies = det.SkippedDuplicateCopies
-	res.BooksExcluded = det.SkippedExcluded
-	res.Groups = make([]chapterGroupOutcome, 0, len(det.Groups))
-	reporter.SetTotal(len(det.Groups))
+	res.applyDetectionCounts(det)
+	res.Groups = make([]chapterGroupOutcome, 0, len(det.Groups)+len(det.Blocked))
+	reporter.SetTotal(len(det.Groups) + len(det.Blocked))
 	for _, g := range det.Groups {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -173,6 +171,8 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 				out.Errors = append(out.Errors, gerr.Error())
 			} else if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
 				out.Status = "blocked"
+			} else if out.Blockers = chapterFileCountBlockers(st); len(out.Blockers) > 0 {
+				out.Status = "blocked"
 			} else {
 				out.Status = "would_merge"
 				out.BooksMerged = len(out.SourceBookIDs)
@@ -189,17 +189,25 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 		}
 		res.Groups = append(res.Groups, out)
 	}
+	// Groups the detector blocked (non-primary versions, iTunes library,
+	// duplicate or sparse positions...) are reported with their reasons and
+	// no fingerprint: they cannot be selected for a merge.
+	for _, g := range det.Blocked {
+		reporter.Increment()
+		out := newChapterGroupOutcome(g)
+		res.BooksSkipped += len(out.SourceBookIDs)
+		res.Groups = append(res.Groups, out)
+	}
 	return nil
 }
 
 // apply merges exactly the reviewed groups in res.Params.Groups.
 func (j *mergeChapterGroupsJob) apply(ctx context.Context, store maintenance.JobStore, ds dedup.Store, reporter maintenance.ProgressReporter, cc *chapterCarryContext, res *chapterGroupsResult) error {
-	exclude, err := chapterExcluder()
+	opts, err := chapterDetectOptionsForRun(res.Params)
 	if err != nil {
 		return err
 	}
 	opID := maintenance.OperationIDFromCtx(ctx)
-	opts := chapterDetectOptions(res.Params, exclude)
 	opts.PathPrefix = "" // the reviewed members ARE the scope; re-verify them as they are
 	claimed := map[string]bool{}
 	res.GroupsFound = len(res.Params.Groups)
@@ -242,6 +250,9 @@ func verifyChapterSelection(sel chapterGroupSelection, st *chapterGroupState, op
 		cores[i] = b.Core()
 	}
 	det := scanner.DetectChapterGroupsWithOptions(cores, opts)
+	if len(det.Groups) == 0 && len(det.Blocked) == 1 {
+		return scanner.ChapterGroup{}, "group is blocked: " + strings.Join(det.Blocked[0].Blockers, "; ")
+	}
 	if len(det.Groups) != 1 {
 		return scanner.ChapterGroup{}, fmt.Sprintf("members no longer form one chapter group (detected %d)", len(det.Groups))
 	}
@@ -288,6 +299,10 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		out.Status = "blocked"
 		return
 	}
+	if out.Blockers = chapterFileCountBlockers(st); len(out.Blockers) > 0 {
+		out.Status = "blocked"
+		return
+	}
 	suggested, action := chapterTitleDecision(st.books[0], out.CommonTitle)
 	out.TitleAction = action
 
@@ -324,7 +339,8 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		if _, why := verifyChapterSelection(sel, cur, opts); why != "" {
 			return &chapterStepError{status: "drifted", msg: why}
 		}
-		if b, _ := cc.chapterGroupBlockers(cur.books[0], cur.books[1:]); len(b) > 0 {
+		b, _ := cc.chapterGroupBlockers(cur.books[0], cur.books[1:])
+		if b = append(b, chapterFileCountBlockers(cur)...); len(b) > 0 {
 			return &chapterStepError{status: "blocked", msg: fmt.Sprint(b), blockers: b}
 		}
 		return nil
@@ -404,13 +420,14 @@ type chapterStepError struct {
 func (e *chapterStepError) Error() string { return e.status + ": " + e.msg }
 
 // chapterTitleDecision returns the title to offer the merge ("" = leave the
-// primary's title alone) and the action to report. Only a title that is still
-// the scanner's filename-derived one is replaced; a curated title is kept.
+// primary's title alone) and the action to report. Only a title no one
+// curated is replaced -- the scanner's filename-derived one, or a bare
+// position like "157" or "108 of 310" (scanner.ChapterTitleIsReplaceable).
 func chapterTitleDecision(primary *database.Book, commonTitle string) (string, string) {
 	if commonTitle == "" || primary.Title == commonTitle {
 		return "", "kept"
 	}
-	if scanner.ChapterTitleIsFilenameDerived(primary.Title, primary.FilePath) {
+	if scanner.ChapterTitleIsReplaceable(primary.Title, primary.FilePath) {
 		return commonTitle, "set"
 	}
 	return "", "kept"
