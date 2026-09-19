@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-19
 
@@ -141,6 +141,11 @@ type CombineAbsorbed struct {
 	// Progress snapshots every user's progress on the absorbed book and on the
 	// survivor, before and after FollowMerge drained one onto the other.
 	Progress []CombineUserProgress `json:"progress,omitempty"`
+	// LeftLive is set when the merge could not retire this book after some of
+	// its steps ran (a split-book merge keeps such a book in the journal so
+	// undo still moves its files, ids and progress back). Undo does not
+	// require it to be soft-deleted.
+	LeftLive bool `json:"left_live,omitempty"`
 }
 
 // CombineFileMove records one file row's move.
@@ -471,9 +476,14 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 // the row where the undo wants it, so treating them alike is safe.
 func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	var reasons []string
-	retry := j.Status == CombineJournalUndoFailed
+	// A Pending journal is a merge that stopped part-way (a crash, or a
+	// journal that could not be finalized). It records every step done so
+	// far, and undo replays exactly those, with the same tolerance as a retry:
+	// a step that never ran leaves its row where it already is.
+	pending := j.Status == CombineJournalPending
+	retry := j.Status == CombineJournalUndoFailed || pending
 	if j.Status != CombineJournalApplied && !retry {
-		return []string{fmt.Sprintf("journal status is %q, only %q (or %q, to retry) combines can be undone", j.Status, CombineJournalApplied, CombineJournalUndoFailed)}
+		return []string{fmt.Sprintf("journal status is %q, only %q (or %q / %q, to replay) combines can be undone", j.Status, CombineJournalApplied, CombineJournalUndoFailed, CombineJournalPending)}
 	}
 	survivor, err := ms.db.GetBookByID(j.SurvivorID)
 	switch {
@@ -485,9 +495,9 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		reasons = append(reasons, fmt.Sprintf("survivor %s has since been deleted or merged away", j.SurvivorID))
 	}
 
-	checkFile := func(fm CombineFileMove) {
+	checkFileL := func(fm CombineFileMove, lenient bool) {
 		f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-		if err == nil && f == nil && retry && ms.fileAlreadyUndone(j, fm) {
+		if err == nil && f == nil && lenient && ms.fileAlreadyUndone(j, fm) {
 			return
 		}
 		switch {
@@ -499,6 +509,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, fmt.Sprintf("file %s moved on disk since the combine (%s -> %s)", fm.FileID, fm.FilePath, f.FilePath))
 		}
 	}
+	checkFile := func(fm CombineFileMove) { checkFileL(fm, retry) }
 	for _, fm := range j.SurvivorFiles {
 		checkFile(fm)
 	}
@@ -530,6 +541,10 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	}
 
 	for _, a := range j.Absorbed {
+		// A book the merge left live (LeftLive) was never retired, and in a
+		// partial journal a later step may not have run: both are checked with
+		// replay tolerance.
+		lenient := retry || a.LeftLive
 		b, err := ms.db.GetBookByID(a.BookID)
 		switch {
 		case err != nil:
@@ -538,7 +553,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		case b == nil:
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s no longer exists (purged)", a.BookID))
 			continue
-		case !b.IsSoftDeleted() && retry:
+		case !b.IsSoftDeleted() && lenient:
 			// Restored by the failed attempt (step 1 runs first).
 		case !b.IsSoftDeleted():
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s is no longer soft-deleted (restored since)", a.BookID))
@@ -552,7 +567,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			// this book's own rows back; those are expected. Any other row is
 			// a file the book gained since, and still refuses.
 			ownRows := map[string]bool{}
-			if retry {
+			if lenient {
 				for _, fm := range a.Files {
 					if !fm.Created {
 						ownRows[fm.FileID] = true
@@ -570,14 +585,14 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			}
 		}
 		for _, fm := range a.Files {
-			checkFile(fm)
+			checkFileL(fm, lenient)
 		}
 		for _, x := range a.ExternalIDs {
 			owner, err := ms.db.GetBookByExternalID(x.Source, x.ExternalID)
 			switch {
 			case err != nil:
 				reasons = append(reasons, fmt.Sprintf("load %s id %s: %v", x.Source, x.ExternalID, err))
-			case retry && owner == a.BookID:
+			case lenient && owner == a.BookID:
 				// Moved back by the failed attempt.
 			case owner != j.SurvivorID:
 				reasons = append(reasons, fmt.Sprintf("%s id %s now maps to %q, not the survivor", x.Source, x.ExternalID, owner))
@@ -866,6 +881,24 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	//     still holds the value the merge wrote; a field someone set since is
 	//     theirs and is left, with a warning.
 	if f := j.FilledEmpty; !f.Empty() {
+		// Remove only the author rows the merge added; any co-author added
+		// since is the user's and stays (becoming the primary author link).
+		var remaining []database.BookAuthor
+		if f.AuthorID != nil && len(f.Authors) > 0 {
+			cur, err := ms.db.GetBookAuthors(j.SurvivorID)
+			if err != nil {
+				return res, fmt.Errorf("read survivor authors: %w", err)
+			}
+			added := map[string]bool{}
+			for _, a := range f.Authors {
+				added[fmt.Sprintf("%d|%s", a.AuthorID, a.Role)] = true
+			}
+			for _, a := range cur {
+				if !added[fmt.Sprintf("%d|%s", a.AuthorID, a.Role)] {
+					remaining = append(remaining, a)
+				}
+			}
+		}
 		authorsCleared := false
 		_, err := ms.db.ModifyBook(j.SurvivorID, func(b *database.Book) error {
 			changed := false
@@ -896,6 +929,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			if f.AuthorID != nil {
 				if b.AuthorID != nil && *b.AuthorID == *f.AuthorID {
 					b.AuthorID, changed, authorsCleared = nil, true, true
+					if len(remaining) > 0 {
+						id := remaining[0].AuthorID
+						b.AuthorID = &id
+					}
 				} else {
 					res.Warnings = append(res.Warnings, "survivor author changed after the merge; left as is")
 				}
@@ -909,7 +946,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			return res, fmt.Errorf("restore survivor fill-empty metadata: %w", err)
 		}
 		if authorsCleared && len(f.Authors) > 0 {
-			if err := ms.db.SetBookAuthors(j.SurvivorID, nil); err != nil {
+			for i := range remaining {
+				remaining[i].Position = i
+			}
+			if err := ms.db.SetBookAuthors(j.SurvivorID, remaining); err != nil {
 				return res, fmt.Errorf("restore survivor authors (fill-empty): %w", err)
 			}
 		}

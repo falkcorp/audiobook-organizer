@@ -1,5 +1,5 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
 // last-edited: 2026-09-19
 
@@ -22,6 +22,7 @@ package dedup
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -70,6 +71,7 @@ type BulkSplitBookMergeParams struct {
 // splitSrcPlan is one src as read before the first write.
 type splitSrcPlan struct {
 	entry       merge.CombineAbsorbed
+	files       []database.BookFile
 	fileIDs     []string
 	hasMappings bool // any mapping, tombstoned included: all ride ReassignExternalIDs
 }
@@ -106,9 +108,28 @@ type SplitMergeOptions struct {
 	// FillEmpty copies ASIN, narrator, series and author from the sources
 	// onto the keep where the keep's field is EMPTY (see PlanFillEmpty).
 	FillEmpty bool
+	// OrderByBooks computes the play order under the merge lock: the keep's
+	// files, then each src's in srcIDs order, each book's files by (disc,
+	// track, path). It is stamped like FileOrder and also gives each src its
+	// offset in the merged timeline for progress mapping. FileOrder, when set,
+	// takes precedence.
+	OrderByBooks bool
+	// Precheck, when set, runs under the merge lock before anything is read
+	// for the merge; an error refuses the merge with nothing written. The
+	// chapter job re-verifies its reviewed group here.
+	Precheck func() error
 }
 
 // MergeSplitBookClusterWithOptions is MergeSplitBookCluster with options.
+//
+// CRASH SAFETY. The journal is written Pending before the first write and
+// re-written after every step that changes something (each src's file move,
+// external-id reassignment, progress follow and soft-delete; the title and
+// fill-empty writes), so at any instant it names everything already done.
+// UndoCombine accepts a Pending journal and replays whatever it records. A src
+// whose step fails after its files moved is KEPT in the journal, marked
+// LeftLive, so undo still moves its files back; only a src for which nothing
+// was written is dropped from it.
 func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []string, suggestedTitle string, opts SplitMergeOptions) (*SplitBookMergeResult, error) {
 	if keepID == "" {
 		return nil, fmt.Errorf("MergeSplitBookCluster: empty keepID")
@@ -120,15 +141,17 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	// This is a fourth unguarded read-modify-write over shared book rows
 	// (GetBookByID -> MoveBookFilesToBook -> UpdateBook -> SoftDeleteBook), the
 	// same failure class #1930 fixed for merge.Service.MergeBooks and that
-	// dedup.MergeBooks (book_dedup.go) already guards with this same lock. A
-	// user merging/combining a book via the dedup review UI while a split-book
-	// bulk-merge op or the single-candidate handler touches the same book id
-	// (as keepID or a srcID) could otherwise interleave writes and corrupt the
-	// row the same way. See internal/merge/serialize.go. It is also the lock
-	// merge.Service.UndoCombine takes, so an undo of this journal cannot
-	// interleave with the merge that writes it.
+	// dedup.MergeBooks (book_dedup.go) already guards with this same lock. It
+	// is also the lock merge.Service.UndoCombine takes, so an undo of this
+	// journal cannot interleave with the merge that writes it.
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+
+	if opts.Precheck != nil {
+		if err := opts.Precheck(); err != nil {
+			return nil, fmt.Errorf("split-book merge refused: %w", err)
+		}
+	}
 
 	// Refuse before any write if keep or any src has a file under the active
 	// iTunes library (merge.ErrITunesProtected).
@@ -160,26 +183,29 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		}
 		plans = append(plans, plan)
 	}
-	// Fill-empty metadata is planned before the first write: a conflict
-	// (sources disagreeing on a value the keep lacks) refuses the merge.
-	var fillPlan FillEmptyPlan
+	srcBook := map[string]*database.Book{}
 	if opts.FillEmpty {
-		srcBooks := make([]*database.Book, 0, len(plans))
 		for _, p := range plans {
 			b, berr := store.GetBookByID(p.entry.BookID)
 			if berr != nil || b == nil {
 				return nil, fmt.Errorf("split-book merge refused: re-read src %s: %v", p.entry.BookID, berr)
 			}
-			srcBooks = append(srcBooks, b)
+			srcBook[p.entry.BookID] = b
 		}
-		fp, perr := PlanFillEmpty(store, keep, srcBooks)
+		// A conflict (sources disagreeing on a value the keep lacks) refuses
+		// the merge before any write. The fill itself is re-planned over the
+		// srcs actually absorbed (below).
+		all := make([]*database.Book, 0, len(plans))
+		for _, p := range plans {
+			all = append(all, srcBook[p.entry.BookID])
+		}
+		fp, perr := PlanFillEmpty(store, keep, all)
 		if perr != nil {
 			return nil, fmt.Errorf("split-book merge refused: %w", perr)
 		}
 		if len(fp.Conflicts) > 0 {
 			return nil, fmt.Errorf("split-book merge refused: metadata conflict: %v", fp.Conflicts)
 		}
-		fillPlan = fp
 	}
 
 	// A src whose listening progress cannot be carried (a store without a
@@ -198,79 +224,100 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 		}
 		plans = carriable
 	}
+
+	ownFiles, oerr := store.GetBookFiles(keepID)
+	if oerr != nil {
+		return nil, fmt.Errorf("split-book merge refused: read keep files: %w", oerr)
+	}
+	order, slices := splitPlayOrder(keepID, ownFiles, plans, opts)
+
 	journal := merge.NewCombineJournal(keepID)
 	journal.Origin = SplitBookMergeJournalOrigin
 	for _, p := range plans {
 		journal.Absorbed = append(journal.Absorbed, p.entry)
 	}
 	// The keep's own files, with their numbers, so UndoCombine can restore a
-	// FileOrder stamp on them too.
-	if ownFiles, oerr := store.GetBookFiles(keepID); oerr != nil {
-		return nil, fmt.Errorf("split-book merge refused: read keep files: %w", oerr)
-	} else {
-		for _, f := range ownFiles {
-			journal.SurvivorOwnFiles = append(journal.SurvivorOwnFiles, merge.CombineFileMove{
-				FileID: f.ID, FromBookID: keepID, FilePath: f.FilePath,
-				DiscBefore: f.DiscNumber, TrackBefore: f.TrackNumber,
-			})
-		}
+	// play-order stamp on them too.
+	for _, f := range ownFiles {
+		journal.SurvivorOwnFiles = append(journal.SurvivorOwnFiles, merge.CombineFileMove{
+			FileID: f.ID, FromBookID: keepID, FilePath: f.FilePath,
+			DiscBefore: f.DiscNumber, TrackBefore: f.TrackNumber,
+		})
 	}
 	if err := merge.WriteCombineJournal(store, journal); err != nil {
 		return nil, fmt.Errorf("split-book merge refused: undo journal could not be written: %w", err)
 	}
+	// persist re-writes the journal after a step. A failure is recorded: the
+	// merge goes on (its writes are real), but the result says the journal may
+	// be behind.
+	persist := func() {
+		if err := merge.WriteCombineJournal(store, journal); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("undo journal %s not updated: %v", journal.ID, err))
+		}
+	}
 
-	// Step 1: move files, reassign external IDs, soft-delete -- per src, in
-	// that order. Only a src that completed all three enters the journal.
-	kept := make([]merge.CombineAbsorbed, 0, len(plans))
-	for _, p := range plans {
-		srcID := p.entry.BookID
+	// Step 1: per src -- move files, reassign external IDs, follow progress,
+	// soft-delete -- persisting the journal after each.
+	kept := make([]string, 0, len(plans))
+	for i := range journal.Absorbed {
+		entry := &journal.Absorbed[i]
+		p := plans[i]
+		srcID := entry.BookID
+		leaveLive := func(msg string) {
+			entry.LeftLive = true
+			result.Errors = append(result.Errors, msg)
+			journal.Warnings = append(journal.Warnings, msg)
+			persist()
+		}
 		if len(p.fileIDs) > 0 {
 			if err := store.MoveBookFilesToBook(p.fileIDs, srcID, keepID); err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("move files from %s: %v", srcID, err))
+				// Atomic: nothing moved. The entry stays (with nothing to undo
+				// beyond a no-op) marked LeftLive.
+				leaveLive(fmt.Sprintf("move files from %s: %v; %s left live", srcID, err, srcID))
 				continue
 			}
 			result.FilesMoved += len(p.fileIDs)
+			merge.FollowFileMove(store, srcID, keepID, p.fileIDs)
 		}
 		if p.hasMappings && eids != nil {
 			// Fail closed, as merge.Service.MergeBooks does: a src soft-deleted
 			// while still holding its PIDs would have them enqueued for iTunes
 			// removal by the purge, for audio the keep now owns.
 			if err := eids.ReassignExternalIDs(srcID, keepID); err != nil {
-				msg := fmt.Sprintf("reassign external ids of %s: %v; %s left live, re-run the merge to finish it", srcID, err, srcID)
-				result.Errors = append(result.Errors, msg)
-				if len(p.fileIDs) > 0 {
-					journal.Warnings = append(journal.Warnings, fmt.Sprintf("%d file(s) of %s moved to %s but %s was left live (external ids not reassigned)", len(p.fileIDs), srcID, keepID, srcID))
-				}
+				entry.ExternalIDs = nil // nothing moved, nothing to move back
+				leaveLive(fmt.Sprintf("reassign external ids of %s: %v; %s left live, undo moves its files back", srcID, err, srcID))
 				continue
 			}
 		}
-		// Carry each moved file's sync_file identity, then every user's
-		// listening progress and the src's sync identity, onto the keep --
-		// what CombineBooks does per absorbed book. Journaled so UndoCombine
-		// puts progress back. A follow that cannot run leaves the src live:
-		// the pre-check above already removed srcs with progress, so this only
-		// fires on an unexpected store error.
-		merge.FollowFileMove(store, srcID, keepID, p.fileIDs)
-		entry := p.entry
+		// Carry every user's listening progress and the src's sync identity
+		// onto the keep. A split part / chapter is a SLICE of the keep, so its
+		// position is mapped into the keep's timeline and its Finished state
+		// is never carried (merge.SliceMapping). The before-snapshot is
+		// journaled before the follow drains anything.
 		if canFollow {
-			progress, redirected, ferr := merge.FollowAbsorbedJournaled(store, keepID, srcID)
+			sm := slices[srcID]
+			progress, redirected, ferr := merge.FollowAbsorbedJournaled(store, keepID, srcID, &sm, func(before []merge.CombineUserProgress) error {
+				entry.Progress = before
+				entry.SyncRedirected = true
+				return merge.WriteCombineJournal(store, journal)
+			})
 			entry.Progress = progress
 			entry.SyncRedirected = redirected
 			if ferr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("follow progress of %s: %v; %s left live, re-run the merge to finish it", srcID, ferr, srcID))
-				journal.Warnings = append(journal.Warnings, fmt.Sprintf("files of %s moved to %s but progress follow failed; %s left live", srcID, keepID, srcID))
+				leaveLive(fmt.Sprintf("follow progress of %s: %v; %s left live, undo moves its files back", srcID, ferr, srcID))
 				continue
 			}
 		}
 		stamp, err := softDeleteSplitSource(store, srcID)
 		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("soft-delete %s: %v", srcID, err))
 			splitMergeLog.Warn("split-book merge soft-delete failed src=%s err=%s", logger.SanitizeLogValue(srcID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			leaveLive(fmt.Sprintf("soft-delete %s: %v; %s left live, undo moves its files back", srcID, err, srcID))
 			continue
 		}
 		entry.MarkedForDeletionAt = stamp
-		kept = append(kept, entry)
+		kept = append(kept, srcID)
 		result.MergedSrcCount++
+		persist()
 	}
 
 	// Step 2: recompute keep duration as sum of all bookfile durations.
@@ -289,31 +336,27 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 	}
 
 	// Step 2b: stamp the play order. Only files the keep now owns are
-	// touched; their previous numbers are in the journal (SurvivorOwnFiles and
-	// Absorbed[].Files), so UndoCombine restores them.
-	if len(opts.FileOrder) > 0 {
-		for i, fid := range opts.FileOrder {
-			f, ferr := store.GetBookFileByID(keepID, fid)
-			if ferr != nil || f == nil {
-				continue // not on the keep (its src was left live)
-			}
-			if f.DiscNumber == 0 && f.TrackNumber == i+1 {
-				continue
-			}
-			f.DiscNumber, f.TrackNumber = 0, i+1
-			if uerr := store.UpdateBookFile(f.ID, f); uerr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("set track order on %s: %v", f.ID, uerr))
-			}
+	// touched; their previous numbers are already in the journal
+	// (SurvivorOwnFiles and Absorbed[].Files), so UndoCombine restores them.
+	for i, fid := range order {
+		f, ferr := store.GetBookFileByID(keepID, fid)
+		if ferr != nil || f == nil {
+			continue // not on the keep (its src was left live)
+		}
+		if f.DiscNumber == 0 && f.TrackNumber == i+1 {
+			continue
+		}
+		f.DiscNumber, f.TrackNumber = 0, i+1
+		if uerr := store.UpdateBookFile(f.ID, f); uerr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("set track order on %s: %v", f.ID, uerr))
 		}
 	}
 
 	// Step 3: update keep title if a non-empty suggested title was given --
 	// unless the user locked the keep's title, in which case theirs stands.
-	// Fail closed on an unreadable lock set: the duration recount (Step 2) is
-	// derived from the files and is never lockable, so it is still written;
-	// only the title change is withheld.
+	// Fail closed on an unreadable lock set.
 	applyTitle := false
-	if suggestedTitle != "" && suggestedTitle != keep.Title {
+	if suggestedTitle != "" && suggestedTitle != keep.Title && len(kept) > 0 {
 		locks, lerr := database.LoadFieldLocks(store, keep.ID)
 		switch {
 		case lerr != nil:
@@ -324,18 +367,20 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			splitMergeLog.Info("split-book merge kept the user-locked title keep=%s suggested=%s", logger.SanitizeLogValue(keep.ID), logger.SanitizeLogValue(suggestedTitle))
 		default:
 			applyTitle = true
+			// Journal the title change BEFORE writing it.
+			journal.Override = &merge.CombineOverrideUndo{
+				Applied:     merge.CombineOverride{Title: suggestedTitle},
+				TitleBefore: keep.Title,
+			}
+			persist()
 		}
 	}
-	// The keep row read above is stale by now: MoveBookFilesToBook recomputed
-	// its aggregates (FileSize among them) inside the store, and any other
-	// writer may have changed it too. A whole-row UpdateBook of that read
-	// reverted all of it, so the write goes through ModifyBook on the fresh
-	// row and sets only the two columns this merge owns.
-	var titleBefore string
-	titleChanged := false
+	// ModifyBook on the fresh row, setting only the two columns this merge
+	// owns (a whole-row write of the stale keep read would revert others).
 	if total > 0 || applyTitle {
+		titleWritten := false
 		_, err := store.ModifyBook(keepID, func(b *database.Book) error {
-			titleChanged = false
+			titleWritten = false
 			changed := false
 			if total > 0 && (b.Duration == nil || *b.Duration != total) {
 				d := total
@@ -343,9 +388,9 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 				changed = true
 			}
 			if applyTitle && b.Title != suggestedTitle {
-				titleBefore = b.Title
+				journal.Override.TitleBefore = b.Title
 				b.Title = suggestedTitle
-				titleChanged = true
+				titleWritten = true
 				changed = true
 			}
 			if !changed {
@@ -354,39 +399,135 @@ func MergeSplitBookClusterWithOptions(store Store, keepID string, srcIDs []strin
 			return nil
 		})
 		if err != nil {
-			titleChanged = false
+			titleWritten = false
 			result.Errors = append(result.Errors, fmt.Sprintf("update keep book: %v", err))
 		}
-	}
-	if titleChanged {
-		journal.Override = &merge.CombineOverrideUndo{
-			Applied:     merge.CombineOverride{Title: suggestedTitle},
-			TitleBefore: titleBefore,
+		if applyTitle && !titleWritten {
+			journal.Override = nil
+		}
+		if applyTitle {
+			persist()
 		}
 	}
 
-	// Step 3b: fill-empty metadata onto the keep, journaled for undo. Only
-	// done when at least one src was absorbed.
+	// Step 3b: fill-empty metadata onto the keep, planned over the srcs
+	// actually absorbed, journaled BEFORE the write and again after.
 	if opts.FillEmpty && len(kept) > 0 {
-		filled, ferr := applyFillEmpty(store, keepID, fillPlan)
-		if ferr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("fill-empty metadata on keep %s: %v", keepID, ferr))
+		absorbed := make([]*database.Book, 0, len(kept))
+		for _, id := range kept {
+			absorbed = append(absorbed, srcBook[id])
 		}
-		journal.FilledEmpty = filled
+		fp, perr := PlanFillEmpty(store, keep, absorbed)
+		switch {
+		case perr != nil:
+			result.Errors = append(result.Errors, fmt.Sprintf("fill-empty plan for keep %s: %v", keepID, perr))
+		case len(fp.Conflicts) > 0:
+			result.Errors = append(result.Errors, fmt.Sprintf("fill-empty skipped, conflict: %v", fp.Conflicts))
+		case !fp.Values.Empty():
+			planned := fp.Values
+			journal.FilledEmpty = &planned
+			persist()
+			filled, ferr := applyFillEmpty(store, keepID, fp)
+			if ferr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("fill-empty metadata on keep %s: %v", keepID, ferr))
+			}
+			if filled == nil && ferr == nil {
+				journal.FilledEmpty = nil
+			} else if filled != nil {
+				journal.FilledEmpty = filled
+			}
+			persist()
+		}
 	}
 
-	// Step 4: finalize the journal. Duration needs no entry: UndoCombine
-	// recomputes the keep's aggregates from the files it leaves there.
-	journal.Absorbed = kept
+	// Step 4: finalize the journal. Srcs for which nothing at all was written
+	// (a failed atomic move) are dropped; everything else stays so undo can
+	// reverse it. Duration needs no entry: UndoCombine recomputes aggregates.
+	final := journal.Absorbed[:0]
+	for i, a := range journal.Absorbed {
+		if a.LeftLive && len(plans[i].fileIDs) > 0 && !movedAny(store, keepID, plans[i].fileIDs) && len(a.ExternalIDs) == 0 && len(a.Progress) == 0 {
+			continue
+		}
+		final = append(final, a)
+	}
+	journal.Absorbed = final
 	journal.Status = merge.CombineJournalApplied
 	if err := merge.WriteCombineJournal(store, journal); err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("merge applied but its undo journal %s could not be finalized; this merge is NOT undoable: %v", journal.ID, err))
+		result.Errors = append(result.Errors, fmt.Sprintf("merge applied but its undo journal %s could not be finalized; it is still %s and undo replays what it recorded: %v", journal.ID, merge.CombineJournalPending, err))
 		splitMergeLog.Error("split-book merge applied but journal not finalized journal=%s keep=%s err=%s", journal.ID, logger.SanitizeLogValue(keepID), logger.SanitizeLogValue(fmt.Sprint(err)))
-	} else {
-		result.JournalID = journal.ID
 	}
-
+	result.JournalID = journal.ID
 	return result, nil
+}
+
+// movedAny reports whether any of fileIDs is now on keepID.
+func movedAny(store Store, keepID string, fileIDs []string) bool {
+	for _, id := range fileIDs {
+		if f, err := store.GetBookFileByID(keepID, id); err == nil && f != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// splitPlayOrder returns the play order to stamp (nil = none) and each src's
+// slice mapping into the merged timeline. The order used for mapping is always
+// computed (keep files, then srcs in order, each by disc/track/path) unless the
+// caller gave an explicit FileOrder, which then defines both.
+func splitPlayOrder(keepID string, ownFiles []database.BookFile, plans []splitSrcPlan, opts SplitMergeOptions) ([]string, map[string]merge.SliceMapping) {
+	dur := map[string]float64{}
+	owner := map[string]string{}
+	sorted := func(files []database.BookFile) []database.BookFile {
+		out := append([]database.BookFile(nil), files...)
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].DiscNumber != out[j].DiscNumber {
+				return out[i].DiscNumber < out[j].DiscNumber
+			}
+			if out[i].TrackNumber != out[j].TrackNumber {
+				return out[i].TrackNumber < out[j].TrackNumber
+			}
+			return out[i].FilePath < out[j].FilePath
+		})
+		return out
+	}
+	var byBooks []string
+	for _, f := range sorted(ownFiles) {
+		byBooks = append(byBooks, f.ID)
+		dur[f.ID], owner[f.ID] = float64(f.Duration), keepID
+	}
+	for _, p := range plans {
+		for _, f := range sorted(p.files) {
+			byBooks = append(byBooks, f.ID)
+			dur[f.ID], owner[f.ID] = float64(f.Duration), p.entry.BookID
+		}
+	}
+	order := byBooks
+	stamp := opts.OrderByBooks
+	if len(opts.FileOrder) > 0 {
+		order, stamp = opts.FileOrder, true
+	}
+	slices := map[string]merge.SliceMapping{}
+	offset, known := 0.0, true
+	for _, fid := range order {
+		src := owner[fid]
+		if _, done := slices[src]; !done && src != keepID && src != "" {
+			slices[src] = merge.SliceMapping{OffsetSeconds: offset, Mappable: known}
+		}
+		d, ok := dur[fid]
+		if !ok || d <= 0 {
+			known = false
+		}
+		offset += d
+	}
+	for _, p := range plans {
+		if _, ok := slices[p.entry.BookID]; !ok {
+			slices[p.entry.BookID] = merge.SliceMapping{} // not in the order: unmappable
+		}
+	}
+	if !stamp {
+		return nil, slices
+	}
+	return order, slices
 }
 
 // planSplitSource reads one src's row, files and external-ID mappings. It
@@ -418,6 +559,7 @@ func planSplitSource(store Store, srcID string, canReassign bool) (splitSrcPlan,
 		},
 		hasMappings: len(mappings) > 0,
 	}
+	p.files = files
 	for _, f := range files {
 		p.fileIDs = append(p.fileIDs, f.ID)
 		p.entry.Files = append(p.entry.Files, merge.CombineFileMove{
