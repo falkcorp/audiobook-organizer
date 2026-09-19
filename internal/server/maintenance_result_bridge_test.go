@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_result_bridge_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 412f096a-5425-4739-b76e-41cc5089d2d4
 // last-edited: 2026-09-19
 
@@ -131,5 +131,11 @@ func TestRunMaintenanceJob_RealChapterMergeWithoutGroupsIs400(t *testing.T) {
 	w = postMaintenanceJob(t, server, "merge-chapter-groups", `{"dry_run": true}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("dry run: status = %d, want 202; body = %s", w.Code, w.Body.String())
+	}
+	// A whitespace-only body means "no parameters" (the advertised dry run),
+	// as it does for every job; the validator must not 400 it.
+	w = postMaintenanceJob(t, server, "merge-chapter-groups", "\n  ")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("whitespace body: status = %d, want 202; body = %s", w.Code, w.Body.String())
 	}
 }

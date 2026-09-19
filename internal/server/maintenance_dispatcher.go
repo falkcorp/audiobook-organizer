@@ -208,7 +208,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// with the resolved dry_run: merge-chapter-groups refuses a real merge
 	// that carries no reviewed group list. The job re-checks in Run.
 	if pv, ok := job.(maintenance.ParamsValidator); ok {
-		if err := pv.ValidateParams(json.RawMessage(body), dryRun); err != nil {
+		if err := pv.ValidateParams(json.RawMessage(bytes.TrimSpace(body)), dryRun); err != nil {
 			httputil.RespondWithBadRequest(c, err.Error())
 			return
 		}
