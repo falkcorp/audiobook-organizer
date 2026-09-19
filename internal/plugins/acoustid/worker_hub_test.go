@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
 // last-edited: 2026-09-19
 
@@ -133,7 +133,7 @@ func TestWorkerHub_NoRunIsUnavailable(t *testing.T) {
 	h := newWorkerHub()
 	_, err := h.Lease(context.Background(), workerapi.LeaseRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrNoWindowRun)
-	_, err = h.Hello(context.Background())
+	_, err = h.Hello(context.Background(), workerapi.HelloRequest{})
 	require.ErrorIs(t, err, ErrNoWindowRun)
 	_, err = h.Renew("x", workerapi.RenewRequest{WorkerID: "w1"})
 	require.ErrorIs(t, err, ErrNoWindowRun)
@@ -438,7 +438,7 @@ func TestWorkerHub_HelloOffersRootsToolsAndCalibration(t *testing.T) {
 	e.addFile("", "todo/two.m4b", true, 3600)
 	h := attachHub(t, e)
 
-	hello, err := h.hub.Hello(context.Background())
+	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.NoError(t, err)
 	require.Equal(t, []workerapi.Root{{ID: "libroot", Remote: true}, {ID: "books", Remote: false}}, hello.Roots)
 	require.Equal(t, fingerprint.WindowPipelineID, hello.Pipeline)
@@ -606,7 +606,7 @@ func TestWindowBackfill_RemoteWorkerSharesTheQueue(t *testing.T) {
 	}
 	require.Positive(t, remote, "the remote worker consumed part of the same queue")
 	require.EqualValues(t, remote, remoteAccepted.Load())
-	_, herr := hub.Hello(context.Background())
+	_, herr := hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.ErrorIs(t, herr, ErrNoWindowRun, "the op detaches when it ends")
 }
 
@@ -713,7 +713,7 @@ func TestWorkerHub_CalibrationUsesOnlyServerMadeWindows(t *testing.T) {
 	require.NoError(t, e.store.ReplaceFingerprintWindows(database.FileWindowRef(wrk), ws))
 	h := attachHub(t, e)
 
-	hello, err := h.hub.Hello(context.Background())
+	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.NoError(t, err)
 	require.Len(t, hello.Calibration, 1)
 	rel, _ := base64.StdEncoding.DecodeString(hello.Calibration[0].RelB64)
