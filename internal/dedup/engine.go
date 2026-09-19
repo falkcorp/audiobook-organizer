@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.81.0
+// version: 1.82.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-09-19
 
@@ -2659,6 +2659,18 @@ func (de *Engine) EmbeddingModel() string {
 		return ""
 	}
 	return de.embedClient.Model()
+}
+
+// EmbedConcurrency is how many EmbedBook calls a fan-out should keep in
+// flight: the embedding pool's routed capacity when calls are pool-routed,
+// otherwise fallback (the legacy single-backend knob). With routing on, a
+// fixed fallback equal to one endpoint's slots leaves every other embed host
+// idle.
+func (de *Engine) EmbedConcurrency(fallback int) int {
+	if n := de.embedClient.RoutedCapacity(); n > 0 {
+		return n
+	}
+	return fallback
 }
 
 // resolvedBookThresholds returns the active book high/low cosine thresholds for

@@ -1,5 +1,5 @@
 // file: internal/ai/pool_routing.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
 // last-edited: 2026-09-19
 
@@ -199,10 +199,28 @@ func (c *EmbeddingClient) WithPoolRouting(pool *PoolSource) *EmbeddingClient {
 
 func (c *EmbeddingClient) poolRoutingActive() bool { return c.pool.IsActive() }
 
+// embedDispatcher is the dispatcher every routed embed call uses: pinned to
+// this client's model and local-only (WithPoolRouting is installed only for
+// embedding_mode local, which never contacts a hosted API on the legacy path
+// either). RoutedCapacity must count exactly the endpoints it can pick.
+func (c *EmbeddingClient) embedDispatcher() *aidispatch.Dispatcher {
+	return c.pool.dispatcher(aidispatch.WithPinnedModel(aidispatch.EmbedText, c.model), aidispatch.WithLocalOnly())
+}
+
+// RoutedCapacity is how many embed requests this client can have in flight
+// across the pool right now, or 0 when its calls are not pool-routed (no pool,
+// routing off, nil client). Callers that fan out embed work size their worker
+// pool from it; a fixed size equal to one endpoint's slots leaves every other
+// endpoint idle.
+func (c *EmbeddingClient) RoutedCapacity() int {
+	if c == nil || !c.pool.IsActive() {
+		return 0
+	}
+	return c.embedDispatcher().Capacity(aidispatch.EmbedText)
+}
+
 func (c *EmbeddingClient) embedRouted(ctx context.Context, texts []string) ([][]float32, error) {
-	// Local-only: WithPoolRouting is installed only for embedding_mode local,
-	// which never contacts a hosted API on the legacy path either.
-	d := c.pool.dispatcher(aidispatch.WithPinnedModel(aidispatch.EmbedText, c.model), aidispatch.WithLocalOnly())
+	d := c.embedDispatcher()
 	return aidispatch.Call(ctx, d, aidispatch.EmbedText, func(ctx context.Context, t aidispatch.Target) ([][]float32, error) {
 		key, err := c.pool.apiKeyFor(t.Endpoint)
 		if err != nil {
