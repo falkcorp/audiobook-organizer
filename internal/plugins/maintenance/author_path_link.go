@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-09-19
 
@@ -56,6 +56,10 @@ import (
 //	                        hold (see BookIDs).
 //	suspect_thin_row        the target row has book_count <= 1, the shape of a
 //	                        title-fragment "author" row. Skipped.
+//	suspect_title_fragment_row
+//	                        the target row is one author-title-fragment-scan
+//	                        would flag. Linking cannot create such a row but
+//	                        can attach books to one. Skipped.
 //	suspect_leaf_dir        the only match was the book's OWN folder, not an
 //	                        ancestor. Skipped.
 //	ambiguous_multi_segment two segments resolve to two different rows. Skipped.
@@ -122,6 +126,12 @@ const (
 	// authorPathLinkCreateDisabled is would_create under create_missing=false:
 	// a name with no row, which this run will not mint.
 	authorPathLinkCreateDisabled = "would_create_row_but_creation_disabled"
+	// authorPathLinkSuspectFragment is a target row that
+	// maintenance.author-title-fragment-scan itself would flag -- a title, or a
+	// leading-hyphen fragment, sitting where an author should be. Linking
+	// cannot create such a row but can ATTACH books to one, which is the
+	// pre-apply cross-check the approved design asks for.
+	authorPathLinkSuspectFragment = "suspect_title_fragment_row"
 )
 
 // authorPathLinkDetailed reports whether an outcome's full entry belongs in the
@@ -136,7 +146,7 @@ func authorPathLinkDetailed(outcome string) bool {
 	case authorPathLinkLinked, authorPathLinkWouldLink,
 		authorPathLinkCreatedAndLinked, authorPathLinkWouldCreate, authorPathLinkCreateDisabled,
 		authorPathLinkNearMiss, authorPathLinkSuspectThin, authorPathLinkSuspectLeaf,
-		authorPathLinkAmbiguous, authorPathLinkExistingCredits,
+		authorPathLinkAmbiguous, authorPathLinkExistingCredits, authorPathLinkSuspectFragment,
 		authorPathLinkChangedSinceScan, authorPathLinkFailed:
 		return true
 	}
@@ -252,16 +262,16 @@ type authorPathLinkCreatedAuthor struct {
 
 // authorPathLinkResult is the op result.
 type authorPathLinkResult struct {
-	DryRun        bool   `json:"dry_run"`
-	CreateMissing bool   `json:"create_missing"`
-	PathPrefix    string `json:"path_prefix,omitempty"`
-	ExplicitIDs   int    `json:"explicit_book_ids,omitempty"`
-	BooksScanned  int    `json:"books_scanned"`
-	BooksInScope  int    `json:"books_in_scope"`
-	SoftDeleted   int    `json:"soft_deleted"`
-	EmptyFilePath int    `json:"empty_file_path"`
-	AuthorRows    int    `json:"author_rows"`
-	Outcomes      map[string]int
+	DryRun        bool           `json:"dry_run"`
+	CreateMissing bool           `json:"create_missing"`
+	PathPrefix    string         `json:"path_prefix,omitempty"`
+	ExplicitIDs   int            `json:"explicit_book_ids,omitempty"`
+	BooksScanned  int            `json:"books_scanned"`
+	BooksInScope  int            `json:"books_in_scope"`
+	SoftDeleted   int            `json:"soft_deleted"`
+	EmptyFilePath int            `json:"empty_file_path"`
+	AuthorRows    int            `json:"author_rows"`
+	Outcomes      map[string]int `json:"outcomes"`
 	// Changes is every in-scope book, one entry each, sorted by book id.
 	Changes        []authorPathLinkChange        `json:"changes"`
 	CreatedAuthors []authorPathLinkCreatedAuthor `json:"created_authors"`
@@ -357,6 +367,30 @@ func (p *Plugin) runAuthorPathLink(ctx context.Context, rawParams json.RawMessag
 // name to a row the index cannot reach.
 func normalizeAuthorNameForLink(s string) string { return util.NormalizeAuthor(s) }
 
+// authorPathLinkPersonShaped is the person-shape gate, with one bound this op
+// adds on top of the shared one.
+//
+// metadata.LooksLikeAuthorSegment has an early return in its initials branch:
+// a segment containing a "." and two capitals passes BEFORE the 2-to-5 word
+// bound is ever applied, so an arbitrarily long title segment gets through --
+// "Book 03 - The Hero of Ages (Unabridged) [v1.0]" is eight words with one dot
+// and passes it. That branch is shared with the scanner's import path
+// (folder_parser.go: tryParseAuthorSegment, parseInnermostSegment and the
+// dash-split fallback all rely on it), and widening or narrowing it there would
+// change how every future scan parses a folder name -- a much larger blast
+// radius than this op. So the word bound is applied HERE instead, where it can
+// only ever cost this op a candidate. Fixing the shared branch is worth doing
+// on its own, with the scanner's tests in scope; it is not this PR.
+func authorPathLinkPersonShaped(name string) bool {
+	if !metadata.LooksLikeAuthorSegment(name) {
+		return false
+	}
+	if n := len(strings.Fields(name)); n < 2 || n > 5 {
+		return false
+	}
+	return true
+}
+
 // authorPathLinkCandidate is one gate-passing segment of a book's path.
 type authorPathLinkCandidate struct {
 	Name   string
@@ -393,7 +427,7 @@ func authorPathLinkCandidates(filePath string) []authorPathLinkCandidate {
 			if name == "" || authorname.IsPlaceholder(name) {
 				return
 			}
-			if !metadata.LooksLikeAuthorSegment(name) {
+			if !authorPathLinkPersonShaped(name) {
 				return
 			}
 			out = append(out, authorPathLinkCandidate{Name: name, Kind: kind, IsLeaf: leaf})
@@ -417,6 +451,9 @@ func authorPathLinkCandidates(filePath string) []authorPathLinkCandidate {
 type authorPathLinkIndex struct {
 	byNormalized map[string]database.Author
 	bookCount    map[int]int
+	// titleFragment marks the normalized names whose row author-title-fragment-scan
+	// would flag: a title sitting where an author should be. Never a link target.
+	titleFragment map[string]bool
 	// normalizedNames is the near-miss search space, bucketed by name length so
 	// a lookup compares against a few hundred names rather than all 14,701.
 	byLength map[int][]string
@@ -493,6 +530,8 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		switch {
 		case matched.IsLeaf:
 			ch.Outcome = authorPathLinkSuspectLeaf
+		case idx.titleFragment[normalizeAuthorNameForLink(matchedAuthor.Name)]:
+			ch.Outcome = authorPathLinkSuspectFragment
 		case ch.TargetBookCount <= authorPathLinkThinRowBooks:
 			ch.Outcome = authorPathLinkSuspectThin
 		default:
@@ -706,28 +745,61 @@ func authorPathLinkBuildIndex(store authorPathLinkAuthorStore) (*authorPathLinkI
 		return nil, fmt.Errorf("author-path-link: list authors: %w", err)
 	}
 	idx := &authorPathLinkIndex{
-		byNormalized: make(map[string]database.Author, len(authors)),
-		bookCount:    map[int]int{},
-		byLength:     map[int][]string{},
+		byNormalized:  make(map[string]database.Author, len(authors)),
+		bookCount:     map[int]int{},
+		byLength:      map[int][]string{},
+		titleFragment: map[string]bool{},
 	}
 	for _, a := range authors {
 		norm := normalizeAuthorNameForLink(a.Name)
 		if norm == "" {
 			continue
 		}
-		// One name maps to ONE id in the author:name index; when two rows
-		// collapse to the same key the LOWEST id is kept here so the choice is
-		// deterministic, and a suspect/ambiguous decision does not depend on
-		// GetAllAuthors ordering. The apply path re-resolves through the index
-		// itself and refuses to write if the id moved.
-		if prev, ok := idx.byNormalized[norm]; ok && prev.ID <= a.ID {
-			continue
-		} else if !ok {
+		prev, seen := idx.byNormalized[norm]
+		if !seen {
 			idx.byLength[len(norm)] = append(idx.byLength[len(norm)], norm)
+			idx.byNormalized[norm] = a
+			continue
 		}
-		idx.byNormalized[norm] = a
+		if prev.ID == a.ID {
+			continue
+		}
+		// 🔴 A DUPLICATE NORMALIZED NAME IS RESOLVED THROUGH THE INDEX, not by
+		// picking one. One name maps to ONE id in author:name, and that id is
+		// the one the apply path will re-resolve to; guessing here (the lowest
+		// id, say) would make the dry run predict a link the apply then
+		// refuses as changed_since_scan, silently. So the tie is broken by
+		// asking the index itself -- once per cluster, and there are six in
+		// prod. If the read fails, the first row seen is kept and the apply's
+		// own re-resolve remains the backstop.
+		if canonical, cErr := store.GetAuthorByName(a.Name); cErr == nil && canonical != nil {
+			idx.byNormalized[norm] = *canonical
+		}
+	}
+	// A target row whose NAME is itself a title fragment ("Freedom's Dawn") is
+	// refused, using author-title-fragment-scan's own predicate rather than a
+	// second opinion. Linking cannot CREATE such a row, but it can attach books
+	// to one that already exists, which is the cross-check the approved design
+	// asks for before an apply.
+	for norm, a := range idx.byNormalized {
+		if classifyTitleFragmentAuthor(a.Name) != "" {
+			idx.titleFragment[norm] = true
+		}
 	}
 	return idx, nil
+}
+
+// authorPathLinkUnderPrefix reports whether path is the prefix itself or sits
+// beneath it, comparing on a path-separator boundary so a prefix cannot select
+// a sibling directory whose name merely starts with the same characters.
+func authorPathLinkUnderPrefix(path, prefix string) bool {
+	if path == prefix {
+		return true
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return strings.HasPrefix(path, prefix)
 }
 
 // authorPathLinkScope pages the whole library once and returns the in-scope
@@ -769,7 +841,10 @@ func authorPathLinkScope(ctx context.Context, store authorPathLinkBookStore, par
 			if len(wanted) > 0 && !wanted[b.ID] {
 				continue
 			}
-			if prefix != "" && !strings.HasPrefix(b.FilePath, prefix) {
+			// The prefix matches on a SEPARATOR boundary: "/mnt/books/ab"
+			// must not scope in "/mnt/books/abooks/...". A prefix that
+			// already ends in "/" is used as given.
+			if prefix != "" && !authorPathLinkUnderPrefix(b.FilePath, prefix) {
 				continue
 			}
 			scoped = append(scoped, b)
@@ -801,20 +876,25 @@ type authorPathLinkCreator struct {
 	mu     sync.Mutex
 	byName map[string]database.Author
 	minted map[int]*authorPathLinkCreatedAuthor
+	// wouldMint is the dry run's twin of minted, keyed by normalized name
+	// because the rows have no id yet.
+	wouldMint map[string]*authorPathLinkCreatedAuthor
 }
 
 func newAuthorPathLinkCreator(store authorPathLinkAuthorStore, dryRun bool) *authorPathLinkCreator {
 	return &authorPathLinkCreator{
-		store:  store,
-		dryRun: dryRun,
-		byName: map[string]database.Author{},
-		minted: map[int]*authorPathLinkCreatedAuthor{},
+		store:     store,
+		dryRun:    dryRun,
+		byName:    map[string]database.Author{},
+		minted:    map[int]*authorPathLinkCreatedAuthor{},
+		wouldMint: map[string]*authorPathLinkCreatedAuthor{},
 	}
 }
 
-// resolveOrCreate returns the row for name, minting it only when no row exists.
-// The bool reports whether this run created it.
-func (c *authorPathLinkCreator) resolveOrCreate(name string) (database.Author, bool, error) {
+// resolveOrCreate returns the row for name, minting it only when no row exists
+// AND allowCreate says minting is in order. The bool reports whether this run
+// created it.
+func (c *authorPathLinkCreator) resolveOrCreate(name string, allowCreate bool) (database.Author, bool, error) {
 	norm := normalizeAuthorNameForLink(name)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -832,7 +912,19 @@ func (c *authorPathLinkCreator) resolveOrCreate(name string) (database.Author, b
 		c.byName[norm] = *existing
 		return *existing, false, nil
 	}
+	if !allowCreate {
+		return database.Author{}, false, nil
+	}
 	if c.dryRun {
+		// A dry run mints nothing, but the preview still has to say how many
+		// DISTINCT rows an apply would add and what they would be called --
+		// the owner approves a creation count, not a book count. Keyed by the
+		// normalized name, so twenty books deriving one name count once.
+		if m, ok := c.wouldMint[norm]; ok {
+			m.Books++
+		} else {
+			c.wouldMint[norm] = &authorPathLinkCreatedAuthor{Name: strings.TrimSpace(name), Books: 1}
+		}
 		return database.Author{}, false, nil
 	}
 	created, err := c.store.CreateAuthor(name)
@@ -850,11 +942,21 @@ func (c *authorPathLinkCreator) resolveOrCreate(name string) (database.Author, b
 func (c *authorPathLinkCreator) created() []authorPathLinkCreatedAuthor {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]authorPathLinkCreatedAuthor, 0, len(c.minted))
+	out := make([]authorPathLinkCreatedAuthor, 0, len(c.minted)+len(c.wouldMint))
 	for _, m := range c.minted {
 		out = append(out, *m)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].AuthorID < out[j].AuthorID })
+	// A dry run's entries carry AuthorID 0 -- the row does not exist -- so the
+	// list is the rows an apply WOULD add, one per distinct name.
+	for _, m := range c.wouldMint {
+		out = append(out, *m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AuthorID != out[j].AuthorID {
+			return out[i].AuthorID < out[j].AuthorID
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -866,8 +968,23 @@ func (c *authorPathLinkCreator) created() []authorPathLinkCreatedAuthor {
 // first would leave a book with a non-nil AuthorID and no credit -- and the
 // next run's "AuthorID == nil" filter would never select it again, so the
 // missing join would be permanent and invisible. Join first leaves AuthorID
-// nil, the next run re-selects the book, and re-writing an identical credit is
-// a no-op.
+// nil, so the next run re-selects the book.
+//
+// 🔴 AND RE-SELECTING IT IS NOT ENOUGH ON ITS OWN. Until 2026-09-19 the credit
+// read below returned existing_credits_left_alone for ANY non-empty join, which
+// meant a book stranded between the two writes was stranded FOREVER: this op
+// refused it on every re-run and author-id-repair, which only acts on non-nil
+// dangling scalars, never saw it. With ~2,748 write pairs in the first apply, a
+// single transient store error was enough. The credit read now recognises this
+// op's own half-write and resumes it; see the comment there.
+//
+// A single Pebble batch across both keys -- what the approved design asked for
+// -- was examined and NOT taken: the book write goes through
+// updateBookLockedMode, which maintains the secondary indexes, the memdb
+// projection and the signature sidecar, and a combined primitive would have to
+// duplicate or re-plumb that whole path. That is a store change far wider than
+// this op, and it is the right follow-up; the resume above makes the invariant
+// hold without it.
 func (p *Plugin) authorPathLinkApplyOne(
 	ch authorPathLinkChange,
 	store authorPathLinkBookStore,
@@ -896,19 +1013,45 @@ func (p *Plugin) authorPathLinkApplyOne(
 	// A book already carrying credits keeps them: SetBookAuthors semantics are
 	// replace-the-array, and a nil scalar beside a real co-author credit is a
 	// different repair from this one.
+	//
+	// 🔴 EXCEPT THE ONE CREDIT THIS OP ITSELF WRITES. The join row and the
+	// scalar are two commits with no batch around them (see the write-order
+	// note above), so a crash or a transient store error between them leaves
+	// exactly one credit -- {this book, target author, role "author", position
+	// 0} -- beside a nil scalar. Treating that as "already has credits" would
+	// strand the book forever: no re-run of this op would finish it, and
+	// author-id-repair only acts on NON-nil dangling scalars, so nothing else
+	// would either. A single credit of exactly that shape, naming exactly the
+	// author this book's path derives, is therefore RESUMED: the join write is
+	// skipped and the scalar write completes the pair. Any other credit -- two
+	// rows, a co-author role, a non-zero position, a different author -- is
+	// somebody else's data and is left alone.
 	joins, err := store.GetBookAuthors(ch.BookID)
 	if err != nil {
 		return fail(err)
 	}
-	if len(joins) > 0 {
+	resuming := false
+	switch {
+	case len(joins) == 0:
+	case len(joins) == 1 && joins[0].Role == "author" && joins[0].Position == 0:
+		resuming = true
+	default:
 		ch.Outcome = authorPathLinkExistingCredits
 		return ch
 	}
 
 	// Resolve the target through the name index, never through the snapshot id.
-	author, minted, err := creator.resolveOrCreate(ch.DerivedName)
+	// A half-written book must NOT mint a row: its credit already names one, so
+	// creation is allowed only when there is no credit to contradict.
+	author, minted, err := creator.resolveOrCreate(ch.DerivedName, !resuming)
 	if err != nil {
 		return fail(err)
+	}
+	if resuming && author.ID != joins[0].AuthorID {
+		// The credit names someone other than the path's author: not this op's
+		// half-write, so it is left alone.
+		ch.Outcome = authorPathLinkExistingCredits
+		return ch
 	}
 	switch {
 	case dryRun && author.ID == 0:
@@ -936,7 +1079,8 @@ func (p *Plugin) authorPathLinkApplyOne(
 		return fail(fmt.Errorf("scan stand-down lease lost; refusing to keep writing"))
 	}
 
-	// (1) the credit.
+	// (1) the credit. A resumed half-write already has it; re-writing would be
+	// a no-op anyway, and the callback refuses to touch a non-empty array.
 	if _, err := store.ModifyBookAuthors(ch.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		if len(cur) > 0 {
 			return nil, database.ErrSkipBookAuthorsWrite
@@ -977,6 +1121,21 @@ func (p *Plugin) authorPathLinkApplyOne(
 	}
 
 	// (3) the ledger, AFTER the write it describes -- never before it.
+	//
+	// 🔴 WHAT THIS ROW IS AND IS NOT. It is a RECORD, not a one-click undo.
+	// "author_id" is not in undo/restorable.go's revertableBookFields, so the
+	// undo engine counts the row safe and its revert writes nothing; and the
+	// join row this op writes alongside the scalar is not recorded at all.
+	// Adding author_id to that map would be wrong on its own -- a revert would
+	// clear the scalar and leave the credit behind, which is the dangling shape
+	// author-id-repair exists to clean up -- so the ledger row is left as the
+	// audit trail it actually is, exactly as author-id-repair's is.
+	//
+	// Reversing a link by hand is therefore: clear the scalar and delete the
+	// credit for the book ids this op lists, then (for a row this op minted,
+	// which the result names in created_authors) purge-empty-authors removes
+	// the row once nothing credits it. A real reversible undo needs a change
+	// type that carries both keys; that is a follow-up, not a claim made here.
 	if lErr := store.CreateOperationChange(&database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: opID,

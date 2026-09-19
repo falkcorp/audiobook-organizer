@@ -14,5 +14,9 @@
   books in the iTunes library, and the manually-curated Doctor Who / Big Finish /
   Torchwood shelves are never touched. It defaults to a dry run that reports exactly what
   an apply would do, takes an explicit list of book ids or a path prefix to scope a run,
-  parks any running library scan while it writes, and records every link in the undo
-  ledger.
+  parks any running library scan while it writes, and writes an audit record of every
+  link it makes. That record is an audit trail, not a one-click undo: reversing a link
+  by hand means clearing the book's author and removing the credit, after which an
+  author it created can be removed by the empty-author cleanup. If it is interrupted
+  part-way through a book, a later run finishes that book rather than leaving it
+  half-linked.
