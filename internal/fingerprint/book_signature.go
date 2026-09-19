@@ -1,7 +1,7 @@
 // file: internal/fingerprint/book_signature.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 7f8e9d0c-1b2a-3f4e-5d6c-7e8f9a0b1c2d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package fingerprint
 
@@ -261,17 +261,26 @@ func SynthesizePartialBookSignature(files []FileSegmentInput) (sig, mask string,
 				f.Segments.Seg0, f.Segments.Seg1, f.Segments.Seg2,
 				f.Segments.Seg3, f.Segments.Seg4, f.Segments.Seg5, f.Segments.Seg6,
 			}
+			decodeFailed := false
 			for i, seg := range segs {
 				if seg == "" && i > 0 {
 					continue
 				}
 				decoded, decErr := decodeAnyFingerprint(seg)
 				if decErr != nil {
-					continue
+					// One undecodable segment makes the whole file MISSING,
+					// not partial: keeping its other segments would shorten
+					// the word stream, shift every later file out of
+					// alignment, and still be masked as real, so a clean
+					// copy of the same book would compare as a confident
+					// mismatch. Zero-padding and masking the file (below)
+					// is what the masked comparison already understands.
+					decodeFailed = true
+					break
 				}
 				words = append(words, decoded...)
 			}
-			isReal = len(words) > 0
+			isReal = !decodeFailed && len(words) > 0
 		}
 
 		if !isReal {
