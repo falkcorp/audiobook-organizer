@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package metadata
 
@@ -197,7 +197,10 @@ func ValidateMetadata(updates map[string]any, rules map[string]ValidationRule) [
 // pure pass-through of database.* embeds — 56 methods, none declared here.
 type batchUpdateStore interface {
 	GetBookByID(id string) (*database.Book, error)
-	UpdateBook(id string, book *database.Book) (*database.Book, error)
+	// ModifyBook, not UpdateBook: this apply does store IO between reading a
+	// book and writing it, so it pairs ModifyBook with SnapshotBook and
+	// MergeBookChanges rather than writing a snapshot back whole.
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateAuthor(name string) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
@@ -272,9 +275,25 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			return nil
 		}
 
+		// Snapshot the row as read, before any of the mutations below. The
+		// author and series resolution further down does store IO, and these
+		// workers run concurrently with each other and with scans, so this
+		// worker holds `book` across a gap other writers can commit into.
+		// MergeBookChanges at the write copies only the fields this worker
+		// actually changed onto the freshly re-read row, so a field it never
+		// touched keeps whatever landed in the meantime instead of being
+		// reverted to this read.
+		before, serr := database.SnapshotBook(book)
+		if serr != nil {
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("update %d: failed to snapshot book %s: %w", i, update.BookID, serr))
+			mu.Unlock()
+			return nil
+		}
+
 		// Apply updates. book is the FULL hydrated row from GetBookByID (a
 		// direct book:<id> point-get + unmarshal, not a memdb-slim projection),
-		// so mutating and writing it back cannot wipe heavy fields.
+		// so the merge below sees every field and not a slim projection.
 		if title, ok := update.Updates["title"].(string); ok {
 			book.Title = title
 		}
@@ -327,10 +346,21 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			book.Format = format
 		}
 
-		// Update in database
-		if _, err := store.UpdateBook(update.BookID, book); err != nil {
+		// Update in database: merge this worker's changes onto the stored row
+		// under the book's write stripe.
+		written, err := store.ModifyBook(update.BookID, func(cur *database.Book) error {
+			_, merr := database.MergeBookChanges(cur, before, book)
+			return merr
+		})
+		if err != nil {
 			mu.Lock()
 			errs = append(errs, fmt.Errorf("update %d: failed to update book %s: %w", i, update.BookID, err))
+			mu.Unlock()
+			return nil
+		}
+		if written == nil {
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("update %d: book %s no longer exists", i, update.BookID))
 			mu.Unlock()
 			return nil
 		}
