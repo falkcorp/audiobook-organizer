@@ -362,6 +362,26 @@ func (s *Server) RecompactActivityDigests(ctx context.Context) (database.Recompa
 	return s.activityService.RecompactDigests(ctx)
 }
 
+// ActivityFilterIndexBackfiller returns the Pebble activity store behind the
+// activity service for maintenance.activity-filter-index-backfill: the store
+// itself in Pebble-only mode, the Pebble side (Primary) under the SQLite
+// migration wrapper — it receives every write there too, which is what lets
+// the indexes be built BEFORE the primary backend switches to Pebble. nil
+// when neither applies; the op refuses in that case rather than no-op.
+func (s *Server) ActivityFilterIndexBackfiller() database.ActivityFilterIndexBackfiller {
+	if s.activityService == nil {
+		return nil
+	}
+	store := s.activityService.Store()
+	if m, ok := store.(*database.MigratingActivityStore); ok {
+		store = m.Primary()
+	}
+	if p, ok := store.(*database.PebbleActivityStore); ok && p != nil {
+		return p
+	}
+	return nil
+}
+
 // ---- feature flags ----
 
 func (s *Server) HasDedupEngine() bool {
