@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/scan_chapter_groups.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a1000019-0000-0000-0000-000000000019
 // last-edited: 2026-09-19
 
@@ -41,7 +41,7 @@ func (j *scanChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSto
 		return err
 	}
 	p.DryRun = true // a scan is always read-only; say so in the echoed params
-	det, _, err := detectChapterGroupsForRun(ctx, store, p)
+	det, err := detectChapterGroupsForRun(ctx, store, p)
 	if err != nil {
 		return err
 	}
@@ -51,6 +51,8 @@ func (j *scanChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSto
 		Params:                       p,
 		GroupsFound:                  len(det.Groups),
 		GroupsSkippedUnknownDuration: det.SkippedUnknownDuration,
+		GroupsSkippedDuplicateCopies: det.SkippedDuplicateCopies,
+		BooksExcluded:                det.SkippedExcluded,
 		Groups:                       make([]chapterGroupOutcome, 0, len(det.Groups)),
 	}
 	reporter.SetTotal(len(det.Groups))
