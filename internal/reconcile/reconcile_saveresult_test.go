@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_saveresult_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4e1c73-2b85-4f60-8d19-3e7c0a5b6f24
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -89,7 +89,14 @@ type applyFakeStore struct {
 	changes []*database.OperationChange
 }
 
-func (f *applyFakeStore) GetBookByID(string) (*database.Book, error) { return f.book, nil }
+// GetBookByID returns an independent copy per read, as PebbleStore does, so
+// the caller's edits never reach f.book except through ModifyBook.
+func (f *applyFakeStore) GetBookByID(string) (*database.Book, error) {
+	if f.book == nil {
+		return nil, nil
+	}
+	return database.SnapshotBook(f.book)
+}
 
 func (f *applyFakeStore) CreateOperationChange(c *database.OperationChange) error {
 	f.changes = append(f.changes, c)

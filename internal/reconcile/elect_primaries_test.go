@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -87,7 +87,15 @@ func (f *electFakeStore) GetBooksByVersionGroup(gid string) ([]database.Book, er
 func (f *electFakeStore) GetBookByID(id string) (*database.Book, error) {
 	f.lock()
 	defer f.unlock()
-	return f.byID[id], nil
+	// An independent copy per read, as PebbleStore unmarshals a new Book each
+	// time: handing back the stored pointer would let the caller's edits land
+	// on the row ModifyBook re-reads, so a merge-onto-stored assertion could
+	// pass without the merge.
+	b := f.byID[id]
+	if b == nil {
+		return nil, nil
+	}
+	return database.SnapshotBook(b)
 }
 
 func (f *electFakeStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {

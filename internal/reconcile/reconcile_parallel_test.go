@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package reconcile
 
@@ -60,7 +60,15 @@ func (f *fakeReconcileStore) GetBookFiles(bookID string) ([]database.BookFile, e
 func (f *fakeReconcileStore) GetBookByID(id string) (*database.Book, error) {
 	f.lock()
 	defer f.unlock()
-	return f.byID[id], nil
+	// An independent copy per read, as PebbleStore unmarshals a new Book each
+	// time: handing back the stored pointer would let the caller's edits land
+	// on the row ModifyBook re-reads, so a merge-onto-stored assertion could
+	// pass without the merge.
+	b := f.byID[id]
+	if b == nil {
+		return nil, nil
+	}
+	return database.SnapshotBook(b)
 }
 
 func (f *fakeReconcileStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {

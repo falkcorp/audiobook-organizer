@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package audiobooks
 
@@ -86,8 +86,13 @@ type stubStoreForRevert struct {
 	book *database.Book
 }
 
+// GetBookByID returns an independent copy per read, as PebbleStore does, so
+// the caller's edits never reach s.book except through ModifyBook/UpdateBook.
 func (s *stubStoreForRevert) GetBookByID(id string) (*database.Book, error) {
-	return s.book, nil
+	if s.book == nil {
+		return nil, nil
+	}
+	return database.SnapshotBook(s.book)
 }
 
 func (s *stubStoreForRevert) UpdateBook(id string, b *database.Book) (*database.Book, error) {
