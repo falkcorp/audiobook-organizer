@@ -1,5 +1,5 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
 // last-edited: 2026-09-19
 
@@ -143,7 +143,15 @@ type sweepShape struct {
 func sweepShapes() []sweepShape {
 	var out []sweepShape
 	for known := 1; known < 30; known += 3 {
-		out = append(out, sweepShape{fmt.Sprintf("%d of 30 probed", known), chapters(30, 1200, known), known * 1200})
+		files := chapters(30, 1200, known)
+		// Book.Duration as RecomputeBookAggregates stores it (the partial
+		// known sum), above it (an earlier, fuller measurement), and at the
+		// full 30-chapter sum.
+		out = append(out,
+			sweepShape{fmt.Sprintf("%d of 30 probed, stored = known sum", known), files, known * 1200},
+			sweepShape{fmt.Sprintf("%d of 30 probed, stored = known sum + 5 chapters", known), files, (known + 5) * 1200},
+			sweepShape{fmt.Sprintf("%d of 30 probed, stored = full sum", known), files, 36000},
+		)
 	}
 	var discs, cbr, oneMissing []database.BookFile
 	for d := 1; d <= 2; d++ {
@@ -172,8 +180,9 @@ func sweepShapes() []sweepShape {
 // a sweep: across row shapes, candidate runtimes, narrator pairings and
 // fill/overwrite, the canonical runtime never passes where main blocked —
 // with ONE exemption, the fix itself: main's runtime_mismatch where the
-// runtime is PARTIAL (some counted row's duration unknown) and its known sum
-// is below the candidate. A lower bound under the candidate proves nothing.
+// runtime is PARTIAL (some counted row's duration unknown), the stored
+// Book.Duration main compared IS that partial known sum, and the sum is below
+// the candidate. A lower bound under the candidate proves nothing.
 func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 	violations := 0
 	for _, sh := range sweepShapes() {
@@ -194,7 +203,8 @@ func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 					// Stated on the rows, not on rt.Partial(), so a change to
 					// what "partial" means cannot widen the exemption.
 					someUnknown := rt.Source == database.RuntimeSourceFiles && rt.FilesKnown < rt.FilesCounted
-					if mainV.Reason == ReasonRuntimeMismatch && someUnknown && rt.Seconds < c.DurationSec {
+					storedIsKnownSum := sh.mainBook == rt.Seconds
+					if mainV.Reason == ReasonRuntimeMismatch && someUnknown && storedIsKnownSum && rt.Seconds < c.DurationSec {
 						continue // the fix: a lower bound below the candidate
 					}
 					violations++
@@ -206,5 +216,25 @@ func TestCheckEvidence_IncompleteRuntimeNeverLooserThanMain(t *testing.T) {
 	}
 	if violations != 0 {
 		t.Fatalf("%d looser-than-main violations", violations)
+	}
+}
+
+// TestCheckEvidence_StaleStoredDurationStillBlocks (final review): 30
+// chapters, 2 probed (2400 s), Book.Duration 36000 from an earlier fuller
+// measurement, candidate 20 h. Main compared 36000 against 72000 and
+// blocked; the stored value is not the partial sum, so it must still count.
+func TestCheckEvidence_StaleStoredDurationStillBlocks(t *testing.T) {
+	book := probeBook("", 36000)
+	rt := database.ComputeBookRuntime(book, chapters(30, 1200, 2))
+	c := &metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", DurationSec: 72000}
+	if v := CheckEvidence(book, rt, c, false); v.Pass || v.Reason != ReasonRuntimeMismatch {
+		t.Fatalf("stored 10h vs 20h candidate: pass=%v reason=%s, want runtime_mismatch", v.Pass, v.Reason)
+	}
+	// The fix stays: stored == the partial sum is not compared as a total.
+	book = probeBook("", 2400)
+	rt = database.ComputeBookRuntime(book, chapters(30, 1200, 2))
+	c.DurationSec = 36000
+	if v := CheckEvidence(book, rt, c, false); v.Reason == ReasonRuntimeMismatch {
+		t.Fatalf("partial-sum Book.Duration vetoed the 10h candidate again: %+v", v)
 	}
 }
