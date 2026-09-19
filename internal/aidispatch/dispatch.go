@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package aidispatch
 
@@ -90,6 +90,8 @@ type Dispatcher struct {
 	requiredLabels map[string][]string
 	totals         map[Kind]TotalCap
 	attemptTimeout map[string]time.Duration
+	pinnedModel    map[string]string
+	attribution    *Attribution
 
 	logMu      sync.Mutex
 	lastNoCape map[string]time.Time
@@ -103,6 +105,19 @@ func WithSlots(s *Slots) Option { return func(d *Dispatcher) { d.slots = s } }
 
 // WithHealth uses h instead of the process-wide health tracker.
 func WithHealth(h *Health) Option { return func(d *Dispatcher) { d.health = h } }
+
+// WithAttribution records attempts in a instead of the process-wide ledger.
+func WithAttribution(a *Attribution) Option { return func(d *Dispatcher) { d.attribution = a } }
+
+// WithPinnedModel makes c servable ONLY by endpoints whose effective model for
+// c equals model. Every other endpoint is refused, the first candidate
+// included. Call's own embed rule pins failover to whatever the first
+// candidate happens to use, which lets a benched preferred endpoint silently
+// move a caller into a different vector space; a caller whose stored vectors
+// are keyed by one model (the embedding cache and store are) must pin it.
+func WithPinnedModel(c Capability, model string) Option {
+	return func(d *Dispatcher) { d.pinnedModel[c.id] = model }
+}
 
 // WithRequiredLabels requires every endpoint serving c to carry ALL of labels
 // (whisper_requires). RequireGPU on an endpoint adds "gpu" on top.
@@ -132,6 +147,8 @@ func New(endpoints []Endpoint, opts ...Option) *Dispatcher {
 		requiredLabels: map[string][]string{},
 		totals:         map[Kind]TotalCap{},
 		attemptTimeout: map[string]time.Duration{},
+		pinnedModel:    map[string]string{},
+		attribution:    defaultAttribution,
 		lastNoCape:     map[string]time.Time{},
 	}
 	for _, o := range opts {
@@ -196,8 +213,12 @@ func (d *Dispatcher) refuse(ep Endpoint, spec Spec) string {
 	if !containsAll(ep.Labels, req) {
 		return fmt.Sprintf("missing required label(s) %v (has %v)", req, ep.Labels)
 	}
-	if _, ok := modelFor(ep, spec); !ok {
+	model, ok := modelFor(ep, spec)
+	if !ok {
 		return fmt.Sprintf("no %s model configured", spec.Kind)
+	}
+	if want, pinned := d.pinnedModel[id]; pinned && model != want {
+		return fmt.Sprintf("model %q is not the pinned model %q", model, want)
 	}
 	return ""
 }
@@ -309,33 +330,68 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 	var attempts []AttemptError
 	deadlines := 0
 	embedModel := ""
-	for i, ep := range cands {
-		model, _ := modelFor(ep, spec)
-		if spec.Kind == KindEmbed {
-			if embedModel == "" {
-				embedModel = model
-			} else if model != embedModel {
-				refusals = append(refusals, Refusal{EndpointID: ep.ID,
-					Reason: fmt.Sprintf("failover skipped: embed model %q differs from %q", model, embedModel)})
-				continue
+	remaining := cands
+	for len(remaining) > 0 {
+		// Drop candidates that can no longer serve this call. The embed and
+		// cooldown rules apply only AFTER the first attempt: the first
+		// candidate set was filtered moments ago by candidates().
+		if len(attempts) > 0 {
+			kept := remaining[:0:0]
+			for _, ep := range remaining {
+				model, _ := modelFor(ep, spec)
+				switch {
+				case spec.Kind == KindEmbed && model != embedModel:
+					refusals = append(refusals, Refusal{EndpointID: ep.ID,
+						Reason: fmt.Sprintf("failover skipped: embed model %q differs from %q", model, embedModel)})
+				case d.health.InCooldown(ep.ID):
+					// A sibling goroutine may have benched it since selection.
+					refusals = append(refusals, Refusal{EndpointID: ep.ID,
+						Reason: "failover skipped: benched after selection"})
+				default:
+					kept = append(kept, ep)
+				}
+			}
+			remaining = kept
+			if len(remaining) == 0 {
+				break
 			}
 		}
-		// A sibling goroutine may have benched this endpoint since selection.
-		if i > 0 && d.health.InCooldown(ep.ID) {
-			refusals = append(refusals, Refusal{EndpointID: ep.ID,
-				Reason: "failover skipped: benched after selection"})
-			continue
-		}
 
+		// Free-slot assignment (design step 2a): take the most preferred
+		// candidate that has a slot free RIGHT NOW, so a saturated preferred
+		// endpoint spills to an idle peer instead of queueing. Only when every
+		// candidate is full does the call wait -- on the most preferred one,
+		// which keeps priority meaningful under sustained backlog.
+		pick := -1
+		var release func()
 		waitStart := time.Now()
-		release, err := d.slots.Acquire(ctx, ep.ID, ep.Concurrency, d.totals[spec.Kind])
-		slotWaitSeconds.WithLabelValues(ep.ID).Observe(time.Since(waitStart).Seconds())
-		if err != nil {
-			// Acquire has no timeout of its own: it fails only when the
-			// CALLER's ctx is done, so trying the next endpoint would fail the
-			// same way. Stopping here is ClassStop, not a skip. If Acquire ever
-			// gains its own bound, this must become a skip plus a refusal.
-			return zero, err
+		for i, ep := range remaining {
+			if r, ok := d.slots.TryAcquire(ep.ID, ep.Concurrency, d.totals[spec.Kind]); ok {
+				pick, release = i, r
+				break
+			}
+		}
+		if pick < 0 {
+			pick = 0
+			r, err := d.slots.Acquire(ctx, remaining[0].ID, remaining[0].Concurrency, d.totals[spec.Kind])
+			slotWaitSeconds.WithLabelValues(remaining[0].ID).Observe(time.Since(waitStart).Seconds())
+			if err != nil {
+				// Acquire has no timeout of its own: it fails only when the
+				// CALLER's ctx is done, so trying the next endpoint would fail
+				// the same way. Stopping here is ClassStop, not a skip. If
+				// Acquire ever gains its own bound, this must become a skip
+				// plus a refusal.
+				return zero, err
+			}
+			release = r
+		} else {
+			slotWaitSeconds.WithLabelValues(remaining[pick].ID).Observe(time.Since(waitStart).Seconds())
+		}
+		ep := remaining[pick]
+		remaining = append(remaining[:pick:pick], remaining[pick+1:]...)
+		model, _ := modelFor(ep, spec)
+		if spec.Kind == KindEmbed && embedModel == "" {
+			embedModel = model
 		}
 
 		attemptCtx, cancel := ctx, context.CancelFunc(func() {})
@@ -343,6 +399,7 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 			attemptCtx, cancel = context.WithTimeout(ctx, t)
 		}
 		inflightGauge.WithLabelValues(ep.ID).Inc()
+		start := time.Now()
 		res, err := fn(attemptCtx, Target{Endpoint: ep, Capability: c, Model: model})
 		inflightGauge.WithLabelValues(ep.ID).Dec()
 		cancel()
@@ -350,6 +407,16 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 
 		class := Classify(ctx, err)
 		requestsTotal.WithLabelValues(c.id, ep.ID, class.String()).Inc()
+		d.attribution.Record(ep.ID, c.id, class, time.Now())
+		// One line per routed request, so an operation log names the endpoint
+		// that served (or failed) each piece of work.
+		logAttrs := []any{"capability", c.id, "endpoint", ep.ID, "model", model,
+			"outcome", class.String(), "elapsed", time.Since(start).Round(time.Millisecond)}
+		if err != nil {
+			slog.Warn("aidispatch: routed request failed", append(logAttrs, "err", err)...)
+		} else {
+			slog.Info("aidispatch: routed request", logAttrs...)
+		}
 		switch class {
 		case ClassOK:
 			d.health.MarkSuccess(ep.ID)

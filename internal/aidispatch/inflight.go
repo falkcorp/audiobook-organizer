@@ -1,7 +1,7 @@
 // file: internal/aidispatch/inflight.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 78ddb327-a1f6-4c52-bcce-bd87a4eaf13c
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package aidispatch
 
@@ -76,14 +76,11 @@ func EffectiveConcurrency(n int) int {
 // ever colliding with a configured ai_endpoints ID.
 func LegacyURLID(url string) string { return "url:" + url }
 
-// acquireTotal takes a slot from the group-wide cap. A limit < 1 means
-// unlimited and returns a no-op release rather than an unbounded channel.
-func (s *Slots) acquireTotal(ctx context.Context, total TotalCap) (func(), error) {
-	if total.Limit < 1 {
-		return func() {}, nil
-	}
-
+// totalPool returns the group-wide pool for total, creating it on first use.
+// Callers must have checked total.Limit >= 1.
+func (s *Slots) totalPool(total TotalCap) *slotPool {
 	s.totMu.Lock()
+	defer s.totMu.Unlock()
 	pool := s.totals[total.Group]
 	if pool == nil {
 		pool = &slotPool{limit: total.Limit, ch: make(chan struct{}, total.Limit)}
@@ -94,24 +91,13 @@ func (s *Slots) acquireTotal(ctx context.Context, total TotalCap) (func(), error
 		slog.Warn("aidispatch: pool-wide in-flight cap changed; keeping the established cap until restart",
 			"group", total.Group, "established", pool.limit, "requested", total.Limit)
 	}
-	s.totMu.Unlock()
-
-	select {
-	case pool.ch <- struct{}{}:
-		var once sync.Once
-		return func() { once.Do(func() { <-pool.ch }) }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return pool
 }
 
-// Acquire blocks until endpoint id has a free request slot (and the group-wide
-// cap has room), or ctx is done. The returned release is safe to call more
-// than once. A failure wraps ErrSlotWait and names the endpoint.
-func (s *Slots) Acquire(ctx context.Context, id string, limit int, total TotalCap) (func(), error) {
-	limit = EffectiveConcurrency(limit)
-
+// endpointPool returns id's per-endpoint pool, creating it on first use.
+func (s *Slots) endpointPool(id string, limit int) *slotPool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	pool, ok := s.pools[id]
 	if !ok {
 		pool = &slotPool{limit: limit, ch: make(chan struct{}, limit)}
@@ -126,7 +112,30 @@ func (s *Slots) Acquire(ctx context.Context, id string, limit int, total TotalCa
 		slog.Warn("aidispatch: conflicting in-flight limits for one endpoint; keeping the established one",
 			"endpoint", id, "established", pool.limit, "requested", limit)
 	}
-	s.mu.Unlock()
+	return pool
+}
+
+// acquireTotal takes a slot from the group-wide cap. A limit < 1 means
+// unlimited and returns a no-op release rather than an unbounded channel.
+func (s *Slots) acquireTotal(ctx context.Context, total TotalCap) (func(), error) {
+	if total.Limit < 1 {
+		return func() {}, nil
+	}
+	pool := s.totalPool(total)
+	select {
+	case pool.ch <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-pool.ch }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Acquire blocks until endpoint id has a free request slot (and the group-wide
+// cap has room), or ctx is done. The returned release is safe to call more
+// than once. A failure wraps ErrSlotWait and names the endpoint.
+func (s *Slots) Acquire(ctx context.Context, id string, limit int, total TotalCap) (func(), error) {
+	pool := s.endpointPool(id, EffectiveConcurrency(limit))
 
 	// Per-endpoint slot FIRST, group-wide second. The group-wide cap is the
 	// scarce SHARED resource; holding it while parking on a busy endpoint's
@@ -153,6 +162,38 @@ func (s *Slots) Acquire(ctx context.Context, id string, limit int, total TotalCa
 			releaseTotal()
 		})
 	}, nil
+}
+
+// TryAcquire is Acquire without waiting: it takes a slot only if endpoint id
+// AND the group-wide cap both have one free right now, and reports whether it
+// did. It is what lets Call fill FREE slots across endpoints (design step 2a)
+// instead of queueing on the preferred endpoint while a peer sits idle.
+func (s *Slots) TryAcquire(id string, limit int, total TotalCap) (func(), bool) {
+	pool := s.endpointPool(id, EffectiveConcurrency(limit))
+	select {
+	case pool.ch <- struct{}{}:
+	default:
+		return nil, false
+	}
+	releaseTotal := func() {}
+	if total.Limit >= 1 {
+		tp := s.totalPool(total)
+		select {
+		case tp.ch <- struct{}{}:
+			var once sync.Once
+			releaseTotal = func() { once.Do(func() { <-tp.ch }) }
+		default:
+			<-pool.ch
+			return nil, false
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-pool.ch
+			releaseTotal()
+		})
+	}, true
 }
 
 // Depth reports how many slots are currently held for id (0 if never used).
