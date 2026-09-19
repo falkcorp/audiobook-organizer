@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/purge_millisecond_durations.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7ad86e89-caff-4b83-8cdb-ec0403de1d98
 // last-edited: 2026-09-19
 
@@ -197,9 +197,8 @@ func (p *Plugin) runPurgeMillisecondDurations(ctx context.Context, raw json.RawM
 				continue
 			}
 
-			f.Duration = newDur
+			files[fi].Duration = newDur
 			toWrite = append(toWrite, &files[fi])
-			files[fi] = f
 		}
 		if len(toWrite) == 0 {
 			return nil
