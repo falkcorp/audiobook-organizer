@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_result_bridge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 412f096a-5425-4739-b76e-41cc5089d2d4
 // last-edited: 2026-09-19
 
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
@@ -89,5 +91,30 @@ func TestRunMaintenanceJob_MergeChapterGroupsWithoutExplicitFalseIsADryRun(t *te
 		if !saved.DryRun {
 			t.Fatalf("body %q resolved to a REAL merge; params %s", body, row.Params)
 		}
+	}
+}
+
+// Every path into the op -- not only the HTTP dispatcher -- must read empty
+// params, or params without dry_run, as the job's ADVERTISED default. A
+// requeue/resume enqueues with nil params, and the Run closure used to decode
+// that to DryRun=false: a real mutation for a dry-run-default job.
+func TestMaintenanceOpRun_EmptyParamsHonourAdvertisedDryRun(t *testing.T) {
+	for _, raw := range []string{"", `{"job_id":"x"}`, `{"dry_run":null}`} {
+		job := &dryRunProbeJob{
+			id: "test-probe-op-empty-params",
+			params: struct {
+				DryRun bool `json:"dry_run"`
+			}{DryRun: true},
+		}
+		reg := maintReg(t)
+		require.NoError(t, (&Server{}).registerMaintenanceJobOp(reg, job))
+		def, ok := reg.Def(maintenanceOpID(job.ID()))
+		require.True(t, ok)
+		var params json.RawMessage
+		if raw != "" {
+			params = json.RawMessage(raw)
+		}
+		require.NoError(t, def.Run(context.Background(), params, &sdReporter{}))
+		require.Equal(t, []bool{true}, job.runs, "params %q ran the job for real", raw)
 	}
 }

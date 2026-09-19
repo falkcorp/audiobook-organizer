@@ -1,5 +1,5 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -156,13 +156,28 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 		Permissions:     []auth.Permission{required},
 		Capabilities:    policy.Capabilities,
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			// Params may legitimately be empty (a requeue re-enqueues with nil)
+			// or lack dry_run. Either way the run takes the dry_run the job
+			// ADVERTISES, exactly as the HTTP dispatcher does -- never Go's zero
+			// value, which is the destructive one. The zero value used to apply
+			// here, so any path that reached this closure without the
+			// dispatcher's resolved params (a requeue, a resume, a direct
+			// enqueue) ran a dry-run-default job for real.
 			var p maintenanceJobOpParams
-			// Params may legitimately be empty (a requeue re-enqueues with nil),
-			// in which case the zero value is correct: DryRun false, no legacy ID.
+			var dry struct {
+				DryRun *bool `json:"dry_run"`
+			}
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
 				}
+				if err := json.Unmarshal(rawParams, &dry); err != nil {
+					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
+				}
+			}
+			p.DryRun = advertisedDryRunDefault(job)
+			if dry.DryRun != nil {
+				p.DryRun = *dry.DryRun
 			}
 
 			store := s.storeForWiring()
