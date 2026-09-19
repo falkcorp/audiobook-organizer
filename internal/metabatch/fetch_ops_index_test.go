@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b7e0a34-9c26-4d18-a0f7-3e9b2c41d685
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 package metabatch_test
 
@@ -169,38 +169,8 @@ func TestCandidateFetchOps_QueriesTheV2Keyspace(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// CandidateFetchBookIDs — two params shapes
-// ---------------------------------------------------------------------------
-
-func TestCandidateFetchBookIDs_ReadsV2ParamsShape(t *testing.T) {
-	store := &fetchIndexStore{
-		v2ByID: map[string]*database.OperationV2Row{
-			"op1": {ID: "op1", Params: `{"book_ids":["b1","b2"],"total_books":2}`},
-		},
-	}
-	got := metabatch.CandidateFetchBookIDs(store, metabatch.CandidateFetchOp{ID: "op1"})
-	if len(got) != 2 || got[0] != "b1" || got[1] != "b2" {
-		t.Fatalf("expected [b1 b2] from v2 params, got %v", got)
-	}
-	if store.paramCall != 0 {
-		t.Error("a v2 op must not read the v1 params blob")
-	}
-}
-
-// TestCandidateFetchBookIDs_ReadsLegacyBareArrayShape was deleted on 2026-09-07
-// with the v1 params branch it covered. SaveOperationParams had no production
-// writer left, and the v1 listing pass that produced the only ops the branch
-// applied to is gone, so the bare-[]string shape is unreachable.
-
-func TestCandidateFetchBookIDs_MalformedParamsYieldNothing(t *testing.T) {
-	store := &fetchIndexStore{
-		v2ByID: map[string]*database.OperationV2Row{"op1": {ID: "op1", Params: `not json`}},
-	}
-	if got := metabatch.CandidateFetchBookIDs(store, metabatch.CandidateFetchOp{ID: "op1"}); got != nil {
-		t.Errorf("malformed v2 params must yield nothing, got %v", got)
-	}
-}
+// CandidateFetchBookIDs and its tests were removed on 2026-09-19: the batch-
+// fetch guard now reads ActiveCandidateFetchBookIDs (active_fetch_test.go).
 
 // ---------------------------------------------------------------------------
 // IsActiveFetchStatus — two status vocabularies

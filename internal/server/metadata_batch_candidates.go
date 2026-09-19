@@ -104,14 +104,16 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	//
 	// The book list now comes off the v2 row's own params, so the separate
 	// GetOperationParams read the v1 path needed is gone.
-	alreadyFetching := make(map[string]bool)
-	for _, op := range metabatch.CandidateFetchOps(store, 200) {
-		if !metabatch.IsActiveFetchStatus(op.Status) {
-			continue
-		}
-		for _, id := range metabatch.CandidateFetchBookIDs(store, op) {
-			alreadyFetching[id] = true
-		}
+	//
+	// Read off the ACTIVE-operations index, not the capped history listing it
+	// used to use: a long fetch could fall out of a 200-row history window
+	// while still running, and the guard then waved every one of its books
+	// through again. A failed read refuses rather than guessing "nothing is
+	// running".
+	alreadyFetching, err := metabatch.ActiveCandidateFetchBookIDs(store)
+	if err != nil {
+		httputil.InternalError(c, "failed to check running metadata fetches", err)
+		return
 	}
 
 	var bookIDs []string

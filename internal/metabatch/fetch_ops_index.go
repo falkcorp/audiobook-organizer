@@ -1,12 +1,13 @@
 // file: internal/metabatch/fetch_ops_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c1d4f60-2a97-4e35-b8d1-6f0e3a7c95b2
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 package metabatch
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -115,33 +116,6 @@ func CandidateFetchOps(store CandidateFetchOpLister, limit int) []CandidateFetch
 	return out
 }
 
-// CandidateFetchParamsReader is the store slice CandidateFetchBookIDs reads.
-type CandidateFetchParamsReader interface {
-	GetOperationV2(id string) (*database.OperationV2Row, error)
-}
-
-// CandidateFetchBookIDs returns the books a fetch was asked to cover.
-//
-// A v2 row carries marshalled FetchOpParams in its own Params column. The v1
-// shape — a bare []string the handler wrote through SaveOperationParams — is
-// gone as of 2026-09-07 along with the v1 listing pass that produced the only
-// rows it applied to; SaveOperationParams had no writer left either.
-//
-// An empty result means "we cannot tell what this run covers". Callers use this
-// for the dedup guard, where that degrades to re-fetching a book — wasteful but
-// correct — rather than to skipping one.
-func CandidateFetchBookIDs(store CandidateFetchParamsReader, op CandidateFetchOp) []string {
-	row, err := store.GetOperationV2(op.ID)
-	if err != nil || row == nil || row.Params == "" {
-		return nil
-	}
-	var p FetchOpParams
-	if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
-		return nil
-	}
-	return p.BookIDs
-}
-
 // CandidateFetchResolver is the store slice ResolveCandidateFetch reads.
 type CandidateFetchResolver interface {
 	GetOperationByID(id string) (*database.Operation, error)
@@ -218,6 +192,45 @@ func RemainingBooksToFetch(existing []database.OperationResult, want []string) [
 		remaining = append(remaining, id)
 	}
 	return remaining
+}
+
+// ActiveCandidateFetchLister is the store slice ActiveCandidateFetchBookIDs
+// reads: the registry's own index of queued and running operations.
+type ActiveCandidateFetchLister interface {
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
+// ActiveCandidateFetchBookIDs returns every book id owned by a queued or
+// running metadata.candidate-fetch, read off the active-operations index.
+//
+// The batch-fetch handler used CandidateFetchOps for this, which reads the
+// whole operation HISTORY capped at a row count and filters by def id AFTER
+// the cap: once enough other operations started after a long fetch, the
+// running fetch fell out of the window and a second "fetch all unmatched"
+// click re-queued every one of its books. The active index holds only live
+// work, so there is no cap for it to fall out of.
+//
+// An error is returned rather than an empty set: the caller must not read
+// "could not look" as "nothing is running" and pay for a duplicate run.
+func ActiveCandidateFetchBookIDs(store ActiveCandidateFetchLister) (map[string]bool, error) {
+	rows, err := store.ListActiveOperationsV2()
+	if err != nil {
+		return nil, fmt.Errorf("list active operations: %w", err)
+	}
+	out := make(map[string]bool)
+	for _, row := range rows {
+		if row.DefID != CandidateFetchDefID || !IsActiveFetchStatus(row.Status) || row.Params == "" {
+			continue
+		}
+		var p FetchOpParams
+		if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
+			return nil, fmt.Errorf("decode params of active candidate fetch %s: %w", row.ID, err)
+		}
+		for _, id := range p.BookIDs {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 // IsActiveFetchStatus reports whether a CandidateFetchOp status means the run is
