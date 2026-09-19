@@ -313,3 +313,18 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 
 	return out
 }
+
+// ChapterTitleIsFilenameDerived reports whether title is still the
+// scanner's filename-derived title for filePath: empty, or equal (after
+// normalisation) to the file's stem with or without its numeric chapter
+// prefix. A chapter merge may replace such a title with the group's common
+// title; any other title was curated (by a metadata apply or by hand) and a
+// merge must leave it alone.
+func ChapterTitleIsFilenameDerived(title, filePath string) bool {
+	nt := normForCompare(title)
+	if nt == "" {
+		return true
+	}
+	stem := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	return nt == normForCompare(stem) || nt == normForCompare(stripNumPrefix(stem))
+}

@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-08-29
+// last-edited: 2026-09-19
 
 package server
 
@@ -212,6 +212,14 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// decodes only the keys this struct declares — and a job decoding its
 			// own shape must see what the operator actually sent.
 			ctx = maintenance.WithRawParams(ctx, rawParams)
+
+			// The run's structured result payload, for jobs that produce one
+			// (scan-/merge-chapter-groups). It lands on the v2 row, which is what
+			// GET /operations/:id/result serves; ReporterSetResult errors rather
+			// than dropping it when the reporter cannot persist results.
+			ctx = maintenance.WithResultSetter(ctx, func(v any) error {
+				return opsregistry.ReporterSetResult(reporter, v)
+			})
 
 			progress := registryProgressAdapter{r: reporter}
 			adapter := &maintenance.ProgressAdapter{Ops: progress}

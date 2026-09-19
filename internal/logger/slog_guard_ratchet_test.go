@@ -8,8 +8,8 @@ package logger
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 323
-	slogRatchetCallCeiling = 1934
+	slogRatchetFileCeiling = 321
+	slogRatchetCallCeiling = 1929
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -150,7 +150,6 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/fix_file_modes.go":                2,
 	"internal/maintenance/jobs/fix_read_by_narrator.go":          2,
 	"internal/maintenance/jobs/generate_itl_tests.go":            3,
-	"internal/maintenance/jobs/merge_chapter_groups.go":          3,
 	"internal/maintenance/jobs/normalize_primary_flags.go":       5,
 	"internal/maintenance/jobs/prune_book_snapshots.go":          1,
 	"internal/maintenance/jobs/purge_ua_duplicates.go":           4,
@@ -162,7 +161,6 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/repair_missing_files.go":          12,
 	"internal/maintenance/jobs/retention_and_hygiene.go":         20,
 	"internal/maintenance/jobs/revert_metadata_fetch.go":         5,
-	"internal/maintenance/jobs/scan_chapter_groups.go":           2,
 	"internal/maintenance/jobs/scan_composer_tags.go":            6,
 	"internal/maintenance/jobs/scan_duplicate_files.go":          2,
 	"internal/maintenance/jobs/scan_duration_mismatch.go":        2,
