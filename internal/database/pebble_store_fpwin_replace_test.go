@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin_replace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ceab4355-b275-47dc-b83a-9f47b07279ce
 // last-edited: 2026-09-19
 
@@ -47,7 +47,7 @@ func TestFpwin_ReplaceRefusesMismatchedRefEmptySetAndOrphan(t *testing.T) {
 
 	orphan := FileWindowRef("no-such-file")
 	w := *fpwinFixture(orphan, WindowKindWindow, 5000, 1)
-	require.Error(t, env.store.ReplaceFingerprintWindows(orphan, []FingerprintWindow{w}))
+	require.ErrorIs(t, env.store.ReplaceFingerprintWindows(orphan, []FingerprintWindow{w}), ErrFingerprintWindowRowGone)
 	require.Empty(t, fpwinKeysUnder(t, env.store, fpwinKeyPrefix))
 }
 
@@ -82,7 +82,8 @@ func TestFpwin_RecordFailureRefusesOrphanAndEmptyReason(t *testing.T) {
 	env := newBookSigEnv(t)
 	_, id := fpwinSeedFile(t, env.store, "/lib/r/d.m4b", nil)
 	require.Error(t, env.store.RecordFingerprintWindowFailure(&FingerprintWindowFailure{Ref: FileWindowRef(id)}))
-	require.Error(t, env.store.RecordFingerprintWindowFailure(&FingerprintWindowFailure{Ref: FileWindowRef("gone"), Reason: "ffmpeg"}))
+	require.ErrorIs(t, env.store.RecordFingerprintWindowFailure(&FingerprintWindowFailure{Ref: FileWindowRef("gone"), Reason: "ffmpeg"}), ErrFingerprintWindowRowGone)
+	require.ErrorIs(t, env.store.PutFingerprintWindow(fpwinFixture(FileWindowRef("gone"), WindowKindWindow, 5000, 1)), ErrFingerprintWindowRowGone)
 	require.Empty(t, fpwinKeysUnder(t, env.store, fpwinFailKeyPrefix))
 }
 
@@ -92,4 +93,15 @@ func TestFpwin_GetFailureNoneIsNilNil(t *testing.T) {
 	fail, err := env.store.GetFingerprintWindowFailure(FileWindowRef(id))
 	require.NoError(t, err)
 	require.Nil(t, fail)
+}
+
+// A row moved to another book is not gone: windows are keyed by file ID.
+func TestFpwin_ReplaceFollowsARowMovedToAnotherBook(t *testing.T) {
+	env := newBookSigEnv(t)
+	from, id := fpwinSeedFile(t, env.store, "/lib/r/moved.m4b", nil)
+	to, err := env.store.CreateBook(&Book{Title: "Other", FilePath: "/lib/other"})
+	require.NoError(t, err)
+	require.NoError(t, env.store.MoveBookFilesToBook([]string{id}, from, to.ID))
+	w := *fpwinFixture(FileWindowRef(id), WindowKindWindow, 5000, 9)
+	require.NoError(t, env.store.ReplaceFingerprintWindows(FileWindowRef(id), []FingerprintWindow{w}))
 }

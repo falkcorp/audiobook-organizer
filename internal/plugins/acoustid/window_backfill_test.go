@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
 // last-edited: 2026-09-19
 
@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,23 +95,53 @@ func newWBEnv(t *testing.T) *wbEnv {
 	bin := t.TempDir()
 	e := &wbEnv{t: t, store: store, lib: t.TempDir(), log: filepath.Join(bin, "ffmpeg.log")}
 
-	// ffmpeg: log the input path, fail for any path containing "corrupt",
-	// otherwise emit the requested seconds of zero PCM (-t is the arg after
-	// the one naming the input). A "slow" path sleeps first so a test can
-	// cancel mid-run.
+	// ffmpeg: log the input path, then behave by path substring:
+	//   corrupt  exit 1 with a deterministic decoder message, every time
+	//   flaky    exit 1 on the first call for that path only
+	//   eio      exit 1 with "Input/output error" (an NFS/ZFS read failure)
+	//   sigkill  die of SIGKILL (the OOM killer) with the ctx still live
+	//   flip     exit 1 on the first call, a 10 s short cut after that
+	//   slow     sleep first, so a test can cancel mid-run
+	// A file whose first line is "dur=N" is N seconds long: a cut past N
+	// emits only what is left, like a real seek near EOF. Otherwise it is
+	// endless and every cut is full length.
 	ffmpeg := filepath.Join(bin, "ffmpeg")
 	require.NoError(t, os.WriteFile(ffmpeg, []byte(`#!/bin/sh
-in=""; len=0; prev=""
+in=""; len=0; ss=0; prev=""
 for a in "$@"; do
   [ "$prev" = "-i" ] && in="${a#file:}"
   [ "$prev" = "-t" ] && len="${a%%.*}"
+  [ "$prev" = "-ss" ] && ss="${a%%.*}"
   prev="$a"
 done
 echo "$in" >> "`+e.log+`"
-case "$in" in *corrupt*) echo "moov atom not found" >&2; exit 1;; esac
+case "$in" in *corrupt*) echo "Invalid data found when processing input" >&2; exit 1;; esac
+case "$in" in *eio*) echo "Input/output error" >&2; exit 1;; esac
+case "$in" in *sigkill*) kill -9 $$;; esac
+case "$in" in *flaky*) if [ ! -e "$in.flaked" ]; then : > "$in.flaked"; echo "Invalid data found" >&2; exit 1; fi;; esac
+case "$in" in *flip*) if [ ! -e "$in.flipped" ]; then : > "$in.flipped"; echo "Invalid data found" >&2; exit 1; fi; head -c 220500 /dev/zero; exit 0;; esac
 case "$in" in *slow*) sleep 0.2;; esac
-head -c $((len * 22050)) /dev/zero
+real=$(head -c 64 "$in" | sed -n 's/^dur=\([0-9]*\).*/\1/p' | head -1)
+if [ -n "$real" ]; then
+  left=$((real - ss)); [ $left -lt 0 ] && left=0
+  [ $left -lt $len ] && len=$left
+fi
+[ "$len" -gt 0 ] && head -c $((len * 22050)) /dev/zero
+exit 0
 `), 0o755))
+	prevProbe := windowProbeDuration
+	t.Cleanup(func() { windowProbeDuration = prevProbe })
+	windowProbeDuration = func(_ context.Context, path string) (float64, error) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return 0, err
+		}
+		var d float64
+		if _, err := fmt.Sscanf(string(b), "dur=%g", &d); err != nil {
+			return 0, fmt.Errorf("fake ffprobe: no duration in %s", path)
+		}
+		return d, nil
+	}
 	vals := make([]string, 200)
 	for i := range vals {
 		vals[i] = fmt.Sprint(1000 + i)
@@ -145,6 +176,23 @@ func (e *wbEnv) addFile(bookID, rel string, present bool, durSec int) (string, s
 	f := &database.BookFile{BookID: bookID, FilePath: path, Format: "m4b", Duration: durSec}
 	require.NoError(e.t, e.store.CreateBookFile(f))
 	return bookID, f.ID
+}
+
+// addFileWith is addFile with explicit on-disk content and stored Duration.
+func (e *wbEnv) addFileWith(bookID, rel, content string, durSec int) (string, string) {
+	e.t.Helper()
+	bookID, id := e.addFile(bookID, rel, false, durSec)
+	path := filepath.Join(e.lib, rel)
+	require.NoError(e.t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(e.t, os.WriteFile(path, []byte(content), 0o644))
+	return bookID, id
+}
+
+// fakeAudio is file content whose real length is durSec seconds (see the fake
+// ffmpeg), padded to size bytes.
+func fakeAudio(durSec, size int) string {
+	head := fmt.Sprintf("dur=%d\n", durSec)
+	return head + strings.Repeat("x", max(0, size-len(head)))
 }
 
 // invoked returns the input paths ffmpeg was called with, in order.
@@ -316,7 +364,7 @@ func TestWindowBackfill_TombstoneSkipsUntilTheFileChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, fail)
 	require.Equal(t, "ffmpeg", fail.Reason)
-	require.Contains(t, fail.Detail, "moov atom not found")
+	require.Contains(t, fail.Detail, "Invalid data found")
 
 	n := len(e.invoked())
 	res, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true})
@@ -328,7 +376,7 @@ func TestWindowBackfill_TombstoneSkipsUntilTheFileChanges(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(e.lib, "a/corrupt.m4b"), later, later))
 	_, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
-	require.Len(t, e.invoked(), n+1, "a changed file is retried despite its tombstone")
+	require.Greater(t, len(e.invoked()), n, "a changed file is retried despite its tombstone")
 }
 
 func TestWindowBackfill_ITunesTreeExcluded(t *testing.T) {
@@ -482,4 +530,177 @@ func TestWindowBackfill_Integration_RealBinaries(t *testing.T) {
 	require.Equal(t, fingerprint.WindowPipelineID, ws[0].Pipeline)
 	require.NotEmpty(t, ws[0].FpcalcVersion)
 	require.NotEmpty(t, ws[0].FFmpegVersion)
+}
+
+// ---- review fixes (PR #3455) ----
+
+func (e *wbEnv) tombstone(fileID string) *database.FingerprintWindowFailure {
+	e.t.Helper()
+	f, err := e.store.GetFingerprintWindowFailure(database.FileWindowRef(fileID))
+	require.NoError(e.t, err)
+	return f
+}
+
+// FIX 1: a pre-CONS-18 millisecond Duration planned windows at 30000 s+ in a
+// 300 s file; every cut decoded nothing and the file was tombstoned forever.
+func TestWindowBackfill_MillisecondDurationIsNormalized(t *testing.T) {
+	e := newWBEnv(t)
+	// 1 MB file, Duration 300000 "seconds" = 26 bps: milliseconds. The row's
+	// FileSize is left 0 so the write chokepoint cannot repair it first.
+	_, id := e.addFileWith("", "a/ms.m4b", fakeAudio(300, 1_000_000), 300_000)
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Nil(t, e.tombstone(id), "a unit error must not become a durable tombstone")
+	ws := e.windows(id)
+	require.Len(t, ws, 1, "300 s plans slot 5000 only")
+	require.InDelta(t, 300, ws[0].DurationUsedSec, 0.001)
+	require.EqualValues(t, 1, res.written)
+}
+
+// FIX 1: a size/bitrate estimate 2x too long seeks past EOF. The op must
+// ffprobe the real duration and retry before tombstoning.
+func TestWindowBackfill_WrongDurationReprobesBeforeTombstone(t *testing.T) {
+	e := newWBEnv(t)
+	_, id := e.addFileWith("", "a/est.m4b", fakeAudio(200, 4096), 400)
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Nil(t, e.tombstone(id))
+	ws := e.windows(id)
+	require.Len(t, ws, 1)
+	require.Equal(t, string(fingerprint.DurationSourceFFprobe), ws[0].DurationSource)
+	require.InDelta(t, 200, ws[0].DurationUsedSec, 0.001)
+	require.EqualValues(t, 1, res.written)
+}
+
+// FIX 1: a tombstone records the duration it was planned from; correcting the
+// row's duration later re-plans the file.
+func TestWindowBackfill_TombstoneClearsWhenDurationIsCorrected(t *testing.T) {
+	e := newWBEnv(t)
+	b, id := e.addFile("", "a/corrupt.m4b", true, 300)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.NotNil(t, e.tombstone(id))
+	n := len(e.invoked())
+	_, err = e.store.ModifyBookFile(b, id, func(f *database.BookFile) error { f.Duration = 900; return nil })
+	require.NoError(t, err)
+	_, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Greater(t, len(e.invoked()), n, "a corrected duration must re-plan a tombstoned file")
+}
+
+// FIX 2: an OOM kill, an I/O error and a one-off failure are not durable.
+func TestWindowBackfill_TransientToolFailuresAreNotTombstoned(t *testing.T) {
+	e := newWBEnv(t)
+	_, killed := e.addFile("", "a/sigkill.m4b", true, 300)
+	_, eio := e.addFile("", "b/eio.m4b", true, 300)
+	_, flaky := e.addFile("", "c/flaky.m4b", true, 300)
+	_, bad := e.addFile("", "d/corrupt.m4b", true, 300)
+	_, flip := e.addFile("", "e/flip.m4b", true, 300)
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, Concurrency: 1})
+	require.NoError(t, err)
+	require.Nil(t, e.tombstone(killed), "signal death tombstoned")
+	require.Nil(t, e.tombstone(eio), "I/O error tombstoned")
+	require.Nil(t, e.tombstone(flaky), "a failure that did not repeat was tombstoned")
+	require.Len(t, e.windows(flaky), 1, "the inline retry should have succeeded")
+	require.Nil(t, e.tombstone(flip), "a retry that failed differently is not a repeat")
+	require.NotNil(t, e.tombstone(bad), "a deterministic repeated failure must still be tombstoned")
+	require.EqualValues(t, 1, res.failed)
+	require.EqualValues(t, 1, res.written)
+}
+
+// FIX 3: a write failure for a row that moved to another book is a real
+// write error, not "row gone".
+func TestWindowBackfill_MovedRowWriteFailureIsAWriteError(t *testing.T) {
+	e := newWBEnv(t)
+	a, id := e.addFile("", "a/moved.m4b", true, 300)
+	bBook, err := e.store.CreateBook(&database.Book{Title: "Other", FilePath: e.lib})
+	require.NoError(t, err)
+	require.NoError(t, e.store.MoveBookFilesToBook([]string{id}, a, bBook.ID))
+	var tally windowTally
+	e.plugin.countWriteErr(windowItem{FileID: id, BookID: a}, errors.New("pebble: disk full"), &tally)
+	require.EqualValues(t, 1, tally.writeErrors.Load())
+	require.Zero(t, tally.rowGone.Load())
+}
+
+func TestWindowBackfill_ITunesExclusionIgnoresCaseAndFollowsSymlinks(t *testing.T) {
+	e := newWBEnv(t)
+	_, upper := e.addFile("", "Books/iTunes/iTunes Media/a.m4b", true, 300)
+	// A symlinked directory elsewhere in the library that points into the tree.
+	_, _ = e.addFile("", "books/itunes/iTunes Media/real/b.m4b", true, 300)
+	require.NoError(t, os.Symlink(filepath.Join(e.lib, "books/itunes/iTunes Media/real"), filepath.Join(e.lib, "via-link")))
+	b, err := e.store.CreateBook(&database.Book{Title: "Link", FilePath: filepath.Join(e.lib, "via-link")})
+	require.NoError(t, err)
+	link := &database.BookFile{BookID: b.ID, FilePath: filepath.Join(e.lib, "via-link", "b.m4b"), Format: "m4b", Duration: 300}
+	require.NoError(t, e.store.CreateBookFile(link))
+	_, _ = e.addFile("", "books/audiobook-organizer/c.m4b", true, 300)
+
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Equal(t, 3, res.plan.excluded["itunes_tree"])
+	require.Empty(t, e.windows(upper))
+	require.Empty(t, e.windows(link.ID))
+	require.Equal(t, []string{filepath.Join(e.lib, "books/audiobook-organizer/c.m4b")}, e.invoked())
+}
+
+// MEDIUM: a dead mount makes every file an I/O failure. The run must stop
+// with a clear error instead of walking the library and finishing green.
+func TestWindowBackfill_BreakerStopsOnConsecutiveIOFailures(t *testing.T) {
+	e := newWBEnv(t)
+	prev := windowBreakerThreshold
+	t.Cleanup(func() { windowBreakerThreshold = prev })
+	windowBreakerThreshold = 10
+	for i := range 30 {
+		e.addFile("", fmt.Sprintf("dead-%02d/sigkill.m4b", i), true, 300)
+	}
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, Concurrency: 1})
+	require.ErrorIs(t, err, errWindowBreaker)
+	require.Less(t, len(e.invoked()), 30, "the breaker should stop the walk early")
+	require.Zero(t, res.written)
+}
+
+func TestWindowBackfill_BreakerResetsOnAGoodFile(t *testing.T) {
+	e := newWBEnv(t)
+	prev := windowBreakerThreshold
+	t.Cleanup(func() { windowBreakerThreshold = prev })
+	windowBreakerThreshold = 10
+	for i := range 8 {
+		e.addFile("", fmt.Sprintf("a-%02d/sigkill.m4b", i), true, 300)
+	}
+	e.addFile("", "b/good.m4b", true, 300)
+	for i := range 8 {
+		e.addFile("", fmt.Sprintf("c-%02d/sigkill.m4b", i), true, 300)
+	}
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, Concurrency: 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, res.written)
+	require.EqualValues(t, 16, res.transient)
+}
+
+type fakeScanProbe struct{ busy atomic.Int64 }
+
+func (f *fakeScanProbe) LibraryScanRunning() bool { return f.busy.Add(-1) >= 0 }
+
+// The op yields to a running library.scan (pauses, never takes the stand-down).
+func TestWindowBackfill_PausesWhileLibraryScanRuns(t *testing.T) {
+	e := newWBEnv(t)
+	prev := windowScanPoll
+	t.Cleanup(func() { windowScanPoll = prev })
+	windowScanPoll = time.Millisecond
+	_, id := e.addFile("", "a/x.m4b", true, 300)
+	probe := &fakeScanProbe{}
+	probe.busy.Store(3) // "running" for the first three checks
+	e.plugin.setScanProbe(probe)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.NoError(t, err)
+	require.Less(t, probe.busy.Load(), int64(0), "the probe was not polled until the scan ended")
+	require.Len(t, e.windows(id), 1)
+
+	// Cancelled while paused: returns the ctx error, cuts nothing.
+	_, id2 := e.addFile("", "b/y.m4b", true, 300)
+	probe.busy.Store(1 << 40)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = e.run(ctx, nil, WindowBackfillParams{Live: true})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Empty(t, e.windows(id2))
 }

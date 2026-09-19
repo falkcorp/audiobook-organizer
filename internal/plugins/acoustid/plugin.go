@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -29,6 +29,8 @@ type Plugin struct {
 	// during server startup, the op reads it when dispatched.
 	toolsMu      sync.Mutex
 	toolResolver fingerprint.ToolResolver
+	// scanProbe lets the window op yield to a running library.scan.
+	scanProbe libraryScanProbe
 	// windowToolsFn replaces tool resolution in tests (fake binaries).
 	windowToolsFn func(context.Context) (fingerprint.WindowTools, error)
 }

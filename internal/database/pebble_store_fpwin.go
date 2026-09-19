@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-09-19
 
@@ -71,7 +71,7 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
 		}
 		if hint == nil {
-			return fmt.Errorf("PutFingerprintWindow %s: book_file %s does not exist", row.Ref, fileID)
+			return fmt.Errorf("PutFingerprintWindow %s: %w: %s", row.Ref, ErrFingerprintWindowRowGone, fileID)
 		}
 	}
 
@@ -83,7 +83,7 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, cerr)
 		}
 		if !ok {
-			return fmt.Errorf("PutFingerprintWindow %s: book_file %s was deleted", row.Ref, fileID)
+			return fmt.Errorf("PutFingerprintWindow %s: %w: %s was deleted", row.Ref, ErrFingerprintWindowRowGone, fileID)
 		}
 	}
 	if err := s.db.Set(fpwinKey(&row), data, pebble.Sync); err != nil {
@@ -577,7 +577,7 @@ func (s *PebbleStore) commitRefWrite(ref FingerprintWindowRef, op string, stage 
 			return fmt.Errorf("%s %s: %w", op, ref, err)
 		}
 		if hint == nil {
-			return fmt.Errorf("%s %s: book_file %s does not exist", op, ref, fileID)
+			return fmt.Errorf("%s %s: %w: %s", op, ref, ErrFingerprintWindowRowGone, fileID)
 		}
 	}
 	unlock := s.lockWindowRefs(ref)
@@ -588,7 +588,7 @@ func (s *PebbleStore) commitRefWrite(ref FingerprintWindowRef, op string, stage 
 			return fmt.Errorf("%s %s: %w", op, ref, err)
 		}
 		if !ok {
-			return fmt.Errorf("%s %s: book_file %s was deleted", op, ref, fileID)
+			return fmt.Errorf("%s %s: %w: %s was deleted", op, ref, ErrFingerprintWindowRowGone, fileID)
 		}
 	}
 	batch := s.db.NewBatch()

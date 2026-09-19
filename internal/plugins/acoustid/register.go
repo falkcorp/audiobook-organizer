@@ -1,6 +1,7 @@
 // file: internal/plugins/acoustid/register.go
-// version: 1.2.0
-// last-edited: 2026-08-19
+// version: 1.3.0
+// guid: 26480480-20ca-4dd1-88e0-4a747df80a96
+// last-edited: 2026-09-19
 
 // Service registry registration for the acoustid UOS plugin (W5/W7).
 //
@@ -46,5 +47,8 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 		slog.Warn("PostInit opregistry not available, skipping op-def registration")
 		return nil
 	}
+	// The window backfill yields to library.scan through the registry's
+	// read-only LibraryScanRunning probe.
+	p.setScanProbe(wrapper.Registry)
 	return p.Register(wrapper.Registry)
 }
