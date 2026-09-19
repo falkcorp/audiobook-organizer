@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
 // last-edited: 2026-09-19
 
@@ -716,15 +716,17 @@ func (h *Handler) Personalized(c *gin.Context) {
 	respondJSON(c, http.StatusOK, shelves)
 }
 
-// hasProgress reports whether the user has a stored position for the book. Errors
-// are treated as "no progress": a shelf is decoration, and failing the whole home
-// screen over one unreadable key would be worse than a short Continue Listening.
+// hasProgress reports whether the user has a stored position for the book. It is
+// display-only and fails open through displayPosition: readable rows are used
+// when some are corrupt, an unreadable position counts as "no progress" (a
+// shelf is decoration; failing the whole home screen would be worse), and
+// either case is logged.
 func (h *Handler) hasProgress(userID, bookID string) bool {
 	if h.progress == nil {
 		return false
 	}
-	pos, err := h.progress.GetUserPosition(userID, bookID)
-	if err != nil || pos == nil || pos.PositionSeconds <= 0 {
+	pos := h.displayPosition("continue-listening shelf", userID, bookID)
+	if pos == nil || pos.PositionSeconds <= 0 {
 		return false
 	}
 	// 🔴 The user's "remove from Continue Listening" choice is what this shelf is

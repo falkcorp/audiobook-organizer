@@ -174,3 +174,27 @@ func TestSessionLocal_UnreadableBookFilesIs503(t *testing.T) {
 		t.Fatalf("session/local wrote %v without a readable duration", got)
 	}
 }
+
+// Display paths stay fail-OPEN (they write nothing), but one corrupt segment
+// row must not hide the readable abs row: the item still shows its progress
+// and the book stays on Continue Listening.
+func TestItemProgress_CorruptSegmentRowFallsBackToReadableRows(t *testing.T) {
+	w := newWriteHarness(t)
+	plantCorruptPosition(t, w)
+	code, body, raw := w.req(t, http.MethodGet, "/api/items/"+w.syncID, nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET item = %d %.200s", code, raw)
+	}
+	mp, _ := body["userMediaProgress"].(map[string]any)
+	if mp == nil || mp["currentTime"] != 3600.0 {
+		t.Fatalf("userMediaProgress = %v, want currentTime 3600 from the readable row", mp)
+	}
+}
+
+func TestContinueListening_CorruptSegmentRowKeepsTheBook(t *testing.T) {
+	w := newWriteHarness(t)
+	plantCorruptPosition(t, w)
+	if ids := continueListeningIDs(t, w); !contains(ids, w.syncID) {
+		t.Fatalf("continue listening = %v; a corrupt segment row dropped the book", ids)
+	}
+}

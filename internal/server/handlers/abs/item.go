@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
 // last-edited: 2026-09-19
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
@@ -83,8 +84,8 @@ func (h *Handler) mediaProgress(userID string, v *itemView) *mediaProgressDTO {
 	if h.progress == nil {
 		return nil
 	}
-	pos, err := h.progress.GetUserPosition(userID, v.Book.ID)
-	if err != nil || pos == nil {
+	pos := h.displayPosition("item mediaProgress", userID, v.Book.ID)
+	if pos == nil {
 		return nil
 	}
 
@@ -224,4 +225,26 @@ func (h *Handler) ItemCover(c *gin.Context) {
 		return
 	}
 	c.Abort()
+}
+
+// displayPosition is the stored position for a DISPLAY-only path (it writes
+// nothing), so it fails OPEN, never 503: an unreadable position shows as "no
+// progress" rather than failing the page. Every failure is logged at Warn with
+// user_id and book_id. When some of the book's position rows did not decode,
+// the readable ones are used (database.ReadablePositionsDespite), so one
+// corrupt segment row does not hide the good row or drop the book from
+// Continue Listening.
+func (h *Handler) displayPosition(op, userID, bookID string) *database.UserPosition {
+	pos, err := h.progress.GetUserPosition(userID, bookID)
+	if err == nil {
+		return pos
+	}
+	if rows, skipped, ok := database.ReadablePositionsDespite(err); ok {
+		progressLog.Warn("abs: %s: user_id=%s book_id=%s: %d position row(s) undecodable, showing the %d readable: %v",
+			op, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), skipped, len(rows), err)
+		return database.LatestPosition(rows)
+	}
+	progressLog.Warn("abs: %s: user_id=%s book_id=%s: position unreadable, showing no progress: %v",
+		op, logger.SanitizeLogValue(userID), logger.SanitizeLogValue(bookID), err)
+	return nil
 }
