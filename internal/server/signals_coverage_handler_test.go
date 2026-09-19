@@ -1,5 +1,5 @@
 // file: internal/server/signals_coverage_handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9dc1c17f-e225-48b7-a3c4-79f0246d7c9c
 // last-edited: 2026-09-19
 
@@ -169,6 +169,15 @@ func TestHandleGetSignalCoverage_WindowsCensus(t *testing.T) {
 	require.NotNil(t, deep.Criteria)
 	assert.Equal(t, fingerprint.WindowPipelineID, deep.Criteria.Pipeline)
 	assert.Contains(t, deep.Unavailable["tool_version_currency"], "tool registry not configured")
+
+	// The re-fingerprint progress meter: head-print era on files, book
+	// signature era on books (deep only).
+	require.NotNil(t, deepResp.Files.HeadPrintEra)
+	assert.EqualValues(t, 0, deepResp.Files.HeadPrintEra.PresentWithPrint)
+	require.NotNil(t, deepResp.Books.SignatureEra)
+	assert.EqualValues(t, 1, deepResp.Books.SignatureEra.LiveBooks)
+	assert.EqualValues(t, 1, deepResp.Books.SignatureEra.NoSignature)
+	assert.Contains(t, get("").Books.SignatureEraError, "deep=true")
 }
 
 func TestHandleGetSignalCoverage_WindowsNeedPebble(t *testing.T) {

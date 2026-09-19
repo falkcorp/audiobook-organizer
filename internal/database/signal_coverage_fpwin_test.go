@@ -1,5 +1,5 @@
 // file: internal/database/signal_coverage_fpwin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 53baee6c-5cb2-4fa1-bbbc-5b0836472ef0
 // last-edited: 2026-09-19
 
@@ -137,7 +137,7 @@ func TestFingerprintWindowCoverage_DeepCensus(t *testing.T) {
 	assert.EqualValues(t, map[string]int64{"head": 1, "window": 9, "whole": 2}, cov.StoredRowsByKind)
 	assert.EqualValues(t, 10, cov.WindowRowsByTools["fpcalc 1.6.0 / ffmpeg 8.0.1"])
 	assert.EqualValues(t, 1, cov.WindowRowsByTools["fpcalc 1.5.1 / ffmpeg 8.0.1"])
-	assert.Contains(t, cov.Unavailable, "legacy_print_era")
+	assert.NotContains(t, cov.Unavailable, "legacy_print_era", "the era split is in files.head_print_era")
 	assert.Contains(t, cov.Unavailable, "tier_t0")
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/signals_coverage_handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ca3e529b-ef05-451d-8a67-8a643e16c176
 // last-edited: 2026-09-19
 
@@ -25,6 +25,10 @@ type BookSignalCoverage struct {
 	// exceed PrimaryBooks when vectors of since-merged books were never pruned.
 	WithEmbedding  int    `json:"with_embedding"`
 	EmbeddingError string `json:"embedding_error,omitempty"`
+	// SignatureEra splits live books by book-signature era (deep=true only:
+	// memdb strips the signature fields, so it is a Pebble read).
+	SignatureEra      *database.BookSignatureEraCoverage `json:"signature_era,omitempty"`
+	SignatureEraError string                             `json:"signature_era_error,omitempty"`
 }
 
 // SignalCoverageResponse is the payload of GET /api/v1/signals/coverage.
@@ -135,6 +139,23 @@ func (s *Server) handleGetSignalCoverage(c *gin.Context) {
 		}
 	} else {
 		resp.Books.EmbeddingError = "embedding store not configured"
+	}
+	switch ps := database.AsPebbleStore(store); {
+	case ps == nil:
+		resp.Books.SignatureEraError = "book signatures are counted only on the Pebble store"
+	case !deep:
+		resp.Books.SignatureEraError = "book signature fields are stripped from memdb; pass deep=true"
+	default:
+		era, eerr := ps.CountBookSignatureEras(c.Request.Context(), workers)
+		switch {
+		case errors.Is(eerr, database.ErrDeepCoverageBusy):
+			httputil.RespondWithConflict(c, eerr.Error())
+			return
+		case eerr != nil:
+			httputil.InternalError(c, "failed to count book signature eras", eerr)
+			return
+		}
+		resp.Books.SignatureEra = era
 	}
 	resp.ElapsedMS = time.Since(started).Milliseconds()
 	httputil.RespondWithOK(c, resp)
