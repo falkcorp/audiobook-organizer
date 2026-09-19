@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_runtime_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6742e59d-bc2b-4c69-997e-ccbfa8ba1b0c
 // last-edited: 2026-09-19
 
@@ -62,6 +62,10 @@ func TestPlanCachedApply_GateReadsTheBooksFiles(t *testing.T) {
 		n := "Kate Reading"
 		b := *book
 		b.Narrator = &n
+		// Book.Duration is the partial known sum RecomputeBookAggregates
+		// stores (28 × 20 min), so only the narrator can decide.
+		knownSum := 28 * 1200
+		b.Duration = &knownSum
 		cand := metafetch.MetadataCandidate{Title: "Shadow Rising", Author: "Robert Jordan", Narrator: "Michael Kramer", DurationSec: 36000, Score: 0.99}
 		books := filesBooks{fakeBooks: fakeBooks{"b1": &b}, files: map[string][]database.BookFile{"b1": chapterFiles("b1", 30, 1200, 28)}}
 		p := planCachedApply(&fakeApplySvc{candidates: candidateJSON(t, cand)}, books, "b1", nil, nil)
