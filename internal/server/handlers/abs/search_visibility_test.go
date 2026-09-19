@@ -381,3 +381,60 @@ func TestWholeListUpdate_HiddenMemberDoesNotBlockReorder(t *testing.T) {
 		t.Fatalf("collection stored %v, want %v", got.BookIDs, want)
 	}
 }
+
+// Round-6 MEDIUM-HIGH: per-file durations are whole seconds, so a 60-file
+// 36,000 s book sums to ~35,940 s; finishing at 35,999 s must land (clamped,
+// finished), and a book with an unknown-duration file must not refuse at all.
+func TestSessionLocalAll_EndOfBookPositionIsNotRefusedByRoundedDurations(t *testing.T) {
+	post := func(t *testing.T, v *visFixture, sync string, ct float64) {
+		t.Helper()
+		code, body := v.h.doAny(t, request{method: http.MethodPost, path: "/api/session/local-all", headers: bearer(v.tok),
+			body: map[string]any{"sessions": []map[string]any{{"id": "end-" + sync, "userId": "u1", "libraryItemId": sync, "currentTime": ct}}}})
+		if code != http.StatusOK {
+			t.Fatalf("local-all = %d %v", code, body)
+		}
+	}
+	t.Run("60 files, rounded down", func(t *testing.T) {
+		v := newVisFixture(t)
+		var files []database.BookFile
+		for i := range 60 {
+			files = append(files, database.BookFile{ID: fmt.Sprintf("f%02d", i), BookID: "01SIXTY000000000000000000S",
+				FilePath: fmt.Sprintf("/nonexistent/%02d.mp3", i), TrackNumber: i + 1, Duration: 599, FileSize: 1000, Format: "mp3"})
+		}
+		v.add("01SIXTY000000000000000000S", "Sixty", true, "organized", files...)
+		sync, _ := v.lib.MintOrGetSyncID("01SIXTY000000000000000000S")
+		post(t, v, sync, 35999)
+		pos, _ := v.lib.GetUserPosition("u1", "01SIXTY000000000000000000S")
+		if pos == nil || pos.PositionSeconds != 35940 {
+			t.Fatalf("finish at 35,999 s was refused or not clamped: %+v", pos)
+		}
+		if st, _ := v.lib.GetUserBookState("u1", "01SIXTY000000000000000000S"); st == nil || st.Status != database.UserBookStatusFinished {
+			t.Fatalf("the finish did not mark the book finished: %+v", st)
+		}
+	})
+	t.Run("unknown file duration", func(t *testing.T) {
+		v := newVisFixture(t)
+		v.add("01UNKNOWN0000000000000000U", "Unknown", true, "organized",
+			database.BookFile{ID: "u1f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/a.mp3", TrackNumber: 1, Duration: 600, FileSize: 1, Format: "mp3"},
+			database.BookFile{ID: "u2f", BookID: "01UNKNOWN0000000000000000U", FilePath: "/nonexistent/b.mp3", TrackNumber: 2, Duration: 0, FileSize: 1, Format: "mp3"})
+		sync, _ := v.lib.MintOrGetSyncID("01UNKNOWN0000000000000000U")
+		post(t, v, sync, 5000)
+		pos, _ := v.lib.GetUserPosition("u1", "01UNKNOWN0000000000000000U")
+		if pos == nil || pos.PositionSeconds != 5000 {
+			t.Fatalf("a position past a partially-unknown duration was refused: %+v", pos)
+		}
+		if st, _ := v.lib.GetUserBookState("u1", "01UNKNOWN0000000000000000U"); st != nil && st.Status == database.UserBookStatusFinished {
+			t.Fatalf("an uncertain duration auto-finished the book")
+		}
+	})
+	t.Run("absurd position still refused", func(t *testing.T) {
+		v := newVisFixture(t)
+		v.add("01ABSURD00000000000000000A", "Absurd", true, "organized",
+			database.BookFile{ID: "a1", BookID: "01ABSURD00000000000000000A", FilePath: "/nonexistent/x.mp3", TrackNumber: 1, Duration: 1000, FileSize: 1, Format: "mp3"})
+		sync, _ := v.lib.MintOrGetSyncID("01ABSURD00000000000000000A")
+		post(t, v, sync, 5000)
+		if pos, _ := v.lib.GetUserPosition("u1", "01ABSURD00000000000000000A"); pos != nil {
+			t.Fatalf("an absurd position was stored: %+v", pos)
+		}
+	})
+}

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -29,9 +29,11 @@ import (
 //
 // CONFLICT POLICY (applyLocalSession): (a) forward-only, EXCEPT a session whose
 // startedAt is after the server's newest known position may move it either way;
-// (b) a session that started before the user's last progress reset is refused;
-// (c) a position past the item's duration is rejected, never turned into
-// "finished". Background on the forward-only default follows.
+// (b) while a progress-reset tombstone exists, a session is discarded unless its
+// position's updatedAt provably post-dates the reset AND the position is
+// physically reachable from 0 since the reset (elapsed × max playback rate);
+// (c) a position absurdly past the item's duration is refused, one slightly past
+// it is clamped to the end. Background on the forward-only default follows.
 //
 // Deliberately STRICTER than upstream ABS. Upstream applies a
 // local session when session.updatedAt > the stored progress's lastUpdate. We use
@@ -82,6 +84,17 @@ const absLocalSessionOverrunSec = 5.0
 // server before its startedAt stops being trusted in either direction.
 const absClockSkewTolerance = 2 * time.Minute
 
+// absMaxPlaybackRate is the fastest a listener can move the playhead by
+// listening. AudioBooth's speed picker tops out at 3.5x
+// (SpeedPickerSheetModel.swift: range 0.5...3.5); 4.0 leaves headroom for other
+// clients.
+const absMaxPlaybackRate = 4.0
+
+// absEndOfBookMargin is how far past the known duration a reported position may
+// fall and still be treated as "at the end" (clamped + finished) rather than as
+// garbage.
+const absEndOfBookMargin = 0.02
+
 type localAllReq struct {
 	Sessions []localSessionReq `json:"sessions"`
 }
@@ -103,6 +116,11 @@ type localSessionResult struct {
 	// there is nothing to misreport, and ShelfPlayer reads a failure on this
 	// path as the connection being offline (§1.8.8 item 1).
 	refused bool
+	// discarded marks a session deliberately dropped because it would undo a
+	// progress reset. It can never become valid, so /api/session/local answers
+	// 200 for it (AudioBooth re-sends a 4xx'd session on every activation,
+	// forever); the discard is logged at Info with the reason.
+	discarded bool
 }
 
 // SessionLocalAll handles POST /api/session/local-all.
@@ -224,26 +242,63 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	// than dating the session did: a startedAt-based check let ANY position a
 	// long-running session reached after the reset through, however old its
 	// last update.
+	//
+	// ⚠️ KNOWN LIMIT (midnight clamp): AudioBooth caps updatedAt at the end of
+	// the session's day. A session paused before midnight and resumed after a
+	// reset at, say, 00:10 reports an updatedAt of 23:59:59 for its first
+	// post-reset sync, which is refused; about one sync interval (~20 s) of
+	// listening is lost, and the playhead carries over on the next sync.
+	//
+	// PHYSICAL BOUND (review of #3470 at 414d54805): some clients RE-STAMP
+	// updatedAt=now when replaying a backlog (spec §1.8.7), so a pre-reset
+	// backlog replayed after the reset passes the updatedAt test. But the
+	// playhead restarts at 0 on reset, and listening cannot move it faster than
+	// elapsed time × max playback rate. A position beyond
+	// (updatedAt − reset) × absMaxPlaybackRate + tolerance cannot have been
+	// reached by listening since the reset, so it is discarded. This needs no
+	// trust in startedAt.
+	//
+	// ⚠️ KNOWN LIMIT (seek): a listener who resets and then SEEKS ahead is held
+	// to the same bound until enough time passes; each later sync is judged
+	// again with a later updatedAt, so the position lands once reachable.
 	if state != nil && state.ProgressResetAt != nil {
 		resetMs := state.ProgressResetAt.UnixMilli()
 		trusted := s.UpdatedAt != nil && *s.UpdatedAt > 0 && *s.UpdatedAt <= now.UnixMilli()+tol
 		if !trusted || *s.UpdatedAt < resetMs+tol {
 			res.Error = "session position is not provably after a progress reset"
-			res.refused = true
+			res.discarded = true
+			return res
+		}
+		reachable := float64(*s.UpdatedAt-resetMs)/1000*absMaxPlaybackRate + absClockSkewTolerance.Seconds()
+		if ct > reachable {
+			res.Error = "position cannot have been reached by listening since the progress reset"
+			res.discarded = true
 			return res
 		}
 	}
 
-	duration := h.durationForBook(bookID, s.Duration)
-	// (c) An out-of-range position is rejected, never clamped into "finished":
-	// a corrupt or foreign value past the end must not mark the book done.
-	if duration > 0 && ct > duration+absLocalSessionOverrunSec {
-		res.Error = "currentTime is beyond the item's duration"
-		res.refused = true
-		return res
-	}
-	if duration > 0 && ct > duration {
-		ct = duration
+	// (c) Duration sanity. Per-file durations are whole seconds (up to ~1 s
+	// lost per file) and a file may have none at all, so the summed duration
+	// is only approximate:
+	//   - any file with an unknown (0) duration → the duration is unknown and
+	//     nothing is refused or clamped on that ground;
+	//   - otherwise tolerance = max(5 s, files × 1 s + 0.5% of the duration);
+	//     a position up to 2% (+ tolerance) past the end is the end — clamped
+	//     to the duration, which marks the book finished; only a position
+	//     beyond that is refused as impossible.
+	// Before this, a 60-file 36,000 s book summed to ~35,970 s and a finish at
+	// 35,999 s was refused, so the finish never synced.
+	duration, known := h.durationBoundsForBook(bookID, s.Duration)
+	if known && duration > 0 {
+		slack := max(absLocalSessionOverrunSec, float64(h.fileCount(bookID))+0.005*duration)
+		if ct > duration*(1+absEndOfBookMargin)+slack {
+			res.Error = "currentTime is beyond the item's duration"
+			res.refused = true
+			return res
+		}
+		if ct > duration {
+			ct = duration
+		}
 	}
 
 	stored := progress.Progress{Duration: duration}

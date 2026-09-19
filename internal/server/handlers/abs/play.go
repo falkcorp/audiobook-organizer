@@ -369,8 +369,9 @@ func (h *Handler) SessionClose(c *gin.Context) {
 //
 // Since 2026-09-19 it also APPLIES the session (it used to acknowledge and drop
 // it), through the same applyLocalSession rules as /api/session/local-all. A
-// session it cannot apply is NOT reported as success: a transient failure is a
-// 503 (retried), a refusal is a 409 (skipped by AudioBooth); see the switch.
+// session it cannot apply is reported by kind: a transient failure is a 503
+// (retried), malformed or impossible data is a 409, and a session discarded
+// because it would undo a progress reset is a logged 200; see the switch.
 func (h *Handler) SessionLocal(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok || user == nil {
@@ -386,6 +387,17 @@ func (h *Handler) SessionLocal(c *gin.Context) {
 	}
 	res := h.applyLocalSession(user.ID, req)
 	switch {
+	case res.discarded:
+		// Deliberately discarded: the session would undo a progress reset and
+		// can never become valid. 200, not 4xx — AudioBooth does NOT drop a
+		// session it got a 4xx for: syncUnsyncedSessions skips it for that
+		// pass only (SessionManager.swift:447-452) and re-sends it on every
+		// activation for as long as pendingListeningTime > 0
+		// (PlaybackSession.fetchUnsynced), i.e. forever. A 200 retires it.
+		// This is stale data being dropped on purpose, logged with its reason.
+		playlistsLog.Info("abs: /api/session/local discarded (would undo a progress reset): session_id=%s reason=%s",
+			logger.SanitizeLogValue(res.ID), res.Error)
+		respondPlainOK(c)
 	case res.Success, !res.transient && !res.refused:
 		// Applied, or named nothing we can apply (no id, unknown item,
 		// podcast): 200, per ShelfPlayer's maxAttempts:1 contract above.
@@ -395,13 +407,11 @@ func (h *Handler) SessionLocal(c *gin.Context) {
 		// the session and retries 5xx (with backoff), which is what we want.
 		respondError(c, http.StatusServiceUnavailable, res.Error)
 	default:
-		// A REFUSAL of this session (e.g. its position predates a progress
-		// reset). Answering 200 would tell the app the listening was recorded
-		// when it was discarded. 409, not 404: AudioBooth's unsynced-session
-		// pass skips a 4xx other than 401/408/429 ("Server rejected session
-		// ... skipping it") instead of retrying it forever, and ShelfPlayer
-		// reads only a 404 as "offline". The app's next progress sync sends a
-		// fresh updatedAt and is judged again.
+		// Malformed or impossible data (a non-finite or absurd position, a
+		// session belonging to another user). 409, not 404: ShelfPlayer reads
+		// only a 404 as "offline". AudioBooth will keep re-sending it (see the
+		// discarded case), which is the right outcome for data a client bug
+		// produced: it stays visible in the log instead of vanishing.
 		playlistsLog.Warn("abs: /api/session/local refused: session_id=%s err=%s",
 			logger.SanitizeLogValue(res.ID), res.Error)
 		respondError(c, http.StatusConflict, res.Error)

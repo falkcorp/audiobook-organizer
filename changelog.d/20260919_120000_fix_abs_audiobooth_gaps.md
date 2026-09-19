@@ -13,8 +13,10 @@
   position may move it backward, which covers re-listening while offline.
   After a progress reset, a session is refused only when its position was last
   moved before the reset. Listening that continues on the same session after
-  the reset is kept. A position far past the
-  end of the book is rejected and never marks the book finished.
+  the reset is kept. A position slightly
+  past the end of the book counts as finishing it. This allows for the rounding
+  in per-file durations. Only a position far past the end is rejected. A
+  position that listening could not have reached since a reset is discarded.
 - **A read status you set by hand stays set.** Listening used to overwrite a
   manually chosen status (such as "abandoned") with a computed one.
 - **Two edits to the same playlist no longer overwrite each other.** This covers
