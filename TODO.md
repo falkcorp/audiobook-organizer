@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.73.9 -->
+<!-- version: 10.73.10 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-09-15 -->
+<!-- last-edited: 2026-09-18 -->
 
 # Project TODO — live items only
 
@@ -233,7 +233,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Registry guard: reject `ResumeRestart` from a def that never checkpoints** — `internal/operations/registry/registry.go` `RegisterOp` already rejects `ResumeUnspecified`, so the enforcement point exists. #3223 fixed the eight ops that declared `ResumeRestart` with no `reporter.Checkpoint` call by hand; nothing stops the next op from repeating it and silently restarting from zero. Options: (a) a `DeclaresCheckpoint bool` on `OperationDef` that `RegisterOp` requires for `ResumeRestart`, verified by a test that walks every registered def; or (b) a resume-time check in `resumeRestart` that logs at Error and treats a `ResumeRestart` row with `state_bytes=0` and `resume_count>0` as `ResumeDrop`. (a) catches it at build time and is preferred.
 
-- [ ] **`resumeRequeue` ignores the error from marking the old row `interrupted_dropped`, which can yield a duplicate op on the next boot** — `internal/operations/registry/resume.go`, `resumeRequeue`. The requeue path inserts a fresh row (`InsertOperationV2`) and then flips the old row to `interrupted_dropped` with `UpdateOperationV2Status`, but discards that second write's error. If the insert succeeds and the status write fails (the same disk-pressure / compaction-stall shape OPS-01 guarded against in #3220), the old row stays in a status `ListResumableOperationsV2` returns, so the next startup sweep requeues it AGAIN alongside the copy that already ran — a duplicate, not a ghost. Found during the OPS-01 review (#3220), deliberately left for its own item. Fix: check the error; on failure log at Error, record an `op_errors_v2` row the way `recordResumeResetFailure` does, and decide whether to delete the just-inserted row (compensating write) or leave a marker the sweep honours so it does not requeue twice. Add a `fakeStore` failure hook and a test the way `TestResume_RestartResetFailureDoesNotAnnounceQueued` does.
+- [x] **`resumeRequeue` ignores the error from marking the old row `interrupted_dropped`, which can yield a duplicate op on the next boot** — `internal/operations/registry/resume.go`, `resumeRequeue`. The requeue path inserts a fresh row (`InsertOperationV2`) and then flips the old row to `interrupted_dropped` with `UpdateOperationV2Status`, but discards that second write's error. If the insert succeeds and the status write fails (the same disk-pressure / compaction-stall shape OPS-01 guarded against in #3220), the old row stays in a status `ListResumableOperationsV2` returns, so the next startup sweep requeues it AGAIN alongside the copy that already ran — a duplicate, not a ghost. Found during the OPS-01 review (#3220), deliberately left for its own item. Fix: check the error; on failure log at Error, record an `op_errors_v2` row the way `recordResumeResetFailure` does, and decide whether to delete the just-inserted row (compensating write) or leave a marker the sweep honours so it does not requeue twice. Add a `fakeStore` failure hook and a test the way `TestResume_RestartResetFailureDoesNotAnnounceQueued` does.
 
 - [ ] **DUPROW-4** — Build a replay-from-journal tool for `book_file_delete`
       ledger rows. `maintenance.dedupe-book-file-rows` now writes the full
