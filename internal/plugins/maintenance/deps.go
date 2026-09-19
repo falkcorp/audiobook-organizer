@@ -93,6 +93,10 @@ type opsBookFileMutator interface {
 type opsBookFileDeleter interface {
 	DeleteBookFile(id string) error
 	DeleteBookFilesByIDs(ids []string) error
+	// CarryOverFingerprintWindows moves a row's fingerprint windows onto
+	// another row. Deleting a book_file row deletes its windows, so a row
+	// merge calls this for each donor BEFORE deleting it.
+	CarryOverFingerprintWindows(from, to database.FingerprintWindowRef) (int, error)
 }
 
 // opsBookFileMover reassigns book_file rows between books.

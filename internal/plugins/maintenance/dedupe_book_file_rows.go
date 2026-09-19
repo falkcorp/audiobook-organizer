@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -452,7 +452,31 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 				mu.Unlock()
 			}
 
-			// Salvage for this group is committed; its donors may now be queued.
+			// Move each donor's fingerprint windows onto the keeper BEFORE the
+			// donor is queued: DeleteBookFilesByIDs cascades a row's windows, so
+			// a donor deleted first takes its windows with it. The rows are the
+			// same file, so the windows describe the keeper too; the keeper's own
+			// window wins on a slot collision. A failed carry-over leaves the
+			// whole group intact, like a failed salvage — the next run retries.
+			carried := true
+			for ri := range redundant {
+				if _, cerr := store.CarryOverFingerprintWindows(
+					database.FileWindowRef(redundant[ri].ID), database.FileWindowRef(keeper.ID)); cerr != nil {
+					mu.Lock()
+					failed++
+					mu.Unlock()
+					log.Warn("dedupe-book-file-rows: could not carry fingerprint windows to the keeper; leaving this group intact",
+						"book_id", bookID, "keeper", keeper.ID, "donor", redundant[ri].ID, "err", cerr)
+					carried = false
+					break
+				}
+			}
+			if !carried {
+				continue
+			}
+
+			// Salvage and window carry-over for this group are committed; its
+			// donors may now be queued.
 			for ri := range redundant {
 				pendingDeletes = append(pendingDeletes, redundant[ri].ID)
 				pendingRows = append(pendingRows, redundant[ri])
