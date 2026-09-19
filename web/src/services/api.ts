@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.112.0
+// version: 2.113.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6375,6 +6375,8 @@ export interface ChapterGroup {
   status?: 'would_merge' | 'would_skip' | 'blocked' | 'drifted' | 'merged' | 'partial' | 'failed';
   /** Data a merge cannot carry; a group with any is never merged. */
   blockers?: string[];
+  /** Fields copied from the sources onto the primary's EMPTY fields (asin, narrator, series, author). */
+  metadata_fills?: string[];
   primary_title?: string;
   /** set = filename-derived title replaced; kept = curated title left alone. */
   title_action?: 'set' | 'kept' | 'kept_locked';

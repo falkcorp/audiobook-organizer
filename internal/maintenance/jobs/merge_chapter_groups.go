@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-09-19
 
@@ -89,8 +89,10 @@ func (j *mergeChapterGroupsJob) ValidateParams(raw json.RawMessage, dryRun bool)
 // written before the first write, iTunes library refused, external IDs and
 // every user's listening progress carried to the primary and journaled, files
 // stamped into chapter order, sources soft-deleted, reversible with
-// merge.Service.UndoCombine. What it cannot carry (bookmarks, playlist entries,
-// ratings, source-only metadata) blocks the group; see chapterGroupBlockers.
+// merge.Service.UndoCombine. Source-only ASIN/narrator/series/author is filled
+// onto the primary's EMPTY fields (journaled). What it cannot carry (bookmarks,
+// playlist entries, ratings, a metadata conflict between sources) blocks the
+// group; see chapterGroupBlockers.
 //
 // Groups are merged one at a time. They are disjoint by construction (a book is
 // in at most one reviewed group, which verification enforces), but
@@ -169,7 +171,7 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 			if gerr := merge.GuardITunesProtected(store, out.BookIDs); gerr != nil {
 				out.Status = "would_skip"
 				out.Errors = append(out.Errors, gerr.Error())
-			} else if out.Blockers = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
+			} else if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
 				out.Status = "blocked"
 			} else {
 				out.Status = "would_merge"
@@ -282,7 +284,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 	}
 	out.CommonTitle, out.Directory = g.CommonTitle, g.Directory
 	out.TotalDuration, out.FileCount = g.TotalDuration, g.FileCount
-	if out.Blockers = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
+	if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
 		out.Status = "blocked"
 		return
 	}
@@ -306,7 +308,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, ds dedup.St
 		}
 	}
 
-	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested, dedup.SplitMergeOptions{FileOrder: order})
+	mres, merr := dedup.MergeSplitBookClusterWithOptions(ds, sel.PrimaryBookID, out.SourceBookIDs, suggested, dedup.SplitMergeOptions{FileOrder: order, FillEmpty: true})
 	switch {
 	case merr != nil:
 		out.Status = "failed"
