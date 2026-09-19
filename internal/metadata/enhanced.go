@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-09-19
 
@@ -291,6 +291,13 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			return nil
 		}
 
+		// Author/series ID resolutions are buffered here and written to the
+		// metadata-history ledger only AFTER the book write lands. Recording
+		// them at resolution time produced a history row for a write that
+		// could still fail or find the book gone — the same shape as the
+		// phantom-repair ledger fixed in #3437.
+		var pendingIDs []*pendingIDChange
+
 		// Apply updates. book is the FULL hydrated row from GetBookByID (a
 		// direct book:<id> point-get + unmarshal, not a memdb-slim projection),
 		// so the merge below sees every field and not a slim projection.
@@ -316,10 +323,9 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 				slog.Warn("BatchUpdateMetadata: author resolution failed; leaving AuthorID unset (fail-open)",
 					"book", update.BookID, "author", name, "error", aerr)
 			case author != nil && (book.AuthorID == nil || *book.AuthorID != author.ID):
-				oldID := book.AuthorID
 				newID := author.ID
 				book.AuthorID = &newID
-				recordIDChange(store, update.BookID, "author_id", oldID, newID)
+				pendingIDs = append(pendingIDs, &pendingIDChange{field: "author_id", newID: newID})
 			}
 		}
 		// Resolve series name → book.SeriesID, scoped to the (possibly
@@ -336,10 +342,9 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 				slog.Warn("BatchUpdateMetadata: series resolution failed; leaving SeriesID unset (fail-open)",
 					"book", update.BookID, "series", name, "error", serr)
 			case series != nil && (book.SeriesID == nil || *book.SeriesID != series.ID):
-				oldID := book.SeriesID
 				newID := series.ID
 				book.SeriesID = &newID
-				recordIDChange(store, update.BookID, "series_id", oldID, newID)
+				pendingIDs = append(pendingIDs, &pendingIDChange{field: "series_id", newID: newID})
 			}
 		}
 		if format, ok := update.Updates["format"].(string); ok {
@@ -349,6 +354,18 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 		// Update in database: merge this worker's changes onto the stored row
 		// under the book's write stripe.
 		written, err := store.ModifyBook(update.BookID, func(cur *database.Book) error {
+			// Capture each ledger row's previous value from the row as it
+			// stands under the write stripe, not from this worker's snapshot.
+			// Another writer may have changed AuthorID/SeriesID since the read
+			// above, and the ledger has to name the value actually replaced.
+			for _, p := range pendingIDs {
+				switch p.field {
+				case "author_id":
+					p.prev = copyIntPtr(cur.AuthorID)
+				case "series_id":
+					p.prev = copyIntPtr(cur.SeriesID)
+				}
+			}
 			_, merr := database.MergeBookChanges(cur, before, book)
 			return merr
 		})
@@ -363,6 +380,15 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			errs = append(errs, fmt.Errorf("update %d: book %s no longer exists", i, update.BookID))
 			mu.Unlock()
 			return nil
+		}
+
+		// The write landed, so the ledger can now claim it. A resolution whose
+		// value was already on the stored row changed nothing and gets no row.
+		for _, p := range pendingIDs {
+			if p.prev != nil && *p.prev == p.newID {
+				continue
+			}
+			recordIDChange(store, update.BookID, p.field, p.prev, p.newID)
 		}
 
 		mu.Lock()
@@ -811,12 +837,41 @@ func writeFLACMetadata(filePath string, metadata map[string]any, config fileops.
 	return nil
 }
 
+// pendingIDChange is one author/series ID resolution waiting on its book write.
+//
+// BatchUpdateMetadata resolves names to IDs before it writes, so a resolution
+// is only a *proposed* change until ModifyBook succeeds. Buffering the ledger
+// row until then keeps the metadata history free of entries for writes that
+// errored or found the book deleted. prev is filled inside the ModifyBook
+// callback from the stored row, so the row names the value actually replaced
+// rather than the one this worker read before the write stripe was held.
+type pendingIDChange struct {
+	field string
+	newID int
+	prev  *int
+}
+
+// copyIntPtr returns a copy of *id, or nil. The pointers handed to the
+// ModifyBook callback belong to the store's row; keeping one past the callback
+// would alias memory the store owns.
+func copyIntPtr(id *int) *int {
+	if id == nil {
+		return nil
+	}
+	v := *id
+	return &v
+}
+
 // recordIDChange records a successful author/series ID resolution as a
 // MetadataChangeRecord (old → new) through the shipped metadata-history store,
 // so a mis-resolution (name collision → wrong existing author) is auditable and
 // reversible. Fail-open: a recording error is logged, never fatal. Previous/new
 // values are JSON-encoded to match the existing history writers in
 // internal/metafetch (nil previous → "null").
+//
+// Call this only AFTER the corresponding book write has landed. The ledger is
+// an audit trail: a row written before the write can outlive a write that never
+// happened, and then claims a change nobody can find in the data.
 //
 // The legacy enhanced.go history stub (MetadataHistory / RecordMetadataChange /
 // GetMetadataHistory) that used to live here was dead code shadowing this
