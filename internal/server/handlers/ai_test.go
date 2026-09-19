@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-08-23
+// last-edited: 2026-09-19
 
 package handlers_test
 
@@ -347,6 +347,18 @@ func TestAIHandler_ApplyScanResults_OK(t *testing.T) {
 	h.ApplyScanResults(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "applied")
+}
+
+// F5: applying from a superseded scan is refused with 409 and names the scan
+// that replaced it, instead of reporting a per-result error inside a 200.
+func TestAIHandler_ApplyScanResults_Superseded_409(t *testing.T) {
+	scanStore := handlersmocks.NewMockAIScanStore(t)
+	scanStore.EXPECT().MarkResultApplied(9, 1).Return(&database.ScanSupersededError{ScanID: 9, By: 12}).Once()
+	h := newAIHandler(nil, scanStore, nil, nil)
+	c, w := newAICtx(http.MethodPost, "/ai/scans/9/apply", `{"result_ids":[1,2]}`, gin.Params{{Key: "id", Value: "9"}})
+	h.ApplyScanResults(c)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "12")
 }
 
 func TestAIHandler_ApplyScanResults_InvalidID_400(t *testing.T) {

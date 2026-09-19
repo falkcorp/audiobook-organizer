@@ -1,5 +1,5 @@
 // file: internal/aiscan/external_results.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
 // last-edited: 2026-09-19
 
@@ -115,11 +115,9 @@ func supersedeUnreviewed(store *database.AIScanStore, scans []database.Scan, kee
 		if sc.ID == keepID || sc.Status != "complete" || !strings.HasPrefix(sc.OperationID, externalSourcePrefix) {
 			continue
 		}
-		rs, err := store.GetScanResults(sc.ID)
-		if err != nil || anyApplied(rs) {
-			continue
-		}
-		if err := store.UpdateScanStatus(sc.ID, "superseded"); err != nil {
+		// Checked and written under the store's apply lock, so an apply
+		// racing this cannot land in a scan that is then hidden.
+		if _, err := store.SupersedeIfUnapplied(sc.ID, keepID); err != nil {
 			plog.Warn("supersede external scan %d: %v", sc.ID, err)
 		}
 	}

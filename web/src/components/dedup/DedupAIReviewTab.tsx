@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-09-19
 import { useState, useEffect } from 'react';
@@ -104,7 +104,9 @@ function AIAuthorPipelinePage() {
     const scanId = args[0] as number;
     const detail = await api.getAIScan(scanId);
     setScan(detail);
-    if (detail.status === 'complete') {
+    // A superseded scan's results are still shown (read-only) so a reviewer
+    // can see what it held.
+    if (detail.status === 'complete' || detail.status === 'superseded') {
       const res = await api.getAIScanResults(scanId);
       setResults(res);
     }
@@ -225,8 +227,9 @@ function AIAuthorPipelinePage() {
       {/* Superseded scan message */}
       {scan && scan.status === 'superseded' && (
         <Alert severity="info" sx={{ mx: 2, mb: 2 }}>
-          Scan #{scan.id} was replaced by a newer nightly run before anything was applied from it.
-          Review the newest scan instead.
+          Scan #{scan.id} was superseded by scan #{scan.superseded_by ?? '?'} — a newer nightly run
+          — before anything was applied from it. Its results are shown read-only; apply from scan #
+          {scan.superseded_by ?? '?'} instead.
         </Alert>
       )}
 
@@ -266,7 +269,7 @@ function AIAuthorPipelinePage() {
       )}
 
       {/* Results */}
-      {scan?.status === 'complete' && results.length > 0 && (
+      {(scan?.status === 'complete' || scan?.status === 'superseded') && results.length > 0 && (
         <Box sx={{ px: 2 }}>
           {/* Filter Tabs */}
           <Tabs value={agreementFilter} onChange={(_, v) => setAgreementFilter(v)} sx={{ mb: 2 }}>
@@ -290,7 +293,7 @@ function AIAuthorPipelinePage() {
           </Tabs>
 
           {/* Floating Apply Bar */}
-          {selected.size > 0 && (
+          {selected.size > 0 && scan?.status !== 'superseded' && (
             <Paper
               elevation={4}
               sx={{
@@ -337,7 +340,7 @@ function AIAuthorPipelinePage() {
                   <Checkbox
                     checked={selected.has(result.id)}
                     onChange={() => toggleSelect(result.id)}
-                    disabled={result.applied}
+                    disabled={result.applied || scan?.status === 'superseded'}
                     size="small"
                   />
                   <Chip

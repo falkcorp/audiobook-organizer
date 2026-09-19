@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.4.0
+// version: 2.5.0
 // last-edited: 2026-09-19
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -39,6 +40,11 @@ type AIScanStore struct {
 	db     *pebble.DB
 	prefix string // "aiscan:" when shared, "" when standalone
 	owned  bool   // if false, Close and Optimize are no-ops
+	// applyMu makes "apply a result" and "supersede the scan" one decision
+	// each (MarkResultApplied, SupersedeIfUnapplied): without it a supersede
+	// could read "nothing applied", an apply land, and the scan then be hidden
+	// with an applied result in it.
+	applyMu sync.Mutex
 }
 
 // Scan represents a full pipeline run.
@@ -49,8 +55,11 @@ type Scan struct {
 	Models      map[string]string `json:"models"` // {groups: "gpt-5-mini", full: "o4-mini"}
 	AuthorCount int               `json:"author_count"`
 	OperationID string            `json:"operation_id,omitempty"` // links to main operations store for visibility/cancel
-	CreatedAt   time.Time         `json:"created_at"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	// SupersededBy is the scan that replaced this one when Status is
+	// "superseded".
+	SupersededBy int        `json:"superseded_by,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
 }
 
 // ScanPhase represents one phase of the pipeline.
@@ -374,6 +383,47 @@ func (s *AIScanStore) deletePrefix(batch *pebble.Batch, prefix []byte) error {
 	return nil
 }
 
+// ScanSupersededError is returned when applying a result from a superseded
+// scan. By names the newer scan the reviewer should apply from instead.
+type ScanSupersededError struct {
+	ScanID, By int
+}
+
+func (e *ScanSupersededError) Error() string {
+	return fmt.Sprintf("scan %d was superseded by scan %d; apply from scan %d instead", e.ScanID, e.By, e.By)
+}
+
+// SupersedeIfUnapplied marks scanID superseded by byID unless any of its
+// results has been applied, and reports whether it did. It holds applyMu, so
+// it cannot interleave with MarkResultApplied.
+func (s *AIScanStore) SupersedeIfUnapplied(scanID, byID int) (bool, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	rs, err := s.GetScanResults(scanID)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range rs {
+		if r.Applied {
+			return false, nil
+		}
+	}
+	scan, err := s.GetScan(scanID)
+	if err != nil || scan == nil {
+		return false, fmt.Errorf("read scan %d: %v", scanID, err)
+	}
+	scan.Status = "superseded"
+	scan.SupersededBy = byID
+	data, err := json.Marshal(scan)
+	if err != nil {
+		return false, fmt.Errorf("marshal scan: %w", err)
+	}
+	if err := s.db.Set(s.k("scan:%d", scanID), data, pebble.Sync); err != nil {
+		return false, fmt.Errorf("save scan: %w", err)
+	}
+	return true, nil
+}
+
 // SavePhaseArtifact durably records one named piece of a phase's in-flight
 // work. It exists so a restart can continue a phase instead of redoing it: a
 // realtime full_scan writes each finished chunk here the moment its LLM call
@@ -605,6 +655,13 @@ func (s *AIScanStore) GetScanResults(scanID int) ([]ScanResult, error) {
 
 // MarkResultApplied marks a scan result as applied with the current timestamp.
 func (s *AIScanStore) MarkResultApplied(scanID, resultID int) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	// Refuse applying from a superseded scan: its list was replaced by a
+	// newer run, and the reviewer should work from that one.
+	if scan, err := s.GetScan(scanID); err == nil && scan != nil && scan.Status == "superseded" {
+		return &ScanSupersededError{ScanID: scanID, By: scan.SupersededBy}
+	}
 	key := s.k("scan_result:%d:%06d", scanID, resultID)
 	value, closer, err := s.db.Get(key)
 	if err == pebble.ErrNotFound {
