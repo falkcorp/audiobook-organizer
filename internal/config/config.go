@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.120.0
+// version: 1.121.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-19
 
@@ -469,6 +469,10 @@ type ITunesConfig struct {
 // maintenance.MaxCompactDays (a test in that package pins the two together);
 // config cannot import the plugin package, so the value is repeated here.
 const MaxActivityLogFullDetailDays = 36500
+
+// MaxAIJournalRetentionDays bounds AIJournalRetentionDays (100 years), well
+// inside what a time.Duration of days can hold.
+const MaxAIJournalRetentionDays = 36500
 
 // MaintenanceConfig holds settings for the nightly maintenance window.
 type MaintenanceConfig struct {
@@ -1316,6 +1320,13 @@ type Config struct {
 	// cutoff back N local calendar days. Bounded by
 	// MaxActivityLogFullDetailDays.
 	ActivityLogFullDetailDays int `json:"activity_log_full_detail_days"`
+	// AIJournalRetentionDays is how long a whisper transcript stays in the AI
+	// result journal (internal/ai/resultjournal) before the nightly
+	// ai_journal_prune task (maintenance.prune-ai-journal) deletes it. The
+	// journal only has to carry a result across a restart or re-run; the
+	// transcript itself is stored on the book row. Default 30; 0 keeps entries
+	// forever (the task does not run). Bounded by MaxAIJournalRetentionDays.
+	AIJournalRetentionDays int `json:"ai_journal_retention_days"`
 
 	// Embedding holds configuration for the embedding pipeline (model, provider, vector backend).
 	Embedding EmbeddingConfig `json:"embedding" mapstructure:"embedding"`
@@ -2214,6 +2225,7 @@ func InitConfig() {
 	viper.SetDefault("log_retention_days", 90)
 	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
 	viper.SetDefault("activity_log_full_detail_days", 0)
+	viper.SetDefault("ai_journal_retention_days", 30)
 
 	// API security/runtime limits
 	viper.SetDefault("api_rate_limit_per_minute", 100)
@@ -2723,6 +2735,7 @@ func InitConfig() {
 			EnableAuth:                          viper.GetBool("enable_auth"),
 			ActivityLogNightlyCompactionEnabled: viper.GetBool("activity_log_nightly_compaction_enabled"),
 			ActivityLogFullDetailDays:           viper.GetInt("activity_log_full_detail_days"),
+			AIJournalRetentionDays:              viper.GetInt("ai_journal_retention_days"),
 			EnableRateLimit:                     viper.GetBool("enable_rate_limit"),
 			ReviewApplyEnabled:                  viper.GetBool("review_apply_enabled"),
 			BulkApplyMaxItems:                   viper.GetInt("bulk_apply_max_items"),
@@ -3337,6 +3350,10 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("activity_log_full_detail_days must be a whole number of days between 0 and %d",
 			MaxActivityLogFullDetailDays))
 	}
+	if c.AIJournalRetentionDays < 0 || c.AIJournalRetentionDays > MaxAIJournalRetentionDays {
+		errs = append(errs, fmt.Sprintf("ai_journal_retention_days must be a whole number of days between 0 and %d (0 keeps entries forever)",
+			MaxAIJournalRetentionDays))
+	}
 
 	validStrategies := map[string]struct{}{
 		"auto": {}, "copy": {}, "hardlink": {}, "reflink": {}, "symlink": {},
@@ -3475,6 +3492,7 @@ func ResetToDefaults() {
 			ActivityLogCompactionDays:           14,
 			ActivityLogNightlyCompactionEnabled: true,
 			ActivityLogFullDetailDays:           0,
+			AIJournalRetentionDays:              30,
 
 			// Embedding pipeline
 			Embedding: EmbeddingConfig{

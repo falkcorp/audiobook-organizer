@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -171,6 +171,7 @@ func (d fakeDeps) HasAIParsing() bool                        { return false }
 func (d fakeDeps) HasBatchPoller() bool                      { return false }
 func (d fakeDeps) RootDir() string                           { return "/lib" }
 func (d fakeDeps) LogRetentionDays() int                     { return 30 }
+func (d fakeDeps) AIJournalRetentionDays() int               { return 30 }
 func (d fakeDeps) PurgeSoftDeletedAfterDays() int            { return 30 }
 func (d fakeDeps) ActivityLogCompactionDays() int            { return 7 }
 func (d fakeDeps) ActivityLogNightlyCompactionEnabled() bool { return false }
