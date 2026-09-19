@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.58.0
+// version: 2.59.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package server
 
@@ -771,6 +771,10 @@ func NewServer(store database.Store) *Server {
 		if rel, ok := tools.LatestRelease("fpcalc"); ok {
 			server.toolRegistry.Register(tools.ToolDef{Name: "fpcalc", Release: rel})
 		}
+		// ffmpeg has no managed release; registering it lets the registry
+		// resolve it (system mode, PATH) for fingerprint.ResolveWindowTools,
+		// and lists it in /tools status alongside fpcalc.
+		server.toolRegistry.Register(tools.ToolDef{Name: "ffmpeg"})
 
 		// Wire fingerprint package so fpcalc resolves via the registry.
 		if fpcalcPath, err := server.toolRegistry.Resolve("fpcalc"); err == nil {

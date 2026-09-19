@@ -1,7 +1,7 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.4.2
+// version: 3.5.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Package fingerprint generates AcoustID-compatible acoustic fingerprints for
 // audio files. It supports two backends:
@@ -218,95 +218,76 @@ func FileSegments(path string, durationHint int) (*Segments, error) {
 // fingerprintAt generates a fingerprint string for SegmentSeconds of audio
 // starting at the given offset (in seconds). It prefers fpcalc (resolved via
 // ToolRegistry injection or PATH), falling back to ffmpeg -f chromaprint.
+//
+// With fpcalc, offset 0 is fpcalc reading the file directly (fpcalc's
+// compressed base64 output, the same form every stored head print has), and
+// offset > 0 is the window pipeline (ffmpeg PCM cut -> fpcalc -raw), returned
+// as EncodeWholeFingerprint of the raw frames. The old fpcalcAt offset path
+// was deleted on 2026-09-19: it gave headerless PCM to fpcalc with no
+// -format/-rate/-channels, decoded `-raw -json`'s integer array into a string
+// field (so every offset > 0 segment failed and was silently left empty), and
+// discarded ffmpeg's exit status and stderr.
 func fingerprintAt(path string, offset float64) (string, error) {
-	if fpcalc, err := lookupFpcalc(); err == nil {
-		return fpcalcAt(fpcalc, path, offset)
+	fpcalc, err := lookupFpcalc()
+	if err != nil {
+		return ffmpegChromaprintAt(path, offset)
 	}
-	return ffmpegChromaprintAt(path, offset)
+	if offset <= 0 {
+		return fpcalcHead(fpcalc, path)
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return "", fmt.Errorf("segment at %.2f needs ffmpeg: %w", offset, err)
+	}
+	return fpcalcSegmentAt(fpcalc, ffmpeg, path, offset)
 }
 
-// fpcalcAt runs fpcalc on the given file at the given offset.
-// When offset > 0, it pipes PCM audio from ffmpeg into fpcalc -raw.
-func fpcalcAt(fpcalc, path string, offset float64) (string, error) {
-	if offset <= 0 {
-		// Simple case: let fpcalc read the file directly.
-		var stdout, stderr bytes.Buffer
-		cmd := exec.Command(fpcalc, "-json", "-length", fmt.Sprintf("%d", SegmentSeconds), path)
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			msg := strings.TrimSpace(stderr.String())
-			if msg == "" {
-				msg = err.Error()
-			}
-			return "", fmt.Errorf("fpcalc %s: %s", path, msg)
-		}
-		var r Result
-		if err := json.NewDecoder(&stdout).Decode(&r); err != nil {
-			return "", fmt.Errorf("fpcalc parse %s: %w", path, err)
-		}
-		if r.Fingerprint == "" {
-			return "", fmt.Errorf("fpcalc returned empty fingerprint for %s", path)
-		}
-		return r.Fingerprint, nil
-	}
+// segmentTimeout bounds one legacy SegmentSeconds (300 s) segment.
+const segmentTimeout = 2 * DefaultWindowTimeout
 
-	// Offset > 0: pipe PCM from ffmpeg into fpcalc -raw.
-	// ffmpeg decodes `SegmentSeconds` seconds starting at `offset` to raw s16le/44100/1
-	// which fpcalc can consume via stdin.
-	ffmpegArgs := []string{
-		"-ss", fmt.Sprintf("%.2f", offset),
-		"-i", path,
-		"-t", fmt.Sprintf("%d", SegmentSeconds),
-		"-f", "s16le",
-		"-ac", "1",
-		"-ar", "44100",
-		"pipe:1",
-	}
-
-	ffmpegCmd := exec.Command("ffmpeg", ffmpegArgs...)
-	fpcalcCmd := exec.Command(fpcalc, "-raw", "-json", "-length", fmt.Sprintf("%d", SegmentSeconds), "-")
-
-	// Wire stdout of ffmpeg → stdin of fpcalc.
-	pipe, err := ffmpegCmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("fpcalcAt: pipe: %w", err)
-	}
-	fpcalcCmd.Stdin = pipe
-
-	var fpcalcOut, fpcalcErr bytes.Buffer
-	fpcalcCmd.Stdout = &fpcalcOut
-	fpcalcCmd.Stderr = &fpcalcErr
-
-	// Suppress ffmpeg's stderr noise.
-	ffmpegCmd.Stderr = nil
-
-	if err := ffmpegCmd.Start(); err != nil {
-		return "", fmt.Errorf("fpcalcAt: ffmpeg start: %w", err)
-	}
-	if err := fpcalcCmd.Start(); err != nil {
-		_ = ffmpegCmd.Process.Kill()
-		return "", fmt.Errorf("fpcalcAt: fpcalc start: %w", err)
-	}
-
-	// Wait for ffmpeg first, then fpcalc.
-	_ = ffmpegCmd.Wait()
-	if err := fpcalcCmd.Wait(); err != nil {
-		msg := strings.TrimSpace(fpcalcErr.String())
+// fpcalcHead runs fpcalc on the file directly for the first SegmentSeconds.
+func fpcalcHead(fpcalc, path string) (string, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(fpcalc, "-json", "-length", fmt.Sprintf("%d", SegmentSeconds), path)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("fpcalcAt: fpcalc: %s", msg)
+		return "", fmt.Errorf("fpcalc %s: %s", path, msg)
 	}
-
 	var r Result
-	if err := json.NewDecoder(&fpcalcOut).Decode(&r); err != nil {
-		return "", fmt.Errorf("fpcalcAt: parse: %w", err)
+	if err := json.NewDecoder(&stdout).Decode(&r); err != nil {
+		return "", fmt.Errorf("fpcalc parse %s: %w", path, err)
 	}
 	if r.Fingerprint == "" {
-		return "", fmt.Errorf("fpcalcAt: empty fingerprint at offset %.2f", offset)
+		return "", fmt.Errorf("fpcalc returned empty fingerprint for %s", path)
 	}
 	return r.Fingerprint, nil
+}
+
+// fpcalcSegmentAt fingerprints SegmentSeconds from offset through the window
+// pipeline. Unlike FileWindow it accepts a segment that decodes short (the
+// last segments of a file shorter than their offsets assume); callers already
+// drop degenerate prints through NormalizeForStorage.
+func fpcalcSegmentAt(fpcalc, ffmpeg, path string, offset float64) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), segmentTimeout)
+	defer cancel()
+	frames, _, err := runWindowPipe(ctx, ffmpeg, fpcalc,
+		windowFFmpegArgs(path, offset, SegmentSeconds), windowFpcalcArgs(SegmentSeconds))
+	if err != nil {
+		return "", fmt.Errorf("segment %s@%.2f: %w", path, offset, err)
+	}
+	if len(frames) == 0 {
+		return "", fmt.Errorf("segment %s@%.2f: empty fingerprint", path, offset)
+	}
+	raw := make([]byte, len(frames)*4)
+	for i, f := range frames {
+		binary.LittleEndian.PutUint32(raw[i*4:], f)
+	}
+	return EncodeWholeFingerprint(raw), nil
 }
 
 // ffmpegChromaprintAt runs ffmpeg with the chromaprint muxer to produce a
