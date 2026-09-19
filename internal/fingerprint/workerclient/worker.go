@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
 // last-edited: 2026-09-19
 
@@ -269,10 +269,23 @@ func (w *worker) sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // helloWithRetry waits for a live window-backfill (503) with backoff; nil
-// hello with nil error means a drain arrived first.
+// hello with nil error means a drain arrived first. It also waits, with the
+// same backoff, while the server answers reference_pending (a remote-only
+// run whose reference windows do not exist yet, or whose bootstrap another
+// worker holds): that is "not yet", not a refusal.
 func (w *worker) helloWithRetry(ctx context.Context) (*workerapi.HelloResponse, error) {
+	req := workerapi.HelloRequest{WorkerID: w.cfg.WorkerID, FpcalcVersion: w.cfg.Versions.Fpcalc, FFmpegVersion: w.cfg.Versions.FFmpeg}
 	for attempt := 0; ; attempt++ {
-		h, st, err := w.api.hello(ctx)
+		h, st, err := w.api.hello(ctx, req)
+		if err == nil && h != nil && h.ReferencePending {
+			d := w.backoff(attempt)
+			log.Info("hello: the server has no reference windows this worker can be calibrated against yet (%s); retrying in %s",
+				h.Waiting, d.Round(time.Second))
+			if !w.sleep(ctx, d) {
+				return nil, ctx.Err()
+			}
+			continue
+		}
 		if err == nil && h != nil {
 			return h, nil
 		}

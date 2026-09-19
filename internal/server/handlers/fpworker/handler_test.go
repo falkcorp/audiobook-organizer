@@ -1,5 +1,5 @@
 // file: internal/server/handlers/fpworker/handler_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1cf62cc0-1b49-43dd-a9f1-317ac56e7aa0
 // last-edited: 2026-09-19
 
@@ -34,7 +34,7 @@ type fakeHub struct {
 	results atomic.Int64
 }
 
-func (f *fakeHub) Hello(context.Context) (*workerapi.HelloResponse, error) {
+func (f *fakeHub) Hello(context.Context, workerapi.HelloRequest) (*workerapi.HelloResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

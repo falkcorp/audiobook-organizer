@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
 // last-edited: 2026-09-19
 
@@ -10,10 +10,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -78,6 +81,24 @@ func refResult(h *hubEnv, job workerapi.Job, seed uint32) workerapi.JobResult {
 	return res
 }
 
+// refHello is a hello from worker running refPair.
+func refHello(worker string) workerapi.HelloRequest {
+	return workerapi.HelloRequest{WorkerID: worker, FpcalcVersion: refPair.Fpcalc, FFmpegVersion: refPair.FFmpeg}
+}
+
+// helloUntilReady calls hello as worker until it is not pending (a bootstrap
+// or a normal calibration), as fp-worker does.
+func helloUntilReady(ctx context.Context, hub *WorkerHub, worker string) *workerapi.HelloResponse {
+	for ctx.Err() == nil {
+		resp, err := hub.Hello(ctx, refHello(worker))
+		if err == nil && !resp.ReferencePending {
+			return resp
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return nil
+}
+
 func refLeaseReq(worker string, n int) workerapi.LeaseRequest {
 	return workerapi.LeaseRequest{WorkerID: worker, MaxJobs: n, Pipeline: fingerprint.WindowPipelineID,
 		FpcalcVersion: refPair.Fpcalc, FFmpegVersion: refPair.FFmpeg}
@@ -86,6 +107,7 @@ func refLeaseReq(worker string, n int) workerapi.LeaseRequest {
 // fakeRefWorker leases with refPair until ctx ends and answers every job
 // with decide(job).
 func fakeRefWorker(ctx context.Context, hub *WorkerHub, decide func(workerapi.Job) workerapi.JobResult) {
+	helloUntilReady(ctx, hub, "mac1")
 	for ctx.Err() == nil {
 		resp, err := hub.Lease(ctx, refLeaseReq("mac1", 4))
 		if err != nil || resp == nil {
@@ -113,7 +135,7 @@ func attachRemoteOnlyHub(t *testing.T, e *wbEnv) *hubEnv {
 	h := &hubEnv{wbEnv: e, hub: e.plugin.WorkerHub(), clock: &testClock{}, tally: &windowTally{}, items: items}
 	h.hub.now = h.clock.now
 	h.hub.attach(context.Background(), e.plugin, fingerprint.WindowTools{Versions: refPair}, h.tally, plan.calibration,
-		hubMode{remoteOnly: true, identity: plan.identity})
+		hubMode{remoteOnly: true, identity: plan.identity, refExists: plan.exactCurrent})
 	t.Cleanup(h.hub.detach)
 	h.hub.beginTier(windowTierPresent, items)
 	return h
@@ -290,8 +312,9 @@ func TestWindowBackfill_RemoteOnly_ReferencePairIsTheClassNotTheServerPair(t *te
 	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
 	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
 	e.addFile("", "lib/a.m4b", true, 3600)
-	// A normal run cuts the file with the server's own tools.
-	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	// A normal run cuts the file with the server's own tools (deliberately:
+	// a reference pair is configured).
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, res.written)
 	calls := noLocalTools(e)
@@ -308,7 +331,7 @@ func TestWindowBackfill_RemoteOnly_ReferencePairIsTheClassNotTheServerPair(t *te
 	require.Len(t, res.plan.tiers[windowTierPresent], 1)
 
 	h := attachRemoteOnlyHub(t, e)
-	hello, err := h.hub.Hello(context.Background())
+	hello, err := h.hub.Hello(context.Background(), workerapi.HelloRequest{})
 	require.NoError(t, err)
 	require.NotContains(t, hello.ToolVersions, workerapi.ToolVersions{Fpcalc: e.tools.Versions.Fpcalc, FFmpeg: e.tools.Versions.FFmpeg})
 	_, err = h.hub.Lease(context.Background(), h.leaseReq("srv", 1))
@@ -317,6 +340,9 @@ func TestWindowBackfill_RemoteOnly_ReferencePairIsTheClassNotTheServerPair(t *te
 	req.FpcalcVersion, req.FFmpegVersion = allow.Fpcalc, allow.FFmpeg
 	_, err = h.hub.Lease(context.Background(), req)
 	require.ErrorIs(t, err, ErrToolsNotAllowed, "no reference windows yet: an allowlisted pair has nothing to be parity-checked against")
+	boot, err := h.hub.Hello(context.Background(), refHello("ref"))
+	require.NoError(t, err)
+	require.True(t, boot.Bootstrap)
 	resp, err := h.hub.Lease(context.Background(), refLeaseReq("ref", 1))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -335,14 +361,14 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
 	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
 	e.addFileWith("", "lib/srv.m4b", fakeAudio(3600, 70<<10), 3600)
-	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true}) // server-pair windows
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true}) // server-pair windows
 	require.NoError(t, err)
 	e.addFileWith("", "lib/a.m4b", fakeAudio(3600, 70<<10), 3600)
 	e.addFileWith("", "lib/b.m4b", fakeAudio(3600, 70<<10), 3600)
 	noLocalTools(e)
 	h := attachRemoteOnlyHub(t, e)
 
-	hello, err := h.hub.Hello(context.Background())
+	hello, err := h.hub.Hello(context.Background(), refHello("mac1"))
 	require.NoError(t, err)
 	require.True(t, hello.Bootstrap)
 	require.Equal(t, &workerapi.ToolVersions{Fpcalc: refPair.Fpcalc, FFmpeg: refPair.FFmpeg}, hello.ReferenceTools)
@@ -370,9 +396,10 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 	st := h.post("mac1", refResult(h, resp.Jobs[0], 3))
 	require.Equal(t, workerapi.StatusAccepted, st[0].Status, st[0].Reason)
 
-	hello, err = h.hub.Hello(context.Background())
+	hello, err = h.hub.Hello(context.Background(), refHello("mac2"))
 	require.NoError(t, err)
 	require.False(t, hello.Bootstrap, "reference windows exist now: the byte-parity gate applies")
+	require.False(t, hello.ReferencePending)
 	require.Len(t, hello.Calibration, 1)
 	cal := hello.Calibration[0]
 	require.Equal(t, resp.Jobs[0].RelB64, cal.RelB64)
@@ -386,4 +413,363 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 	req.FpcalcVersion, req.FFmpegVersion = allow.Fpcalc, allow.FFmpeg
 	_, err = h.hub.Lease(context.Background(), req)
 	require.NoError(t, err, "with reference windows offered, an allowlisted pair may lease after its parity gate")
+}
+
+// ---- review round 1 ----
+
+// hbReporter counts the remote-only heartbeat's progress reports.
+type hbReporter struct {
+	*wbReporter
+	beats atomic.Int64
+}
+
+func (r *hbReporter) UpdateProgress(_, _ int, msg string) error {
+	if strings.Contains(msg, "heartbeat") {
+		r.beats.Add(1)
+	}
+	return nil
+}
+
+// TestWindowBackfill_RemoteOnly_HeartbeatWhileAHeadLeaseIsStuck: worker A
+// leases the head of the tier and crashes, so every RunItems waiter sits on
+// its items while worker B keeps finishing later ones. The op must keep
+// reporting progress on a fixed period (the watchdog kills a silent op), and
+// it must survive until A's lease expires and B finishes A's files.
+func TestWindowBackfill_RemoteOnly_HeartbeatWhileAHeadLeaseIsStuck(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	const n = 120
+	for i := range n {
+		e.addFile("", fmt.Sprintf("lib/f%03d.m4b", i), true, 3600)
+	}
+	prevSweep, prevPoll := hubSweepEvery, windowDrainPoll
+	hubSweepEvery, windowDrainPoll = 5*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { hubSweepEvery, windowDrainPoll = prevSweep, prevPoll })
+	clock := &testClock{}
+	hub := e.plugin.WorkerHub()
+	hub.now = clock.now
+	h := &hubEnv{wbEnv: e, hub: hub, clock: clock}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rep := &hbReporter{wbReporter: &wbReporter{}}
+	var beatsWhileStuck atomic.Int64
+	go func() {
+		// A: claim the bootstrap, lease the 8 head files, write only the
+		// last (so reference windows exist), then crash holding 7.
+		if helloUntilReady(ctx, hub, "A") == nil {
+			return
+		}
+		var resp *workerapi.LeaseResponse
+		for ctx.Err() == nil && resp == nil {
+			resp, _ = hub.Lease(ctx, refLeaseReq("A", 8))
+		}
+		if resp == nil {
+			return
+		}
+		last := resp.Jobs[len(resp.Jobs)-1]
+		_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "A", Results: []workerapi.JobResult{refResult(h, last, 1)}})
+		// B works through everything else, one file every 2 ms.
+		helloUntilReady(ctx, hub, "B")
+		start := rep.beats.Load()
+		for ctx.Err() == nil {
+			r, err := hub.Lease(ctx, refLeaseReq("B", 1))
+			if err != nil || r == nil {
+				break // only A's stuck files are left
+			}
+			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "B", Results: []workerapi.JobResult{refResult(h, r.Jobs[0], 2)}})
+			time.Sleep(2 * time.Millisecond)
+		}
+		beatsWhileStuck.Store(rep.beats.Load() - start)
+		// A's lease expires; the sweep hands its files back and B does them.
+		clock.advance(workerapi.LeaseTTL + time.Second)
+		for ctx.Err() == nil {
+			r, err := hub.Lease(ctx, refLeaseReq("B", 4))
+			if err != nil || r == nil {
+				time.Sleep(2 * time.Millisecond)
+				continue
+			}
+			var rs []workerapi.JobResult
+			for _, j := range r.Jobs {
+				rs = append(rs, refResult(h, j, 3))
+			}
+			_, _ = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "B", Results: rs})
+		}
+	}()
+	res, err := e.plugin.windowBackfill(ctx, rep, WindowBackfillParams{Live: true, RemoteOnly: true, Concurrency: 4})
+	cancel()
+	require.NoError(t, err)
+	require.EqualValues(t, n, res.written)
+	require.GreaterOrEqual(t, beatsWhileStuck.Load(), int64(5),
+		"no fixed-period heartbeat while every waiter sat on a crashed worker's lease")
+}
+
+// TestWorkerHub_RemoteOnly_OneBootstrapClaimAtATime: two reference-pair
+// workers hello at once with no reference windows; exactly one gets the
+// bootstrap, the other (and any non-reference pair) is told to wait and may
+// not lease. A claimant that goes silent loses the claim after the lease TTL.
+func TestWorkerHub_RemoteOnly_OneBootstrapClaimAtATime(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	for i := range 3 {
+		e.addFileWith("", fmt.Sprintf("lib/b%d.m4b", i), fakeAudio(3600, 70<<10), 3600)
+	}
+	h := attachRemoteOnlyHub(t, e)
+	var wg sync.WaitGroup
+	got := make([]*workerapi.HelloResponse, 2)
+	for i, id := range []string{"llm1", "mac1"} {
+		wg.Go(func() {
+			r, err := h.hub.Hello(context.Background(), refHello(id))
+			require.NoError(t, err)
+			got[i] = r
+		})
+	}
+	wg.Wait()
+	require.NotEqual(t, got[0].Bootstrap, got[1].Bootstrap, "exactly one worker may bootstrap")
+	claimant, other := "llm1", "mac1"
+	if got[1].Bootstrap {
+		claimant, other = "mac1", "llm1"
+		got[0], got[1] = got[1], got[0]
+	}
+	require.NotEmpty(t, got[0].Calibration)
+	require.True(t, got[1].ReferencePending)
+	require.Empty(t, got[1].Calibration)
+	require.NotEmpty(t, got[1].Waiting)
+
+	nonRef := workerapi.HelloRequest{WorkerID: "x", FpcalcVersion: "1.6.1", FFmpegVersion: "9.0.1"}
+	r, err := h.hub.Hello(context.Background(), nonRef)
+	require.NoError(t, err)
+	require.True(t, r.ReferencePending)
+	require.False(t, r.Bootstrap)
+
+	_, err = h.hub.Lease(context.Background(), refLeaseReq(other, 1))
+	require.ErrorIs(t, err, ErrToolsNotAllowed, "only the claimant may lease during the bootstrap")
+	resp, err := h.hub.Lease(context.Background(), refLeaseReq(claimant, 1))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	// The claimant vanishes: after the TTL the claim is released.
+	h.clock.advance(workerapi.LeaseTTL + time.Second)
+	r, err = h.hub.Hello(context.Background(), refHello(other))
+	require.NoError(t, err)
+	require.True(t, r.Bootstrap, "a lapsed claim must pass to the next reference-pair worker")
+	_, err = h.hub.Lease(context.Background(), refLeaseReq(claimant, 1))
+	require.ErrorIs(t, err, ErrToolsNotAllowed, "the lapsed claimant may not lease without reference windows")
+}
+
+// TestWorkerHub_RemoteOnly_ExistingReferenceWindowsNeverBootstrapAgain: a
+// later run over a store that already has reference-pair windows picks its
+// calibration by the EXACT reference pair (not by equivalence), and never
+// bootstraps again, even while no reference file happens to be readable.
+func TestWorkerHub_RemoteOnly_ExistingReferenceWindowsNeverBootstrapAgain(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
+	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
+	var allowIDs []string
+	for i := range 5 {
+		_, id := e.addFileWith("", fmt.Sprintf("lib/allow%d.m4b", i), fakeAudio(3600, 70<<10), 3600)
+		allowIDs = append(allowIDs, id)
+	}
+	_, refID := e.addFileWith("", "lib/ref.m4b", fakeAudio(3600, 70<<10), 3600)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true})
+	require.NoError(t, err)
+	restamp := func(id string, v fingerprint.ToolVersionInfo) {
+		ws := e.windows(id)
+		for i := range ws {
+			ws[i].FpcalcVersion, ws[i].FFmpegVersion, ws[i].Host = v.Fpcalc, v.FFmpeg, "fp-worker:mac1"
+		}
+		require.NoError(t, e.store.ReplaceFingerprintWindows(database.FileWindowRef(id), ws))
+	}
+	for _, id := range allowIDs {
+		restamp(id, allow)
+	}
+	restamp(refID, refPair)
+	fingerprint.SetToolEquivalence(refPair, []fingerprint.ToolVersionInfo{allow})
+
+	plan, err := e.plugin.planWindowBackfill(context.Background(), &wbReporter{}, &refPair)
+	require.NoError(t, err)
+	require.Equal(t, 6, plan.current[windowTierPresent], "allowlisted windows are current by equivalence")
+	require.True(t, plan.exactCurrent)
+	require.Len(t, plan.calibration, 1, "only exact-reference-pair files may be calibration candidates")
+	require.Equal(t, refID, plan.calibration[0].FileID)
+
+	h := attachRemoteOnlyHub(t, e)
+	refPath := filepath.Join(e.lib, "lib/ref.m4b")
+	fi, err := os.Stat(refPath)
+	require.NoError(t, err)
+	// The one reference file is unreadable as planned right now.
+	require.NoError(t, os.Chtimes(refPath, fi.ModTime(), fi.ModTime().Add(time.Hour)))
+	r, err := h.hub.Hello(context.Background(), refHello("mac1"))
+	require.NoError(t, err)
+	require.False(t, r.Bootstrap, "reference windows exist in the store: never bootstrap again")
+	require.True(t, r.ReferencePending)
+	require.NoError(t, os.Chtimes(refPath, fi.ModTime(), fi.ModTime()))
+	r, err = h.hub.Hello(context.Background(), refHello("mac2"))
+	require.NoError(t, err)
+	require.False(t, r.Bootstrap)
+	require.False(t, r.ReferencePending)
+	require.Len(t, r.Calibration, 1)
+	require.NotEmpty(t, r.Calibration[0].Windows, "the next worker must pass byte parity")
+	for _, w := range r.Calibration[0].Windows {
+		require.Equal(t, workerapi.ToolVersions{Fpcalc: refPair.Fpcalc, FFmpeg: refPair.FFmpeg}, w.ToolVersions)
+	}
+}
+
+// TestWindowBackfill_ReferenceConfiguredRefusesServerDecode: with a reference
+// pair configured, a live run without remote_only would re-cut the library
+// on the server; it is refused unless allow_server_decode says otherwise.
+func TestWindowBackfill_ReferenceConfiguredRefusesServerDecode(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	_, id := e.addFile("", "lib/a.m4b", true, 3600)
+	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
+	require.ErrorContains(t, err, "allow_server_decode")
+	require.Empty(t, e.invoked(), "refused before anything was cut")
+	res, err := e.run(context.Background(), nil, WindowBackfillParams{})
+	require.NoError(t, err, "a dry run decodes nothing and is allowed")
+	require.Zero(t, res.written)
+	res, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, res.written)
+	require.NotEmpty(t, e.windows(id))
+}
+
+// startRemoteOnlyRun runs a remote-only live backfill in the background with
+// the hub on clock and a fast heartbeat, and waits until the hub is attached.
+func startRemoteOnlyRun(t *testing.T, e *wbEnv, clock *testClock, p WindowBackfillParams) (context.Context, chan error) {
+	t.Helper()
+	prevPoll := windowDrainPoll
+	windowDrainPoll = 5 * time.Millisecond
+	t.Cleanup(func() { windowDrainPoll = prevPoll })
+	hub := e.plugin.WorkerHub()
+	hub.now = clock.now
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.run(ctx, nil, p)
+		done <- err
+	}()
+	for {
+		if _, err := hub.liveRun(); err == nil {
+			hub.mu.Lock()
+			ready := len(hub.run.st) > 0
+			hub.mu.Unlock()
+			if ready {
+				return ctx, done
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestWindowBackfill_RemoteOnly_NoWorkerGraceFailsFast: with no worker ever
+// calling, the run ends with a clear error after the grace instead of holding
+// acoustid.fingerprint for 72 h.
+func TestWindowBackfill_RemoteOnly_NoWorkerGraceFailsFast(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	e.addFile("", "lib/a.m4b", true, 3600)
+	clock := &testClock{}
+	_, done := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60})
+	clock.advance(61 * time.Second)
+	err := <-done
+	require.ErrorIs(t, err, errNoRemoteWorkers)
+	require.ErrorContains(t, err, "no fp-worker called the worker API")
+}
+
+// TestWindowBackfill_RemoteOnly_WorkerGapShorterThanTTLDoesNotFail: once a
+// worker has made contact, a silence longer than the grace but shorter than
+// the lease TTL plus the margin must not end the run.
+func TestWindowBackfill_RemoteOnly_WorkerGapShorterThanTTLDoesNotFail(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	noLocalTools(e)
+	e.addFile("", "lib/a.m4b", true, 3600)
+	e.addFile("", "lib/b.m4b", true, 3600)
+	clock := &testClock{}
+	ctx, done := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60})
+	hub := e.plugin.WorkerHub()
+	h := &hubEnv{wbEnv: e, hub: hub, clock: clock}
+	one := func() {
+		t.Helper()
+		resp, err := hub.Lease(ctx, refLeaseReq("mac1", 1))
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		_, err = hub.Results(ctx, workerapi.ResultsRequest{WorkerID: "mac1", Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}})
+		require.NoError(t, err)
+	}
+	require.NotNil(t, helloUntilReady(ctx, hub, "mac1"))
+	one()
+	// Nothing leased; the worker is quiet for 9 min (> grace, < TTL+margin).
+	clock.advance(9 * time.Minute)
+	time.Sleep(100 * time.Millisecond) // ~20 heartbeats
+	select {
+	case err := <-done:
+		t.Fatalf("run ended during a worker gap shorter than the lease TTL: %v", err)
+	default:
+	}
+	one()
+	require.NoError(t, <-done)
+}
+
+// TestWorkerHub_RemoteOnly_SlowHelloDoesNotStallResults: a bootstrap hello
+// reading its calibration files over a slow mount must not hold any lock the
+// lease and results paths need.
+func TestWorkerHub_RemoteOnly_SlowHelloDoesNotStallResults(t *testing.T) {
+	e := newWBEnv(t)
+	withRootDir(t, e.lib)
+	withRemoteOnly(t)
+	e.addFileWith("", "lib/a.m4b", fakeAudio(3600, 70<<10), 3600)
+	e.addFileWith("", "lib/b.m4b", fakeAudio(3600, 70<<10), 3600)
+	h := attachRemoteOnlyHub(t, e)
+	gate := make(chan struct{})
+	var release sync.Once
+	entered := make(chan struct{}, 1)
+	prev := calibHeadSHA256
+	calibHeadSHA256 = func(p string) (string, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-gate
+		return prev(p)
+	}
+	t.Cleanup(func() {
+		release.Do(func() { close(gate) })
+		calibHeadSHA256 = prev
+	})
+	go func() { _, _ = h.hub.Hello(context.Background(), refHello("mac1")) }()
+	<-entered // the hello is now stuck reading a calibration file
+
+	done := make(chan error, 1)
+	go func() {
+		resp, err := h.hub.Lease(context.Background(), refLeaseReq("mac1", 1))
+		if err != nil || resp == nil {
+			done <- fmt.Errorf("lease: %v", err)
+			return
+		}
+		st, err := h.hub.Results(context.Background(), workerapi.ResultsRequest{WorkerID: "mac1",
+			Results: []workerapi.JobResult{refResult(h, resp.Jobs[0], 1)}})
+		if err == nil && st.Statuses[0].Status != workerapi.StatusAccepted {
+			err = fmt.Errorf("status %+v", st.Statuses[0])
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease/results stalled behind a slow hello")
+	}
+	release.Do(func() { close(gate) })
 }
