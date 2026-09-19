@@ -4,4 +4,12 @@
 - Durations are advisory. Known durations are summed and outliers are noted, but an unknown duration no longer drops the group (the old `groups_skipped_unknown_duration` counter is gone). `max_per_file_duration` is now only a note. `min_files` is the smallest group reported.
 - Each group lists its members in position order, with the lowest position as the primary. It also reports the gaps, the declared `N of M` total, how many durations are known, a proposed title (the shared residual or the folder name, never `157`), a confidence level and its reasons.
 - Groups that must not merge are reported as `blocked` with a reason, not dropped. Reasons: a non-primary member (it names where the primaries live), the active iTunes library (previously excluded without a word), repeated positions (two copies), `N of M` totals that disagree, a run more than 20% sparse, different known authors, mixed containers, and records sharing one file. Doctor Who / Big Finish / Torchwood stay excluded. The merge stays review-gated, with explicit groups and fingerprints. It also refuses a member that is not a one-file record, and it replaces a primary title that is only a position (`157`, `108 of 310`).
+- Evidence rules (from adversarial review):
+  - A numbered file under a real title (`The Saga - 01.m4b` titled `Leviathan Rising`, `Dunes_2.m4b` titled `Book 2`) is never a candidate. The title must be a position, or say nothing the file does not.
+  - Book-length members whose titles are not positions are blocked.
+  - Plain numbering beside disc-track numbering (`03 X` and `1-03 X`) is blocked as two copies. A bare `5` takes its disc from a `2-05 X.mp3` file.
+  - A bare-numbered run needs corroboration: known chapter-length durations (otherwise `needs durations`), a known author, and a folder that is not a catch-all like `Unknown Author`. A catch-all folder name is never proposed as a title.
+  - Bare records join a folder-named run only when durations, container and codec match. Otherwise they are reported for review.
+  - `high` confidence needs position titles, a contiguous run and known chapter-length durations. Any missing evidence is listed.
+- Merge card: selection is opt-in (nothing is pre-ticked), "Select all" skips low-confidence groups, each group expands to show every member's position, title, duration and file, and the proposed title is shown.
 - Detection runs one folder per worker across all CPUs, and its output is deterministic.

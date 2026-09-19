@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -60,6 +60,11 @@ type ChapterGroup struct {
 	DurationsKnown int      `json:"durations_known"`
 	Confidence     string   `json:"confidence"`
 	Reasons        []string `json:"reasons"`
+	// MemberTitles, MemberFiles (base names) and MemberDurations (seconds,
+	// 0 = unknown) describe each member, parallel to BookIDs, for review.
+	MemberTitles    []string `json:"member_titles"`
+	MemberFiles     []string `json:"member_files"`
+	MemberDurations []int    `json:"member_durations"`
 	// Blockers, when present, are why the group must not be merged; such a
 	// group is returned in ChapterDetection.Blocked, never in Groups.
 	Blockers []string `json:"blockers,omitempty"`
@@ -230,6 +235,8 @@ type seqCand struct {
 	disc  int
 	index int
 	total int
+	// titleMarker is true when the TITLE (not just the file) is a position.
+	titleMarker bool
 	// key is the normalised residual the record groups by; key2 the part of
 	// it before a chapter token (the book's name when the rest is a
 	// chapter's own name), used only when key alone groups nothing.
@@ -258,9 +265,21 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 	if !tok && !fok {
 		return c, false
 	}
+	if !tok && !seqTitleCarriesNothing(b.Title, b.FilePath, fm) {
+		// A numbered FILE under a real title ("The Saga - 01.m4b" titled
+		// "Leviathan Rising", "Dunes_2.m4b" titled "Book 2") is a volume of
+		// a series, not a chapter: the file name alone never makes a
+		// candidate. The title must be a position, or say nothing the file
+		// does not (empty, the file's own name, or its residual).
+		return c, false
+	}
+	c.titleMarker = tok
 	var residual string
 	if tok {
 		c.shape, c.disc, c.index, c.total = tm.Shape, tm.Disc, tm.Index, tm.Total
+		if tm.Shape == SeqShapeBare && fok && fm.Disc > 0 && fm.Index == tm.Index {
+			c.disc = fm.Disc // "5" in "2-05 The Yard.mp3" is disc 2 track 5
+		}
 		residual = tm.Residual
 		if sequenceResidualKey(tm.Residual) != "" {
 			c.titleDisplay = sequenceResidualDisplay(tm.Residual)
@@ -289,6 +308,17 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 		c.key2 = sequenceResidualKey(b)
 	}
 	return c, true
+}
+
+// seqTitleCarriesNothing reports whether a non-position title adds nothing
+// to what the file stem says: empty, the stem itself (with or without its
+// number), or exactly the stem's residual.
+func seqTitleCarriesNothing(title, filePath string, fm SequenceMarker) bool {
+	if normForCompare(title) == "" || ChapterTitleIsFilenameDerived(title, filePath) {
+		return true
+	}
+	fk := sequenceResidualKey(fm.Residual)
+	return fk != "" && sequenceResidualKey(title) == fk
 }
 
 // versionIndex maps a version group to the directories of its primary
@@ -430,12 +460,19 @@ func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOption
 		delete(buckets, k)
 		buckets[cs[0].key2] = append(buckets[cs[0].key2], cs[0])
 	}
-	// Bare residuals join the one residual that IS the folder's name.
+	// Bare residuals join the one residual that IS the folder's name, but
+	// only with corroboration (known durations in the run's range, same
+	// container and codec). Without it they are reported apart, for review.
 	folderKey := chapterFolderKey(dir)
+	bareReview := ""
 	if bare, ok := buckets[""]; ok && folderKey != "" {
 		if named, ok := buckets[folderKey]; ok {
-			buckets[folderKey] = append(named, bare...)
-			delete(buckets, "")
+			if seqBareJoinCorroborated(named, bare) {
+				buckets[folderKey] = append(named, bare...)
+				delete(buckets, "")
+			} else {
+				bareReview = fmt.Sprintf("needs review: %d bare-titled record(s) beside the %q run, without matching durations/format to show they belong to it", len(bare), named[0].fileDisplayOr(named[0].titleDisplay))
+			}
 		}
 	}
 	for _, k := range sortedBucketKeys(buckets) {
@@ -443,7 +480,11 @@ func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOption
 		if len(cs) < opts.MinFiles {
 			continue
 		}
-		g, verdict := evaluateSeqBucket(dir, k, folderKey, cs, opts, vi)
+		review := ""
+		if k == "" {
+			review = bareReview
+		}
+		g, verdict := evaluateSeqBucket(dir, k, folderKey, review, cs, opts, vi)
 		switch verdict {
 		case seqVerdictNotSequence:
 			res.notSequence++
@@ -461,6 +502,67 @@ func detectInDir(dir string, books []database.BookCore, opts ChapterDetectOption
 		}
 	}
 	return res
+}
+
+func (c seqCand) fileDisplayOr(alt string) string {
+	if alt != "" {
+		return alt
+	}
+	return c.fileDisplay
+}
+
+// seqBareJoinCorroborated reports whether bare-titled records may join a
+// named run: every bare member's duration is known and within 4x of the
+// run's known durations, and container and codec match the run's.
+func seqBareJoinCorroborated(named, bare []seqCand) bool {
+	lo, hi := 0, 0
+	exts := map[string]bool{}
+	codecs := map[string]bool{}
+	for _, c := range named {
+		exts[c.ext] = true
+		if c.book.Codec != nil && *c.book.Codec != "" {
+			codecs[strings.ToLower(*c.book.Codec)] = true
+		}
+		if c.book.Duration != nil && *c.book.Duration > 0 {
+			d := *c.book.Duration
+			if lo == 0 || d < lo {
+				lo = d
+			}
+			hi = max(hi, d)
+		}
+	}
+	if lo == 0 || len(exts) != 1 {
+		return false
+	}
+	for _, c := range bare {
+		if !exts[c.ext] || c.book.Duration == nil || *c.book.Duration <= 0 {
+			return false
+		}
+		if d := *c.book.Duration; d*4 < lo || d > hi*4 {
+			return false
+		}
+		if c.book.Codec != nil && *c.book.Codec != "" && len(codecs) > 0 && !codecs[strings.ToLower(*c.book.Codec)] {
+			return false
+		}
+	}
+	return true
+}
+
+// catchAllFolders are folder names that say nothing about which book a
+// record belongs to; a bare-numbered run in one is never offered, and the
+// name is never proposed as a title.
+var catchAllFolders = map[string]bool{
+	"unknown": true, "unknown author": true, "unknown artist": true, "various": true,
+	"various artists": true, "audiobooks": true, "audiobook": true, "books": true,
+	"misc": true, "miscellaneous": true, "unsorted": true, "imported": true,
+	"incoming": true, "downloads": true, "download": true, "new": true,
+	"voice memos": true, "itunes media": true, "media": true, "music": true,
+	"library": true, "abooks": true, "newbooks": true, "temp": true, "tmp": true,
+	"moved": true, "incomplete": true, "complete": true,
+}
+
+func isCatchAllFolder(dir string) bool {
+	return catchAllFolders[normForCompare(filepath.Base(dir))]
 }
 
 func sortedBucketKeys(m map[string][]seqCand) []string {
@@ -483,7 +585,7 @@ const (
 
 // evaluateSeqBucket checks one same-folder, same-residual bucket and builds
 // its group.
-func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDetectOptions, vi versionIndex) (ChapterGroup, seqVerdict) {
+func evaluateSeqBucket(dir, key, folderKey, review string, cs []seqCand, opts ChapterDetectOptions, vi versionIndex) (ChapterGroup, seqVerdict) {
 	sort.SliceStable(cs, func(i, j int) bool {
 		a, b := cs[i], cs[j]
 		if a.disc != b.disc {
@@ -506,7 +608,7 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 			allYears = false
 		}
 	}
-	if key == "" && (allYears || (lo > 2 && n < 5)) {
+	if key == "" && review == "" && (allYears || (lo > 2 && n < 5)) {
 		return ChapterGroup{}, seqVerdictNotSequence
 	}
 	// Every member at ONE position ("31 - Title" twice in a series folder)
@@ -534,11 +636,31 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 			g.Confidence = to
 		}
 	}
+	// missingEv lists the evidence a "high" group needs and this one lacks:
+	// position TITLES, a contiguous run, known chapter-length durations.
+	var missingEv []string
+	if review != "" {
+		g.Blockers = append(g.Blockers, review)
+	}
 	shapes := map[string]int{}
+	nonMarkerTitles := 0
 	for _, c := range cs {
 		g.BookIDs = append(g.BookIDs, c.book.ID)
 		g.IndexLabels = append(g.IndexLabels, c.label())
+		g.MemberTitles = append(g.MemberTitles, c.book.Title)
+		g.MemberFiles = append(g.MemberFiles, filepath.Base(c.book.FilePath))
+		d := 0
+		if c.book.Duration != nil && *c.book.Duration > 0 {
+			d = *c.book.Duration
+		}
+		g.MemberDurations = append(g.MemberDurations, d)
 		shapes[c.shape]++
+		if !c.titleMarker {
+			nonMarkerTitles++
+		}
+	}
+	if nonMarkerTitles > 0 {
+		missingEv = append(missingEv, fmt.Sprintf("%d track title(s) are not positions (only the file name is numbered)", nonMarkerTitles))
 	}
 	g.PrimaryBookID = g.BookIDs[0]
 	g.Reasons = append(g.Reasons, fmt.Sprintf("%d single-file records in one folder titled as positions (%s)", n, seqShapeSummary(shapes)))
@@ -599,7 +721,7 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 		}
 		g.Reasons = append(g.Reasons, fmt.Sprintf("titles declare %d parts; %d present", g.DeclaredTotal, n))
 	}
-	if span > 0 && float64(missing)/float64(span) > maxSparseFraction && n < minSparseReport {
+	if span > 0 && float64(missing)/float64(span) > maxSparseFraction && n < minSparseReport && review == "" {
 		// A handful of scattered positions ("23 - Title" and "29 - Title"
 		// in one series folder) is not a split book worth reporting.
 		return ChapterGroup{}, seqVerdictNotSequence
@@ -611,12 +733,18 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 		g.Blockers = append(g.Blockers, fmt.Sprintf("index run too sparse: %d of %d positions missing between %d and %d", missing, span, lo, hi))
 	} else if missing > 0 {
 		g.Reasons = append(g.Reasons, fmt.Sprintf("positions %d..%d with %d missing (see gaps)", lo, hi, missing))
-		demote(ChapterConfidenceMedium)
+		missingEv = append(missingEv, fmt.Sprintf("gaps in the run (%d missing)", missing))
 	} else {
 		g.Reasons = append(g.Reasons, fmt.Sprintf("positions %d..%d contiguous", lo, hi))
 	}
 	if lo > 1 && len(discs) == 1 {
 		g.Reasons = append(g.Reasons, fmt.Sprintf("run starts at %d: earlier parts may be titled differently", lo))
+	}
+
+	// Plain numbering beside disc-track numbering is the same book twice
+	// ("03 Title" and "1-03 Title"), not one book of twice the length.
+	if _, plain := byDisc[0]; plain && len(byDisc) > 1 {
+		g.Blockers = append(g.Blockers, "mixes plain and disc-track numbering: two copies of the book in one folder?")
 	}
 
 	// Authors: unknown is fine, two different known authors is not.
@@ -694,9 +822,10 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 		}
 	}
 
-	// Durations: advisory.
+	// Durations: advisory for a titled run, corroborating evidence for a
+	// bare one.
 	var known []int
-	long := 0
+	long, bookLength := 0, 0
 	for _, c := range cs {
 		if c.book.Duration != nil && *c.book.Duration > 0 {
 			d := *c.book.Duration
@@ -705,10 +834,39 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 			if d >= opts.MaxPerFileDuration {
 				long++
 			}
+			if d >= fullBookSeconds {
+				bookLength++
+			}
 		}
 	}
 	g.DurationsKnown = len(known)
 	g.Reasons = append(g.Reasons, fmt.Sprintf("durations known for %d of %d", len(known), n))
+	if len(known) < n {
+		missingEv = append(missingEv, fmt.Sprintf("durations unknown for %d of %d", n-len(known), n))
+	}
+	if bookLength > 0 {
+		missingEv = append(missingEv, fmt.Sprintf("%d member(s) are book-length (>= %d s)", bookLength, fullBookSeconds))
+	}
+	allBookLength := len(known) == n && bookLength == n
+	if allBookLength && nonMarkerTitles > 0 {
+		g.Blockers = append(g.Blockers, "every member is book-length and the titles are not positions: separate books, not chapters")
+	}
+	if key == "" {
+		// A bare run ("1", "2", "3" with bare or track-numbered files) says
+		// nothing about which book it is; it needs corroboration.
+		if isCatchAllFolder(dir) {
+			g.Blockers = append(g.Blockers, fmt.Sprintf("folder %q is a catch-all: nothing shows these bare-numbered records are one book", filepath.Base(dir)))
+		}
+		switch {
+		case len(known) < n:
+			g.Blockers = append(g.Blockers, fmt.Sprintf("needs durations: bare position titles are corroborated only by known chapter-length durations (%d of %d known)", len(known), n))
+		case allBookLength:
+			g.Blockers = append(g.Blockers, "every member is book-length: separate books, not chapters")
+		}
+		if len(authors) == 0 {
+			g.Blockers = append(g.Blockers, "no author known on any member: nothing ties the bare-numbered records together")
+		}
+	}
 	if long > 0 {
 		g.Reasons = append(g.Reasons, fmt.Sprintf("%d member(s) at least %d s long", long, opts.MaxPerFileDuration))
 	}
@@ -727,12 +885,24 @@ func evaluateSeqBucket(dir, key, folderKey string, cs []seqCand, opts ChapterDet
 		}
 		if len(outliers) > 0 {
 			g.Reasons = append(g.Reasons, fmt.Sprintf("duration outliers vs median %ds: %s", med, seqJoinCapped(outliers, 6)))
-			demote(ChapterConfidenceMedium)
+			missingEv = append(missingEv, "duration outliers")
 		}
 	}
 
 	// Proposed title.
 	g.CommonTitle = seqProposeTitle(dir, key, folderKey, cs, &g, demote)
+
+	// Confidence: high only with every piece of evidence; each missing
+	// piece is named.
+	switch {
+	case len(missingEv) >= 2:
+		demote(ChapterConfidenceLow)
+	case len(missingEv) == 1:
+		demote(ChapterConfidenceMedium)
+	}
+	if len(missingEv) > 0 {
+		g.Reasons = append(g.Reasons, "missing evidence: "+strings.Join(missingEv, "; "))
+	}
 	return g, verdict
 }
 
@@ -761,6 +931,9 @@ func seqProposeTitle(dir, key, folderKey string, cs []seqCand, g *ChapterGroup, 
 		return t
 	}
 	folder := chapterFolderDisplay(dir)
+	if isCatchAllFolder(dir) {
+		folder = "" // "Unknown Author" is never a book title
+	}
 	file := seqMostCommon(fromFiles)
 	fileKey := sequenceResidualKey(file)
 	switch {

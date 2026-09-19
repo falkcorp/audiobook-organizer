@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.117.0
+// version: 2.118.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-09-19
 
@@ -6389,8 +6389,13 @@ export interface ChapterGroup {
   /** Members with a known duration; durations are advisory, never required. */
   durations_known?: number;
   confidence?: 'high' | 'medium' | 'low';
-  /** Why the detector grouped these records. */
+  /** Why the detector grouped these records (and any missing evidence). */
   reasons?: string[];
+  /** Per-member review detail, parallel to book_ids. */
+  member_titles?: string[];
+  member_files?: string[];
+  /** Seconds; 0 = unknown. */
+  member_durations?: number[];
   members?: ChapterMemberSnapshot[];
   /** What the preview saw; a real merge sends it back and drifted groups are skipped. */
   fingerprint?: string;
