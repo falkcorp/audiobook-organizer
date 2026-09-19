@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -378,7 +378,9 @@ func (s *PebbleStore) CreateBookFile(file *BookFile) error {
 		return err
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// Under the book's owner stripe, refusing a row for a book that has no
+	// row (book_delete_owns_files.go): that row would be born orphaned.
+	if err := s.commitBookFileBatch(batch, nil, []string{file.BookID}, nil); err != nil {
 		return err
 	}
 	s.InvalidateLibraryStats()
@@ -545,7 +547,9 @@ func (s *PebbleStore) BatchCreateBookFiles(files []*BookFile) error {
 		return nil
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// Every staged row is new, so every book in affectedBooks must exist,
+	// checked under their owner stripes (book_delete_owns_files.go).
+	if err := s.commitBookFileBatch(batch, nil, affectedBooks, nil); err != nil {
 		return err
 	}
 
@@ -708,7 +712,11 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, mergeStore
 		return false, err
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// An in-place rewrite of the row read above: under the book's owner
+	// stripe, and only if the row is still committed, so a concurrent
+	// DeleteBookFile + DeleteBook cannot let this write recreate the row
+	// under a deleted book (book_delete_owns_files.go).
+	if err := s.commitBookFileBatch(batch, []string{file.BookID}, nil, [][]byte{key}); err != nil {
 		return false, err
 	}
 	s.InvalidateLibraryStats()
@@ -1535,6 +1543,8 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 	// Recorded after that branch for exactly this reason.
 	affectedBooks := make([]string, 0, len(files))
 	seenBooks := make(map[string]struct{}, len(files))
+	var newOwners []string
+	var rewriteKeys [][]byte
 
 	// Rows already staged in THIS batch, indexed the same two ways the committed
 	// lookups below index them. Both lookups read s.db.Get, i.e. COMMITTED state,
@@ -1682,6 +1692,15 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 			}
 			file.UpdatedAt = now
 		}
+		// Owner guard inputs (book_delete_owns_files.go): a new row needs its
+		// book to exist at commit; a matched row is rewritten in place and
+		// must still be committed at commit. A row matched from THIS batch
+		// (mergeTarget) is neither — it is staged, not committed.
+		if existing == nil {
+			newOwners = append(newOwners, file.BookID)
+		} else if mergeTarget == nil {
+			rewriteKeys = append(rewriteKeys, []byte(fmt.Sprintf("book_file:%s:%s", existing.BookID, existing.ID)))
+		}
 
 		if _, ok := seenBooks[file.BookID]; !ok && file.BookID != "" {
 			seenBooks[file.BookID] = struct{}{}
@@ -1718,7 +1737,7 @@ func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) er
 		}
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	if err := s.commitBookFileBatch(batch, affectedBooks, newOwners, rewriteKeys); err != nil {
 		return err
 	}
 	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
@@ -1885,7 +1904,10 @@ func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID
 		}
 	}
 
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// The target must still exist when the rows land on it, checked under its
+	// owner stripe, so a concurrent DeleteBook of the target either sees these
+	// rows (and refuses) or has already committed (and this move refuses).
+	if err := s.commitBookFileBatch(batch, affected, []string{targetBookID}, nil); err != nil {
 		return err
 	}
 

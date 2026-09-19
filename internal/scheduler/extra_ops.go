@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -66,7 +66,6 @@ type ExtraOpsDeps struct {
 // interfaces rather than a fresh method list. Was database.Store (398 methods)
 // until 2026-08-19.
 type ExtraOpsStore interface {
-	sweep.ArchiveSweepStore        // SweepArchivedBooks
 	metabatch.Store                // NewMetadataUpgradeService
 	versions.TrashedVersionCleaner // CleanupTrashedVersions
 
@@ -77,6 +76,9 @@ type ExtraOpsStore interface {
 	// ModifyBook is the author split's primary-author write: a locked
 	// read-modify-write of AuthorID/Author, never GetBookByID -> UpdateBook.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// GetAllBooksCore is the metadata refresh scan's listing. It used to
+	// arrive through sweep.ArchiveSweepStore, retired with the archive sweep.
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 }
 
 // extraOpsAuthorStore is the author-consolidation op's author-row half. Split
@@ -199,34 +201,6 @@ func (r *ExtraOpsRegistrar) RegisterTrashCleanupOp(reg *opsregistry.Registry) er
 			progress := extraOpsProgressAdapter{r: reporter}
 			purged := versions.CleanupTrashedVersions(r.Store)
 			_ = progress.Log("info", fmt.Sprintf("Trash cleanup: purged %d versions", purged), nil)
-			return nil
-		},
-	})
-}
-
-// --- archive-sweep ---
-
-// RegisterArchiveSweepOp registers the scheduler.archive-sweep OperationDef.
-func (r *ExtraOpsRegistrar) RegisterArchiveSweepOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.archive-sweep",
-		Liveness:        opsregistry.LivenessNone,
-		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
-		Plugin:          "scheduler",
-		DisplayName:     "Archive Sweep",
-		Description:     "Remove soft-deleted books past the 30-day retention window.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     false,
-		Isolate:         false,
-		Timeout:         1 * time.Hour,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.archive-sweep",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			progress := extraOpsProgressAdapter{r: reporter}
-			cleaned := sweep.SweepArchivedBooks(r.Store)
-			_ = progress.Log("info", fmt.Sprintf("Archive sweep: cleaned %d books", cleaned), nil)
 			return nil
 		},
 	})
@@ -960,8 +934,12 @@ func (r *ExtraOpsRegistrar) runAutoPurgeSoftDeleted(ctx context.Context, opID st
 		return
 	}
 
-	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d errors)",
-		result.Purged, result.Attempted, result.FilesDeleted, len(result.Errors))
+	// Books that still own book_file rows are skipped on every run (a merge
+	// loser keeps its files for good), so they are summarized as one count per
+	// run rather than one activity line per book per run; only real errors
+	// are itemized below.
+	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, %d errors)",
+		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, len(result.Errors))
 	slog.Info("Auto-purge", "msg", msg)
 	activity.EmitInfo(r.Deps.ActivityWriter, opID, "purge-deleted", "purge-deleted", msg,
 		activity.TagsIf(result.Purged == 0, activity.NoOpTag)...)

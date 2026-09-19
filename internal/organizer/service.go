@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.40.1
+// version: 1.41.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package organizer
 
@@ -1844,11 +1844,27 @@ func (orgSvc *Service) rollbackOrganizedVersion(newBookID string, landing *Landi
 			log.Warn("organize: rollback could not clear author links for %s: %v", newBookID, err)
 		}
 		if err := orgSvc.db.DeleteBook(newBookID); err != nil {
-			log.Warn("organize: rollback could not delete the organized book row %s: %v — a book with no files is now in the library", newBookID, err)
+			// The book row survives, so the files this organize wrote must
+			// survive with it: if the delete was refused because rows name
+			// the book (database.ErrBookOwnsFiles — the "no rows" claim in the
+			// comment above turned out false), those rows point at exactly
+			// these files, and removing them would leave a live book with
+			// missing audio. Keep the files; an extra copy on disk is
+			// recoverable, deleted audio is not.
+			log.Warn("organize: rollback could not delete the organized book row %s: %v — keeping the files this organize wrote (%d), since the surviving row may point at them",
+				newBookID, err, createdCount(landing))
+			return
 		}
 	}
 
 	RemoveCreated(landing, newBookID, log)
+}
+
+func createdCount(landing *Landing) int {
+	if landing == nil {
+		return 0
+	}
+	return len(landing.Created)
 }
 
 // RemoveCreated is the on-disk half of an organize rollback: it removes the

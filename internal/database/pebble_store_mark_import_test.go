@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_mark_import_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-07-01
+// last-edited: 2026-09-19
 
 package database
 
@@ -27,6 +27,9 @@ func newPebbleStoreForMarkImport(t *testing.T) *PebbleStore {
 func TestMarkFileImportedFromDeluge_ByPath_PopulatesDownloadHashWhenEmpty(t *testing.T) {
 	store := newPebbleStoreForMarkImport(t)
 
+	if _, err := store.CreateBook(&Book{ID: "book-1", Title: "book-1"}); err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
 	bf := &BookFile{
 		BookID:   "book-1",
 		FilePath: "/downloads/original.mp3",
@@ -61,6 +64,9 @@ func TestMarkFileImportedFromDeluge_ByPath_PopulatesDownloadHashWhenEmpty(t *tes
 func TestMarkFileImportedFromDeluge_ByPath_DoesNotClobberManualDownloadHash(t *testing.T) {
 	store := newPebbleStoreForMarkImport(t)
 
+	if _, err := store.CreateBook(&Book{ID: "book-2", Title: "book-2"}); err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
 	manualHash := "manually-set-hash"
 	bf := &BookFile{
 		BookID:       "book-2",
@@ -96,6 +102,9 @@ func TestMarkFileImportedFromDeluge_ByPath_DoesNotClobberManualDownloadHash(t *t
 func TestMarkFileImportedFromDeluge_ByTorrentHash_PopulatesDownloadHash(t *testing.T) {
 	store := newPebbleStoreForMarkImport(t)
 
+	if _, err := store.CreateBook(&Book{ID: "book-3", Title: "book-3"}); err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
 	torrentHash := "fallback-torrent-hash"
 	bv := &BookVersion{
 		BookID:      "book-3",

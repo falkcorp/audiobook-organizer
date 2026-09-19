@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-09-19
 
@@ -49,9 +49,13 @@ type PurgeResult struct {
 	FilesDeleted int `json:"files_deleted"`
 	// SkippedOwnsFiles counts books left soft-deleted because they still own
 	// book_file rows: hard-deleting them would orphan those rows
-	// (database.ErrBookOwnsFiles). Each is also named in Errors.
-	SkippedOwnsFiles int      `json:"skipped_owns_files"`
-	Errors           []string `json:"errors"`
+	// (database.ErrBookOwnsFiles). They are named in SkippedOwnsFilesIDs, NOT
+	// in Errors: a merge loser keeps its files for good, so it is skipped on
+	// every run, and repeating one error line per book per run would bury the
+	// real errors. The nightly job reports the count once per run.
+	SkippedOwnsFiles    int      `json:"skipped_owns_files"`
+	SkippedOwnsFilesIDs []string `json:"skipped_owns_files_ids,omitempty"`
+	Errors              []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

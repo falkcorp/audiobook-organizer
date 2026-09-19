@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-09-19
 
@@ -121,7 +121,6 @@ func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int,
 }
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int { return 0 }
 func (d fakeDeps) CleanupTrashedVersions() int                     { return 0 }
-func (d fakeDeps) SweepArchivedBooks() int                         { return 0 }
 func (d fakeDeps) ActivityFlushOp(_ string)                        {}
 func (d fakeDeps) EnqueueWriteBack(_ string)                       {}
 func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }

@@ -1,13 +1,14 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package organizer
 
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -205,6 +206,29 @@ func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 	require.Equal(t, "theirs", string(got))
 	_, err = os.Stat(targetDir)
 	require.NoError(t, err, "a directory that still holds another book's file must not be removed")
+}
+
+// When the rollback cannot delete the organized book row — DeleteBook refuses
+// a book that still owns book_file rows (database.ErrBookOwnsFiles) — the row
+// survives, and the files this organize wrote are what its rows may point
+// at. They must be kept: removing them left a live book with missing audio.
+func TestRollbackOrganizedVersion_DeleteRefusedKeepsCreatedFiles(t *testing.T) {
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{RootDir: rootDir}
+	store := newMockStore(t)
+	store.EXPECT().SetBookAuthors("new-book", mock.Anything).Return(nil)
+	store.EXPECT().DeleteBook("new-book").Return(fmt.Errorf("delete book new-book: %w", database.ErrBookOwnsFiles))
+	svc := NewService(store)
+
+	targetDir := filepath.Join(rootDir, "Author", "Title")
+	require.NoError(t, os.MkdirAll(targetDir, 0o775))
+	ours := filepath.Join(targetDir, "Title - 01.mp3")
+	require.NoError(t, os.WriteFile(ours, []byte("ours"), 0o644))
+
+	svc.rollbackOrganizedVersion("new-book", &Landing{Path: targetDir, Files: map[string]string{"/s": ours}, Created: []string{ours}}, &noopLogger{})
+
+	_, err := os.Stat(ours)
+	require.NoError(t, err, "a file the surviving book row may point at must not be removed")
 }
 
 func TestRollbackOrganizedVersion_EmptyDirectoryIsRemoved(t *testing.T) {

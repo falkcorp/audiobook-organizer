@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-09-19
 
@@ -635,27 +635,6 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("failed to enqueue scheduler.trash-cleanup: %w", enqErr)
 			}
 			return v2ScheduledOp(v2ID, "trash-cleanup"), nil
-		},
-		IsEnabled:              func() bool { return true },
-		GetInterval:            func() time.Duration { return 0 },
-		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return true },
-	})
-
-	ts.registerTask(TaskDefinition{
-		Name:        "archive_sweep",
-		Description: "Remove soft-deleted books past the 30-day retention window",
-		Category:    "maintenance",
-		TriggerFn: func(source string) (*database.Operation, error) {
-			store := ts.deps.Store()
-			if store == nil {
-				return nil, fmt.Errorf("database not initialized")
-			}
-			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "scheduler.archive-sweep", schedulerExtraOpParams{})
-			if enqErr != nil {
-				return nil, fmt.Errorf("failed to enqueue scheduler.archive-sweep: %w", enqErr)
-			}
-			return v2ScheduledOp(v2ID, "archive-sweep"), nil
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },

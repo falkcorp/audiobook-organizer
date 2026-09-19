@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-09-19
 
@@ -162,7 +162,6 @@ var taskV2DefIDs = map[string]string{
 	"isbn_enrichment":             "scheduler.isbn-enrichment",
 	"temp_file_cleanup":           "scheduler.temp-file-cleanup",
 	"trash_cleanup":               "scheduler.trash-cleanup",
-	"archive_sweep":               "scheduler.archive-sweep",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
 	"author_split_scan":           "scheduler.author-split-scan",
 	"db_optimize":                 "scheduler.db-optimize",

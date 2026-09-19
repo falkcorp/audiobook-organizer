@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 1.9.0
+// version: 2.1.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -17,26 +17,30 @@ import (
 )
 
 // OrphanBookFilesCleanupParams are the JSON parameters for the orphan
-// book_files cleanup op. When Delete is false (default), the op reports the
-// count of orphan rows but does not modify the database.
+// book_files scan.
+//
+// Delete is accepted only so an old caller gets a clear refusal instead of a
+// silent report: the delete mode was REMOVED on 2026-09-19. It hard-deleted
+// the orphan rows, and a book_file row is the only record tying an audio file
+// to the library — the standing rule is never delete book_file rows as a
+// repair, repoint them. Use maintenance.orphan-book-files-repoint-plan (dry
+// run) to see where each orphan should go.
 type OrphanBookFilesCleanupParams struct {
-	// Delete, when true, removes the detected orphan book_file rows via
-	// Store.DeleteBookFilesByIDs. When false (default), the op is a dry run.
 	Delete bool `json:"delete"`
 }
 
 // orphanBookFilesCleanupDef registers the maintenance.orphan-book-files-cleanup
 // OperationDef. It runs nightly during the maintenance window (02:15 daily) so
 // it sits between purge-old-logs (02:00 Sun) and purge-deleted (03:00) without
-// competing for the same minute.
+// competing for the same minute. Report-only.
 func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 	sched := "15 2 * * *" // 02:15 daily — nightly maintenance window
 	return sdk.OperationDef{
 		ID:              "maintenance.orphan-book-files-cleanup",
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
-		DisplayName:     "Orphan book_file cleanup",
-		Description:     "Detects book_file rows whose book_id no longer references an existing book. Reports the count by default; pass {\"delete\": true} to remove the orphans.",
+		DisplayName:     "Orphan book_file scan",
+		Description:     "Report-only: counts book_file rows whose book_id no longer references an existing book. Never deletes; see maintenance.orphan-book-files-repoint-plan for where each should go.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "maintenance.orphan-book-files-cleanup",
@@ -44,7 +48,7 @@ func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 		Isolate:         false,
 		Timeout:         30 * time.Minute,
 		Schedule:        &sched,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
 		Run:             p.runOrphanBookFilesCleanup,
 	}
 }
@@ -56,13 +60,14 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	if params.Delete {
+		return fmt.Errorf("the delete mode of this op was removed: it deleted book_file rows, which must be repointed instead; run maintenance.orphan-book-files-repoint-plan for a dry-run plan")
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting orphan book_file scan",
-		slog.Bool("delete", params.Delete),
-	)
+	_ = reporter.Log(slog.LevelInfo, "Starting orphan book_file scan (report-only)")
 	scanProg := sdk.NewProgress(reporter, 0)
 	scanProg.Start("Scanning book_files for orphan rows...")
 
@@ -77,127 +82,9 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 		// live + soft-deleted: every book that could still own a file row.
 		slog.Int("owning_books", ownerCount),
 	)
-
-	if !params.Delete || len(orphans) == 0 {
-		msg := fmt.Sprintf("Orphan book_file scan: %d orphan(s) detected (report-only)", len(orphans))
-		if params.Delete && len(orphans) == 0 {
-			msg = "Orphan book_file cleanup: no orphans found, nothing to delete"
-		}
-		_ = reporter.Log(slog.LevelInfo, msg)
-		scanProg.Done(msg)
-		return nil
-	}
-
-	// Delete pass — now we know N.
-	total := len(orphans)
-	prog := sdk.NewProgress(reporter, total)
-	prog.Start(fmt.Sprintf("Found %d orphan book_file row(s) out of %d (owning books: %d)",
-		total, totalFiles, ownerCount))
-	var deleted, failed int
-
-	// Deletes go through Store.DeleteBookFilesByIDs in chunks rather than one
-	// DeleteBookFile per row. Per-row deletion costs ~1.35s of FIXED overhead each
-	// (a Sync commit, a full book-version snapshot, two memdb write transactions,
-	// and an aggregate recompute — all per-book work being run per row), which on a
-	// multi-thousand-row orphan sweep is hours of pure waste.
-	//
-	// ⚠️ THIS PATH HAS NO TRAILING RecomputeBookAggregates of its own, unlike
-	// dedupe-book-file-rows. It relies entirely on DeleteBookFilesByIDs notifying
-	// once per affected book. Do not "optimise" that notification away.
-	//
-	// (In practice a genuine orphan's owning book does not exist — that is what
-	// makes it an orphan — so the recompute finds no book and returns early. The
-	// notification still has to happen: findOrphanBookFiles decides orphanhood from
-	// a snapshot, and if a book turns out to exist after all, its aggregates must be
-	// corrected rather than left counting rows that are gone.)
-	//
-	// WHY CHUNKED and not one call for the whole list: DeleteBookFilesByIDs is
-	// fail-closed, so a single unresolvable ID aborts its entire call. Chunking
-	// bounds that blast radius to one chunk and keeps a cancellation check and a
-	// progress tick happening often enough to feed the stuck-op watchdog.
-	const orphanDeleteChunk = 500
-	for start := 0; start < total; start += orphanDeleteChunk {
-		if ctx.Err() != nil {
-			_ = reporter.Log(slog.LevelWarn, "Orphan delete cancelled",
-				slog.Int("deleted", deleted),
-				slog.Int("failed", failed),
-				slog.Int("remaining", total-start),
-			)
-			return ctx.Err()
-		}
-		end := min(start+orphanDeleteChunk, total)
-		chunk := orphans[start:end]
-
-		ids := make([]string, 0, len(chunk))
-		for i := range chunk {
-			ids = append(ids, chunk[i].ID)
-		}
-
-		if err := store.DeleteBookFilesByIDs(ids); err != nil {
-			// ⚠️ FAIL-CLOSED IS NOT SELF-HEALING ON THIS PATH — hence the fallback.
-			//
-			// The dedupe op can simply retry next run, because it re-reads its row
-			// set from Pebble (GetBookFiles) and an ID that no longer exists is
-			// therefore never queued twice. THIS op cannot make that claim: its list
-			// comes from findOrphanBookFiles → GetAllBookFilesCore, which is served
-			// from memdb whenever UseMemDB is on (i.e. in production). memdb is a
-			// derived cache that can hold a row Pebble no longer has, so a phantom
-			// row yields an ID that can never resolve — and under plain fail-closed
-			// it would abort the same 500-row chunk on EVERY nightly run until the
-			// process restarts and memdb is rebuilt. That is strictly worse than the
-			// per-row loop this replaced, which skipped the phantom and deleted the
-			// other 499.
-			//
-			// So the store layer stays fail-closed (a batch must never act on a view
-			// it cannot fully verify), and the caller that reads from a cache gets an
-			// explicit degraded path: retry this chunk one row at a time via
-			// DeleteBookFile, which tolerates "already gone" by design. Slow — this is
-			// exactly the ~1.35s/row cost the batch exists to avoid — but it only ever
-			// runs on the chunk that actually hit the anomaly, and it makes progress
-			// instead of deadlocking the op run after run.
-			_ = reporter.Log(slog.LevelWarn, "Batched orphan delete failed; retrying chunk row by row",
-				slog.Int("chunk_start", start),
-				slog.Int("chunk_size", len(ids)),
-				slog.String("error", err.Error()),
-			)
-			for i := range chunk {
-				if ctx.Err() != nil {
-					_ = reporter.Log(slog.LevelWarn, "Orphan delete cancelled",
-						slog.Int("deleted", deleted),
-						slog.Int("failed", failed),
-						slog.Int("remaining", total-(start+i)),
-					)
-					return ctx.Err()
-				}
-				if derr := store.DeleteBookFile(chunk[i].ID); derr != nil {
-					failed++
-					_ = reporter.Log(slog.LevelWarn, "Failed to delete orphan book_file",
-						slog.String("book_file_id", chunk[i].ID),
-						slog.String("book_id", chunk[i].BookID),
-						slog.String("file_path", chunk[i].FilePath),
-						slog.String("error", derr.Error()),
-					)
-					continue
-				}
-				deleted++
-				// Tick per row here, not per chunk. The fallback is ~1.35s/row, so a
-				// 500-row chunk is ~11 minutes — well past the registry's 5m default
-				// ProgressTimeout, which this op does not override. Without a stamp in
-				// this loop the watchdog would cancel the op mid-recovery.
-				prog.StepN(start+i+1, fmt.Sprintf("Deleting orphan book_files (row-by-row): %d/%d",
-					start+i+1, total))
-			}
-			// Progress is already stamped by the loop above; fall through.
-			continue
-		}
-		deleted += len(ids)
-		prog.StepN(end, fmt.Sprintf("Deleting orphan book_files: %d/%d", end, total))
-	}
-
-	final := fmt.Sprintf("Orphan book_file cleanup: deleted %d, failed %d (of %d detected)",
-		deleted, failed, total)
-	_ = reporter.Log(slog.LevelInfo, final)
-	prog.Done(final)
+	msg := fmt.Sprintf("Orphan book_file scan: %d orphan(s) detected (report-only)", len(orphans))
+	_ = reporter.Log(slog.LevelInfo, msg)
+	scanProg.Done(msg)
 	return nil
 }
 
@@ -210,17 +97,19 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 // getters that build the OWNER set — GetAllBooksCoreComplete and
 // ListSoftDeletedBooks — take that fastpath only while memdb can vouch for
 // being complete, and fall back to the authoritative Pebble scan otherwise.
-// That is not an optimisation detail: this scan's absences authorize a hard
-// delete, so a short answer here destroys file rows (see the call sites below).
+// That is not an optimisation detail: this scan's absences decide what is
+// reported (and planned for repointing) as an orphan, so a short answer
+// misreports live rows. Until 2026-09-19 they authorized a hard delete of the
+// rows; that mode is gone, but the fail-closed reads stay — the comments below
+// that speak of deletion describe why they were made strict.
 //
 // "Could still own it" is deliberately wider than "live": a soft-deleted book
 // is restorable and still owns its files, so ownerCount is live + soft-deleted
 // and will exceed the library's book count. That is the correct denominator
 // for this scan and the one it reports.
 //
-// This is the testable core of runOrphanBookFilesCleanup. It does not delete
-// anything — callers that want to delete pass the resulting IDs to
-// Store.DeleteBookFilesByIDs themselves, in chunks.
+// This is the testable core of runOrphanBookFilesCleanup and of the repoint
+// plan. It never deletes anything, and no caller does any more.
 func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()

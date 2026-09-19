@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-09-19
 
@@ -108,6 +108,10 @@ type BookPathSetReader interface {
 	// every decorator that embeds Store (server.indexedStore in production)
 	// forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// BookAtPathIndexBuilt reports whether the book_atpath backfill sentinel
+	// exists. Until it does, LiveBookIDsAtPath answers from a scan of EVERY
+	// book row, so a caller that asks per item should check this first.
+	BookAtPathIndexBuilt() (bool, error)
 }
 
 // BookLookupReader resolves books by a natural key: path, hash, or external ID.
