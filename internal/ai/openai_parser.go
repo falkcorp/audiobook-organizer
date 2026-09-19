@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.21.0
+// version: 13.22.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package ai
 
@@ -345,6 +345,19 @@ func NewOpenAIParser(cfg *config.Config, apiKey string, enabled bool) *OpenAIPar
 // model is the fallback model used when a per-feature model field on cfg is
 // empty; an empty model keeps the OpenAI-only defaultModel. cfg may be nil.
 func NewOpenAIParserWithBaseURL(cfg *config.Config, apiKey, baseURL, model string, enabled bool) *OpenAIParser {
+	return newOpenAIParser(cfg, apiKey, baseURL, model, enabled)
+}
+
+// newRoutedEndpointParser is the single-endpoint parser a pool-routed call
+// uses (pool_routing.go). It disables the SDK's own retries: on the routed
+// path aidispatch owns failover, and DoWithRetry already retries transient
+// failures in place, so SDK retries only re-sent a quota-exhausted 429 twice
+// more before the dispatcher could move the batch to a peer.
+func newRoutedEndpointParser(apiKey, baseURL, model string) *OpenAIParser {
+	return newOpenAIParser(nil, apiKey, baseURL, model, true, option.WithMaxRetries(0))
+}
+
+func newOpenAIParser(cfg *config.Config, apiKey, baseURL, model string, enabled bool, extra ...option.RequestOption) *OpenAIParser {
 	if !enabled || apiKey == "" {
 		return &OpenAIParser{enabled: false, cfg: cfg, defaultModelOverride: model}
 	}
@@ -353,6 +366,7 @@ func NewOpenAIParserWithBaseURL(cfg *config.Config, apiKey, baseURL, model strin
 	if baseURL != "" {
 		clientOptions = append(clientOptions, option.WithBaseURL(baseURL))
 	}
+	clientOptions = append(clientOptions, extra...)
 
 	client := openai.NewClient(clientOptions...)
 
