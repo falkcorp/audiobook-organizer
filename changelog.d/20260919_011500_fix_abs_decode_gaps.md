@@ -1,0 +1,4 @@
+- Fixed filters and author/series lookups in the AudioBooth app coming up empty: the library request the app uses to load its filter lists now returns them instead of the bare library object.
+- Fixed one unreadable book blanking every playlist in AudioBooth. A playlist entry whose book cannot be rendered is now left out (and logged) instead of being sent half-built, which made the app reject the whole playlist list.
+- Book sorting in AudioBooth now honours "Author (Last, First)", "Progress", "Progress: Started", "Progress: Finished", "File Birthtime", "File Modified" and "Randomly"; before, each of these silently returned title order.
+- Series sorting now honours "Number of Books", "Date Added", "Last Book Added", "Last Book Updated", "Total Duration" and "Randomly" instead of always sorting by name, and each series now reports a real added/updated date instead of the current time.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_sort_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e2f81-3a76-4b50-8d19-6e2b7c05af34
-// last-edited: 2026-08-25
+// last-edited: 2026-09-19
 
 package abs
 
@@ -36,7 +36,12 @@ func TestAbsSortField(t *testing.T) {
 
 		// Everything else that was silently dropped.
 		{"author", "media.metadata.authorName", "author"},
-		{"author last-first", "media.metadata.authorNameLF", "author"},
+		// authorNameLF is ordered by the handler (absHandlerSort), not the
+		// store: the store's "author" is first-name-first. It must NOT map here,
+		// or the handler branch is bypassed and LF returns authorName order.
+		{"author last-first is handler-sorted", "media.metadata.authorNameLF", ""},
+		{"file birthtime", "birthtimeMs", "created_at"},
+		{"file modified", "mtimeMs", "updated_at"},
 		{"narrator", "media.metadata.narratorName", "narrator"},
 		{"series", "media.metadata.seriesName", "series"},
 		{"added at", "addedAt", "created_at"},
@@ -175,8 +180,7 @@ func TestEnabledSortIndexDefaultsAreRecognised(t *testing.T) {
 		// receives only *Book and stripBookForMemdb nils Book.Author, so the
 		// index would file the whole library under one empty key. It is sorted
 		// by resolving the name while materialising the match set.
-		"media.metadata.authorName":   "author",
-		"media.metadata.authorNameLF": "author",
+		"media.metadata.authorName": "author",
 	} {
 		got := absSortField(key)
 		if got != want {

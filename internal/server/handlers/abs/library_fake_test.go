@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package abs_test
 
@@ -104,6 +104,10 @@ type fakeLibrary struct {
 	// series hydration path — so a test can prove a hydration failure is a
 	// 500 rather than an empty list beside a nonzero numBooks.
 	booksByIDsErr error
+
+	// bookFilesErr fails GetBookFiles for the named book ids only, so a test can
+	// make ONE book's item view unbuildable while its neighbours still render.
+	bookFilesErr map[string]error
 }
 
 func (f *fakeLibrary) setBooksByIDsErr(err error) {
@@ -377,20 +381,54 @@ func (f *fakeLibrary) filteredSummaries(fl database.BookSummaryFilter) []databas
 			SeriesID:       b.SeriesID,
 			SeriesSequence: b.SeriesSequence,
 			Duration:       b.Duration,
+			AuthorID:       b.AuthorID,
+			CreatedAt:      b.CreatedAt,
+			UpdatedAt:      b.UpdatedAt,
 		}
 		if f.matchesFilter(b, sum, fl) {
 			out = append(out, sum)
 		}
 	}
-	if fl.SortBy == "title" {
+	switch fl.SortBy {
+	case "title":
 		sort.SliceStable(out, func(i, j int) bool {
 			if fl.SortAscending {
 				return out[i].Title < out[j].Title
 			}
 			return out[i].Title > out[j].Title
 		})
+	case "created_at", "updated_at":
+		// Mirrors the store's created_at/updated_at comparators closely enough to
+		// prove a client key reached the right field: a missing time sorts first
+		// ascending, as a zero value.
+		at := func(s database.BookSummary) int64 {
+			ts := s.CreatedAt
+			if fl.SortBy == "updated_at" {
+				ts = s.UpdatedAt
+			}
+			if ts == nil {
+				return 0
+			}
+			return ts.UnixMilli()
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			if fl.SortAscending {
+				return at(out[i]) < at(out[j])
+			}
+			return at(out[i]) > at(out[j])
+		})
 	}
 	return out
+}
+
+// setBookFilesErr makes GetBookFiles fail for one book id.
+func (f *fakeLibrary) setBookFilesErr(bookID string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bookFilesErr == nil {
+		f.bookFilesErr = map[string]error{}
+	}
+	f.bookFilesErr[bookID] = err
 }
 
 func (f *fakeLibrary) CountBookSummariesFiltered(fl database.BookSummaryFilter) (int, error) {
@@ -482,6 +520,9 @@ func (f *fakeLibrary) SearchBooks(query string, limit, offset int) ([]database.B
 func (f *fakeLibrary) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.bookFilesErr[bookID]; err != nil {
+		return nil, err
+	}
 	return f.files[bookID], nil
 }
 

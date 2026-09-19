@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package abs
 
@@ -111,11 +111,47 @@ func (h *Handler) Libraries(c *gin.Context) {
 }
 
 // Library handles GET /api/libraries/:libraryId.
+//
+// 🔴 ?include=filterdata WAS IGNORED. AudioBooth's FilterDataService fetches
+// this route with include=filterdata and decodes Response{filterdata: FilterData}
+// with `filterdata` REQUIRED. We answered the bare Library object, so the decode
+// failed and every filter/lookup built from it (author and series name lookups)
+// came up empty. Real ABS answers {filterdata, issues, numUserPlaylists, library}
+// for this include; AudioBooth reads only filterdata, and `library` is kept so
+// the envelope matches ABS for any client that reads it.
+//
+// The filterdata payload is the SAME cached document /filterdata serves, so the
+// two routes cannot disagree. Without the include the bare Library object is
+// returned unchanged: every other caller decodes it directly.
 func (h *Handler) Library(c *gin.Context) {
 	if !h.knownLibrary(c) {
 		return
 	}
-	respondJSON(c, http.StatusOK, h.libraryDTO())
+	if !queryIncludes(c, "filterdata") {
+		respondJSON(c, http.StatusOK, h.libraryDTO())
+		return
+	}
+	fd := h.filterDataCached(c.Request.Context())
+	if fd == nil {
+		// filterdata is REQUIRED by the client; an empty document decodes, a
+		// null one fails the whole response.
+		fd = emptyFilterData(msEpoch(h.now()))
+	}
+	respondJSON(c, http.StatusOK, libraryWithFilterDataResponse{
+		Filterdata: fd,
+		Issues:     fd.NumIssues,
+		Library:    h.libraryDTO(),
+	})
+}
+
+// queryIncludes reports whether the comma-separated ?include= list names part.
+func queryIncludes(c *gin.Context, part string) bool {
+	for p := range strings.SplitSeq(c.Query("include"), ",") {
+		if strings.EqualFold(strings.TrimSpace(p), part) {
+			return true
+		}
+	}
+	return false
 }
 
 // knownLibrary rejects a request for a library we do not have. It writes the 404
@@ -207,12 +243,24 @@ func absItemFilterBase() database.BookSummaryFilter {
 //
 // Keys are matched on the last dotted segment, case-insensitively, so both
 // `media.metadata.publishedYear` and a bare `publishedYear` resolve.
+//
+// authorNameLF is NOT here: it mapped to "author" until 2026-09-19, which sorts
+// first-name-first, so "Last, First" returned the authorName order. It and the
+// other non-Book-field sorts (progress x3, random) are ordered by the handler;
+// see absHandlerSort in browse_client_sort.go.
+//
+// birthtimeMs and mtimeMs map to created_at and updated_at because those are
+// the values minifiedItem emits for an item's birthtimeMs and mtimeMs
+// (mapper.go), so the order agrees with what the client displays.
+// Book.LastScanMtime is a truer file mtime, but sorting by it would disagree
+// with the emitted mtimeMs and it has no store comparator.
 var absSortFields = map[string]string{
 	"title":               "title",
 	"titleignorearticles": "title",
 	"publishedyear":       "year",
 	"authorname":          "author",
-	"authornamelf":        "author",
+	"birthtimems":         "created_at",
+	"mtimems":             "updated_at",
 	"narratorname":        "narrator",
 	"seriesname":          "series",
 	"addedat":             "created_at",
@@ -336,27 +384,13 @@ const absSortRawLogMax = 64
 // field == "", so the case it most needed to report was the one case it
 // skipped.
 //
-// absSortFields holds 11 accepted parameter spellings that resolve to 9
-// distinct store fields (title and author each have two spellings). Six client
-// sorts are known to resolve to "" instead, for three different reasons, and
-// the log line is the only way anyone finds out which:
-//
-//   - File Modified -- Book.LastScanMtime exists; this is a mapping away, and
-//     is filed rather than done here because adding a sort is a feature, not a
-//     fix for the silence.
-//   - Progress (×3) -- per-user state (UserBookState.ProgressPct), not a Book
-//     field. Sorting by it needs a per-user join the summary path has no shape
-//     for.
-//   - File Birthtime -- no field exists on Book at all.
-//   - Randomly -- deliberately unimplemented; a stable page order is required
-//     for pagination to mean anything.
-//
-// An earlier version of this comment claimed the client menu offers 14 sorts
-// and that absSortFields covered 8 of them. Neither number was reconstructible
-// from the code, so both are gone: what is stated above is what the map
-// actually contains.
+// Every sort in AudioBooth's book menu now resolves: the store-backed keys via
+// absSortFields (birthtimeMs and mtimeMs since 2026-09-19), and authorNameLF,
+// the three progress keys and random via absHandlerSort, which this skips. So
+// this now fires only for a key no known client sends -- which is exactly what
+// it should report.
 func warnUnsupportedSort(field, raw string) {
-	if field != "" || strings.TrimSpace(raw) == "" {
+	if field != "" || strings.TrimSpace(raw) == "" || absHandlerSort(raw) != "" {
 		return
 	}
 	// The zero value means "never warned": now-0 is ~1.7e9, far past the
@@ -509,6 +543,14 @@ func (h *Handler) LibraryItems(c *gin.Context) {
 	// the 28 captures carry a filter — so the log was the only oracle available.
 	if raw := strings.TrimSpace(c.Query("filter")); raw != "" {
 		h.filteredItems(c, raw, p, &resp)
+		return
+	}
+
+	// Sorts that are not Book fields (progress, random, authorNameLF) are ordered
+	// here over the whole visible set. This is the unfiltered /items path only;
+	// the ?filter= drill-down above has its own sort handling.
+	if key := absHandlerSort(c.Query("sort")); key != "" {
+		h.clientSortedItems(c, key, p, &resp)
 		return
 	}
 
@@ -741,23 +783,16 @@ func (h *Handler) LibrarySeries(c *gin.Context) {
 
 	// ORDER FIRST, THEN SLICE. GetAllSeries makes no ordering promise, and paginating
 	// an unstable order lets pages overlap and skip — the client would see some series
-	// twice and others never. Sorting on nameIgnorePrefix with the id as tie-break is
-	// total (ids are unique), so the pages partition the set exactly.
+	// twice and others never. Every order sortSeries produces except `random`
+	// falls back to nameIgnorePrefix then id, which is total (ids are unique), so
+	// the pages partition the set exactly. `random` reshuffles per request, so its
+	// pages do not -- the same trade real ABS makes.
 	//
-	// `sort=name` is the only sort the app is observed to send and it is what this
-	// already does; an unrecognised sort keeps this order rather than erroring.
-	sort.SliceStable(series, func(i, j int) bool {
-		li, lj := ignorePrefix(series[i].Name), ignorePrefix(series[j].Name)
-		if li != lj {
-			return li < lj
-		}
-		return series[i].ID < series[j].ID
-	})
-	if c.Query("desc") == "1" || c.Query("sortDesc") == "1" {
-		for i, j := 0, len(series)-1; i < j; i, j = i+1, j-1 {
-			series[i], series[j] = series[j], series[i]
-		}
-	}
+	// AudioBooth sends seven SortBy keys here (name, numBooks, addedAt,
+	// lastBookAdded, lastBookUpdated, totalDuration, random). This comment used to
+	// say name was the only sort the app sends; the other six all came back in
+	// name order. An unrecognised key still keeps name order rather than erroring.
+	sortSeries(series, c.Query("sort"), c.Query("desc") == "1" || c.Query("sortDesc") == "1", bySeries)
 
 	// 🔴 page/limit/sort WERE ACCEPTED AND IGNORED. Confirmed against production
 	// 2026-08-13: limit=100 and limit=500 both returned all 14,625 series, and the
@@ -872,11 +907,14 @@ func (h *Handler) seriesRows(
 			"name":             s.Name,
 			"nameIgnorePrefix": ignorePrefix(s.Name),
 			"libraryId":        h.libraryID(),
-			"addedAt":          msEpoch(h.now()),
-			"updatedAt":        msEpoch(h.now()),
-			"books":            items,
-			"totalDuration":    total,
-			"numBooks":         len(items),
+			// Derived from the served books (see sortSeries): a series row has no
+			// timestamps of its own, and emitting now() here made every series
+			// "added" on every request while the addedAt sort used a real date.
+			"addedAt":       msOrNow(built.firstAddedMs, h.now()),
+			"updatedAt":     msOrNow(built.lastUpdatedMs, h.now()),
+			"books":         items,
+			"totalDuration": total,
+			"numBooks":      len(items),
 		})
 		if want := counts[s.ID]; want != len(items) {
 			h.logSeriesBookCountMismatch(s.ID, s.Name, want, len(items))
@@ -986,6 +1024,12 @@ const absSeriesBooksCacheTTL = 5 * time.Minute
 // book. Caching summaries would still mint ~16,500 ids on EVERY series request.
 type seriesBooksBuilt struct {
 	totalDuration int
+	// firstAddedMs / lastAddedMs are the min / max CreatedAt, and lastUpdatedMs
+	// the max UpdatedAt, over the SERVED books, in ms epoch (0 = unknown). They
+	// back the series addedAt / lastBookAdded / lastBookUpdated sorts.
+	firstAddedMs  int64
+	lastAddedMs   int64
+	lastUpdatedMs int64
 	// bookIDs is the same set in the same order, kept so the ?filter=series.<id>
 	// path on /items can reuse this grouping instead of re-deriving it. Reusing it
 	// is not just cheaper: it guarantees the series tile and the series drill-down
@@ -1085,6 +1129,13 @@ func (h *Handler) buildSeriesBooks() (map[int]seriesBooksBuilt, error) {
 			if list[i].Duration != nil {
 				built.totalDuration += *list[i].Duration
 			}
+			if ms := msEpochPtr(list[i].CreatedAt); ms > 0 {
+				if built.firstAddedMs == 0 || ms < built.firstAddedMs {
+					built.firstAddedMs = ms
+				}
+				built.lastAddedMs = max(built.lastAddedMs, ms)
+			}
+			built.lastUpdatedMs = max(built.lastUpdatedMs, msEpochPtr(list[i].UpdatedAt))
 		}
 		m[id] = built
 	}
@@ -1095,6 +1146,14 @@ func (h *Handler) buildSeriesBooks() (map[int]seriesBooksBuilt, error) {
 	h.seriesBooksCache, h.seriesBooksCacheAt = m, h.now()
 	h.seriesBooksCacheMu.Unlock()
 	return m, nil
+}
+
+// msOrNow returns ms, or now as a ms epoch when ms is unknown (0).
+func msOrNow(ms int64, now time.Time) int64 {
+	if ms > 0 {
+		return ms
+	}
+	return msEpoch(now)
 }
 
 // hasSyncID reports whether a book has a resolvable client-visible sync id.
@@ -2807,6 +2866,19 @@ func (h *Handler) filteredItems(c *gin.Context, raw string, p pageParams, resp *
 	// is paid only when a sort is actually requested. With no sort the group's
 	// own order stands -- for a series that is reading sequence, which is a
 	// better default than any field the client could ask for.
+	//
+	// Handler-side keys (authorNameLF, progress x3, random) are not Book fields,
+	// so SortBooks cannot order them; they are ordered over the group's ids here,
+	// the same way /items orders them over the whole library.
+	if key := absHandlerSort(c.Query("sort")); key != "" {
+		ordered, oerr := h.orderIDsByClientSort(c, key, ids, c.Query("desc") == "1")
+		if oerr != nil {
+			respondError(c, http.StatusInternalServerError, "could not sort library items")
+			return
+		}
+		h.renderItemPage(c, ordered[p.Offset:end], resp)
+		return
+	}
 	sortField := absSortField(c.Query("sort"))
 
 	var (
