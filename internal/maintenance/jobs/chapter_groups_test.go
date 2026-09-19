@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
@@ -637,8 +638,9 @@ func TestMergeChapterGroups_NeverAppliesDuringALibraryScan(t *testing.T) {
 	if err := s.InsertOperationV2(database.OperationV2Row{ID: "op-scan", DefID: "library.scan", Plugin: "library", Status: "queued"}); err != nil {
 		t.Fatalf("InsertOperationV2: %v", err)
 	}
-	if ok, err := s.SetOperationV2StatusIfQueued("op-scan", "running"); err != nil || !ok {
-		t.Fatalf("start the scan row: ok=%v err=%v", ok, err)
+	now := time.Now()
+	if err := s.UpdateOperationV2Status("op-scan", "running", &now, nil, nil); err != nil {
+		t.Fatalf("start the scan row: %v", err)
 	}
 	raw, _ := json.Marshal(map[string]any{"dry_run": false, "groups": []chapterGroupSelection{sel}})
 	if _, err := chRunRaw(t, &mergeChapterGroupsJob{}, s, string(raw), false); err == nil || !strings.Contains(err.Error(), "library.scan") {
@@ -653,17 +655,79 @@ func TestMergeChapterGroups_NeverAppliesDuringALibraryScan(t *testing.T) {
 // brings the sibling disc folders into its context, so the multi-disc
 // blocker the preview reported holds for a hand-built selection too.
 func TestMergeChapterGroups_OneDiscOfAMultiDiscBookIsRefused(t *testing.T) {
-	s := ddRealStore(t)
-	disc1 := chSeedGroup(t, s, "/lib/H/Dunes/Disc 1", "Dunes", 4, 1500)
-	chSeedGroup(t, s, "/lib/H/Dunes/Disc 2", "Dunes", 4, 1500)
-	ids := make([]string, len(disc1))
-	for i, b := range disc1 {
-		ids[i] = b.ID
+	for name, folders := range map[string][2]string{
+		"Disc N":         {"Disc 1", "Disc 2"},
+		"Title - CDn":    {"Dunes - CD1", "Dunes - CD2"},
+		"Title (Disc n)": {"Dunes (Disc 1)", "Dunes (Disc 2)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := ddRealStore(t)
+			disc1 := chSeedGroup(t, s, "/lib/H/Dunes/"+folders[0], "Dunes", 4, 1500)
+			chSeedGroup(t, s, "/lib/H/Dunes/"+folders[1], "Dunes", 4, 1500)
+			ids := make([]string, len(disc1))
+			for i, b := range disc1 {
+				ids[i] = b.ID
+			}
+			sel := chSelectionFor(t, s, ids)
+			sel.AllowLowConfidence = true
+			res := chApply(t, s, sel)
+			if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "multi-disc") {
+				t.Fatalf("one disc of a multi-disc book merged: %+v", res.Groups)
+			}
+		})
 	}
-	sel := chSelectionFor(t, s, ids)
-	sel.AllowLowConfidence = true
+}
+
+// chCountingStore counts whole-library loads.
+type chCountingStore struct {
+	*database.PebbleStore
+	fullLoads int
+}
+
+func (c *chCountingStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	c.fullLoads++
+	return c.PebbleStore.GetAllBooksCore(limit, offset)
+}
+
+// A real merge never loads the whole library: verification (before and
+// under the process-wide merge lock) re-lists only the members' folder
+// through the book_atpath index. Loading every book once per group under
+// that lock blocked every dedup and UI merge for the whole run.
+func TestMergeChapterGroups_ApplyDoesNotLoadTheLibrary(t *testing.T) {
+	s := ddRealStore(t)
+	var sels []chapterGroupSelection
+	for _, d := range []string{"/lib/P/A", "/lib/P/B", "/lib/P/C"} {
+		books := chSeedGroup(t, s, d, "Tale", 3, 300)
+		sels = append(sels, chSelectionFor(t, s, []string{books[0].ID, books[1].ID, books[2].ID}))
+	}
+	cs := &chCountingStore{PebbleStore: s}
+	raw, _ := json.Marshal(map[string]any{"dry_run": false, "groups": sels})
+	res := chRun(t, &mergeChapterGroupsJob{}, cs, string(raw), false)
+	if res.BooksMerged != 6 {
+		t.Fatalf("want 3 groups merged (6 sources), got %+v", res)
+	}
+	if cs.fullLoads != 0 {
+		t.Fatalf("a real merge of 3 groups loaded the whole library %d times", cs.fullLoads)
+	}
+}
+
+// A ZOMBIE library.scan row -- "running" in the store, but with no progress
+// for far longer than the registry watchdog lets a live run go quiet -- does
+// not block merges forever. The registry itself skips such rows (no live
+// handle); a live scan is still refused (NeverAppliesDuringALibraryScan).
+func TestMergeChapterGroups_ZombieScanRowDoesNotBlock(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/Z/Tale", "Tale", 2, 300)
+	sel := chSelectionFor(t, s, []string{books[0].ID, books[1].ID})
+	if err := s.InsertOperationV2(database.OperationV2Row{ID: "op-zombie", DefID: "library.scan", Plugin: "library", Status: "queued"}); err != nil {
+		t.Fatalf("InsertOperationV2: %v", err)
+	}
+	long := time.Now().Add(-6 * time.Hour)
+	if err := s.UpdateOperationV2Status("op-zombie", "running", &long, nil, nil); err != nil {
+		t.Fatalf("start the zombie row: %v", err)
+	}
 	res := chApply(t, s, sel)
-	if res.BooksMerged != 0 || res.Groups[0].Status != "blocked" || !strings.Contains(strings.Join(res.Groups[0].Blockers, ";"), "multi-disc") {
-		t.Fatalf("one disc of a multi-disc book merged: %+v", res.Groups)
+	if res.BooksMerged != 1 {
+		t.Fatalf("a zombie scan row blocked the merge: %+v", res.Groups)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package database
 
@@ -150,8 +150,26 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 //
 // Normally there are no markers, so this is one empty seek.
 func undecodableMarkedAtPath(snap *pebble.Snapshot, path string) ([]string, error) {
+	matched, err := undecodableMarkedMatching(snap, func(p string) bool { return p == path })
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(matched))
+	for id := range matched {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// undecodableMarkedMatching is undecodableMarkedAtPath for any path
+// predicate: it returns id -> path for each marked row that now decodes, is
+// live, and whose path matches, and fails closed on a row that still does not
+// decode.
+func undecodableMarkedMatching(snap *pebble.Snapshot, match func(path string) bool) (map[string]string, error) {
 	lower := []byte(bookAtPathUndecodablePrefix)
-	var blocking, atPath []string
+	var blocking []string
+	atPath := map[string]string{}
 	err := forEachKeyInRange(snap, lower, bareRowUpperBound(bookAtPathUndecodablePrefix), func(key, _ []byte) error {
 		id := string(key[len(lower):])
 		v, closer, err := snap.Get([]byte("book:" + id))
@@ -168,8 +186,8 @@ func undecodableMarkedAtPath(snap *pebble.Snapshot, path string) ([]string, erro
 			blocking = append(blocking, id)
 			return nil
 		}
-		if row.FilePath == path && !markedForDeletionFlag(row.MarkedForDeletion) {
-			atPath = append(atPath, id)
+		if match(row.FilePath) && !markedForDeletionFlag(row.MarkedForDeletion) {
+			atPath[id] = row.FilePath
 		}
 		return nil
 	})

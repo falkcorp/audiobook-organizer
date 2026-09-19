@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-09-19
 
@@ -329,14 +329,31 @@ func classifySeqCand(b database.BookCore) (seqCand, bool) {
 // seqCopySuffixRe is the " (1)" a file manager appends to a second copy.
 var seqCopySuffixRe = regexp.MustCompile(`\s+\(\d{1,2}\)$`)
 
-// seqDiscFolderRe matches a per-disc subfolder name: "Disc 1", "CD2",
-// "disk_03", "Part 2", "Disc 1 of 2".
-var seqDiscFolderRe = regexp.MustCompile(`(?i)^(?:disc|disk|cd|part)\s*[-_.#]?\s*\d{1,3}\b`)
+// seqDiscTokenRe finds a disc token ANYWHERE in a folder name: "Disc 1",
+// "Dune - CD1", "Dune (Disc 2)", "Disc One", "Dune_disk_02". Word boundaries
+// are spelled out because "_" is a word character for \b.
+var seqDiscTokenRe = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])((?:disc|disk|cd)\s*[-_.#]?\s*(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten))(?:$|[^a-z0-9])`)
 
-// IsDiscFolderName reports whether a folder's base name reads as one disc (or
-// part) of a book split into sibling folders.
-func IsDiscFolderName(name string) bool {
-	return seqDiscFolderRe.MatchString(strings.TrimSpace(name))
+// seqPartFolderRe is "Part N" at the START of a folder name only: "Part 2"
+// inside a name ("The Tower Part 2 - Subtitle") is a volume title.
+var seqPartFolderRe = regexp.MustCompile(`(?i)^(part\s*[-_.#]?\s*\d{1,3})\b`)
+
+// DiscFolderKey reports whether a folder is one disc (or part) of a book
+// split into sibling folders, and returns the key its sibling discs share:
+// the parent directory plus the folder name with the disc token removed
+// ("Dune - CD1" and "Dune - CD2" share one key; "Alpha - CD1" and "Beta -
+// CD1" do not).
+func DiscFolderKey(dir string) (string, bool) {
+	name := filepath.Base(dir)
+	loc := seqDiscTokenRe.FindStringSubmatchIndex(name)
+	if loc == nil {
+		loc = seqPartFolderRe.FindStringSubmatchIndex(name)
+	}
+	if loc == nil {
+		return "", false
+	}
+	stem := normForCompare(name[:loc[2]] + " " + name[loc[3]:])
+	return filepath.Dir(dir) + "\x00" + stem, true
 }
 
 // seqTitleCarriesNothing reports whether a non-position title adds nothing
@@ -442,11 +459,12 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 
 	// A book split into sibling "Disc N" folders cannot be merged one disc
 	// at a time: each disc alone would become a half-book. Count the disc
-	// folders under each parent; any parent with two or more blocks them.
+	// folders under each parent that share a stem once the disc token is
+	// removed; two or more block them.
 	discFolders := map[string]int{}
 	for _, d := range dirs {
-		if IsDiscFolderName(filepath.Base(d)) {
-			discFolders[filepath.Dir(d)]++
+		if k, ok := DiscFolderKey(d); ok {
+			discFolders[k]++
 		}
 	}
 
@@ -456,8 +474,8 @@ func DetectChapterGroupsWithOptions(books []database.BookCore, opts ChapterDetec
 	for i, dir := range dirs {
 		eg.Go(func() error {
 			multiDisc := 0
-			if IsDiscFolderName(filepath.Base(dir)) {
-				multiDisc = discFolders[filepath.Dir(dir)]
+			if k, ok := DiscFolderKey(dir); ok {
+				multiDisc = discFolders[k]
 			}
 			results[i] = detectInDir(dir, byDir[dir], opts, vi, multiDisc)
 			return nil

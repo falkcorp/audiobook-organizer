@@ -24256,6 +24256,68 @@ func (_c *MockStore_LiveBookIDsAtPath_Call) RunAndReturn(run func(path string) (
 	return _c
 }
 
+// LiveBookPathsUnderDir provides a mock function for the type MockStore
+func (_mock *MockStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	ret := _mock.Called(dir)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LiveBookPathsUnderDir")
+	}
+
+	var r0 map[string]string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (map[string]string, error)); ok {
+		return returnFunc(dir)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) map[string]string); ok {
+		r0 = returnFunc(dir)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(dir)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_LiveBookPathsUnderDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LiveBookPathsUnderDir'
+type MockStore_LiveBookPathsUnderDir_Call struct {
+	*mock.Call
+}
+
+// LiveBookPathsUnderDir is a helper method to define mock.On call
+//   - dir string
+func (_e *MockStore_Expecter) LiveBookPathsUnderDir(dir any) *MockStore_LiveBookPathsUnderDir_Call {
+	return &MockStore_LiveBookPathsUnderDir_Call{Call: _e.mock.On("LiveBookPathsUnderDir", dir)}
+}
+
+func (_c *MockStore_LiveBookPathsUnderDir_Call) Run(run func(dir string)) *MockStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_LiveBookPathsUnderDir_Call) Return(stringToString map[string]string, err error) *MockStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Return(stringToString, err)
+	return _c
+}
+
+func (_c *MockStore_LiveBookPathsUnderDir_Call) RunAndReturn(run func(dir string) (map[string]string, error)) *MockStore_LiveBookPathsUnderDir_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MarkAIJobApplied provides a mock function for the type MockStore
 func (_mock *MockStore) MarkAIJobApplied(id string, successCount int, errorCount int, rowErrors []database.AIJobRowError) error {
 	ret := _mock.Called(id, successCount, errorCount, rowErrors)
