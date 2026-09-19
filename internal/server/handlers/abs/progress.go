@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-09-19
 
@@ -386,6 +386,45 @@ func (h *Handler) durationForBook(bookID string, clientDuration *float64) float6
 		return *clientDuration
 	}
 	return 0
+}
+
+// durationBoundsForBook is durationForBook for code that must JUDGE a position
+// against the duration (offline replay). known=false when any file of the book
+// has no duration: the sum is then an undercount, and the caller must neither
+// refuse nor clamp a position against it. For an unknown duration it returns the
+// client's duration when given, else 0, so an uncertain value never auto-finishes
+// a book.
+func (h *Handler) durationBoundsForBook(bookID string, clientDuration *float64) (float64, bool) {
+	if h.library != nil {
+		if files, err := h.library.GetBookFiles(bookID); err == nil && len(files) > 0 {
+			total := 0.0
+			for i := range files {
+				if files[i].Duration <= 0 {
+					if clientDuration != nil && *clientDuration > 0 {
+						return *clientDuration, false
+					}
+					return 0, false
+				}
+				total += float64(files[i].Duration)
+			}
+			return total, true
+		}
+	}
+	d := h.durationForBook(bookID, clientDuration)
+	return d, d > 0
+}
+
+// fileCount is the number of book_file rows (0 when unreadable), for the
+// per-file rounding slack in duration checks.
+func (h *Handler) fileCount(bookID string) int {
+	if h.library == nil {
+		return 0
+	}
+	files, err := h.library.GetBookFiles(bookID)
+	if err != nil {
+		return 0
+	}
+	return len(files)
 }
 
 // ── id resolution ───────────────────────────────────────────────────────────

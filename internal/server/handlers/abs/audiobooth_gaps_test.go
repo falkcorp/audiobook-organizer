@@ -656,9 +656,11 @@ func TestSessionLocal_ReusedSessionListeningAfterResetIsAccepted(t *testing.T) {
 	}
 }
 
-// Round-5 MEDIUM: a refused session must not be answered 200 on
-// /api/session/local (that tells the app the listening was recorded).
-func TestSessionLocal_RefusedSessionIsNotReportedAsSuccess(t *testing.T) {
+// Round-6: a session discarded because it would undo a reset can NEVER
+// become valid. AudioBooth re-sends a 4xx'd session on every activation
+// forever, so /api/session/local answers 200 and applies nothing (logged).
+// Malformed/impossible data keeps its 409.
+func TestSessionLocal_DiscardedResetSessionIs200AndAppliesNothing(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 300.0})
 	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
@@ -667,8 +669,54 @@ func TestSessionLocal_RefusedSessionIsNotReportedAsSuccess(t *testing.T) {
 	code, _, raw := w.req(t, http.MethodPost, "/api/session/local", map[string]any{
 		"id": "pre", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 300.0,
 		"startedAt": time.Now().Add(-time.Hour).UnixMilli(), "updatedAt": time.Now().Add(-time.Hour).UnixMilli()})
+	if code != http.StatusOK {
+		t.Fatalf("discarded session answered %d %s, want 200 (a 4xx is re-sent forever)", code, raw)
+	}
+	if got := storedPosition(t, w); got != 0 {
+		t.Fatalf("a discarded session was applied: position %v", got)
+	}
+	code, _, raw = w.req(t, http.MethodPost, "/api/session/local", map[string]any{
+		"id": "foreign", "userId": "someone-else", "libraryItemId": w.syncID, "currentTime": 10.0})
 	if code != http.StatusConflict {
-		t.Fatalf("refused session answered %d %s, want 409", code, raw)
+		t.Fatalf("an impossible session answered %d %s, want 409", code, raw)
+	}
+}
+
+// Round-6 MEDIUM: clients that RE-STAMP updatedAt=now on replay pass the
+// updatedAt test, but the playhead restarts at 0 on reset and cannot move
+// faster than elapsed × max rate. A backlog position beyond that is discarded;
+// real listening at 1x and 3x since the reset is accepted.
+func TestSessionLocalAll_ReStampedBacklogCannotUndoAReset(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		elapsed time.Duration
+		ct      float64
+		accept  bool
+	}{
+		{"re-stamped backlog", 10 * time.Minute, 3600, false},
+		{"5 min at 1x", 5 * time.Minute, 300, true},
+		{"5 min at 3x", 5 * time.Minute, 900, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWriteHarness(t)
+			w.patch(t, map[string]any{"currentTime": 3600.0})
+			if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
+				t.Fatalf("reset = %d %s", code, raw)
+			}
+			w.seed.lib.mu.Lock()
+			resetAt := time.Now().Add(-tc.elapsed)
+			w.seed.lib.states[w.userID+"|"+w.bookID].ProgressResetAt = &resetAt
+			w.seed.lib.mu.Unlock()
+			localAll(t, w, map[string]any{"id": "s", "userId": w.userID, "libraryItemId": w.syncID,
+				"currentTime": tc.ct, "startedAt": time.Now().Add(-2 * time.Hour).UnixMilli(), "updatedAt": time.Now().UnixMilli()})
+			got := storedPosition(t, w)
+			if tc.accept && got != tc.ct {
+				t.Fatalf("real post-reset listening refused: position %v, want %v", got, tc.ct)
+			}
+			if !tc.accept && got != 0 {
+				t.Fatalf("a re-stamped backlog undid the reset: position %v", got)
+			}
+		})
 	}
 }
 
