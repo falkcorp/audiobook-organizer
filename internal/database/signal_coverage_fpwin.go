@@ -440,9 +440,12 @@ func countWindowCoverage(ctx context.Context, n int, at func(i int) *BookFile, c
 // GetFingerprintWindowCoverage reports windowed-fingerprint coverage of every
 // present book_file row. See the file comment for the fast/deep split.
 //
-// Rows come from memdb pointers when memdb is serving. Without memdb the fast
-// path refuses with ErrMemDBNotReady (it must stay cheap); the deep path reads
-// the rows from Pebble instead.
+// Row source follows GetBookFileSignalCoverage so the two sections of one
+// response count the same rows: the fast path reads memdb pointers (and
+// refuses with ErrMemDBNotReady when memdb is not serving — it must stay
+// cheap), the deep path always reads the rows from Pebble, exactly as the deep
+// book_file scan does. Mixing them would give "windowed / present" two
+// different denominators in one report.
 func (p *PebbleStore) GetFingerprintWindowCoverage(ctx context.Context, deep bool, crit WindowCoverageCriteria, workers int) (*FingerprintWindowCoverage, error) {
 	if workers < 1 {
 		workers = runtime.NumCPU()
@@ -462,7 +465,7 @@ func (p *PebbleStore) GetFingerprintWindowCoverage(ctx context.Context, deep boo
 		at     func(i int) *BookFile
 		source string
 	)
-	if mem := p.mem(); p.UseMemDB && mem != nil {
+	if mem := p.mem(); !deep && p.UseMemDB && mem != nil {
 		ptrs, err := mem.bookFilePointers()
 		if err != nil {
 			return nil, err

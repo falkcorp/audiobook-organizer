@@ -157,6 +157,8 @@ func TestFingerprintWindowCoverage_FastPathIsKeysOnly(t *testing.T) {
 	assert.EqualValues(t, 3, cov.NoWindows)
 	assert.Contains(t, cov.Unavailable, "with_current_windows")
 	assert.Nil(t, cov.WindowRowsByTools)
+	assert.Equal(t, cov.PresentFiles, cov.WithWindows+cov.TombstonedNoWindows+cov.NoWindows,
+		"on the fast path WithWindows stands in for the two currency buckets")
 
 	// Without memdb the fast path refuses rather than scanning Pebble.
 	fx.store.UseMemDB = false
@@ -226,19 +228,21 @@ func TestFingerprintWindowCoverage_CensusEqualsBruteForce(t *testing.T) {
 		}
 	}
 	require.EqualValues(t, 9, want.PresentFiles, "brute force must see the whole fixture")
-	// Both row sources: memdb pointers and the Pebble fallback.
 	s.WaitForWarmup()
-	require.True(t, s.IsMemReady(), "the memdb arm would silently run the Pebble path")
-	for _, src := range []string{"memdb", "pebble"} {
-		s.UseMemDB = src == "memdb"
-		for _, workers := range []int{1, 2, 5, 16} {
-			cov, err := s.GetFingerprintWindowCoverage(context.Background(), true, windowCoverageCriteria, workers)
-			require.NoError(t, err)
-			assert.Equal(t, src, cov.Source)
-			assert.Equal(t, want, cov.WindowCoverageBuckets, "source=%s workers=%d", src, workers)
-		}
+	require.True(t, s.IsMemReady(), "the fast arm would refuse instead of reading memdb")
+	for _, workers := range []int{1, 2, 5, 16} {
+		cov, err := s.GetFingerprintWindowCoverage(context.Background(), true, windowCoverageCriteria, workers)
+		require.NoError(t, err)
+		assert.Equal(t, "pebble", cov.Source, "deep reads rows from Pebble, like the deep book_file scan")
+		assert.Equal(t, want, cov.WindowCoverageBuckets, "deep workers=%d", workers)
+
+		fast, err := s.GetFingerprintWindowCoverage(context.Background(), false, windowCoverageCriteria, workers)
+		require.NoError(t, err)
+		assert.Equal(t, "memdb", fast.Source)
+		fastWant := want
+		fastWant.WithCurrentWindows, fastWant.WithStaleWindowsOnly = 0, 0
+		assert.Equal(t, fastWant, fast.WindowCoverageBuckets, "fast workers=%d", workers)
 	}
-	s.UseMemDB = true
 }
 
 func TestFingerprintWindowCoverage_SharesTheDeepScanSlot(t *testing.T) {
