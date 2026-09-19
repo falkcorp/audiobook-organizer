@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.10.2
+// version: 2.11.0
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -923,7 +923,7 @@ func TestApplyVerdicts_PersistsAndRoutes(t *testing.T) {
 		{Index: 99, IsDuplicate: true, Reason: "unknown index — should be ignored"},
 	}
 
-	applied := engine.ApplyVerdicts(verdicts, byIndex)
+	applied := engine.ApplyVerdicts(verdicts, byIndex).Applied
 	if applied != 2 {
 		t.Errorf("applied = %d, want 2", applied)
 	}
@@ -997,7 +997,7 @@ func TestApplyVerdicts_AutoMergeOnHighConfidence(t *testing.T) {
 		{Index: 0, IsDuplicate: true, Confidence: "high", Reason: "identical metadata"},
 	}
 
-	applied := engine.ApplyVerdicts(verdicts, byIndex)
+	applied := engine.ApplyVerdicts(verdicts, byIndex).Applied
 	if applied != 1 {
 		t.Errorf("applied = %d, want 1", applied)
 	}

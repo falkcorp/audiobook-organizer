@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -4005,7 +4006,16 @@ func (de *Engine) loadAuthorEntity(entityID string) (ai.DedupEntity, bool) {
 // immediate merge for "duplicate" verdicts at confidence "high".
 //
 // Returns the number of verdicts successfully persisted (not the
-// number of merges fired — that's logged separately).
+// number of merges fired — that's logged separately) and the number skipped
+// as stale.
+//
+// Only a candidate whose CURRENT status is "pending" is touched. The status is
+// re-read per verdict, not taken from byIndex: that map is a snapshot built when
+// the callback started, and both the owner (dismissing a pair while the batch
+// ran) and this loop (marking a pair merged) change it. A dismissed or resolved
+// candidate gets no verdict write and is never auto-merged — an LLM verdict
+// must not override an owner decision. The same rule makes a replay of an
+// already-applied batch a no-op for every candidate the first run resolved.
 //
 // Auto-merges via LLM verdict tag the surviving book with
 // `dedup:merge-survivor:llm-auto` as a system tag so the user
@@ -4015,16 +4025,31 @@ func (de *Engine) loadAuthorEntity(entityID string) (ai.DedupEntity, bool) {
 //
 // Errors are logged and skipped so one bad row doesn't abort
 // the whole batch.
-func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]database.DedupCandidate) int {
+func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]database.DedupCandidate) ai.ApplyVerdictsResult {
 	applied := 0
+	skippedStale := 0
 	autoMerged := 0
 	refusedITunes := 0
 	for _, v := range verdicts {
-		candidate, ok := byIndex[v.Index]
+		snap, ok := byIndex[v.Index]
 		if !ok {
 			slog.Info("dedup LLM returned unknown index", "v", v.Index)
 			continue
 		}
+		current, err := de.embedStore.GetCandidateByID(snap.ID)
+		if err != nil || current == nil {
+			// Deleted/purged since submission, or unreadable: never write a
+			// verdict we cannot check against the current status.
+			verdictLog.Warn("LLM verdict for candidate %d skipped: cannot re-read it (err=%v)", snap.ID, err)
+			skippedStale++
+			continue
+		}
+		if current.Status != "pending" {
+			verdictLog.Info("LLM verdict for candidate %d skipped: status is %q, not pending", current.ID, current.Status)
+			skippedStale++
+			continue
+		}
+		candidate := *current
 		verdict := "not_duplicate"
 		if v.IsDuplicate {
 			verdict = "duplicate"
@@ -4141,8 +4166,10 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 	if autoMerged > 0 {
 		slog.Info("dedup LLM auto-merge fired on high-confidence pair(s)", "autoMerged", autoMerged)
 	}
-	return applied
+	return ai.ApplyVerdictsResult{Applied: applied, SkippedStale: skippedStale}
 }
+
+var verdictLog = logger.New("dedup.llm-verdict")
 
 // levenshteinDistance measures the edit distance between two strings in RUNES,
 // preserving case.

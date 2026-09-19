@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled_paths_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a4b1b59-2071-4042-bc11-03f0520916dd
-// last-edited: 2026-09-10
+// last-edited: 2026-09-19
 
 // Regression tests for DA-02: the two UNATTENDED auto-merge triggers inside the
 // engine (exact-file-hash auto-merge on the FullScan Layer-1 pass, and
@@ -97,7 +97,7 @@ func TestApplyVerdicts_LLMAutoMergeWritesJournalEntry(t *testing.T) {
 	applied := engine.ApplyVerdicts(
 		[]ai.DedupPairVerdict{{Index: 0, IsDuplicate: true, Confidence: "high", Reason: "same book"}},
 		map[int]database.DedupCandidate{0: cands[0]},
-	)
+	).Applied
 	if applied != 1 {
 		t.Fatalf("expected 1 verdict applied, got %d", applied)
 	}
