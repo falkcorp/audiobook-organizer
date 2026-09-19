@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.9.1
+// version: 4.10.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package server
 
@@ -1313,6 +1313,7 @@ func (s *Server) setupRoutes() {
 		protected.Use(authMiddleware)
 
 		s.wireHandlers(api, authMiddleware, protected, oauthH)
+		s.wireFingerprintWorkerRoutes(api, authMiddleware)
 		{
 			// Audiobook routes.
 			// NOTE: the main audiobooks list / CRUD domain (list, count, facets,

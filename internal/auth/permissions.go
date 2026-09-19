@@ -1,6 +1,7 @@
 // file: internal/auth/permissions.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d8a1f4e-5c3b-4f90-a7d6-1e8c0f2b9a45
+// last-edited: 2026-09-19
 //
 // Permission atoms for the multi-user model (spec 3.7). Permissions
 // are Go string constants — not DB rows. Roles carry inline lists of
@@ -71,6 +72,15 @@ const (
 	// PermRequestsApprove — reserved for the future request-approval
 	// flow (admin-equivalent for the requests subsystem).
 	PermRequestsApprove Permission = "requests.approve"
+
+	// PermFingerprintWorker gates the remote fingerprint worker API
+	// (/api/v1/fingerprint/worker/*): leasing windowed-fingerprint jobs
+	// from a running acoustid.window-backfill and posting their results.
+	// Meant for a dedicated service user whose API key is scoped to
+	// exactly this atom (Scopes=["fingerprint.worker"], narrowed by
+	// intersectPermissions), so a worker's key can do nothing else. Only
+	// admin holds it among the seed roles.
+	PermFingerprintWorker Permission = "fingerprint.worker"
 )
 
 // All returns every permission constant defined in this package.
@@ -90,6 +100,7 @@ func All() []Permission {
 		PermCollectionsManage,
 		PermRequestsCreate,
 		PermRequestsApprove,
+		PermFingerprintWorker,
 	}
 }
 
@@ -109,7 +120,8 @@ func IsKnown(p Permission) bool {
 		PermPlaylistsCreate,
 		PermCollectionsManage,
 		PermRequestsCreate,
-		PermRequestsApprove:
+		PermRequestsApprove,
+		PermFingerprintWorker:
 		return true
 	}
 	return false

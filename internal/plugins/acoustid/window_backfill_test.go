@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
 // last-edited: 2026-09-19
 
@@ -242,7 +242,7 @@ func TestWindowWorkers_ExplicitAndClamped(t *testing.T) {
 
 	// The options RunItems actually receives carry the pool size, a
 	// checkpoint hook that works at Concurrency > 1, and a label.
-	opts := windowRunOptions(6, 0, 10, 0, []windowItem{{FileID: "a"}}, WindowBackfillParams{Live: true}, &wbReporter{}, &windowTally{})
+	opts := windowRunOptions(6, 0, 10, 0, []windowItem{{FileID: "a"}}, WindowBackfillParams{Live: true}, &wbReporter{}, &windowTally{}, nil)
 	require.Equal(t, 6, opts.Concurrency)
 	require.NotNil(t, opts.CheckpointStateFn, "CheckpointFn is never called by runItemsPar; the watermark hook is required")
 	require.Nil(t, opts.CheckpointFn)
