@@ -321,9 +321,9 @@ const (
 	BatchVerdictFreshCandidates
 	// BatchVerdictKnownEmpty: every currently enabled provider has already
 	// answered the book's current inputs with nothing. Asking again is the
-	// same question to the same providers; it is only re-opened by an input
-	// change (title/author, which changes SourceHash), a newly enabled
-	// provider, or an explicit force.
+	// same question to the same providers; it is re-opened by an input change
+	// (title/author, which changes SourceHash), a newly enabled provider, an
+	// explicit force, or database.MetadataKnownEmptyTTL passing.
 	BatchVerdictKnownEmpty
 )
 
@@ -370,6 +370,9 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book) (*MetadataCandidateC
 		if nowUTC().Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL {
 			return entry, BatchVerdictKnownEmpty
 		}
+		return entry, BatchVerdictNone
+	}
+	if nowUTC().Sub(*entry.LastEmptyFetchAt) >= database.MetadataKnownEmptyTTL {
 		return entry, BatchVerdictNone
 	}
 	active := mfs.ActiveSourceNames()
