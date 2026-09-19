@@ -350,8 +350,13 @@ export function ChapterConsolidationCard() {
   // A real merge needs a preview to confirm against: the dialog's counts come
   // from it. A result that was itself a real merge does not count.
   const preview = result && result.dry_run ? result : null;
+  // Groups the preview marked would_skip (iTunes guard, unreadable primary)
+  // are not merged, so they do not count toward what the dialog promises.
   const previewSources = preview
-    ? preview.groups.reduce((n, g) => n + g.source_book_ids.length, 0)
+    ? preview.groups.reduce(
+        (n, g) => n + (g.status === 'would_skip' ? 0 : g.source_book_ids.length),
+        0
+      )
     : 0;
   const groups = result?.groups ?? [];
   const isMergeResult = result?.job === 'merge-chapter-groups';
