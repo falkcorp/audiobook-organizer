@@ -1,5 +1,5 @@
 // file: internal/ai/dedup_review_aijobs_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7f3c4a8d-9b2e-4f6a-8c1d-2e5f9a1b3c7d
 // last-edited: 2026-09-19
 
@@ -114,6 +114,14 @@ func (f *fakeStoreForDedup) MarkAIJobApplyFailed(id, msg string) (database.AIJob
 	j.LastApplyAt = time.Now()
 	f.jobs[id] = j
 	return j, nil
+}
+func (f *fakeStoreForDedup) MarkAIJobApplied(id string, s, e int, re []database.AIJobRowError) error {
+	j := f.jobs[id]
+	j.Applied = true
+	j.SuccessCount = s
+	j.ErrorCount = e
+	f.jobs[id] = j
+	return nil
 }
 func (f *fakeStoreForDedup) ListAIJobs(t, s string, l, o int) ([]database.AIJob, error) {
 	var out []database.AIJob

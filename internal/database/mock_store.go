@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.128.0
+// version: 1.129.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-19
 
@@ -287,6 +287,7 @@ type MockStore struct {
 	MarkAIJobCompletedFunc   func(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
 	MarkAIJobFailedFunc      func(id, errMsg string) error
 	MarkAIJobApplyFailedFunc func(id, errMsg string) (AIJob, error)
+	MarkAIJobAppliedFunc     func(id string, successCount, errorCount int, rowErrors []AIJobRowError) error
 	ListAIJobsFunc           func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 
 	// Metadata rejections
@@ -3577,6 +3578,13 @@ func (m *MockStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
 		return m.MarkAIJobApplyFailedFunc(id, errMsg)
 	}
 	return AIJob{}, nil
+}
+
+func (m *MockStore) MarkAIJobApplied(id string, successCount, errorCount int, rowErrors []AIJobRowError) error {
+	if m.MarkAIJobAppliedFunc != nil {
+		return m.MarkAIJobAppliedFunc(id, successCount, errorCount, rowErrors)
+	}
+	return nil
 }
 
 func (m *MockStore) ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error) {

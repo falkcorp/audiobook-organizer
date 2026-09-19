@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/aijobs_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 92b8a4e2-1647-48c3-acc3-ae3e101623d7
 // last-edited: 2026-09-19
 
@@ -76,6 +76,14 @@ func (f *fakeStore) MarkAIJobApplyFailed(id, msg string) (database.AIJob, error)
 	j.LastApplyAt = time.Now()
 	f.jobs[id] = j
 	return j, nil
+}
+func (f *fakeStore) MarkAIJobApplied(id string, s, e int, re []database.AIJobRowError) error {
+	j := f.jobs[id]
+	j.Applied = true
+	j.SuccessCount = s
+	j.ErrorCount = e
+	f.jobs[id] = j
+	return nil
 }
 func (f *fakeStore) ListAIJobs(t, s string, l, o int) ([]database.AIJob, error) {
 	var out []database.AIJob

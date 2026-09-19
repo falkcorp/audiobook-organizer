@@ -1,5 +1,5 @@
 // file: internal/database/iface_metadata.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
 // last-edited: 2026-09-19
 //
@@ -154,5 +154,9 @@ type AIJobsStore interface {
 	// status "apply_failed", ApplyAttempts+1, LastApplyError, LastApplyAt. It
 	// returns the updated row so the caller can decide whether to give up.
 	MarkAIJobApplyFailed(id, errMsg string) (AIJob, error)
+	// MarkAIJobApplied records that the callback applied the results, with the
+	// outcome counts, without changing status. Written before MarkAIJobCompleted
+	// so a failed completion mark never re-runs the callback.
+	MarkAIJobApplied(id string, successCount, errorCount int, rowErrors []AIJobRowError) error
 	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
 }

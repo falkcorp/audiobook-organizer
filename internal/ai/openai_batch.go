@@ -1,5 +1,5 @@
 // file: internal/ai/openai_batch.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
 // last-edited: 2026-09-19
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/pagination"
@@ -53,6 +54,8 @@ type BatchInfo struct {
 	OutputFileID  string
 	ErrorFileID   string
 	RequestCounts RequestCounts
+	// CreatedAt is when OpenAI created the batch.
+	CreatedAt time.Time
 	// Metadata is the batch's full metadata map, including the owner keys
 	// (aijobs.MetadataJobIDKey, BatchMetaScanID, ...) set at creation.
 	Metadata map[string]string
@@ -105,8 +108,19 @@ func (p *OpenAIParser) CreateBatchWithMetadata(ctx context.Context, fileID strin
 	return batch.ID, nil
 }
 
-// ListProjectBatches lists all recent batches tagged with our project metadata.
-func (p *OpenAIParser) ListProjectBatches(ctx context.Context) ([]BatchInfo, error) {
+// maxBatchListPages bounds ListProjectBatches' walk back through history. At
+// 100 batches a page that is 5,000 batches — far past OpenAI's retention of
+// anything a pending job could still be waiting on.
+const maxBatchListPages = 50
+
+// ListProjectBatches lists recent batches tagged with our project metadata.
+//
+// With a zero since it reads one page (the 100 most recent batches of the
+// whole OpenAI project, filtered to ours afterwards — so fewer than 100 of
+// ours). With a non-zero since it keeps paging until a page reaches batches
+// created before since, so a job whose batch id was never recorded is found
+// however much other traffic the project has had since.
+func (p *OpenAIParser) ListProjectBatches(ctx context.Context, since time.Time) ([]BatchInfo, error) {
 	if !p.enabled {
 		return nil, fmt.Errorf("OpenAI parser is not enabled")
 	}
@@ -119,30 +133,61 @@ func (p *OpenAIParser) ListProjectBatches(ctx context.Context) ([]BatchInfo, err
 	}
 
 	var results []BatchInfo
-	// Iterate through the first page of results
-	for _, b := range page.Data {
-		if b.Metadata == nil || b.Metadata["project"] != "audiobook-organizer" {
-			continue
+	for pages := 1; page != nil; pages++ {
+		reachedSince := false
+		for _, b := range page.Data {
+			if !since.IsZero() && time.Unix(b.CreatedAt, 0).Before(since) {
+				reachedSince = true
+			}
+			if b.Metadata == nil || b.Metadata["project"] != "audiobook-organizer" {
+				continue
+			}
+			results = append(results, batchInfoFrom(b))
 		}
-		md := make(map[string]string, len(b.Metadata))
-		for k, v := range b.Metadata {
-			md[k] = v
+		if since.IsZero() || reachedSince || len(page.Data) == 0 || pages >= maxBatchListPages {
+			break
 		}
-		results = append(results, BatchInfo{
-			Metadata:     md,
-			ID:           b.ID,
-			Status:       string(b.Status),
-			Type:         b.Metadata["type"],
-			OutputFileID: b.OutputFileID,
-			ErrorFileID:  b.ErrorFileID,
-			RequestCounts: RequestCounts{
-				Total:     int(b.RequestCounts.Total),
-				Completed: int(b.RequestCounts.Completed),
-				Failed:    int(b.RequestCounts.Failed),
-			},
-		})
+		page, err = page.GetNextPage()
+		if err != nil {
+			return results, fmt.Errorf("list batches (page %d): %w", pages+1, err)
+		}
 	}
 	return results, nil
+}
+
+// GetBatch fetches one batch by id, whatever its age. The poller uses it for
+// batches the store is still waiting on, so a retry never depends on the batch
+// being in the recent listing.
+func (p *OpenAIParser) GetBatch(ctx context.Context, batchID string) (BatchInfo, error) {
+	if !p.enabled {
+		return BatchInfo{}, fmt.Errorf("OpenAI parser is not enabled")
+	}
+	b, err := p.client.Batches.Get(ctx, batchID)
+	if err != nil {
+		return BatchInfo{}, fmt.Errorf("get batch %s: %w", batchID, err)
+	}
+	return batchInfoFrom(*b), nil
+}
+
+func batchInfoFrom(b openai.Batch) BatchInfo {
+	md := make(map[string]string, len(b.Metadata))
+	for k, v := range b.Metadata {
+		md[k] = v
+	}
+	return BatchInfo{
+		Metadata:     md,
+		ID:           b.ID,
+		Status:       string(b.Status),
+		Type:         md["type"],
+		OutputFileID: b.OutputFileID,
+		ErrorFileID:  b.ErrorFileID,
+		CreatedAt:    time.Unix(b.CreatedAt, 0),
+		RequestCounts: RequestCounts{
+			Total:     int(b.RequestCounts.Total),
+			Completed: int(b.RequestCounts.Completed),
+			Failed:    int(b.RequestCounts.Failed),
+		},
+	}
 }
 
 // Ensure pagination import is used.

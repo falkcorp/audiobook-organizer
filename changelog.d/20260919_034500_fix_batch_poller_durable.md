@@ -15,3 +15,12 @@
   it is marked failed with the reason, visible in the AI jobs list. A batch
   that OpenAI itself failed or let expire now marks its job failed instead of
   leaving it waiting forever.
+- An AI duplicate-review verdict no longer touches a pair you already
+  dismissed or resolved: it is not recorded over your decision and the pair
+  is never auto-merged. Jobs that older versions marked failed are no longer
+  re-applied after an upgrade.
+- AI job results are still collected when their batch has dropped out of
+  OpenAI's recent-batch list, and a batch that expired part-way through now
+  has the results it did finish applied instead of discarded.
+- Book embeddings that failed to save are retried instead of the batch being
+  recorded as done with those books left without vectors.

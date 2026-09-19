@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller_durable_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fe113f87-b567-440e-8ec1-63022b2e72db
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
@@ -107,7 +108,7 @@ func (c *countingCallback) cb(_ context.Context, _ []byte, results []aijobs.RowR
 	defer c.mu.Unlock()
 	c.calls++
 	for _, r := range results {
-		c.effects[r.CustomID] = 1
+		c.effects[r.CustomID]++
 	}
 	return len(results), 0, nil, nil
 }
@@ -118,6 +119,7 @@ func aijobsPoller(t *testing.T, store *crashJournalStore, client *fakeBatchClien
 	get := func() database.AIJobsStore { return store }
 	bp.RegisterHandler("aijobs", aijobsBatchHandler(client, get))
 	bp.RegisterReconciler("aijobs", aijobsReconciler(get))
+	bp.RegisterTracker("aijobs", aijobsTracker(get))
 	return bp
 }
 
@@ -220,4 +222,128 @@ func TestBatchPoller_PanickingHandlerReleasesClaim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
 	assert.True(t, bp.IsProcessed("batch_p"))
+}
+
+func seedSubmittedJob(t *testing.T, store *crashJournalStore, id, typ, batchID string) *countingCallback {
+	t.Helper()
+	cc := &countingCallback{effects: map[string]int{}}
+	aijobs.Register(typ, cc.cb)
+	require.NoError(t, store.CreateAIJob(database.AIJob{ID: id, Type: typ, Status: "pending", CreatedAt: time.Now()}, []byte("[]")))
+	require.NoError(t, store.MarkAIJobSubmitted(id, batchID))
+	return cc
+}
+
+// FIX-2: a batch that has scrolled out of the recent listing is still fetched
+// by id from the store's own list of owed batches, and applied.
+func TestBatchPoller_TrackedBatchOutsideListingStillApplied(t *testing.T) {
+	store := newPollerTestStore(t)
+	cc := seedSubmittedJob(t, store, "JOBL", "poller_unlisted_test", "batch_old")
+	client := &fakeBatchClient{
+		unlisted: []ai.BatchInfo{{ID: "batch_old", Status: "completed", Type: "aijobs", OutputFileID: "out_old"}},
+		outputs:  map[string][]ai.BatchRawResult{"out_old": {{CustomID: "JOBL-0", Content: "{}"}}},
+	}
+	n, err := aijobsPoller(t, store, client).Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 1, cc.calls)
+	job, _ := store.GetAIJob("JOBL")
+	assert.Equal(t, "completed", job.Status)
+
+	// Completed jobs are no longer tracked: no further fetches by id.
+	gets := client.gets
+	_, _ = aijobsPoller(t, store, client).Poll(context.Background())
+	assert.Equal(t, gets, client.gets)
+	assert.Equal(t, 1, cc.calls)
+}
+
+// FIX-4: a submitted job whose batch-id index is missing (a kill split the old
+// two-write MarkAIJobSubmitted) is repaired by the tracker and applied.
+func TestBatchPoller_MissingBatchIndexRebuilt(t *testing.T) {
+	store := newPollerTestStore(t)
+	cc := seedSubmittedJob(t, store, "JOBI", "poller_index_test", "batch_idx")
+	require.NoError(t, store.DeleteRaw("aijob_batch:batch_idx"))
+	_, err := store.GetAIJobByBatchID("batch_idx")
+	require.ErrorIs(t, err, database.ErrAIJobNotFound)
+
+	client := &fakeBatchClient{
+		batches: []ai.BatchInfo{{ID: "batch_idx", Status: "completed", Type: "aijobs", OutputFileID: "out_idx"}},
+		outputs: map[string][]ai.BatchRawResult{"out_idx": {{CustomID: "JOBI-0", Content: "{}"}}},
+	}
+	_, err = aijobsPoller(t, store, client).Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, cc.calls)
+	job, _ := store.GetAIJob("JOBI")
+	assert.Equal(t, "completed", job.Status)
+}
+
+// FIX-5: an expired batch with a partial output file is applied, not failed.
+func TestBatchPoller_ExpiredBatchWithOutputApplied(t *testing.T) {
+	store := newPollerTestStore(t)
+	cc := seedSubmittedJob(t, store, "JOBE", "poller_expired_test", "batch_exp")
+	client := &fakeBatchClient{
+		batches: []ai.BatchInfo{{ID: "batch_exp", Status: "expired", Type: "aijobs", OutputFileID: "out_exp",
+			Metadata: map[string]string{aijobs.MetadataJobIDKey: "JOBE"}}},
+		outputs: map[string][]ai.BatchRawResult{"out_exp": {{CustomID: "JOBE-0", Content: "{}"}}},
+	}
+	_, err := aijobsPoller(t, store, client).Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, cc.calls, "partial results of an expired batch were dropped")
+	job, _ := store.GetAIJob("JOBE")
+	assert.Equal(t, "completed", job.Status)
+}
+
+// An expired batch with no output has nothing to apply: its job is failed.
+func TestBatchPoller_ExpiredBatchWithoutOutputFailsJob(t *testing.T) {
+	store := newPollerTestStore(t)
+	cc := seedSubmittedJob(t, store, "JOBX", "poller_expired_empty_test", "batch_x")
+	client := &fakeBatchClient{batches: []ai.BatchInfo{{ID: "batch_x", Status: "expired", Type: "aijobs",
+		Metadata: map[string]string{aijobs.MetadataJobIDKey: "JOBX"}}}}
+	_, err := aijobsPoller(t, store, client).Poll(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, cc.calls)
+	job, _ := store.GetAIJob("JOBX")
+	assert.Equal(t, "failed", job.Status)
+}
+
+// FIX-6: a failed embedding upsert fails the handler so the batch is retried,
+// not recorded handled with books missing vectors.
+func TestBatchPoller_EmbedAsyncUpsertFailureRetried(t *testing.T) {
+	store := newPollerTestStore(t)
+	client := &fakeBatchClient{batches: []ai.BatchInfo{{ID: "batch_emb", Status: "completed", Type: "embed_async", OutputFileID: "out_emb"}}}
+	stored := map[string]int{}
+	failOnce := true
+	bp := newTestPoller(t, store, client)
+	bp.RegisterHandler("embed_async", embedAsyncBatchHandler(
+		func(context.Context, string) ([]ai.EmbedBatchResult, error) {
+			return []ai.EmbedBatchResult{{BookID: "B1"}, {BookID: "B2"}}, nil
+		},
+		func(e database.Embedding) error {
+			if e.EntityID == "B2" && failOnce {
+				failOnce = false
+				return assert.AnError
+			}
+			stored[e.EntityID]++
+			return nil
+		},
+	))
+	_, _ = bp.Poll(context.Background())
+	assert.False(t, bp.IsProcessed("batch_emb"), "batch recorded handled with a failed upsert")
+	_, _ = bp.Poll(context.Background())
+	assert.True(t, bp.IsProcessed("batch_emb"))
+	assert.Equal(t, 1, stored["B2"])
+}
+
+// A foreign install's aijobs batch (no local job) is skipped for the process
+// without erroring every tick, and is not journaled.
+func TestBatchPoller_ForeignAIJobsBatchSkippedInMemory(t *testing.T) {
+	store := newPollerTestStore(t)
+	client := &fakeBatchClient{
+		batches: []ai.BatchInfo{{ID: "batch_foreign", Status: "completed", Type: "aijobs", OutputFileID: "out_f"}},
+		outputs: map[string][]ai.BatchRawResult{"out_f": {{CustomID: "X-0"}}},
+	}
+	bp := aijobsPoller(t, store, client)
+	_, err := bp.Poll(context.Background())
+	require.NoError(t, err)
+	assert.True(t, bp.IsProcessed("batch_foreign"))
+	assert.False(t, aijobsPoller(t, store, client).IsProcessed("batch_foreign"), "foreign batch must not be journaled")
 }
