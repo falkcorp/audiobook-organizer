@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -62,7 +62,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 }
 
 // pluginStore is what this plugin reads and writes, measured with an
-// empty-interface compiler probe under -gcflags=-e: eight methods, no
+// empty-interface compiler probe under -gcflags=-e: nine methods (split
+// below to stay under the interfacebloat limit), no
 // forwarding constraints. It was pluginStore -- 398 methods -- until
 // 2026-08-19.
 //
@@ -70,19 +71,34 @@ func (p *Plugin) Register(r sdk.Registry) error {
 // *PebbleStore, not on this interface, and are resolved with
 // database.AsPebbleStore rather than a bare assertion -- see reset_all.go.
 type pluginStore interface {
+	pluginBookReader
+	pluginFileStore
+	pluginBookSigWriter
+}
+
+// pluginBookReader pages through books for the backfill.
+type pluginBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	// CountAllBooks sizes the backfill progress bar now that the op pages
 	// through books instead of loading them all up front.
 	CountAllBooks() (int, error)
+}
+
+// pluginFileStore reads and writes the book_file rows that carry prints.
+type pluginFileStore interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]database.BookFile, int64, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// pluginBookSigWriter writes the book-level signature.
+type pluginBookSigWriter interface {
 	// ModifyBook is the book-signature write: a locked read-modify-write of
 	// the five BookSig* columns, never GetBookByID -> UpdateBook.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	// ClearBookSignature deletes a book's signature when re-synthesis finds
 	// no usable current-era data.
 	ClearBookSignature(id string) error
-	UpdateBookFile(id string, file *database.BookFile) error
 }
