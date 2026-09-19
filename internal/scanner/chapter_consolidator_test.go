@@ -132,3 +132,20 @@ func TestDetectChapterGroupsWithOptions_CountsUnknownDurationSkips(t *testing.T)
 		t.Fatalf("want 0 groups and 1 unknown-duration skip, got %+v", d)
 	}
 }
+
+func TestChapterTitleIsFilenameDerived(t *testing.T) {
+	const p = "/lib/A/Book/01 - My Book.mp3"
+	cases := map[string]bool{
+		"":                      true,
+		"01 - My Book":          true,
+		"My Book":               true,
+		"my book":               true,
+		"My Book: The Original": false,
+		"A Curated Title":       false,
+	}
+	for title, want := range cases {
+		if got := ChapterTitleIsFilenameDerived(title, p); got != want {
+			t.Errorf("ChapterTitleIsFilenameDerived(%q) = %v, want %v", title, got, want)
+		}
+	}
+}

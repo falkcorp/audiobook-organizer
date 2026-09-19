@@ -1,12 +1,14 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
-// The existing `MergeChapterBooks` store method is SQLite-only
-// (PebbleStore returns nil without doing anything). The existing
+// The `MergeChapterBooks` store method does move files on PebbleStore (since
+// #3446, atomically), but it writes no undo journal, does not guard the iTunes
+// library, and does not reassign external IDs, so the merge-chapter-groups job
+// uses this function instead (2026-09-19). The existing
 // `merge.Service.MergeBooks` soft-deletes losers but does NOT move
 // their BookFiles to the keeper — for chapter merges that would orphan
 // every chapter file.
