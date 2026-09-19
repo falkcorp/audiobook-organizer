@@ -1,7 +1,7 @@
 // file: internal/database/sql_dialect.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2f1a90-4c8b-4e23-9f61-2b7c5d0e8a44
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 // Package database — SQL dialect seam for the backend-agnostic activity store.
 //
@@ -78,8 +78,21 @@ func (sqliteDialect) ddl() []string {
 			pruned_at    INTEGER
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_act_srckey ON activity(src_key) WHERE src_key IS NOT NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_act_tier_ts ON activity(tier, ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_act_ts       ON activity(ts)`,
+		// (tier, ts, source) and (ts, source), not (tier, ts) and (ts): the
+		// trailing source makes both COVERING for GetDistinctSources, which
+		// otherwise fetched every matching row — details BLOB and all — from
+		// the table to read one short string. The Sources picker's since=24h
+		// request took 11-103 s on prod (2026-09-19) that way; a tier-only
+		// count took 35.8 s on a 1M-row fixture. Every seek the old indexes
+		// served, these serve too (same leading columns), so the old ones are
+		// dropped rather than kept as duplicate write cost.
+		//
+		// First open after upgrade builds both indexes over the whole table,
+		// inside this schema Exec, before the store serves anything.
+		`CREATE INDEX IF NOT EXISTS idx_act_tier_ts_src ON activity(tier, ts, source)`,
+		`CREATE INDEX IF NOT EXISTS idx_act_ts_src      ON activity(ts, source)`,
+		`DROP INDEX IF EXISTS idx_act_tier_ts`,
+		`DROP INDEX IF EXISTS idx_act_ts`,
 		`CREATE INDEX IF NOT EXISTS idx_act_op_ts    ON activity(operation_id, ts) WHERE operation_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_act_bk_ts    ON activity(book_id, ts)      WHERE book_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_act_source   ON activity(source)`,

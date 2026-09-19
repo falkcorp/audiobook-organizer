@@ -1,0 +1,4 @@
+### Fixed
+
+- The Activity page's Sources filter no longer times out. Counting sources for the last 24 hours read every matching log row in full, including its stored details, which took 11 to 103 seconds on the live server; the page gives up after 15. Two database indexes now answer the count on their own. On a one-million-row test log, the 24-hour count dropped from 0.68 s to 0.02 s and the all-time "change" count from 35.8 s to 0.5 s. The first start after upgrading builds these indexes once, which delays startup.
+- The nightly activity summarizer now writes one summary per day, type and source instead of one per operation. Operation IDs are unique, so a busy day produced one summary row for every job that ran. Each summary still records how many operations it covers and lists up to 20 of their IDs.
