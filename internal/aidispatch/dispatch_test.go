@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29aa8b75-6c17-4559-9e41-f39e445566bd
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package aidispatch
 
@@ -368,7 +368,8 @@ func TestCall_EmbedFailoverOnlyToSameModel(t *testing.T) {
 		ep.EmbedModel = model
 		return ep
 	}
-	d := isolated([]Endpoint{mk("bge-a", 1, "bge-m3"), mk("nomic", 2, "nomic-embed"), mk("bge-b", 3, "bge-m3")})
+	d := isolated([]Endpoint{mk("bge-a", 1, "bge-m3"), mk("nomic", 2, "nomic-embed"), mk("bge-b", 3, "bge-m3")},
+		WithPinnedModel(EmbedText, "bge-m3"))
 	var seen []string
 	_, err := Call(context.Background(), d, EmbedText, func(_ context.Context, tg Target) (int, error) {
 		seen = append(seen, tg.Endpoint.ID+"/"+tg.Model)
