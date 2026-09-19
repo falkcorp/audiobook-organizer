@@ -1,5 +1,5 @@
 // file: internal/scheduler/tasks.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-09-19
 
@@ -958,7 +958,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if ts.deps.PollBatches == nil {
 				return nil, nil
 			}
-			processed, err := ts.deps.PollBatches(context.Background())
+			// The lifecycle context, not Background: collection starts AI-scan
+			// enrichment and cross-validation that must stop with the server.
+			processed, err := ts.deps.PollBatches(ts.lifecycleContext())
 			if err != nil {
 				slog.Warn("batch_poller", "error", err)
 			}

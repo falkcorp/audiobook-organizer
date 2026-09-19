@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller_durable_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fe113f87-b567-440e-8ec1-63022b2e72db
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -372,4 +373,41 @@ func TestBatchPoller_WritesOffUnlinkedJobOnlyOnCompleteListing(t *testing.T) {
 	job, err = store.GetAIJob("J")
 	require.NoError(t, err)
 	require.Equal(t, "failed", job.Status)
+}
+
+// failingTrackStore makes the aijobs tracker fail (its first ListAIJobs, for
+// "submitted" jobs) while the write-off's own pending listing still works.
+type failingTrackStore struct {
+	*crashJournalStore
+}
+
+func (f failingTrackStore) ListAIJobs(typ, status string, limit, offset int) ([]database.AIJob, error) {
+	if status == "submitted" {
+		return nil, errors.New("pebble: iterator failed")
+	}
+	return f.crashJournalStore.ListAIJobs(typ, status, limit, offset)
+}
+
+// F3: when the aijobs tracker fails, the poller never learns the oldest
+// pending job, lists only the most recent page with no error — and used to
+// call that listing complete and write the job off. A listing is complete
+// only when every tracker succeeded and it reached back past every pending
+// job.
+func TestBatchPoller_TrackerErrorNeverWritesOff(t *testing.T) {
+	base := newPollerTestStore(t)
+	require.NoError(t, base.CreateAIJob(database.AIJob{ID: "J", Type: "t", Status: "pending", ItemCount: 1,
+		CreatedAt: time.Now().Add(-2 * aijobs.UnlinkedWriteOffGrace)}, []byte("[]")))
+	store := failingTrackStore{base}
+
+	client := &fakeBatchClient{}
+	bp := newTestPoller(t, base, client)
+	get := func() database.AIJobsStore { return store }
+	bp.RegisterHandler("aijobs", aijobsBatchHandler(client, get))
+	bp.RegisterReconciler("aijobs", aijobsReconciler(get))
+	bp.RegisterTracker("aijobs", aijobsTracker(get))
+
+	_, _ = bp.Poll(context.Background())
+	job, err := base.GetAIJob("J")
+	require.NoError(t, err)
+	require.Equal(t, "pending", job.Status, "an incomplete view must never write a job off")
 }

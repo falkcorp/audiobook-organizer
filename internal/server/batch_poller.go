@@ -1,5 +1,5 @@
 // file: internal/server/batch_poller.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
 // last-edited: 2026-09-19
 
@@ -34,10 +34,13 @@ type BatchCompletionHandler func(ctx context.Context, batchID string, outputFile
 // status, before completed batches are dispatched. It repairs local records
 // that lost their link to a batch (see aijobs.ReconcileOrphans).
 //
-// complete is true only when the listing reached back past every local record
-// still awaiting its batch (no error, not truncated). Only then does a batch's
-// ABSENCE from batches prove it does not exist.
-type BatchReconciler func(ctx context.Context, batches []ai.BatchInfo, complete bool) error
+// coveredFrom is the start of the window the listing is KNOWN to cover
+// completely: every tracker succeeded (so it knows the oldest record awaiting
+// a batch), the listing paged back to that record without error or
+// truncation, and so a batch created at or after coveredFrom is either in
+// batches or does not exist. Zero means no such guarantee — a reconciler must
+// then treat an absent batch as unknown, never as absent.
+type BatchReconciler func(ctx context.Context, batches []ai.BatchInfo, coveredFrom time.Time) error
 
 // BatchClient is the slice of *ai.OpenAIParser the poller uses. An interface so
 // tests can drive Poll without a live OpenAI client.
@@ -159,10 +162,14 @@ func (bp *BatchPoller) RegisterTracker(batchType string, t BatchTracker) {
 func (bp *BatchPoller) Poll(ctx context.Context) (int, error) {
 	tracked := make(map[string]string) // batch id -> type
 	var since time.Time
+	trackersOK := true
 	for typ, track := range bp.trackers {
 		ids, oldest, err := track(ctx)
 		if err != nil {
 			batchPollerLog.Error("track %s batches: %v", typ, err)
+			// Its oldest unlinked record never reaches since, so this tick's
+			// listing cannot be called complete.
+			trackersOK = false
 			continue
 		}
 		for _, id := range ids {
@@ -198,7 +205,14 @@ func (bp *BatchPoller) Poll(ctx context.Context) (int, error) {
 		batches = append(batches, b)
 	}
 
-	bp.reconcile(ctx, batches, listErr == nil)
+	// A zero since means the listing read a single page, which proves nothing
+	// about older batches — only a non-zero since that the walk reached
+	// without error is a complete view.
+	var coveredFrom time.Time
+	if trackersOK && listErr == nil && !since.IsZero() {
+		coveredFrom = since
+	}
+	bp.reconcile(ctx, batches, coveredFrom)
 
 	processed := 0
 	for _, b := range batches {
@@ -257,7 +271,7 @@ func (bp *BatchPoller) dispatch(ctx context.Context, b ai.BatchInfo) (handled bo
 
 // reconcile hands each registered reconciler the listed batches of its type
 // that are not yet handled. Errors are logged; they never block dispatch.
-func (bp *BatchPoller) reconcile(ctx context.Context, batches []ai.BatchInfo, complete bool) {
+func (bp *BatchPoller) reconcile(ctx context.Context, batches []ai.BatchInfo, coveredFrom time.Time) {
 	if len(bp.reconcilers) == 0 {
 		return
 	}
@@ -273,7 +287,7 @@ func (bp *BatchPoller) reconcile(ctx context.Context, batches []ai.BatchInfo, co
 		}
 	}
 	for typ, r := range bp.reconcilers {
-		if err := r(ctx, byType[typ], complete); err != nil {
+		if err := r(ctx, byType[typ], coveredFrom); err != nil {
 			batchPollerLog.Error("reconcile %s batches: %v", typ, err)
 		}
 	}
@@ -446,7 +460,7 @@ func aijobsTracker(getStore func() database.AIJobsStore) BatchTracker {
 // aijobsReconciler re-attaches aijobs batches whose id never reached their job
 // row (process killed between CreateBatch and MarkAIJobSubmitted).
 func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
-	return func(_ context.Context, batches []ai.BatchInfo, complete bool) error {
+	return func(_ context.Context, batches []ai.BatchInfo, coveredFrom time.Time) error {
 		store := getStore()
 		if store == nil {
 			return fmt.Errorf("aijobs: store does not implement AIJobsStore")
@@ -458,11 +472,11 @@ func aijobsReconciler(getStore func() database.AIJobsStore) BatchReconciler {
 		if _, err := aijobs.ReconcileOrphans(store, orphans); err != nil {
 			return err
 		}
-		if !complete {
+		if coveredFrom.IsZero() {
 			// A partial listing proves no absence; write nothing off.
 			return nil
 		}
-		_, err := aijobs.WriteOffUnlinked(store, orphans, time.Now())
+		_, err := aijobs.WriteOffUnlinked(store, orphans, time.Now(), coveredFrom)
 		return err
 	}
 }

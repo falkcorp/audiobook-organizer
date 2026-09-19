@@ -1,5 +1,5 @@
 // file: internal/ai/aijobs/aijobs.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8231e2ae-fa34-4594-80fd-f0f9dc60bc3b
 // last-edited: 2026-09-19
 
@@ -464,7 +464,14 @@ const UnlinkedWriteOffGrace = time.Hour
 // pending job (the poller pages back to Tracked.OldestUnlinked). On a partial
 // listing an absent batch proves nothing, and a failed row is never attached
 // again, so writing one off there would orphan a billed batch.
-func WriteOffUnlinked(store database.AIJobsStore, listed []OrphanBatch, now time.Time) (int, error) {
+//
+// coveredFrom is the start of the window the listing covered completely; a job
+// created before it could have a batch the listing never reached and is left
+// alone. A zero coveredFrom writes nothing off.
+func WriteOffUnlinked(store database.AIJobsStore, listed []OrphanBatch, now, coveredFrom time.Time) (int, error) {
+	if coveredFrom.IsZero() {
+		return 0, nil
+	}
 	named := make(map[string]bool, len(listed))
 	for _, b := range listed {
 		if id := b.Metadata[MetadataJobIDKey]; id != "" {
@@ -477,7 +484,7 @@ func WriteOffUnlinked(store database.AIJobsStore, listed []OrphanBatch, now time
 	}
 	n := 0
 	for _, j := range pending {
-		if j.BatchID != "" || named[j.ID] || now.Sub(j.CreatedAt) < UnlinkedWriteOffGrace {
+		if j.BatchID != "" || named[j.ID] || now.Sub(j.CreatedAt) < UnlinkedWriteOffGrace || j.CreatedAt.Before(coveredFrom) {
 			continue
 		}
 		if err := store.MarkAIJobFailed(j.ID, "no batch exists at OpenAI for this job (confirmed by a complete listing)"); err != nil {
