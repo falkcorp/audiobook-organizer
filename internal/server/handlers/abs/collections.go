@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package abs
 
@@ -375,6 +375,74 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 	if err := h.collections.UpdateCollection(col); err != nil {
 		// Same race as AddBookToCollection above: surface a stale-Version
 		// conflict as 409 rather than a generic 500.
+		if errors.Is(err, database.ErrCollectionVersionConflict) {
+			respondError(c, http.StatusConflict, err.Error())
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "could not update collection")
+		return
+	}
+	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+}
+
+// ── POST /api/collections/:id/batch/add, /batch/remove ──────────────────────
+//
+// 🔴 BOTH 301'd INTO /api/v1 ON PRODUCTION until 2026-09-19 (item-6 decode
+// matrix). The client re-issues a redirected POST as a GET, so a multi-select
+// "add to collection" silently did nothing. Payload is ABS's
+// {"books":[libraryItemId…]}; the answer is the full collection, the same body
+// the single-book routes return.
+
+// absCollectionBatchReq is the batch add/remove payload.
+type absCollectionBatchReq struct {
+	Books []string `json:"books"`
+}
+
+// BatchAddToCollection handles POST /api/collections/:id/batch/add.
+func (h *Handler) BatchAddToCollection(c *gin.Context) {
+	h.batchEditCollection(c, func(col *database.Collection, ids []string) {
+		for _, id := range ids {
+			if !slices.Contains(col.BookIDs, id) {
+				col.BookIDs = append(col.BookIDs, id)
+			}
+		}
+	})
+}
+
+// BatchRemoveFromCollection handles POST /api/collections/:id/batch/remove.
+func (h *Handler) BatchRemoveFromCollection(c *gin.Context) {
+	h.batchEditCollection(c, func(col *database.Collection, ids []string) {
+		col.BookIDs = withoutIDs(col.BookIDs, ids)
+	})
+}
+
+// batchEditCollection is the shared body of the two batch routes: gate, resolve,
+// reject dynamic collections, apply, and persist in ONE UpdateCollection — so the
+// whole batch lands or none of it does, and the Version compare-and-swap catches a
+// concurrent edit exactly as it does for the single-book routes.
+func (h *Handler) batchEditCollection(c *gin.Context, apply func(col *database.Collection, ids []string)) {
+	if !h.canManageCollections(c) {
+		return
+	}
+	col, ok := h.lookupCollection(c)
+	if !ok {
+		return
+	}
+	if col.Type == database.CollectionTypeDynamic {
+		respondError(c, http.StatusConflict,
+			"this is a dynamic collection; its members come from its query")
+		return
+	}
+	var req absCollectionBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Books) == 0 {
+		respondError(c, http.StatusBadRequest, "books are required")
+		return
+	}
+	col.BookIDs = append([]string(nil), col.BookIDs...)
+	apply(col, h.resolveSyncIDs(req.Books))
+
+	if err := h.collections.UpdateCollection(col); err != nil {
 		if errors.Is(err, database.ErrCollectionVersionConflict) {
 			respondError(c, http.StatusConflict, err.Error())
 			return

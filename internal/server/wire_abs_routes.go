@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package server
 
@@ -52,6 +52,10 @@ var absReservedPaths = []string{
 	"/api/authorize",
 	"/api/me",
 	"/api/libraries",
+	// Send-to-e-reader (handlers/abs/unsupported.go answers it with an honest 400).
+	// Exact path, and unconditional because there is no /api/v1/emails twin: with
+	// ABS off it 404s instead of 301ing into a route that does not exist either.
+	"/api/emails/send-ebook-to-device",
 	// NOTE: /api/collections is deliberately NOT here. It has a live /api/v1 twin, so
 	// it belongs in absAppAPICollisions + absCollisionDetailRoutes, which are
 	// method-aware and gated on ABSAPIEnabled. See the comment on that list.
@@ -163,6 +167,40 @@ var absCollisionDetailRoutes = []absCollisionDetailRoute{
 	{Method: http.MethodDelete, Pattern: "/api/collections/:id"},
 	{Method: http.MethodPost, Pattern: "/api/collections/:id/book"},
 	{Method: http.MethodDelete, Pattern: "/api/collections/:id/book/:bookId"},
+	// Batch membership edits, added 2026-09-19. The native API has no
+	// /collections/:id/batch/* routes, so claiming them costs no app route.
+	{Method: http.MethodPost, Pattern: "/api/collections/:id/batch/add"},
+	{Method: http.MethodPost, Pattern: "/api/collections/:id/batch/remove"},
+
+	// Playlist mutations, added 2026-09-19 (handlers/abs/playlists_write.go). Until
+	// then every one of these 301'd into /api/v1 and the app re-issued the POST /
+	// PATCH / DELETE as a GET, so nothing was ever written.
+	//
+	// 🔴 TWO OF THESE SHAPES ARE ALSO APP-API ROUTES: POST /api/playlists and
+	// DELETE /api/playlists/:id (wire_library_routes.go). With the ABS surface on,
+	// the UNVERSIONED form of those two now belongs to ABS — the same trade already
+	// made for POST /api/collections and DELETE /api/collections/:id above. Nothing
+	// in this repo calls the unversioned form (the web UI's playlistApi.ts uses an
+	// /api/v1 base, pinned by TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths),
+	// and /api/v1/playlists itself never passes through the redirect. With ABS off
+	// both keep redirecting to the app API exactly as before.
+	//
+	// Every OTHER app playlist route stays unclaimed and keeps redirecting —
+	// PUT /:id, /:id/books, /:id/books/:bookID, /:id/reorder, /:id/materialize —
+	// pinned by TestPlaylistReservationDoesNotSwallowAppSubRoutes.
+	{Method: http.MethodPost, Pattern: "/api/playlists"},
+	{Method: http.MethodPatch, Pattern: "/api/playlists/:id"},
+	{Method: http.MethodDelete, Pattern: "/api/playlists/:id"},
+	{Method: http.MethodPost, Pattern: "/api/playlists/:id/batch/add"},
+	{Method: http.MethodPost, Pattern: "/api/playlists/:id/batch/remove"},
+	{Method: http.MethodDelete, Pattern: "/api/playlists/:id/item/:libraryItemId"},
+
+	// Narrator image (an honest 404; see handlers/abs/unsupported.go). The
+	// namespace has a live app twin (/api/v1/narrators, /api/v1/narrators/count), so
+	// it is claimed by exact shape: /api/narrators/count has one segment fewer and
+	// can never match.
+	{Method: http.MethodGet, Pattern: "/api/narrators/:id/image"},
+	{Method: http.MethodHead, Pattern: "/api/narrators/:id/image"},
 }
 
 // absCollisionDetailReserved reports whether (method, path) is a route ABS serves
@@ -287,6 +325,11 @@ var absAppAPICollisions = []string{
 	// API (redirect by default) and ABS claims its six routes individually, by method
 	// and shape, in absCollisionDetailRoutes.
 	"/api/collections",
+	// Added 2026-09-19 with the ABS narrator-image route. The app API serves
+	// /api/v1/narrators and /api/v1/narrators/count (wire_entities_routes.go), so
+	// the namespace redirects by default and ABS claims only
+	// /api/narrators/:id/image, in absCollisionDetailRoutes.
+	"/api/narrators",
 }
 
 // absReservedPath reports whether a request path belongs to the ABS surface and must
@@ -628,10 +671,31 @@ func absRouteList() []string {
 		// Detail route. The list shipped without it, so opening a playlist 301'd
 		// into the app API and rendered empty — reported from the app 2026-08-13.
 		"GET /api/playlists/:id",
+		// Playlist mutations (2026-09-19). Reserved in absCollisionDetailRoutes.
+		"POST /api/playlists",
+		"PATCH /api/playlists/:id",
+		"DELETE /api/playlists/:id",
+		"POST /api/playlists/:id/batch/add",
+		"POST /api/playlists/:id/batch/remove",
+		"DELETE /api/playlists/:id/item/:libraryItemId",
+		// Collections (Handler.Register). Absent from this list until 2026-09-19,
+		// so the reservation guard never checked them; listed now with the batch
+		// routes added the same day.
+		"GET /api/collections/:id",
+		"POST /api/collections",
+		"PATCH /api/collections/:id",
+		"DELETE /api/collections/:id",
+		"POST /api/collections/:id/book",
+		"DELETE /api/collections/:id/book/:bookId",
+		"POST /api/collections/:id/batch/add",
+		"POST /api/collections/:id/batch/remove",
 		"GET /api/libraries/:libraryId/authors",
 		"GET /api/authors/:id",
 		"GET /api/series/:id",
 		"GET /api/libraries/:libraryId/narrators",
+		"GET /api/narrators/:id/image",
+		"HEAD /api/narrators/:id/image",
+		"POST /api/emails/send-ebook-to-device",
 		"GET /api/libraries/:libraryId/filterdata",
 		"GET /api/libraries/:libraryId/search",
 		"GET /api/libraries/:libraryId/recent-episodes",
@@ -650,6 +714,8 @@ func absRouteList() []string {
 		// TestABSReservedPath_CoversEVERYRegisteredUnversionedRoute walks this
 		// list, so a route missing from it is a route the guard never checks.
 		"POST /api/session/local",
+		// Offline upload, bulk half (2026-09-19). Covered by "/api/session/".
+		"POST /api/session/local-all",
 		"GET /public/session/:id/track/:index (unauthenticated)",
 		// Phase 6 — progress mutation. Every one is covered by the "/api/me/"
 		// entry in absReservedPathPrefixes; they are listed here because

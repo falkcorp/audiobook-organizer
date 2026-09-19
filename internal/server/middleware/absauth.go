@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
 // last-edited: 2026-09-19
 
@@ -580,7 +580,12 @@ func absBearerFromRequest(c *gin.Context) string {
 		}
 	}
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
-		if tok := strings.TrimSpace(c.Query("token")); tok != "" {
+		// Same `abk_` exclusion as the header branch above. Without it an API key
+		// sent as ?token= (AudioBooth's ebook-reader and Watch download URLs, for
+		// a user signed in with an API key) was handed to ResolveBearer as a JWT,
+		// failed token-invalid, and Resolve returned 401 before ResolveAPIKey —
+		// which accepts the query form — ever ran. Measured on prod 2026-09-19.
+		if tok := strings.TrimSpace(c.Query("token")); tok != "" && !strings.HasPrefix(tok, "abk_") {
 			return tok
 		}
 	}

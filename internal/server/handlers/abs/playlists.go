@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
 // last-edited: 2026-09-19
 
@@ -31,17 +31,14 @@ var playlistsLog = logger.New("abs")
 // (wire_library_routes.go:77-85) actually serve. Mapping the legacy type here would
 // produce a playlist list unrelated to anything the web UI shows.
 //
-// SCOPE, AND WHAT IT IS NOT. This file serves the LIST and the DETAIL routes.
-// Upstream ABS has ~12 playlist routes (create, update, delete, item add/remove,
-// batch add/remove, create-from-collection); none of those WRITE routes are
-// implemented and this change does not add them.
+// SCOPE. This file serves the LIST and the DETAIL routes; the six write routes
+// AudioBooth calls (create, patch, delete, batch add/remove, item delete) live in
+// playlists_write.go. Create-from-collection is not implemented.
 //
-// The bare /api/playlists namespace continues to 301 into the app-API twin via
-// absAppAPICollisions — deliberate, and pinned by
-// TestCollidingNamespacesStillRedirect. Only "/api/playlists/" WITH a trailing
-// segment is reserved for ABS (absReservedPathPrefixes), so the list redirect and
-// the native detail route coexist. Nothing here touches engine-level routing —
-// doing that to solve this collision has broken 46 live app routes twice.
+// Routing: /api/playlists has a live /api/v1 twin, so the namespace stays in
+// absAppAPICollisions and ABS claims its routes one by one, by method and exact
+// shape, in absCollisionDetailRoutes (wire_abs_routes.go) — only while the ABS
+// surface is enabled. GET /api/playlists (the bare list) still redirects.
 //
 // ⚠️ RETRACTED 2026-08-13: this block previously read "NO CLIENT IS KNOWN TO CALL
 // THIS", resting on zero playlist paths appearing in the 28 captures and on
@@ -75,6 +72,14 @@ type PlaylistStore interface {
 	// ownership check therefore lives in PlaylistDetail and is not optional; see
 	// the note on this interface about disclosing other users' playlists.
 	GetUserPlaylist(id string) (*database.UserPlaylist, error)
+	// The write half, used by the ABS playlist mutations in playlists_write.go.
+	// These are the same store methods the native /api/v1/playlists routes use,
+	// so a playlist created from the app and one created in the web UI are the
+	// same record. None of them is user-scoped: ownership is checked by the
+	// handler before every write, exactly as for GetUserPlaylist.
+	CreateUserPlaylist(pl *database.UserPlaylist) (*database.UserPlaylist, error)
+	UpdateUserPlaylist(pl *database.UserPlaylist) error
+	DeleteUserPlaylist(id string) error
 }
 
 // absPlaylistPageSize bounds one page of playlists. Playlists are few and the

@@ -1,12 +1,14 @@
 // file: internal/server/handlers/abs/playlists_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e2f4a08-b165-4c39-8de2-91f0a3b74c6e
-// last-edited: 2026-08-13
+// last-edited: 2026-09-19
 
 package abs_test
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +59,53 @@ func (f *absplFakeStore) GetUserPlaylist(id string) (*database.UserPlaylist, err
 		}
 	}
 	return nil, nil
+}
+
+// The write half mirrors PebbleStore's contract closely enough to exercise the
+// handler: a global case-insensitive name index (the store rejects a duplicate
+// with "already in use"), a Version bump on update, and a no-op delete of an
+// unknown id. Records are stored BY VALUE so a handler that forgets to call
+// UpdateUserPlaylist cannot pass by mutating the pointer it was handed.
+func (f *absplFakeStore) CreateUserPlaylist(pl *database.UserPlaylist) (*database.UserPlaylist, error) {
+	f.calls++
+	for i := range f.lists {
+		if strings.EqualFold(f.lists[i].Name, pl.Name) {
+			return nil, fmt.Errorf("playlist name %q already in use", pl.Name)
+		}
+	}
+	cp := *pl
+	if cp.ID == "" {
+		cp.ID = fmt.Sprintf("01PLAYLIST%016d", len(f.lists)+1)
+	}
+	cp.Version = 1
+	f.lists = append(f.lists, cp)
+	out := cp
+	return &out, nil
+}
+
+func (f *absplFakeStore) UpdateUserPlaylist(pl *database.UserPlaylist) error {
+	f.calls++
+	for i := range f.lists {
+		if f.lists[i].ID == pl.ID {
+			cp := *pl
+			cp.BookIDs = append([]string(nil), pl.BookIDs...)
+			cp.Version = f.lists[i].Version + 1
+			f.lists[i] = cp
+			return nil
+		}
+	}
+	return fmt.Errorf("playlist %s not found", pl.ID)
+}
+
+func (f *absplFakeStore) DeleteUserPlaylist(id string) error {
+	f.calls++
+	for i := range f.lists {
+		if f.lists[i].ID == id {
+			f.lists = append(f.lists[:i], f.lists[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func withPlaylists(p abshandler.PlaylistStore) harnessOpt {

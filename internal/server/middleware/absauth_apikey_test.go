@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5d3b8a71-9e64-4c02-b1f7-8a06d2e93c45
-// last-edited: 2026-08-20
+// last-edited: 2026-09-19
 
 package middleware
 
@@ -165,5 +165,56 @@ func TestABSAPIKey_NonPrefixedTokenNotTreatedAsKey(t *testing.T) {
 
 	if w := h.get("not_an_abk_token"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("a non-abk_ bearer must not authenticate via the API-key path, got %d", w.Code)
+	}
+}
+
+// 🔴 TestABSAPIKey_QueryTokenReachesAPIKeyCheck is the item-6 F4 regression.
+//
+// AudioBooth builds ebook-reader and Watch download URLs with ?token=<credential>,
+// and for a user signed in with an API key that credential is an `abk_` key. The
+// header branch of absBearerFromRequest skipped `abk_` so it fell through to the
+// API-key resolver; the QUERY branch did not, so the key was handed to
+// ResolveBearer as a JWT, failed with token-invalid, and Resolve returned 401
+// before ResolveAPIKey ever ran. Measured on prod 2026-09-19:
+// GET /api/items/:id/file/:ino?token=abk_… answered 401.
+func TestABSAPIKey_QueryTokenReachesAPIKeyCheck(t *testing.T) {
+	h := newAPIKeyHarness(t)
+	h.store.addUser(&database.User{ID: "u-reader", Username: "reader", Status: "active"})
+	key := "abk_" + "test"
+	h.store.addKey(key, &database.APIKey{ID: "k1", UserID: "u-reader", Status: "active"})
+	serveFile := func(c *gin.Context) {
+		u, _ := CurrentUser(c)
+		c.String(http.StatusOK, u.ID)
+	}
+	h.router.GET("/api/items/:id/file/:ino", ABSRequireAuth(h.resolver), serveFile)
+	h.router.HEAD("/api/items/:id/file/:ino", ABSRequireAuth(h.resolver), serveFile)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, "/api/items/item-1/file/ino-1?token="+key, nil)
+		w := httptest.NewRecorder()
+		h.router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s ?token=<api key> on the file route: got %d, want 200 — the query-string key was "+
+				"treated as a JWT and never reached the API-key check. body=%s", method, w.Code, w.Body.String())
+		}
+	}
+
+	// The key must still be refused on a state-changing method: ?token= is
+	// accepted on safe methods only, so a key cannot leak into a log on a write.
+	req := httptest.NewRequest(http.MethodPost, "/api/me?token="+key, nil)
+	h.router.POST("/api/me", ABSRequireAuth(h.resolver), func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("POST with ?token=<api key> must stay 401, got %d", w.Code)
+	}
+
+	// And a revoked key over the query string is still refused.
+	revoked := "abk_" + "revoked"
+	h.store.addKey(revoked, &database.APIKey{ID: "k2", UserID: "u-reader", Status: "revoked"})
+	w = httptest.NewRecorder()
+	h.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/items/item-1/file/ino-1?token="+revoked, nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked ?token= key must be 401, got %d", w.Code)
 	}
 }

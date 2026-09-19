@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -329,6 +329,14 @@ type Handler struct {
 	// devices — an attacker replaying random tokens cannot make it grow.
 	refreshLocks sync.Map // sessionID -> *sync.Mutex
 
+	// playlistLocks serializes the ABS playlist mutations (playlists_write.go) per
+	// playlist id. UpdateUserPlaylist has no compare-and-swap, so two concurrent
+	// batch adds on the same playlist would each read the same membership and the
+	// second write would silently drop the first one's books. Keyed only after the
+	// playlist resolved AND is owned by the caller, so its size is bounded by the
+	// number of real playlists.
+	playlistLocks sync.Map // playlistID -> *sync.Mutex
+
 	// itemsCount caches the filtered library-item count per filter identity.
 	// CountBookSummariesFiltered is a full-library scan, and this endpoint is polled
 	// on every library page, so an uncached count made latency a flat ~2s regardless
@@ -557,11 +565,28 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.DELETE("/api/collections/:id", auth, h.DeleteCollection)
 	r.POST("/api/collections/:id/book", auth, h.AddBookToCollection)
 	r.DELETE("/api/collections/:id/book/:bookId", auth, h.RemoveBookFromCollection)
+	// Batch membership edits (AudioBooth's multi-select "add to collection").
+	// Both 301'd into /api/v1 on prod until 2026-09-19 — the client re-issued the
+	// POST as a GET and nothing was added. Wildcard name MUST stay ":id": gin
+	// panics at startup on two names for one path position.
+	r.POST("/api/collections/:id/batch/add", auth, h.BatchAddToCollection)
+	r.POST("/api/collections/:id/batch/remove", auth, h.BatchRemoveFromCollection)
 	// The DETAIL route the app calls when a playlist is opened. Without it the
 	// path 301'd into /api/v1/playlists/:id and every playlist rendered empty.
 	// Reserved from the redirect by the "/api/playlists/" prefix — see
 	// absReservedPathPrefixes, where the trailing slash is load-bearing.
 	r.GET("/api/playlists/:id", auth, h.PlaylistDetail)
+	// Playlist mutations (playlists_write.go). Every one 301'd into /api/v1 and
+	// was downgraded to a GET by the client until 2026-09-19. Each is claimed
+	// individually in absCollisionDetailRoutes; see that list for why the two
+	// shapes the app API also serves (POST bare, DELETE :id) belong to ABS while
+	// the ABS surface is on.
+	r.POST("/api/playlists", auth, h.CreatePlaylist)
+	r.PATCH("/api/playlists/:id", auth, h.UpdatePlaylist)
+	r.DELETE("/api/playlists/:id", auth, h.DeletePlaylist)
+	r.POST("/api/playlists/:id/batch/add", auth, h.BatchAddToPlaylist)
+	r.POST("/api/playlists/:id/batch/remove", auth, h.BatchRemoveFromPlaylist)
+	r.DELETE("/api/playlists/:id/item/:libraryItemId", auth, h.RemovePlaylistItem)
 	r.GET("/api/libraries/:libraryId/authors", auth, h.LibraryAuthors)
 	// The item surface emits these ids in media.metadata.authors. The ABS client
 	// follows them when a user taps an author in a book detail screen, so this
@@ -569,6 +594,14 @@ func (h *Handler) Register(r gin.IRouter) {
 	r.GET("/api/authors/:id", auth, h.AuthorDetail)
 	r.GET("/api/series/:id", auth, h.SeriesDetail)
 	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
+	// Narrator portraits. There is no narrator image anywhere in our data model
+	// (database.Narrator is id+name), so this is an honest 404 — registered so the
+	// request stops 301ing into /api/v1/narrators/:id/image and 404ing there.
+	r.GET("/api/narrators/:id/image", auth, h.NarratorImage)
+	r.HEAD("/api/narrators/:id/image", auth, h.NarratorImage)
+	// Send-to-e-reader. No outbound email exists on this server, so this answers
+	// a clear 400 instead of the 301 → GET downgrade the app used to get.
+	r.POST("/api/emails/send-ebook-to-device", auth, h.SendEbookToDevice)
 	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
 	r.GET("/api/libraries/:libraryId/search", auth, h.LibrarySearch)
 	// Podcast stub: a probing client gets a valid empty response, not an error
@@ -619,6 +652,9 @@ func (h *Handler) Register(r gin.IRouter) {
 	// 404 as "connection offline" (§1.8.8 item 1). Static segment deliberately
 	// sits alongside the ":id" sibling above — gin prefers the literal match.
 	r.POST("/api/session/local", auth, h.SessionLocal)
+	// Offline upload, bulk half: the app's queued offline listening. Applies each
+	// session's position through the offline-replay merge (session_local_all.go).
+	r.POST("/api/session/local-all", auth, h.SessionLocalAll)
 
 	// UNAUTHENTICATED by protocol requirement (§1.8.3). AudioBooth has no
 	// contentUrl field at all (zero repo-wide hits) and streams exclusively from
