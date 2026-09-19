@@ -1,5 +1,5 @@
 // file: internal/server/middleware/recovery_redact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ec1e8a2-beb7-4e4c-a883-d7bab38999f7
 // last-edited: 2026-09-19
 
@@ -7,11 +7,10 @@ package middleware
 
 import (
 	"errors"
-	"net"
 	"net/http"
-	"os"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
@@ -42,17 +41,12 @@ func RedactingRecovery() gin.HandlerFunc {
 			}
 			brokenPipe := false
 			if err, ok := rec.(error); ok {
-				var ne *net.OpError
-				if errors.As(err, &ne) {
-					var se *os.SyscallError
-					if errors.As(ne, &se) {
-						msg := strings.ToLower(se.Error())
-						brokenPipe = strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
-					}
-				}
-				if errors.Is(err, http.ErrAbortHandler) {
-					brokenPipe = true
-				}
+				// errors.Is on the errno, as gin does: string matching an
+				// OpError→SyscallError chain misses wrapped and platform-
+				// specific forms of the same condition.
+				brokenPipe = errors.Is(err, syscall.EPIPE) ||
+					errors.Is(err, syscall.ECONNRESET) ||
+					errors.Is(err, http.ErrAbortHandler)
 			}
 			line := RedactedRequestSummary(c.Request)
 			if brokenPipe {

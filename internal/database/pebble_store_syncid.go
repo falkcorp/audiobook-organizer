@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -32,6 +32,7 @@ package database
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -223,6 +224,13 @@ func (p *PebbleStore) GetSyncIDForBook(bookID string) (string, bool, error) {
 	return string(value), true, nil
 }
 
+// ErrSyncRedirectChainBroken is returned by ResolveSyncItem when a merge
+// redirect chain is dangling (points at a record that does not exist), cyclic,
+// or longer than the hop cap. It is PERMANENT — retrying cannot fix it — so
+// callers must tell it apart from an I/O error: a caller that treats it as
+// retryable blocks every request that names the id, forever.
+var ErrSyncRedirectChainBroken = errors.New("sync item redirect chain is broken (dangling, cyclic or too long)")
+
 // ResolveSyncItem reads the sync_item:<syncID> record and follows RedirectTo
 // chains left behind by merges until it reaches a live record (RedirectTo ==
 // ""). It caps at 10 hops and tracks visited ids to guard against a cycle or
@@ -236,7 +244,7 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 	current := syncID
 	for range maxHops {
 		if visited[current] {
-			return nil, fmt.Errorf("sync item redirect chain too long or cyclic starting at %s", syncID)
+			return nil, fmt.Errorf("%w: starting at %s", ErrSyncRedirectChainBroken, syncID)
 		}
 		visited[current] = true
 
@@ -248,14 +256,14 @@ func (p *PebbleStore) ResolveSyncItem(syncID string) (*SyncItem, error) {
 			if current == syncID {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("sync item redirect chain too long or cyclic starting at %s", syncID)
+			return nil, fmt.Errorf("%w: starting at %s", ErrSyncRedirectChainBroken, syncID)
 		}
 		if item.RedirectTo == "" {
 			return item, nil
 		}
 		current = item.RedirectTo
 	}
-	return nil, fmt.Errorf("sync item redirect chain too long or cyclic starting at %s", syncID)
+	return nil, fmt.Errorf("%w: starting at %s", ErrSyncRedirectChainBroken, syncID)
 }
 
 // RepointSyncItem moves the reverse index from oldBookID to newBookID and

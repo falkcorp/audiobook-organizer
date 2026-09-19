@@ -7,6 +7,7 @@ package abs_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -232,30 +233,79 @@ func TestMembership_MergeLoserShowsAsSurvivorAndIsRemovable(t *testing.T) {
 	}
 }
 
-// Review HIGH #1: a whole-list PATCH must never drop a member it did not know
-// about. The app read {A,B}; the web UI added C (version bump); the app's
-// reorder [B,A] must land as [B,A,C], not [B,A].
+// Review HIGH #1 + re-review LOW #2: a whole-list PATCH must never drop a
+// member it did not know about, and must not silently ignore an omission
+// either. The app read {A,B}; the web UI added C (version bump); the app's
+// [B,A] no longer names every stored member, so it is refused with 409 and C
+// survives. A pure reorder of the CURRENT set, and an addition, are applied.
 func TestPlaylists_PatchItemsNeverDropsAConcurrentlyAddedMember(t *testing.T) {
 	v := newVisFixture(t)
-	for _, id := range []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B", "01CCCC0000000000000000000C"} {
+	ids := []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B", "01CCCC0000000000000000000C", "01DDDD0000000000000000000D"}
+	syncs := map[string]string{}
+	for _, id := range ids {
 		v.add(id, "Book "+id[2:6], true, "organized")
+		syncs[id], _ = v.lib.MintOrGetSyncID(id)
 	}
+	A, B, C, D := ids[0], ids[1], ids[2], ids[3]
+	items := func(books ...string) map[string]any {
+		out := []map[string]any{}
+		for _, b := range books {
+			out = append(out, map[string]any{"libraryItemId": syncs[b]})
+		}
+		return map[string]any{"items": out}
+	}
+	patch := func(body map[string]any) int {
+		code, _ := v.h.doAny(t, request{method: http.MethodPatch, path: "/api/playlists/01PL", headers: bearer(v.tok), body: body})
+		return code
+	}
+	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", Version: 1, BookIDs: []string{A, B}}}
+	v.lists.beforeUpdate = func(f *absplFakeStore) {
+		f.lists[0].BookIDs = append(f.lists[0].BookIDs, C)
+		f.lists[0].Version++
+	}
+	if code := patch(items(B, A)); code != http.StatusConflict {
+		t.Fatalf("stale [B,A] against {A,B,C} = %d, want 409", code)
+	}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, []string{A, B, C}) {
+		t.Fatalf("stored %v, want [A B C]: the concurrently added member was lost", got)
+	}
+	if code := patch(items(C, B, A)); code != http.StatusOK {
+		t.Fatalf("pure reorder = %d", code)
+	}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, []string{C, B, A}) {
+		t.Fatalf("pure reorder stored %v", got)
+	}
+	if code := patch(items(D, C)); code != http.StatusConflict {
+		t.Fatalf("a shorter list (would-be removal) = %d, want 409, not a silent no-op", code)
+	}
+	if code := patch(items(C, B, A, D)); code != http.StatusOK {
+		t.Fatalf("addition = %d", code)
+	}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, []string{C, B, A, D}) {
+		t.Fatalf("addition stored %v", got)
+	}
+}
+
+// Re-review LOW #3: a sync id whose redirect chain is broken (dangling or
+// cyclic) is a PERMANENT condition; it must be skipped like an unknown id, not
+// 503 every request that carries it forever.
+func TestPlaylists_BrokenRedirectChainIsSkippedNot503(t *testing.T) {
+	v := newVisFixture(t)
+	v.add("01AAAA0000000000000000000A", "A", true, "organized")
+	v.add("01BBBB0000000000000000000B", "B", true, "organized")
 	a, _ := v.lib.MintOrGetSyncID("01AAAA0000000000000000000A")
 	b, _ := v.lib.MintOrGetSyncID("01BBBB0000000000000000000B")
 	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
-		CreatedByUserID: "u1", Version: 1, BookIDs: []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B"}}}
-	v.lists.beforeUpdate = func(f *absplFakeStore) {
-		f.lists[0].BookIDs = append(f.lists[0].BookIDs, "01CCCC0000000000000000000C")
-		f.lists[0].Version++
-	}
-	code, body := v.h.doAny(t, request{method: http.MethodPatch, path: "/api/playlists/01PL", headers: bearer(v.tok),
-		body: map[string]any{"items": []map[string]any{{"libraryItemId": b}, {"libraryItemId": a}}}})
+		CreatedByUserID: "u1", Version: 1}}
+	v.lib.resolveErr = map[string]error{a: fmt.Errorf("%w: starting at %s", database.ErrSyncRedirectChainBroken, a)}
+	code, body := v.h.doAny(t, request{method: http.MethodPost, path: "/api/playlists/01PL/batch/add", headers: bearer(v.tok),
+		body: map[string]any{"items": []map[string]any{{"libraryItemId": a}, {"libraryItemId": b}}}})
 	if code != http.StatusOK {
-		t.Fatalf("PATCH = %d %v", code, body)
+		t.Fatalf("batch/add with one broken-chain id = %d %v, want 200 (skip it)", code, body)
 	}
-	want := []string{"01BBBB0000000000000000000B", "01AAAA0000000000000000000A", "01CCCC0000000000000000000C"}
-	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, want) {
-		t.Fatalf("stored %v, want %v: the concurrently added member was lost", got, want)
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, []string{"01BBBB0000000000000000000B"}) {
+		t.Fatalf("stored %v, want only the resolvable book", got)
 	}
 }
 

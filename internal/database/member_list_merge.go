@@ -1,5 +1,5 @@
 // file: internal/database/member_list_merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bf80550f-b696-40ac-a320-8549eb1bf408
 // last-edited: 2026-09-19
 
@@ -35,4 +35,34 @@ func MergeMemberListNoLoss(stored, incoming []string) []string {
 		}
 	}
 	return out
+}
+
+// MemberListOmitted returns the stored members incoming does not name (after
+// mapping each stored id through canonical, when non-nil, so a merge loser the
+// client knows only by its survivor counts as named).
+//
+// A whole-list update that omits a stored member is ambiguous: the user may
+// have removed it, or the client may never have seen it (added concurrently).
+// MergeMemberListNoLoss would keep it — a silent no-op for a client that meant
+// "remove". Callers therefore REFUSE such an update with 409 and a message
+// pointing at the explicit remove routes; only a pure reorder or an addition
+// (incoming names every stored member) is applied.
+func MemberListOmitted(stored, incoming []string, canonical func(string) string) []string {
+	named := make(map[string]struct{}, len(incoming))
+	for _, id := range incoming {
+		named[id] = struct{}{}
+	}
+	var omitted []string
+	for _, id := range stored {
+		if _, ok := named[id]; ok {
+			continue
+		}
+		if canonical != nil {
+			if _, ok := named[canonical(id)]; ok {
+				continue
+			}
+		}
+		omitted = append(omitted, id)
+	}
+	return omitted
 }

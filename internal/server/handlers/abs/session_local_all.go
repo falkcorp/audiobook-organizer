@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -177,18 +177,25 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		startedAt = s.StartedAt
 	}
 
-	// (b) Reset tombstone. Refuses ONLY a session KNOWN to have started before
-	// the user's last "reset progress" — by more than the skew tolerance, so a
-	// device clock slightly behind cannot turn a real post-reset listen into a
-	// refusal. A session with no (trusted) startedAt is NOT refused: it falls
-	// through to the forward-only rule below, because refusing it would refuse
-	// that device's uploads for this book forever (the tombstone is never
-	// cleared: a known pre-reset session must stay refused even after new
-	// listening lands, or the discarded position could be replayed forward).
-	if state != nil && state.ProgressResetAt != nil && startedAt != nil &&
-		*startedAt+tol < state.ProgressResetAt.UnixMilli() {
-		res.Error = "session predates a progress reset"
-		return res
+	// (b) Reset tombstone. While one exists, a session is accepted ONLY if it
+	// provably started after the reset: a present, trusted (not future beyond
+	// the tolerance) startedAt that is LATER than reset + tolerance. The
+	// tolerance widens only the REFUSE side. Anything else is refused:
+	//   - startedAt within the tolerance of the reset: the stored position is
+	//     0 after a reset, so forward-only would accept it and bring the
+	//     discarded position back (review of #3470 at 590e1883b);
+	//   - missing, zero or implausibly-future startedAt (a fast device clock):
+	//     it cannot prove the listen came after the reset.
+	// AudioBooth always sends startedAt (a non-optional Int in its
+	// SessionSync model), so a missing one is a client we cannot vouch for.
+	// Without a tombstone none of this applies and a missing startedAt falls
+	// back to forward-only below.
+	if state != nil && state.ProgressResetAt != nil {
+		resetMs := state.ProgressResetAt.UnixMilli()
+		if startedAt == nil || *startedAt < resetMs+tol {
+			res.Error = "session is not provably after a progress reset"
+			return res
+		}
 	}
 
 	duration := h.durationForBook(bookID, s.Duration)

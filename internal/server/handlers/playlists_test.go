@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1e2d3c4-b5a6-7890-cdef-1234567890ab
 // last-edited: 2026-09-19
 
@@ -143,27 +143,42 @@ func TestPlaylistHandler_ListPlaylists_ScopesToCaller(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// Review HIGH #1 (native twin): PUT book_ids built from an older read must not
-// drop a member added since. The retry applies it to the FRESH row {A,B,C}; a
-// client list [B,A] lands as [B,A,C].
+// Review HIGH #1 + re-review LOW #2 (native twin): PUT book_ids built from an
+// older read must neither drop a member added since nor silently ignore an
+// omission: the retry sees the FRESH row {A,B,C}, [B,A] omits C, so it is a
+// 409 and nothing is written. A pure reorder of the current set applies.
 func TestPlaylistHandler_UpdatePlaylist_BookIDsNeverDropsAnUnmentionedMember(t *testing.T) {
-	store := handlersmocks.NewMockPlaylistStore(t)
-	fresh := &database.UserPlaylist{ID: "pl-1", Name: "mine", Type: database.UserPlaylistTypeStatic,
-		BookIDs: []string{"A", "B", "C"}, CreatedByUserID: "userA", Version: 2}
-	store.EXPECT().GetUserPlaylist("pl-1").Return(fresh, nil)
-	var written []string
-	store.EXPECT().UpdateUserPlaylist(mock.Anything).RunAndReturn(func(pl *database.UserPlaylist) error {
-		written = append([]string(nil), pl.BookIDs...)
-		return nil
+	put := func(t *testing.T, store *handlersmocks.MockPlaylistStore, body string) *httptest.ResponseRecorder {
+		h := handlers.NewPlaylistHandler(store, nil)
+		c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "userA")
+		c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
+		h.UpdatePlaylist(c)
+		return w
+	}
+	fresh := func() *database.UserPlaylist {
+		return &database.UserPlaylist{ID: "pl-1", Name: "mine", Type: database.UserPlaylistTypeStatic,
+			BookIDs: []string{"A", "B", "C"}, CreatedByUserID: "userA", Version: 2}
+	}
+
+	t.Run("omission is a conflict, nothing written", func(t *testing.T) {
+		store := handlersmocks.NewMockPlaylistStore(t)
+		store.EXPECT().GetUserPlaylist("pl-1").Return(fresh(), nil)
+		// UpdateUserPlaylist deliberately NOT expected.
+		w := put(t, store, `{"book_ids":["B","A"]}`)
+		assert.Equal(t, http.StatusConflict, w.Code)
 	})
-
-	h := handlers.NewPlaylistHandler(store, nil)
-	c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "userA")
-	c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", strings.NewReader(`{"book_ids":["B","A"]}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
-	h.UpdatePlaylist(c)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, []string{"B", "A", "C"}, written, "an unmentioned member was dropped by a whole-list replace")
+	t.Run("pure reorder applies", func(t *testing.T) {
+		store := handlersmocks.NewMockPlaylistStore(t)
+		store.EXPECT().GetUserPlaylist("pl-1").Return(fresh(), nil)
+		var written []string
+		store.EXPECT().UpdateUserPlaylist(mock.Anything).RunAndReturn(func(pl *database.UserPlaylist) error {
+			written = append([]string(nil), pl.BookIDs...)
+			return nil
+		})
+		w := put(t, store, `{"book_ids":["C","A","B"]}`)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, []string{"C", "A", "B"}, written)
+	})
 }
