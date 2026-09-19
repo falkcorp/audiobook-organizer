@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 // Package merge: sync-identity follow hooks.
 //
@@ -75,6 +75,22 @@ var syncRepointMu sync.Mutex
 // the redirect is already recorded and de-duplicates MergedFrom), so a retried
 // or concurrently repeated merge cannot double-redirect or grow a chain.
 func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string) {
+	followMerge(db, follower, winnerBookID, loserBookIDs, nil)
+}
+
+// FollowMergeUsers is FollowMerge restricted to the given users' progress.
+// Journaled callers pass only the users they could snapshot, so progress is
+// never moved without the journal undo needs to move it back. A nil or empty
+// list follows NO user's progress (the redirect is still recorded).
+func FollowMergeUsers(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User) {
+	if users == nil {
+		users = []database.User{}
+	}
+	followMerge(db, follower, winnerBookID, loserBookIDs, users)
+}
+
+// followMerge: users == nil means "every user" (ListUsers).
+func followMerge(db UserProgressMerger, follower SyncFollower, winnerBookID string, loserBookIDs []string, users []database.User) {
 	if follower == nil || db == nil || winnerBookID == "" {
 		return
 	}
@@ -96,7 +112,13 @@ func FollowMerge(db UserProgressMerger, follower SyncFollower, winnerBookID stri
 			slog.Error("sync-identity merge-follow: redirect NOT recorded; a client holding the loser's id will not resolve",
 				"loser", loserID, "winner", winnerBookID, "err", err)
 		}
-		if err := mergeUserProgress(db, loserID, winnerBookID); err != nil {
+		var err error
+		if users == nil {
+			err = mergeUserProgress(db, loserID, winnerBookID)
+		} else {
+			err = mergeUserProgressUsers(db, users, loserID, winnerBookID)
+		}
+		if err != nil {
 			slog.Error("sync-identity merge-follow: progress NOT merged onto winner",
 				"loser", loserID, "winner", winnerBookID, "err", err)
 		}
@@ -297,6 +319,11 @@ func mergeUserProgress(db UserProgressMerger, loserBookID, winnerBookID string) 
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
+	return mergeUserProgressUsers(db, users, loserBookID, winnerBookID)
+}
+
+// mergeUserProgressUsers merges the given users' progress, one at a time.
+func mergeUserProgressUsers(db UserProgressMerger, users []database.User, loserBookID, winnerBookID string) error {
 	var firstErr error
 	for _, u := range users {
 		if u.ID == "" {

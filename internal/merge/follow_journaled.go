@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-09-19
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // ErrNoSyncFollower is returned by FollowAbsorbedJournaled when the store
@@ -36,19 +37,11 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 	if err != nil {
 		return nil, false, fmt.Errorf("list users: %w", err)
 	}
-	snap := func() (progressSnap, error) {
-		var s progressSnap
-		var err error
-		if s.absState, s.absPos, err = snapshotProgress(db, users, absorbedID); err != nil {
-			return s, err
-		}
-		s.survState, s.survPos, err = snapshotProgress(db, users, survivorID)
-		return s, err
-	}
-	before, err := snap()
-	if err != nil {
-		return nil, false, fmt.Errorf("snapshot progress before follow: %w", err)
-	}
+	// Per user (snapshotPair): a user whose progress cannot be read is
+	// skipped and logged, their rows left where they are, and only the users
+	// in the before-snapshot are followed, so no progress moves unjournaled.
+	before, followable, skipped := snapshotPair(db, users, absorbedID, survivorID)
+	logSkippedFollow(absorbedID, "not journaled or followed; their rows stay on the absorbed book", skipped)
 	// Persist the before-snapshot BEFORE the follow drains anything, so a
 	// crash inside the follow still leaves undo what it needs to put the
 	// absorbed book's progress back.
@@ -58,18 +51,16 @@ func FollowAbsorbedJournaled(db UserProgressMerger, survivorID, absorbedID strin
 		}
 	}
 	if slice == nil {
-		FollowMerge(db, follower, survivorID, []string{absorbedID})
+		FollowMergeUsers(db, follower, survivorID, []string{absorbedID}, followable)
 	} else {
-		if err := followSlice(db, follower, users, survivorID, absorbedID, *slice); err != nil {
+		if err := followSlice(db, follower, followable, survivorID, absorbedID, *slice); err != nil {
 			return buildProgressJournal(before, progressSnap{}), true, err
 		}
 	}
-	after, err := snap()
-	if err != nil {
-		// The follow ran; without an after-snapshot undo cannot tell whether
-		// the survivor changed since, so it would leave it as is (safe).
-		return buildProgressJournal(before, progressSnap{}), true, fmt.Errorf("snapshot progress after follow: %w", err)
-	}
+	after, _, afterSkipped := snapshotPair(db, followable, absorbedID, survivorID)
+	// A user whose after-snapshot failed has no after-state in the journal;
+	// undo then leaves their survivor progress as is (safe).
+	logSkippedFollow(absorbedID, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
 	return buildProgressJournal(before, after), true, nil
 }
 
@@ -207,4 +198,12 @@ func BookHasUserProgress(db UserProgressMerger, bookID string) (bool, error) {
 		return false, err
 	}
 	return len(states) > 0 || len(positions) > 0, nil
+}
+
+// logSkippedFollow logs each user skipped by a journaled follow.
+func logSkippedFollow(absorbedID, what string, skipped map[string]error) {
+	for u, err := range skipped {
+		mlog.Warn("merge-follow: progress of user=%s on absorbed=%s %s: %v",
+			logger.SanitizeLogValue(u), logger.SanitizeLogValue(absorbedID), what, err)
+	}
 }

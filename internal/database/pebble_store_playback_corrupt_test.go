@@ -91,3 +91,23 @@ func TestSetUserBookState_OverUndecodableRowDropsStaleStatusIndex(t *testing.T) 
 		t.Fatalf("in_progress list = %+v, %v; want the book", got, err)
 	}
 }
+
+// The readable rows travel WITH the error, for display-only callers that may
+// fail open (ReadablePositionsDespite); fail-closed callers see only the error.
+func TestUserPositions_UndecodableErrorCarriesReadableRows(t *testing.T) {
+	p := openPlaybackStore(t)
+	if err := p.SetUserPosition("u1", "b1", "abs", 3600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set([]byte("upos:u1:b1:zz"), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	_, err := p.GetUserPosition("u1", "b1")
+	rows, skipped, ok := ReadablePositionsDespite(err)
+	if !ok || skipped != 1 || len(rows) != 1 || rows[0].PositionSeconds != 3600 {
+		t.Fatalf("ReadablePositionsDespite = %v, %d, %v; want the abs row and 1 skipped", rows, skipped, ok)
+	}
+	if latest := LatestPosition(rows); latest == nil || latest.SegmentID != "abs" {
+		t.Fatalf("LatestPosition = %+v", latest)
+	}
+}

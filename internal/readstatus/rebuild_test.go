@@ -1,11 +1,12 @@
 // file: internal/readstatus/rebuild_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2d6f4a-3c19-4e57-a6d0-f1e9c7b5a382
 // last-edited: 2026-09-19
 
 package readstatus
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -87,6 +88,25 @@ func TestRebuild_ReadableStateIsLeftAlone(t *testing.T) {
 	rep, err := RebuildUserBookState(store, "u1", "b1", true)
 	if err != nil || !rep.StateReadable || rep.WouldRebuild || rep.Applied {
 		t.Fatalf("report for a readable row = %+v, %v", rep, err)
+	}
+	assertStateIntact(t, store)
+}
+
+type transientStateStore struct{ countingStore }
+
+func (*transientStateStore) GetUserBookState(string, string) (*database.UserBookState, error) {
+	return nil, errors.New("transient I/O failure")
+}
+
+// Only a row that fails to DECODE is rebuilt. A transient read error says
+// nothing about the row, which may be perfectly good: apply must not
+// overwrite it. The error maps to 503 (ErrStateUnreadable).
+func TestRebuild_TransientReadErrorWritesNothing(t *testing.T) {
+	store := seedTombstoned(t)
+	ts := &transientStateStore{countingStore{Store: store}}
+	rep, err := RebuildUserBookState(ts, "u1", "b1", true)
+	if !errors.Is(err, ErrStateUnreadable) || rep.Applied || ts.writes != 0 {
+		t.Fatalf("rebuild after a transient read error = %+v, %v, writes=%d; want ErrStateUnreadable and no write", rep, err, ts.writes)
 	}
 	assertStateIntact(t, store)
 }

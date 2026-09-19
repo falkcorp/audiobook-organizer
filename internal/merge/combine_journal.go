@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-09-19
 
@@ -324,6 +324,62 @@ func (ms *Service) ListCombineJournals(limit int) ([]CombineJournal, error) {
 
 // snapshotProgress captures every user's state and positions on one book.
 // Users with nothing recorded are omitted from the map.
+// snapshotPair snapshots every user's progress on BOTH books of a follow.
+// Per user, not all-or-nothing: a user whose state or positions on either
+// book cannot be read is left out of the snapshot and returned in skipped, so
+// one corrupt row costs only that user (who must then NOT be followed: never
+// move progress that is not journaled), not every other user's undo.
+func snapshotPair(db userPositionStore, users []database.User, absorbedID, survivorID string) (s progressSnap, followable []database.User, skipped map[string]error) {
+	s = progressSnap{
+		absState: map[string]*database.UserBookState{}, survState: map[string]*database.UserBookState{},
+		absPos: map[string][]database.UserPosition{}, survPos: map[string][]database.UserPosition{},
+	}
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		aSt, aPos, err := readUserProgress(db, u.ID, absorbedID)
+		if err == nil {
+			var sSt *database.UserBookState
+			var sPos []database.UserPosition
+			if sSt, sPos, err = readUserProgress(db, u.ID, survivorID); err == nil {
+				if aSt != nil {
+					s.absState[u.ID] = aSt
+				}
+				if len(aPos) > 0 {
+					s.absPos[u.ID] = aPos
+				}
+				if sSt != nil {
+					s.survState[u.ID] = sSt
+				}
+				if len(sPos) > 0 {
+					s.survPos[u.ID] = sPos
+				}
+				followable = append(followable, u)
+				continue
+			}
+		}
+		if skipped == nil {
+			skipped = map[string]error{}
+		}
+		skipped[u.ID] = err
+	}
+	return s, followable, skipped
+}
+
+// readUserProgress reads one user's state and positions on one book.
+func readUserProgress(db userPositionStore, userID, bookID string) (*database.UserBookState, []database.UserPosition, error) {
+	st, err := db.GetUserBookState(userID, bookID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read progress state user=%s book=%s: %w", userID, bookID, err)
+	}
+	pos, err := db.ListUserPositionsForBook(userID, bookID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read positions user=%s book=%s: %w", userID, bookID, err)
+	}
+	return st, pos, nil
+}
+
 func snapshotProgress(db userPositionStore, users []database.User, bookID string) (map[string]*database.UserBookState, map[string][]database.UserPosition, error) {
 	states := map[string]*database.UserBookState{}
 	positions := map[string][]database.UserPosition{}

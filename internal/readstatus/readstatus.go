@@ -1,5 +1,5 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
 // last-edited: 2026-09-19
 //
@@ -239,7 +239,9 @@ type RebuildReport struct {
 // row. Every state write fails closed on such a row (ErrStateUnreadable, 503),
 // so without this the book stays unwritable for that user forever.
 //
-// A readable row is never touched. For an unreadable one it derives a fresh
+// A readable row is never touched, and neither is one whose read failed for
+// any reason other than a decode error (database.ErrUserBookStateUndecodable):
+// that is ErrStateUnreadable, nothing written. For an undecodable row it derives a fresh
 // state from the positions (exactly as RecomputeUserBookState would for a
 // user with no stored state) and, only when apply is true, writes it over the
 // bad row. Dry run by default at the call sites. Fields only the lost row
@@ -251,11 +253,16 @@ func RebuildUserBookState(store Store, userID, bookID string, apply bool) (Rebui
 	if store == nil || userID == "" || bookID == "" {
 		return rep, fmt.Errorf("readstatus: rebuild needs a store, user and book")
 	}
-	if _, err := store.GetUserBookState(userID, bookID); err == nil {
+	_, err := store.GetUserBookState(userID, bookID)
+	if err == nil {
 		rep.StateReadable = true
 		return rep, nil
-	} else {
-		rep.StateError = err.Error()
+	}
+	rep.StateError = err.Error()
+	if !errors.Is(err, database.ErrUserBookStateUndecodable) {
+		// A transient read error says nothing about the row, which may be
+		// good: never overwrite it. 503 via ErrStateUnreadable; retry.
+		return rep, fmt.Errorf("%w: %s/%s: %w", ErrStateUnreadable, userID, bookID, err)
 	}
 	positions, err := store.ListUserPositionsForBook(userID, bookID)
 	if err != nil {

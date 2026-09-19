@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-19
 
@@ -1077,14 +1077,20 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 		// Carry the absorbed shell's sync identity and listening position onto
 		// the survivor, snapshotting both sides first so undo can put them
 		// back (mergeUserProgress DRAINS the loser; nothing else keeps it).
-		var before, after progressSnap
+		//
+		// Per user: a user whose progress cannot be read (a corrupt row) is
+		// skipped, logged and reported in the journal warnings, and their
+		// rows stay where they are. Only users in the before-snapshot are
+		// followed, so no progress moves without its undo journal.
 		if ms.syncFollower != nil {
-			before = ms.snapProgressPair(users, id, survivor.ID, journal)
-		}
-		FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})
-		if ms.syncFollower != nil {
-			after = ms.snapProgressPair(users, id, survivor.ID, journal)
+			before, followable, skipped := snapshotPair(ms.db, users, id, survivor.ID)
+			ms.reportSkippedProgress(journal, id, "not journaled or followed; their rows stay on the absorbed book", skipped)
+			FollowMergeUsers(ms.db, ms.syncFollower, survivor.ID, []string{id}, followable)
+			after, _, afterSkipped := snapshotPair(ms.db, followable, id, survivor.ID)
+			ms.reportSkippedProgress(journal, id, "followed, but the after-snapshot failed; undo leaves their survivor progress as is", afterSkipped)
 			a.Progress = buildProgressJournal(before, after)
+		} else {
+			FollowMerge(ms.db, ms.syncFollower, survivor.ID, []string{id})
 		}
 
 		// Guard (mirrors applyFSRegroup): never retire a book that still owns
@@ -1166,19 +1172,17 @@ type progressSnap struct {
 	absPos, survPos     map[string][]database.UserPosition
 }
 
-func (ms *Service) snapProgressPair(users []database.User, absorbedID, survivorID string, j *CombineJournal) progressSnap {
-	var s progressSnap
-	var err error
-	if s.absState, s.absPos, err = snapshotProgress(ms.db, users, absorbedID); err == nil {
-		s.survState, s.survPos, err = snapshotProgress(ms.db, users, survivorID)
+func (ms *Service) reportSkippedProgress(j *CombineJournal, absorbedID, what string, skipped map[string]error) {
+	ids := make([]string, 0, len(skipped))
+	for u := range skipped {
+		ids = append(ids, u)
 	}
-	if err != nil {
-		mlog.Warn("combine: progress snapshot failed; undo will not restore listening progress for this book absorbed=%s err=%s",
-			logger.SanitizeLogValue(absorbedID), logger.SanitizeLogValue(fmt.Sprint(err)))
-		j.Warnings = append(j.Warnings, fmt.Sprintf("progress of %s not journaled: %v", absorbedID, err))
-		return progressSnap{}
+	slices.Sort(ids)
+	for _, u := range ids {
+		mlog.Warn("combine: progress of user=%s on absorbed=%s %s: %s",
+			logger.SanitizeLogValue(u), logger.SanitizeLogValue(absorbedID), what, logger.SanitizeLogValue(fmt.Sprint(skipped[u])))
+		j.Warnings = append(j.Warnings, fmt.Sprintf("progress of user %s on %s %s: %v", u, absorbedID, what, skipped[u]))
 	}
-	return s
 }
 
 // buildProgressJournal keeps only users who had progress on the absorbed book

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
 // last-edited: 2026-09-19
 
@@ -39,8 +39,55 @@ func (p *PebbleStore) SetUserPosition(userID, bookID, segmentID string, position
 // rewound the listener. Zero matching rows is still (nil, nil).
 var ErrUserPositionUndecodable = errors.New("database: stored user position is undecodable")
 
+// ErrUserBookStateUndecodable: the stored ubs: row exists but could not be
+// decoded. Distinct from an I/O error, which says nothing about the row: only
+// an undecodable row may be rebuilt (readstatus.RebuildUserBookState).
+var ErrUserBookStateUndecodable = errors.New("database: stored user book state is undecodable")
+
+// UndecodablePositionsError is the error for (user, book) position rows of
+// which at least one did not decode. It wraps ErrUserPositionUndecodable, so
+// fail-closed callers need only errors.Is. It also CARRIES the rows that did
+// decode, for display-only callers that may fail open and show what is
+// readable (ReadablePositionsDespite). A write path must never use them.
+type UndecodablePositionsError struct {
+	UserID, BookID string
+	Readable       []UserPosition
+	Skipped        int
+	First          error // the first decode error
+}
+
+func (e *UndecodablePositionsError) Error() string {
+	return fmt.Sprintf("%v: %s/%s: %d row(s) undecodable (first: %v)", ErrUserPositionUndecodable, e.UserID, e.BookID, e.Skipped, e.First)
+}
+
+func (e *UndecodablePositionsError) Unwrap() error { return ErrUserPositionUndecodable }
+
+// ReadablePositionsDespite returns the rows that DID decode when err is an
+// *UndecodablePositionsError, with how many were skipped. DISPLAY ONLY: a
+// caller that writes must treat the error as fatal.
+func ReadablePositionsDespite(err error) (rows []UserPosition, skipped int, ok bool) {
+	var upe *UndecodablePositionsError
+	if !errors.As(err, &upe) {
+		return nil, 0, false
+	}
+	return upe.Readable, upe.Skipped, true
+}
+
+// LatestPosition is the most recently updated of rows (nil for none), the
+// same pick GetUserPosition makes.
+func LatestPosition(rows []UserPosition) *UserPosition {
+	var latest *UserPosition
+	for i := range rows {
+		if latest == nil || rows[i].UpdatedAt.After(latest.UpdatedAt) {
+			latest = &rows[i]
+		}
+	}
+	return latest
+}
+
 // scanUserPositions decodes every upos: row for (user, book). Any row that
-// fails to decode, and any iterator error (including on Close), is an error.
+// fails to decode is an *UndecodablePositionsError (carrying the readable
+// rows); any iterator error, including on Close, is returned as is.
 func (p *PebbleStore) scanUserPositions(userID, bookID string) (out []UserPosition, err error) {
 	prefix := []byte("upos:" + userID + ":" + bookID + ":")
 	upper := []byte("upos:" + userID + ":" + bookID + ":~")
@@ -53,15 +100,25 @@ func (p *PebbleStore) scanUserPositions(userID, bookID string) (out []UserPositi
 			out, err = nil, fmt.Errorf("closing position iterator for %s/%s: %w", userID, bookID, cerr)
 		}
 	}()
+	var bad *UndecodablePositionsError
 	for iter.First(); iter.Valid(); iter.Next() {
 		var pos UserPosition
 		if uerr := json.Unmarshal(iter.Value(), &pos); uerr != nil {
-			return nil, fmt.Errorf("%w: key %q: %w", ErrUserPositionUndecodable, iter.Key(), uerr)
+			if bad == nil {
+				bad = &UndecodablePositionsError{UserID: userID, BookID: bookID,
+					First: fmt.Errorf("key %q: %w", iter.Key(), uerr)}
+			}
+			bad.Skipped++
+			continue
 		}
 		out = append(out, pos)
 	}
 	if ierr := iter.Error(); ierr != nil {
 		return nil, fmt.Errorf("iterating positions for %s/%s: %w", userID, bookID, ierr)
+	}
+	if bad != nil {
+		bad.Readable = out
+		return nil, bad
 	}
 	return out, nil
 }
@@ -74,13 +131,7 @@ func (p *PebbleStore) GetUserPosition(userID, bookID string) (*UserPosition, err
 	if err != nil {
 		return nil, err
 	}
-	var latest *UserPosition
-	for i := range all {
-		if latest == nil || all[i].UpdatedAt.After(latest.UpdatedAt) {
-			latest = &all[i]
-		}
-	}
-	return latest, nil
+	return LatestPosition(all), nil
 }
 
 func (p *PebbleStore) ListUserPositionsForBook(userID, bookID string) ([]UserPosition, error) {
@@ -217,7 +268,7 @@ func (p *PebbleStore) GetUserBookState(userID, bookID string) (*UserBookState, e
 	defer closer.Close()
 	var s UserBookState
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s/%s: %w", ErrUserBookStateUndecodable, userID, bookID, err)
 	}
 	return &s, nil
 }
