@@ -624,13 +624,8 @@ func (s *SQLActivityStore) Query(ctx context.Context, f ActivityFilter) ([]Activ
 // budgeted newest-window sample, and needs no memoization — the engine does the
 // aggregation. That is a strict improvement, not a regression.
 func (s *SQLActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) ([]SourceCount, error) {
-	where, args := s.buildFilter(f)
-	whereClause := ""
-	if where != "" {
-		whereClause = " WHERE " + where
-	}
-	q := "SELECT source, COUNT(*) c FROM activity" + whereClause + " GROUP BY source ORDER BY c DESC, source ASC"
-	rows, err := s.reader.QueryContext(ctx, s.dialect.rebind(q), args...)
+	q, args := s.distinctSourcesQuery(f)
+	rows, err := s.reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sql_activity: distinct sources: %w", err)
 	}
@@ -644,6 +639,29 @@ func (s *SQLActivityStore) GetDistinctSources(ctx context.Context, f ActivityFil
 		out = append(out, sc)
 	}
 	return out, rows.Err()
+}
+
+// distinctSourcesQuery builds GetDistinctSources' statement, already rebound.
+// Split out so a test can EXPLAIN exactly the statement that runs.
+func (s *SQLActivityStore) distinctSourcesQuery(f ActivityFilter) (string, []any) {
+	where, args := s.buildFilter(f)
+	whereClause := ""
+	if where != "" {
+		whereClause = " WHERE " + where
+	}
+	// A time window with no tier or source is the Sources picker's own request
+	// (it sends only since/until). Left to itself the planner walks the whole
+	// of idx_act_source to get rows pre-sorted for the GROUP BY and then fetches
+	// every row to test ts — a full-table read for a 24-hour question. The ts
+	// range on the covering idx_act_ts_src is the right plan at any table
+	// size, so it is named rather than hoped for. The index is created by the
+	// schema DDL on open, so INDEXED BY cannot name a missing index.
+	from := " FROM activity"
+	if f.Tier == "" && f.Source == "" && (f.Since != nil || f.Until != nil) {
+		from = " FROM activity INDEXED BY idx_act_ts_src"
+	}
+	q := "SELECT source, COUNT(*) c" + from + whereClause + " GROUP BY source ORDER BY c DESC, source ASC"
+	return s.dialect.rebind(q), args
 }
 
 // Summarize groups entries older than olderThan in tier by (day, type, source),
@@ -895,10 +913,10 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 //     Lock that could park the op silently and uncancellably behind a stalled
 //     backfill batch.
 //   - The range query is a lone MIN(ts), which SQLite answers with one seek on
-//     idx_act_ts. It used to be MIN(ts), MAX(ts) in one statement: two
+//     idx_act_ts_src. It used to be MIN(ts), MAX(ts) in one statement: two
 //     aggregates defeat SQLite's min/max optimization, so it walked EVERY row
-//     below the cutoff through idx_act_ts with a table lookup per row to test
-//     tier (idx_act_ts does not cover it). Measured 1.00s vs 0.01s on a
+//     below the cutoff through idx_act_ts_src with a table lookup per row to test
+//     tier (idx_act_ts_src does not cover it). Measured 1.00s vs 0.01s on a
 //     1.5M-row fixture; production has ~5.9M such rows in a ~20 GB file. MAX
 //     was never read. The query is also re-issued per day from the end of the
 //     previous day, so runs of empty days cost nothing instead of one write
@@ -981,7 +999,7 @@ func (s *SQLActivityStore) CompactByDay(ctx context.Context, olderThan time.Time
 }
 
 // nextCompactableTS returns the earliest non-digest timestamp in [from, cutoff).
-// A lone MIN over an indexed column is a single seek on idx_act_ts; see the
+// A lone MIN over an indexed column is a single seek on idx_act_ts_src; see the
 // CompactByDay comment for why it must not be paired with MAX.
 func (s *SQLActivityStore) nextCompactableTS(ctx context.Context, from, cutoff int64) (int64, bool, error) {
 	var minNS sql.NullInt64
@@ -1174,7 +1192,7 @@ func (s *SQLActivityStore) compactDayChunk(ctx context.Context, day time.Time, l
 // Each category is its own bounded LIMIT query, so the number of rows decoded is
 // capped at maxDigestItems regardless of how large the day is.
 func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, beat func()) ([]DigestItem, error) {
-	// Audit rows: idx_act_tier_ts serves tier = 'audit' AND ts range directly,
+	// Audit rows: idx_act_tier_ts_src serves tier = 'audit' AND ts range directly,
 	// so this is a bounded seek that stops after maxDigestItems rows.
 	items, err := s.digestItemsWhere(ctx,
 		`tier = 'audit' AND ts >= ? AND ts < ? ORDER BY ts ASC, id ASC LIMIT ?`, lo, hi, maxDigestItems)
@@ -1190,7 +1208,7 @@ func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, bea
 	// earliest error/warn rows of a 4.8M-row day means walking the day. That
 	// walk used to be ONE statement (`level IN ('error','warn') ORDER BY ts
 	// LIMIT n`) — unbounded when errors are rare, silent, and run inside the
-	// first chunk's write transaction. It is now a keyset walk over idx_act_ts
+	// first chunk's write transaction. It is now a keyset walk over idx_act_ts_src
 	// in windows of sqlActSampleWindow rows, reading only id/ts/tier/level,
 	// with a heartbeat after each window; it stops as soon as error/warn rows
 	// alone fill the sample. The chosen rows are identical to the old query's
