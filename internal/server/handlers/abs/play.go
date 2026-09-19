@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-09-19
 
@@ -364,35 +364,47 @@ func (h *Handler) SessionClose(c *gin.Context) {
 // 🔴 THIS ENDPOINT EXISTS SO IT CANNOT 404. §1.8.8 item 1: ShelfPlayer sends it after
 // every play/pause with maxAttempts:1, so a 404 immediately marks the whole connection
 // offline; §1.9.1 softens that to "still implement it, but a 404 is no longer fatal"
-// for the two clients we actually target. So it ALWAYS answers a 2xx with a
-// non-empty body, whatever happens to the session inside it.
+// for the two clients we actually target. It answers a 2xx with a non-empty
+// body whenever the session is applied, and never a 404.
 //
 // Since 2026-09-19 it also APPLIES the session (it used to acknowledge and drop
 // it), through the same applyLocalSession rules as /api/session/local-all. A
-// session that cannot be applied is logged, never reported as an HTTP error: a
-// 4xx here would wedge a client that cannot recover from one.
+// session it cannot apply is NOT reported as success: a transient failure is a
+// 503 (retried), a refusal is a 409 (skipped by AudioBooth); see the switch.
 func (h *Handler) SessionLocal(c *gin.Context) {
-	// Answered before anything else can fail, so no error path can produce an empty
-	// 200 — fatal for these decoders (§1.8.6).
-	defer respondPlainOK(c)
-
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok || user == nil {
+		respondPlainOK(c)
 		return
 	}
 	// The body is ONE PlaybackSession — the same object local-all carries in its
-	// array — and it is applied by the same rules (applyLocalSession): offline
-	// replay is forward-only unless the session began after the server's newest
-	// position, a reset tombstone refuses older sessions, and an out-of-range
-	// position is rejected. Until 2026-09-19 this acknowledged and discarded it.
+	// array — applied by the same rules (applyLocalSession).
 	var req localSessionReq
 	if err := c.ShouldBindJSON(&req); err != nil {
+		respondPlainOK(c)
 		return
 	}
 	res := h.applyLocalSession(user.ID, req)
-	if !res.Success {
-		playlistsLog.Warn("abs: /api/session/local not applied: session_id=%s err=%s",
+	switch {
+	case res.Success, !res.transient && !res.refused:
+		// Applied, or named nothing we can apply (no id, unknown item,
+		// podcast): 200, per ShelfPlayer's maxAttempts:1 contract above.
+		respondPlainOK(c)
+	case res.transient:
+		// A read/resolve/write failure: a retry can succeed. AudioBooth keeps
+		// the session and retries 5xx (with backoff), which is what we want.
+		respondError(c, http.StatusServiceUnavailable, res.Error)
+	default:
+		// A REFUSAL of this session (e.g. its position predates a progress
+		// reset). Answering 200 would tell the app the listening was recorded
+		// when it was discarded. 409, not 404: AudioBooth's unsynced-session
+		// pass skips a 4xx other than 401/408/429 ("Server rejected session
+		// ... skipping it") instead of retrying it forever, and ShelfPlayer
+		// reads only a 404 as "offline". The app's next progress sync sends a
+		// fresh updatedAt and is judged again.
+		playlistsLog.Warn("abs: /api/session/local refused: session_id=%s err=%s",
 			logger.SanitizeLogValue(res.ID), res.Error)
+		respondError(c, http.StatusConflict, res.Error)
 	}
 }
 

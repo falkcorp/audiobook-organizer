@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
 // last-edited: 2026-09-19
 
@@ -60,10 +60,18 @@ type localSessionReq struct {
 	EpisodeID     *string  `json:"episodeId"`
 	CurrentTime   *float64 `json:"currentTime"`
 	Duration      *float64 `json:"duration"`
-	// StartedAt is when the listen began on the device (ms epoch). Unlike
-	// updatedAt, clients do not re-stamp it when they replay a backlog, so it is
-	// the one timestamp this endpoint can trust.
+	// StartedAt is when the listen began on the device (ms epoch). It gates the
+	// rewind branch (a session that began after the server's newest position).
+	// It does NOT date the position: see UpdatedAt.
 	StartedAt *int64 `json:"startedAt"`
+	// UpdatedAt is when the device last moved this session's position (ms
+	// epoch). AudioBooth sets it on every progress sync
+	// (SessionManager.syncProgress: session.updatedAt = min(now, end of the
+	// session's day)) and sends the stored value on replay, so it dates the
+	// POSITION, which is what the reset tombstone must judge. startedAt dates
+	// only the session, and AudioBooth REUSES one local session across a reset
+	// (a new one starts only when the old one closes or the day changes).
+	UpdatedAt *int64 `json:"updatedAt"`
 }
 
 // absLocalSessionOverrunSec is how far past the item's duration a reported
@@ -84,6 +92,17 @@ type localSessionResult struct {
 	Success        bool   `json:"success"`
 	ProgressSynced bool   `json:"progressSynced"`
 	Error          string `json:"error,omitempty"`
+	// transient marks a failure a retry can fix (a read/resolve/write error),
+	// as opposed to a refusal of the session itself. /api/session/local maps
+	// it to 503 (AudioBooth retries 5xx) vs 409 (AudioBooth skips a 4xx).
+	transient bool
+	// refused marks a deliberate refusal of the session's DATA (it would undo
+	// a progress reset, carries an impossible position, or belongs to another
+	// user). /api/session/local answers 409 for these. A session that names
+	// nothing we can apply (no id, unknown item, podcast) is not "refused":
+	// there is nothing to misreport, and ShelfPlayer reads a failure on this
+	// path as the connection being offline (§1.8.8 item 1).
+	refused bool
 }
 
 // SessionLocalAll handles POST /api/session/local-all.
@@ -133,6 +152,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	case s.UserID != "" && s.UserID != userID:
 		// Upstream ABS rejects a session belonging to another user the same way.
 		res.Error = "session belongs to a different user"
+		res.refused = true
 		return res
 	case s.EpisodeID != nil && strings.TrimSpace(*s.EpisodeID) != "":
 		res.Error = "podcast episodes are not supported"
@@ -141,6 +161,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	bookID, rerr := h.bookIDForSyncID(strings.TrimSpace(s.LibraryItemID))
 	if rerr != nil {
 		res.Error = "could not resolve library item; retry"
+		res.transient = true
 		return res
 	}
 	if bookID == "" {
@@ -156,6 +177,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	ct := *s.CurrentTime
 	if math.IsNaN(ct) || math.IsInf(ct, 0) || ct < 0 {
 		res.Error = "currentTime is not a valid position"
+		res.refused = true
 		return res
 	}
 
@@ -164,6 +186,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		// Unknown stored position: writing blind could rewind the listener,
 		// which is the one outcome this endpoint must never produce.
 		res.Error = "could not read stored progress"
+		res.transient = true
 		return res
 	}
 	state, _ := h.progress.GetUserBookState(userID, bookID)
@@ -177,23 +200,36 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		startedAt = s.StartedAt
 	}
 
-	// (b) Reset tombstone. While one exists, a session is accepted ONLY if it
-	// provably started after the reset: a present, trusted (not future beyond
-	// the tolerance) startedAt that is LATER than reset + tolerance. The
-	// tolerance widens only the REFUSE side. Anything else is refused:
-	//   - startedAt within the tolerance of the reset: the stored position is
-	//     0 after a reset, so forward-only would accept it and bring the
-	//     discarded position back (review of #3470 at 590e1883b);
-	//   - missing, zero or implausibly-future startedAt (a fast device clock):
-	//     it cannot prove the listen came after the reset.
-	// AudioBooth always sends startedAt (a non-optional Int in its
-	// SessionSync model), so a missing one is a client we cannot vouch for.
-	// Without a tombstone none of this applies and a missing startedAt falls
-	// back to forward-only below.
+	// (b) Reset tombstone. While one exists, a session is accepted ONLY if its
+	// POSITION provably post-dates the reset: a present, trusted updatedAt (not
+	// beyond server now + tolerance) at or after reset + tolerance. The
+	// tolerance widens only the REFUSE side. Refused:
+	//   - a position last moved before, or within the tolerance of, the reset:
+	//     the stored position is 0 after a reset, so forward-only would bring
+	//     the discarded position back;
+	//   - a missing, zero or implausibly-future updatedAt: it cannot prove the
+	//     position came after the reset.
+	// Judged on updatedAt, NOT startedAt (review of #3470 at 0690ce2d6):
+	// AudioBooth keeps the same local session across a reset, so real
+	// listening after a 10:00 reset arrives on a session with startedAt 09:00
+	// and was refused. AudioBooth always sends updatedAt (non-optional Int in
+	// its SessionSync model). Without a tombstone none of this applies.
+	//
+	// ⚠️ KNOWN LIMIT: a device clock running FAST by less than the tolerance
+	// (2 min) can make a position moved shortly BEFORE the reset look like it
+	// came after it, and that position would be accepted. Closing it needs a
+	// server-side record of when each device's position moved, which offline
+	// replay by definition does not have. Clocks more than 2 min fast are
+	// untrusted and refused. Dating the position (updatedAt) bounds this better
+	// than dating the session did: a startedAt-based check let ANY position a
+	// long-running session reached after the reset through, however old its
+	// last update.
 	if state != nil && state.ProgressResetAt != nil {
 		resetMs := state.ProgressResetAt.UnixMilli()
-		if startedAt == nil || *startedAt < resetMs+tol {
-			res.Error = "session is not provably after a progress reset"
+		trusted := s.UpdatedAt != nil && *s.UpdatedAt > 0 && *s.UpdatedAt <= now.UnixMilli()+tol
+		if !trusted || *s.UpdatedAt < resetMs+tol {
+			res.Error = "session position is not provably after a progress reset"
+			res.refused = true
 			return res
 		}
 	}
@@ -203,6 +239,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	// a corrupt or foreign value past the end must not mark the book done.
 	if duration > 0 && ct > duration+absLocalSessionOverrunSec {
 		res.Error = "currentTime is beyond the item's duration"
+		res.refused = true
 		return res
 	}
 	if duration > 0 && ct > duration {
@@ -250,6 +287,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	if err := h.progress.SetUserPosition(userID, bookID, absProgressSegmentID, merged.CurrentTime); err != nil {
 		res.Success = false
 		res.Error = "could not store progress"
+		res.transient = true
 		return res
 	}
 	status := database.UserBookStatusInProgress

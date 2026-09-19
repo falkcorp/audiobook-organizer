@@ -259,7 +259,12 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		}
 		// Omitting a stored member is refused (409), never silently kept or
 		// blindly removed; see database.MemberListOmitted.
-		if omitted := database.MemberListOmitted(col.BookIDs, ids, h.canonicalBookID); len(omitted) > 0 {
+		visible, verr := h.visibleMembers(c.Request.Context(), col.BookIDs)
+		if verr != nil {
+			respondError(c, http.StatusServiceUnavailable, "could not read collection members; nothing was changed, retry")
+			return
+		}
+		if omitted := database.MemberListOmitted(visible, ids, nil); len(omitted) > 0 {
 			respondError(c, http.StatusConflict,
 				"books omits books currently in this collection (it may have changed since you loaded it); reload and retry, and use batch/remove or DELETE /api/collections/:id/book/:bookId to remove books")
 			return
@@ -597,17 +602,14 @@ func (h *Handler) collectionsPageBooks(
 		return out
 	}
 
-	books, err := h.library.GetBooksByIDs(ids)
-	if err != nil {
-		return out
-	}
-	views, err := h.loadItemViews(ctx, books)
+	views, err := h.memberViews(ctx, ids)
 	if err != nil {
 		return out
 	}
 	byID := make(map[string]libraryItemDTO, len(views))
-	for i := range views {
-		byID[views[i].Book.ID] = h.minifiedItem(&views[i])
+	for id := range views {
+		v := views[id]
+		byID[id] = h.minifiedItem(&v)
 	}
 
 	for i := range cols {
@@ -623,6 +625,63 @@ func (h *Handler) collectionsPageBooks(
 		out[cols[i].ID] = items
 	}
 	return out
+}
+
+// memberViews builds the item views for canonical member ids, keyed by book id.
+// A member that is absent from the result is one the client is NOT shown:
+// a deleted book, a merge loser, or one whose view cannot be built.
+//
+// 🔴 THIS IS THE SINGLE DEFINITION OF "WHAT THE CLIENT SEES" for membership
+// lists. Both renders (collectionsPageBooks, playlistItems) and the
+// omitted-member check on whole-list updates (visibleMembers) go through it,
+// so the check can never demand a member the client was never shown — which
+// is how a playlist holding a deleted book answered 409 to every reorder,
+// forever, with no way for the app to remove the hidden member (review of
+// #3470 at 0690ce2d6).
+//
+// One unbuildable book must not hide the rest: if the batched build fails, it
+// falls back to building each book on its own and drops only the failures.
+func (h *Handler) memberViews(ctx context.Context, ids []string) (map[string]itemView, error) {
+	out := make(map[string]itemView, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	books, err := h.library.GetBooksByIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	views, err := h.loadItemViews(ctx, books)
+	if err != nil {
+		for i := range books {
+			if v, verr := h.loadItemView(ctx, &books[i]); verr == nil && v != nil {
+				out[v.Book.ID] = *v
+			}
+		}
+		return out, nil
+	}
+	for i := range views {
+		out[views[i].Book.ID] = views[i]
+	}
+	return out, nil
+}
+
+// visibleMembers returns the stored list's members exactly as the render shows
+// them: canonical (survivor) ids, in order, deduplicated, restricted to members
+// memberViews can build. Hidden members are not in it; a whole-list update is
+// checked against THIS set and hidden members ride through the no-loss merge.
+func (h *Handler) visibleMembers(ctx context.Context, stored []string) ([]string, error) {
+	canon := h.canonicalMembers(stored)
+	views, err := h.memberViews(ctx, canon)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(canon))
+	for _, id := range canon {
+		if _, ok := views[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // canonicalBookID returns the book a client sees for a stored member id: the

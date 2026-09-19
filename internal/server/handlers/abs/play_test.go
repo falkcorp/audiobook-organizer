@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3e5c9b17-84d0-4f26-a1b9-70c8de4531f5
 // last-edited: 2026-08-22
 
@@ -518,8 +518,9 @@ func TestSessionSync_OtherUsersSessionIsRejected(t *testing.T) {
 func TestSessionLocal_ReturnsOK(t *testing.T) {
 	h, _, tok := newBrowseHarness(t)
 
-	// The real client sends a session object here; the stub persists nothing, so the
-	// body is sent only to prove a populated payload does not change the answer.
+	// This session names no library item, so there is nothing to apply; it must
+	// still be a 200. (A session the server REFUSES — e.g. one that would undo a
+	// progress reset — is a 409; see TestSessionLocal_RefusedSessionIsNotReportedAsSuccess.)
 	w, _ := h.do(t, request{
 		method: http.MethodPost, path: "/api/session/local",
 		body: map[string]any{

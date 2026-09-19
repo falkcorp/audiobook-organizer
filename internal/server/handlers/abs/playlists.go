@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
 // last-edited: 2026-09-19
 
@@ -7,7 +7,6 @@ package abs
 
 import (
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -170,67 +169,35 @@ func (h *Handler) playlistItems(c *gin.Context, playlistID string, bookIDs []str
 	}
 	// A member that lost a merge is shown as its survivor, not dropped (see
 	// canonicalBookID), so the user can still see and remove it.
-	bookIDs = h.canonicalMembers(bookIDs)
-
-	books, err := h.library.GetBooksByIDs(bookIDs)
+	members := h.canonicalMembers(bookIDs)
+	// memberViews is the SAME visibility definition the whole-list update check
+	// uses (visibleMembers), so what is rendered here is exactly the set a
+	// reorder must name. A member it cannot build (deleted book, merge loser,
+	// unbuildable view) is left out rather than emitted without a libraryItem:
+	// AudioBooth decodes libraryItem non-optionally when episodeId is null, so
+	// one such item would fail the decode of the WHOLE Page<Playlist>.
+	views, err := h.memberViews(c.Request.Context(), members)
 	if err != nil {
-		// Report the playlist with no items rather than failing the whole page —
-		// one unreadable playlist must not take out the list.
+		// Report the playlist with no items rather than failing the whole page.
+		playlistsLog.Warn("abs: playlist items unavailable: playlist_id=%s err=%v",
+			logger.SanitizeLogValue(playlistID), err)
 		return items
 	}
-	byID := make(map[string]*database.Book, len(books))
-	for i := range books {
-		byID[books[i].ID] = &books[i]
-	}
-
-	order := make(map[string]int, len(bookIDs))
-	for i, id := range bookIDs {
-		if _, seen := order[id]; !seen {
-			order[id] = i
-		}
-	}
-
-	type positioned struct {
-		pos int
-		val gin.H
-	}
-	built := make([]positioned, 0, len(bookIDs))
-	for id, pos := range order {
-		book := byID[id]
-		if book == nil {
-			continue // stale reference to a deleted book
-		}
-		syncID, err := h.identity.MintOrGetSyncID(book.ID)
-		if err != nil {
+	for _, id := range members {
+		v, ok := views[id]
+		if !ok {
 			continue
 		}
-		// 🔴 A book whose item view cannot be built is DROPPED, like a deleted
-		// one. AudioBooth's PlaylistItem decodes libraryItem non-optionally
-		// whenever episodeId is null, so emitting the item without it (as this
-		// did) failed the decode of the ENTIRE Page<Playlist> -- one unreadable
-		// book blanked every playlist.
-		v, verr := h.loadItemView(c.Request.Context(), book)
-		if verr != nil || v == nil {
-			playlistsLog.Warn("abs: playlist item dropped: its library item could not be built: playlist_id=%s book_id=%s library_item_id=%s err=%v",
-				logger.SanitizeLogValue(playlistID), book.ID, syncID, verr)
-			continue
-		}
-		item := gin.H{
+		items = append(items, gin.H{
 			// The playlist-item id is synthesized from (playlist, item): our store
 			// has no PlaylistItem row for UserPlaylist — membership is an ordered
 			// id slice — and ABS clients use this only as a list key.
-			"id":            playlistID + "_" + syncID,
+			"id":            playlistID + "_" + v.SyncID,
 			"playlistId":    playlistID,
-			"libraryItemId": syncID,
+			"libraryItemId": v.SyncID,
 			"episodeId":     nil,
-			"libraryItem":   h.minifiedItem(v),
-		}
-		built = append(built, positioned{pos: pos, val: item})
-	}
-	sort.Slice(built, func(i, j int) bool { return built[i].pos < built[j].pos })
-
-	for _, b := range built {
-		items = append(items, b.val)
+			"libraryItem":   h.minifiedItem(&v),
+		})
 	}
 	return items
 }

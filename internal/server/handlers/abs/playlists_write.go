@@ -184,7 +184,15 @@ func (h *Handler) UpdatePlaylist(c *gin.Context) {
 			// seen?) and is refused rather than silently kept; upstream ABS
 			// treats this PATCH as a replace, so a client relying on that must
 			// learn it did not happen. AudioBooth removes via batch/remove.
-			if omitted := database.MemberListOmitted(pl.BookIDs, incoming, h.canonicalBookID); len(omitted) > 0 {
+			// Checked against what the app was SHOWN (visibleMembers), never
+			// the raw stored list: a hidden member (deleted book) would
+			// otherwise make every reorder 409 forever. Hidden members are
+			// kept by the no-loss merge below.
+			visible, verr := h.visibleMembers(c.Request.Context(), pl.BookIDs)
+			if verr != nil {
+				return http.StatusServiceUnavailable, "could not read playlist members; nothing was changed, retry"
+			}
+			if omitted := database.MemberListOmitted(visible, incoming, nil); len(omitted) > 0 {
 				return http.StatusConflict, "items omits books currently in this playlist (it may have changed since you loaded it); reload and retry, and use batch/remove or DELETE /api/playlists/:id/item/:libraryItemId to remove books"
 			}
 			pl.BookIDs = database.MergeMemberListNoLoss(pl.BookIDs, incoming)
