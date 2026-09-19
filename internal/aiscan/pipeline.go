@@ -252,12 +252,18 @@ const heartbeatInterval = 60 * time.Second
 // BatchFinder looks up the OpenAI batch a scan phase submitted, by the
 // scan_id / scan_phase metadata written at CreateBatch time. It is what lets a
 // phase that died between CreateBatch and recording the batch id re-attach
-// instead of paying for a second batch. Optional: the client passed to
-// NewPipelineManager is checked for it, and a scan resumed without one fails
+// instead of paying for a second batch. *ai.OpenAIParser implements it; the
+// client passed to NewPipelineManager is checked for it (test fakes may omit
+// it), and a scan resumed without one fails
 // the ambiguous phase visibly (ErrBatchSubmitUnknown) rather than guessing.
 type BatchFinder interface {
 	FindScanBatch(ctx context.Context, scanID int, phaseType string) (batchID string, found bool, err error)
 }
+
+// The production client must implement BatchFinder. It is checked by type
+// assertion at run time, so without this line dropping the method would
+// silently turn every crash-mid-submit re-attach into ErrBatchSubmitUnknown.
+var _ BatchFinder = (*ai.OpenAIParser)(nil)
 
 // sourcePhases are the two phases a scan starts with, each paired with the
 // enrichment phase that follows it.
