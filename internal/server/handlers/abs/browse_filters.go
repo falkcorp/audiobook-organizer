@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/browse_filters.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bb2cd357-d7f1-4d95-a61d-676c82fdc680
 // last-edited: 2026-09-19
 
@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -93,23 +92,22 @@ func (h *Handler) filterGroupBookIDs(c *gin.Context, group, value string) ([]str
 		}
 		return idx.narratorBooks[value], filterResolved, nil
 	case "genres":
-		return h.visibleBooksMatching(func(b *database.BookCore) bool { return genreMatches(b.Genre, value) })
+		return h.visibleBooksMatching(func(b *visibleBookAttrs) bool { return genreMatches(b.genre, value) })
 	case "languages":
-		return h.visibleBooksMatching(func(b *database.BookCore) bool {
-			return b.Language != nil && strings.EqualFold(strings.TrimSpace(*b.Language), value)
+		return h.visibleBooksMatching(func(b *visibleBookAttrs) bool {
+			return b.language != nil && strings.EqualFold(strings.TrimSpace(*b.language), value)
 		})
 	case "publishers":
-		return h.visibleBooksMatching(func(b *database.BookCore) bool {
-			return b.Publisher != nil && strings.EqualFold(strings.TrimSpace(*b.Publisher), value)
+		return h.visibleBooksMatching(func(b *visibleBookAttrs) bool {
+			return b.publisher != nil && strings.EqualFold(strings.TrimSpace(*b.publisher), value)
 		})
 	case "publishedDecades", "decades":
 		decade, err := strconv.Atoi(value)
 		if err != nil {
 			return nil, filterBadValue, nil
 		}
-		return h.visibleBooksMatching(func(b *database.BookCore) bool {
-			year := bookYear(b.AudiobookReleaseYear, b.PrintYear)
-			return year != 0 && year/10*10 == decade
+		return h.visibleBooksMatching(func(b *visibleBookAttrs) bool {
+			return b.year != 0 && b.year/10*10 == decade
 		})
 	case "tags":
 		return h.visibleTaggedBooks(value)
@@ -151,50 +149,122 @@ func bookYear(release, print *int) int {
 	return 0
 }
 
-// visibleIDs returns the ids of every book the ABS surface shows, in summary
-// order. Same predicate as /items (absItemFilterBase), so a filter can never
-// surface a book the library tab hides.
-func (h *Handler) visibleIDs() ([]string, error) {
+// visibleBookAttrs is one visible book's filterable attributes, projected once.
+type visibleBookAttrs struct {
+	id        string
+	genre     *string
+	language  *string
+	publisher *string
+	year      int
+}
+
+// visibleAttrIndex is the cached projection: every visible book, in summary
+// order, with the attributes the filters test. Immutable once published.
+type visibleAttrIndex struct {
+	books []visibleBookAttrs
+	ids   []string
+}
+
+// absAttrIndexTTL matches the series grouping: filters see library changes
+// within the same window the series and contributor tabs do.
+const absAttrIndexTTL = absSeriesBooksCacheTTL
+
+// visibleAttrs returns the cached visible-book attribute index, building it on
+// a miss (concurrent misses share one build).
+//
+// 🔴 WHY CACHED (review W6): uncached, every filter request — and every PAGE of
+// a filtered list, since the client pages through it — walked the visible
+// summaries AND the whole BookCore projection of the library. The index is
+// built from one such pass and then serves every group and every page from
+// memory until it expires.
+func (h *Handler) visibleAttrs() (*visibleAttrIndex, error) {
+	h.attrIndexMu.Lock()
+	idx, at := h.attrIndex, h.attrIndexAt
+	h.attrIndexMu.Unlock()
+	if idx != nil && h.now().Sub(at) < absAttrIndexTTL {
+		return idx, nil
+	}
+	v, err, _ := h.attrIndexSF.Do("attr-index", func() (any, error) {
+		built, err := h.buildVisibleAttrs()
+		if err != nil {
+			return nil, err
+		}
+		h.attrIndexMu.Lock()
+		h.attrIndex, h.attrIndexAt = built, h.now()
+		h.attrIndexMu.Unlock()
+		return built, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*visibleAttrIndex), nil
+}
+
+// buildVisibleAttrs makes one visible-summary pass and one chunked BookCore
+// walk. The per-row work is a map lookup and a copy of four fields — no DB,
+// network or hashing per item — so it is a plain loop, not a worker pool.
+func (h *Handler) buildVisibleAttrs() (*visibleAttrIndex, error) {
 	summaries, err := h.visibleBookSummaries(absItemFilterBase())
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, len(summaries))
+	pos := make(map[string]int, len(summaries))
+	idx := &visibleAttrIndex{
+		books: make([]visibleBookAttrs, len(summaries)),
+		ids:   make([]string, len(summaries)),
+	}
 	for i := range summaries {
-		ids[i] = summaries[i].ID
+		pos[summaries[i].ID] = i
+		idx.books[i].id = summaries[i].ID
+		idx.ids[i] = summaries[i].ID
 	}
-	return ids, nil
-}
-
-// visibleBooksMatching walks the BookCore projection once (chunked, like
-// visibleBookSummaries) and returns the visible books match accepts.
-//
-// This is a projection walk with a trivial predicate per row — no per-item DB
-// read, network call or hashing — so it is a plain loop rather than a worker
-// pool. Filters on these groups are rare user actions, not polled endpoints, so
-// the result is not cached.
-func (h *Handler) visibleBooksMatching(match func(b *database.BookCore) bool) ([]string, filterGroupStatus, error) {
-	visible, err := h.visibleIDs()
-	if err != nil {
-		return nil, filterResolved, err
-	}
-	matched := make(map[string]struct{})
 	const chunk = 5000
 	for offset := 0; ; offset += chunk {
 		page, err := h.library.GetAllBooksCore(chunk, offset)
 		if err != nil {
-			return nil, filterResolved, err
+			return nil, err
 		}
 		for i := range page {
-			if match(&page[i]) {
-				matched[page[i].ID] = struct{}{}
+			j, ok := pos[page[i].ID]
+			if !ok {
+				continue
 			}
+			b := &idx.books[j]
+			b.genre, b.language, b.publisher = page[i].Genre, page[i].Language, page[i].Publisher
+			b.year = bookYear(page[i].AudiobookReleaseYear, page[i].PrintYear)
 		}
 		if len(page) < chunk {
 			break
 		}
 	}
-	return keepIDs(visible, func(id string) bool { _, ok := matched[id]; return ok }), filterResolved, nil
+	return idx, nil
+}
+
+// visibleIDs returns the ids of every book the ABS surface shows, in summary
+// order (from the cached index). Same predicate as /items (absItemFilterBase),
+// so a filter can never surface a book the library tab hides. The slice is
+// shared and must not be modified.
+func (h *Handler) visibleIDs() ([]string, error) {
+	idx, err := h.visibleAttrs()
+	if err != nil {
+		return nil, err
+	}
+	return idx.ids, nil
+}
+
+// visibleBooksMatching returns the visible books match accepts, from the index.
+func (h *Handler) visibleBooksMatching(match func(b *visibleBookAttrs) bool) ([]string, filterGroupStatus, error) {
+	idx, err := h.visibleAttrs()
+	if err != nil {
+		return nil, filterResolved, err
+	}
+	out := make([]string, 0)
+	for i := range idx.books {
+		if match(&idx.books[i]) {
+			out = append(out, idx.books[i].id)
+		}
+	}
+	return out, filterResolved, nil
 }
 
 // visibleTaggedBooks resolves a tag through the tag index. Note the item DTO
@@ -257,15 +327,25 @@ func (h *Handler) progressFilterBookIDs(c *gin.Context, state string) ([]string,
 			return nil, filterResolved, err
 		}
 		for _, raw := range rows {
-			buf, merr := json.Marshal(raw)
-			if merr != nil {
-				continue
-			}
 			var row progressFilterRow
-			if uerr := json.Unmarshal(buf, &row); uerr != nil || row.LibraryItemID == "" {
-				continue
+			bookID := ""
+			if dto, typed := raw.(mediaProgressDTO); typed && dto.bookID != "" {
+				// The production provider's rows carry the book they were
+				// rendered from: no JSON round trip, no sync-keyspace lookup.
+				row = progressFilterRow{LibraryItemID: dto.LibraryItemID, IsFinished: dto.IsFinished,
+					CurrentTime: dto.CurrentTime, Progress: dto.Progress}
+				bookID = dto.bookID
+			} else {
+				// Any other provider: decode the wire shape and resolve the id.
+				buf, merr := json.Marshal(raw)
+				if merr != nil {
+					continue
+				}
+				if uerr := json.Unmarshal(buf, &row); uerr != nil || row.LibraryItemID == "" {
+					continue
+				}
+				bookID = h.bookIDForSyncID(row.LibraryItemID)
 			}
-			bookID := h.bookIDForSyncID(row.LibraryItemID)
 			if bookID == "" {
 				continue
 			}

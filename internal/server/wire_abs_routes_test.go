@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
 // last-edited: 2026-09-19
 
@@ -866,7 +866,31 @@ func TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths(t *testing.T) {
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("web sources not present: %v", err)
 	}
-	unversioned := regexp.MustCompile(`/api/(playlists|collections|narrators)\b`)
+	// Three shapes, because a literal-only match is blind to built paths:
+	//   1. a literal unversioned path:          '/api/playlists/...'
+	//   2. a template segment right after /api: `/api/${ns}/...`
+	//   3. an unversioned base used to build:   const BASE = '/api'  |  '/api/' + ns
+	// Legitimate '/api/' uses that do not build a path (startsWith, includes)
+	// match none of them.
+	unversioned := regexp.MustCompile(
+		`/api/(playlists|collections|narrators)\b` +
+			"|/api/\\$\\{" +
+			"|['\"`]/api/?['\"`]\\s*\\+" +
+			"|=\\s*['\"`]/api/?['\"`]")
+	// The pattern must catch built paths, and must not flag non-building uses.
+	for sample, want := range map[string]bool{
+		"fetch('/api/playlists')":                  true,
+		"fetch(`/api/${ns}/${id}`)":                true,
+		"const BASE = '/api';":                     true,
+		"fetch('/api/' + 'collections')":           true,
+		"fetch(`/api/v1/playlists/${id}`)":         false,
+		"url.startsWith('/api/')":                  false,
+		"requestUrl.includes('/api/')":             false,
+		"const API_BASE = '/api/v1';":              false,
+		"fetch(`${API_BASE}/playlists?${params}`)": false,
+	} {
+		require.Equal(t, want, unversioned.MatchString(sample), "pattern self-check on %q", sample)
+	}
 	scanned := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -887,8 +911,9 @@ func TestWebUIUsesOnlyVersionedPlaylistAndCollectionPaths(t *testing.T) {
 		}
 		scanned++
 		if loc := unversioned.FindIndex(data); loc != nil {
-			t.Errorf("%s calls an UNVERSIONED %s; with ABS enabled that path belongs to the ABS "+
-				"surface. Use the /api/v1 form.", path, data[loc[0]:loc[1]])
+			t.Errorf("%s builds or calls an UNVERSIONED API path (%q); with ABS enabled "+
+				"/api/playlists, /api/collections and /api/narrators belong to the ABS surface. Use the /api/v1 form.",
+				path, data[loc[0]:loc[1]])
 		}
 		return nil
 	})
