@@ -1,12 +1,14 @@
 // file: internal/server/handlers/reading.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package handlers
 
 import (
+	"errors"
 	"log/slog"
+	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -91,7 +93,7 @@ func (h *ReadingHandler) SetPosition(c *gin.Context) {
 	}
 	state, err := readstatus.RecomputeUserBookState(h.store, userID, bookID)
 	if err != nil {
-		httputil.InternalError(c, "failed to recompute book state", err)
+		respondReadStatusError(c, "failed to recompute book state", err)
 		return
 	}
 	httputil.RespondWithOK(c, state)
@@ -154,7 +156,7 @@ func (h *ReadingHandler) SetBookStatus(c *gin.Context) {
 	}
 	state, err := readstatus.SetManualStatus(h.store, CallingUserID(c), bookID, req.Status)
 	if err != nil {
-		httputil.InternalError(c, "failed to set status", err)
+		respondReadStatusError(c, "failed to set status", err)
 		return
 	}
 	httputil.RespondWithOK(c, state)
@@ -170,10 +172,20 @@ func (h *ReadingHandler) ClearBookStatus(c *gin.Context) {
 	}
 	state, err := readstatus.SetManualStatus(h.store, CallingUserID(c), bookID, "")
 	if err != nil {
-		httputil.InternalError(c, "failed to clear status", err)
+		respondReadStatusError(c, "failed to clear status", err)
 		return
 	}
 	httputil.RespondWithOK(c, state)
+}
+
+// respondReadStatusError answers 503 when the stored state row could not be
+// read (readstatus wrote nothing; a retry can succeed) and 500 otherwise.
+func respondReadStatusError(c *gin.Context, msg string, err error) {
+	if errors.Is(err, readstatus.ErrStateUnreadable) {
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, msg, "STATE_UNREADABLE")
+		return
+	}
+	httputil.InternalError(c, msg, err)
 }
 
 // ListByStatus returns the calling user's books filtered by status, paginated.

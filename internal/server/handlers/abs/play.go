@@ -573,10 +573,14 @@ func (h *Handler) updateUserBookState(userID, bookID string, mutate func(*databa
 		return nil
 	}
 	state, err := h.progress.GetUserBookState(userID, bookID)
-	if err != nil || state == nil {
-		// A read error is treated as "no row yet" rather than propagated: losing the
-		// previous StatusManual/hide flag is bad, but refusing to record the user's
-		// new position is worse, and this path has already promised the client 200.
+	if err != nil {
+		// Fail closed. An unreadable row is NOT "no row yet": writing a fresh
+		// row over it silently dropped StatusManual, the hide flag and the
+		// progress-reset tombstone (and with the tombstone gone, an offline
+		// backlog replay undoes the reset). Write nothing; callers answer 503.
+		return fmt.Errorf("%w: %s/%s: %w", errProgressStateUnreadable, userID, bookID, err)
+	}
+	if state == nil {
 		state = &database.UserBookState{UserID: userID, BookID: bookID}
 	}
 	mutate(state)
