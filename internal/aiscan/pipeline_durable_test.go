@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
 // last-edited: 2026-09-19
 
@@ -422,6 +422,22 @@ func waitPhase(t *testing.T, s *database.AIScanStore, scanID int, phase, status 
 	}, 5*time.Second, 5*time.Millisecond, "phase %s never reached %s", phase, status)
 }
 
+// awaitGroupsSettled waits until an about-to-be-abandoned manager has finished
+// everything it does for groups_scan: the phase and its enrichment are
+// complete and it holds neither claim. Only then is the manager "dead" the way
+// a crashed process is. Waiting on full_scan alone left pm1 still driving
+// groups_scan while pm2 resumed the same rows — two live processes the claim
+// map (per manager) cannot exclude — so pm2 either found groups_scan still
+// pending or ran groups_enrich a second time and doubled the results.
+func awaitGroupsSettled(t *testing.T, pm *PipelineManager, s *database.AIScanStore, scanID int) {
+	t.Helper()
+	waitPhase(t, s, scanID, "groups_scan", "complete")
+	waitPhase(t, s, scanID, "groups_enrich", "complete")
+	require.Eventually(t, func() bool {
+		return !pm.phaseClaimed(scanID, "groups_scan") && !pm.phaseClaimed(scanID, "groups_enrich")
+	}, 5*time.Second, 5*time.Millisecond, "the abandoned manager still holds a groups claim")
+}
+
 func runAsync(pm *PipelineManager, scanID int) <-chan error {
 	out := make(chan error, 1)
 	go func() { out <- pm.RunScan(context.Background(), scanID, nil) }()
@@ -540,6 +556,7 @@ func TestBatchScanCollectedOnceAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	_ = runAsync(pm1, scan.ID)
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 	// pm1 is abandoned here: the "process" is gone.
 
 	llm2 := newFakeLLM(acct)
@@ -583,6 +600,7 @@ func TestBatchCrashAfterCreateReattaches(t *testing.T) {
 	_ = runAsync(pm1, scan.ID)
 	<-llm1.entered
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 
 	llm2 := newFakeLLM(acct)
 	pm2 := NewPipelineManager(store, main, finderLLM{fakeLLM: llm2})
@@ -620,6 +638,7 @@ func TestBatchCrashAfterCreateWithoutFinderFailsVisibly(t *testing.T) {
 	_ = runAsync(pm1, scan.ID)
 	<-llm1.entered
 	waitPhase(t, store, scan.ID, "full_scan", "submitting")
+	awaitGroupsSettled(t, pm1, store, scan.ID)
 
 	llm2 := newFakeLLM(acct)
 	pm2 := NewPipelineManager(store, main, llm2)
@@ -717,4 +736,44 @@ func TestBatchSubmittingWithNoBatchSubmitsOnce(t *testing.T) {
 	acct.setAllStatus("completed")
 	require.NoError(t, pollUntilDone(t, pm, run))
 	require.Len(t, resultKeys(t, store, scan.ID), 4)
+}
+
+// TestResumedNeverSubmittedPhaseIsLaunchedNotLookedUp: a batch scan is
+// resumed while both source phases are still "pending" and neither ever
+// reached CreateBatch (no last-submit record). Such a phase owns no batch, so
+// the resume must launch it, not treat it as a crash inside CreateBatch. The
+// old path failed the scan with ErrBatchSubmitUnknown when the client had no
+// BatchFinder, and with one waited out submitGrace (an hour) before submitting.
+// groups_scan here has no duplicate groups: nothing to submit at all.
+func TestResumedNeverSubmittedPhaseIsLaunchedNotLookedUp(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		client func(*fakeLLM) LLM
+	}{
+		{"without finder", func(f *fakeLLM) LLM { return f }},
+		{"with finder", func(f *fakeLLM) LLM { return finderLLM{fakeLLM: f} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			main := newFakeMainStore(7)
+			store := newScanStore(t)
+			acct := newFakeAccount()
+			llm := newFakeLLM(acct)
+			pm := NewPipelineManager(store, main, tc.client(llm))
+			scan, err := pm.CreateScan("batch")
+			require.NoError(t, err)
+			// The previous process marked the scan running and died before
+			// either source phase got as far as submitBatch.
+			require.NoError(t, store.UpdateScanStatus(scan.ID, "scanning"))
+
+			run := runAsync(pm, scan.ID)
+			waitPhase(t, store, scan.ID, "full_scan", "submitted")
+			acct.setAllStatus("completed")
+			require.NoError(t, pollUntilDone(t, pm, run))
+
+			_, creates, _ := llm.counts()
+			require.Equal(t, 1, creates, "one batch, for the phase that had work")
+			require.Equal(t, "complete", phaseStatus(t, pm, scan.ID, "groups_scan"))
+			require.Len(t, resultKeys(t, store, scan.ID), 7)
+		})
+	}
 }
