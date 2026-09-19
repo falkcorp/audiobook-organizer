@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced_concurrency_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f4a5b6c-7d8e-49f0-a1b2-c3d4e5f60718
 // last-edited: 2026-09-19
 
@@ -42,7 +42,7 @@ func TestBatchUpdateMetadata_ParallelManyItems(t *testing.T) {
 		id := fmt.Sprintf("ok-book-%d", i)
 		newTitle := fmt.Sprintf("Updated Title %d", i)
 		book := &database.Book{ID: id, Title: fmt.Sprintf("Old Title %d", i), Format: "mp3"}
-		store.EXPECT().GetBookByID(id).Return(book, nil).Once()
+		expectFreshRead(t, store, id, book)
 		expectMergedBook(t, store, id, book, func(b *database.Book) bool {
 			return b != nil && b.Title == newTitle
 		})
