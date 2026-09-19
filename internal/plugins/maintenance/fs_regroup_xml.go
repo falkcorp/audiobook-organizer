@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -948,7 +948,7 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 	// path shares, so that section is serial; the per-group reads and the ledger
 	// writes outside it run in parallel. Making the RMW itself parallel needs
 	// per-group locking in internal/merge, which is a separate design decision.
-	err = registry.RunItems(ctx, reporter, work, func(_ context.Context, g fsRepairGroup) error {
+	err = registry.RunItems(ctx, reporter, work, func(gctx context.Context, g fsRepairGroup) error {
 		defer done.Add(1)
 		if lost.Load() {
 			return nil
@@ -959,7 +959,7 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 		}
 		switch g.Category {
 		case fsCatFragments:
-			a.applyFragments(g)
+			a.applyFragments(gctx, g)
 		case fsCatDuplicates:
 			a.applyDuplicates(g)
 		}
@@ -1004,7 +1004,7 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 // filling its own gap. The shells' rows, those included, then move to the
 // survivor as ordinary book_file_reassign rows, which a revert moves back.
 // Nothing is ever deleted.
-func (a *fsApplier) applyFragments(g fsRepairGroup) {
+func (a *fsApplier) applyFragments(ctx context.Context, g fsRepairGroup) {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 
@@ -1202,24 +1202,7 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 
 	// 3. Track numbers from each row's own chapter folder, gaps kept. The shape
 	// check above refused any group where two paths claim one number.
-	if rows, err := a.store.GetBookFiles(g.SurvivorID); err != nil {
-		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: re-read survivor rows: %v", folder, err)
-	} else {
-		for i := range rows {
-			f := &rows[i]
-			if _, _, n, ok := chaptershape.Parts(f.FilePath); ok && f.TrackNumber != n {
-				old := f.TrackNumber
-				f.TrackNumber = n
-				if err := a.store.UpdateBookFile(f.ID, f); err != nil {
-					a.errs.Add(1)
-					a.log(slog.LevelWarn, "fragments %q: set track %d on %s: %v", folder, n, f.ID, err)
-					continue
-				}
-				a.journal(g.SurvivorID, fsChangeFileTrack, "book_file:"+f.ID, strconv.Itoa(old), strconv.Itoa(n))
-			}
-		}
-	}
+	survivorRecomputed := a.renumberFragmentTracks(ctx, g.SurvivorID, folder)
 
 	a.updateSurvivor(g)
 
@@ -1242,11 +1225,68 @@ func (a *fsApplier) applyFragments(g fsRepairGroup) {
 		}
 		a.retire("fragments", folder, m.ID, g.SurvivorID, "merged into "+g.SurvivorID)
 	}
-	if err := a.store.RecomputeBookAggregates(g.SurvivorID); err != nil {
-		a.errs.Add(1)
-		a.log(slog.LevelWarn, "fragments %q: recompute %s: %v", folder, g.SurvivorID, err)
+	// Retiring shells does not touch the survivor's rows, so when the track
+	// pass already recomputed the survivor after the moves, a second recompute
+	// here would re-read every row for nothing.
+	if !survivorRecomputed {
+		if err := a.store.RecomputeBookAggregates(g.SurvivorID); err != nil {
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "fragments %q: recompute %s: %v", folder, g.SurvivorID, err)
+		}
 	}
 	a.groups.Add(1)
+}
+
+// renumberFragmentTracks sets each survivor row's TrackNumber from its own
+// chapter folder and journals each row that landed. All of the rows go through
+// ONE UpdateBookFiles call: per-row UpdateBookFile recomputed the survivor's
+// aggregates after every row, re-reading all of its rows each time (O(n^2) on
+// a many-chapter book; see duration-reextract, 2026-09-19). ctx is checked
+// between rows, and liveness is stamped after each one. A cancel leaves every
+// written row complete and journaled, and the rest at their old number.
+//
+// Reports whether the survivor's aggregates were recomputed after its rows
+// were final, so the caller can skip its own trailing recompute.
+func (a *fsApplier) renumberFragmentTracks(ctx context.Context, survivorID, folder string) bool {
+	rows, err := a.store.GetBookFiles(survivorID)
+	if err != nil {
+		a.errs.Add(1)
+		a.log(slog.LevelWarn, "fragments %q: re-read survivor rows: %v", folder, err)
+		return false
+	}
+	var toWrite []*database.BookFile
+	var oldTrack []int
+	for i := range rows {
+		f := &rows[i]
+		if _, _, n, ok := chaptershape.Parts(f.FilePath); ok && f.TrackNumber != n {
+			oldTrack = append(oldTrack, f.TrackNumber)
+			f.TrackNumber = n
+			toWrite = append(toWrite, f)
+		}
+	}
+	if len(toWrite) == 0 {
+		return false
+	}
+	rowFailed := false
+	_, err = a.store.UpdateBookFiles(ctx, toWrite, func(i int, applied bool) {
+		registry.TouchLiveness(a.reporter)
+		f := toWrite[i]
+		if !applied {
+			rowFailed = true
+			a.errs.Add(1)
+			a.log(slog.LevelWarn, "fragments %q: set track %d on %s failed", folder, f.TrackNumber, f.ID)
+			return
+		}
+		a.journal(survivorID, fsChangeFileTrack, "book_file:"+f.ID, strconv.Itoa(oldTrack[i]), strconv.Itoa(f.TrackNumber))
+	})
+	if err != nil {
+		if !rowFailed {
+			a.errs.Add(1) // cancel, fsync, or recompute failure: no row callback counted it
+		}
+		a.log(slog.LevelWarn, "fragments %q: set track numbers on %s: %v", folder, survivorID, err)
+		return false
+	}
+	return true
 }
 
 // updateSurvivor sets the survivor's title (unless the user locked it; fails

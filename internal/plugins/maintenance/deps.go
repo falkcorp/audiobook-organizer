@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.46.0
+// version: 1.46.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-09-19
 
@@ -86,7 +86,7 @@ type opsBookFileMutator interface {
 	UpdateBookFile(id string, file *database.BookFile) error
 	// UpdateBookFiles writes many rows by ID with one aggregate recompute per
 	// book, not per row (duration-reextract, purge-millisecond-durations).
-	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(done int)) (int, error)
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 	// ModifyBookFile is the atomic compare-and-write repoint-unrecorded-renames
 	// uses, so "row still holds old_path" and the repoint are one step.
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)

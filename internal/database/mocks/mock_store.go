@@ -29865,7 +29865,7 @@ func (_c *MockStore_UpdateBookFileHashes_Call) RunAndReturn(run func(id string, 
 }
 
 // UpdateBookFiles provides a mock function for the type MockStore
-func (_mock *MockStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(done int)) (int, error) {
+func (_mock *MockStore) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
 	ret := _mock.Called(ctx, files, afterRow)
 
 	if len(ret) == 0 {
@@ -29874,15 +29874,15 @@ func (_mock *MockStore) UpdateBookFiles(ctx context.Context, files []*database.B
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(done int)) (int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(i int, applied bool)) (int, error)); ok {
 		return returnFunc(ctx, files, afterRow)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(done int)) int); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []*database.BookFile, func(i int, applied bool)) int); ok {
 		r0 = returnFunc(ctx, files, afterRow)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, []*database.BookFile, func(done int)) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []*database.BookFile, func(i int, applied bool)) error); ok {
 		r1 = returnFunc(ctx, files, afterRow)
 	} else {
 		r1 = ret.Error(1)
@@ -29898,12 +29898,12 @@ type MockStore_UpdateBookFiles_Call struct {
 // UpdateBookFiles is a helper method to define mock.On call
 //   - ctx context.Context
 //   - files []*database.BookFile
-//   - afterRow func(done int)
+//   - afterRow func(i int, applied bool)
 func (_e *MockStore_Expecter) UpdateBookFiles(ctx any, files any, afterRow any) *MockStore_UpdateBookFiles_Call {
 	return &MockStore_UpdateBookFiles_Call{Call: _e.mock.On("UpdateBookFiles", ctx, files, afterRow)}
 }
 
-func (_c *MockStore_UpdateBookFiles_Call) Run(run func(ctx context.Context, files []*database.BookFile, afterRow func(done int))) *MockStore_UpdateBookFiles_Call {
+func (_c *MockStore_UpdateBookFiles_Call) Run(run func(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool))) *MockStore_UpdateBookFiles_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -29913,9 +29913,9 @@ func (_c *MockStore_UpdateBookFiles_Call) Run(run func(ctx context.Context, file
 		if args[1] != nil {
 			arg1 = args[1].([]*database.BookFile)
 		}
-		var arg2 func(done int)
+		var arg2 func(i int, applied bool)
 		if args[2] != nil {
-			arg2 = args[2].(func(done int))
+			arg2 = args[2].(func(i int, applied bool))
 		}
 		run(
 			arg0,
@@ -29931,7 +29931,7 @@ func (_c *MockStore_UpdateBookFiles_Call) Return(n int, err error) *MockStore_Up
 	return _c
 }
 
-func (_c *MockStore_UpdateBookFiles_Call) RunAndReturn(run func(ctx context.Context, files []*database.BookFile, afterRow func(done int)) (int, error)) *MockStore_UpdateBookFiles_Call {
+func (_c *MockStore_UpdateBookFiles_Call) RunAndReturn(run func(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)) *MockStore_UpdateBookFiles_Call {
 	_c.Call.Return(run)
 	return _c
 }

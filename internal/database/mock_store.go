@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.131.0
+// version: 1.131.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-19
 
@@ -561,7 +561,7 @@ type MockStore struct {
 	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
 	UpdateBookFileFunc                      func(id string, file *BookFile) error
-	UpdateBookFilesFunc                     func(ctx context.Context, files []*BookFile, afterRow func(done int)) (int, error)
+	UpdateBookFilesFunc                     func(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error)
 	UpdateBookFileHashesFunc                func(id, originalHash, postMetadataHash, fileHash string) error
 	GetBookFilesFunc                        func(bookID string) ([]BookFile, error)
 	GetBookFileByIDFunc                     func(bookID, fileID string) (*BookFile, error)
@@ -3299,7 +3299,7 @@ func (m *MockStore) UpdateBookFile(id string, file *BookFile) error {
 // UpdateBookFiles defaults to UpdateBookFile per row (through
 // UpdateBookFileFunc when set), honouring ctx between rows and calling
 // afterRow, so a test that only stubs UpdateBookFileFunc still sees its rows.
-func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(done int)) (int, error) {
+func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error) {
 	if m.UpdateBookFilesFunc != nil {
 		return m.UpdateBookFilesFunc(ctx, files, afterRow)
 	}
@@ -3310,13 +3310,14 @@ func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afte
 			errs = append(errs, err)
 			break
 		}
-		if err := m.UpdateBookFile(f.ID, f); err != nil {
+		err := m.UpdateBookFile(f.ID, f)
+		if err != nil {
 			errs = append(errs, err)
 		} else {
 			written++
 		}
 		if afterRow != nil {
-			afterRow(i + 1)
+			afterRow(i, err == nil)
 		}
 	}
 	return written, errors.Join(errs...)

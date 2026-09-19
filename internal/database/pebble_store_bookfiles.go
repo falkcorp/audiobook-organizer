@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-09-19
 
@@ -646,9 +646,10 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // row errors. Every row it wrote is a complete UpdateBookFile write; a row is
 // never half-written.
 //
-// afterRow, if non-nil, is called after each row attempt with the number of
-// rows attempted so far, so a long-running caller can report liveness from
-// inside the loop.
+// afterRow, if non-nil, is called after each row attempt with the row's index
+// in files and whether that row was applied (a durability-unknown write counts
+// as applied), so a long-running caller can report liveness from inside the
+// loop and journal exactly the rows that landed.
 //
 // Returns the number of rows applied. A row whose write failed is skipped and
 // its error (wrapped with the row ID) is joined into the returned error; the
@@ -658,7 +659,7 @@ func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
 // aggregate recompute failures are RETURNED (joined), not only logged: the
 // caller wrote these rows to change the book's totals and must be able to
 // tell that the totals did not follow.
-func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(done int)) (int, error) {
+func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error) {
 	var (
 		written  int
 		errs     []error
@@ -675,7 +676,8 @@ func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, af
 			continue
 		}
 		recompute, err := s.updateBookFileNoNotify(file.ID, file)
-		if bookFileApplied(err) {
+		applied := bookFileApplied(err)
+		if applied {
 			written++
 			if recompute && !seen[file.BookID] {
 				seen[file.BookID] = true
@@ -686,7 +688,7 @@ func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, af
 			errs = append(errs, fmt.Errorf("book file %s: %w", file.ID, err))
 		}
 		if afterRow != nil {
-			afterRow(i + 1)
+			afterRow(i, applied)
 		}
 	}
 	for _, bookID := range affected {
@@ -733,7 +735,10 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, mergeStored, rec
 	}()
 	var err error
 	notify, err = s.updateBookFileLocked(id, file, mergeStored, recomputeAggregates)
-	notify = notify && err == nil
+	// Applied includes a batch whose fsync failed (ErrBookFileDurabilityUnknown):
+	// its row is visible, so the book's aggregates must follow it
+	// (bookFileApplied's contract). Gating on err == nil left the book stale.
+	notify = notify && bookFileApplied(err)
 	return err
 }
 
@@ -2258,7 +2263,7 @@ func (s *PebbleStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, f
 	}()
 	var err error
 	bookID, notify, err = s.updateBookFileHashesLocked(id, originalHash, postMetadataHash, fileHash)
-	notify = notify && err == nil
+	notify = notify && bookFileApplied(err) // see updateBookFile
 	return err
 }
 

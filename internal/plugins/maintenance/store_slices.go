@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package maintenance
 
 import (
+	"context"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -121,7 +122,9 @@ type regroupFileMover interface {
 // equivalent -- it creates books, not files.
 type fsRegroupFileStore interface {
 	CreateBookFile(file *database.BookFile) error
-	UpdateBookFile(id string, file *database.BookFile) error
+	// UpdateBookFiles, not per-row UpdateBookFile: the track pass rewrites many
+	// rows of one survivor and must recompute it once, not once per row.
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 }
 
@@ -189,7 +192,7 @@ type orphanFileScanner interface {
 // bookFileTrackWriter stamps disc/track numbers onto existing book files.
 type bookFileTrackWriter interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
 // versionGroupWriter applies a version-group decision across the group's books.

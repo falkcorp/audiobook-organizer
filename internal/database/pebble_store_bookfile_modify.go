@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfile_modify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d3a9e27-b4c1-4f58-8a02-e7c5d1b9f463
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package database
 
@@ -55,9 +55,12 @@ func (s *PebbleStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) e
 			fileID, stored.ID, row.ID, stored.BookID, row.BookID)
 	}
 	n, err := s.updateBookFileLocked(fileID, &row, true, true)
+	// Set before the error return: a write whose fsync failed
+	// (ErrBookFileDurabilityUnknown) was still applied, so the book's
+	// aggregates must follow it (bookFileApplied's contract).
+	notify = n && bookFileApplied(err)
 	if err != nil {
 		return nil, fmt.Errorf("ModifyBookFile: write %s: %w", fileID, err)
 	}
-	notify = n
 	return &row, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -204,7 +204,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 		// numbering failure logs a warning but does NOT fail the review item — the disc/
 		// track can be re-derived by re-running the dry-run, and leaving the item "failed"
 		// would wrongly imply the books weren't merged.
-		if n, derr := applyDiscTrackNumbers(store, res.PrimaryID, p); derr != nil {
+		if n, derr := applyDiscTrackNumbers(ctx, store, res.PrimaryID, p); derr != nil {
 			slog.Warn("regroup multidisc apply: disc/track numbering incomplete",
 				"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "updated", n, "err", derr)
 		} else if n > 0 {
@@ -220,16 +220,21 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 //
 // Safety rules (this repo's dominant incident class is BookFile write-back wipes):
 //   - Reads the FULL rows via GetBookFiles (fingerprint retained in storage) and
-//     mutates ONLY DiscNumber/TrackNumber, then writes via UpdateBookFile — which
-//     itself restores AcoustIDFingerprint on an empty incoming value. Never a full
-//     fresh/partial BookFile write-back.
+//     mutates ONLY DiscNumber/TrackNumber, then writes via UpdateBookFiles — per row
+//     the same write as UpdateBookFile, which restores AcoustIDFingerprint on an
+//     empty incoming value. Never a full fresh/partial BookFile write-back.
+//   - ONE UpdateBookFiles call for the whole survivor, so its aggregates are
+//     recomputed once, not once per row (per-row UpdateBookFile re-read every row
+//     of the survivor after each write: O(n^2) on a many-file book). ctx is checked
+//     between rows. A failed row no longer stops the rows after it; the returned
+//     count is the rows applied and the error names every failed row.
 //   - GROUP-LEVEL "already set → leave it" guard: if ANY survivor file already carries
 //     disc/track metadata, the whole group is left untouched. That both honors the
 //     owner's "unless the disk is already set, then leave it" and prevents a collision
 //     between a pre-tagged file's track and a freshly-sequenced one.
 //   - Backward compatible: a hold written before DiscNumbers/TrackNumbers existed has
 //     empty arrays → no-op.
-func applyDiscTrackNumbers(store bookFileTrackWriter, survivorID string, p regroupPayload) (int, error) {
+func applyDiscTrackNumbers(ctx context.Context, store bookFileTrackWriter, survivorID string, p regroupPayload) (int, error) {
 	if len(p.DiscNumbers) == 0 || len(p.TrackNumbers) == 0 {
 		return 0, nil // old payload or a non-confident kind — nothing to assign
 	}
@@ -254,19 +259,23 @@ func applyDiscTrackNumbers(store bookFileTrackWriter, survivorID string, p regro
 			return 0, nil
 		}
 	}
-	updated := 0
+	var toWrite []*database.BookFile
 	for i := range files {
-		f := files[i] // full row incl. AcoustIDFingerprint
+		f := &files[i] // full row incl. AcoustIDFingerprint
 		d, ok := want[f.FilePath]
 		if !ok || (d.disc == 0 && d.track == 0) {
 			continue
 		}
 		f.DiscNumber = d.disc
 		f.TrackNumber = d.track
-		if err := store.UpdateBookFile(f.ID, &f); err != nil {
-			return updated, fmt.Errorf("set disc/track on %s: %w", f.ID, err)
-		}
-		updated++
+		toWrite = append(toWrite, f)
+	}
+	if len(toWrite) == 0 {
+		return 0, nil
+	}
+	updated, err := store.UpdateBookFiles(ctx, toWrite, nil)
+	if err != nil {
+		return updated, fmt.Errorf("set disc/track numbers: %w", err)
 	}
 	return updated, nil
 }
