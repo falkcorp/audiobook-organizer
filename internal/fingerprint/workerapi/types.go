@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerapi/types.go
-// version: 1.1.0
+// version: 1.4.0
 // guid: d5f6ff4f-9158-43e6-b27a-0ef43f926bfb
 // last-edited: 2026-09-19
 
@@ -24,6 +24,12 @@ import (
 var (
 	// ErrNoRun: no live acoustid.window-backfill is running (503).
 	ErrNoRun = errors.New("fingerprint worker: acoustid.window-backfill is not running")
+	// ErrRunChanged: the request's run_id is not the live run's (a new run
+	// attached, or the caller predates run IDs). Sent as 409 with
+	// RunChangedMarker in the message: an fp-worker that knows the marker
+	// says hello again and re-runs its startup gate against the new run; one
+	// that predates it treats 409 as fatal and exits, which is also safe.
+	ErrRunChanged = errors.New(RunChangedMarker + ": the window backfill run changed; hello again and pass the startup gate before leasing")
 	// ErrLeaseGone: the lease expired, was reclaimed, or never existed (410).
 	ErrLeaseGone = errors.New("fingerprint worker: lease expired or reclaimed")
 	// ErrToolsNotAllowed: pipeline or tool versions not allowlisted (409).
@@ -105,9 +111,11 @@ type CalibrationFile struct {
 	Windows   []CalibrationWindow `json:"windows"`
 }
 
-// CalibrationWindow is one stored window of a calibration file. Only windows
-// the server cut itself are offered, never a worker's: the tool pair says
-// which server build made the print the worker must reproduce.
+// CalibrationWindow is one stored window of a calibration file. Normally only
+// windows the server cut itself are offered, never a worker's; in a
+// remote-only run they are the windows cut with the reference pair, by
+// whichever worker cut them. The tool pair says which build made the print
+// the worker must reproduce.
 type CalibrationWindow struct {
 	Window
 	RawSHA256 string `json:"raw_sha256"`
@@ -123,7 +131,53 @@ type HelloResponse struct {
 	ToolVersions []ToolVersions    `json:"tool_versions"`
 	Calibration  []CalibrationFile `json:"calibration"`
 	Limits       Limits            `json:"limits"`
+
+	// ReferenceTools is set by a remote-only run (the server decodes
+	// nothing): the configured reference pair that stands in for the
+	// server's own. Calibration windows carry exactly this pair.
+	ReferenceTools *ToolVersions `json:"reference_tools,omitempty"`
+	// Bootstrap is set by a remote-only run, for exactly ONE worker at a
+	// time (the bootstrap claim), while no window cut with ReferenceTools
+	// exists under a remote root yet. Its calibration files then carry NO
+	// windows (identity only: size, mtime, Head64K): that worker, whose exact
+	// pair equals ReferenceTools, passes on the identity checks alone and
+	// becomes the reference. A worker that predates this field sees
+	// calibration files without windows and refuses, which is the safe
+	// reading.
+	Bootstrap bool `json:"bootstrap,omitempty"`
+	// ReferencePending: the worker cannot be calibrated yet (no reference
+	// windows exist and another worker holds the bootstrap claim, or this
+	// worker's pair is not the reference pair, or no reference file is
+	// readable right now). Calibration is empty; the worker must wait and
+	// call hello again, not exit. Waiting says why.
+	ReferencePending bool   `json:"reference_pending,omitempty"`
+	Waiting          string `json:"waiting,omitempty"`
+	// RunID identifies the live run. Lease, renew and results must echo it:
+	// the bootstrap claim and every "this worker passed its gate" fact live
+	// in one run's memory, so a worker must hello (and pass the gate) again
+	// for each run.
+	RunID string `json:"run_id,omitempty"`
 }
+
+// RunChangedMarker opens ErrRunChanged's message.
+const RunChangedMarker = "run_changed"
+
+// HelloRequest identifies the caller of GET hello, sent as the query
+// parameters worker_id, fpcalc_version and ffmpeg_version. All optional for
+// backward compatibility; a remote-only run offers the bootstrap only to a
+// caller that sends a valid worker_id and exactly the reference pair.
+type HelloRequest struct {
+	WorkerID      string
+	FpcalcVersion string
+	FFmpegVersion string
+}
+
+// Query parameter names of HelloRequest.
+const (
+	HelloParamWorkerID = "worker_id"
+	HelloParamFpcalc   = "fpcalc_version"
+	HelloParamFFmpeg   = "ffmpeg_version"
+)
 
 // Limits restates the protocol constants so a worker need not hard-code them.
 type Limits struct {
@@ -136,6 +190,8 @@ type Limits struct {
 
 // LeaseRequest is the body of POST lease.
 type LeaseRequest struct {
+	// RunID echoes HelloResponse.RunID (ErrRunChanged when stale or empty).
+	RunID         string `json:"run_id,omitempty"`
 	WorkerID      string `json:"worker_id"`
 	MaxJobs       int    `json:"max_jobs"`
 	FpcalcVersion string `json:"fpcalc_version"`
@@ -178,6 +234,7 @@ type LeaseResponse struct {
 // holds the lease may renew it.
 type RenewRequest struct {
 	WorkerID string `json:"worker_id"`
+	RunID    string `json:"run_id,omitempty"`
 }
 
 // RenewResponse answers POST lease/{id}/renew.
@@ -223,6 +280,7 @@ type JobResult struct {
 
 // ResultsRequest is the body of POST results.
 type ResultsRequest struct {
+	RunID    string      `json:"run_id,omitempty"`
 	WorkerID string      `json:"worker_id"`
 	LeaseID  string      `json:"lease_id"`
 	Results  []JobResult `json:"results"`

@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/api.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b107cfb-5f0a-4ac4-b6c3-24914ad0d741
 // last-edited: 2026-09-19
 
@@ -46,6 +46,11 @@ func (e *apiError) Error() string {
 // out. It returns the status code; a transport failure is status 0. A 204 is
 // (204, nil) with out untouched; any other non-200 is an *apiError.
 func (c *apiClient) call(ctx context.Context, method, path string, in, out any) (int, error) {
+	return c.callQuery(ctx, method, path, nil, in, out)
+}
+
+// callQuery is call with URL query parameters.
+func (c *apiClient) callQuery(ctx context.Context, method, path string, query url.Values, in, out any) (int, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -56,6 +61,9 @@ func (c *apiClient) call(ctx context.Context, method, path string, in, out any) 
 	}
 	u := *c.base
 	u.Path = strings.TrimRight(u.Path, "/") + apiPrefix + path
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return 0, fmt.Errorf("build %s request: %w", path, err)
@@ -110,9 +118,13 @@ func errorMessage(r io.Reader) string {
 	return strings.TrimSpace(strings.ToValidUTF8(string(b), "?"))
 }
 
-func (c *apiClient) hello(ctx context.Context) (*workerapi.HelloResponse, int, error) {
+func (c *apiClient) hello(ctx context.Context, req workerapi.HelloRequest) (*workerapi.HelloResponse, int, error) {
 	var out workerapi.HelloResponse
-	st, err := c.call(ctx, http.MethodGet, "/hello", nil, &out)
+	q := url.Values{}
+	q.Set(workerapi.HelloParamWorkerID, req.WorkerID)
+	q.Set(workerapi.HelloParamFpcalc, req.FpcalcVersion)
+	q.Set(workerapi.HelloParamFFmpeg, req.FFmpegVersion)
+	st, err := c.callQuery(ctx, http.MethodGet, "/hello", q, nil, &out)
 	if err != nil || st != http.StatusOK {
 		return nil, st, err
 	}

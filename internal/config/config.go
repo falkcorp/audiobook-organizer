@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.122.1
+// version: 1.123.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-09-19
 
@@ -1139,6 +1139,23 @@ type Config struct {
 	// touches that worker's windows, and removing it later re-queues all of them.
 	FingerprintWorkerToolVersions []string `json:"fingerprint_worker_tool_versions" mapstructure:"fingerprint_worker_tool_versions"`
 
+	// FingerprintWindowReferenceTools is the reference tool pair of a
+	// remote-only acoustid.window-backfill run ({"remote_only": true}), as
+	// "<fpcalc version>/<ffmpeg version>", e.g. "1.6.1/9.0.2". Empty (the
+	// default) means remote-only live runs refuse to start.
+	//
+	// In a remote-only run the server decodes nothing, so it has no tool pair
+	// of its own: this pair takes the server's place. It (plus the
+	// fingerprint_worker_tool_versions allowlist) is the equivalence class,
+	// the pair calibration windows must carry, and, while no window cut with
+	// it exists yet under a root, the ONE pair a worker may bootstrap with:
+	// a worker running exactly this pair passes its startup gate on the
+	// file-identity checks alone and becomes the reference every later worker
+	// must reproduce byte for byte. Windows the server cut with its own pair
+	// are NOT equivalent to it unless that pair is allowlisted, so a
+	// remote-only run re-plans them.
+	FingerprintWindowReferenceTools string `json:"fingerprint_window_reference_tools" mapstructure:"fingerprint_window_reference_tools"`
+
 	// FingerprintLengthSec is how many seconds of audio fpcalc analyses per
 	// file (its -length flag). 0 or unset means 120, fpcalc's own default and
 	// what every stored fingerprint was made with; N > 0 analyses the first N
@@ -2191,6 +2208,7 @@ func InitConfig() {
 	// os.Getenv() reads scattered across their respective packages.
 	viper.SetDefault("fp_parallel_workers", 4)
 	viper.SetDefault("fingerprint_remote_workers_enabled", false)
+	viper.SetDefault("fingerprint_window_reference_tools", "")
 	viper.SetDefault("fingerprint_length_sec", 120)
 	viper.SetDefault("whisper_clip_cache_dir", "")
 	viper.SetDefault("whisper_batch_sleep_ms", 8000)
@@ -2727,6 +2745,7 @@ func InitConfig() {
 			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
 			FingerprintRemoteWorkersEnabled:      viper.GetBool("fingerprint_remote_workers_enabled"),
 			FingerprintWorkerToolVersions:        viper.GetStringSlice("fingerprint_worker_tool_versions"),
+			FingerprintWindowReferenceTools:      viper.GetString("fingerprint_window_reference_tools"),
 			FingerprintLengthSec:                 viper.GetInt("fingerprint_length_sec"),
 			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
 			WhisperBatchSleepMS:                  viper.GetInt("whisper_batch_sleep_ms"),
@@ -3499,6 +3518,7 @@ func ResetToDefaults() {
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
 			FingerprintRemoteWorkersEnabled:  false, // OFF by default — worker routes 404 until enabled
+			FingerprintWindowReferenceTools:  "",    // unset — remote-only window backfill refuses to start
 			BulkApplyMaxItems:                5000,
 			BasicAuthEnabled:                 false,
 			BasicAuthUsername:                "",

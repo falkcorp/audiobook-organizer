@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/gate.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 35b498ed-d496-4677-81eb-adf09304d580
 // last-edited: 2026-09-19
 
@@ -128,22 +128,40 @@ func describeRoots(r []workerapi.Root) string {
 // calibrationTargets returns the calibration files under configured roots
 // and requires at least one per configured root: without one, neither the
 // root mapping nor the pipeline parity can be proven.
-func (w *worker) calibrationTargets(h *workerapi.HelloResponse) ([]workerapi.CalibrationFile, error) {
-	var out []workerapi.CalibrationFile
+//
+// bootstrap is true when the server announced a remote-only bootstrap
+// (hello.Bootstrap: no window cut with the reference pair exists yet) and this
+// worker runs exactly that reference pair. The files are then identity-only:
+// the mount and file-identity checks still run on them, and the parity cut is
+// skipped because this worker's output IS the reference by definition. Any
+// other pair refuses: it has nothing to be compared against.
+func (w *worker) calibrationTargets(h *workerapi.HelloResponse) (cfs []workerapi.CalibrationFile, bootstrap bool, err error) {
+	if h.Bootstrap {
+		ref := h.ReferenceTools
+		if ref == nil || ref.Fpcalc != w.cfg.Versions.Fpcalc || ref.FFmpeg != w.cfg.Versions.FFmpeg {
+			want := "none announced"
+			if ref != nil {
+				want = "fpcalc " + ref.Fpcalc + " + ffmpeg " + ref.FFmpeg
+			}
+			return nil, false, fmt.Errorf("%w: the server has no reference windows yet and is bootstrapping them; only the reference pair (%s) may run first, and this worker has fpcalc %s + ffmpeg %s. Start a reference-pair worker first, then retry",
+				ErrParity, want, w.cfg.Versions.Fpcalc, w.cfg.Versions.FFmpeg)
+		}
+		bootstrap = true
+	}
 	seen := map[string]bool{}
 	for _, cf := range h.Calibration {
-		if _, ok := w.roots[cf.Root]; !ok || len(cf.Windows) == 0 {
+		if _, ok := w.roots[cf.Root]; !ok || (len(cf.Windows) == 0 && !bootstrap) {
 			continue
 		}
-		out = append(out, cf)
+		cfs = append(cfs, cf)
 		seen[cf.Root] = true
 	}
 	for name := range w.roots {
 		if !seen[name] {
-			return nil, fmt.Errorf("%w: the server offered no calibration file under root %q, so the root mapping and pipeline parity cannot be proven (the window backfill must have server-cut windows first)", ErrParity, name)
+			return nil, false, fmt.Errorf("%w: the server offered no calibration file under root %q, so the root mapping and pipeline parity cannot be proven (the window backfill must have reference windows first)", ErrParity, name)
 		}
 	}
-	return out, nil
+	return cfs, bootstrap, nil
 }
 
 // openCalibration resolves one calibration file and checks it is the same
@@ -266,6 +284,9 @@ func (w *worker) recheck() error {
 			return err
 		}
 	}
-	_, err := w.checkCalibrationFiles(w.calib)
+	w.calibMu.Lock()
+	cfs := w.calib
+	w.calibMu.Unlock()
+	_, err := w.checkCalibrationFiles(cfs)
 	return err
 }

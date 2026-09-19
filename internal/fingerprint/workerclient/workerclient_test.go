@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.1.0
+// version: 1.4.0
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -17,8 +17,10 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,10 +67,13 @@ type fakeServer struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	hello       workerapi.HelloResponse
-	pending     []workerapi.Job
-	leaseScript []int // statuses answered to lease before any job is served
-	nLease      int
+	hello        workerapi.HelloResponse
+	helloScript  []workerapi.HelloResponse // answered, in order, before hello
+	helloQueries []url.Values
+	runID        string // the live run; lease and results must echo it
+	pending      []workerapi.Job
+	leaseScript  []int // statuses answered to lease before any job is served
+	nLease       int
 
 	leaseCalls  int
 	renewCalls  int
@@ -99,10 +104,19 @@ func (s *fakeServer) handler() http.Handler {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	p := apiPrefix
-	mux.HandleFunc("GET "+p+"/hello", auth(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET "+p+"/hello", auth(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		writeJSON(w, s.hello)
+		s.helloQueries = append(s.helloQueries, r.URL.Query())
+		if len(s.helloScript) > 0 {
+			h := s.helloScript[0]
+			s.helloScript = s.helloScript[1:]
+			writeJSON(w, h)
+			return
+		}
+		h := s.hello
+		h.RunID = s.runID
+		writeJSON(w, h)
 	}))
 	mux.HandleFunc("POST "+p+"/lease", auth(func(w http.ResponseWriter, r *http.Request) {
 		var req workerapi.LeaseRequest
@@ -114,6 +128,10 @@ func (s *fakeServer) handler() http.Handler {
 		defer s.mu.Unlock()
 		s.leaseCalls++
 		s.leaseReqs = append(s.leaseReqs, req)
+		if req.RunID != s.runID {
+			writeRunChanged(w)
+			return
+		}
 		if len(s.leaseScript) > 0 {
 			st := s.leaseScript[0]
 			s.leaseScript = s.leaseScript[1:]
@@ -160,6 +178,11 @@ func (s *fakeServer) handler() http.Handler {
 			return
 		}
 		s.mu.Lock()
+		if req.RunID != s.runID {
+			s.mu.Unlock()
+			writeRunChanged(w)
+			return
+		}
 		s.resultPosts++
 		s.results = append(s.results, req.Results...)
 		resp := workerapi.ResultsResponse{}
@@ -173,6 +196,13 @@ func (s *fakeServer) handler() http.Handler {
 		}
 	}))
 	return mux
+}
+
+// writeRunChanged answers like the real handler for ErrRunChanged.
+func writeRunChanged(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": workerapi.ErrRunChanged.Error()})
 }
 
 func (s *fakeServer) nResults() int {
@@ -201,7 +231,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &testEnv{t: t, mount: mount, srv: &fakeServer{t: t, resultsCh: make(chan struct{}, 100)}}
+	e := &testEnv{t: t, mount: mount, srv: &fakeServer{t: t, resultsCh: make(chan struct{}, 100), runID: "run-1"}}
 	calContent := []byte(strings.Repeat("calibration audio ", 5000)) // > 64 KiB
 	calRel := "Author/Calibration Book/part1.m4b"
 	fi := e.writeFile(calRel, calContent)
@@ -769,7 +799,8 @@ func newTestWorker(t *testing.T, e *testEnv) *worker {
 	}
 	w := &worker{cfg: cfg, api: &apiClient{base: base, key: cfg.APIKey, hc: cfg.HTTPClient}, roots: roots,
 		sem: make(chan struct{}, 1), wake: make(chan struct{}, 1), recheckC: make(chan struct{}, 1),
-		stop: make(chan struct{}), maxBatchBytes: workerapi.MaxBodyBytes - bodyMargin}
+		stop: make(chan struct{}), maxBatchBytes: workerapi.MaxBodyBytes - bodyMargin,
+		runID: e.srv.runID} // as if it had said hello to the live run
 	w.tally.statuses = map[string]int{}
 	w.tally.outcomes = map[string]int{}
 	return w
@@ -1003,5 +1034,142 @@ func TestProcess_MixedFormComponents(t *testing.T) {
 		if res.Outcome != workerapi.OutcomeOK {
 			t.Errorf("%q: %s (%s)", rel, res.Outcome, res.Error)
 		}
+	}
+}
+
+// bootstrapHello turns the test server's hello into a remote-only bootstrap:
+// identity-only calibration files and ref as the announced reference pair.
+func (e *testEnv) bootstrapHello(ref fingerprint.ToolVersionInfo) {
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	rt := workerapi.ToolVersions{Fpcalc: ref.Fpcalc, FFmpeg: ref.FFmpeg}
+	e.srv.hello.Bootstrap = true
+	e.srv.hello.ReferenceTools = &rt
+	for i := range e.srv.hello.Calibration {
+		e.srv.hello.Calibration[i].Windows = []workerapi.CalibrationWindow{}
+	}
+	if !slices.Contains(e.srv.hello.ToolVersions, rt) {
+		e.srv.hello.ToolVersions = append(e.srv.hello.ToolVersions, rt)
+	}
+}
+
+// TestRun_BootstrapReferencePairPasses: in a remote-only bootstrap the worker
+// running exactly the reference pair passes on the identity checks alone and
+// works.
+func TestRun_BootstrapReferencePairPasses(t *testing.T) {
+	e := newTestEnv(t)
+	e.bootstrapHello(testVersions)
+	e.addJob("A/B/c.mp3", []byte("bootstrap audio"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if e.srv.results[0].Outcome != workerapi.OutcomeOK {
+		t.Fatalf("outcome %s (%s)", e.srv.results[0].Outcome, e.srv.results[0].Error)
+	}
+}
+
+// TestRun_BootstrapNonReferencePairRefuses: any other pair, even one the
+// server allowlists, refuses a bootstrap: there is no reference yet to prove
+// it byte-identical to.
+func TestRun_BootstrapNonReferencePairRefuses(t *testing.T) {
+	e := newTestEnv(t)
+	e.bootstrapHello(fingerprint.ToolVersionInfo{Fpcalc: "1.6.1", FFmpeg: "9.0.2"})
+	e.addJob("A/B/c.mp3", []byte("x"))
+	// Bounded: a worker that wrongly passes the gate would lease forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, make(chan struct{}), e.cfg)
+	if !errors.Is(err, ErrParity) || !strings.Contains(err.Error(), "reference pair") {
+		t.Fatalf("Run = %v, want ErrParity naming the reference pair", err)
+	}
+	if n := e.srv.leaseCallsSafe(); n != 0 {
+		t.Errorf("leased %d times", n)
+	}
+}
+
+// TestRun_ReferencePendingRetriesThenRuns: while the server answers
+// reference_pending (another worker holds the bootstrap, or this pair must
+// wait for reference windows), the worker waits and asks again instead of
+// exiting, then passes the normal parity gate. Hello identifies the worker.
+func TestRun_ReferencePendingRetriesThenRuns(t *testing.T) {
+	e := newTestEnv(t)
+	pending := workerapi.HelloResponse{ReferencePending: true, Waiting: "another reference-pair worker holds the bootstrap",
+		Calibration: []workerapi.CalibrationFile{}}
+	e.srv.helloScript = []workerapi.HelloResponse{pending, pending}
+	e.addJob("A/B/c.mp3", []byte("after the wait"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if len(e.srv.helloQueries) < 3 {
+		t.Fatalf("%d hellos, want the 2 pending answers retried", len(e.srv.helloQueries))
+	}
+	q := e.srv.helloQueries[0]
+	if q.Get(workerapi.HelloParamWorkerID) != "test-worker" || q.Get(workerapi.HelloParamFpcalc) != testVersions.Fpcalc ||
+		q.Get(workerapi.HelloParamFFmpeg) != testVersions.FFmpeg {
+		t.Errorf("hello query = %v, want the worker id and tool pair", q)
+	}
+}
+
+// TestRun_BootstrapWrongMountRefuses: the bootstrap skips only the parity
+// cut; a reference-pair worker whose mount does not hold the server's bytes
+// still refuses.
+func TestRun_BootstrapWrongMountRefuses(t *testing.T) {
+	for name, mutate := range map[string]func(*workerapi.CalibrationFile){
+		"head": func(cf *workerapi.CalibrationFile) { cf.Head64K = strings.Repeat("b", 64) },
+		"size": func(cf *workerapi.CalibrationFile) { cf.Size++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.bootstrapHello(testVersions)
+			mutate(&e.srv.hello.Calibration[0])
+			e.addJob("A/B/c.mp3", []byte("x"))
+			// Bounded: a worker that wrongly passes the gate would lease forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := Run(ctx, make(chan struct{}), e.cfg)
+			if !errors.Is(err, ErrMountCheck) {
+				t.Fatalf("Run = %v, want ErrMountCheck", err)
+			}
+			if n := e.srv.leaseCallsSafe(); n != 0 {
+				t.Errorf("leased %d times", n)
+			}
+		})
+	}
+}
+
+// TestRun_RunChangedHellosAgainAndReGates: when the server's run changes, the
+// lease answer is ErrRunChanged; the worker says hello again, passes the new
+// run's gate, and leases under the new run ID instead of exiting.
+func TestRun_RunChangedHellosAgainAndReGates(t *testing.T) {
+	e := newTestEnv(t)
+	e.addJob("A/one.mp3", []byte("first run"))
+	drain, done := e.start()
+	e.waitResults(1, done)
+	e.srv.mu.Lock()
+	e.srv.runID = "run-2"
+	e.srv.mu.Unlock()
+	e.addJob("A/two.mp3", []byte("second run"))
+	e.waitResults(2, done)
+	close(drain)
+	if err := waitDone(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	if len(e.srv.helloQueries) < 2 {
+		t.Fatalf("%d hellos; the worker must hello again after the run changed", len(e.srv.helloQueries))
+	}
+	if last := e.srv.leaseReqs[len(e.srv.leaseReqs)-1]; last.RunID != "run-2" {
+		t.Errorf("last lease under run %q, want run-2", last.RunID)
 	}
 }
