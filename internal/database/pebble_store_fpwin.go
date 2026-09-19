@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
 // last-edited: 2026-09-19
 
@@ -36,9 +36,13 @@ import (
 //   - Repoint of an untracked candidate: CarryOverFingerprintWindows from its
 //     p: ref to the new row's f: ref.
 //
-// fpwinMu serializes every window write against the delete cascade. Without it
-// a Put that passed its "row exists" check could commit after a concurrent
-// delete staged its cascade, leaving a window with no row.
+// Locking: fpwinLocks is a stripe set keyed by window ref (lockWindowRefs). A
+// window write and the delete cascade of the SAME file take the same stripe
+// across their check/stage and their commit, so a Put that passed its "row
+// exists" check can never commit after the delete staged its cascade (which
+// would leave a window with no row). Different files take different stripes
+// and do not wait on each other. Multi-ref holders take their stripes in
+// ascending stripe order, so two of them cannot deadlock.
 
 // PutFingerprintWindow stores one window, replacing any stored window with the
 // same ref, kind and slot. For an f: ref the book_file row must exist; a window
@@ -59,9 +63,9 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 	fileID, isFile := fileIDOfWindowRef(row.Ref)
 	var hint *BookFile
 	if isFile {
-		// Resolved BEFORE fpwinMu: the pre-index fallback is a scan of every
-		// book_file row, and holding the store-wide window lock across it would
-		// stall every concurrent window writer behind it. Existence is then
+		// Resolved BEFORE the window stripe: the pre-index fallback is a scan of every
+		// book_file row, and holding a window stripe across it would stall every
+		// writer that hashes to the same stripe. Existence is then
 		// re-confirmed under the lock with point reads only.
 		if hint, err = s.resolveBookFileByID(fileID); err != nil {
 			return fmt.Errorf("PutFingerprintWindow %s: %w", row.Ref, err)
@@ -71,8 +75,8 @@ func (s *PebbleStore) PutFingerprintWindow(w *FingerprintWindow) error {
 		}
 	}
 
-	s.fpwinMu.Lock()
-	defer s.fpwinMu.Unlock()
+	unlock := s.lockWindowRefs(row.Ref)
+	defer unlock()
 	if isFile {
 		ok, cerr := s.fileRowStillExists(fileID, hint)
 		if cerr != nil {
@@ -137,8 +141,8 @@ func (s *PebbleStore) DeleteFingerprintWindows(ref FingerprintWindowRef) (int, e
 	if err := ref.validate(); err != nil {
 		return 0, err
 	}
-	s.fpwinMu.Lock()
-	defer s.fpwinMu.Unlock()
+	unlock := s.lockWindowRefs(ref)
+	defer unlock()
 	batch := s.db.NewBatch()
 	n, err := s.stageFingerprintWindowDeletes(batch, ref)
 	if err != nil {
@@ -151,111 +155,206 @@ func (s *PebbleStore) DeleteFingerprintWindows(ref FingerprintWindowRef) (int, e
 	return n, nil
 }
 
-// CarryOverFingerprintWindows moves every stored window of from onto to, in one
-// batch: each is rewritten under to (Ref updated) and deleted under from, and
-// from's failure tombstone is dropped (a failure recorded against the donor says
-// nothing about the keeper). A window to already has for the same kind and slot
-// wins and the donor's copy is discarded: the keeper's data is never overwritten.
-// It returns the number of windows written under to.
+// CarryOverFingerprintWindows moves the stored windows of every donor in from
+// onto to, in one batch: each is rewritten under to (Ref updated) and deleted
+// under its donor, and each donor's failure tombstone is dropped (a failure
+// recorded against a donor says nothing about the keeper). A window to already
+// has for the same kind and slot wins, and among donors the first listed wins:
+// the keeper's data is never overwritten. It returns the number of windows
+// written under to.
 //
-// For an f: target the book_file row must exist, as for PutFingerprintWindow.
-// from == to is a no-op.
-func (s *PebbleStore) CarryOverFingerprintWindows(from, to FingerprintWindowRef) (int, error) {
-	if err := from.validate(); err != nil {
-		return 0, err
+// A group with NOTHING to carry is a strict no-op: (0, nil), with no keeper
+// lookup and no write. That is every dedupe group in production until windows
+// exist, so it must not fail or cost anything:
+//   - a donor ref the key scheme cannot represent (an ID containing ':' or ';',
+//     the same rule the delete cascade skips on) can hold no windows, so it is
+//     treated as empty rather than as an error;
+//   - to is only validated, and an f: keeper only resolved, once some donor has
+//     a window or tombstone. The keeper is resolved ONCE per call, before any
+//     stripe is taken: a row written before the book_file_id index resolves by
+//     a scan of every book_file row.
+func (s *PebbleStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error) {
+	// Donors worth looking at: representable, distinct, not the keeper.
+	donors := make([]FingerprintWindowRef, 0, len(from))
+	seen := make(map[FingerprintWindowRef]struct{}, len(from))
+	for _, ref := range from {
+		if ref == to || ref.validate() != nil {
+			continue
+		}
+		if _, dup := seen[ref]; dup {
+			continue
+		}
+		seen[ref] = struct{}{}
+		donors = append(donors, ref)
 	}
-	if err := to.validate(); err != nil {
-		return 0, err
+
+	// Unlocked pre-check: nothing stored under any donor means nothing to do.
+	// The authoritative read happens again under the stripes below.
+	anything := false
+	for _, ref := range donors {
+		has, err := s.refHasWindowState(ref)
+		if err != nil {
+			return 0, fmt.Errorf("CarryOverFingerprintWindows %s: %w", ref, err)
+		}
+		if has {
+			anything = true
+			break
+		}
 	}
-	if from == to {
+	if !anything {
 		return 0, nil
 	}
 
-	// Target row resolved before the lock, re-confirmed under it; see
-	// PutFingerprintWindow.
+	if err := to.validate(); err != nil {
+		return 0, fmt.Errorf("CarryOverFingerprintWindows: donors hold windows but the keeper ref is unusable: %w", err)
+	}
 	toFileID, toIsFile := fileIDOfWindowRef(to)
 	var hint *BookFile
 	if toIsFile {
 		f, ferr := s.resolveBookFileByID(toFileID)
 		if ferr != nil {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, ferr)
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: %w", to, ferr)
 		}
 		if f == nil {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: book_file %s does not exist", from, to, toFileID)
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: book_file %s does not exist", to, toFileID)
 		}
 		hint = f
 	}
 
-	s.fpwinMu.Lock()
-	defer s.fpwinMu.Unlock()
+	unlock := s.lockWindowRefs(append([]FingerprintWindowRef{to}, donors...)...)
+	defer unlock()
 
-	donor, err := s.readFingerprintWindows(from)
-	if err != nil {
-		return 0, err
-	}
-	if len(donor) == 0 {
-		// Still drop a lone tombstone so the donor leaves nothing behind.
-		if _, closer, gerr := s.db.Get(fpwinFailKey(from)); gerr == nil {
-			closer.Close()
-			if derr := s.db.Delete(fpwinFailKey(from), pebble.Sync); derr != nil {
-				return 0, fmt.Errorf("CarryOverFingerprintWindows %s: drop tombstone: %w", from, derr)
-			}
-		} else if !errors.Is(gerr, pebble.ErrNotFound) {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s: read tombstone: %w", from, gerr)
-		}
-		return 0, nil
-	}
 	if toIsFile {
 		ok, cerr := s.fileRowStillExists(toFileID, hint)
 		if cerr != nil {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, cerr)
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: %w", to, cerr)
 		}
 		if !ok {
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: book_file %s was deleted", from, to, toFileID)
+			return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: book_file %s was deleted", to, toFileID)
 		}
 	}
 	existing, err := s.readFingerprintWindows(to)
 	if err != nil {
 		return 0, err
 	}
-	have := make(map[string]struct{}, len(existing))
+	taken := make(map[string]struct{}, len(existing))
 	for i := range existing {
-		have[string(fpwinKey(&existing[i]))] = struct{}{}
+		taken[string(fpwinKey(&existing[i]))] = struct{}{}
 	}
 
 	batch := s.db.NewBatch()
 	moved := 0
-	for i := range donor {
-		w := donor[i]
-		w.Ref = to
-		key := fpwinKey(&w)
-		if _, taken := have[string(key)]; taken {
-			continue
-		}
-		data, merr := json.Marshal(&w)
-		if merr != nil {
+	for _, ref := range donors {
+		windows, rerr := s.readFingerprintWindows(ref)
+		if rerr != nil {
 			batch.Close()
-			return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: marshal: %w", from, to, merr)
+			return 0, rerr
 		}
-		if err := batch.Set(key, data, nil); err != nil {
+		for i := range windows {
+			w := windows[i]
+			w.Ref = to
+			key := fpwinKey(&w)
+			if _, dup := taken[string(key)]; dup {
+				continue
+			}
+			data, merr := json.Marshal(&w)
+			if merr != nil {
+				batch.Close()
+				return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: marshal: %w", ref, to, merr)
+			}
+			if err := batch.Set(key, data, nil); err != nil {
+				batch.Close()
+				return 0, err
+			}
+			taken[string(key)] = struct{}{}
+			moved++
+		}
+		if _, err := s.stageFingerprintWindowDeletes(batch, ref); err != nil {
 			batch.Close()
 			return 0, err
 		}
-		moved++
-	}
-	if _, err := s.stageFingerprintWindowDeletes(batch, from); err != nil {
-		batch.Close()
-		return 0, err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
-		return 0, fmt.Errorf("CarryOverFingerprintWindows %s -> %s: %w", from, to, err)
+		return 0, fmt.Errorf("CarryOverFingerprintWindows -> %s: %w", to, err)
 	}
 	return moved, nil
 }
 
+// refHasWindowState reports whether ref has any stored window or a failure
+// tombstone, with at most one short seek and one point read.
+func (s *PebbleStore) refHasWindowState(ref FingerprintWindowRef) (bool, error) {
+	prefix := fpwinRefPrefix(ref)
+	found := false
+	if err := forEachKeyInRange(s.db, prefix, prefixEnd(prefix), func(_, _ []byte) error {
+		found = true
+		return errStopScan
+	}); err != nil && !errors.Is(err, errStopScan) {
+		return false, err
+	}
+	if found {
+		return true, nil
+	}
+	_, closer, err := s.db.Get(fpwinFailKey(ref))
+	if err == nil {
+		closer.Close()
+		return true, nil
+	}
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+// lockWindowRefs takes the window stripes for refs, in ascending stripe order
+// with duplicates collapsed, and returns the func that releases them. Every
+// caller that takes more than one stripe goes through here, so the order is
+// global and two multi-ref holders cannot deadlock. Nothing slow runs under a
+// stripe: Pebble reads and one batch commit.
+func (s *PebbleStore) lockWindowRefs(refs ...FingerprintWindowRef) func() {
+	idx := make([]int, 0, len(refs))
+	have := make(map[int]struct{}, len(refs))
+	for _, r := range refs {
+		i := stripeFor(string(r))
+		if _, dup := have[i]; dup {
+			continue
+		}
+		have[i] = struct{}{}
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	for _, i := range idx {
+		s.fpwinLocks[i].Lock()
+	}
+	return func() {
+		for j := len(idx) - 1; j >= 0; j-- {
+			s.fpwinLocks[idx[j]].Unlock()
+		}
+	}
+}
+
+// commitWithWindowCascade stages the window cascade of files into batch and
+// commits it, holding those files' window stripes across stage AND commit and
+// releasing them before returning. The three book_file delete paths use it.
+// On error the batch is closed.
+func (s *PebbleStore) commitWithWindowCascade(batch *pebble.Batch, files ...*BookFile) error {
+	refs := make([]FingerprintWindowRef, 0, len(files))
+	for _, f := range files {
+		if f != nil && f.ID != "" {
+			refs = append(refs, FileWindowRef(f.ID))
+		}
+	}
+	unlock := s.lockWindowRefs(refs...)
+	defer unlock()
+	if err := s.stageFileWindowCascade(batch, files...); err != nil {
+		batch.Close()
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
 // stageFingerprintWindowDeletes stages a point delete for every stored window of
 // ref, plus its failure tombstone, into batch. It returns how many window rows
-// were staged. The caller holds fpwinMu and commits.
+// were staged. The caller holds ref's window stripe and commits.
 //
 // Point deletes, not DeleteRange: an indexed batch's Get/NewIter do not observe
 // a range delete staged in the same batch, and the book_file delete batches this
@@ -282,7 +381,8 @@ func (s *PebbleStore) stageFingerprintWindowDeletes(batch *pebble.Batch, ref Fin
 }
 
 // stageFileWindowCascade is the delete cascade for book_file rows: it stages
-// the windows of every file in files into batch. The caller holds fpwinMu.
+// the windows of every file in files into batch. The caller holds their
+// window stripes (commitWithWindowCascade).
 func (s *PebbleStore) stageFileWindowCascade(batch *pebble.Batch, files ...*BookFile) error {
 	for _, f := range files {
 		if f == nil || f.ID == "" {
@@ -290,7 +390,7 @@ func (s *PebbleStore) stageFileWindowCascade(batch *pebble.Batch, files ...*Book
 		}
 		ref := FileWindowRef(f.ID)
 		if ref.validate() != nil {
-			// An ID containing ':' cannot have windows: PutFingerprintWindow
+			// An ID containing ':' or ';' cannot have windows: PutFingerprintWindow
 			// refuses to build a key for it. Nothing to cascade.
 			continue
 		}
@@ -334,11 +434,11 @@ func (s *PebbleStore) resolveBookFileByID(fileID string) (*BookFile, error) {
 	return s.scanForBookFileByID(fileID)
 }
 
-// fileRowStillExists re-confirms, under fpwinMu, that a row resolved before the
+// fileRowStillExists re-confirms, under the window stripe, that a row resolved before the
 // lock still exists, using point reads only: the primary key the pre-lock read
 // found, then the book_file_id index (which a move between books rewrites).
 // Every delete path removes the primary key in the same batch as its window
-// cascade, and holds fpwinMu across that commit, so a miss on both means the
+// cascade, and holds the same stripe across that commit, so a miss on both means the
 // row is gone and a window written now would be an orphan.
 func (s *PebbleStore) fileRowStillExists(fileID string, hint *BookFile) (bool, error) {
 	if hint != nil && hint.BookID != "" {

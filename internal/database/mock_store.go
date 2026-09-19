@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.126.0
+// version: 1.127.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-19
 
@@ -589,7 +589,7 @@ type MockStore struct {
 	GetFingerprintWindowsFunc       func(ref FingerprintWindowRef) ([]FingerprintWindow, error)
 	WindowsForFileFunc              func(fileID string) ([]FingerprintWindow, error)
 	DeleteFingerprintWindowsFunc    func(ref FingerprintWindowRef) (int, error)
-	CarryOverFingerprintWindowsFunc func(from, to FingerprintWindowRef) (int, error)
+	CarryOverFingerprintWindowsFunc func(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error)
 
 	// Path history
 	RecordPathChangeFunc   func(change *BookPathChange) error
@@ -3506,7 +3506,7 @@ func (m *MockStore) DeleteFingerprintWindows(ref FingerprintWindowRef) (int, err
 	return 0, nil
 }
 
-func (m *MockStore) CarryOverFingerprintWindows(from, to FingerprintWindowRef) (int, error) {
+func (m *MockStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error) {
 	if m.CarryOverFingerprintWindowsFunc != nil {
 		return m.CarryOverFingerprintWindowsFunc(from, to)
 	}

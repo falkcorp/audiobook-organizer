@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_fpwin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 67f3605a-acce-4382-9555-a1a26ed37eb0
 // last-edited: 2026-09-19
 
@@ -376,7 +376,7 @@ func TestFpwin_CarryOver_RowMergeMovesDonorWindows(t *testing.T) {
 	}
 	require.NoError(t, env.store.db.Set(fpwinFailKey(donorRef), []byte(`{}`), nil))
 
-	n, err := env.store.CarryOverFingerprintWindows(donorRef, keeperRef)
+	n, err := env.store.CarryOverFingerprintWindows([]FingerprintWindowRef{donorRef}, keeperRef)
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "slot 5000 already existed on the keeper")
 
@@ -392,7 +392,7 @@ func TestFpwin_CarryOver_RowMergeMovesDonorWindows(t *testing.T) {
 
 	// Refused onto a row that does not exist; the donor keeps its windows.
 	require.NoError(t, fresh.PutFingerprintWindow(fpwinFixture(donorRef, WindowKindWindow, 1000, 1)))
-	_, err = fresh.CarryOverFingerprintWindows(donorRef, FileWindowRef("01NOSUCHROW"))
+	_, err = fresh.CarryOverFingerprintWindows([]FingerprintWindowRef{donorRef}, FileWindowRef("01NOSUCHROW"))
 	require.Error(t, err)
 	left, err := fresh.GetFingerprintWindows(donorRef)
 	require.NoError(t, err)
@@ -405,7 +405,7 @@ func TestFpwin_CarryOver_RepointPathRefToFileRef(t *testing.T) {
 	pref := PathWindowRef("p/found.m4b")
 	require.NoError(t, env.store.PutFingerprintWindow(fpwinFixture(pref, WindowKindWindow, 5000, 5)))
 
-	n, err := env.store.CarryOverFingerprintWindows(pref, FileWindowRef(id))
+	n, err := env.store.CarryOverFingerprintWindows([]FingerprintWindowRef{pref}, FileWindowRef(id))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Empty(t, fpwinKeysUnder(t, env.store, string(fpwinRefPrefix(pref))))

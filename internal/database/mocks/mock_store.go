@@ -5821,7 +5821,7 @@ func (_c *MockStore_BumpDepRev_Call) RunAndReturn(run func(sub database.OpSubjec
 }
 
 // CarryOverFingerprintWindows provides a mock function for the type MockStore
-func (_mock *MockStore) CarryOverFingerprintWindows(from database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error) {
+func (_mock *MockStore) CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error) {
 	ret := _mock.Called(from, to)
 
 	if len(ret) == 0 {
@@ -5830,15 +5830,15 @@ func (_mock *MockStore) CarryOverFingerprintWindows(from database.FingerprintWin
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(database.FingerprintWindowRef, database.FingerprintWindowRef) (int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func([]database.FingerprintWindowRef, database.FingerprintWindowRef) (int, error)); ok {
 		return returnFunc(from, to)
 	}
-	if returnFunc, ok := ret.Get(0).(func(database.FingerprintWindowRef, database.FingerprintWindowRef) int); ok {
+	if returnFunc, ok := ret.Get(0).(func([]database.FingerprintWindowRef, database.FingerprintWindowRef) int); ok {
 		r0 = returnFunc(from, to)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(database.FingerprintWindowRef, database.FingerprintWindowRef) error); ok {
+	if returnFunc, ok := ret.Get(1).(func([]database.FingerprintWindowRef, database.FingerprintWindowRef) error); ok {
 		r1 = returnFunc(from, to)
 	} else {
 		r1 = ret.Error(1)
@@ -5852,17 +5852,17 @@ type MockStore_CarryOverFingerprintWindows_Call struct {
 }
 
 // CarryOverFingerprintWindows is a helper method to define mock.On call
-//   - from database.FingerprintWindowRef
+//   - from []database.FingerprintWindowRef
 //   - to database.FingerprintWindowRef
 func (_e *MockStore_Expecter) CarryOverFingerprintWindows(from any, to any) *MockStore_CarryOverFingerprintWindows_Call {
 	return &MockStore_CarryOverFingerprintWindows_Call{Call: _e.mock.On("CarryOverFingerprintWindows", from, to)}
 }
 
-func (_c *MockStore_CarryOverFingerprintWindows_Call) Run(run func(from database.FingerprintWindowRef, to database.FingerprintWindowRef)) *MockStore_CarryOverFingerprintWindows_Call {
+func (_c *MockStore_CarryOverFingerprintWindows_Call) Run(run func(from []database.FingerprintWindowRef, to database.FingerprintWindowRef)) *MockStore_CarryOverFingerprintWindows_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 database.FingerprintWindowRef
+		var arg0 []database.FingerprintWindowRef
 		if args[0] != nil {
-			arg0 = args[0].(database.FingerprintWindowRef)
+			arg0 = args[0].([]database.FingerprintWindowRef)
 		}
 		var arg1 database.FingerprintWindowRef
 		if args[1] != nil {
@@ -5881,7 +5881,7 @@ func (_c *MockStore_CarryOverFingerprintWindows_Call) Return(n int, err error) *
 	return _c
 }
 
-func (_c *MockStore_CarryOverFingerprintWindows_Call) RunAndReturn(run func(from database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)) *MockStore_CarryOverFingerprintWindows_Call {
+func (_c *MockStore_CarryOverFingerprintWindows_Call) RunAndReturn(run func(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)) *MockStore_CarryOverFingerprintWindows_Call {
 	_c.Call.Return(run)
 	return _c
 }

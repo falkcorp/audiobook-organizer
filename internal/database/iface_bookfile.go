@@ -1,5 +1,5 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
 // last-edited: 2026-09-19
 
@@ -165,10 +165,11 @@ type FingerprintWindowStore interface {
 	// DeleteFingerprintWindows removes every window of ref and its failure
 	// tombstone, returning how many windows were removed.
 	DeleteFingerprintWindows(ref FingerprintWindowRef) (int, error)
-	// CarryOverFingerprintWindows moves from's windows onto to (a row merge, or
-	// a p: candidate repointed to an f: row). to's own windows win on a
-	// kind/slot collision. Returns how many were written under to.
-	CarryOverFingerprintWindows(from, to FingerprintWindowRef) (int, error)
+	// CarryOverFingerprintWindows moves every donor's windows onto to (a row
+	// merge, or a p: candidate repointed to an f: row). to's own windows win on
+	// a kind/slot collision. Returns how many were written under to. When no
+	// donor holds anything it is a strict no-op: (0, nil), no keeper lookup.
+	CarryOverFingerprintWindows(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error)
 }
 
 // BookFileITunesStore covers the iTunes persistent-ID linkage.
