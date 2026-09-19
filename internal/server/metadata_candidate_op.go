@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-09-11
+// last-edited: 2026-09-19
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -213,6 +213,15 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	close(workCh)
 
 	var completed int64 = int64(alreadyDone)
+	// How many books this attempt answered from the candidate cache without a
+	// provider call, split by why (see fetchCandidateForBook). Reported in the
+	// progress line and the finish log so "fetched 11,105" can no longer hide
+	// whether that meant 11,105 provider ladders or none.
+	var skippedCached, skippedKnownEmpty int64
+	progressLine := func(finished int64) string {
+		return fmt.Sprintf("fetched %d/%d (from cache: %d, known empty: %d)", finished, totalBooks,
+			atomic.LoadInt64(&skippedCached), atomic.LoadInt64(&skippedKnownEmpty))
+	}
 	var wg sync.WaitGroup
 	numWorkers := min(8, len(p.BookIDs))
 
@@ -239,7 +248,13 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if ctx.Err() != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID)
+				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force)
+				switch result.Cached {
+				case candidateCachedCandidates:
+					atomic.AddInt64(&skippedCached, 1)
+				case candidateCachedKnownEmpty:
+					atomic.AddInt64(&skippedKnownEmpty, 1)
+				}
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
 					slog.Warn("metadata-candidate-fetch marshal result for book", "bookID", bookID, "err", err)
@@ -254,7 +269,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 					slog.Warn("metadata-candidate-fetch store result for book", "bookID", bookID, "err", err)
 				}
 				finished := atomic.AddInt64(&completed, 1)
-				_ = progress.UpdateProgress(int(finished), totalBooks, fmt.Sprintf("fetched %d/%d", finished, totalBooks))
+				_ = progress.UpdateProgress(int(finished), totalBooks, progressLine(finished))
 				if done.mark(bookID) {
 					writeCheckpoint()
 				}
@@ -281,12 +296,14 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		// this write succeeds under a cancelled context.
 		writeCheckpoint()
 		slog.Info("metadata-candidate-fetch canceled",
-			"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks)
+			"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks,
+			"skippedCached", atomic.LoadInt64(&skippedCached), "skippedKnownEmpty", atomic.LoadInt64(&skippedKnownEmpty))
 		return ctx.Err()
 	}
-	_ = progress.UpdateProgress(int(finalCount), totalBooks, "completed")
+	_ = progress.UpdateProgress(int(finalCount), totalBooks, "completed: "+progressLine(finalCount))
 	slog.Info("metadata-candidate-fetch done",
-		"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks)
+		"opID", opID, "finalCount", finalCount, "totalBooks", totalBooks, "force", p.Force,
+		"skippedCached", atomic.LoadInt64(&skippedCached), "skippedKnownEmpty", atomic.LoadInt64(&skippedKnownEmpty))
 	return nil
 }
 

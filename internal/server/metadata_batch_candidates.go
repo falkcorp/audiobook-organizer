@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.11.0
+// version: 4.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -153,6 +153,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	params := metadataCandidateFetchOpParams{
 		BookIDs:    bookIDs,
 		TotalBooks: totalBooks,
+		Force:      req.Force,
 	}
 	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "metadata.candidate-fetch", params)
 	if enqErr != nil {
@@ -171,14 +172,32 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	})
 }
 
+// Values of CandidateResult.Cached: the fetch answered the book from the
+// candidate cache without asking any provider.
+const (
+	candidateCachedCandidates = "candidates"
+	candidateCachedKnownEmpty = "known_empty"
+)
+
 // fetchCandidateForBook fetches metadata candidates for a single book, respecting
 // the rate limiter. Returns a CandidateResult.
+//
+// Unless force is set, a book the candidate cache can already answer for its
+// CURRENT inputs costs no provider call (metafetch.CachedBatchVerdict): fresh
+// cached candidates are served as-is, and a book every enabled provider has
+// already answered with nothing is reported as no_match straight away. Before
+// this, every run of "search providers" re-asked all four providers the full
+// query ladder for the same ~8,000 books they had answered with nothing on
+// every previous run -- those books are never "matched", so the only-unmatched
+// selection hands them back every time, and the per-provider fetch cache does
+// not store empty answers.
 func (s *Server) fetchCandidateForBook(
 	ctx context.Context,
 	mfs *metafetch.Service,
 	store candidateFetchStore,
 	limiter *rate.Limiter,
 	opID, bookID string,
+	force bool,
 ) CandidateResult {
 	book, err := store.GetBookByID(bookID)
 	if err != nil || book == nil {
@@ -233,6 +252,27 @@ func (s *Server) fetchCandidateForBook(
 	if len(authorHint) > 0 {
 		authorForHash = authorHint[0]
 	}
+	if !force {
+		switch cached, verdict := mfs.CachedBatchVerdict(book); verdict {
+		case metafetch.BatchVerdictFreshCandidates:
+			result := candidateResultFromEntry(store, bookInfo, bookID, book.Title, cached)
+			result.Cached = candidateCachedCandidates
+			return result
+		case metafetch.BatchVerdictKnownEmpty:
+			checked := "earlier"
+			if cached.LastEmptyFetchAt != nil {
+				checked = cached.LastEmptyFetchAt.UTC().Format("2006-01-02")
+			}
+			return CandidateResult{
+				Book:   bookInfo,
+				Status: "no_match",
+				Error: fmt.Sprintf("not refetched: every enabled provider returned nothing for this title/author (last checked %s); "+
+					"edit the title or author, enable another provider, or force a refetch to ask again", checked),
+				Cached: candidateCachedKnownEmpty,
+			}
+		}
+	}
+
 	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, book.Title, authorForHash, "", "", metafetch.SearchOptions{})
 	if err != nil {
 		return CandidateResult{
@@ -241,6 +281,17 @@ func (s *Server) fetchCandidateForBook(
 			Error:  fmt.Sprintf("search failed: %v", err),
 		}
 	}
+	return candidateResultFromEntry(store, bookInfo, bookID, book.Title, entry)
+}
+
+// candidateResultFromEntry turns a candidate-cache entry into the op's result
+// row: the top candidate the owner has not already rejected, or no_match.
+func candidateResultFromEntry(
+	store candidateFetchStore,
+	bookInfo CandidateBookInfo,
+	bookID, title string,
+	entry *metafetch.MetadataCandidateCache,
+) CandidateResult {
 	// Decode cached []json.RawMessage back into MetadataCandidate
 	// for the OperationResult payload (back-compat with the progress UI).
 	results := make([]metafetch.MetadataCandidate, 0, len(entry.Candidates))
@@ -250,7 +301,7 @@ func (s *Server) fetchCandidateForBook(
 			results = append(results, c)
 		}
 	}
-	resp := &metafetch.SearchMetadataResponse{Results: results, Query: book.Title}
+	resp := &metafetch.SearchMetadataResponse{Results: results, Query: title}
 
 	if len(resp.Results) == 0 {
 		return CandidateResult{

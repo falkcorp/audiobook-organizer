@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_op.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-08-22
+// last-edited: 2026-09-19
 //
 // FetchOpParams holds the serializable parameters for the
 // metadata.candidate-fetch v2 OperationDef. Kept here so the
@@ -27,4 +27,9 @@ package metabatch
 type FetchOpParams struct {
 	BookIDs    []string `json:"book_ids"`
 	TotalBooks int      `json:"total_books"`
+	// Force re-queries the providers even for a book whose cached answer is
+	// still valid for its current inputs (fresh candidates, or a durable
+	// "providers have nothing" verdict). Without it Run serves those books
+	// from the candidate cache and spends no provider calls on them.
+	Force bool `json:"force,omitempty"`
 }
