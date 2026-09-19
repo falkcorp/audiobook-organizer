@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 24b634b3-fd8d-4f7f-8809-0843e63141c8
 // last-edited: 2026-09-19
 
@@ -248,9 +248,11 @@ func TestMergeChapterGroups_DryRunWritesNothing(t *testing.T) {
 func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 	s := ddRealStore(t)
 	books := chSeedGroup(t, s, "/lib/A/Tale", "Tale", 3, 300)
-	// A second group whose primary carries a curated title.
+	// A second group whose primary carries a title someone set that is not
+	// just a position (a real title with no position is not a chapter
+	// candidate at all; see scanner TestReview_RealTitlesWithNumberedFilesNeverGroup).
 	curated := chSeedGroup(t, s, "/lib/B/Saga", "Saga", 2, 300)
-	if _, err := s.ModifyBook(curated[0].ID, func(b *database.Book) error { b.Title = "The Saga: Collector's Edition"; return nil }); err != nil {
+	if _, err := s.ModifyBook(curated[0].ID, func(b *database.Book) error { b.Title = "Chapter 1 - Saga"; return nil }); err != nil {
 		t.Fatalf("ModifyBook: %v", err)
 	}
 
@@ -269,7 +271,7 @@ func TestMergeChapterGroups_RealMergeIsCorrectAuditedAndUndoable(t *testing.T) {
 	if primary.Title != "Tale" {
 		t.Fatalf("filename-derived primary title = %q, want %q", primary.Title, "Tale")
 	}
-	if got := ddMustGet(t, s, curated[0].ID); got.Title != "The Saga: Collector's Edition" {
+	if got := ddMustGet(t, s, curated[0].ID); got.Title != "Chapter 1 - Saga" {
 		t.Fatalf("curated title overwritten: %q", got.Title)
 	}
 	for _, src := range books[1:] {

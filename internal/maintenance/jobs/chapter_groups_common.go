@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-09-19
 
@@ -108,13 +108,18 @@ type chapterGroupOutcome struct {
 	// Detection detail (scanner.ChapterGroup): each member's position in
 	// BookIDs order, the missing positions, the "N of M" total, how many
 	// durations are known, and why the detector grouped it.
-	IndexLabels    []string                `json:"index_labels,omitempty"`
-	Gaps           []string                `json:"gaps,omitempty"`
-	DeclaredTotal  int                     `json:"declared_total,omitempty"`
-	DurationsKnown int                     `json:"durations_known"`
-	Confidence     string                  `json:"confidence,omitempty"`
-	Reasons        []string                `json:"reasons,omitempty"`
-	Members        []chapterMemberSnapshot `json:"members,omitempty"`
+	IndexLabels    []string `json:"index_labels,omitempty"`
+	Gaps           []string `json:"gaps,omitempty"`
+	DeclaredTotal  int      `json:"declared_total,omitempty"`
+	DurationsKnown int      `json:"durations_known"`
+	Confidence     string   `json:"confidence,omitempty"`
+	Reasons        []string `json:"reasons,omitempty"`
+	// Per-member review detail, parallel to BookIDs: title, file base
+	// name, duration in seconds (0 = unknown).
+	MemberTitles    []string                `json:"member_titles,omitempty"`
+	MemberFiles     []string                `json:"member_files,omitempty"`
+	MemberDurations []int                   `json:"member_durations,omitempty"`
+	Members         []chapterMemberSnapshot `json:"members,omitempty"`
 	// Fingerprint identifies exactly what the preview saw; a real merge of
 	// this group must send it back and is refused if the members changed.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -227,19 +232,22 @@ func detectChapterGroupsForRun(ctx context.Context, store maintenance.JobStore, 
 // fingerprint, so it can never be sent back for a merge.
 func newChapterGroupOutcome(g scanner.ChapterGroup) chapterGroupOutcome {
 	out := chapterGroupOutcome{
-		PrimaryBookID:  g.PrimaryBookID,
-		BookIDs:        g.BookIDs,
-		SourceBookIDs:  append([]string(nil), g.BookIDs[1:]...),
-		CommonTitle:    g.CommonTitle,
-		TotalDuration:  g.TotalDuration,
-		FileCount:      g.FileCount,
-		Directory:      g.Directory,
-		IndexLabels:    g.IndexLabels,
-		Gaps:           g.Gaps,
-		DeclaredTotal:  g.DeclaredTotal,
-		DurationsKnown: g.DurationsKnown,
-		Confidence:     g.Confidence,
-		Reasons:        g.Reasons,
+		PrimaryBookID:   g.PrimaryBookID,
+		BookIDs:         g.BookIDs,
+		SourceBookIDs:   append([]string(nil), g.BookIDs[1:]...),
+		CommonTitle:     g.CommonTitle,
+		TotalDuration:   g.TotalDuration,
+		FileCount:       g.FileCount,
+		Directory:       g.Directory,
+		IndexLabels:     g.IndexLabels,
+		Gaps:            g.Gaps,
+		DeclaredTotal:   g.DeclaredTotal,
+		DurationsKnown:  g.DurationsKnown,
+		Confidence:      g.Confidence,
+		Reasons:         g.Reasons,
+		MemberTitles:    g.MemberTitles,
+		MemberFiles:     g.MemberFiles,
+		MemberDurations: g.MemberDurations,
 	}
 	if len(g.Blockers) > 0 {
 		out.Status = "blocked"

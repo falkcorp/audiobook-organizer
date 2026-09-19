@@ -1,8 +1,9 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   Alert,
   Box,
@@ -297,7 +298,10 @@ export function ChapterConsolidationCard() {
   const [result, setResult] = useState<api.ChapterGroupsResult | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+  // Selection is OPT-IN: nothing is ticked until the operator ticks it (or
+  // uses "Select all", which never includes a low-confidence group).
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const params = useCallback((): api.ChapterGroupsParams => {
@@ -316,7 +320,8 @@ export function ChapterConsolidationCard() {
       setProgress('Starting…');
       setError(null);
       setResult(null);
-      setDeselected(new Set());
+      setChosen(new Set());
+      setOpenRows(new Set());
       try {
         const { operation_id: opId } = await api.runMaintenanceJob(jobId, jobDryRun, {
           ...jobParams,
@@ -347,13 +352,13 @@ export function ChapterConsolidationCard() {
   // count (it runs neither the iTunes guard nor the carry checks), and a
   // result that was itself a real merge does not either.
   const preview = result && result.job === 'merge-chapter-groups' && result.dry_run ? result : null;
-  // Only groups the preview would merge, and the operator left ticked, are
-  // sent -- blocked / would_skip groups never are.
-  const selectedGroups = preview
-    ? preview.groups.filter(
-        (g) => g.status === 'would_merge' && g.fingerprint && !deselected.has(g.primary_book_id)
-      )
+  // Only groups the preview would merge, and the operator ticked, are sent
+  // -- blocked / would_skip groups never are.
+  const mergeable = preview
+    ? preview.groups.filter((g) => g.status === 'would_merge' && g.fingerprint)
     : [];
+  const selectedGroups = mergeable.filter((g) => chosen.has(g.primary_book_id));
+  const bulkSelectable = mergeable.filter((g) => g.confidence !== 'low');
   const previewSources = selectedGroups.reduce((n, g) => n + g.source_book_ids.length, 0);
 
   const handleMergeClick = () => {
@@ -382,13 +387,15 @@ export function ChapterConsolidationCard() {
     });
   };
 
-  const toggleGroup = (primaryId: string) =>
-    setDeselected((prev) => {
+  const toggleIn = (setter: Dispatch<SetStateAction<Set<string>>>) => (primaryId: string) =>
+    setter((prev) => {
       const next = new Set(prev);
       if (next.has(primaryId)) next.delete(primaryId);
       else next.add(primaryId);
       return next;
     });
+  const toggleGroup = toggleIn(setChosen);
+  const toggleRow = toggleIn(setOpenRows);
   const groups = result?.groups ?? [];
   const isMergeResult = result?.job === 'merge-chapter-groups';
 
@@ -524,46 +531,90 @@ export function ChapterConsolidationCard() {
             <Button size="small" onClick={() => setExpanded((v) => !v)} sx={{ mb: 1 }}>
               {expanded ? 'Hide groups' : `Show ${groups.length} group(s)`}
             </Button>
+            {preview && bulkSelectable.length > 0 && (
+              <Button
+                size="small"
+                onClick={() => setChosen(new Set(bulkSelectable.map((g) => g.primary_book_id)))}
+                sx={{ mb: 1, ml: 1 }}
+              >
+                Select all ({bulkSelectable.length}, low confidence excluded)
+              </Button>
+            )}
+            {preview && selectedGroups.length > 0 && (
+              <Button size="small" onClick={() => setChosen(new Set())} sx={{ mb: 1, ml: 1 }}>
+                Clear selection
+              </Button>
+            )}
             <Collapse in={expanded}>
               <List dense disablePadding>
                 {groups.map((g) => (
-                  <ListItem key={g.primary_book_id} disableGutters>
-                    {preview && g.status === 'would_merge' && (
-                      <Checkbox
-                        size="small"
-                        checked={!deselected.has(g.primary_book_id)}
-                        onChange={() => toggleGroup(g.primary_book_id)}
-                        slotProps={{ input: { 'aria-label': `Include ${g.primary_book_id}` } }}
+                  <Box key={g.primary_book_id}>
+                    <ListItem disableGutters>
+                      {preview && g.status === 'would_merge' && (
+                        <Checkbox
+                          size="small"
+                          checked={chosen.has(g.primary_book_id)}
+                          onChange={() => toggleGroup(g.primary_book_id)}
+                          slotProps={{ input: { 'aria-label': `Include ${g.primary_book_id}` } }}
+                        />
+                      )}
+                      <ListItemText
+                        primary={g.common_title || '(unknown title)'}
+                        secondary={
+                          `proposed title "${g.common_title || '(none)'}" · ` +
+                          `${g.file_count} files · ${Math.round(g.total_duration / 60)} min total · ${g.directory}` +
+                          (g.confidence ? ` · ${g.confidence} confidence` : '') +
+                          (g.gaps && g.gaps.length > 0 ? ` · missing ${g.gaps.join(', ')}` : '') +
+                          (g.title_action === 'kept' && g.primary_title
+                            ? ` · keeps title "${g.primary_title}"`
+                            : '') +
+                          (g.metadata_fills && g.metadata_fills.length > 0
+                            ? ` · fills empty ${g.metadata_fills.join(', ')}`
+                            : '') +
+                          (g.blockers && g.blockers.length > 0
+                            ? ` · blocked: ${g.blockers.join('; ')}`
+                            : '') +
+                          (g.errors && g.errors.length > 0 ? ` · ${g.errors.join('; ')}` : '')
+                        }
                       />
+                      {g.status && (
+                        <Chip
+                          size="small"
+                          color={chapterStatusColor[g.status]}
+                          label={g.status.replace('_', ' ')}
+                          sx={{ ml: 1 }}
+                        />
+                      )}
+                      <Chip size="small" label={`${g.file_count} files`} sx={{ ml: 1 }} />
+                      {g.member_titles && g.member_titles.length > 0 && (
+                        <Button
+                          size="small"
+                          onClick={() => toggleRow(g.primary_book_id)}
+                          aria-label={`Members of ${g.primary_book_id}`}
+                          sx={{ ml: 1 }}
+                        >
+                          {openRows.has(g.primary_book_id) ? 'Hide members' : 'Members'}
+                        </Button>
+                      )}
+                    </ListItem>
+                    {openRows.has(g.primary_book_id) && g.member_titles && (
+                      <Box
+                        component="ol"
+                        data-testid={`members-${g.primary_book_id}`}
+                        sx={{ mt: 0, mb: 1, pl: 6, typography: 'caption' }}
+                      >
+                        {g.member_titles.map((title, i) => (
+                          <li key={g.book_ids[i] ?? i}>
+                            {`#${g.index_labels?.[i] ?? i + 1} · "${title}" · ${
+                              g.member_durations?.[i]
+                                ? `${Math.round((g.member_durations[i] ?? 0) / 60)} min`
+                                : 'duration unknown'
+                            } · ${g.member_files?.[i] ?? ''}`}
+                          </li>
+                        ))}
+                      </Box>
                     )}
-                    <ListItemText
-                      primary={g.common_title || '(unknown title)'}
-                      secondary={
-                        `${g.file_count} files · ${Math.round(g.total_duration / 60)} min total · ${g.directory}` +
-                        (g.confidence ? ` · ${g.confidence} confidence` : '') +
-                        (g.gaps && g.gaps.length > 0 ? ` · missing ${g.gaps.join(', ')}` : '') +
-                        (g.title_action === 'kept' && g.primary_title
-                          ? ` · keeps title "${g.primary_title}"`
-                          : '') +
-                        (g.metadata_fills && g.metadata_fills.length > 0
-                          ? ` · fills empty ${g.metadata_fills.join(', ')}`
-                          : '') +
-                        (g.blockers && g.blockers.length > 0
-                          ? ` · blocked: ${g.blockers.join('; ')}`
-                          : '') +
-                        (g.errors && g.errors.length > 0 ? ` · ${g.errors.join('; ')}` : '')
-                      }
-                    />
-                    {g.status && (
-                      <Chip
-                        size="small"
-                        color={chapterStatusColor[g.status]}
-                        label={g.status.replace('_', ' ')}
-                        sx={{ ml: 1 }}
-                      />
-                    )}
-                    <Chip size="small" label={`${g.file_count} files`} sx={{ ml: 1 }} />
-                  </ListItem>
+                  </Box>
                 ))}
               </List>
             </Collapse>

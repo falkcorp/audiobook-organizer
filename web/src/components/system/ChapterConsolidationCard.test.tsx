@@ -1,5 +1,5 @@
 // file: web/src/components/system/ChapterConsolidationCard.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: dad38fac-1352-4ced-9735-5811865fa668
 // last-edited: 2026-09-19
 
@@ -47,6 +47,11 @@ function mockRun(res: api.ChapterGroupsResult) {
     status: 'completed',
   } as unknown as Awaited<ReturnType<typeof api.pollOperation>>);
   vi.mocked(api.getOperationResult).mockResolvedValue({ result_data: res });
+}
+
+// Selection is opt-in: tick every non-low-confidence group of the preview.
+function selectAll() {
+  fireEvent.click(screen.getByRole('button', { name: /^Select all/ }));
 }
 
 describe('ChapterConsolidationCard', () => {
@@ -132,8 +137,12 @@ describe('ChapterConsolidationCard', () => {
     await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
     expect(api.runMaintenanceJob).toHaveBeenCalledTimes(1);
 
-    // Real merge opens a confirm dialog and does NOT start a job yet.
+    // Nothing is pre-ticked: the real merge stays disabled until a group is chosen.
     fireEvent.click(screen.getByLabelText('Dry Run'));
+    expect(screen.getByRole('button', { name: 'Merge Chapter Groups…' })).toBeDisabled();
+    selectAll();
+
+    // Real merge opens a confirm dialog and does NOT start a job yet.
     fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
     const confirm = await screen.findByRole('button', { name: 'Merge 2 record(s)' });
     expect(api.runMaintenanceJob).toHaveBeenCalledTimes(1);
@@ -155,6 +164,7 @@ describe('ChapterConsolidationCard', () => {
     render(<ChapterConsolidationCard />);
     fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
     await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    selectAll();
     fireEvent.click(screen.getByLabelText('Dry Run'));
     fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
@@ -181,6 +191,7 @@ describe('ChapterConsolidationCard', () => {
     render(<ChapterConsolidationCard />);
     fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
     await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    selectAll();
     fireEvent.click(screen.getByLabelText('Dry Run'));
     fireEvent.click(screen.getByRole('button', { name: 'Merge Chapter Groups…' }));
     expect(await screen.findByRole('button', { name: 'Merge 2 record(s)' })).toBeInTheDocument();
@@ -217,6 +228,7 @@ describe('ChapterConsolidationCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
     await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
 
+    selectAll();
     // The operator clears the prefix after reviewing a /lib/Foo preview.
     fireEvent.change(screen.getByLabelText('Path prefix (optional)'), { target: { value: '' } });
     fireEvent.click(screen.getByLabelText('Dry Run'));
@@ -267,6 +279,7 @@ describe('ChapterConsolidationCard', () => {
     render(<ChapterConsolidationCard />);
     fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
     await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    selectAll();
     fireEvent.click(screen.getByRole('button', { name: /Show 2 group/ }));
     fireEvent.click(screen.getByLabelText('Include x01'));
     fireEvent.click(screen.getByLabelText('Dry Run'));
@@ -275,5 +288,66 @@ describe('ChapterConsolidationCard', () => {
     await waitFor(() => expect(api.runMaintenanceJob).toHaveBeenCalledTimes(2));
     const sent = vi.mocked(api.runMaintenanceJob).mock.calls[1][2] as { groups: unknown[] };
     expect(sent.groups).toHaveLength(1);
+  });
+
+  it('select all leaves out low-confidence groups; they can only be ticked one by one', async () => {
+    mockRun(
+      result({
+        groups_found: 2,
+        groups: [
+          { ...group, status: 'would_merge', confidence: 'high' },
+          {
+            ...group,
+            primary_book_id: 'lo01',
+            book_ids: ['lo01', 'lo02'],
+            source_book_ids: ['lo02'],
+            fingerprint: 'fp-lo',
+            status: 'would_merge',
+            confidence: 'low',
+          },
+        ],
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Merge' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Show 2 group/ }));
+    // Opt-in: nothing ticked after a preview.
+    expect(screen.getByLabelText('Include ch01')).not.toBeChecked();
+    expect(screen.getByLabelText('Include lo01')).not.toBeChecked();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Select all \(1, low confidence excluded\)/ })
+    );
+    expect(screen.getByLabelText('Include ch01')).toBeChecked();
+    expect(screen.getByLabelText('Include lo01')).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText('Include lo01'));
+    expect(screen.getByLabelText('Include lo01')).toBeChecked();
+  });
+
+  it('each group expands to list every member and shows the proposed title', async () => {
+    mockRun(
+      result({
+        job: 'scan-chapter-groups',
+        groups: [
+          {
+            ...group,
+            index_labels: ['1', '2', '3'],
+            member_titles: ['157', '158', '159'],
+            member_files: ['Tale - 157.mp3', 'Tale - 158.mp3', 'Tale - 159.mp3'],
+            member_durations: [600, 0, 1200],
+          },
+        ],
+      })
+    );
+    render(<ChapterConsolidationCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scan for Chapter Groups' }));
+    await waitFor(() => expect(screen.getByTestId('chapter-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Show 1 group/ }));
+    expect(screen.getByText(/proposed title "My Book"/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Members of ch01' }));
+    const list = screen.getByTestId('members-ch01');
+    expect(list).toHaveTextContent('#1 · "157" · 10 min · Tale - 157.mp3');
+    expect(list).toHaveTextContent('#2 · "158" · duration unknown · Tale - 158.mp3');
+    expect(list).toHaveTextContent('#3 · "159" · 20 min · Tale - 159.mp3');
   });
 });

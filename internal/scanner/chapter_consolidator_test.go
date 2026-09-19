@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_consolidator_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 04249a9d-8f2e-44f4-9652-258511aae768
 // last-edited: 2026-09-19
 
@@ -7,6 +7,7 @@ package scanner
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,8 +16,12 @@ import (
 
 func chIntPtr(v int) *int { return &v }
 
+// chBook is a record whose title is still its file stem (the scanner's
+// filename-derived title): a real title with only a numbered FILE is never a
+// chapter candidate (see TestReview_RealTitlesWithNumberedFilesNeverGroup).
 func chBook(id, path string, dur *int) database.BookCore {
-	return database.BookCore{ID: id, Title: "raw", FilePath: path, Duration: dur}
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return database.BookCore{ID: id, Title: stem, FilePath: path, Duration: dur}
 }
 
 // (a) The primary must be chapter 01, not whichever row the store listed
@@ -153,7 +158,10 @@ func chGroupOf(t *testing.T, dur int, names ...string) []ChapterGroup {
 // books under the old prefix / 80%-word-overlap similarity.
 func TestDetectChapterGroups_GoldenMustNotGroup(t *testing.T) {
 	cases := map[string][]string{
-		"character prefix It/Ithaca":    {"01 - It.mp3", "02 - Ithaca.mp3"},
+		"character prefix It/Ithaca": {"01 - It.mp3", "02 - Ithaca.mp3"},
+		// Bare-numbered files with no author and nothing else tying them
+		// together are never offered (they may be reported, blocked).
+		"empty stripped title":          {"01.mp3", "02.mp3", "03.mp3"},
 		"word prefix Dune/Dune Messiah": {"01 - Dune.mp3", "02 - Dune Messiah.mp3"},
 		"too-short stripped title":      {"01 - It.mp3", "02 - It.mp3"},
 		"numbered series books":         {"01 - Wheel of Time Book 01.mp3", "02 - Wheel of Time Book 02.mp3"},
@@ -179,11 +187,6 @@ func TestDetectChapterGroups_GoldenMustGroup(t *testing.T) {
 		"chapter tokens differ":   {"01 - My Book - Chapter 1.mp3", "02 - My Book - Chapter 2.mp3"},
 		"track tokens differ":     {"001 My Book Track 01.mp3", "002 My Book Track 02.mp3"},
 		"joined cd tokens":        {"01 - My Book CD1.mp3", "02 - My Book CD2.mp3"},
-		// A folder of bare-numbered files is one book cut into tracks (the
-		// folder names it). It was a must-not-group golden while the
-		// detector keyed on the filename alone; see
-		// TestDetectChapterGroups_BareNumberTitles for the shapes.
-		"bare numbered files": {"01.mp3", "02.mp3", "03.mp3"},
 	}
 	for name, files := range cases {
 		g := chGroupOf(t, 300, files...)

@@ -1,5 +1,5 @@
 // file: internal/scanner/chapter_detect_shapes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d2b6c1e-47a9-4b35-a0f2-6e1c9d3b7a52
 // last-edited: 2026-09-19
 
@@ -28,6 +28,18 @@ func shRun(prefix, dir string, from, to int, title, file func(i int) string) []d
 		out = append(out, shBook(fmt.Sprintf("%s%04d", prefix, i), title(i), dir+"/"+file(i)))
 	}
 	return out
+}
+
+// shEv gives every record a known duration and author: the corroboration a
+// bare-numbered run needs before it is offered.
+func shEv(books []database.BookCore, dur int) []database.BookCore {
+	author := 42
+	for i := range books {
+		d := dur
+		books[i].Duration = &d
+		books[i].AuthorID = &author
+	}
+	return books
 }
 
 func shDetect(books []database.BookCore) ChapterDetection {
@@ -102,16 +114,16 @@ func TestDetectChapterGroups_RealTitleShapes(t *testing.T) {
 		},
 		{
 			name: "Part N titles",
-			books: shRun("p", "/lib/Author/The Long Road", 1, 4,
+			books: shEv(shRun("p", "/lib/Author/The Long Road", 1, 4,
 				func(i int) string { return fmt.Sprintf("Part %d", i) },
-				func(i int) string { return fmt.Sprintf("Part %d.mp3", i) }),
+				func(i int) string { return fmt.Sprintf("Part %d.mp3", i) }), 1500),
 			wantN: 4, wantTitle: "The Long Road",
 		},
 		{
 			name: "chapter-named tracks share only the book",
-			books: shRun("c", "/lib/Author/Tunnels", 1, 5,
+			books: shEv(shRun("c", "/lib/Author/Tunnels", 1, 5,
 				func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c", i, i, 'A'+rune(i)) },
-				func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c.m4b", i, i, 'A'+rune(i)) }),
+				func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c.m4b", i, i, 'A'+rune(i)) }), 1500),
 			wantN: 5, wantTitle: "Tunnels",
 		},
 	}
@@ -199,13 +211,15 @@ func TestDetectChapterGroups_LegitNumericTitlesDoNotGroup(t *testing.T) {
 // Two copies of one book interleaved in a folder repeat indices: reported as
 // blocked, never merged into one double-length book.
 func TestDetectChapterGroups_DuplicateIndicesBlock(t *testing.T) {
-	books := append(
+	// Durations corroborate the bare copy, so it joins the named run -- and
+	// the repeated positions then block the whole folder.
+	books := shEv(append(
 		shRun("a", "/lib/A/Moon and Stone", 1, 5,
 			func(i int) string { return fmt.Sprintf("%03d - Moon and Stone", i) },
 			func(i int) string { return fmt.Sprintf("%03d - Moon and Stone.mp3", i) }),
 		shRun("b", "/lib/A/Moon and Stone", 1, 5,
 			func(i int) string { return fmt.Sprintf("%03d", i) },
-			func(i int) string { return fmt.Sprintf("%03d.mp3", i) })...)
+			func(i int) string { return fmt.Sprintf("%03d.mp3", i) })...), 1500)
 	d := shDetect(books)
 	if len(d.Groups) != 0 || len(d.Blocked) != 1 {
 		t.Fatalf("want one blocked group, got groups=%+v blocked=%+v", d.Groups, d.Blocked)
@@ -328,16 +342,16 @@ func TestDetectChapterGroups_SubsetReproducesGroup(t *testing.T) {
 			func(i int) string { return fmt.Sprint(i) },
 			func(i int) string { return fmt.Sprintf("Eldritch - %d.mp3", i) }),
 			shBook("z", "Other Book", "/lib/A/Eldritch/Other Book.mp3")),
-		"bare members join the folder-named residual": append(
+		"bare members join the folder-named residual": shEv(append(
 			shRun("a", "/lib/A/Moon and Stone", 1, 5,
 				func(i int) string { return fmt.Sprintf("%03d - Moon and Stone", i) },
 				func(i int) string { return fmt.Sprintf("%03d - Moon and Stone.mp3", i) }),
 			shRun("b", "/lib/A/Moon and Stone", 6, 8,
 				func(i int) string { return fmt.Sprintf("%03d", i) },
-				func(i int) string { return fmt.Sprintf("%03d.mp3", i) })...),
-		"chapter-named tracks": shRun("c", "/lib/Author/Tunnels", 1, 5,
+				func(i int) string { return fmt.Sprintf("%03d.mp3", i) })...), 1500),
+		"chapter-named tracks": shEv(shRun("c", "/lib/Author/Tunnels", 1, 5,
 			func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c", i, i, 'A'+rune(i)) },
-			func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c.m4b", i, i, 'A'+rune(i)) }),
+			func(i int) string { return fmt.Sprintf("%02d Chapter %d - Name %c.m4b", i, i, 'A'+rune(i)) }), 1500),
 	}
 	for name, books := range cases {
 		t.Run(name, func(t *testing.T) {
