@@ -1,0 +1,4 @@
+### Added
+
+- A new maintenance job, "AcoustID window backfill", fingerprints short samples from the middle and end of each audio file instead of only the opening credits, and stores them next to the existing fingerprints. Files in books that are missing some of their files go first, then every other file that is on disk. It never changes book or file records, skips files in the iTunes library, and skips files that are not on disk.
+- The job is a preview by default: it counts what it would do in each group and changes nothing. Run it with `live` turned on to do the work. Running it again only redoes files that changed since their samples were taken, files that fail in a way a retry won't fix are marked and skipped until the file changes, and a stopped or interrupted run picks up where it left off.

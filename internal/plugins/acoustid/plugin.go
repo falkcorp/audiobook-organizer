@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -9,8 +9,12 @@
 package acoustid
 
 import (
+	"context"
+	"sync"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -20,6 +24,13 @@ type Plugin struct {
 	engine         *dedupengine.Engine
 	store          pluginStore
 	embeddingStore *database.EmbeddingStore
+
+	// toolsMu guards the window op's tool wiring: SetToolRegistry runs
+	// during server startup, the op reads it when dispatched.
+	toolsMu      sync.Mutex
+	toolResolver fingerprint.ToolResolver
+	// windowToolsFn replaces tool resolution in tests (fake binaries).
+	windowToolsFn func(context.Context) (fingerprint.WindowTools, error)
 }
 
 // New constructs an acoustid Plugin. engine and embeddingStore may be nil if embedding is disabled;
@@ -51,6 +62,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.lshBackfillDef(),
 		p.onlineLookupDef(),
 		p.durationBackfillDef(),
+		p.windowBackfillDef(),
 	}
 
 	for _, op := range ops {
@@ -74,6 +86,7 @@ type pluginStore interface {
 	pluginBookReader
 	pluginFileStore
 	pluginBookSigWriter
+	windowSidecarStore
 }
 
 // pluginBookReader pages through books for the backfill.
@@ -101,4 +114,15 @@ type pluginBookSigWriter interface {
 	// ClearBookSignature deletes a book's signature when re-synthesis finds
 	// no usable current-era data.
 	ClearBookSignature(id string) error
+}
+
+// windowSidecarStore is the part of database.FingerprintWindowStore the
+// window backfill uses. It is on database.Store (via BookFileFingerprintStore),
+// so the production indexedStore satisfies it through its embedded Store at
+// compile time; nothing is type-asserted at run time.
+type windowSidecarStore interface {
+	GetFingerprintWindows(ref database.FingerprintWindowRef) ([]database.FingerprintWindow, error)
+	GetFingerprintWindowFailure(ref database.FingerprintWindowRef) (*database.FingerprintWindowFailure, error)
+	ReplaceFingerprintWindows(ref database.FingerprintWindowRef, ws []database.FingerprintWindow) error
+	RecordFingerprintWindowFailure(f *database.FingerprintWindowFailure) error
 }
