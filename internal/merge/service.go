@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-09-19
 
@@ -1019,7 +1019,15 @@ func (ms *Service) CombineBooks(bookIDs []string, primaryID string, override *Co
 	// the early return exists to prevent.
 	if len(bulk) > 0 {
 		if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
-			return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
+			if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+				return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
+			}
+			// Applied and visible; only the fsync failed. The files HAVE
+			// moved, so the combine must finish: returning here left the
+			// absorbed books live with zero files. Recorded on the journal.
+			mlog.Error("combine: move of files -> %s was written but its fsync failed (%s); durability unknown, treating it as applied",
+				logger.SanitizeLogValue(survivor.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			journal.Warnings = append(journal.Warnings, fmt.Sprintf("move of files -> %s: durability unknown (%v); treated as applied", survivor.ID, err))
 		}
 	}
 

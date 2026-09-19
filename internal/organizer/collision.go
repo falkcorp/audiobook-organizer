@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -222,6 +222,10 @@ func (j *collisionJournal) empty() bool {
 // in result.Errors — the same posture rollbackRenameTemps takes, and for the
 // same reason: a file left in quarantine whose row points elsewhere is
 // invisible to the library and must not be dropped silently.
+// collisionLog routes new messages through internal/logger (the
+// log-injection barrier) rather than bare log/slog.
+var collisionLog = logger.New("organizer-collision")
+
 func (j *collisionJournal) rollback(result *RenameFilesResult) {
 	if j == nil {
 		return
@@ -231,7 +235,15 @@ func (j *collisionJournal) rollback(result *RenameFilesResult) {
 		if j.store == nil || r.prior == nil {
 			continue
 		}
-		if err := j.store.UpdateBookFile(r.fileID, r.prior); err != nil {
+		err := j.store.UpdateBookFile(r.fileID, r.prior)
+		if errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+			// Restored and visible; only its fsync failed. Not a failed
+			// rollback, but the durability is logged.
+			collisionLog.Error("collision rollback: restore of book_file %s to %s was written but its fsync failed (%v); durability unknown, treating it as applied",
+				logger.SanitizeLogValue(r.fileID), logger.SanitizeLogValue(r.prior.FilePath), err)
+			err = nil
+		}
+		if err != nil {
 			slog.Error("collision rollback failed — book_file row left in its resolved state",
 				"file_id", logger.SanitizeLogValue(r.fileID),
 				"restore_path", logger.SanitizeLogValue(r.prior.FilePath),
