@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.8.1
+// version: 2.9.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -72,6 +73,12 @@ type remoteHealth struct {
 	// ComputeType is informational: it is logged with a refusal so "cpu"
 	// plus "int8" reads as a coherent story rather than a bare rejection.
 	ComputeType string `json:"compute_type"`
+	// Model is the model the server loaded (both bundled servers report it).
+	// It is part of the result-journal key -- see newEndpointJournal; empty
+	// means the endpoint's results are not journalled.
+	Model string `json:"model"`
+	// Backend ("mlx", ...) qualifies Model in the journal key; optional.
+	Backend string `json:"backend"`
 }
 
 // supportsBatch reports whether the server exposes /transcribe-batch.
@@ -115,24 +122,67 @@ func supportsRemoteBatch(ctx context.Context, remoteURL string) bool {
 // and falls back to the original per-file worker pool on 404 or probe failure.
 func transcribeRemote(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
 	h, ok := probeRemoteHealth(ctx, remoteURL)
-	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, limit, jobs, onProgress)
+	return transcribeRemoteWithHealth(ctx, remoteURL, h, ok, limit, jobs, onProgress, nil)
 }
 
 // transcribeRemoteWithHealth is transcribeRemote for a caller that has ALREADY
 // probed /health -- the pool gate does, to decide require_gpu -- so the batch
 // decision reuses that same response instead of issuing a second one.
-func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteHealth, probed bool, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
-	if probed && h.supportsBatch() {
-		return transcribeRemoteBatched(ctx, remoteURL, limit, jobs, onProgress)
+//
+// With a journal, this is also where the journal is consulted, because this is
+// the first point the endpoint's model (from /health) is known and the model
+// is part of the key: jobs already journalled for this model are served and
+// not sent, byte-identical clips are sent once, and every result the endpoint
+// returns is journalled before progress is reported for it.
+func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteHealth, probed bool, limit int, jobs map[string]string, onProgress ProgressFunc, journal ResultJournal) (map[string]BatchResult, error) {
+	ej := newEndpointJournal(journal, remoteURL, h, probed)
+	served, send, followers := ej.plan(jobs)
+	total := len(jobs)
+
+	// Progress stays in units of THIS call's jobs: served jobs count as done
+	// up front, and the sender's own count is offset by them.
+	sendProgress := onProgress
+	if onProgress != nil && len(send) != total {
+		base := len(served)
+		if base > 0 {
+			onProgress(base, total)
+		}
+		sendProgress = func(d, _ int) { onProgress(base+d, total) }
 	}
-	return transcribeRemotePerFile(ctx, remoteURL, limit, jobs, onProgress)
+
+	results := make(map[string]BatchResult, total)
+	if len(send) > 0 {
+		var (
+			sent map[string]BatchResult
+			err  error
+		)
+		if probed && h.supportsBatch() {
+			sent, err = transcribeRemoteBatched(ctx, remoteURL, limit, send, sendProgress, ej)
+		} else {
+			sent, err = transcribeRemotePerFile(ctx, remoteURL, limit, send, sendProgress, ej)
+		}
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(results, sent)
+	}
+	fanOut(results, followers)
+	maps.Copy(results, served)
+	if onProgress != nil && len(followers) > 0 {
+		onProgress(len(results), total)
+	}
+	return results, nil
 }
 
 // transcribeRemoteBatched sends jobs in sub-batches of whisperBatchSize to
 // /transcribe-batch. Processing is sequential inside each sub-batch (the GPU
 // handles one file at a time), but reduced HTTP round-trips and
 // BatchedInferencePipeline on the server give 2-3x throughput vs per-file mode.
-func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+//
+// ej (may be nil) journals each chunk's results the moment the chunk returns,
+// before its progress is reported and before the next chunk is sent, so a kill
+// at any point loses at most the chunk in flight.
+func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
 	// Stable order so progress reporting is deterministic.
 	ordered := make([]wavJob, 0, len(jobs))
 	for id, path := range jobs {
@@ -176,6 +226,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 				"url", remoteURL, "completed", done, "total", total, "chunk_start", start)
 			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
 		}
+		ej.complete(batchResults)
 		for id, r := range batchResults {
 			results[id] = r
 			done++
@@ -266,7 +317,10 @@ func sendBatch(ctx context.Context, client *http.Client, remoteURL string, chunk
 
 // transcribeRemotePerFile is the original per-file worker-pool path, kept as
 // fallback for servers that don't expose /transcribe-batch.
-func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+//
+// ej (may be nil) journals each file's result as it is drained, before its
+// progress is reported.
+func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 
 	batchCtx, cancel := context.WithCancel(ctx)
@@ -341,6 +395,7 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 			}
 			continue
 		}
+		ej.completeOne(item.id, item.result)
 		results[item.id] = item.result
 		if onProgress != nil {
 			onProgress(len(results), total)

@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -89,7 +89,7 @@ func endpointInCooldown(url string) bool {
 // ONLY when jobs remain and no healthy endpoint is left — per the locked
 // decision in PLAN.md, that error carries no per-file meaning and callers
 // must write nothing.
-func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc) (map[string]BatchResult, error) {
+func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc, journal ResultJournal) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -128,7 +128,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 	// One endpoint: byte-for-byte the historical single-URL behaviour.
 	if len(eligible) == 1 {
 		g := probeByURL[eligible[0].URL]
-		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, jobs, onProgress)
+		results, err := transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, jobs, onProgress, journal)
 		if err != nil {
 			return nil, classifyTransport([]string{g.Endpoint.URL}, err)
 		}
@@ -197,7 +197,7 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 			ep := healthy[idx]
 			wg.Go(func() {
 				g := probeByURL[ep.URL]
-				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, ep.Concurrency, sub, progressFor())
+				r, err := transcribeRemoteWithHealth(ctx, ep.URL, g.Health, g.Probed, ep.Concurrency, sub, progressFor(), journal)
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}

@@ -1,5 +1,5 @@
 // file: internal/ai/resultjournal/journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 10003ffd-5d00-48b1-865a-37ac9f9ae826
 // last-edited: 2026-09-19
 
@@ -37,12 +37,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var journalLog = logger.New("resultjournal")
 
 // keyPrefix is the root of every journal key: aijournal:<kind>:<contentKey>.
 const keyPrefix = "aijournal:"
@@ -167,7 +169,7 @@ func (j *Journal) Prune(olderThan time.Duration) (int, error) {
 	for _, kv := range pairs {
 		var e Entry
 		if uerr := json.Unmarshal(kv.Value, &e); uerr != nil {
-			slog.Warn("resultjournal: deleting undecodable entry", "key", kv.Key, "err", uerr)
+			journalLog.Warn("deleting undecodable entry: key=%s err=%v", kv.Key, uerr)
 		} else if !e.At.Before(cutoff) {
 			continue
 		}

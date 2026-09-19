@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1ca890f2-8505-4a42-9d74-209cc293077e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package transcribe
 
@@ -66,7 +66,7 @@ func TestPoolOneEndpointDownSurvivorCompletes(t *testing.T) {
 	}
 	jobs := tempWAVJobs(t, 5)
 
-	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil)
+	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil, nil)
 	if err != nil {
 		t.Fatalf("expected nil error when a survivor remains, got: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestPoolAllEndpointsDownTransportError(t *testing.T) {
 	}
 	jobs := tempWAVJobs(t, 3)
 
-	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil)
+	results, err := transcribePool(context.Background(), endpoints, nil, jobs, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error with all endpoints down, got results: %v", results)
 	}

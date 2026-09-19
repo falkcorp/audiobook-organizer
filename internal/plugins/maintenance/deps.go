@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -181,9 +181,17 @@ type opsLinkStore interface {
 // took it to ten declared entries, over the interfacebloat limit of 8. The name
 // is retained as their composition so the method set stays byte-identical and
 // no consumer moves — the same regrouping opsBookFileWriter took on 2026-08-24.
+//
+// database.RawKVStore (SetRaw/GetRaw/DeleteRaw/ScanPrefix) backs the AI result
+// journal (internal/ai/resultjournal) that transcribe-book-intros builds from
+// the run's store. It is on the interface rather than reached by a capability
+// type assertion because the prod ops store is a wrapper, and an assertion for
+// a method the wrapper does not forward misses silently; a compile-time method
+// set cannot.
 type opsHousekeeping interface {
 	opsRecordsAndQueue
 	opsSystemPreferences
+	database.RawKVStore
 }
 
 // opsRecordsAndQueue is opsHousekeeping's original method set.
@@ -235,7 +243,7 @@ type opsPeopleStore interface {
 	opsNarratorStore
 }
 
-// OpsStore is the 57 methods the maintenance ops need -- what they call directly
+// OpsStore is the 61 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
