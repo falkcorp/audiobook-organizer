@@ -1,5 +1,6 @@
 // file: internal/readstatus/readstatus_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-09-19
 // guid: 9e2a8c4d-5b1f-4f70-a7c6-2d8e0f1b9a57
 
 package readstatus
@@ -20,6 +21,12 @@ func setupReadTestStore(t *testing.T) database.Store {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+
+	// The owner book must exist: book_file writers refuse rows whose book
+	// is missing (never orphan a book_file row).
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Read Status Book", FilePath: "/tmp/b1"}); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
 
 	for i, segID := range []string{"s1", "s2", "s3"} {
 		if err := store.CreateBookFile(&database.BookFile{
