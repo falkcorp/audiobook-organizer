@@ -1,7 +1,7 @@
 // file: internal/fingerprint/wholefile.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package fingerprint
 
@@ -235,9 +235,11 @@ func middleSliceFrames(fp []byte) []byte {
 	return fp[start:end]
 }
 
-// canonical base64 chromaprint string (with the standard 4-byte
-// version-1 header). Useful when interoperating with code paths that still
-// expect the base64 form, including potential online AcoustID lookup.
+// EncodeWholeFingerprint encodes little-endian frames in the app's
+// UNCOMPRESSED storage form: base64 of a chromaprint header with frame count
+// 0 (algorithm 1) followed by the frames. decodeAnyFingerprint reads it back.
+// It is not what fpcalc prints and the AcoustID web service rejects it; use
+// EncodeCompressedFingerprint for that.
 func EncodeWholeFingerprint(raw []byte) string {
 	if len(raw) == 0 {
 		return ""

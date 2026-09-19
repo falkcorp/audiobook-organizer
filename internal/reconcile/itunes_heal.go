@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-19
 
@@ -456,7 +456,16 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 			durationSec = int(wf.DurationSec)
 		}
 
-		encoded := fingerprint.EncodeWholeFingerprint(rawFP)
+		// AcoustID's lookup needs Chromaprint's compressed form, not the
+		// app's uncompressed EncodeWholeFingerprint storage form.
+		encoded, encErr := fingerprint.EncodeCompressedFingerprint(rawFP)
+		if encErr != nil {
+			if failures != nil {
+				n := failures.acoustidLookupFailed.Add(1)
+				warnRateLimited(n, "itunes-heal: stored fingerprint not encodable for AcoustID", "path", path, "err", encErr)
+			}
+			continue
+		}
 		result, err := ac.Lookup(ctx, encoded, durationSec)
 		if err != nil || result.Title == "" {
 			if failures != nil {

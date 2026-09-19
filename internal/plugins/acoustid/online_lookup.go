@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
-// last-edited: 2026-08-20
+// last-edited: 2026-09-19
 
 package acoustid
 
@@ -204,10 +204,17 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 			// honest and the file gets retried on the next pass.
 			lerr = hydrateErr
 		} else {
-			// Encode raw bytes to the canonical chromaprint base64+header form
-			// that AcoustID expects.
-			fpStr := fingerprint.EncodeWholeFingerprint(raw)
-			res, lerr = client.Lookup(ctx, fpStr, c.dur)
+			// AcoustID's lookup takes Chromaprint's COMPRESSED form (what
+			// fpcalc prints). Until 2026-09-19 this sent
+			// EncodeWholeFingerprint (the app's uncompressed storage form),
+			// which the service cannot match. Misaligned bytes are counted
+			// as a failed lookup, never sent.
+			fpStr, encErr := fingerprint.EncodeCompressedFingerprint(raw)
+			if encErr != nil {
+				lerr = encErr
+			} else {
+				res, lerr = client.Lookup(ctx, fpStr, c.dur)
+			}
 		}
 		now := time.Now().UTC()
 		if lerr != nil {
