@@ -1,7 +1,7 @@
 // file: internal/aidispatch/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5db963f7-aa57-4c7b-8ccf-3c7b1f34b8fb
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package aidispatch
 
@@ -29,6 +29,13 @@ var ErrNoCapableEndpoint = errors.New("no capable AI endpoint")
 // zero Capability can reach the dispatcher this way, since the constructor is
 // unexported, so this is always a programming error.
 var ErrUnknownCapability = errors.New("unregistered AI capability")
+
+// ErrEmbedModelNotPinned means an embedding call was made without
+// WithPinnedModel. Embedding endpoints are interchangeable only when they
+// serve the SAME model, and spillover picks whichever endpoint has a free
+// slot, so an unpinned embed call could land vectors from two models in one
+// store. Call refuses it before contacting anything.
+var ErrEmbedModelNotPinned = errors.New("embedding call has no pinned model (use WithPinnedModel)")
 
 // Refusal is one endpoint the dispatcher considered and why it said no.
 type Refusal struct {

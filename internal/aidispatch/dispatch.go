@@ -1,5 +1,5 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
 // last-edited: 2026-09-19
 
@@ -97,6 +97,7 @@ type Dispatcher struct {
 	attemptTimeout map[string]time.Duration
 	pinnedModel    map[string]string
 	attribution    *Attribution
+	localOnly      bool
 
 	logMu      sync.Mutex
 	lastNoCape map[string]time.Time
@@ -198,6 +199,9 @@ func (d *Dispatcher) refuse(ep Endpoint, spec Spec) string {
 	}
 	if len(ep.Capabilities) == 0 {
 		return "no capabilities ticked (default-deny)"
+	}
+	if d.localOnly && EndpointLocality(ep) == LocalityCloud {
+		return "cloud endpoint excluded: this call is local-only"
 	}
 	if !slices.Contains(ep.Capabilities, id) {
 		if slices.ContainsFunc(ep.Capabilities, func(s string) bool { return strings.Contains(s, "*") }) {
@@ -324,6 +328,9 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 	if !ok {
 		return zero, fmt.Errorf("%w: %q", ErrUnknownCapability, c.id)
 	}
+	if spec.Kind == KindEmbed && d.pinnedModel[c.id] == "" {
+		return zero, fmt.Errorf("%w: capability %s", ErrEmbedModelNotPinned, c.id)
+	}
 	cands, refusals := d.candidates(spec)
 	if len(cands) == 0 {
 		noCapableTotal.WithLabelValues(c.id).Inc()
@@ -403,12 +410,18 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		if t := d.attemptTimeout[c.id]; t > 0 {
 			attemptCtx, cancel = context.WithTimeout(ctx, t)
 		}
-		inflightGauge.WithLabelValues(ep.ID).Inc()
 		start := time.Now()
-		res, err := fn(attemptCtx, Target{Endpoint: ep, Capability: c, Model: model})
-		inflightGauge.WithLabelValues(ep.ID).Dec()
-		cancel()
-		release()
+		// One closure per attempt so the slot, the gauge and the attempt
+		// context are released by defer even if fn panics. Sequential
+		// releases after fn leaked the slot on a panic, and a concurrency-1
+		// endpoint then refused every later call for the life of the process.
+		res, err := func() (T, error) {
+			defer release()
+			defer cancel()
+			inflightGauge.WithLabelValues(ep.ID).Inc()
+			defer inflightGauge.WithLabelValues(ep.ID).Dec()
+			return fn(attemptCtx, Target{Endpoint: ep, Capability: c, Model: model})
+		}()
 
 		class := Classify(ctx, err)
 		requestsTotal.WithLabelValues(c.id, ep.ID, class.String()).Inc()

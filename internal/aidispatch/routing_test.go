@@ -1,5 +1,5 @@
 // file: internal/aidispatch/routing_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bcb13a89-88a9-4712-96a9-77be75c40ec3
 // last-edited: 2026-09-19
 
@@ -158,5 +158,80 @@ func TestCall_AttributionCounters(t *testing.T) {
 	}
 	if got := attr.Snapshot("never"); got.Requests != 0 || !got.LastUsed.IsZero() {
 		t.Fatalf("unused endpoint = %+v, want zero", got)
+	}
+}
+
+func TestEndpointLocality(t *testing.T) {
+	cases := []struct {
+		url, authRef string
+		proto        Protocol
+		want         Locality
+	}{
+		{"http://127.0.0.1:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://[::1]:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://localhost:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://192.168.1.20:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://10.0.0.5/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://100.101.1.2/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://mac-studio:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"http://mac-studio.local:11434/v1", "", ProtocolOpenAICompat, LocalityLocal},
+		{"", "", ProtocolLocalProcess, LocalityLocal},
+		{"https://api.openai.com/v1", "", ProtocolOpenAICompat, LocalityCloud},
+		{"https://8.8.8.8/v1", "", ProtocolOpenAICompat, LocalityCloud},
+		{"http://127.0.0.1:9999/v1", "openai_api_key", ProtocolOpenAICompat, LocalityCloud},
+		{"::not a url", "", ProtocolOpenAICompat, LocalityCloud},
+		{"", "", ProtocolOpenAICompat, LocalityCloud},
+	}
+	for _, tc := range cases {
+		got := EndpointLocality(Endpoint{URL: tc.url, AuthRef: tc.authRef, Protocol: tc.proto})
+		if got != tc.want {
+			t.Errorf("EndpointLocality(%q, auth_ref=%q, %s) = %s, want %s", tc.url, tc.authRef, tc.proto, got, tc.want)
+		}
+	}
+}
+
+func TestCall_LocalOnlyRefusesCloud(t *testing.T) {
+	fp := LLMFilenameParse.ID()
+	cloud := chatEP("cloud", 1, fp)
+	cloud.URL, cloud.AuthRef = "https://api.openai.com/v1", "openai_api_key"
+	local := chatEP("local", 5, fp)
+	local.URL = "http://127.0.0.1:11434/v1"
+	d := isolated([]Endpoint{cloud, local}, WithLocalOnly())
+	cands, refusals, _ := d.Candidates(LLMFilenameParse)
+	if len(cands) != 1 || cands[0].ID != "local" || len(refusals) != 1 || !strings.Contains(refusals[0].Reason, "local-only") {
+		t.Fatalf("cands %v refusals %+v", ids(cands), refusals)
+	}
+}
+
+// FIX 2: a panicking fn must not leak its endpoint slot or in-flight gauge.
+func TestCall_PanicInFnReleasesSlot(t *testing.T) {
+	fp := LLMFilenameParse.ID()
+	one := chatEP("one", 1, fp)
+	one.Concurrency = 1
+	d := isolated([]Endpoint{one})
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = Call(context.Background(), d, LLMFilenameParse, func(context.Context, Target) (int, error) {
+			panic("boom")
+		})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := Call(ctx, d, LLMFilenameParse, func(context.Context, Target) (int, error) { return 1, nil }); err != nil {
+		t.Fatalf("after a panic the concurrency-1 endpoint could not be acquired: %v", err)
+	}
+}
+
+// FIX 4: embedding work must be pinned to a model, or spillover could mix
+// vector spaces. Call refuses an unpinned KindEmbed call.
+func TestCall_EmbedRequiresPinnedModel(t *testing.T) {
+	d := isolated([]Endpoint{chatEP("e", 1, EmbedText.ID())})
+	called := false
+	_, err := Call(context.Background(), d, EmbedText, func(context.Context, Target) (int, error) {
+		called = true
+		return 0, nil
+	})
+	if !errors.Is(err, ErrEmbedModelNotPinned) || called {
+		t.Fatalf("err = %v, called = %v; want ErrEmbedModelNotPinned and no call", err, called)
 	}
 }
