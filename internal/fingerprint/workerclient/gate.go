@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/gate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 35b498ed-d496-4677-81eb-adf09304d580
 // last-edited: 2026-09-19
 
@@ -200,7 +200,18 @@ func (w *worker) checkCalibrationFiles(cfs []workerapi.CalibrationFile) ([]strin
 // the same frame count. Any difference, however small, stops the worker:
 // prints that are merely similar would be stored as if the server had made
 // them.
+//
+// A drain (w.stop) cancels the cuts and returns errDrained.
 func (w *worker) parity(ctx context.Context, cfs []workerapi.CalibrationFile, paths []string, windowSet string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-w.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	var mu sync.Mutex
 	var problems []string
 	g, gctx := errgroup.WithContext(ctx)
@@ -233,6 +244,9 @@ func (w *worker) parity(ctx context.Context, cfs []workerapi.CalibrationFile, pa
 		}
 	}
 	_ = g.Wait()
+	if w.stopping() {
+		return errDrained
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

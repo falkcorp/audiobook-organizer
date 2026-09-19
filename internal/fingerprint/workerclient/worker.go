@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/worker.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 201f885e-8d5c-40a3-8022-a6a19631e9d9
 // last-edited: 2026-09-19
 
@@ -15,6 +15,8 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,9 +34,10 @@ import (
 
 var log = logger.New("fp-worker")
 
-// notFoundRecheckAfter: this many not_found jobs in a row re-run the mount
-// checks (design (d2) "Re-checks"): a vanished mount looks like a run of
-// missing files.
+// notFoundRecheckAfter: this many jobs in a row that fail on the mount
+// (not_found, or an I/O error such as EIO/ESTALE/ETIMEDOUT) re-run the mount
+// checks (design (d2) "Re-checks"): a vanished or flapping mount looks like a
+// run of missing or unreadable files.
 const notFoundRecheckAfter = 20
 
 // resultBatchMax caps the results in one POST (the server refuses more than
@@ -43,6 +46,12 @@ const resultBatchMax = 100
 
 // bodyMargin is kept free under the server's body cap for the envelope.
 const bodyMargin = 256 << 10
+
+// maxPostAttempts is how many times one results batch is tried.
+const maxPostAttempts = 5
+
+// errDrained: a drain arrived during the startup gate; Run returns nil.
+var errDrained = errors.New("fp-worker: drained")
 
 // maxErrorLen bounds a result's error text.
 const maxErrorLen = 512
@@ -58,11 +67,13 @@ type worker struct {
 	renewEvery    time.Duration
 	maxLeases     int
 
-	sem      chan struct{}
-	queued   atomic.Int64 // leased jobs not started yet
-	wake     chan struct{}
-	nfStreak atomic.Int64
-	recheckC chan struct{}
+	sem    chan struct{}
+	queued atomic.Int64 // leased jobs not started yet
+	wake   chan struct{}
+	// badStreak counts consecutive jobs that failed on the mount itself
+	// (not_found, or an I/O error); see notFoundRecheckAfter.
+	badStreak atomic.Int64
+	recheckC  chan struct{}
 
 	stopOnce sync.Once
 	stop     chan struct{} // closed when draining begins
@@ -167,6 +178,10 @@ func Run(ctx context.Context, drain <-chan struct{}, cfg Config) error {
 	}
 	w.calib = cfs
 	if err := w.parity(ctx, cfs, paths, hello.WindowSet); err != nil {
+		if errors.Is(err, errDrained) {
+			log.Info("drained during the parity gate; nothing was leased")
+			return nil
+		}
 		return err
 	}
 	nWin := 0
@@ -560,7 +575,7 @@ func encodedSize(r workerapi.JobResult) int {
 // hard stop cuts it short.
 func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.JobResult) {
 	req := workerapi.ResultsRequest{WorkerID: w.cfg.WorkerID, LeaseID: ls.id, Results: batch}
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; ; attempt++ {
 		resp, st, err := w.api.results(ctx, req)
 		if err == nil {
 			w.countStatuses(ls.id, resp.Statuses)
@@ -586,6 +601,11 @@ func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.Job
 			log.Warn("lease %s: the window backfill ended; %d results dropped (the server re-plans them)", ls.id, len(batch))
 			return
 		}
+		if attempt == maxPostAttempts-1 {
+			log.Error("lease %s: gave up posting %d results after %d attempts (%s); the lease will expire and the server re-queues them",
+				ls.id, len(batch), maxPostAttempts, describeWait(st, err))
+			return
+		}
 		d := w.backoff(attempt)
 		log.Warn("lease %s: posting %d results failed (%s); retrying in %s", ls.id, len(batch), describeWait(st, err), d.Round(time.Millisecond))
 		t := time.NewTimer(d)
@@ -596,7 +616,6 @@ func (w *worker) post(ctx context.Context, ls *leaseState, batch []workerapi.Job
 			return
 		}
 	}
-	log.Error("lease %s: gave up posting %d results; the lease will expire and the server re-queues them", ls.id, len(batch))
 }
 
 func (w *worker) countStatuses(leaseID string, sts []workerapi.JobStatus) {
@@ -668,36 +687,40 @@ func (w *worker) process(ctx context.Context, job workerapi.Job) workerapi.JobRe
 	}
 	p, err := w.resolve(mount, string(relB))
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			if w.nfStreak.Add(1) > notFoundRecheckAfter {
-				w.nfStreak.Store(0)
-				select {
-				case w.recheckC <- struct{}{}:
-				default:
-				}
-			}
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			w.mountTrouble()
 			return fail(workerapi.OutcomeNotFound, "not found: "+err.Error())
+		case errors.Is(err, pathutil.ErrBadRelPath), errors.Is(err, pathutil.ErrEscapesRoot):
+			return fail(workerapi.OutcomeRejected, "path: "+err.Error())
+		default:
+			// EIO, ESTALE, ETIMEDOUT...: the mount, not the file. Re-queue
+			// (a timeout is not a verdict and does not send the file to the
+			// server lane on the first occurrence).
+			w.mountTrouble()
+			return fail(workerapi.OutcomeTimeout, "i/o: "+err.Error())
 		}
-		return fail(workerapi.OutcomeRejected, "path: "+err.Error())
 	}
-	w.nfStreak.Store(0)
 
 	// Design (d2) step 5: open read-only and fstat; the job is refused as
 	// stale unless the size and mtime are exactly the server's. This is also
 	// what keeps the NFC/NFD fallback in resolve from ever fingerprinting a
 	// different file under this job's ref.
-	f, err := os.Open(p)
+	f, err := w.cfg.openFile(p)
 	if err != nil {
+		w.mountTrouble()
 		if errors.Is(err, fs.ErrNotExist) {
 			return fail(workerapi.OutcomeNotFound, "not found: "+err.Error())
 		}
-		return fail(workerapi.OutcomeRejected, "open: "+err.Error())
+		return fail(workerapi.OutcomeTimeout, "i/o: open: "+err.Error())
 	}
 	fi, err := f.Stat()
 	_ = f.Close()
 	if err != nil {
-		return fail(workerapi.OutcomeRejected, "fstat: "+err.Error())
+		w.mountTrouble()
+		return fail(workerapi.OutcomeTimeout, "i/o: fstat: "+err.Error())
 	}
+	w.badStreak.Store(0)
 	if !fi.Mode().IsRegular() {
 		return fail(workerapi.OutcomeRejected, "path: not a regular file")
 	}
@@ -725,8 +748,30 @@ func (w *worker) process(ctx context.Context, job workerapi.Job) workerapi.JobRe
 			RawB64:     base64.StdEncoding.EncodeToString(wp.Raw),
 		})
 	}
+	// Re-stat after the cut: a file rewritten or replaced while ffmpeg read
+	// it gives a print of neither version.
+	after, err := os.Stat(p)
+	switch {
+	case err != nil:
+		return fail(workerapi.OutcomeTimeout, "i/o: stat after cut: "+err.Error())
+	case !os.SameFile(fi, after) || after.Size() != fi.Size() || !after.ModTime().Equal(fi.ModTime()):
+		return fail(workerapi.OutcomeStale, fmt.Sprintf("file changed while it was cut (size/mtime %d/%d -> %d/%d)",
+			fi.Size(), fi.ModTime().Unix(), after.Size(), after.ModTime().Unix()))
+	}
 	res.Outcome = workerapi.OutcomeOK
 	return res
+}
+
+// mountTrouble counts a job that failed on the mount itself; a long enough
+// run asks recheckLoop to re-verify the mount and calibration files.
+func (w *worker) mountTrouble() {
+	if w.badStreak.Add(1) > notFoundRecheckAfter {
+		w.badStreak.Store(0)
+		select {
+		case w.recheckC <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // cutWithRetry cuts a window, retrying once after a transient failure.
@@ -766,44 +811,86 @@ func classifyCutError(err error) string {
 // resolve maps a root-relative path onto the mount (pathutil.JoinRoot:
 // validated, symlinks resolved, containment re-checked).
 //
-// The exact bytes always win. Only when they do not exist is the Unicode
-// NFC or NFD spelling of the same name tried, because a Mac client can see a
-// name in a different normalization than the server's ZFS stored it. Design
+// The exact bytes always win. Only when they do not exist is the path looked
+// up component by component, each component taking its exact bytes if they
+// exist and otherwise its NFC or NFD spelling (unicodeAlternatePath), because
+// a Mac client can see a name in a different normalization than the server's
+// ZFS stored it, and a directory and the file in it need not agree. Design
 // (d2) says the worker never normalizes, and on a byte-preserving share an
 // NFC and an NFD name are two different files; the fallback is safe only
-// because (1) it is never consulted when the exact name exists, so each of
-// two coexisting spellings resolves to itself, and (2) process fstat-checks
+// because (1) it is never consulted when the exact path exists, and a
+// component's exact bytes are preferred when they exist, so each of two
+// coexisting spellings resolves to itself, and (2) process fstat-checks
 // whatever it opened against the job's size and mtime and answers stale on
 // any difference, so a different file reached through the alternate spelling
 // is never fingerprinted under this job's ref. not_found is reported only
 // when no spelling exists.
 func (w *worker) resolve(mount, rel string) (string, error) {
-	p, err := pathutil.JoinRoot(mount, rel)
+	p, err := w.cfg.joinRoot(mount, rel)
 	if err == nil || !errors.Is(err, fs.ErrNotExist) {
 		return p, err
 	}
-	for _, alt := range unicodeAlternates(rel) {
-		p2, err2 := pathutil.JoinRoot(mount, alt)
-		if err2 == nil {
-			return p2, nil
-		}
-		if !errors.Is(err2, fs.ErrNotExist) {
-			return "", err2
-		}
+	alt, ok, aerr := unicodeAlternatePath(mount, rel)
+	if aerr != nil {
+		return "", aerr
 	}
-	return "", err
+	if !ok {
+		return "", err
+	}
+	return w.cfg.joinRoot(mount, alt)
 }
 
-// unicodeAlternates returns rel's NFC and NFD spellings that differ from it.
-// A name that is not valid UTF-8 has none.
-func unicodeAlternates(rel string) []string {
-	if !utf8.ValidString(rel) {
-		return nil
+// unicodeAlternatePath looks rel up one component at a time. Each
+// component tries its exact bytes first and then its NFC and NFD spellings,
+// backtracking when a choice leads nowhere (a directory can exist in both
+// forms with the file under only one of them), so a directory and a file
+// stored in different forms are both found. ok is false when no combination
+// exists, or when the only one found is rel itself. A non-ENOENT error while
+// looking is returned as is (the mount, not the name). A name that is not
+// valid UTF-8 has no alternates. The caller still runs the result through
+// JoinRoot (containment) and process's size/mtime check. At most 3 spellings
+// per component are tried, so the search is bounded by 3^depth lstats, and
+// it runs only after the exact path was already missing.
+func unicodeAlternatePath(mount, rel string) (alt string, ok bool, err error) {
+	if !utf8.ValidString(rel) || pathutil.ValidateRel(rel) != nil {
+		return "", false, nil
 	}
-	var out []string
+	comps := strings.Split(rel, "/")
+	chosen := make([]string, len(comps))
+	var walk func(i int, dir string) (bool, error)
+	walk = func(i int, dir string) (bool, error) {
+		if i == len(comps) {
+			return true, nil
+		}
+		for _, cand := range componentSpellings(comps[i]) {
+			next := filepath.Join(dir, cand)
+			if _, lerr := os.Lstat(next); lerr != nil {
+				if errors.Is(lerr, fs.ErrNotExist) {
+					continue
+				}
+				return false, lerr
+			}
+			chosen[i] = cand
+			found, werr := walk(i+1, next)
+			if werr != nil || found {
+				return found, werr
+			}
+		}
+		return false, nil
+	}
+	found, err := walk(0, mount)
+	if err != nil || !found {
+		return "", false, err
+	}
+	alt = strings.Join(chosen, "/")
+	return alt, alt != rel, nil
+}
+
+// componentSpellings is c, then its NFC and NFD forms where they differ.
+func componentSpellings(c string) []string {
+	out := []string{c}
 	for _, f := range []norm.Form{norm.NFC, norm.NFD} {
-		alt := f.String(rel)
-		if alt != rel && (len(out) == 0 || out[0] != alt) {
+		if alt := f.String(c); !slices.Contains(out, alt) {
 			out = append(out, alt)
 		}
 	}

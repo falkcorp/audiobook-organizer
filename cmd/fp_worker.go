@@ -1,5 +1,5 @@
 // file: cmd/fp_worker.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 588cd98f-d5c3-478a-825f-809163a8edd3
 // last-edited: 2026-09-19
 
@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -64,7 +65,10 @@ Example:
     --key-file ~/.config/fp-worker/key --root libroot=/Volumes/library/audiobooks`,
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
-	RunE:         runFPWorker,
+	// fp-worker runs on another host in whatever directory it is started
+	// from: none of the app setup in initConfig applies to it.
+	Annotations: map[string]string{skipAppInitAnnotation: "true"},
+	RunE:        runFPWorker,
 }
 
 func init() {
@@ -87,7 +91,7 @@ func runFPWorker(cmd *cobra.Command, _ []string) error {
 	if fpwServer == "" {
 		return errors.New("fp-worker: --server is required")
 	}
-	key, err := workerclient.LoadAPIKey(fpwKeyFile, os.Getenv)
+	key, err := fpWorkerAPIKey(fpwKeyFile)
 	if err != nil {
 		return err
 	}
@@ -126,25 +130,13 @@ func runFPWorker(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// First signal drains; a second one stops at once.
 	drain := make(chan struct{})
+	done := make(chan struct{})
+	defer close(done)
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigs)
-	go func() {
-		select {
-		case <-sigs:
-		case <-ctx.Done():
-			return
-		}
-		close(drain)
-		select {
-		case <-sigs:
-			fmt.Fprintln(cmd.ErrOrStderr(), "fp-worker: second signal, stopping now")
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	go fpWorkerSignals(sigs, drain, done, cancel, fpWorkerHardStopGrace, os.Exit, cmd.ErrOrStderr())
 
 	return workerclient.Run(ctx, drain, workerclient.Config{
 		ServerURL:      fpwServer,
@@ -158,6 +150,49 @@ func runFPWorker(cmd *cobra.Command, _ []string) error {
 		HTTPClient:     hc,
 		AllowedFSTypes: fpwFSTypes,
 	})
+}
+
+// fpWorkerHardStopGrace is how long a second signal waits for Run to return
+// before the process exits regardless.
+const fpWorkerHardStopGrace = 10 * time.Second
+
+// fpWorkerAPIKey loads the key and removes it from this process's
+// environment, so no child process (ffmpeg, fpcalc) can inherit it.
+func fpWorkerAPIKey(keyFile string) (string, error) {
+	k, err := workerclient.LoadAPIKey(keyFile, os.Getenv)
+	_ = os.Unsetenv(workerclient.KeyEnvVar)
+	return k, err
+}
+
+// fpWorkerSignals handles SIGINT/SIGTERM. The first closes drain (graceful:
+// in-flight jobs finish and post, the rest are released). The second
+// cancels the hard context and, since a hung hard NFS mount can leave
+// goroutines stuck in Lstat/Open or ffmpeg in uninterruptible sleep where no
+// cancellation reaches them, calls exit(130) after grace if Run has not
+// returned by then. done is closed when Run returns.
+func fpWorkerSignals(sigs <-chan os.Signal, drain chan<- struct{}, done <-chan struct{}, cancel func(),
+	grace time.Duration, exit func(int), stderr io.Writer) {
+	select {
+	case <-sigs:
+	case <-done:
+		return
+	}
+	close(drain)
+	select {
+	case <-sigs:
+	case <-done:
+		return
+	}
+	fmt.Fprintf(stderr, "fp-worker: second signal: stopping now (forced exit in %s if jobs are stuck)\n", grace)
+	cancel()
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		fmt.Fprintln(stderr, "fp-worker: jobs did not stop in time; exiting (their leases expire on the server)")
+		exit(130)
+	case <-done:
+	}
 }
 
 // fpWorkerHTTPClient trusts the system roots plus caFile, if given.
@@ -177,5 +212,11 @@ func fpWorkerHTTPClient(caFile string) (*http.Client, error) {
 		}
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Transport: tr, Timeout: 2 * time.Minute}, nil
+	return &http.Client{
+		Transport: tr,
+		Timeout:   2 * time.Minute,
+		// Never follow a redirect: the request carries the bearer key, and
+		// the worker API never redirects. The 3xx comes back as the answer.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, nil
 }

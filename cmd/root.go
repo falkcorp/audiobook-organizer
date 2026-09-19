@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-09-12
+// last-edited: 2026-09-19
 
 package cmd
 
@@ -393,7 +393,16 @@ func Execute() error {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
+	// App setup runs as the root's PersistentPreRun rather than a
+	// cobra.OnInitialize hook, so it knows which command is running and can
+	// skip commands annotated skipAppInitAnnotation (fp-worker). No
+	// subcommand defines its own PersistentPreRun, so this one runs for all.
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		if cmd.Annotations[skipAppInitAnnotation] == "true" {
+			return
+		}
+		initConfig()
+	}
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.audiobook-organizer.yaml)")
 	rootCmd.PersistentFlags().StringVar(&rootDir, "dir", "", "root directory containing audiobooks")
@@ -507,6 +516,10 @@ broken tags or filename fallbacks without running a full scan.`,
 		return nil
 	},
 }
+
+// skipAppInitAnnotation marks a command that must not run initConfig: no
+// config file, no viper.AutomaticEnv, no playlist or database directories.
+const skipAppInitAnnotation = "audiobook-organizer/skip-app-init"
 
 func initConfig() {
 	// FIRST: record which flags the operator actually typed, before any config

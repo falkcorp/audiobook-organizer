@@ -1,5 +1,5 @@
 // file: internal/fingerprint/workerclient/workerclient_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f3c9a52-6f0e-4d7b-9a55-3d1e2b8c7a41
 // last-edited: 2026-09-19
 
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -850,15 +852,156 @@ func TestParseRootsAndServerURL(t *testing.T) {
 	}
 }
 
-func TestUnicodeAlternates(t *testing.T) {
+func TestComponentSpellings(t *testing.T) {
 	nfc := norm.NFC.String("Café")
-	if got := unicodeAlternates(nfc); len(got) != 1 || got[0] != norm.NFD.String(nfc) {
-		t.Errorf("alternates(NFC) = %q", got)
+	if got := componentSpellings(nfc); len(got) != 2 || got[0] != nfc || got[1] != norm.NFD.String(nfc) {
+		t.Errorf("spellings(NFC) = %q", got)
 	}
-	if got := unicodeAlternates("plain ascii"); len(got) != 0 {
-		t.Errorf("alternates(ascii) = %q", got)
+	if got := componentSpellings("plain ascii"); len(got) != 1 {
+		t.Errorf("spellings(ascii) = %q", got)
 	}
-	if got := unicodeAlternates("bad\xffbyte"); len(got) != 0 {
-		t.Errorf("alternates(invalid UTF-8) = %q", got)
+	if _, ok, err := unicodeAlternatePath(t.TempDir(), "bad\xffbyte"); ok || err != nil {
+		t.Errorf("invalid UTF-8 got an alternate: %v %v", ok, err)
+	}
+}
+
+// I/O failures on the mount (EIO, ESTALE, ETIMEDOUT) are not a verdict on
+// the file: they come back as timeout (re-queued, not sent to the server
+// lane) and count toward the mount re-check streak.
+func TestProcess_IOErrorsAreTimeoutAndTriggerRecheck(t *testing.T) {
+	e := newTestEnv(t)
+	fi := e.writeFile("a.mp3", []byte("abc"))
+	for _, c := range []struct {
+		name string
+		set  func(*Config)
+	}{
+		{"resolve", func(c *Config) {
+			c.joinRoot = func(string, string) (string, error) {
+				return "", &fs.PathError{Op: "lstat", Path: e.mount + "/a.mp3", Err: syscall.EIO}
+			}
+		}},
+		{"open", func(c *Config) {
+			c.openFile = func(p string) (*os.File, error) {
+				return nil, &fs.PathError{Op: "open", Path: p, Err: syscall.ESTALE}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.set(&e.cfg)
+			defer func() { e.cfg.joinRoot, e.cfg.openFile = nil, nil }()
+			w := newTestWorker(t, e)
+			for i := 0; i <= notFoundRecheckAfter; i++ {
+				res := w.process(context.Background(), e.job("a.mp3", fi))
+				if res.Outcome != workerapi.OutcomeTimeout {
+					t.Fatalf("I/O error: %s (%s), want timeout", res.Outcome, res.Error)
+				}
+				if strings.Contains(res.Error, e.mount) {
+					t.Errorf("error leaks the mount path: %s", res.Error)
+				}
+			}
+			select {
+			case <-w.recheckC:
+			default:
+				t.Error("a run of I/O errors did not request a mount re-check")
+			}
+		})
+	}
+}
+
+// The file is re-statted after the cut: a change while cutting is stale.
+func TestProcess_FileChangedDuringCutIsStale(t *testing.T) {
+	e := newTestEnv(t)
+	p := filepath.Join(e.mount, "grow.mp3")
+	fi := e.writeFile("grow.mp3", []byte("before"))
+	e.cfg.Cut = func(ctx context.Context, path string, spec fingerprint.WindowSpec) (*fingerprint.WindowPrint, error) {
+		wp, err := fakeCut(ctx, path, spec)
+		f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+		_, _ = f.WriteString(" and after")
+		_ = f.Close()
+		return wp, err
+	}
+	w := newTestWorker(t, e)
+	if res := w.process(context.Background(), e.job("grow.mp3", fi)); res.Outcome != workerapi.OutcomeStale {
+		t.Errorf("file grew during the cut: %s (%s), want stale", res.Outcome, res.Error)
+	}
+}
+
+// After the last failed attempt post returns at once rather than sleeping.
+func TestPost_NoSleepAfterFinalAttempt(t *testing.T) {
+	var mu sync.Mutex
+	var last time.Time
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		last = time.Now()
+		mu.Unlock()
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+	e := newTestEnv(t)
+	e.cfg.ServerURL = ts.URL
+	// Four waits of 200-400 ms sit between the five attempts; a wait after
+	// the last attempt would add at least 200 ms more.
+	e.cfg.backoffMin, e.cfg.backoffMax = 400*time.Millisecond, 400*time.Millisecond
+	w := newTestWorker(t, e)
+	w.post(context.Background(), &leaseState{id: "L1"}, []workerapi.JobResult{{JobID: "J1", Outcome: workerapi.OutcomeOK}})
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 5 {
+		t.Fatalf("%d attempts, want 5", attempts)
+	}
+	if d := time.Since(last); d > 150*time.Millisecond {
+		t.Errorf("post returned %s after its last attempt: it slept after the final failure", d)
+	}
+}
+
+// A drain during the parity gate stops it and Run returns nil.
+func TestRun_DrainDuringParity(t *testing.T) {
+	e := newTestEnv(t)
+	inCut := make(chan struct{}, 10)
+	e.cfg.Cut = func(ctx context.Context, path string, spec fingerprint.WindowSpec) (*fingerprint.WindowPrint, error) {
+		inCut <- struct{}{}
+		<-ctx.Done()
+		return nil, fmt.Errorf("fingerprint window: %w", ctx.Err())
+	}
+	drain, done := e.start()
+	select {
+	case <-inCut:
+	case <-time.After(10 * time.Second):
+		t.Fatal("parity never started")
+	}
+	close(drain)
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Run = %v, want nil after a drain", r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parity gate ignored the drain")
+	}
+	if n := e.srv.leaseCallsSafe(); n != 0 {
+		t.Errorf("leased %d times after draining during parity", n)
+	}
+}
+
+// A directory and the file in it can be in different normalization forms;
+// resolution works component by component.
+func TestProcess_MixedFormComponents(t *testing.T) {
+	e := newTestEnv(t)
+	w := newTestWorker(t, e)
+	dirNFD := norm.NFD.String("Émile Zola")
+	fileNFC := norm.NFC.String("Thérèse Raquin.mp3")
+	content := []byte("mixed forms")
+	fi := e.writeFile(dirNFD+"/"+fileNFC, content)
+	for _, rel := range []string{
+		norm.NFC.String(dirNFD) + "/" + fileNFC,                  // all NFC
+		dirNFD + "/" + norm.NFD.String(fileNFC),                  // all NFD
+		norm.NFC.String(dirNFD) + "/" + norm.NFD.String(fileNFC), // both flipped
+	} {
+		res := w.process(context.Background(), e.job(rel, fi))
+		if res.Outcome != workerapi.OutcomeOK {
+			t.Errorf("%q: %s (%s)", rel, res.Outcome, res.Error)
+		}
 	}
 }
