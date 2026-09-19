@@ -1,7 +1,7 @@
 // file: internal/ai/openai_batch.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package ai
 
@@ -19,13 +19,30 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// batchMetadata returns standard metadata tags for OpenAI batch creation.
-func batchMetadata(batchType string) shared.Metadata {
-	return shared.Metadata{
-		"project": "audiobook-organizer",
-		"service": "ao-metadata-batch",
-		"type":    batchType,
+// Batch metadata keys that name the local record a batch belongs to. They are
+// written at CreateBatch time so a batch whose id never reached the store (the
+// process died between OpenAI accepting the batch and the local write that
+// records its id) can still be matched back to its owner from a batch listing.
+const (
+	// BatchMetaScanID is the ai.author-scan scan id that submitted the batch.
+	BatchMetaScanID = "scan_id"
+	// BatchMetaScanPhase is the scan phase type ("groups_scan", "full_scan").
+	BatchMetaScanPhase = "scan_phase"
+)
+
+// batchMetadata returns standard metadata tags for OpenAI batch creation, plus
+// any caller-supplied owner keys. The standard keys always win: an extra
+// "project" or "type" would hide the batch from ListProjectBatches or misroute
+// it in the poller.
+func batchMetadata(batchType string, extra map[string]string) shared.Metadata {
+	md := shared.Metadata{}
+	for k, v := range extra {
+		md[k] = v
 	}
+	md["project"] = "audiobook-organizer"
+	md["service"] = "ao-metadata-batch"
+	md["type"] = batchType
+	return md
 }
 
 // BatchInfo holds information about a project-tagged OpenAI batch.
@@ -36,6 +53,9 @@ type BatchInfo struct {
 	OutputFileID  string
 	ErrorFileID   string
 	RequestCounts RequestCounts
+	// Metadata is the batch's full metadata map, including the owner keys
+	// (aijobs.MetadataJobIDKey, BatchMetaScanID, ...) set at creation.
+	Metadata map[string]string
 }
 
 // RequestCounts holds batch request count information.
@@ -66,8 +86,9 @@ func (p *OpenAIParser) UploadBatchFileBytes(ctx context.Context, data []byte) (s
 	return p.UploadBatchFile(ctx, bytes.NewReader(data))
 }
 
-// CreateBatchWithMetadata creates a batch with custom metadata tags.
-func (p *OpenAIParser) CreateBatchWithMetadata(ctx context.Context, fileID string, batchType string) (string, error) {
+// CreateBatchWithMetadata creates a batch tagged with the project metadata,
+// batchType, and extra owner keys (nil for none).
+func (p *OpenAIParser) CreateBatchWithMetadata(ctx context.Context, fileID string, batchType string, extra map[string]string) (string, error) {
 	if !p.enabled {
 		return "", fmt.Errorf("OpenAI parser is not enabled")
 	}
@@ -76,7 +97,7 @@ func (p *OpenAIParser) CreateBatchWithMetadata(ctx context.Context, fileID strin
 		InputFileID:      fileID,
 		Endpoint:         openai.BatchNewParamsEndpointV1ChatCompletions,
 		CompletionWindow: openai.BatchNewParamsCompletionWindow24h,
-		Metadata:         batchMetadata(batchType),
+		Metadata:         batchMetadata(batchType, extra),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create batch: %w", err)
@@ -103,7 +124,12 @@ func (p *OpenAIParser) ListProjectBatches(ctx context.Context) ([]BatchInfo, err
 		if b.Metadata == nil || b.Metadata["project"] != "audiobook-organizer" {
 			continue
 		}
+		md := make(map[string]string, len(b.Metadata))
+		for k, v := range b.Metadata {
+			md[k] = v
+		}
 		results = append(results, BatchInfo{
+			Metadata:     md,
 			ID:           b.ID,
 			Status:       string(b.Status),
 			Type:         b.Metadata["type"],
@@ -145,8 +171,9 @@ type BatchResponse struct {
 }
 
 // CreateBatchAuthorDedup creates a batch job for author dedup (full mode).
-// Returns the batch ID for polling.
-func (p *OpenAIParser) CreateBatchAuthorDedup(ctx context.Context, inputs []AuthorDiscoveryInput) (string, error) {
+// Returns the batch ID for polling. extra carries owner keys for the batch
+// metadata (nil for none).
+func (p *OpenAIParser) CreateBatchAuthorDedup(ctx context.Context, inputs []AuthorDiscoveryInput, extra map[string]string) (string, error) {
 	if !p.enabled {
 		return "", fmt.Errorf("OpenAI parser is not enabled")
 	}
@@ -216,7 +243,7 @@ Only include groups where you find actual duplicates or issues.`
 		InputFileID:      file.ID,
 		Endpoint:         openai.BatchNewParamsEndpointV1ChatCompletions,
 		CompletionWindow: openai.BatchNewParamsCompletionWindow24h,
-		Metadata:         batchMetadata("author_dedup"),
+		Metadata:         batchMetadata("author_dedup", extra),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create batch: %w", err)
@@ -313,8 +340,9 @@ func (p *OpenAIParser) DownloadBatchResults(ctx context.Context, outputFileID st
 }
 
 // CreateBatchAuthorReview creates a batch job for author dedup groups (groups mode).
-// Returns the batch ID for polling.
-func (p *OpenAIParser) CreateBatchAuthorReview(ctx context.Context, groups []AuthorDedupInput) (string, error) {
+// Returns the batch ID for polling. extra carries owner keys for the batch
+// metadata (nil for none).
+func (p *OpenAIParser) CreateBatchAuthorReview(ctx context.Context, groups []AuthorDedupInput, extra map[string]string) (string, error) {
 	if !p.enabled {
 		return "", fmt.Errorf("OpenAI parser is not enabled")
 	}
@@ -378,7 +406,7 @@ Return ONLY valid JSON: {"suggestions": [{"group_index": N, "action": "merge|spl
 		InputFileID:      file.ID,
 		Endpoint:         openai.BatchNewParamsEndpointV1ChatCompletions,
 		CompletionWindow: openai.BatchNewParamsCompletionWindow24h,
-		Metadata:         batchMetadata("author_review"),
+		Metadata:         batchMetadata("author_review", extra),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create batch: %w", err)

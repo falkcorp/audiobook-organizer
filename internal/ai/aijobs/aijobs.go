@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/aijobs.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 8231e2ae-fa34-4594-80fd-f0f9dc60bc3b
-// last-edited: 2026-07-03
+// last-edited: 2026-09-19
 
 package aijobs
 
@@ -10,19 +10,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/oklog/ulid/v2"
 )
+
+var log = logger.New("aijobs")
+
+// MetadataJobIDKey is the batch metadata key carrying the ai_jobs row id. It is
+// written at CreateBatch time so ReconcileOrphans can re-attach a batch whose
+// id never reached the job row.
+const MetadataJobIDKey = "ai_job_id"
 
 // BatchClient is the subset of internal/ai.OpenAIParser methods aijobs uses.
 // Defined as an interface so tests can inject fakes without depending on the real client.
 type BatchClient interface {
 	UploadBatchFile(ctx context.Context, data []byte) (string, error)
-	CreateBatchWithMetadata(ctx context.Context, fileID, batchType string) (string, error)
+	// CreateBatchWithMetadata creates the batch tagged with batchType plus the
+	// extra metadata keys (Submit passes MetadataJobIDKey).
+	CreateBatchWithMetadata(ctx context.Context, fileID, batchType string, extra map[string]string) (string, error)
 }
 
 // Deps is the runtime dependency set for Submit.
@@ -61,6 +70,12 @@ type RowResult struct {
 //  3. Apply the result (DB write, etc.), catching per-row errors into the returned slice
 //  4. Return (successCount, errorCount, rowErrors, fatalErr). A non-nil fatalErr means the
 //     whole batch could not be processed and the job row is marked failed.
+//
+// A callback must be idempotent. The job row is marked completed only after the
+// callback returns, so a process killed between the callback's writes and that
+// mark leaves the job "submitted", and the next Dispatch runs the callback again
+// on the same results. Dispatch never runs it for a job already completed or
+// failed, so that interrupted-apply replay is the only repeat a callback sees.
 type CompletionCallback func(ctx context.Context, itemsJSON []byte, results []RowResult) (successCount, errorCount int, rowErrors []database.AIJobRowError, fatalErr error)
 
 var (
@@ -138,7 +153,11 @@ func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 		_ = deps.Store.MarkAIJobFailed(jobID, fmt.Sprintf("upload: %v", err))
 		return jobID, err
 	}
-	batchID, err := deps.Client.CreateBatchWithMetadata(ctx, fileID, "aijobs")
+	// The job id rides in the batch metadata: if the process dies after OpenAI
+	// accepts the batch but before MarkAIJobSubmitted lands, the row is left
+	// pending with no batch id and ReconcileOrphans re-attaches it from a
+	// batch listing. Without it the paid batch's results are never applied.
+	batchID, err := deps.Client.CreateBatchWithMetadata(ctx, fileID, "aijobs", map[string]string{MetadataJobIDKey: jobID})
 	if err != nil {
 		_ = deps.Store.MarkAIJobFailed(jobID, fmt.Sprintf("create batch: %v", err))
 		return jobID, err
@@ -147,17 +166,45 @@ func Submit(ctx context.Context, deps Deps, req SubmitRequest) (string, error) {
 	if err := deps.Store.MarkAIJobSubmitted(jobID, batchID); err != nil {
 		return jobID, fmt.Errorf("aijobs.Submit: mark submitted: %w", err)
 	}
-	slog.Info("aijobs submitted job type batch items", "jobID", jobID, "reqType", req.Type, "batchID", batchID, "itemCount", req.ItemCount)
+	log.Info("submitted job %s type %s batch %s (%d items)", jobID, req.Type, batchID, req.ItemCount)
 	return jobID, nil
 }
+
+// terminalJobStatuses are the ai_jobs statuses Dispatch must never apply again.
+// Listed explicitly rather than as "anything but submitted": a job row read back
+// with an empty status is not evidence it was already applied.
+var terminalJobStatuses = map[string]bool{
+	"completed":             true,
+	"completed_with_errors": true,
+	"failed":                true,
+	"expired":               true,
+}
+
+// IsTerminalStatus reports whether a job in this status has been dispatched to
+// an outcome and must not be applied again.
+func IsTerminalStatus(status string) bool { return terminalJobStatuses[status] }
 
 // Dispatch is called by the BatchPoller when an aijobs batch completes.
 // It looks up the ai_jobs row, loads the payload, invokes the registered callback,
 // and records the outcome.
+//
+// A job already in a terminal status is a no-op that returns nil. The poller's
+// durable "handled" mark is written after Dispatch returns, so a restart in that
+// gap re-delivers the batch; the job row, marked first, is what stops the
+// results being applied a second time. Returning nil (not an error) lets the
+// poller record the batch as handled instead of retrying it every tick.
+//
+// "failed" is terminal too: a fatal callback error is recorded on the row and
+// surfaced in the jobs list rather than retried blind every poll, since the
+// callback may have applied part of the batch before failing.
 func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, results []RowResult) (err error) {
 	job, err := store.GetAIJobByBatchID(batchID)
 	if err != nil {
 		return fmt.Errorf("aijobs.Dispatch: lookup batch %s: %w", batchID, err)
+	}
+	if IsTerminalStatus(job.Status) {
+		log.Info("batch %s: job %s already %s, not applying again", batchID, job.ID, job.Status)
+		return nil
 	}
 
 	registryMu.RLock()
@@ -200,6 +247,64 @@ func Dispatch(ctx context.Context, store database.AIJobsStore, batchID string, r
 	if err := store.MarkAIJobCompleted(job.ID, status, successCount, errorCount, rowErrors); err != nil {
 		return fmt.Errorf("aijobs.Dispatch: mark completed: %w", err)
 	}
-	slog.Info("aijobs dispatched job type success errors", "jobID", job.ID, "jobType", job.Type, "successCount", successCount, "errorCount", errorCount)
+	log.Info("dispatched job %s type %s: %d succeeded, %d errors", job.ID, job.Type, successCount, errorCount)
 	return nil
+}
+
+// OrphanBatch is one listed OpenAI batch as ReconcileOrphans needs it.
+type OrphanBatch struct {
+	ID       string
+	Metadata map[string]string
+}
+
+// ReconcileOrphans re-attaches batches whose id never reached their job row.
+//
+// Submit creates the job row "pending", creates the OpenAI batch, then records
+// the batch id with MarkAIJobSubmitted. A process killed between the last two
+// steps leaves a pending row with no batch id while OpenAI runs (and bills) the
+// batch; Dispatch looks jobs up by batch id, so the results would never be
+// applied. Each batch carries its job id in metadata (MetadataJobIDKey), so for
+// every listed batch naming a job that is still pending without a batch id,
+// the id is attached here and the normal Dispatch path collects the results.
+//
+// Only pending rows are touched. A "failed" row with no batch id is left alone:
+// Submit's caller saw that failure and may already have resubmitted the same
+// items, and attaching the old batch would apply them twice.
+//
+// Returns the number of jobs attached. Per-batch errors are logged and skipped
+// so one bad row cannot block the rest; the returned error is the first one.
+func ReconcileOrphans(store database.AIJobsStore, batches []OrphanBatch) (int, error) {
+	attached := 0
+	var firstErr error
+	for _, b := range batches {
+		jobID := b.Metadata[MetadataJobIDKey]
+		if jobID == "" || b.ID == "" {
+			continue
+		}
+		job, err := store.GetAIJob(jobID)
+		if err != nil || job.ID == "" {
+			// A batch naming a job this store never had (another install
+			// sharing the OpenAI project, or a deleted row) is not ours.
+			continue
+		}
+		if job.BatchID != "" {
+			if job.BatchID != b.ID {
+				log.Warn("batch %s names job %s, which is already attached to batch %s; leaving it", b.ID, jobID, job.BatchID)
+			}
+			continue
+		}
+		if job.Status != "pending" {
+			continue
+		}
+		if err := store.MarkAIJobSubmitted(jobID, b.ID); err != nil {
+			log.Error("re-attach orphaned batch %s to job %s: %v", b.ID, jobID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		attached++
+		log.Warn("re-attached orphaned batch %s to job %s (its batch id was never recorded)", b.ID, jobID)
+	}
+	return attached, firstErr
 }

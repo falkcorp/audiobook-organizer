@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review_aijobs_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f3c4a8d-9b2e-4f6a-8c1d-2e5f9a1b3c7d
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package ai
 
@@ -131,7 +131,7 @@ func (f *fakeBatchClientForDedup) UploadBatchFile(ctx context.Context, data []by
 	f.lastJSONL = append([]byte(nil), data...)
 	return "file_dedup_test", nil
 }
-func (f *fakeBatchClientForDedup) CreateBatchWithMetadata(ctx context.Context, fileID, batchType string) (string, error) {
+func (f *fakeBatchClientForDedup) CreateBatchWithMetadata(ctx context.Context, fileID, batchType string, _ map[string]string) (string, error) {
 	f.createCalls++
 	return "batch_dedup_test", nil
 }

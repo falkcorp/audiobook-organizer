@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-09-07
+// last-edited: 2026-09-19
 
 package maintenance
 
@@ -126,7 +126,7 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, _ json.RawMessage, reporte
 	prog := sdk.NewProgress(reporter, maxPolls)
 	prog.Start(fmt.Sprintf("Submitting %d authors to OpenAI Batch API...", len(inputs)))
 
-	batchID, err := parser.CreateBatchAuthorDedup(ctx, inputs)
+	batchID, err := parser.CreateBatchAuthorDedup(ctx, inputs, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create batch: %w", err)
 	}

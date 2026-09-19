@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/integration_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 69ad37a4-c90e-4dc4-92a5-155b51f85263
-// last-edited: 2026-06-10
+// last-edited: 2026-09-19
 
 // NOTE(fable5 T022): Ported from NewSQLiteStore to NewPebbleStore.
 
@@ -106,7 +106,7 @@ func (f *fakeIntClient) UploadBatchFile(context.Context, []byte) (string, error)
 	}
 	return "file_int", nil
 }
-func (f *fakeIntClient) CreateBatchWithMetadata(context.Context, string, string) (string, error) {
+func (f *fakeIntClient) CreateBatchWithMetadata(context.Context, string, string, map[string]string) (string, error) {
 	if f.createErr != nil {
 		return "", f.createErr
 	}

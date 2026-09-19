@@ -1,26 +1,75 @@
 // file: internal/server/batch_poller_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: c9d0e1f2-a3b4-5678-cdef-9876543210ab
+// last-edited: 2026-09-19
 
 package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// mockBatchLister is a minimal mock for testing BatchPoller without a real OpenAI client.
-// We test the poller logic by calling Poll with a parser that has a custom ListProjectBatches.
-// Since ListProjectBatches is on *ai.OpenAIParser and not mockable directly, we test
-// the handler routing and dedup logic via the exported methods.
+// fakeBatchClient is a BatchClient serving a fixed listing and per-file results.
+type fakeBatchClient struct {
+	mu      sync.Mutex
+	batches []ai.BatchInfo
+	outputs map[string][]ai.BatchRawResult
+}
+
+func (f *fakeBatchClient) ListProjectBatches(context.Context) ([]ai.BatchInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ai.BatchInfo(nil), f.batches...), nil
+}
+
+func (f *fakeBatchClient) DownloadBatchRaw(_ context.Context, fileID string) ([]ai.BatchRawResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.outputs[fileID], nil
+}
+
+// crashJournalStore is a real PebbleStore whose next journal write can be made
+// to fail, standing in for a process killed after the handler returned but
+// before the handled mark landed.
+type crashJournalStore struct {
+	*database.PebbleStore
+	failNextJournal bool
+}
+
+func (c *crashJournalStore) SetRaw(key string, value []byte) error {
+	if c.failNextJournal {
+		c.failNextJournal = false
+		return errors.New("killed before handled mark")
+	}
+	return c.PebbleStore.SetRaw(key, value)
+}
+
+func newPollerTestStore(t *testing.T) *crashJournalStore {
+	t.Helper()
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	return &crashJournalStore{PebbleStore: ps}
+}
+
+func newTestPoller(t *testing.T, store database.OperationStore, client BatchClient) *BatchPoller {
+	t.Helper()
+	bp, err := NewBatchPoller(store, client)
+	require.NoError(t, err)
+	return bp
+}
 
 func TestBatchPollerRegisterAndRouting(t *testing.T) {
-	bp := NewBatchPoller(nil, nil)
+	bp := newTestPoller(t, newPollerTestStore(t), &fakeBatchClient{})
 
 	called := map[string]string{}
 	bp.RegisterHandler("author_dedup", func(_ context.Context, batchID, outputFileID string) error {
@@ -38,7 +87,7 @@ func TestBatchPollerRegisterAndRouting(t *testing.T) {
 }
 
 func TestBatchPollerProcessedTracking(t *testing.T) {
-	bp := NewBatchPoller(nil, nil)
+	bp := newTestPoller(t, newPollerTestStore(t), &fakeBatchClient{})
 
 	assert.False(t, bp.IsProcessed("batch_123"))
 
@@ -51,7 +100,7 @@ func TestBatchPollerProcessedTracking(t *testing.T) {
 }
 
 func TestBatchPollerHandlerError(t *testing.T) {
-	bp := NewBatchPoller(nil, nil)
+	bp := newTestPoller(t, newPollerTestStore(t), &fakeBatchClient{})
 
 	failCount := 0
 	bp.RegisterHandler("failing_type", func(_ context.Context, batchID, outputFileID string) error {

@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-09-15
+// last-edited: 2026-09-19
 
 package logger
 
@@ -38,7 +38,6 @@ var slogRatchet = map[string]int{
 	"internal/activity/relocate.go":                              6,
 	"internal/activity/sql_migration.go":                         7,
 	"internal/activity/sql_migration_report.go":                  2,
-	"internal/ai/aijobs/aijobs.go":                               2,
 	"internal/ai/dedup_review.go":                                2,
 	"internal/ai/embedding_client.go":                            4,
 	"internal/ai/openai_parser.go":                               2,

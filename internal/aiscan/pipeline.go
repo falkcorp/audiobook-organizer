@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline.go
-// version: 4.0.1
+// version: 4.1.0
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package aiscan
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -706,6 +707,17 @@ func (pm *PipelineManager) runFullScanRealtime(ctx context.Context, scanID int, 
 	pm.OnPhaseComplete(ctx, scanID, "full_scan")
 }
 
+// scanBatchOwner is the batch metadata naming the scan phase that owns a batch.
+// The phase row learns its batch id only after CreateBatch returns; if the
+// process dies in between, these keys are the only link from the paid OpenAI
+// batch back to the phase that submitted it.
+func scanBatchOwner(scanID int, phaseType string) map[string]string {
+	return map[string]string{
+		ai.BatchMetaScanID:    strconv.Itoa(scanID),
+		ai.BatchMetaScanPhase: phaseType,
+	}
+}
+
 func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, authors []database.Author) {
 	slog.Info("[AI Pipeline] Scan starting groups scan (batch)", "scanID", scanID)
 
@@ -731,7 +743,7 @@ func (pm *PipelineManager) runGroupsScanBatch(ctx context.Context, scanID int, a
 	_ = pm.scanStore.SavePhaseData(scanID, "groups_scan", inputJSON, nil, nil)
 
 	// Create the batch job
-	batchID, err := pm.parser.CreateBatchAuthorReview(ctx, inputs)
+	batchID, err := pm.parser.CreateBatchAuthorReview(ctx, inputs, scanBatchOwner(scanID, "groups_scan"))
 	if err != nil {
 		pm.failPhase(scanID, "groups_scan", fmt.Errorf("create batch: %w", err))
 		return
@@ -764,7 +776,7 @@ func (pm *PipelineManager) runFullScanBatch(ctx context.Context, scanID int, aut
 	_ = pm.scanStore.SavePhaseData(scanID, "full_scan", inputJSON, nil, nil)
 
 	// Create the batch job
-	batchID, err := pm.parser.CreateBatchAuthorDedup(ctx, inputs)
+	batchID, err := pm.parser.CreateBatchAuthorDedup(ctx, inputs, scanBatchOwner(scanID, "full_scan"))
 	if err != nil {
 		pm.failPhase(scanID, "full_scan", fmt.Errorf("create batch: %w", err))
 		return
