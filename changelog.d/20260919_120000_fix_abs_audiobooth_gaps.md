@@ -11,7 +11,9 @@
   discarded it. Both now apply each session. An out-of-date session only moves
   the saved position forward. A session that started after the server's latest
   position may move it backward, which covers re-listening while offline.
-  Sessions from before a progress reset are refused. A position far past the
+  After a progress reset, a session is refused only when its position was last
+  moved before the reset. Listening that continues on the same session after
+  the reset is kept. A position far past the
   end of the book is rejected and never marks the book finished.
 - **A read status you set by hand stays set.** Listening used to overwrite a
   manually chosen status (such as "abandoned") with a computed one.
@@ -20,8 +22,9 @@
   before the later write silently discarded the earlier one. Renaming a playlist
   to a name that is already taken now returns a conflict. It used to break the
   other playlist's lookup by name. Sending a playlist's or collection's full book list can reorder it or add to
-  it. A list that leaves out a book the playlist or collection currently holds is
-  refused with a conflict, because it may have been built before someone else
+  it. A list that leaves out a book the app is shown is refused with a conflict. A
+  hidden book, such as one deleted from the library, is kept and does not
+  block a reorder, because it may have been built before someone else
   added that book. Removing a book takes an explicit remove.
 - **Credentials in URLs are masked in the request log.** This covers values such
   as `?token=`.

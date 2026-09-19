@@ -538,7 +538,7 @@ func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
 		t.Fatalf("reset = %d %s", code, raw)
 	}
 	rows := localAll(t, w, map[string]any{"id": "pre-reset", "userId": w.userID, "libraryItemId": w.syncID,
-		"currentTime": 300.0, "startedAt": before})
+		"currentTime": 300.0, "startedAt": before, "updatedAt": before})
 	if rows[0]["success"] != false {
 		t.Fatalf("a pre-reset session was accepted: %v", rows)
 	}
@@ -552,7 +552,7 @@ func TestSessionLocalAll_RefusesSessionsFromBeforeAProgressReset(t *testing.T) {
 	w.seed.lib.mu.Unlock()
 	after := time.Now().Add(-time.Minute).UnixMilli()
 	localAll(t, w, map[string]any{"id": "post-reset", "userId": w.userID, "libraryItemId": w.syncID,
-		"currentTime": 30.0, "startedAt": after})
+		"currentTime": 30.0, "startedAt": after, "updatedAt": after})
 	if got := storedPosition(t, w); got != 30 {
 		t.Fatalf("a post-reset session did not apply: %v", got)
 	}
@@ -598,11 +598,11 @@ func TestSessionLocal_AppliesTheSession(t *testing.T) {
 
 // Re-review MEDIUM #3: fail-safe offline replay around resets and clock skew.
 
-// Re-review MEDIUM #1: while a reset tombstone exists, a session must PROVE
-// it started after the reset. Inside the tolerance window, with no startedAt,
-// or with a clock too far ahead to trust, it is refused — the stored position
-// is 0 after a reset, so forward-only would bring the discarded position back.
-// With no tombstone, a missing startedAt still falls back to forward-only.
+// While a reset tombstone exists, a session's POSITION must provably
+// post-date the reset (its updatedAt). Inside the tolerance window, with no
+// updatedAt, or with a clock too far ahead to trust, it is refused — the
+// stored position is 0 after a reset, so forward-only would bring the
+// discarded position back. With no tombstone, the fallback is forward-only.
 func TestSessionLocalAll_ResetRefusesSessionsNotProvablyAfterIt(t *testing.T) {
 	w := newWriteHarness(t)
 	w.patch(t, map[string]any{"currentTime": 3600.0})
@@ -610,9 +610,9 @@ func TestSessionLocalAll_ResetRefusesSessionsNotProvablyAfterIt(t *testing.T) {
 		t.Fatalf("reset = %d %s", code, raw)
 	}
 	for name, sess := range map[string]map[string]any{
-		"inside tolerance": {"startedAt": time.Now().Add(-90 * time.Second).UnixMilli()},
-		"no startedAt":     {},
-		"clock far ahead":  {"startedAt": time.Now().Add(time.Hour).UnixMilli()},
+		"inside tolerance": {"updatedAt": time.Now().Add(-90 * time.Second).UnixMilli()},
+		"no updatedAt":     {"startedAt": time.Now().Add(time.Hour).UnixMilli()},
+		"clock far ahead":  {"updatedAt": time.Now().Add(time.Hour).UnixMilli()},
 	} {
 		sess["id"], sess["userId"], sess["libraryItemId"], sess["currentTime"] = "s-"+name, w.userID, w.syncID, 3600.0
 		if rows := localAll(t, w, sess); rows[0]["success"] != false {
@@ -626,7 +626,49 @@ func TestSessionLocalAll_ResetRefusesSessionsNotProvablyAfterIt(t *testing.T) {
 	fresh := newWriteHarness(t) // no reset, no tombstone
 	localAll(t, fresh, map[string]any{"id": "nostart", "userId": fresh.userID, "libraryItemId": fresh.syncID, "currentTime": 90.0})
 	if got := storedPosition(t, fresh); got != 90 {
-		t.Fatalf("without a tombstone a missing startedAt must apply forward-only; position %v", got)
+		t.Fatalf("without a tombstone a session without timestamps must apply forward-only; position %v", got)
+	}
+}
+
+// Round-5 MEDIUM: AudioBooth REUSES its local session across a reset, so real
+// listening after a 10:00 reset arrives with startedAt 09:00. The position's
+// updatedAt is after the reset, so it must be accepted on both endpoints.
+func TestSessionLocal_ReusedSessionListeningAfterResetIsAccepted(t *testing.T) {
+	w := newWriteHarness(t)
+	w.patch(t, map[string]any{"currentTime": 3600.0})
+	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
+		t.Fatalf("reset = %d %s", code, raw)
+	}
+	// Age the tombstone to "10:00" so "10:30" is after reset + tolerance.
+	w.seed.lib.mu.Lock()
+	resetAt := time.Now().Add(-30 * time.Minute)
+	w.seed.lib.states[w.userID+"|"+w.bookID].ProgressResetAt = &resetAt
+	w.seed.lib.mu.Unlock()
+
+	code, _, raw := w.req(t, http.MethodPost, "/api/session/local", map[string]any{
+		"id": "reused", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 1800.0,
+		"startedAt": resetAt.Add(-time.Hour).UnixMilli(), "updatedAt": time.Now().UnixMilli()})
+	if code != http.StatusOK {
+		t.Fatalf("session/local = %d %s, want 200", code, raw)
+	}
+	if got := storedPosition(t, w); got != 1800 {
+		t.Fatalf("real post-reset listening on a reused session was dropped: position %v, want 1800", got)
+	}
+}
+
+// Round-5 MEDIUM: a refused session must not be answered 200 on
+// /api/session/local (that tells the app the listening was recorded).
+func TestSessionLocal_RefusedSessionIsNotReportedAsSuccess(t *testing.T) {
+	w := newWriteHarness(t)
+	w.patch(t, map[string]any{"currentTime": 300.0})
+	if code, _, raw := w.req(t, http.MethodDelete, "/api/me/progress/"+w.rowID(), nil); code != http.StatusOK {
+		t.Fatalf("reset = %d %s", code, raw)
+	}
+	code, _, raw := w.req(t, http.MethodPost, "/api/session/local", map[string]any{
+		"id": "pre", "userId": w.userID, "libraryItemId": w.syncID, "currentTime": 300.0,
+		"startedAt": time.Now().Add(-time.Hour).UnixMilli(), "updatedAt": time.Now().Add(-time.Hour).UnixMilli()})
+	if code != http.StatusConflict {
+		t.Fatalf("refused session answered %d %s, want 409", code, raw)
 	}
 }
 

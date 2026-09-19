@@ -339,3 +339,45 @@ func TestPlaylists_ResolveErrorFailsClosed(t *testing.T) {
 		t.Fatalf("a lookup error changed the stored list to %v", got)
 	}
 }
+
+// Round-5 HIGH: the omitted-member check must compare against what the app is
+// SHOWN. A playlist {A,B,X} with X deleted renders [A,B]; a reorder [B,A]
+// must apply (not 409 forever) and keep the hidden X.
+func TestWholeListUpdate_HiddenMemberDoesNotBlockReorder(t *testing.T) {
+	v := newVisFixture(t)
+	v.add("01AAAA0000000000000000000A", "A", true, "organized")
+	v.add("01BBBB0000000000000000000B", "B", true, "organized")
+	a, _ := v.lib.MintOrGetSyncID("01AAAA0000000000000000000A")
+	b, _ := v.lib.MintOrGetSyncID("01BBBB0000000000000000000B")
+	const deleted = "01DELETED00000000000000000" // never added to the library
+	stored := []string{"01AAAA0000000000000000000A", "01BBBB0000000000000000000B", deleted}
+	reorder := []map[string]any{{"libraryItemId": b}, {"libraryItemId": a}}
+
+	v.lists.lists = []database.UserPlaylist{{ID: "01PL", Name: "p", Type: database.UserPlaylistTypeStatic,
+		CreatedByUserID: "u1", Version: 1, BookIDs: slices.Clone(stored)}}
+	shown, _ := v.get(t, "/api/playlists/01PL")["items"].([]any)
+	if len(shown) != 2 {
+		t.Fatalf("precondition: the deleted member must be hidden; rendered %d items", len(shown))
+	}
+	if code, body := v.h.doAny(t, request{method: http.MethodPatch, path: "/api/playlists/01PL", headers: bearer(v.tok),
+		body: map[string]any{"items": reorder}}); code != http.StatusOK {
+		t.Fatalf("reorder of the shown set = %d %v, want 200", code, body)
+	}
+	want := []string{"01BBBB0000000000000000000B", "01AAAA0000000000000000000A", deleted}
+	if got := v.lists.lists[0].BookIDs; !slices.Equal(got, want) {
+		t.Fatalf("stored %v, want %v (reordered, hidden member kept)", got, want)
+	}
+
+	abscolGrantManage(t, v.h, "u1")
+	col, err := v.cols.CreateCollection(&database.Collection{Name: "c", Type: database.CollectionTypeStatic, BookIDs: slices.Clone(stored)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := v.h.doAny(t, request{method: http.MethodPatch, path: "/api/collections/" + col.ID, headers: bearer(v.tok),
+		body: map[string]any{"books": []string{b, a}}}); code != http.StatusOK {
+		t.Fatalf("collection reorder of the shown set = %d %v, want 200", code, body)
+	}
+	if got, _ := v.cols.GetCollection(col.ID); !slices.Equal(got.BookIDs, want) {
+		t.Fatalf("collection stored %v, want %v", got.BookIDs, want)
+	}
+}
