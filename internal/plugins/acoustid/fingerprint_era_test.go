@@ -1,11 +1,16 @@
 // file: internal/plugins/acoustid/fingerprint_era_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c1f3e76-4a2b-4d9e-9f05-b7e2a6c4d830
 // last-edited: 2026-09-19
 
 package acoustid
 
 import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,4 +102,79 @@ func makeEraSegment() string {
 		raw[i] = byte(i * 13)
 	}
 	return fingerprint.EncodeWholeFingerprint(raw)
+}
+
+// TestBackfill_ReFingerprintsLegacyRowsOnly: the nightly backfill must treat a
+// legacy-era raw print as not done (so it re-fingerprints it) and a
+// current-era print as done (so a resumed or repeated run never redoes it).
+// A book whose files are all current but whose signature is legacy still gets
+// its signature rebuilt.
+func TestBackfill_ReFingerprintsLegacyRowsOnly(t *testing.T) {
+	origAvail, origFn := fpcalcAvailable, fingerprintFileFn
+	t.Cleanup(func() { fpcalcAvailable, fingerprintFileFn = origAvail, origFn })
+	fpcalcAvailable = func() bool { return true }
+
+	dir := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	legacy := database.BookFile{ID: "legacy", BookID: "b1", FilePath: mk("a.mp3"),
+		AcoustIDFingerprint: []byte{1, 2, 3, 4}, AcoustIDFingerprintDurationSec: 120}
+	current := database.BookFile{ID: "current", BookID: "b1", FilePath: mk("b.mp3"),
+		AcoustIDFingerprint: []byte{1, 2, 3, 4}, AcoustIDFingerprintDurationSec: 120,
+		AcoustIDFPVersion: fingerprint.PrintEncodingVersion}
+
+	if !hasUsableFingerprint(current) {
+		t.Fatal("current-era print not treated as done: a rerun would redo it")
+	}
+	if hasUsableFingerprint(legacy) {
+		t.Fatal("legacy-era print treated as done: the backfill would never replace it")
+	}
+
+	var mu sync.Mutex
+	var ran []string
+	fingerprintFileFn = func(_ pluginStore, f database.BookFile, _ bool) fingerprintFileOutcome {
+		mu.Lock()
+		ran = append(ran, f.ID)
+		mu.Unlock()
+		return fingerprintOutcomeFingerprinted
+	}
+	for _, tc := range []struct {
+		name  string
+		files []database.BookFile
+		want  []string
+	}{
+		{"mixed", []database.BookFile{legacy, current}, []string{"legacy"}},
+		{"all_current", []database.BookFile{current}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ran = nil
+			oldSig := "legacy-sig" // no BookSigVersion: pre-fix signature
+			book := database.Book{ID: "b1", BookSigV1: &oldSig}
+			var sigTouched int
+			m := &database.MockStore{}
+			m.GetBookFilesFunc = func(string) ([]database.BookFile, error) { return tc.files, nil }
+			m.GetBookByIDFunc = func(string) (*database.Book, error) { cp := book; return &cp, nil }
+			m.ClearBookSignatureFunc = func(string) error { sigTouched++; return nil }
+			m.ModifyBookFunc = func(string, func(*database.Book) error) (*database.Book, error) {
+				sigTouched++
+				return &book, nil
+			}
+			p := &Plugin{store: m}
+			var tally backfillTally
+			if err := p.backfillBook(context.Background(), book, &tally, make(chan struct{}, 2), slog.New(slog.DiscardHandler)); err != nil {
+				t.Fatalf("backfillBook: %v", err)
+			}
+			if len(ran) != len(tc.want) || (len(ran) == 1 && ran[0] != tc.want[0]) {
+				t.Fatalf("fingerprinted %v, want %v", ran, tc.want)
+			}
+			if sigTouched == 0 {
+				t.Fatal("legacy-era book signature was not rebuilt or cleared")
+			}
+		})
+	}
 }

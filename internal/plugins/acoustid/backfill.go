@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -180,7 +180,9 @@ func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backf
 		return err
 	}
 
-	if modified.Load() || b.BookSigV1 == nil {
+	// Also rebuild a legacy-era signature: it was synthesized from misdecoded
+	// prints and is ignored by every consumer until replaced (or cleared).
+	if modified.Load() || b.BookSigV1 == nil || !b.HasCurrentBookSig() {
 		if err := synthesizeBookSignatureForBook(p.store, b.ID); err != nil {
 			logger.Warn("synthesize book signature", "book_id", b.ID, "error", err)
 		}
@@ -474,9 +476,16 @@ func cachedAvailability(probe func() bool, ttl time.Duration) func() bool {
 // with no raw print forever, because the default run skipped them and only
 // force=true — which recomputes everything in scope — would reach them. With no
 // fpcalc the segment fallback is the best available, so Seg0 counts.
+//
+// A raw print is done only when it is CURRENT-era (AcoustIDFPVersion). A
+// legacy-era print (written before the 2026-09-19 decoder fix) holds
+// misdecoded bytes, so the nightly run re-fingerprints it; the selection is
+// by era, so a resumed or repeated run never redoes a row it already fixed.
+// Without fpcalc a legacy print cannot be replaced (the segment fallback
+// writes no raw print), so it counts as done rather than looping nightly.
 func hasUsableFingerprint(f database.BookFile) bool {
 	if len(f.AcoustIDFingerprint) > 0 || f.AcoustIDFingerprintDurationSec > 0 {
-		return true
+		return f.HasCurrentPrint() || !fpcalcAvailable()
 	}
 	return f.AcoustIDSeg0 != "" && !fpcalcAvailable()
 }
@@ -583,7 +592,11 @@ func doFingerprintFile(store pluginStore, f database.BookFile, force bool) finge
 		updated.FingerprintFailureDetail = nil
 	}
 
-	stampFreshPrint(&updated)
+	// The segment fallback writes no raw print, so stamping the version on a
+	// row that still holds a legacy raw print would certify those bytes.
+	if err == nil || (len(updated.AcoustIDFingerprint) == 0 && updated.AcoustIDFingerprintDurationSec == 0) {
+		stampFreshPrint(&updated)
+	}
 	if err := store.UpdateBookFile(f.ID, &updated); err != nil {
 		slog.Warn("fingerprint update", "id", f.ID, "err", err)
 		return fingerprintOutcomeFailed
