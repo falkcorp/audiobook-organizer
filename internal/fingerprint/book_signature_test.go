@@ -1,5 +1,5 @@
 // file: internal/fingerprint/book_signature_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-09-19
 
@@ -579,5 +579,51 @@ func TestBookSignatureSimilarityMasked_ZeroOverlap(t *testing.T) {
 	}
 	if sim != 0 {
 		t.Errorf("expected 0 similarity with no overlap, got %f", sim)
+	}
+}
+
+// corruptSegment is a payload whose header promises 5 compressed frames but
+// whose body cannot hold them, so decodeAnyFingerprint rejects it.
+const corruptSegment = "AQAABf8"
+
+// TestSynthesizePartialBookSignature_CorruptSegmentIsMissingNotPartial: a
+// file with one undecodable segment used to contribute its OTHER segments'
+// words, flagged real. That shortened the book's word stream, shifted every
+// later file's words, and compared the result as complete — a confident
+// mismatch against a clean copy of the same book. The file must instead be
+// treated like a missing file: zero-padded to EstimatedLen and masked out.
+func TestSynthesizePartialBookSignature_CorruptSegmentIsMissingNotPartial(t *testing.T) {
+	const words = 500
+	clean := []FileSegmentInput{makeFileInput(71, words), makeFileInput(72, words), makeFileInput(73, words)}
+	damaged := []FileSegmentInput{clean[0], clean[1], clean[2]}
+	damaged[0].Segments.Seg3 = corruptSegment
+	damaged[0].EstimatedLen = NumSegments * words
+
+	sigC, maskC, covC, _, err := SynthesizePartialBookSignature(clean)
+	if err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	sigD, maskD, covD, _, err := SynthesizePartialBookSignature(damaged)
+	if err != nil {
+		t.Fatalf("damaged: %v", err)
+	}
+	if covC != 100 {
+		t.Fatalf("clean coverage %d, want 100", covC)
+	}
+	if covD >= 100 {
+		t.Fatalf("damaged coverage %d: a file with an undecodable segment was counted as fully real", covD)
+	}
+	sim, overlap, err := BookSignatureSimilarityMasked(sigC, sigD, maskC, maskD)
+	if err != nil {
+		t.Fatalf("masked similarity: %v", err)
+	}
+	if overlap == 0 || sim < 0.99 {
+		t.Fatalf("same book with one damaged file scored %.4f over %d words; the damage must be masked out, not compared", sim, overlap)
+	}
+
+	// A single-file book whose only file is damaged has no real data at all:
+	// no signature, so no comparison and no veto can be built from it.
+	if _, _, _, _, err := SynthesizePartialBookSignature(damaged[:1]); err != ErrIncompleteFingerprint {
+		t.Fatalf("single damaged file: got err %v, want ErrIncompleteFingerprint", err)
 	}
 }
