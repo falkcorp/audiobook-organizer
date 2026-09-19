@@ -1,7 +1,7 @@
 // file: internal/database/memdb_strip.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-08-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -47,6 +47,7 @@ func stripBookForMemdb(src *Book) *Book {
 	cp.BookSigSegments = nil
 	cp.BookSigBuiltAt = nil
 	cp.BookSigCoveragePct = nil
+	cp.BookSigVersion = nil
 	// Pre-resolved Author/Series pointers are nil at warm time anyway —
 	// they're hydrated separately via authorsMap/seriesMap in the
 	// service layer. Clear defensively in case a caller pre-fills them.

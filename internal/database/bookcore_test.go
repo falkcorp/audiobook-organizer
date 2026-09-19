@@ -1,7 +1,7 @@
 // file: internal/database/bookcore_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: b2d9a610-4f37-4a8e-9c15-bookcoretest01
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package database
 
@@ -22,6 +22,7 @@ var heavyFields = map[string]struct{}{
 	"BookSigSegments":    {},
 	"BookSigBuiltAt":     {},
 	"BookSigCoveragePct": {},
+	"BookSigVersion":     {},
 	"Author":             {},
 	"Series":             {},
 }

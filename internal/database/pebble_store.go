@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.172.0
+// version: 1.173.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-09-19
 
@@ -2682,6 +2682,9 @@ func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
 	}
 	if book.BookSigCoveragePct == nil {
 		book.BookSigCoveragePct = oldBook.BookSigCoveragePct
+	}
+	if book.BookSigVersion == nil {
+		book.BookSigVersion = oldBook.BookSigVersion
 	}
 	// Author/Series are denormalized display objects derived from
 	// AuthorID/SeriesID; they are recomputed on read, never user-cleared to

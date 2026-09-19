@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 // Regression tests for CONC-1: BookSignatureScan's O(n²) pairwise loop is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -96,7 +96,7 @@ func TestParallelBookSignatureScan_SameCandidatesAsSerial(t *testing.T) {
 		sig := sigWord(word)
 		for k := range perGroup {
 			id := fmt.Sprintf("g%d-%02d", g, k)
-			b := database.Book{ID: id, Title: "Book " + id, BookSigV1: &sig}
+			b := database.Book{ID: id, Title: "Book " + id, BookSigV1: &sig, BookSigVersion: curSigV()}
 			books = append(books, b)
 			byID[id] = b
 		}
@@ -219,13 +219,14 @@ func TestBookSignatureScan_SurvivesMemdbStrippedGetAllBooks(t *testing.T) {
 
 	sig := sigWord(0x12345678)
 	full := []database.Book{
-		{ID: "book-a", Title: "Book A", BookSigV1: &sig},
-		{ID: "book-b", Title: "Book B", BookSigV1: &sig},
+		{ID: "book-a", Title: "Book A", BookSigV1: &sig, BookSigVersion: curSigV()},
+		{ID: "book-b", Title: "Book B", BookSigV1: &sig, BookSigVersion: curSigV()},
 	}
 	stripped := make([]database.Book, len(full))
 	for i, b := range full {
 		cp := b
 		cp.BookSigV1 = nil // mirrors stripBookForMemdb
+		cp.BookSigVersion = nil
 		stripped[i] = cp
 	}
 

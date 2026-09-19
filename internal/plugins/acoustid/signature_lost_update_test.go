@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/signature_lost_update_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4ae5494-c39a-4c29-8456-9a40033177cc
 // last-edited: 2026-09-19
 
@@ -99,7 +99,7 @@ func TestSynthesizeBookSignatureForBook_DoesNotRevertConcurrentColumns(t *testin
 	mkFile := func(id string, track int) database.BookFile {
 		return database.BookFile{
 			ID: id, BookID: "b1", TrackNumber: track, OriginalFilename: id + ".mp3",
-			AcoustIDSeg0: lostUpdateSegment(rng, 500), AcoustIDSeg1: lostUpdateSegment(rng, 500),
+			AcoustIDFPVersion: fingerprint.PrintEncodingVersion, AcoustIDSeg0: lostUpdateSegment(rng, 500), AcoustIDSeg1: lostUpdateSegment(rng, 500),
 			AcoustIDSeg2: lostUpdateSegment(rng, 500), AcoustIDSeg3: lostUpdateSegment(rng, 500),
 			AcoustIDSeg4: lostUpdateSegment(rng, 500), AcoustIDSeg5: lostUpdateSegment(rng, 500),
 			AcoustIDSeg6: lostUpdateSegment(rng, 500),

@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -256,6 +256,9 @@ func (orgSvc *Service) sameRecording(book *database.Book, src, target string, sr
 	occRow := orgSvc.bookFileAt(occupant.ID, target)
 	if srcRow == nil || occRow == nil || len(srcRow.AcoustIDFingerprint) == 0 || len(occRow.AcoustIDFingerprint) == 0 {
 		return recordingUnverified, "no Chromaprint fingerprint on one or both files; duration alone does not prove the same recording"
+	}
+	if !srcRow.HasCurrentPrint() || !occRow.HasCurrentPrint() {
+		return recordingUnverified, "a fingerprint predates the 2026-09-19 decoder fix (not comparable); re-fingerprint to compare"
 	}
 	sim, err := fingerprint.WholeFileSimilarity(srcRow.AcoustIDFingerprint, occRow.AcoustIDFingerprint)
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/dedup/acoustid_veto_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7c1a92-6d38-45b1-8f0a-3c2e9d514b70
-// last-edited: 2026-07-02
+// last-edited: 2026-09-19
 
 package dedup
 
@@ -35,6 +35,7 @@ func TestAcoustIDSignaturesConflict(t *testing.T) {
 		if sig != "" {
 			s := sig
 			b.BookSigV1 = &s
+			b.BookSigVersion = curSigV()
 		}
 		books[id] = b
 		return b

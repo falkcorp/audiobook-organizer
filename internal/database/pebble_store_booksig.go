@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c81f0a7-5e93-4d2b-9a16-7f30c8e51b42
-// last-edited: 2026-08-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -80,6 +80,7 @@ type bookSigSidecar struct {
 	Segments    *int       `json:"segments,omitempty"`
 	BuiltAt     *time.Time `json:"built_at,omitempty"`
 	CoveragePct *int       `json:"coverage_pct,omitempty"`
+	Version     *int       `json:"version,omitempty"`
 }
 
 // bookSigOf projects a Book's five signature fields. ok is false when all five
@@ -96,9 +97,10 @@ func bookSigOf(b *Book) (bookSigSidecar, bool) {
 		Segments:    b.BookSigSegments,
 		BuiltAt:     b.BookSigBuiltAt,
 		CoveragePct: b.BookSigCoveragePct,
+		Version:     b.BookSigVersion,
 	}
 	empty := s.V1 == nil && s.Mask == nil && s.Segments == nil &&
-		s.BuiltAt == nil && s.CoveragePct == nil
+		s.BuiltAt == nil && s.CoveragePct == nil && s.Version == nil
 	return s, !empty
 }
 
@@ -115,6 +117,7 @@ func (s bookSigSidecar) applyTo(b *Book) {
 	b.BookSigSegments = s.Segments
 	b.BookSigBuiltAt = s.BuiltAt
 	b.BookSigCoveragePct = s.CoveragePct
+	b.BookSigVersion = s.Version
 }
 
 // stripBookSigForRow returns a shallow copy of b with the five signature fields
@@ -138,6 +141,7 @@ func stripBookSigForRow(b *Book) *Book {
 	cp.BookSigSegments = nil
 	cp.BookSigBuiltAt = nil
 	cp.BookSigCoveragePct = nil
+	cp.BookSigVersion = nil
 	return &cp
 }
 

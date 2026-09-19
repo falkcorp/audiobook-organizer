@@ -1,5 +1,5 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 // last-edited: 2026-09-19
 
@@ -279,6 +279,10 @@ func DisambiguateMatch(expectedPath, artist, album string, trackNum int, candida
 	return "", ""
 }
 
+// acoustIDHealMinScore mirrors plugins/acoustid.AcoustIDOnlineMinScore (not
+// imported: reconcile must not depend on a plugin package).
+const acoustIDHealMinScore = 0.85
+
 // resolveAmbiguousByDB looks up stored AcoustID fingerprints for each candidate
 // from the DB (no fpcalc — data is already there from the backfill).
 //
@@ -297,7 +301,8 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 	rows := make([]row, 0, len(candidates))
 	for _, path := range candidates {
 		f, err := store.GetBookFileByPath(path)
-		if err != nil || f == nil || len(f.AcoustIDFingerprint) == 0 {
+		// A legacy-era print (misdecoded bytes) is unknown, like no print.
+		if err != nil || f == nil || len(f.AcoustIDFingerprint) == 0 || !f.HasCurrentPrint() {
 			return "", 0
 		}
 		rows = append(rows, row{f.BookID, f.AcoustIDFingerprint, path})
@@ -440,7 +445,9 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 		var rawFP []byte
 		var durationSec int
 
-		if bf, err := store.GetBookFileByPath(path); err == nil && bf != nil && len(bf.AcoustIDFingerprint) > 0 {
+		// Stored print only when it is current-era; a legacy one is not a
+		// valid AcoustID submission, so fingerprint the file afresh instead.
+		if bf, err := store.GetBookFileByPath(path); err == nil && bf != nil && len(bf.AcoustIDFingerprint) > 0 && bf.HasCurrentPrint() {
 			rawFP = bf.AcoustIDFingerprint
 			durationSec = int(bf.AcoustIDFingerprintDurationSec)
 		} else {
@@ -467,6 +474,12 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 			continue
 		}
 		result, err := ac.Lookup(ctx, encoded, durationSec)
+		// The resolver ranks candidates by the matched title, so a weak
+		// match would pick a winner on noise: require the same floor as the
+		// online-lookup op (AcoustIDOnlineMinScore, 0.85).
+		if err == nil && result.Title != "" && result.Score < acoustIDHealMinScore {
+			continue
+		}
 		if err != nil || result.Title == "" {
 			if failures != nil {
 				n := failures.acoustidLookupFailed.Add(1)

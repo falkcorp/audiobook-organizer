@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.100.0
+// version: 2.101.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-13
+// last-edited: 2026-09-19
 
 package database
 
@@ -292,6 +292,12 @@ type Book struct {
 	BookSigBuiltAt     *time.Time `json:"book_sig_built_at,omitempty"`
 	BookSigV1Mask      *string    `json:"book_sig_v1_mask,omitempty"`      // 4096-bit coverage mask (base64)
 	BookSigCoveragePct *int       `json:"book_sig_coverage_pct,omitempty"` // 0–100; nil = full coverage
+	// BookSigVersion is the fingerprint.BookSignatureVersion the signature was
+	// synthesized under. nil/0 = legacy: built before 2026-09-19 from
+	// misdecoded (compressed-bitstream) prints, so it is not comparable with
+	// anything and every similarity consumer must treat it as MISSING
+	// evidence (HasCurrentBookSig), never as a mismatch.
+	BookSigVersion *int `json:"book_sig_version,omitempty"`
 	// ITunesSyncStatus tracks whether this book's metadata is in sync with the iTunes library.
 	// Values: "synced" (up-to-date in ITL), "dirty" (changed since last write-back),
 	// "unlinked" (no iTunes presence), "pending" (new, needs adding to iTunes),
@@ -912,6 +918,13 @@ type BookFile struct {
 	// measured while decoding (may differ from container metadata when the
 	// container is lying about duration).
 	AcoustIDFingerprintDurationSec float64 `json:"acoustid_fingerprint_duration_sec,omitempty"`
+	// AcoustIDFPVersion is the fingerprint.PrintEncodingVersion this row's
+	// AcoustIDFingerprint (and the Seg0 derived from it) was written under.
+	// 0 = legacy: written before 2026-09-19, when fpcalc's compressed output
+	// was misread as frames, so the bytes are not frames. Fuzzy comparisons
+	// must treat a legacy row as MISSING (HasCurrentPrint); exact string
+	// matches on the stored segment stay valid.
+	AcoustIDFPVersion int `json:"acoustid_fp_version,omitempty"`
 	// 7-segment fields. Deprecated — kept for back-compat reads during the
 	// whole-file migration. New writes only populate Seg0 as a transition
 	// fallback; Seg1..6 are no longer written.

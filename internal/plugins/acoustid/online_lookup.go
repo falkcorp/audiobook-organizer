@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
 // last-edited: 2026-09-19
 
@@ -66,6 +66,13 @@ func (p *Plugin) onlineLookupDef() sdk.OperationDef {
 	}
 }
 
+// onlineLookupPrintUsable reports whether f's stored whole-file print may be
+// sent to AcoustID: only prints written under the current encoding
+// (fingerprint.PrintEncodingVersion). Legacy rows hold misdecoded bytes.
+func onlineLookupPrintUsable(f *database.BookFileCore) bool {
+	return f.HasCurrentPrint()
+}
+
 func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
 	if p.store == nil {
 		return fmt.Errorf("database store not available")
@@ -114,9 +121,18 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		dur int
 	}
 	cands := make([]candidate, 0, 8192)
+	needsRefingerprint := 0
 	for i := range files {
 		f := &files[i]
 		dur := int(f.AcoustIDFingerprintDurationSec)
+		if dur > 0 && !onlineLookupPrintUsable(f) {
+			// Legacy-era print: not a valid AcoustID submission. Sending it
+			// would return "no match" and stamping AcoustIDOnlineLookedUpAt
+			// would then skip the file forever. Count it; the acoustid
+			// backfill (force=true) re-fingerprints it and clears the stamp.
+			needsRefingerprint++
+			continue
+		}
 		if dur <= 0 {
 			// No whole-file fingerprint recorded for this file. NOTE: under
 			// memdb the raw blob is stripped, so DurationSec is the ONLY
@@ -146,7 +162,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	if total == 0 {
 		prog = sdk.NewProgress(reporter, 0)
 		prog.Start("No book files eligible for online lookup")
-		prog.Done("Nothing to do — every fingerprinted file already has an AcoustID result or no fingerprint exists.")
+		prog.Done(fmt.Sprintf("Nothing to do — needs_refingerprint=%d (legacy-era prints; run acoustid.backfill with force=true); every other fingerprinted file already has an AcoustID result or no fingerprint exists.", needsRefingerprint))
 		return nil
 	}
 
@@ -275,8 +291,8 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		}
 	}
 
-	prog.Done(fmt.Sprintf("Online lookup complete in %s — matched=%d no_match=%d failed=%d rate_limited=%d (of %d files)",
+	prog.Done(fmt.Sprintf("Online lookup complete in %s — matched=%d no_match=%d failed=%d rate_limited=%d needs_refingerprint=%d (of %d files)",
 		time.Since(startedAt).Round(time.Second),
-		matched, noMatch, failed, rateLimited, total))
+		matched, noMatch, failed, rateLimited, needsRefingerprint, total))
 	return nil
 }

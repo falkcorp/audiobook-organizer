@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 99027475-b084-4603-adf4-4061987f30b0
-// last-edited: 2026-09-14
+// last-edited: 2026-09-19
 
 package organizer
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func addInPlaceBook(t *testing.T, store *database.PebbleStore, id, title, path s
 	}
 	if err := store.CreateBookFile(&database.BookFile{
 		ID: id + "-f", BookID: b.ID, FilePath: path, FileSize: int64(len(content)),
-		AcoustIDFingerprint: fp, AcoustIDFingerprintDurationSec: fpDur,
+		AcoustIDFingerprint: fp, AcoustIDFingerprintDurationSec: fpDur, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
 	}); err != nil {
 		t.Fatalf("create book file %s: %v", id, err)
 	}
@@ -690,6 +691,7 @@ func TestInPlace_UnverifiedSkip_ReevaluatedWhenFingerprintsArrive(t *testing.T) 
 		}
 		f := files[0]
 		f.AcoustIDFingerprint = fp
+		f.AcoustIDFPVersion = fingerprint.PrintEncodingVersion
 		f.AcoustIDFingerprintDurationSec = 600
 		if err := store.UpdateBookFile(f.ID, &f); err != nil {
 			t.Fatal(err)

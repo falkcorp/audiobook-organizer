@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.127.0
+// version: 1.128.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-09-19
 
@@ -33,10 +33,11 @@ var _ Store = (*MockStore)(nil)
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {
 	// Book methods
-	GetBookByIDFunc       func(id string) (*Book, error)
-	GetBooksByIDsFunc     func(ids []string) ([]Book, error)
-	GetBookByFilePathFunc func(path string) (*Book, error)
-	LiveBookIDsAtPathFunc func(path string) ([]string, error)
+	GetBookByIDFunc        func(id string) (*Book, error)
+	ClearBookSignatureFunc func(id string) error
+	GetBooksByIDsFunc      func(ids []string) ([]Book, error)
+	GetBookByFilePathFunc  func(path string) (*Book, error)
+	LiveBookIDsAtPathFunc  func(path string) ([]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
@@ -1380,6 +1381,14 @@ func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 // pointer edited the "stored row" in place, so a caller that wrote back a stale
 // copy instead of merging looked correct and lost-update tests passed
 // vacuously (found 2026-09-19).
+// ClearBookSignature calls ClearBookSignatureFunc when set; otherwise no-op.
+func (m *MockStore) ClearBookSignature(id string) error {
+	if m.ClearBookSignatureFunc != nil {
+		return m.ClearBookSignatureFunc(id)
+	}
+	return nil
+}
+
 func (m *MockStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
 	if m.ModifyBookFunc != nil {
 		return m.ModifyBookFunc(id, fn)

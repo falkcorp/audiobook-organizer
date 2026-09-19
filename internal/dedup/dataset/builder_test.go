@@ -1,13 +1,14 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package dataset
 
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -242,8 +243,8 @@ func TestBuildExample_HasCover(t *testing.T) {
 func TestBuildExample_SignatureRelation_Match(t *testing.T) {
 	// Two books with identical 4096-uint32 sigs → sim=1.0 → "match"
 	sig := makeTestSig(0xDEADBEEF)
-	bkA := &database.Book{ID: "a", Title: "Same Book", BookSigV1: &sig}
-	bkB := &database.Book{ID: "b", Title: "Same Book", BookSigV1: &sig}
+	bkA := &database.Book{ID: "a", Title: "Same Book", BookSigV1: &sig, BookSigVersion: curSigV()}
+	bkB := &database.Book{ID: "b", Title: "Same Book", BookSigV1: &sig, BookSigVersion: curSigV()}
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{},
@@ -264,8 +265,8 @@ func TestBuildExample_SignatureRelation_Disjoint(t *testing.T) {
 	// XOR of these is all-ones → every bit differs → sim=0.0 → "disjoint"
 	sigA := makeTestSig(0x00000000)
 	sigB := makeTestSig(0xFFFFFFFF)
-	bkA := &database.Book{ID: "a", Title: "Book A", BookSigV1: &sigA}
-	bkB := &database.Book{ID: "b", Title: "Book B", BookSigV1: &sigB}
+	bkA := &database.Book{ID: "a", Title: "Book A", BookSigV1: &sigA, BookSigVersion: curSigV()}
+	bkB := &database.Book{ID: "b", Title: "Book B", BookSigV1: &sigB, BookSigVersion: curSigV()}
 	fs := &fakeStore{
 		books: map[string]*database.Book{"a": bkA, "b": bkB},
 		files: map[string][]database.BookFile{},
@@ -322,8 +323,8 @@ func TestSignatureRelation_Table(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bkA := &database.Book{ID: "a", Title: "A", BookSigV1: tt.a}
-			bkB := &database.Book{ID: "b", Title: "B", BookSigV1: tt.b}
+			bkA := &database.Book{ID: "a", Title: "A", BookSigV1: tt.a, BookSigVersion: curSigV()}
+			bkB := &database.Book{ID: "b", Title: "B", BookSigV1: tt.b, BookSigVersion: curSigV()}
 			got := signatureRelation(bkA, bkB)
 			if got != tt.want {
 				t.Fatalf("signatureRelation() = %q, want %q", got, tt.want)
@@ -512,3 +513,6 @@ func TestBuildFeatures_IdentityFields(t *testing.T) {
 		t.Fatalf("nil identity pointers must snapshot as empty; got ASIN=%q VG=%q", bare.ASIN, bare.VersionGroupID)
 	}
 }
+
+// curSigV returns a pointer to the current BookSignatureVersion for fixtures.
+func curSigV() *int { v := fingerprint.BookSignatureVersion; return &v }
