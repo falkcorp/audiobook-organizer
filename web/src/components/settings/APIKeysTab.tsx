@@ -1,7 +1,7 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.2.2
+// version: 1.2.3
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-08-19
+// last-edited: 2026-09-19
 import { useState, useEffect, useRef } from 'react';
 import {
   Box,
@@ -56,6 +56,8 @@ const ALL_SCOPES = [
   'playlists.create',
   'requests.create',
   'requests.approve',
+  // Remote fingerprint worker API only; give a worker key this scope alone.
+  'fingerprint.worker',
 ];
 
 const EXPIRES_OPTIONS = [

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-09-19
 
@@ -64,6 +64,15 @@ import (
 //
 // Dry-run is the default: {"live": true} writes. A dry run builds the full
 // plan (stat, stored-window and tombstone reads) and reports it per tier.
+//
+// Remote workers (design (d), PR 6): a live run attaches to the plugin's
+// WorkerHub, and each tier's work list is shared by the server lane and any
+// fp-worker leasing through /api/v1/fingerprint/worker/*. The server lane
+// claims each file before cutting it and skips one a lease holds; after the
+// tier's pass it drains what workers handed back (expired leases, decode
+// errors, second timeouts) and waits for leases still out, so a tier only
+// ends when every one of its files is resolved. With no worker attached the
+// claim always succeeds and the drain finds nothing: the op behaves as before.
 
 // windowBackfillDefID is the op's def ID.
 const windowBackfillDefID = "acoustid.window-backfill"
@@ -136,6 +145,8 @@ type windowItem struct {
 	Duration   float64
 	Size       int64
 	MtimeUnix  int64
+	// qi is the item's index in its tier's work list (the WorkerHub queue).
+	qi int
 }
 
 // windowWorkers resolves the execution pool size. An explicit parameter wins;
@@ -240,6 +251,9 @@ type windowPlan struct {
 	excluded    map[string]int       // reason -> count
 	rows        int
 	missingRows int
+	// calibration is a few files under libroot whose windows are current,
+	// offered to remote workers by hello for their parity gate.
+	calibration []windowItem
 }
 
 // windowRunResult is what a run did, for tests and the final census.
@@ -305,6 +319,9 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 	}
 	var tally windowTally
 	run := &windowRun{p: p, wt: wt, host: host, t: &tally, reporter: reporter, probe: probe}
+	hub := p.WorkerHub()
+	hub.attach(ctx, p, wt, &tally, plan.calibration)
+	defer hub.detach()
 	total := len(plan.tiers[0]) + len(plan.tiers[1])
 	done := 0
 	for tier := range windowTierCount {
@@ -326,12 +343,23 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		if len(items) == 0 {
 			continue
 		}
-		opts := windowRunOptions(workers, done, total, tier, items, params, reporter, &tally)
+		for i := range items {
+			items[i].qi = i
+		}
+		hub.beginTier(tier, items)
+		opts := windowRunOptions(workers, done, total, tier, items, params, reporter, &tally, hub.checkpointMark)
 		run.progCur.Store(int64(done))
 		run.progTotal.Store(int64(total))
 		err := registry.RunItems(ctx, reporter, items, func(ctx context.Context, it windowItem) error {
+			if !hub.claimServer(it.qi) {
+				return nil // a remote lease holds it; the drain below waits for it
+			}
+			defer hub.serverDone(it.qi)
 			return run.file(ctx, it)
 		}, opts)
+		if err == nil {
+			err = run.drainRemote(ctx, hub, tier, workers)
+		}
 		if err != nil {
 			fillWindowResult(res, &tally)
 			return res, err
@@ -368,8 +396,12 @@ func fillWindowResult(res *windowRunResult, t *windowTally) {
 // windowRunOptions builds the RunItems options for one tier. A named function
 // so a test runs the real options: an omitted Concurrency is exactly the
 // regression that left acoustid.backfill on one core for months.
+//
+// capMark lowers the watermark below any item a remote worker still owes
+// (WorkerHub.checkpointMark): the server lane passes a leased item by skipping
+// it, so the raw watermark can run ahead of work that is not done.
 func windowRunOptions(workers, done, total, tier int, items []windowItem, params WindowBackfillParams,
-	reporter sdk.Reporter, tally *windowTally) registry.RunItemsOptions {
+	reporter sdk.Reporter, tally *windowTally, capMark func(int) int) registry.RunItemsOptions {
 	return registry.RunItemsOptions{
 		Concurrency:     workers,
 		ProgressOffset:  done,
@@ -379,6 +411,9 @@ func windowRunOptions(workers, done, total, tier int, items []windowItem, params
 		// items[mark-1] and everything before it are finished even with
 		// workers completing out of order. Calls are serialized by RunItems.
 		CheckpointStateFn: func(_ context.Context, mark int) error {
+			if capMark != nil {
+				mark = capMark(mark)
+			}
 			if mark <= 0 || mark > len(items) {
 				return nil
 			}
@@ -456,6 +491,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	// Books with at least one missing tracked row are the unmatched books.
 	unmatched := make(map[string]bool)
 	plan := &windowPlan{excluded: map[string]int{}, rows: len(cores)}
+	libRoots := pathutil.PathVars(config.AppConfig.RootDir)
 	for i, r := range rows {
 		if r.missing {
 			plan.missingRows++
@@ -478,6 +514,11 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 		switch r.state {
 		case windowCurrent:
 			plan.current[tier]++
+			if len(plan.calibration) < calibrationFiles {
+				if root, _, ok := pathutil.SplitRoot(r.item.Path, libRoots); ok && root == "libroot" {
+					plan.calibration = append(plan.calibration, r.item)
+				}
+			}
 		case windowTombstoned:
 			plan.tombstoned[tier]++
 		default:
@@ -581,7 +622,9 @@ func windowsCurrent(stored []database.FingerprintWindow, it windowItem, versions
 			w.SourceSize != it.Size || w.SourceMtimeUnix != it.MtimeUnix {
 			return false
 		}
-		if versions != nil && (w.FpcalcVersion != versions.Fpcalc || w.FFmpegVersion != versions.FFmpeg) {
+		// The server's own tools, or a pair allowlisted for remote workers
+		// (their parity gate proved byte-identical output), are current.
+		if !windowVersionAllowed(w.FpcalcVersion, w.FFmpegVersion, versions) {
 			return false
 		}
 		have = append(have, w.SlotBP)
@@ -798,6 +841,48 @@ func (r *windowRun) waitForLibraryScan(ctx context.Context) error {
 	return nil
 }
 
+// windowDrainPoll is how often a tier waiting on remote leases re-sends its
+// progress, so the watchdog sees a live op.
+var windowDrainPoll = 30 * time.Second
+
+// drainRemote finishes a tier after its server-lane pass: files a remote
+// worker handed back (released, expired, decode errors, second timeouts) are
+// cut here, and the tier does not end while any lease still holds a file.
+// A dead worker costs at most one lease TTL plus a sweep before its files
+// come back.
+func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, workers int) error {
+	for {
+		if backlog := hub.takeBacklog(); len(backlog) > 0 {
+			err := registry.RunItems(ctx, r.reporter, backlog, func(ctx context.Context, it windowItem) error {
+				defer hub.serverDone(it.qi)
+				return r.file(ctx, it)
+			}, registry.RunItemsOptions{
+				Concurrency: workers,
+				// Runs inside worker goroutines: reads atomics only.
+				Label: func(i, t int) string {
+					return fmt.Sprintf("%s: files handed back by remote workers %d/%d (%s)", windowTierNames[tier], i+1, t, r.t.summary())
+				},
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		n := hub.inFlight()
+		if n == 0 {
+			return nil
+		}
+		_ = r.reporter.UpdateProgress(int(r.progCur.Load()), int(r.progTotal.Load()),
+			fmt.Sprintf("%s: waiting for %d file(s) leased to remote workers", windowTierNames[tier], n))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-hub.changedCh():
+		case <-time.After(windowDrainPoll):
+		}
+	}
+}
+
 // good resets the breaker after a file that produced an outcome.
 func (r *windowRun) good() { r.consecutive.Store(0) }
 
@@ -868,7 +953,7 @@ func (r *windowRun) file(ctx context.Context, it windowItem) error {
 
 		switch {
 		case werr == nil:
-			r.p.storeWindows(it, prints, r.host, r.t)
+			_ = r.p.storeWindows(it, prints, windowProvenance{host: r.host}, r.t) // tallied inside
 			r.good()
 		case isDurableWindowErr(werr):
 			r.p.storeFailure(it, slot, dur, werr, r.wt, r.host, r.t)
@@ -959,7 +1044,17 @@ func isDurableWindowErr(err error) bool {
 	return false
 }
 
-func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, host string, t *windowTally) {
+// windowProvenance is who computed a set of windows: the server's hostname,
+// or "fp-worker:<id>" plus the lease for a remote result.
+type windowProvenance struct {
+	host    string
+	leaseID string
+}
+
+// storeWindows writes one file's windows; both lanes write through it. The
+// outcome is tallied here; the error is returned for the remote lane, which
+// answers the worker with it.
+func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, prov windowProvenance, t *windowTally) error {
 	ref := database.FileWindowRef(it.FileID)
 	now := time.Now().UTC()
 	rows := make([]database.FingerprintWindow, 0, len(prints))
@@ -985,14 +1080,16 @@ func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, 
 			SourceSize:      it.Size,
 			SourceMtimeUnix: it.MtimeUnix,
 			ComputedAt:      now,
-			Host:            host,
+			Host:            prov.host,
+			LeaseID:         prov.leaseID,
 		})
 	}
 	if err := p.store.ReplaceFingerprintWindows(ref, rows); err != nil {
 		p.countWriteErr(it, err, t)
-		return
+		return err
 	}
 	t.written.Add(1)
+	return nil
 }
 
 func (p *Plugin) storeFailure(it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {

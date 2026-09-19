@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
 // last-edited: 2026-09-19
 
@@ -33,6 +33,11 @@ type Plugin struct {
 	scanProbe libraryScanProbe
 	// windowToolsFn replaces tool resolution in tests (fake binaries).
 	windowToolsFn func(context.Context) (fingerprint.WindowTools, error)
+
+	// hub is the remote fingerprint worker lease manager, created on first
+	// use (WorkerHub); a live acoustid.window-backfill attaches to it.
+	hubOnce sync.Once
+	hub     *WorkerHub
 }
 
 // New constructs an acoustid Plugin. engine and embeddingStore may be nil if embedding is disabled;

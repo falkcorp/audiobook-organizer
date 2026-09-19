@@ -1,7 +1,7 @@
 // file: internal/server/middleware/request_size.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: f2129ae7-cf11-4888-bd4f-ab4b578f8f18
-// last-edited: 2026-09-02
+// last-edited: 2026-09-19
 
 package middleware
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +24,16 @@ func methodHasBody(method string) bool {
 	}
 }
 
+// fingerprintWorkerPathPrefix is the remote fingerprint worker API. Its
+// result batches (up to 50 files x 3 base64 prints) can outgrow the 1 MB JSON
+// default, so the class is pinned at workerapi.MaxBodyBytes (8 MB) whatever
+// json_body_limit_mb says; the handler enforces the same cap again.
+const fingerprintWorkerPathPrefix = "/api/v1/fingerprint/worker/"
+
 func selectBodyLimit(path string, jsonLimitBytes, uploadLimitBytes int64) int64 {
+	if strings.HasPrefix(path, fingerprintWorkerPathPrefix) {
+		return workerapi.MaxBodyBytes
+	}
 	if strings.Contains(path, "/import/") || strings.Contains(path, "/backup/") {
 		return uploadLimitBytes
 	}

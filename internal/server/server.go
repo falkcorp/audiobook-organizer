@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.61.0
+// version: 2.62.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-09-19
 
@@ -67,6 +67,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/fpworker"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
@@ -315,6 +316,9 @@ type Server struct {
 
 	// toolRegistry manages external binary lifecycle (Ollama, fpcalc).
 	toolRegistry *tools.ToolRegistry
+	// fpWorkerHub is the remote fingerprint worker lease manager; nil when
+	// the acoustid plugin is absent. See wire_fpworker_routes.go.
+	fpWorkerHub fpworker.Hub
 	// ollamaDaemon starts/stops the Ollama binary on demand.
 	ollamaDaemon *tools.OllamaDaemon
 	// embedQueue debounces re-embedding requests.
@@ -838,6 +842,13 @@ func NewServer(store database.Store) *Server {
 		if acoustidPlug, ok := serviceregistry.TryGet[*acoustidplugin.Plugin](regContainer, "acoustidplugin"); ok && acoustidPlug != nil {
 			acoustidPlug.SetToolRegistry(server.toolRegistry)
 		}
+	}
+
+	// Remote fingerprint worker API (windowed-fingerprint PR 6): its routes
+	// reach the lease manager the acoustid plugin owns. Left nil (every
+	// worker route 503s) when the plugin is not registered.
+	if acoustidPlug, ok := serviceregistry.TryGet[*acoustidplugin.Plugin](regContainer, "acoustidplugin"); ok && acoustidPlug != nil {
+		server.fpWorkerHub = acoustidPlug.WorkerHub()
 	}
 
 	// Start embedding backfill if dedup engine is ready. Tracked via
