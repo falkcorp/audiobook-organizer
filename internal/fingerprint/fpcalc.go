@@ -1,5 +1,5 @@
 // file: internal/fingerprint/fpcalc.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
 // last-edited: 2026-09-19
 
@@ -151,6 +151,18 @@ func File(path string) (*Result, error) {
 		Duration:    dur,
 		Fingerprint: segs[0],
 	}, nil
+}
+
+// FileHeadSegment returns only segment [0] of FileSegments: SegmentSeconds
+// from offset 0, via fpcalc reading the file directly when fpcalc is
+// available, else the ffmpeg chromaprint muxer. It is byte-for-byte what
+// FileSegments(path, n)[0] would be, without probing the duration or cutting
+// the six later segments. Use it when only the head print is compared.
+func FileHeadSegment(path string) (string, error) {
+	if !Available() {
+		return "", ErrNotAvailable
+	}
+	return fingerprintAt(path, 0)
 }
 
 // FileSegments generates all 7 acoustic fingerprint segments for the audio
